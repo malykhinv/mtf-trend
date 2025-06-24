@@ -10,3 +10,6 @@ class MTFState:
     is_in_correction: bool
     correction_direction: Literal['up', 'down', 'none']
     rr_potential: float
+    is_range: bool
+    range_high: float
+    range_low: float

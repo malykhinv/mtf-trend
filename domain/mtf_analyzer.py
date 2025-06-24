@@ -25,14 +25,19 @@ class MTFAnalyzer:
                 structure=swings,
                 is_in_correction=False,
                 correction_direction='none',
-                rr_potential=0.0
+                rr_potential=0.0,
+                is_range=False,
+                range_high=None,
+                range_low=None
             )
 
         trend: Literal['up', 'down', 'flat'] = 'flat'
         is_in_correction = False
         correction_direction: Literal['up', 'down', 'none'] = 'none'
+        is_range = False
+        range_high = None
+        range_low = None
 
-        # Проверяем наличие структуры HH + HL или LL + LH
         highs = [s for s in swings if s.kind == 'high']
         lows = [s for s in swings if s.kind == 'low']
 
@@ -44,16 +49,26 @@ class MTFAnalyzer:
                 trend = 'down'
 
         if trend == 'up':
-            lows = [s for s in swings if s.kind == 'low']
             if len(lows) >= 2 and lows[-1].price < lows[-2].price:
                 is_in_correction = True
                 correction_direction = 'down'
 
         elif trend == 'down':
-            highs = [s for s in swings if s.kind == 'high']
             if len(highs) >= 2 and highs[-1].price > highs[-2].price:
                 is_in_correction = True
                 correction_direction = 'up'
+
+        # Флет, если отсутствует ясный тренд + хаи/лои в диапазоне
+        if trend == 'flat' and len(highs) >= 2 and len(lows) >= 2:
+            recent_highs = [h.price for h in highs[-3:]]
+            recent_lows = [l.price for l in lows[-3:]]
+            max_high = max(recent_highs)
+            min_low = min(recent_lows)
+            range_size = max_high - min_low
+            is_range = range_size / self.atr < 6
+            if is_range:
+                range_high = max_high
+                range_low = min_low
 
         rr = 0.0
         last = swings[-1]
@@ -70,5 +85,8 @@ class MTFAnalyzer:
             structure=swings,
             is_in_correction=is_in_correction,
             correction_direction=correction_direction,
-            rr_potential=round(rr, 2)
+            rr_potential=round(rr, 2),
+            is_range=is_range,
+            range_high=range_high,
+            range_low=range_low
         )

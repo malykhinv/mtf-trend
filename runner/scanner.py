@@ -1,7 +1,7 @@
 from config.settings.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from config.settings.constants import TF_MAP
 from data.loader import Loader
-from domain.risk_filters import is_low_liquidity, is_abnormal_spike
+from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend
 from domain.setup_detector import SetupDetector
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
@@ -39,6 +39,10 @@ class Scanner:
                     for tf, bars in bars_by_tf.items()
                 }
 
+                if is_anomalous_trend(bars_by_tf['1h'], atr_by_tf['1h']):
+                    log(f"Аномально сильный тренд по {symbol}. Пропускаем.")
+                    continue
+
                 detector = SetupDetector(symbol, bars_by_tf, atr_by_tf)
                 signal = detector.detect()
 
@@ -50,7 +54,6 @@ class Scanner:
                         self.trade_executor.execute(
                             symbol=signal.symbol,
                             direction=signal.direction,
-                            entry=signal.entry,
                             sl=signal.sl,
                             tp=signal.tp
                         )

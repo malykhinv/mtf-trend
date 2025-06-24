@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal, List
+from typing import Literal, List, Optional
 
 
 @dataclass
@@ -15,3 +15,4 @@ class SetupSignal:
     entry: float
     sl: float
     tp: float
+    scenario: Optional[Literal['rebound', 'false_breakout', 'breakout', 'momentum']] = None
