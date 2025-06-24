@@ -37,7 +37,6 @@ class Loader:
         }
 
     def get_filtered_symbols(self, quote_asset: str = "USDT", min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> list:
-        log("Загружаю список рынков с Binance.")
         markets = self.binance.load_markets()
         symbols = []
 
