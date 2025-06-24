@@ -25,5 +25,5 @@ class TelegramNotifier:
             response = requests.post(url, json=payload)
             response.raise_for_status()
             log("Сообщение успешно отправлено в Telegram.")
-        except Exception as e:
-            log(f"Ошибка при отправке в Telegram: {e}")
+        except Exception as error:
+            log(f"Ошибка при отправке в Telegram: {error}")

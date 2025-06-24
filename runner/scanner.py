@@ -5,6 +5,7 @@ from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalou
 from domain.setup_detector import SetupDetector
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
+from services.position_tracker_service import PositionTrackerService
 from services.trade_executor import TradeExecutor
 from utils.logger import log
 
@@ -14,7 +15,8 @@ class Scanner:
         self.loader = Loader()
         self.orders_notifier = TelegramNotifier(TELEGRAM_ORDERS_BOT_TOKEN)
         self.events_notifier = TelegramNotifier(TELEGRAM_EVENTS_BOT_TOKEN)
-        self.trade_executor = TradeExecutor(self.loader.binance)
+        self.tracker = PositionTrackerService()
+        self.trade_executor = TradeExecutor(self.loader.binance, self.tracker)
 
     def run(self):
         log("Запущен цикл сканирования.")
