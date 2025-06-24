@@ -6,7 +6,6 @@ from domain.models.setup_signal import SetupSignal
 from domain.structures import StructureDetector
 from typing import Dict, List, Literal, cast
 from utils.logger import log
-import statistics
 
 
 class SetupDetector:
@@ -29,92 +28,66 @@ class SetupDetector:
         }
 
         d1_state = mtf_states["1d"]
+        h4_state = mtf_states["4h"]
+        h1_state = mtf_states["1h"]
 
-        # ---- ФЛЭТ СЦЕНАРИИ ----
+        bars_15m = self.bars_by_tf["15m"]
+        atr_15m = self.atr_by_tf["15m"]
+        if len(bars_15m) < 25:
+            return None
+        swings = StructureDetector(bars_15m, atr_15m).detect_swing_points()
+
+        # -------- ФЛЭТ-СЦЕНАРИЙ --------
         if d1_state.is_range:
-            log(f"{self.symbol} во флэте (фаза 1). Проверка сценария.")
-            bars_15m = self.bars_by_tf["15m"]
-            atr_15m = self.atr_by_tf["15m"]
-
-            if len(bars_15m) < 22:
-                return None
+            log(f"{self.symbol} во флэте. Проверка реакции у границ.")
 
             last = bars_15m[-1]
             prev = bars_15m[-2]
-            before_prev = bars_15m[-3]
-            fourth = bars_15m[-4]
 
-            avg_volume = statistics.mean([b.volume for b in bars_15m[-21:-1]])
-            high_tail = prev.high - prev.close > 0.3 * atr_15m
-            low_tail = prev.close - prev.low > 0.3 * atr_15m
 
-            distance_to_high = abs(last.close - d1_state.range_high)
-            distance_to_low = abs(last.close - d1_state.range_low)
+            avg_volume = sum(b.volume for b in bars_15m[-21:-1]) / 20
+            volume_ok = prev.volume > 1.2 * avg_volume
 
-            direction = None
-            entry = None
-            sl = None
-            tp = None
-            scenario = None
-            volume_multiplier = 1.2
+            # swing рядом с границей
+            recent_swing = next((s for s in reversed(swings)
+                                 if abs(s.price - d1_state.range_high) < atr_15m or
+                                    abs(s.price - d1_state.range_low) < atr_15m), None)
 
-            if (
-                    before_prev.close < d1_state.range_high < prev.close and
-                    prev.low < d1_state.range_high and prev.volume > volume_multiplier * avg_volume and
-                    fourth.low <= d1_state.range_high
-            ):
-                direction = "long"
-                entry = last.close
-                sl = min(before_prev.low, prev.low) - 0.25 * atr_15m
-                tp = d1_state.range_high + (d1_state.range_high - sl)
-                scenario = "breakout"
-
-            elif (
-                    before_prev.close > d1_state.range_low > prev.close and
-                    prev.high > d1_state.range_low and prev.volume > volume_multiplier * avg_volume and
-                    fourth.high >= d1_state.range_low
-            ):
-                direction = "short"
-                entry = last.close
-                sl = max(before_prev.high, prev.high) + 0.25 * atr_15m
-                tp = d1_state.range_low - (sl - d1_state.range_low)
-                scenario = "breakout"
-
-            elif prev.high > d1_state.range_high > last.close and high_tail and prev.volume > volume_multiplier * avg_volume:
-                direction = "short"
-                entry = last.close
-                sl = prev.high + 0.25 * atr_15m
-                tp = (d1_state.range_high + d1_state.range_low) / 2
-                scenario = "false_breakout"
-
-            elif prev.low < d1_state.range_low < last.close and low_tail and prev.volume > volume_multiplier * avg_volume:
-                direction = "long"
-                entry = last.close
-                sl = prev.low - 0.25 * atr_15m
-                tp = (d1_state.range_high + d1_state.range_low) / 2
-                scenario = "false_breakout"
-
-            elif distance_to_high <= 1.5 * atr_15m and high_tail and prev.volume > volume_multiplier * avg_volume:
-                direction = "short"
-                entry = last.close
-                sl = d1_state.range_high + 0.5 * atr_15m
-                tp = (d1_state.range_high + d1_state.range_low) / 2
-                scenario = "rebound"
-
-            elif distance_to_low <= 1.5 * atr_15m and low_tail and prev.volume > volume_multiplier * avg_volume:
-                direction = "long"
-                entry = last.close
-                sl = d1_state.range_low - 0.5 * atr_15m
-                tp = (d1_state.range_high + d1_state.range_low) / 2
-                scenario = "rebound"
-
-            if direction is None:
-                log(f"Цена {self.symbol} не у границ диапазона или нет реакции. Пропускаем.")
+            if not recent_swing:
+                log(f"{self.symbol}: нет swing-реакции у границы.")
                 return None
 
+            # подтверждение пробоя swing-точки
+            confirmed_break = (
+                recent_swing.kind == 'high' and prev.close < recent_swing.price < last.close or
+                recent_swing.kind == 'low' and prev.close > recent_swing.price > last.close
+            )
+
+            if not confirmed_break or not volume_ok:
+                log(f"{self.symbol}: нет подтверждённого пробоя swing.")
+                return None
+
+            direction = "long" if recent_swing.kind == 'low' else "short"
+            entry = last.close
+
+            # SL/TP строго по swing-структуре
+            if direction == "long":
+                sl_candidates = [s.price for s in swings if s.kind == "low" and s.index < recent_swing.index]
+                tp_candidates = [s.price for s in swings if s.kind == "high" and s.index > recent_swing.index]
+            else:
+                sl_candidates = [s.price for s in swings if s.kind == "high" and s.index < recent_swing.index]
+                tp_candidates = [s.price for s in swings if s.kind == "low" and s.index > recent_swing.index]
+
+            if not sl_candidates or not tp_candidates:
+                log(f"{self.symbol}: нет структурных SL/TP.")
+                return None
+
+            sl = sl_candidates[-1]
+            tp = tp_candidates[0]
             rr = abs(tp - entry) / abs(entry - sl)
+
             if rr < MIN_RR:
-                log(f"RR ниже порога: {rr:.2f}. Пропускаем.")
+                log(f"{self.symbol}: RR={rr:.2f} ниже порога.")
                 return None
 
             return SetupSignal(
@@ -123,101 +96,79 @@ class SetupDetector:
                 confidence="high",
                 confirmed_timeframes=["1d"],
                 rr=round(rr, 2),
-                text=f"{self.symbol}: {direction.upper()} ФЛЭТ-СЦЕНАРИЙ ({scenario})\nEntry: {entry}, SL: {sl}, TP: {tp}",
+                text=f"{self.symbol}: {direction.upper()} ФЛЭТ СЕТАП\nEntry: {entry}, SL: {sl}, TP: {tp}",
                 timestamp=last.timestamp,
                 entry=entry,
                 sl=sl,
                 tp=tp,
-                scenario=cast(Literal['rebound'] | Literal['false_breakout'] | Literal['breakout'], scenario)
+                scenario="rebound"
             )
 
-        # ---- МОМЕНТУМ СЦЕНАРИЙ ----
-        confirmed = []
-        for tf in self.timeframes:
-            s = mtf_states[tf]
-            if s.trend in ["up", "down"] and not s.is_in_correction:
-                confirmed.append(tf)
-
-        if len(confirmed) < 3:
-            log(f"{self.symbol}: недостаточно согласованных ТФ. Пропускаем.")
+        # -------- МОМЕНТУМ-СЦЕНАРИЙ --------
+        if not (h4_state.trend in ["up", "down"] and not h4_state.is_in_correction):
+            log(f"{self.symbol}: нет направленного тренда на 4H.")
             return None
 
-        base_trend = mtf_states[confirmed[0]].trend
-        if not all(mtf_states[tf].trend == base_trend for tf in confirmed):
-            log(f"{self.symbol}: таймфреймы не согласованы. Пропускаем.")
+        if not (h1_state.trend == h4_state.trend and h1_state.is_in_correction):
+            log(f"{self.symbol}: на 1H нет коррекции в тренде {h4_state.trend}.")
             return None
 
-        direction = "long" if base_trend == "up" else "short"
-        rr_values = [mtf_states[tf].rr_potential for tf in confirmed]
-        avg_rr = round(sum(rr_values) / len(rr_values), 2)
-        if avg_rr < MIN_RR:
-            log(f"{self.symbol}: RR ниже порога: {avg_rr}. Пропускаем.")
-            return None
-
-        confidence = "high" if len(confirmed) >= 3 else "medium"
-
-        bars_15m = self.bars_by_tf["15m"]
-        atr_15m = self.atr_by_tf["15m"]
-        swings = StructureDetector(bars_15m, atr_15m).detect_swing_points()
-
-        if len(swings) < 2:
-            log(f"{self.symbol}: недостаточно swing-точек. Пропускаем.")
-            return None
+        direction = "long" if h4_state.trend == "up" else "short"
 
         last_swing = next(
             (s for s in reversed(swings)
              if (direction == "long" and s.kind == "high") or
-             (direction == "short" and s.kind == "low")),
+                (direction == "short" and s.kind == "low")),
             None
         )
 
         if last_swing is None:
-            log(f"{self.symbol}: нет swing-точки для подтверждения. Пропускаем.")
+            log(f"{self.symbol}: нет swing-точки для входа.")
             return None
 
         confirm_candle = bars_15m[-1]
         previous_candle = bars_15m[-2]
 
         confirmed_break = (
-                direction == "long" and previous_candle.close < last_swing.price < confirm_candle.close or
-                direction == "short" and previous_candle.close > last_swing.price > confirm_candle.close
+            direction == "long" and previous_candle.close < last_swing.price < confirm_candle.close or
+            direction == "short" and previous_candle.close > last_swing.price > confirm_candle.close
         )
 
         if not confirmed_break:
-            log(f"{self.symbol}: свеча не закрылась за swing-уровнем. Нет подтверждения.")
+            log(f"{self.symbol}: свеча не подтвердила пробой swing.")
             return None
 
         entry = confirm_candle.close
 
         if direction == "long":
-            sl_swings = [s.price for s in swings if s.kind == "low" and s.index < len(bars_15m) - 1]
-            tp_swings = [s.price for s in swings if s.kind == "high" and s.index > len(bars_15m) - 1]
+            sl_candidates = [s.price for s in swings if s.kind == "low" and s.index < last_swing.index]
+            tp_candidates = [s.price for s in swings if s.kind == "high" and s.index > last_swing.index]
         else:
-            sl_swings = [s.price for s in swings if s.kind == "high" and s.index < len(bars_15m) - 1]
-            tp_swings = [s.price for s in swings if s.kind == "low" and s.index > len(bars_15m) - 1]
+            sl_candidates = [s.price for s in swings if s.kind == "high" and s.index < last_swing.index]
+            tp_candidates = [s.price for s in swings if s.kind == "low" and s.index > last_swing.index]
 
-        if not sl_swings or not tp_swings:
-            log(f"{self.symbol}: нет структурных SL/TP. Пропускаем.")
+        if not sl_candidates or not tp_candidates:
+            log(f"{self.symbol}: нет структурных SL/TP.")
             return None
 
-        sl = sl_swings[-1]
-        tp = tp_swings[0]
-
+        sl = sl_candidates[-1]
+        tp = tp_candidates[0]
         rr = abs(tp - entry) / abs(entry - sl)
+
         if rr < MIN_RR:
-            log(f"RR ниже порога: {rr:.2f}. Пропускаем.")
+            log(f"{self.symbol}: RR={rr:.2f} ниже порога.")
             return None
 
         return SetupSignal(
             symbol=self.symbol,
             direction=cast(Literal['long', 'short'], direction),
-            confidence=confidence,
-            confirmed_timeframes=confirmed,
-            rr=rr,
-            text=f"{self.symbol}: {direction.upper()} тренд\nEntry: {entry}, SL: {sl}, TP: {tp}",
+            confidence="high",
+            confirmed_timeframes=["4h", "1h"],
+            rr=round(rr, 2),
+            text=f"{self.symbol}: {direction.upper()} ТРЕНД\nEntry: {entry}, SL: {sl}, TP: {tp}",
             timestamp=confirm_candle.timestamp,
             entry=entry,
             sl=sl,
             tp=tp,
-            scenario=cast(Literal['momentum'], "momentum")
+            scenario="momentum"
         )
