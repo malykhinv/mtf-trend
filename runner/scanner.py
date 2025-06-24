@@ -40,11 +40,9 @@ class Scanner:
                 detector = SetupDetector(symbol, bars_by_tf, atr_by_tf)
                 signal = detector.detect()
 
-                if signal:
+                if signal is not None and signal.confidence == 'high' or signal.confidence == 'medium':
                     message = format_signal_detailed(signal)
                     self.events_notifier.send_message(message)
-                    if signal.confidence == 'high' or signal.confidence == 'medium':
-                        self.orders_notifier.send_message(message)
 
                 else:
                     log(f"Сетап по {symbol} не подтверждён.")

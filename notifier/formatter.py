@@ -17,15 +17,14 @@ def format_signal_detailed(signal: SetupSignal) -> str:
     }
 
     tf_lines = "\n".join([
-        f"• {tf_labels[tf]} — тренд {signal.direction.upper()}"
+        f"{tf_labels[tf].lower()} {signal.direction}"
         for tf in signal.confirmed_timeframes
     ])
 
     text = (
-        f"{level_emojis[signal.confidence]} *{signal.symbol}* `{signal.direction.upper()}`\n"
-        f"*RR:* `{signal.rr}`\n\n"
-        f"*Подтверждение:*\n{tf_lines}\n\n"
-        f"_{ago(signal.timestamp)}_"
+        f"{level_emojis[signal.confidence]} *{signal.symbol}* {signal.direction.upper()}\n\n"
+        f"{tf_lines}\n\n"
+        f"1 : {signal.rr}"
     )
 
     return text
