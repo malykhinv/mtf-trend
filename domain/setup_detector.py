@@ -133,67 +133,63 @@ class SetupDetector:
         atr_15m = self.atr_by_tf["15m"]
         swings = StructureDetector(bars_15m, atr_15m).detect_swing_points()
 
-        if confidence == "high":
-            if len(swings) < 2:
-                log(f"{self.symbol}: недостаточно swing-точек. Пропускаем.")
-                return None
+        if len(swings) < 2:
+            log(f"{self.symbol}: недостаточно swing-точек. Пропускаем.")
+            return None
 
-            # определим последнюю swing-точку против тренда
-            last_swing = next(
-                (s for s in reversed(swings)
-                 if (direction == "long" and s.kind == "high") or
-                 (direction == "short" and s.kind == "low")),
-                None
-            )
+        # Последняя swing против тренда должна быть пробита (подтверждение на 15м)
+        last_swing = next(
+            (s for s in reversed(swings)
+             if (direction == "long" and s.kind == "high") or
+             (direction == "short" and s.kind == "low")),
+            None
+        )
 
-            if last_swing is None:
-                log(f"{self.symbol}: нет swing-точки для подтверждения. Пропускаем.")
-                return None
+        if last_swing is None:
+            log(f"{self.symbol}: нет swing-точки для подтверждения. Пропускаем.")
+            return None
 
-            confirm_price = bars_15m[-1].close
-            breakout = (
-                    direction == "long" and confirm_price > last_swing.price or
-                    direction == "short" and confirm_price < last_swing.price
-            )
+        confirm_price = bars_15m[-1].close
+        breakout = (
+            direction == "long" and confirm_price > last_swing.price or
+            direction == "short" and confirm_price < last_swing.price
+        )
 
-            if not breakout:
-                log(f"{self.symbol}: swing {last_swing.kind} не пробит — нет подтверждения коррекции.")
-                return None
+        if not breakout:
+            log(f"{self.symbol}: swing {last_swing.kind} не пробит — нет подтверждения коррекции.")
+            return None
 
-            entry = confirm_price
+        entry = confirm_price
 
-            sl_candidates = [
-                s for s in swings
-                if (direction == "long" and s.kind == "low" and s.index < len(bars_15m) - 1) or
-                   (direction == "short" and s.kind == "high" and s.index < len(bars_15m) - 1)
-            ]
-            tp_candidates = [
-                s for s in swings
-                if (direction == "long" and s.kind == "high" and s.index > len(bars_15m) - 1) or
-                   (direction == "short" and s.kind == "low" and s.index > len(bars_15m) - 1)
-            ]
+        sl_candidates = [
+            s for s in swings
+            if (direction == "long" and s.kind == "low" and s.index < len(bars_15m) - 1) or
+               (direction == "short" and s.kind == "high" and s.index < len(bars_15m) - 1)
+        ]
+        tp_candidates = [
+            s for s in swings
+            if (direction == "long" and s.kind == "high" and s.index > len(bars_15m) - 1) or
+               (direction == "short" and s.kind == "low" and s.index > len(bars_15m) - 1)
+        ]
 
-            if not sl_candidates or not tp_candidates:
-                log(f"{self.symbol}: нет SL/TP точек. Пропускаем.")
-                return None
+        if not sl_candidates or not tp_candidates:
+            log(f"{self.symbol}: нет SL/TP точек. Пропускаем.")
+            return None
 
-            sl = sl_candidates[-1].price
-            tp = tp_candidates[0].price
-            scenario = "momentum"
+        sl = sl_candidates[-1].price
+        tp = tp_candidates[0].price
+        scenario = "momentum"
 
-            return SetupSignal(
-                symbol=self.symbol,
-                direction=cast(Literal['long', 'short'], direction),
-                confidence=confidence,
-                confirmed_timeframes=confirmed,
-                rr=avg_rr,
-                text=f"{self.symbol}: {direction.upper()} тренд\nEntry: {entry}, SL: {sl}, TP: {tp}",
-                timestamp=bars_15m[-1].timestamp,
-                entry=entry,
-                sl=sl,
-                tp=tp,
-                scenario=cast(Literal['momentum'], scenario)
-            )
-
-        log(f"{self.symbol}: сетап не подтверждён.")
-        return None
+        return SetupSignal(
+            symbol=self.symbol,
+            direction=cast(Literal['long', 'short'], direction),
+            confidence=cast(Literal['low', 'medium', 'high'], confidence),
+            confirmed_timeframes=confirmed,
+            rr=avg_rr,
+            text=f"{self.symbol}: {direction.upper()} тренд\nEntry: {entry}, SL: {sl}, TP: {tp}",
+            timestamp=bars_15m[-1].timestamp,
+            entry=entry,
+            sl=sl,
+            tp=tp,
+            scenario=cast(Literal['momentum'], scenario)
+        )
