@@ -5,7 +5,7 @@ from utils.logger import log
 
 
 class TelegramNotifier:
-    def __init__(self, token: str = TELEGRAM_ORDERS_BOT_TOKEN, chat_id: str = TELEGRAM_BOT_CHAT_ID):
+    def __init__(self, token: str, chat_id: str = TELEGRAM_BOT_CHAT_ID):
         self.token = token
         self.chat_id = chat_id
 

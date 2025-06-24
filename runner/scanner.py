@@ -1,4 +1,4 @@
-from data.binance_client import get_binance_client
+from config.settings.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from domain.setup_detector import SetupDetector
 from notifier.formatter import format_signal
 from config.settings.constants import TF_MAP
@@ -11,7 +11,8 @@ from utils.logger import log
 class Scanner:
     def __init__(self):
         self.loader = Loader()
-        self.notifier = TelegramNotifier()
+        self.orders_notifier = TelegramNotifier(TELEGRAM_ORDERS_BOT_TOKEN)
+        self.events_notifier = TelegramNotifier(TELEGRAM_EVENTS_BOT_TOKEN)
 
     def run(self):
         log("Запущен цикл сканирования.")
@@ -41,7 +42,10 @@ class Scanner:
 
                 if signal:
                     message = format_signal(signal)
-                    self.notifier.send_message(message)
+                    self.events_notifier.send_message(message)
+                    if signal.confidence == 'high' or signal.confidence == 'medium':
+                        self.orders_notifier.send_message(message)
+
                 else:
                     log(f"Сетап по {symbol} не подтверждён.")
 
