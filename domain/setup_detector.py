@@ -36,12 +36,13 @@ class SetupDetector:
             bars_15m = self.bars_by_tf["15m"]
             atr_15m = self.atr_by_tf["15m"]
 
-            if len(bars_15m) < 21:
+            if len(bars_15m) < 22:
                 return None
 
             last = bars_15m[-1]
             prev = bars_15m[-2]
             before_prev = bars_15m[-3]
+            fourth = bars_15m[-4]  # свеча после пробоя
 
             avg_volume = statistics.mean([b.volume for b in bars_15m[-21:-1]])
             high_tail = prev.high - prev.close > 0.3 * atr_15m
@@ -57,8 +58,9 @@ class SetupDetector:
             scenario = None
 
             if (
-                before_prev.close < d1_state.range_high < prev.close < last.close and
-                prev.low < d1_state.range_high and prev.volume > 1.5 * avg_volume
+                before_prev.close < d1_state.range_high < prev.close and
+                prev.low < d1_state.range_high and prev.volume > 1.5 * avg_volume and
+                fourth.low <= d1_state.range_high
             ):
                 direction = "long"
                 entry = last.close
@@ -67,8 +69,9 @@ class SetupDetector:
                 scenario = "breakout"
 
             elif (
-                before_prev.close > d1_state.range_low > prev.close > last.close and
-                prev.high > d1_state.range_low and prev.volume > 1.5 * avg_volume
+                before_prev.close > d1_state.range_low > prev.close and
+                prev.high > d1_state.range_low and prev.volume > 1.5 * avg_volume and
+                fourth.high >= d1_state.range_low
             ):
                 direction = "short"
                 entry = last.close
