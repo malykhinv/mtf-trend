@@ -42,7 +42,7 @@ class SetupDetector:
 
         # -------- ФЛЕТ-СЦЕНАРИЙ --------
         if d1_state.is_range:
-            if not (h4_state.trend == 'flat' and h1_state.trend == 'flat'):
+            if not (h4_state.trend in ['flat', None] and h1_state.trend in ['flat', None]):
                 log(f"{self.symbol}: 1D — флет, но 4H/1H — нет. Пропускаем.")
                 return None
 
@@ -57,7 +57,7 @@ class SetupDetector:
 
             volume = prev.volume
             avg_volume = sum(b.volume for b in bars_15m[-21:-1]) / 20
-            volume_ok = volume > 1.2 * avg_volume
+            volume_ok = volume > avg_volume
 
             # Проверка возврата внутрь диапазона (ложный пробой)
             if recent_swing.kind == 'high':
