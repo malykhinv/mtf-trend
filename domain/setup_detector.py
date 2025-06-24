@@ -98,6 +98,11 @@ class SetupDetector:
                 log(f"{self.symbol}: SL слишком мал — {sl_pct * 100:.2f}%")
                 return None
 
+            # Проверка: SL не должен быть внутри тела текущей свечи
+            if last.low < sl < last.high:
+                log(f"{self.symbol}: SL внутри тела текущей свечи — пропускаем.")
+                return None
+
             if tp_pct < MIN_TP_PCT:
                 log(f"{self.symbol}: TP слишком мал — {tp_pct * 100:.2f}%")
                 return None
@@ -180,6 +185,11 @@ class SetupDetector:
 
         if tp_pct < MIN_TP_PCT:
             log(f"{self.symbol}: TP слишком мал — {tp_pct * 100:.2f}%")
+            return None
+
+        # Проверка: SL не должен быть внутри тела текущей свечи
+        if last.low < sl < last.high:
+            log(f"{self.symbol}: SL внутри тела текущей свечи — пропускаем.")
             return None
 
         rr = abs(tp - entry) / abs(entry - sl)
