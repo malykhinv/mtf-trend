@@ -1,5 +1,6 @@
 from dataclasses import dataclass
-from typing import List, Literal
+from typing import List, Literal, Optional
+
 from domain.models.swing_point import SwingPoint
 
 @dataclass
@@ -11,5 +12,5 @@ class MTFState:
     correction_direction: Literal['up', 'down', 'none']
     rr_potential: float
     is_range: bool
-    range_high: float
-    range_low: float
+    range_high: Optional[float]
+    range_low: Optional[float]

@@ -1,4 +1,4 @@
-from config.settings.constants import MIN_RR
+from config.settings.constants import MIN_RR, MIN_SL_PCT, MIN_TP_PCT
 from domain.mtf_analyzer import MTFAnalyzer
 from domain.models.bar import Bar
 from domain.models.mtf_state import MTFState
@@ -42,6 +42,10 @@ class SetupDetector:
 
         # -------- ФЛЕТ-СЦЕНАРИЙ --------
         if d1_state.is_range:
+            if not (h4_state.trend == 'flat' and h1_state.trend == 'flat'):
+                log(f"{self.symbol}: 1D — флет, но 4H/1H — нет. Пропускаем.")
+                return None
+
             log(f"{self.symbol} во флете. Проверка ложного пробоя и ретеста.")
 
             recent_swing = next((s for s in reversed(swings)
@@ -87,6 +91,17 @@ class SetupDetector:
 
             sl = sl_candidates[-1]
             tp = tp_candidates[0]
+            sl_pct = abs(entry - sl) / entry
+            tp_pct = abs(tp - entry) / entry
+
+            if sl_pct < MIN_SL_PCT:
+                log(f"{self.symbol}: SL слишком мал — {sl_pct * 100:.2f}%")
+                return None
+
+            if tp_pct < MIN_TP_PCT:
+                log(f"{self.symbol}: TP слишком мал — {tp_pct * 100:.2f}%")
+                return None
+
             rr = abs(tp - entry) / abs(entry - sl)
 
             if rr < MIN_RR:
@@ -156,6 +171,17 @@ class SetupDetector:
 
         sl = sl_candidates[-1]
         tp = tp_candidates[0]
+        sl_pct = abs(entry - sl) / entry
+        tp_pct = abs(tp - entry) / entry
+
+        if sl_pct < MIN_SL_PCT:
+            log(f"{self.symbol}: SL слишком мал — {sl_pct * 100:.2f}%")
+            return None
+
+        if tp_pct < MIN_TP_PCT:
+            log(f"{self.symbol}: TP слишком мал — {tp_pct * 100:.2f}%")
+            return None
+
         rr = abs(tp - entry) / abs(entry - sl)
 
         if rr < MIN_RR:
