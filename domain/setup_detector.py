@@ -42,7 +42,7 @@ class SetupDetector:
             last = bars_15m[-1]
             prev = bars_15m[-2]
             before_prev = bars_15m[-3]
-            fourth = bars_15m[-4]  # свеча после пробоя
+            fourth = bars_15m[-4]
 
             avg_volume = statistics.mean([b.volume for b in bars_15m[-21:-1]])
             high_tail = prev.high - prev.close > 0.3 * atr_15m
@@ -56,11 +56,12 @@ class SetupDetector:
             sl = None
             tp = None
             scenario = None
+            volume_multiplier = 1.2
 
             if (
-                before_prev.close < d1_state.range_high < prev.close and
-                prev.low < d1_state.range_high and prev.volume > 1.5 * avg_volume and
-                fourth.low <= d1_state.range_high
+                    before_prev.close < d1_state.range_high < prev.close and
+                    prev.low < d1_state.range_high and prev.volume > volume_multiplier * avg_volume and
+                    fourth.low <= d1_state.range_high
             ):
                 direction = "long"
                 entry = last.close
@@ -69,9 +70,9 @@ class SetupDetector:
                 scenario = "breakout"
 
             elif (
-                before_prev.close > d1_state.range_low > prev.close and
-                prev.high > d1_state.range_low and prev.volume > 1.5 * avg_volume and
-                fourth.high >= d1_state.range_low
+                    before_prev.close > d1_state.range_low > prev.close and
+                    prev.high > d1_state.range_low and prev.volume > volume_multiplier * avg_volume and
+                    fourth.high >= d1_state.range_low
             ):
                 direction = "short"
                 entry = last.close
@@ -79,28 +80,28 @@ class SetupDetector:
                 tp = d1_state.range_low - (sl - d1_state.range_low)
                 scenario = "breakout"
 
-            elif prev.high > d1_state.range_high > last.close and high_tail and prev.volume > 1.5 * avg_volume:
+            elif prev.high > d1_state.range_high > last.close and high_tail and prev.volume > volume_multiplier * avg_volume:
                 direction = "short"
                 entry = last.close
                 sl = prev.high + 0.25 * atr_15m
                 tp = (d1_state.range_high + d1_state.range_low) / 2
                 scenario = "false_breakout"
 
-            elif prev.low < d1_state.range_low < last.close and low_tail and prev.volume > 1.5 * avg_volume:
+            elif prev.low < d1_state.range_low < last.close and low_tail and prev.volume > volume_multiplier * avg_volume:
                 direction = "long"
                 entry = last.close
                 sl = prev.low - 0.25 * atr_15m
                 tp = (d1_state.range_high + d1_state.range_low) / 2
                 scenario = "false_breakout"
 
-            elif distance_to_high <= 1.5 * atr_15m and high_tail and prev.volume > 1.5 * avg_volume:
+            elif distance_to_high <= 1.5 * atr_15m and high_tail and prev.volume > volume_multiplier * avg_volume:
                 direction = "short"
                 entry = last.close
                 sl = d1_state.range_high + 0.5 * atr_15m
                 tp = (d1_state.range_high + d1_state.range_low) / 2
                 scenario = "rebound"
 
-            elif distance_to_low <= 1.5 * atr_15m and low_tail and prev.volume > 1.5 * avg_volume:
+            elif distance_to_low <= 1.5 * atr_15m and low_tail and prev.volume > volume_multiplier * avg_volume:
                 direction = "long"
                 entry = last.close
                 sl = d1_state.range_low - 0.5 * atr_15m
@@ -153,10 +154,7 @@ class SetupDetector:
             log(f"{self.symbol}: RR ниже порога: {avg_rr}. Пропускаем.")
             return None
 
-        confidence = "high" if len(confirmed) == 4 else "medium"
-        if confidence != "high":
-            log(f"{self.symbol}: уверенность недостаточная: {confidence}. Пропускаем.")
-            return None
+        confidence = "high" if len(confirmed) >= 3 else "medium"
 
         bars_15m = self.bars_by_tf["15m"]
         atr_15m = self.atr_by_tf["15m"]
@@ -169,7 +167,7 @@ class SetupDetector:
         last_swing = next(
             (s for s in reversed(swings)
              if (direction == "long" and s.kind == "high") or
-                (direction == "short" and s.kind == "low")),
+             (direction == "short" and s.kind == "low")),
             None
         )
 
@@ -181,8 +179,8 @@ class SetupDetector:
         previous_candle = bars_15m[-2]
 
         confirmed_break = (
-            direction == "long" and previous_candle.close < last_swing.price < confirm_candle.close or
-            direction == "short" and previous_candle.close > last_swing.price > confirm_candle.close
+                direction == "long" and previous_candle.close < last_swing.price < confirm_candle.close or
+                direction == "short" and previous_candle.close > last_swing.price > confirm_candle.close
         )
 
         if not confirmed_break:
@@ -207,7 +205,7 @@ class SetupDetector:
 
         rr = abs(tp - entry) / abs(entry - sl)
         if rr < MIN_RR:
-            log(f"{self.symbol}: итоговый RR ниже порога: {rr:.2f}. Пропускаем.")
+            log(f"RR ниже порога: {rr:.2f}. Пропускаем.")
             return None
 
         return SetupSignal(

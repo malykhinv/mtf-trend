@@ -1,5 +1,5 @@
 from typing import Literal
-from config.settings.constants import POSITION_USDT
+from config.settings.constants import POSITION_USDT, MIN_RR
 from ccxt import binance
 
 
@@ -34,8 +34,8 @@ class TradeExecutor:
             reward = abs(tp - actual_entry)
             actual_rr = reward / risk if risk > 0 else 0
 
-            if actual_rr < 3.0:
-                print(f"[ОТМЕНА] Новый RR={actual_rr:.2f} ниже 3. Сделка не открыта по {symbol}.")
+            if actual_rr < MIN_RR:
+                print(f"[ОТМЕНА] Новый RR={actual_rr:.2f} ниже {MIN_RR}. Сделка не открыта по {symbol}.")
                 return
 
             # Проверка адекватности TP и SL
