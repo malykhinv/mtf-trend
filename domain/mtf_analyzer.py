@@ -28,17 +28,20 @@ class MTFAnalyzer:
                 rr_potential=0.0
             )
 
-        last = swings[-1]
-        prev = swings[-3]
-
         trend: Literal['up', 'down', 'flat'] = 'flat'
         is_in_correction = False
         correction_direction: Literal['up', 'down', 'none'] = 'none'
 
-        if last.kind == 'high' and last.price > prev.price:
-            trend = 'up'
-        elif last.kind == 'low' and last.price < prev.price:
-            trend = 'down'
+        # Проверяем наличие структуры HH + HL или LL + LH
+        highs = [s for s in swings if s.kind == 'high']
+        lows = [s for s in swings if s.kind == 'low']
+
+        if len(highs) >= 2 and len(lows) >= 1:
+            if highs[-1].price > highs[-2].price and lows[-1].price > lows[-2].price:
+                trend = 'up'
+        elif len(lows) >= 2 and len(highs) >= 1:
+            if lows[-1].price < lows[-2].price and highs[-1].price < highs[-2].price:
+                trend = 'down'
 
         if trend == 'up':
             lows = [s for s in swings if s.kind == 'low']
@@ -53,6 +56,7 @@ class MTFAnalyzer:
                 correction_direction = 'up'
 
         rr = 0.0
+        last = swings[-1]
         if trend == 'up':
             rr = (last.price - min([b.low for b in self.bars[-10:]])) / self.atr
         elif trend == 'down':

@@ -10,7 +10,6 @@ class StructureDetector:
         self.threshold = atr * threshold_multiplier
 
     def detect_swing_points(self) -> List[SwingPoint]:
-        log("Начинаю поиск swing-точек.")
         swings = []
         direction = None
         last_extreme = self.bars[0].high if self.bars[1].close > self.bars[0].close else self.bars[0].low
