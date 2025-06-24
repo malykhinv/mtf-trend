@@ -43,6 +43,17 @@ class Scanner:
                     log(f"Аномально сильный тренд по {symbol}. Пропускаем.")
                     continue
 
+                # Фильтр: цена у экстремума D1
+                bars_d1 = bars_by_tf['1d']
+                high_d1 = max([b.high for b in bars_d1[-5:]])
+                low_d1 = min([b.low for b in bars_d1[-5:]])
+                current_price = bars_d1[-1].close
+                buffer = atr_by_tf['1d'] * 0.5
+
+                if abs(current_price - high_d1) < buffer or abs(current_price - low_d1) < buffer:
+                    log(f"{symbol}: цена у экстремума D1. Пропускаем.")
+                    continue
+
                 detector = SetupDetector(symbol, bars_by_tf, atr_by_tf)
                 signal = detector.detect()
 
@@ -58,7 +69,6 @@ class Scanner:
                             tp=signal.tp
                         )
                         self.orders_notifier.send_message(message)
-
                 else:
                     log(f"Сетап по {symbol} не подтверждён.")
 
