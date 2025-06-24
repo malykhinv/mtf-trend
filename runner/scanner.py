@@ -1,9 +1,9 @@
 from config.settings.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from domain.setup_detector import SetupDetector
-from notifier.formatter import format_signal
 from config.settings.constants import TF_MAP
 from data.loader import Loader
 from domain.risk_filters import is_low_liquidity, is_abnormal_spike
+from notifier.formatter import format_signal_detailed
 from notifier.telegram import TelegramNotifier
 from utils.logger import log
 
@@ -41,7 +41,7 @@ class Scanner:
                 signal = detector.detect()
 
                 if signal:
-                    message = format_signal(signal)
+                    message = format_signal_detailed(signal)
                     self.events_notifier.send_message(message)
                     if signal.confidence == 'high' or signal.confidence == 'medium':
                         self.orders_notifier.send_message(message)

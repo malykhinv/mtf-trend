@@ -1,6 +1,7 @@
 from datetime import datetime
 from typing import List, Dict
 
+from config.settings.constants import VOLUME_THRESHOLD_USDT
 from data.binance_client import get_binance_client
 from domain.models.bar import Bar
 from utils.logger import log
@@ -35,7 +36,7 @@ class Loader:
             for tf in tf_map
         }
 
-    def get_filtered_symbols(self, quote_asset: str = "USDT", min_volume_usdt: float = 50_000_000) -> list:
+    def get_filtered_symbols(self, quote_asset: str = "USDT", min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> list:
         log("Загружаю список рынков с Binance.")
         markets = self.binance.load_markets()
         symbols = []
