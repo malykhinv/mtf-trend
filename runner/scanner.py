@@ -40,7 +40,7 @@ class Scanner:
                 detector = SetupDetector(symbol, bars_by_tf, atr_by_tf)
                 signal = detector.detect()
 
-                if signal is not None and signal.confidence == 'high' or signal.confidence == 'medium':
+                if signal is not None and (signal.confidence == 'high' or signal.confidence == 'medium'):
                     message = format_signal_detailed(signal)
                     self.events_notifier.send_message(message)
 
