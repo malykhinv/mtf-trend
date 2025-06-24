@@ -24,13 +24,11 @@ class StructureDetector:
                 swings.append(SwingPoint(index=i, price=bar.high, kind='high', confirmed=True))
                 direction = 'down'
                 last_extreme = bar.high
-                log(f"Обнаружен локальный максимум на индексе {i}, цена {bar.high}.")
 
             elif is_low and (direction != 'up' or abs(bar.low - last_extreme) > self.threshold):
                 swings.append(SwingPoint(index=i, price=bar.low, kind='low', confirmed=True))
                 direction = 'up'
                 last_extreme = bar.low
-                log(f"Обнаружен локальный минимум на индексе {i}, цена {bar.low}.")
 
         log(f"Всего swing-точек найдено: {len(swings)}.")
         return swings

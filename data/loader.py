@@ -55,5 +55,4 @@ class Loader:
             symbols.append(symbol_code)
             log(f"{symbol_code} добавлен в список.")
 
-        log(f"Итого отобрано {len(symbols)} символов.")
         return sorted(symbols)
