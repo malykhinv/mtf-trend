@@ -1,6 +1,7 @@
 from domain.models.bar import Bar
 from domain.models.swing_point import SwingPoint
 from typing import List
+from utils.logger import log
 
 class StructureDetector:
     def __init__(self, bars: List[Bar], atr: float, threshold_multiplier: float = 1.5):
@@ -9,6 +10,7 @@ class StructureDetector:
         self.threshold = atr * threshold_multiplier
 
     def detect_swing_points(self) -> List[SwingPoint]:
+        log("Начинаю поиск swing-точек.")
         swings = []
         direction = None
         last_extreme = self.bars[0].high if self.bars[1].close > self.bars[0].close else self.bars[0].low
@@ -22,10 +24,13 @@ class StructureDetector:
                 swings.append(SwingPoint(index=i, price=bar.high, kind='high', confirmed=True))
                 direction = 'down'
                 last_extreme = bar.high
+                log(f"Обнаружен локальный максимум на индексе {i}, цена {bar.high}.")
 
             elif is_low and (direction != 'up' or abs(bar.low - last_extreme) > self.threshold):
                 swings.append(SwingPoint(index=i, price=bar.low, kind='low', confirmed=True))
                 direction = 'up'
                 last_extreme = bar.low
+                log(f"Обнаружен локальный минимум на индексе {i}, цена {bar.low}.")
 
+        log(f"Всего swing-точек найдено: {len(swings)}.")
         return swings

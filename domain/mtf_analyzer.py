@@ -1,11 +1,8 @@
-# domain/mtf_analyzer.py
 from domain.models.bar import Bar
-from domain.models.swing_point import SwingPoint
 from domain.models.mtf_state import MTFState
 from domain.structures import StructureDetector
 from typing import List, Literal
-import numpy as np
-
+from utils.logger import log
 
 class MTFAnalyzer:
     def __init__(self, bars: List[Bar], timeframe: str, atr: float):
@@ -14,10 +11,14 @@ class MTFAnalyzer:
         self.atr = atr
 
     def analyze(self) -> MTFState:
+        log(f"Анализ фазы для {self.timeframe}.")
+
         detector = StructureDetector(self.bars, self.atr)
         swings = detector.detect_swing_points()
+        log(f"Найдено swing-точек: {len(swings)}.")
 
         if len(swings) < 3:
+            log(f"Слишком мало swing-точек — считаем {self.timeframe} как flat.")
             return MTFState(
                 timeframe=self.timeframe,
                 trend='flat',
@@ -27,7 +28,7 @@ class MTFAnalyzer:
             )
 
         last = swings[-1]
-        prev = swings[-3]  # предыдущий такого же типа
+        prev = swings[-3]
 
         trend: Literal['up', 'down', 'flat'] = 'flat'
         is_in_correction = False
@@ -37,7 +38,6 @@ class MTFAnalyzer:
         elif last.kind == 'low' and last.price < prev.price:
             trend = 'down'
 
-        # Откат: последняя точка противоположного типа ниже/выше предыдущей
         if trend == 'up':
             lows = [s for s in swings if s.kind == 'low']
             if len(lows) >= 2 and lows[-1].price < lows[-2].price:
@@ -48,12 +48,13 @@ class MTFAnalyzer:
             if len(highs) >= 2 and highs[-1].price > highs[-2].price:
                 is_in_correction = True
 
-        # Потенциал RR до предыдущей swing-точки
         rr = 0.0
         if trend == 'up':
             rr = (last.price - min([b.low for b in self.bars[-10:]])) / self.atr
         elif trend == 'down':
             rr = (max([b.high for b in self.bars[-10:]]) - last.price) / self.atr
+
+        log(f"{self.timeframe}: тренд — {trend}, коррекция — {is_in_correction}, RR — {round(rr, 2)}.")
 
         return MTFState(
             timeframe=self.timeframe,

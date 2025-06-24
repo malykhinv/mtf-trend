@@ -3,7 +3,7 @@ from domain.models.bar import Bar
 from domain.models.mtf_state import MTFState
 from domain.models.setup_signal import SetupSignal
 from typing import Dict, List, Literal
-
+from utils.logger import log
 
 class SetupDetector:
     def __init__(self, symbol: str, bars_by_tf: Dict[str, List[Bar]], atr_by_tf: Dict[str, float]):
@@ -13,6 +13,8 @@ class SetupDetector:
         self.timeframes = ["1d", "4h", "1h", "15m"]
 
     def detect(self) -> SetupSignal | None:
+        log(f"Анализ актива {self.symbol}.")
+
         mtf_states: Dict[str, MTFState] = {}
 
         for tf in self.timeframes:
@@ -24,10 +26,12 @@ class SetupDetector:
                      and not mtf_states[tf].is_in_correction]
 
         if len(confirmed) < 2:
+            log(f"Недостаточно подтверждённых таймфреймов. Пропускаем {self.symbol}.")
             return None
 
         base_trend = mtf_states[confirmed[0]].trend
         if not all(mtf_states[tf].trend == base_trend for tf in confirmed):
+            log(f"Таймфреймы расходятся по направлению тренда. Пропускаем {self.symbol}.")
             return None
 
         direction: Literal['long', 'short'] = "long" if base_trend == "up" else "short"
@@ -36,6 +40,7 @@ class SetupDetector:
         avg_rr = round(sum(rr_values) / len(rr_values), 2)
 
         if avg_rr < 2.0:
+            log(f"RR ниже порога: {avg_rr}. Пропускаем {self.symbol}.")
             return None
 
         confidence: Literal['low', 'medium', 'high'] = "low"
@@ -43,6 +48,8 @@ class SetupDetector:
             confidence = "medium"
         elif len(confirmed) == 4:
             confidence = "high"
+
+        log(f"Сетап найден: {self.symbol}, направление — {direction}, уверенность — {confidence}, RR — {avg_rr}.")
 
         text = f"{self.symbol}: {direction.upper()} setup\n"
         for tf in confirmed:

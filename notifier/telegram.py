@@ -1,6 +1,7 @@
 # notifier/telegram.py
 import requests
 from config.settings.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_BOT_CHAT_ID
+from utils.logger import log
 
 
 class TelegramNotifier:
@@ -10,7 +11,7 @@ class TelegramNotifier:
 
     def send_message(self, text: str) -> None:
         if not self.token or not self.chat_id:
-            print("[TELEGRAM] Missing credentials — message not sent.")
+            log("Отсутствуют данные Telegram. Сообщение не отправлено.")
             return
 
         url = f"https://api.telegram.org/bot{self.token}/sendMessage"
@@ -23,5 +24,6 @@ class TelegramNotifier:
         try:
             response = requests.post(url, json=payload)
             response.raise_for_status()
+            log("Сообщение успешно отправлено в Telegram.")
         except Exception as e:
-            print(f"[TELEGRAM ERROR] {e}")
+            log(f"Ошибка при отправке в Telegram: {e}")

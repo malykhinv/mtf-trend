@@ -1,6 +1,9 @@
 import ccxt
 
-def get_filtered_symbols(quote_asset: str = "USDT", min_volume_usd: float = 1_000_000) -> list:
+from utils.logger import log
+
+
+def get_filtered_symbols(quote_asset: str = "USDT", min_volume_usdt: float = 50_000_000) -> list:
     exchange = ccxt.binance({"enableRateLimit": True})
     markets = exchange.load_markets()
     symbols = []
@@ -12,9 +15,11 @@ def get_filtered_symbols(quote_asset: str = "USDT", min_volume_usd: float = 1_00
             continue
 
         if "quoteVolume" in data and data["quoteVolume"] is not None:
-            if data["quoteVolume"] < min_volume_usd:
+            if data["quoteVolume"] < min_volume_usdt:
                 continue
 
-        symbols.append(symbol.replace("/", ""))
+        symbol = symbol.replace("/", "")
+        log(f"{symbol} added")
+        symbols.append(symbol)
 
     return sorted(symbols)
