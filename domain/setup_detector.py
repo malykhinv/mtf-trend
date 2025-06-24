@@ -1,3 +1,4 @@
+from config.settings.constants import MIN_RR
 from domain.mtf_analyzer import MTFAnalyzer
 from domain.models.bar import Bar
 from domain.models.mtf_state import MTFState
@@ -48,7 +49,7 @@ class SetupDetector:
         rr_values = [mtf_states[tf].rr_potential for tf in confirmed]
         avg_rr = round(sum(rr_values) / len(rr_values), 2)
 
-        if avg_rr < 2.0:
+        if avg_rr < MIN_RR:
             log(f"RR ниже порога: {avg_rr}. Пропускаем {self.symbol}.")
             return None
 
