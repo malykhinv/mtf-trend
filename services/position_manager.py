@@ -2,7 +2,6 @@ from typing import Literal
 
 from data.loader import Loader
 from domain.structures import StructureDetector
-from services.position_tracker_service import PositionTrackerService
 from utils.logger import log
 
 
@@ -17,7 +16,7 @@ class PositionManager:
                  client,
                  atr: float,
                  amount: float,
-                 tracker: PositionTrackerService):
+                 tracker):
         self.symbol = symbol
         self.direction = direction
         self.entry = entry
