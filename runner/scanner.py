@@ -1,7 +1,7 @@
+from data.binance_client import get_binance_client
 from domain.setup_detector import SetupDetector
 from notifier.formatter import format_signal
 from config.settings.constants import TF_MAP
-from data.symbols import get_filtered_symbols
 from data.loader import Loader
 from domain.risk_filters import is_low_liquidity, is_abnormal_spike
 from notifier.telegram import TelegramNotifier
@@ -9,14 +9,13 @@ from utils.logger import log
 
 
 class Scanner:
-    def __init__(self, binance):
-        self.binance = binance
-        self.loader = Loader(binance)
+    def __init__(self):
+        self.loader = Loader()
         self.notifier = TelegramNotifier()
 
     def run(self):
         log("Запущен цикл сканирования.")
-        symbols = get_filtered_symbols(self.binance)
+        symbols = self.loader.get_filtered_symbols()
         log(f"Отобрано {len(symbols)} символов для анализа.")
 
         for symbol in symbols:

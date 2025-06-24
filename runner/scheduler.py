@@ -1,6 +1,5 @@
 from apscheduler.schedulers.blocking import BlockingScheduler
 from config.settings.constants import UPDATE_INTERVAL_MINUTES
-from data.binance_client import get_binance_client
 from runner.scanner import Scanner
 from utils.logger import log
 import threading
@@ -8,8 +7,7 @@ import threading
 
 class Scheduler:
     def __init__(self):
-        self.binance = get_binance_client()
-        self.scanner = Scanner(self.binance)
+        self.scanner = Scanner()
         self.scheduler = BlockingScheduler(timezone="UTC")
         self.interval_minutes = UPDATE_INTERVAL_MINUTES
         self._lock = threading.Lock()

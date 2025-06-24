@@ -5,6 +5,7 @@ from domain.models.setup_signal import SetupSignal
 from typing import Dict, List, Literal
 from utils.logger import log
 
+
 class SetupDetector:
     def __init__(self, symbol: str, bars_by_tf: Dict[str, List[Bar]], atr_by_tf: Dict[str, float]):
         self.symbol = symbol
@@ -21,12 +22,20 @@ class SetupDetector:
             analyzer = MTFAnalyzer(bars=self.bars_by_tf[tf], timeframe=tf, atr=self.atr_by_tf[tf])
             mtf_states[tf] = analyzer.analyze()
 
-        confirmed = [tf for tf in self.timeframes
-                     if mtf_states[tf].trend in ["up", "down"]
-                     and not mtf_states[tf].is_in_correction]
+        # Сначала — отбор по тренду и фазе коррекции
+        confirmed = []
+        for tf in self.timeframes:
+            state = mtf_states[tf]
+            if state.trend not in ["up", "down"]:
+                continue
+            if state.is_in_correction:
+                if (state.trend == 'up' and state.correction_direction == 'down') or \
+                   (state.trend == 'down' and state.correction_direction == 'up'):
+                    continue
+            confirmed.append(tf)
 
         if len(confirmed) < 2:
-            log(f"Недостаточно подтверждённых таймфреймов. Пропускаем {self.symbol}.")
+            log(f"Недостаточно согласованных таймфреймов. Пропускаем {self.symbol}.")
             return None
 
         base_trend = mtf_states[confirmed[0]].trend
@@ -53,7 +62,8 @@ class SetupDetector:
 
         text = f"{self.symbol}: {direction.upper()} setup\n"
         for tf in confirmed:
-            text += f"{tf.upper()} trend confirmed, RR={mtf_states[tf].rr_potential}\n"
+            rr = mtf_states[tf].rr_potential
+            text += f"{tf.upper()} тренд подтверждён, RR={rr}\n"
 
         return SetupSignal(
             symbol=self.symbol,

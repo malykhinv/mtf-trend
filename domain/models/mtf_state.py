@@ -1,8 +1,6 @@
 from dataclasses import dataclass
-from typing import Literal, List
-
+from typing import List, Literal
 from domain.models.swing_point import SwingPoint
-
 
 @dataclass
 class MTFState:
@@ -10,4 +8,5 @@ class MTFState:
     trend: Literal['up', 'down', 'flat']
     structure: List[SwingPoint]
     is_in_correction: bool
+    correction_direction: Literal['up', 'down', 'none']
     rr_potential: float
