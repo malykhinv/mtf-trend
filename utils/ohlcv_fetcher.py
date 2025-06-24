@@ -3,6 +3,8 @@ import os
 import ccxt
 import pandas as pd
 
+from utils.logger import log
+
 # === НАСТРОЙКИ ===
 coin = 'SEI'
 symbol = 'SEI/USDT'
@@ -45,4 +47,4 @@ with open(filename, 'w', encoding='utf-8') as f:
     f.write("# Проанализируй этот файл по моей системе MTF (momentum + flat).\n")
     f.write("# Определи фазу на каждом ТФ, найди потенциальные сетапы на вход и уточни, где я мог бы войти.\n")
 
-print(f"[✓] Файл сохранён: {filename}")
+log(f"✓ Файл сохранён: {filename}")

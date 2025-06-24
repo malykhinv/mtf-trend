@@ -2,6 +2,8 @@ from typing import Literal
 from config.settings.constants import POSITION_USDT, MIN_RR
 from ccxt import binance
 
+from utils.logger import log
+
 
 class TradeExecutor:
     def __init__(self, client: binance):
@@ -34,14 +36,19 @@ class TradeExecutor:
             reward = abs(tp - actual_entry)
             actual_rr = reward / risk if risk > 0 else 0
 
+            def log_state():
+                log(f"Направление: {direction}, Entry: {actual_entry}, SL: {sl}, TP: {tp}")
+
             if actual_rr < MIN_RR:
-                print(f"[ОТМЕНА] Новый RR={actual_rr:.2f} ниже {MIN_RR}. Сделка не открыта по {symbol}.")
+                log(f"{symbol}: RR={actual_rr:.2f} ниже порога ({MIN_RR}).")
+                log_state()
                 return
 
             # Проверка адекватности TP и SL
             if (direction == 'long' and (sl >= actual_entry or tp <= actual_entry)) or \
-               (direction == 'short' and (sl <= actual_entry or tp >= actual_entry)):
-                print(f"[ОТМЕНА] SL/TP не соответствуют направлению сделки по {symbol}.")
+                    (direction == 'short' and (sl <= actual_entry or tp >= actual_entry)):
+                log(f"SL/TP не соответствуют направлению сделки по {symbol}.")
+                log_state()
                 return
 
             # Рассчитываем объём
@@ -81,7 +88,7 @@ class TradeExecutor:
                 }
             )
 
-            print(f"[ВХОД] {symbol} {direction.upper()} @ {actual_entry}\nSL: {sl}, TP: {tp}, RR: {actual_rr:.2f}")
+            log(f"[ВХОД] {symbol} {direction.upper()} @ {actual_entry}\nSL: {sl}, TP: {tp}, RR: {actual_rr:.2f}")
 
-        except Exception as e:
-            print(f"[ОШИБКА] Исполнение ордера по {symbol} не удалось: {e}")
+        except Exception as error:
+            log(f"Исполнение ордера по {symbol} не удалось: {error}")
