@@ -38,6 +38,12 @@ class TradeExecutor:
                 print(f"[ОТМЕНА] Новый RR={actual_rr:.2f} ниже 3. Сделка не открыта по {symbol}.")
                 return
 
+            # Проверка адекватности TP и SL
+            if (direction == 'long' and (sl >= actual_entry or tp <= actual_entry)) or \
+               (direction == 'short' and (sl <= actual_entry or tp >= actual_entry)):
+                print(f"[ОТМЕНА] SL/TP не соответствуют направлению сделки по {symbol}.")
+                return
+
             # Рассчитываем объём
             amount = round(amount_usdt / actual_entry, int(market['precision']['amount']))
 

@@ -34,45 +34,61 @@ class SetupDetector:
             log(f"{self.symbol} во флэте (фаза 1). Проверка сценария.")
             bars_15m = self.bars_by_tf["15m"]
             atr_15m = self.atr_by_tf["15m"]
-            last_bar = bars_15m[-1]
-            prev_bar = bars_15m[-2]
 
-            distance_to_high = abs(last_bar.close - d1_state.range_high)
-            distance_to_low = abs(last_bar.close - d1_state.range_low)
+            if len(bars_15m) < 3:
+                return None
 
-            if prev_bar.close < d1_state.range_high < last_bar.close and last_bar.low < d1_state.range_high:
+            last = bars_15m[-1]
+            prev = bars_15m[-2]
+            before_prev = bars_15m[-3]
+
+            distance_to_high = abs(last.close - d1_state.range_high)
+            distance_to_low = abs(last.close - d1_state.range_low)
+
+            # Проверка на breakout вверх
+            if (
+                    before_prev.close < d1_state.range_high < prev.close < last.close
+                    and prev.low < d1_state.range_high
+            ):
                 direction = "long"
-                entry = last_bar.close
+                entry = last.close
                 sl = d1_state.range_high - 0.5 * atr_15m
                 tp = entry + (entry - sl) * MIN_RR
                 scenario = "breakout"
-            elif prev_bar.close > d1_state.range_low > last_bar.close and last_bar.high > d1_state.range_low:
+
+            # Проверка на breakout вниз
+            elif (
+                    before_prev.close > d1_state.range_low > prev.close > last.close
+                    and prev.high > d1_state.range_low
+            ):
                 direction = "short"
-                entry = last_bar.close
+                entry = last.close
                 sl = d1_state.range_low + 0.5 * atr_15m
                 tp = entry - (sl - entry) * MIN_RR
                 scenario = "breakout"
-            elif prev_bar.high > d1_state.range_high > last_bar.close:
+
+            # Остальные сценарии без изменений
+            elif prev.high > d1_state.range_high > last.close:
                 direction = "short"
-                entry = last_bar.close
-                sl = max(prev_bar.high, last_bar.high) + 0.25 * atr_15m
+                entry = last.close
+                sl = max(prev.high, last.high) + 0.25 * atr_15m
                 tp = (d1_state.range_high + d1_state.range_low) / 2
                 scenario = "false_breakout"
-            elif prev_bar.low < d1_state.range_low < last_bar.close:
+            elif prev.low < d1_state.range_low < last.close:
                 direction = "long"
-                entry = last_bar.close
-                sl = min(prev_bar.low, last_bar.low) - 0.25 * atr_15m
+                entry = last.close
+                sl = min(prev.low, last.low) - 0.25 * atr_15m
                 tp = (d1_state.range_high + d1_state.range_low) / 2
                 scenario = "false_breakout"
             elif distance_to_high <= 1.5 * atr_15m:
                 direction = "short"
-                entry = last_bar.close
+                entry = last.close
                 sl = d1_state.range_high + 0.5 * atr_15m
                 tp = (d1_state.range_high + d1_state.range_low) / 2
                 scenario = "rebound"
             elif distance_to_low <= 1.5 * atr_15m:
                 direction = "long"
-                entry = last_bar.close
+                entry = last.close
                 sl = d1_state.range_low - 0.5 * atr_15m
                 tp = (d1_state.range_high + d1_state.range_low) / 2
                 scenario = "rebound"
@@ -93,7 +109,7 @@ class SetupDetector:
                 confirmed_timeframes=["1d"],
                 rr=round(rr, 2),
                 text=f"{self.symbol}: {direction.upper()} ФЛЭТ-СЦЕНАРИЙ ({scenario})\nEntry: {entry}, SL: {sl}, TP: {tp}",
-                timestamp=last_bar.timestamp,
+                timestamp=last.timestamp,
                 entry=entry,
                 sl=sl,
                 tp=tp,
@@ -151,8 +167,8 @@ class SetupDetector:
 
         confirm_price = bars_15m[-1].close
         breakout = (
-            direction == "long" and confirm_price > last_swing.price or
-            direction == "short" and confirm_price < last_swing.price
+                direction == "long" and confirm_price > last_swing.price or
+                direction == "short" and confirm_price < last_swing.price
         )
 
         if not breakout:
