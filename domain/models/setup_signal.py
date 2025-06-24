@@ -16,3 +16,7 @@ class SetupSignal:
     sl: float
     tp: float
     scenario: Optional[Literal['rebound', 'false_breakout', 'breakout', 'momentum']] = None
+
+    @property
+    def is_order_signal(self) -> bool:
+        return self.confidence == 'high' and self.tp is not None and self.sl is not None

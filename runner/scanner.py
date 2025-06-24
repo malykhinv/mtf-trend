@@ -59,9 +59,7 @@ class Scanner:
 
                 if signal is not None and signal.confidence in ['medium', 'high']:
                     message = format_message(signal)
-                    self.events_notifier.send_message(message)
-
-                    if signal.entry and signal.sl and signal.tp:
+                    if signal.is_order_signal:
                         self.trade_executor.execute(
                             symbol=signal.symbol,
                             direction=signal.direction,
@@ -69,6 +67,8 @@ class Scanner:
                             tp=signal.tp
                         )
                         self.orders_notifier.send_message(message)
+                    else:
+                        self.events_notifier.send_message(message)
                 else:
                     log(f"Сетап по {symbol} не подтверждён.")
 

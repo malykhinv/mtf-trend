@@ -17,7 +17,7 @@ def format_message(signal: SetupSignal) -> str:
         f"`{tf_block}`"
     )
 
-    if signal.entry and signal.sl and signal.tp:
+    if signal.is_order_signal:
         sl_pct = round(100 * abs(signal.entry - signal.sl) / signal.entry, 2)
         tp_pct = round(100 * abs(signal.tp - signal.entry) / signal.entry, 2)
         msg += f"\n\nSL {sl_pct}%\n"
