@@ -1,10 +1,11 @@
 from config.settings.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
-from domain.setup_detector import SetupDetector
 from config.settings.constants import TF_MAP
 from data.loader import Loader
 from domain.risk_filters import is_low_liquidity, is_abnormal_spike
-from notifier.formatter import format_signal_detailed
+from domain.setup_detector import SetupDetector
+from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
+from services.trade_executor import TradeExecutor
 from utils.logger import log
 
 
@@ -13,6 +14,7 @@ class Scanner:
         self.loader = Loader()
         self.orders_notifier = TelegramNotifier(TELEGRAM_ORDERS_BOT_TOKEN)
         self.events_notifier = TelegramNotifier(TELEGRAM_EVENTS_BOT_TOKEN)
+        self.trade_executor = TradeExecutor(self.loader.binance)
 
     def run(self):
         log("Запущен цикл сканирования.")
@@ -40,9 +42,19 @@ class Scanner:
                 detector = SetupDetector(symbol, bars_by_tf, atr_by_tf)
                 signal = detector.detect()
 
-                if signal is not None and (signal.confidence == 'high' or signal.confidence == 'medium'):
-                    message = format_signal_detailed(signal)
+                if signal is not None and signal.confidence in ['medium', 'high']:
+                    message = format_message(signal)
                     self.events_notifier.send_message(message)
+
+                    if signal.entry and signal.sl and signal.tp:
+                        self.trade_executor.execute(
+                            symbol=signal.symbol,
+                            direction=signal.direction,
+                            entry=signal.entry,
+                            sl=signal.sl,
+                            tp=signal.tp
+                        )
+                        self.orders_notifier.send_message(message)
 
                 else:
                     log(f"Сетап по {symbol} не подтверждён.")

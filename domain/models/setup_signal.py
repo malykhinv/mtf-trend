@@ -12,3 +12,6 @@ class SetupSignal:
     rr: float
     text: str
     timestamp: datetime
+    entry: float
+    sl: float
+    tp: float
