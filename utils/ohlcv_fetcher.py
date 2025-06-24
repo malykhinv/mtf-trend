@@ -1,3 +1,5 @@
+import os
+
 import ccxt
 import pandas as pd
 
@@ -5,8 +7,11 @@ import pandas as pd
 coin = 'SEI'
 symbol = 'SEI/USDT'
 symbol_clean = symbol.replace('/', '')
-filename = f"{symbol_clean}_MTF_OHLCV.csv"
 limit = 500
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+output_dir = os.path.join(project_root, '.generated/ohlcv')
+os.makedirs(output_dir, exist_ok=True)
+filename = os.path.join(output_dir, f"{symbol_clean}_OHLCV.csv")
 
 # Таймфреймы Binance (ccxt)
 timeframes = {
