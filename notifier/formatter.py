@@ -13,6 +13,7 @@ def format_message(signal: SetupSignal) -> str:
 
     msg = (
         f"{emoji} *{signal.symbol}*\n\n"
+        f"{signal.text}\n\n"
         f"1:{round(signal.rr, 1)} {signal.direction.upper()}\n\n"
         f"`{tf_block}`"
     )

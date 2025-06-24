@@ -37,40 +37,43 @@ class SetupDetector:
             return None
         swings = StructureDetector(bars_15m, atr_15m).detect_swing_points()
 
-        # -------- ФЛЭТ-СЦЕНАРИЙ --------
+        last = bars_15m[-1]
+        prev = bars_15m[-2]
+
+        # -------- ФЛЕТ-СЦЕНАРИЙ --------
         if d1_state.is_range:
-            log(f"{self.symbol} во флэте. Проверка реакции у границ.")
+            log(f"{self.symbol} во флете. Проверка ложного пробоя и ретеста.")
 
-            last = bars_15m[-1]
-            prev = bars_15m[-2]
-
-
-            avg_volume = sum(b.volume for b in bars_15m[-21:-1]) / 20
-            volume_ok = prev.volume > 1.2 * avg_volume
-
-            # swing рядом с границей
             recent_swing = next((s for s in reversed(swings)
                                  if abs(s.price - d1_state.range_high) < atr_15m or
                                     abs(s.price - d1_state.range_low) < atr_15m), None)
-
             if not recent_swing:
                 log(f"{self.symbol}: нет swing-реакции у границы.")
                 return None
 
-            # подтверждение пробоя swing-точки
-            confirmed_break = (
-                recent_swing.kind == 'high' and prev.close < recent_swing.price < last.close or
-                recent_swing.kind == 'low' and prev.close > recent_swing.price > last.close
-            )
+            volume = prev.volume
+            avg_volume = sum(b.volume for b in bars_15m[-21:-1]) / 20
+            volume_ok = volume > 1.2 * avg_volume
 
-            if not confirmed_break or not volume_ok:
-                log(f"{self.symbol}: нет подтверждённого пробоя swing.")
+            # Проверка возврата внутрь диапазона (ложный пробой)
+            if recent_swing.kind == 'high':
+                is_false_break = prev.high > recent_swing.price > last.close
+            else:
+                is_false_break = prev.low < recent_swing.price < last.close
+
+            # Проверка пробоя + ретеста (пробой с закреплением)
+            if recent_swing.kind == 'high':
+                is_break_and_retest = prev.close < recent_swing.price < last.high and last.close > recent_swing.price
+            else:
+                is_break_and_retest = prev.close > recent_swing.price > last.low and last.close < recent_swing.price
+
+            if not (is_false_break or is_break_and_retest) or not volume_ok:
+                log(f"{self.symbol}: нет валидной реакции у границы.")
                 return None
 
             direction = "long" if recent_swing.kind == 'low' else "short"
             entry = last.close
 
-            # SL/TP строго по swing-структуре
             if direction == "long":
                 sl_candidates = [s.price for s in swings if s.kind == "low" and s.index < recent_swing.index]
                 tp_candidates = [s.price for s in swings if s.kind == "high" and s.index > recent_swing.index]
@@ -96,12 +99,12 @@ class SetupDetector:
                 confidence="high",
                 confirmed_timeframes=["1d"],
                 rr=round(rr, 2),
-                text=f"{self.symbol}: {direction.upper()} ФЛЭТ СЕТАП\nEntry: {entry}, SL: {sl}, TP: {tp}",
+                text="Цена вернулась после ложного пробоя" if is_false_break else "Цена закрепилась за уровнем",
                 timestamp=last.timestamp,
                 entry=entry,
                 sl=sl,
                 tp=tp,
-                scenario="rebound"
+                scenario="rebound" if is_false_break else "breakout"
             )
 
         # -------- МОМЕНТУМ-СЦЕНАРИЙ --------
@@ -165,7 +168,7 @@ class SetupDetector:
             confidence="high",
             confirmed_timeframes=["4h", "1h"],
             rr=round(rr, 2),
-            text=f"{self.symbol}: {direction.upper()} ТРЕНД\nEntry: {entry}, SL: {sl}, TP: {tp}",
+            text=f"Вход после коррекции в тренде",
             timestamp=confirm_candle.timestamp,
             entry=entry,
             sl=sl,
