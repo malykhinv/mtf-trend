@@ -35,13 +35,11 @@ class SetupDetector:
         ])
         return max(candidates, key=lambda s: s.confidence_value(), default=None)
 
-    # --- FLAT SETUPS ---
-
     def flat_high(self) -> Optional[SetupSignal]:
         log("Пробуем flat_high...")
         d1, h4, h1 = self.mtf_states["1d"], self.mtf_states["4h"], self.mtf_states["1h"]
-        if not d1.is_range:
-            log("D1 не во флете.")
+        if not d1.is_range or d1.range_high is None or d1.range_low is None:
+            log("D1 не во флете или нет границ диапазона.")
             return None
         if not (h4.trend in ['flat', None] and h1.trend in ['flat', None]):
             log("4H или 1H не во флете.")
@@ -68,6 +66,10 @@ class SetupDetector:
     def flat_medium(self) -> Optional[SetupSignal]:
         log("Пробуем flat_medium...")
         d1 = self.mtf_states["1d"]
+        if not d1.is_range or d1.range_high is None or d1.range_low is None:
+            log("D1 не во флете или нет границ диапазона.")
+            return None
+
         recent = self._find_swing_near(d1.range_high, d1.range_low)
         if not recent:
             log("Нет swing рядом с границей диапазона.")
@@ -89,6 +91,10 @@ class SetupDetector:
     def flat_low(self) -> Optional[SetupSignal]:
         log("Пробуем flat_low...")
         d1 = self.mtf_states["1d"]
+        if not d1.is_range or d1.range_high is None or d1.range_low is None:
+            log("D1 не во флете или нет границ диапазона.")
+            return None
+
         recent = self._find_swing_near(d1.range_high, d1.range_low)
         if not recent:
             log("Нет swing рядом с границей диапазона.")
@@ -102,8 +108,6 @@ class SetupDetector:
             text="Флет: реакция у уровня без подтверждения",
             confidence="low"
         )
-
-    # --- MOMENTUM SETUPS ---
 
     def momentum_high(self) -> Optional[SetupSignal]:
         log("Пробуем momentum_high...")
@@ -238,6 +242,9 @@ class SetupDetector:
         )
 
     def _find_swing_near(self, high: float, low: float):
+        if high is None or low is None:
+            log("Одна из границ диапазона — None. Прерываем поиск swing.")
+            return None
         return next((s for s in reversed(self.swings)
                      if abs(s.price - high) < self.atr_15m or abs(s.price - low) < self.atr_15m), None)
 
