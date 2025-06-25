@@ -104,10 +104,13 @@ class TradeExecutor:
 
     @staticmethod
     def _validate_sl_tp(entry: float, sl: float, tp: float, direction: str, symbol: str) -> bool:
+        def log_illegal():
+            log(f"SL/TP не соответствуют направлению сделки по {symbol}: {entry}.")
+
         if direction == 'long' and (sl >= entry or tp <= entry):
-            log(f"SL/TP не соответствуют направлению сделки по {symbol}.")
+            log_illegal()
             return False
         if direction == 'short' and (sl <= entry or tp >= entry):
-            log(f"SL/TP не соответствуют направлению сделки по {symbol}.")
+            log_illegal()
             return False
         return True

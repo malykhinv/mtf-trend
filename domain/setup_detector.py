@@ -53,12 +53,12 @@ class SetupDetector:
         avg_volume = sum(b.volume for b in self.bars_15m[-21:-1]) / 20
         volume_ok = self.prev.volume > 1.2 * avg_volume
         is_false_break = (
-            recent.kind == 'high' and self.prev.high > recent.price > self.last.close or
-            recent.kind == 'low' and self.prev.low < recent.price < self.last.close
+                recent.kind == 'high' and self.prev.high > recent.price > self.last.close or
+                recent.kind == 'low' and self.prev.low < recent.price < self.last.close
         )
         is_break_and_retest = (
-            recent.kind == 'high' and self.prev.close < recent.price < self.last.high and self.last.close > recent.price or
-            recent.kind == 'low' and self.prev.close > recent.price > self.last.low and self.last.close < recent.price
+                recent.kind == 'high' and self.prev.close < recent.price < self.last.high and self.last.close > recent.price or
+                recent.kind == 'low' and self.prev.close > recent.price > self.last.low and self.last.close < recent.price
         )
 
         if not (is_false_break or is_break_and_retest):
@@ -103,8 +103,8 @@ class SetupDetector:
             return None
 
         breakout_ok = (
-            direction == "long" and self.prev.close < last_swing.price < self.last.close or
-            direction == "short" and self.prev.close > last_swing.price > self.last.close
+                direction == "long" and self.prev.close < last_swing.price < self.last.close or
+                direction == "short" and self.prev.close > last_swing.price > self.last.close
         )
         if not breakout_ok:
             log("Цена не подтвердила пробой — confidence снижен.")
@@ -120,21 +120,21 @@ class SetupDetector:
         )
 
     def _build_signal(
-        self,
-        direction: Literal['long', 'short'],
-        reference_swing,
-        confirmed_tfs: List[str],
-        scenario: Literal['rebound', 'false_breakout', 'breakout', 'momentum'],
-        text: str,
-        confidence: Literal["low", "medium", "high"]
+            self,
+            direction: Literal['long', 'short'],
+            reference_swing,
+            confirmed_tfs: List[str],
+            scenario: Literal['rebound', 'false_breakout', 'breakout', 'momentum'],
+            text: str,
+            confidence: Literal["low", "medium", "high"]
     ) -> SetupSignal | None:
         entry = self.last.close
 
         sl_candidates = [
             s.price for s in self.swings
             if s.kind == ("low" if direction == "long" else "high")
-            and s.index < reference_swing.index
-            and abs(entry - s.price) > 0.3 * self.atr_15m
+               and s.index < reference_swing.index
+               and abs(entry - s.price) > 0.3 * self.atr_15m
         ]
 
         if not sl_candidates:
@@ -145,43 +145,43 @@ class SetupDetector:
             )
             sl_candidates = [fallback_sl]
 
-        sl = sl_candidates[-1]
+        sl = sl_candidates[-1] if sl_candidates else None
 
         tp_candidates = [
             s.price for s in self.swings
             if s.kind == ("high" if direction == "long" else "low")
-            and s.index > reference_swing.index
+               and s.index > reference_swing.index
         ]
 
-        min_rr = MIN_RR
-        tp = next((p for p in tp_candidates if abs(p - entry) / abs(entry - sl) >= min_rr), None)
+        tp = next((p for p in tp_candidates if sl is not None and abs(p - entry) / abs(entry - sl) >= MIN_RR), None)
 
-        if not tp:
+        if tp is None:
             log("Нет swing TP с нужным RR — пробуем fallback по экстремуму.")
             fallback_tp = (
                 max(b.high for b in self.bars_15m[-20:]) if direction == "long"
                 else min(b.low for b in self.bars_15m[-20:])
             )
             tp = fallback_tp
-            rr = abs(tp - entry) / abs(entry - sl)
-            if rr < MIN_RR:
-                log(f"RR {rr:.2f} меньше минимума {MIN_RR} — отклоняем.")
-                return None
 
+        # Проверка до расчёта rr
         if sl is None or tp is None:
             log("SL или TP не определены — отклоняем сигнал.")
             return None
 
         rr = abs(tp - entry) / abs(entry - sl)
+        if rr < MIN_RR:
+            log(f"RR {rr:.2f} меньше минимума {MIN_RR} — отклоняем.")
+            return None
+
         sl_pct = abs(entry - sl) / entry
         tp_pct = abs(tp - entry) / entry
 
         if sl_pct < MIN_SL_PCT and confidence == "high":
-            log("SL слишком близко — отклоняем.")
-            return None
+            log("SL слишком близко.")
+            confidence = "medium"
         if tp_pct < MIN_TP_PCT and confidence == "high":
-            log("TP слишком близко — отклоняем.")
-            return None
+            log("TP слишком близко.")
+            confidence = "medium"
 
         log(f"RR: {rr:.2f}, SL: {sl}, TP: {tp}")
         log(f"Сигнал {confidence.upper()}.")
@@ -199,4 +199,3 @@ class SetupDetector:
             tp=tp,
             scenario=scenario
         )
-
