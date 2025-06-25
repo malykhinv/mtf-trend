@@ -3,7 +3,7 @@ from domain.mtf_analyzer import MTFAnalyzer
 from domain.models.bar import Bar
 from domain.models.setup_signal import SetupSignal
 from domain.structures import StructureDetector
-from typing import Dict, List, Literal, cast
+from typing import Dict, List, Literal, Optional, cast
 from utils.logger import log
 
 
@@ -23,148 +23,189 @@ class SetupDetector:
         self.last = self.bars_15m[-1]
         self.prev = self.bars_15m[-2]
 
-    def detect(self) -> SetupSignal | None:
+    def detect(self) -> Optional[SetupSignal]:
         log(f"Анализ актива {self.symbol}.")
-
         if len(self.bars_15m) < 25:
             log("Мало данных на 15м — минимум 25 свечей нужно.")
             return None
 
-        return self.detect_flat_setup() or self.detect_momentum_setup()
+        candidates = filter(None, [
+            self.flat_high(), self.flat_medium(), self.flat_low(),
+            self.momentum_high(), self.momentum_medium(), self.momentum_low()
+        ])
+        return max(candidates, key=lambda s: s.confidence_value(), default=None)
 
-    def detect_flat_setup(self) -> SetupSignal | None:
+    # --- FLAT SETUPS ---
+
+    def flat_high(self) -> Optional[SetupSignal]:
+        log("Пробуем flat_high...")
         d1, h4, h1 = self.mtf_states["1d"], self.mtf_states["4h"], self.mtf_states["1h"]
-        confidence: Literal["low", "medium", "high"] = "high"
-
         if not d1.is_range:
             log("D1 не во флете.")
-            confidence = "medium"
+            return None
         if not (h4.trend in ['flat', None] and h1.trend in ['flat', None]):
-            log("4H или 1H в тренде — состояние ближе к переходу.")
-            confidence = "low"
-
-        recent = next((s for s in reversed(self.swings)
-                       if abs(s.price - d1.range_high) < self.atr_15m or
-                       abs(s.price - d1.range_low) < self.atr_15m), None)
-        if not recent:
-            log("Нет swing-точки рядом с границей.")
+            log("4H или 1H не во флете.")
             return None
 
-        avg_volume = sum(b.volume for b in self.bars_15m[-21:-1]) / 20
-        volume_ok = self.prev.volume > 1.2 * avg_volume
-        is_false_break = (
-                recent.kind == 'high' and self.prev.high > recent.price > self.last.close or
-                recent.kind == 'low' and self.prev.low < recent.price < self.last.close
-        )
-        is_break_and_retest = (
-                recent.kind == 'high' and self.prev.close < recent.price < self.last.high and self.last.close > recent.price or
-                recent.kind == 'low' and self.prev.close > recent.price > self.last.low and self.last.close < recent.price
-        )
+        recent = self._find_swing_near(d1.range_high, d1.range_low)
+        if not recent:
+            log("Нет swing рядом с границей диапазона.")
+            return None
 
-        if not (is_false_break or is_break_and_retest):
-            log("Формация слаба, просто реакция. Confidence: low.")
-            confidence = "low"
-        if not volume_ok:
-            log("Слабый объём — confidence снижен.")
-            confidence = "medium" if confidence == "high" else "low"
+        if not self._has_strong_15m_reaction(recent):
+            log("Нет сильной реакции на 15m.")
+            return None
 
-        return self._build_signal(
-            direction=cast(Literal["long", "short"], "long" if recent.kind == 'low' else "short"),
+        return self._try_build_signal(
+            direction="long" if recent.kind == 'low' else "short",
             reference_swing=recent,
             confirmed_tfs=["1d"],
-            scenario="rebound" if is_false_break else "breakout",
-            text="Цена вернулась после ложного пробоя" if is_false_break else "Цена закрепилась за уровнем",
-            confidence=cast(Literal["low", "medium", "high"], confidence)
+            scenario="rebound",
+            text="Флет: реакция от границы с подтверждением",
+            confidence="high"
         )
 
-    def detect_momentum_setup(self) -> SetupSignal | None:
-        h4, h1 = self.mtf_states["4h"], self.mtf_states["1h"]
-        confidence = "high"
-
-        if h4.trend not in ["up", "down"]:
-            log("4H без тренда.")
-            confidence = "low"
-        if h4.is_in_correction:
-            log("4H в коррекции.")
-            confidence = "medium"
-        if h1.trend != h4.trend:
-            log("1H не совпадает с 4H.")
-            confidence = "low"
-        if not h1.is_in_correction:
-            log("1H не в коррекции — момент входа сомнительный.")
-            confidence = "medium"
-
-        direction = "long" if h4.trend == "up" else "short"
-        last_swing = next((s for s in reversed(self.swings)
-                           if (direction == "long" and s.kind == "high") or
-                           (direction == "short" and s.kind == "low")), None)
-        if not last_swing:
-            log("Нет swing для подтверждения.")
+    def flat_medium(self) -> Optional[SetupSignal]:
+        log("Пробуем flat_medium...")
+        d1 = self.mtf_states["1d"]
+        recent = self._find_swing_near(d1.range_high, d1.range_low)
+        if not recent:
+            log("Нет swing рядом с границей диапазона.")
             return None
 
-        breakout_ok = (
-                direction == "long" and self.prev.close < last_swing.price < self.last.close or
-                direction == "short" and self.prev.close > last_swing.price > self.last.close
-        )
-        if not breakout_ok:
-            log("Цена не подтвердила пробой — confidence снижен.")
-            confidence = "low"
+        if not self._has_moderate_15m_reaction(recent):
+            log("Нет умеренной реакции на 15m.")
+            return None
 
-        return self._build_signal(
-            direction=cast(Literal["long", "short"], direction),
+        return self._try_build_signal(
+            direction="long" if recent.kind == 'low' else "short",
+            reference_swing=recent,
+            confirmed_tfs=["1d"],
+            scenario="rebound",
+            text="Флет: слабая реакция от границы",
+            confidence="medium"
+        )
+
+    def flat_low(self) -> Optional[SetupSignal]:
+        log("Пробуем flat_low...")
+        d1 = self.mtf_states["1d"]
+        recent = self._find_swing_near(d1.range_high, d1.range_low)
+        if not recent:
+            log("Нет swing рядом с границей диапазона.")
+            return None
+
+        return self._try_build_signal(
+            direction="long" if recent.kind == 'low' else "short",
+            reference_swing=recent,
+            confirmed_tfs=["1d"],
+            scenario="rebound",
+            text="Флет: реакция у уровня без подтверждения",
+            confidence="low"
+        )
+
+    # --- MOMENTUM SETUPS ---
+
+    def momentum_high(self) -> Optional[SetupSignal]:
+        log("Пробуем momentum_high...")
+        h4, h1 = self.mtf_states["4h"], self.mtf_states["1h"]
+        if h4.trend not in ["up", "down"]:
+            log("4H без тренда.")
+            return None
+        if not h1.is_in_correction:
+            log("1H не в коррекции.")
+            return None
+        if h1.trend != h4.trend:
+            log("1H не совпадает с 4H по направлению.")
+            return None
+
+        last_swing = self._get_trend_swing(h4.trend)
+        if not last_swing:
+            log("Нет swing по тренду.")
+            return None
+        if not self._breakout_confirmed(last_swing, h4.trend):
+            log("Нет подтверждения пробоя swing.")
+            return None
+
+        return self._try_build_signal(
+            direction="long" if h4.trend == "up" else "short",
             reference_swing=last_swing,
             confirmed_tfs=["4h", "1h"],
             scenario="momentum",
-            text="Вход после коррекции в тренде",
-            confidence=cast(Literal["low", "medium", "high"], confidence)
+            text="Моментум: вход после коррекции в тренде",
+            confidence="high"
         )
 
-    def _build_signal(
-            self,
-            direction: Literal['long', 'short'],
-            reference_swing,
-            confirmed_tfs: List[str],
-            scenario: Literal['rebound', 'false_breakout', 'breakout', 'momentum'],
-            text: str,
-            confidence: Literal["low", "medium", "high"]
-    ) -> SetupSignal | None:
-        entry = self.last.close
+    def momentum_medium(self) -> Optional[SetupSignal]:
+        log("Пробуем momentum_medium...")
+        h4 = self.mtf_states["4h"]
+        if h4.trend not in ["up", "down"]:
+            log("4H без тренда.")
+            return None
 
+        last_swing = self._get_trend_swing(h4.trend)
+        if not last_swing:
+            log("Нет swing по тренду.")
+            return None
+
+        return self._try_build_signal(
+            direction="long" if h4.trend == "up" else "short",
+            reference_swing=last_swing,
+            confirmed_tfs=["4h"],
+            scenario="momentum",
+            text="Моментум: тренд есть, подтверждение слабое",
+            confidence="medium"
+        )
+
+    def momentum_low(self) -> Optional[SetupSignal]:
+        log("Пробуем momentum_low...")
+        h4 = self.mtf_states["4h"]
+        if h4.trend not in ["up", "down"]:
+            log("4H без тренда.")
+            return None
+
+        return self._try_build_signal(
+            direction="long" if h4.trend == "up" else "short",
+            reference_swing=self.swings[-1],
+            confirmed_tfs=["4h"],
+            scenario="momentum",
+            text="Моментум: слабое подтверждение",
+            confidence="low"
+        )
+
+    def _try_build_signal(self, direction: Literal['long', 'short'], reference_swing, confirmed_tfs: List[str],
+                          scenario: Literal['rebound', 'breakout', 'momentum'], text: str,
+                          confidence: Literal["low", "medium", "high"]) -> Optional[SetupSignal]:
+        entry = self.last.close
         sl_candidates = [
             s.price for s in self.swings
             if s.kind == ("low" if direction == "long" else "high")
                and s.index < reference_swing.index
                and abs(entry - s.price) > 0.3 * self.atr_15m
         ]
-
         if not sl_candidates:
-            log("Нет подходящих SL swing — пробуем fallback.")
+            log("Нет подходящих SL swing — используем fallback.")
             fallback_sl = (
                 min(b.low for b in self.bars_15m[-15:]) if direction == "long"
                 else max(b.high for b in self.bars_15m[-15:])
             )
             sl_candidates = [fallback_sl]
 
-        sl = sl_candidates[-1] if sl_candidates else None
-
+        sl = sl_candidates[-1]
         tp_candidates = [
             s.price for s in self.swings
             if s.kind == ("high" if direction == "long" else "low")
                and s.index > reference_swing.index
         ]
-
-        tp = next((p for p in tp_candidates if sl is not None and abs(p - entry) / abs(entry - sl) >= MIN_RR), None)
-
+        tp = next((p for p in tp_candidates if abs(p - entry) / abs(entry - sl) >= MIN_RR), None)
         if tp is None:
-            log("Нет swing TP с нужным RR — пробуем fallback по экстремуму.")
+            log("Нет swing TP с нужным RR — используем fallback.")
             fallback_tp = (
                 max(b.high for b in self.bars_15m[-20:]) if direction == "long"
                 else min(b.low for b in self.bars_15m[-20:])
             )
             tp = fallback_tp
 
-        # Проверка до расчёта rr
-        if sl is None or tp is None:
+        if not sl or not tp:
             log("SL или TP не определены — отклоняем сигнал.")
             return None
 
@@ -176,15 +217,11 @@ class SetupDetector:
         sl_pct = abs(entry - sl) / entry
         tp_pct = abs(tp - entry) / entry
 
-        if sl_pct < MIN_SL_PCT and confidence == "high":
-            log("SL слишком близко.")
-            confidence = "medium"
-        if tp_pct < MIN_TP_PCT and confidence == "high":
-            log("TP слишком близко.")
-            confidence = "medium"
+        if confidence == "high" and (sl_pct < MIN_SL_PCT or tp_pct < MIN_TP_PCT):
+            log("SL/TP слишком близко для high confidence — отклоняем.")
+            return None
 
-        log(f"RR: {rr:.2f}, SL: {sl}, TP: {tp}")
-        log(f"Сигнал {confidence.upper()}.")
+        log(f"Сигнал найден: RR={rr:.2f}, SL={sl:.2f}, TP={tp:.2f}, confidence={confidence}")
 
         return SetupSignal(
             symbol=self.symbol,
@@ -199,3 +236,27 @@ class SetupDetector:
             tp=tp,
             scenario=scenario
         )
+
+    def _find_swing_near(self, high: float, low: float):
+        return next((s for s in reversed(self.swings)
+                     if abs(s.price - high) < self.atr_15m or abs(s.price - low) < self.atr_15m), None)
+
+    def _has_strong_15m_reaction(self, swing):
+        avg_vol = sum(b.volume for b in self.bars_15m[-21:-1]) / 20
+        structure_ok = self.prev.close > self.prev.open and (self.prev.high - self.prev.close) < 0.3 * (
+                    self.prev.high - self.prev.low)
+        return self.prev.volume > 1.2 * avg_vol and abs(self.prev.close - swing.price) < self.atr_15m and structure_ok
+
+    def _has_moderate_15m_reaction(self, swing):
+        avg_vol = sum(b.volume for b in self.bars_15m[-21:-1]) / 20
+        return self.prev.volume > 0.9 * avg_vol and abs(self.prev.close - swing.price) < 1.5 * self.atr_15m
+
+    def _get_trend_swing(self, trend: str):
+        kind = "high" if trend == "up" else "low"
+        return next((s for s in reversed(self.swings) if s.kind == kind), None)
+
+    def _breakout_confirmed(self, swing, trend):
+        if trend == "up":
+            return self.prev.close < swing.price < self.last.close
+        else:
+            return self.prev.close > swing.price > self.last.close
