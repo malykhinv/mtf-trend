@@ -36,8 +36,7 @@ class SetupDetector:
             self.flat_low(),
             self.flat_fake_breakout(),
             self.momentum_high(),
-            self.momentum_medium(),
-            self.momentum_low()
+            self.momentum_medium()
         ])
         return max(candidates, key=lambda s: confidence_map.get(s.confidence, 0), default=None)
 
@@ -81,8 +80,8 @@ class SetupDetector:
             log("Нет swing рядом с границей диапазона.")
             return None
 
-        if not self._has_moderate_15m_reaction(recent):
-            log("Нет умеренной реакции на 15m.")
+        if not self._has_structured_moderate_15m_reaction(recent):
+            log("Нет структурной реакции на 15m.")
             return None
 
         return self._try_build_signal(
@@ -196,10 +195,11 @@ class SetupDetector:
             return None
 
         has_correction_on_1h = h1.is_in_correction
-        has_reaction_on_15m = self._has_moderate_15m_reaction(last_swing)
+        has_valid_swing = last_swing.confirmed
+        has_reaction_on_15m = self._has_structured_moderate_15m_reaction(last_swing)
 
-        if not (has_correction_on_1h or has_reaction_on_15m):
-            log("Нет коррекции на 1H и реакции на 15m — отклоняем medium сигнал.")
+        if not (has_correction_on_1h and has_valid_swing and has_reaction_on_15m):
+            log("Нет нужной структуры на 1H/15m — medium отклоняется.")
             return None
 
         return self._try_build_signal(
@@ -229,8 +229,7 @@ class SetupDetector:
 
     def _try_build_signal(self, direction: Literal['long', 'short'], reference_swing, confirmed_tfs: List[str],
                           scenario: Literal['rebound', 'breakout', 'momentum'], text: str,
-                          confidence: Literal["low", "medium", "high"], tp_override: Optional[float] = None) -> \
-    Optional[SetupSignal]:
+                          confidence: Literal["low", "medium", "high"], tp_override: Optional[float] = None) -> Optional[SetupSignal]:
         entry = self.last.close
         sl_candidates = [
             s.price for s in self.swings
@@ -310,9 +309,12 @@ class SetupDetector:
                 self.prev.high - self.prev.low)
         return self.prev.volume > 1.2 * avg_vol and abs(self.prev.close - swing.price) < self.atr_15m and structure_ok
 
-    def _has_moderate_15m_reaction(self, swing):
+    def _has_structured_moderate_15m_reaction(self, swing):
         avg_vol = sum(b.volume for b in self.bars_15m[-21:-1]) / 20
-        return self.prev.volume > 0.9 * avg_vol and abs(self.prev.close - swing.price) < 1.5 * self.atr_15m
+        volume_ok = self.prev.volume >= avg_vol
+        close_near_swing = abs(self.prev.close - swing.price) < 1.2 * self.atr_15m
+        good_structure = abs(self.prev.high - self.prev.close) < 0.5 * (self.prev.high - self.prev.low)
+        return volume_ok and close_near_swing and good_structure
 
     def _get_trend_swing(self, trend: str):
         kind = "high" if trend == "up" else "low"

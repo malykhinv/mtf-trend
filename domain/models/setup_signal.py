@@ -23,4 +23,4 @@ class SetupSignal:
 
     @property
     def is_event_signal(self) -> bool:
-        return self.confidence == 'medium' and self.rr
+        return self.confidence in ['low', 'medium'] and self.rr
