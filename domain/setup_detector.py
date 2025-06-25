@@ -163,6 +163,10 @@ class SetupDetector:
                 else min(b.low for b in self.bars_15m[-20:])
             )
             tp = fallback_tp
+            rr = abs(tp - entry) / abs(entry - sl)
+            if rr < MIN_RR:
+                log(f"RR {rr:.2f} меньше минимума {MIN_RR} — отклоняем.")
+                return None
 
         if sl is None or tp is None:
             log("SL или TP не определены — отклоняем сигнал.")
