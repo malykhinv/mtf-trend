@@ -1,7 +1,6 @@
 from config.settings.constants import MIN_RR, MIN_SL_PCT, MIN_TP_PCT
 from domain.mtf_analyzer import MTFAnalyzer
 from domain.models.bar import Bar
-from domain.models.mtf_state import MTFState
 from domain.models.setup_signal import SetupSignal
 from domain.structures import StructureDetector
 from typing import Dict, List, Literal, cast
@@ -18,160 +17,91 @@ class SetupDetector:
     def detect(self) -> SetupSignal | None:
         log(f"Анализ актива {self.symbol}.")
 
-        mtf_states: Dict[str, MTFState] = {
-            tf: MTFAnalyzer(
-                bars=self.bars_by_tf[tf],
-                timeframe=tf,
-                atr=self.atr_by_tf[tf]
-            ).analyze()
+        self.mtf_states = {
+            tf: MTFAnalyzer(self.bars_by_tf[tf], tf, self.atr_by_tf[tf]).analyze()
             for tf in self.timeframes
         }
 
-        d1_state = mtf_states["1d"]
-        h4_state = mtf_states["4h"]
-        h1_state = mtf_states["1h"]
+        self.bars_15m = self.bars_by_tf["15m"]
+        self.atr_15m = self.atr_by_tf["15m"]
 
-        bars_15m = self.bars_by_tf["15m"]
-        atr_15m = self.atr_by_tf["15m"]
-        if len(bars_15m) < 25:
-            return None
-        swings = StructureDetector(bars_15m, atr_15m).detect_swing_points()
-
-        last = bars_15m[-1]
-        prev = bars_15m[-2]
-
-        # -------- ФЛЕТ-СЦЕНАРИЙ --------
-        if d1_state.is_range:
-            if not (h4_state.trend in ['flat', None] and h1_state.trend in ['flat', None]):
-                log(f"{self.symbol}: 1D — флет, но 4H/1H — нет. Пропускаем.")
-                return None
-
-            log(f"{self.symbol} во флете. Проверка ложного пробоя и ретеста.")
-
-            recent_swing = next((s for s in reversed(swings)
-                                 if abs(s.price - d1_state.range_high) < atr_15m or
-                                    abs(s.price - d1_state.range_low) < atr_15m), None)
-            if not recent_swing:
-                log(f"{self.symbol}: нет swing-реакции у границы.")
-                return None
-
-            volume = prev.volume
-            avg_volume = sum(b.volume for b in bars_15m[-21:-1]) / 20
-            volume_ok = volume > avg_volume
-
-            # Проверка возврата внутрь диапазона (ложный пробой)
-            if recent_swing.kind == 'high':
-                is_false_break = prev.high > recent_swing.price > last.close
-            else:
-                is_false_break = prev.low < recent_swing.price < last.close
-
-            # Проверка пробоя + ретеста (пробой с закреплением)
-            if recent_swing.kind == 'high':
-                is_break_and_retest = prev.close < recent_swing.price < last.high and last.close > recent_swing.price
-            else:
-                is_break_and_retest = prev.close > recent_swing.price > last.low and last.close < recent_swing.price
-
-            if not (is_false_break or is_break_and_retest) or not volume_ok:
-                log(f"{self.symbol}: нет валидной реакции у границы.")
-                return None
-
-            direction = "long" if recent_swing.kind == 'low' else "short"
-            entry = last.close
-
-            if direction == "long":
-                sl_candidates = [s.price for s in swings if s.kind == "low" and s.index < recent_swing.index]
-                tp_candidates = [s.price for s in swings if s.kind == "high" and s.index > recent_swing.index]
-            else:
-                sl_candidates = [s.price for s in swings if s.kind == "high" and s.index < recent_swing.index]
-                tp_candidates = [s.price for s in swings if s.kind == "low" and s.index > recent_swing.index]
-
-            if not sl_candidates or not tp_candidates:
-                log(f"{self.symbol}: нет структурных SL/TP.")
-                return None
-
-            sl = sl_candidates[-1]
-            tp = tp_candidates[0]
-            sl_pct = abs(entry - sl) / entry
-            tp_pct = abs(tp - entry) / entry
-
-            if sl_pct < MIN_SL_PCT:
-                log(f"{self.symbol}: SL слишком мал — {sl_pct * 100:.2f}%")
-                return None
-
-            # Проверка: SL не должен быть внутри тела текущей свечи
-            if last.low < sl < last.high:
-                log(f"{self.symbol}: SL внутри тела текущей свечи — пропускаем.")
-                return None
-
-            if tp_pct < MIN_TP_PCT:
-                log(f"{self.symbol}: TP слишком мал — {tp_pct * 100:.2f}%")
-                return None
-
-            rr = abs(tp - entry) / abs(entry - sl)
-
-            if rr < MIN_RR:
-                log(f"{self.symbol}: RR={rr:.2f} ниже порога.")
-                return None
-
-            return SetupSignal(
-                symbol=self.symbol,
-                direction=cast(Literal['long', 'short'], direction),
-                confidence="high",
-                confirmed_timeframes=["1d"],
-                rr=round(rr, 2),
-                text="Цена вернулась после ложного пробоя" if is_false_break else "Цена закрепилась за уровнем",
-                timestamp=last.timestamp,
-                entry=entry,
-                sl=sl,
-                tp=tp,
-                scenario="rebound" if is_false_break else "breakout"
-            )
-
-        # -------- МОМЕНТУМ-СЦЕНАРИЙ --------
-        if not (h4_state.trend in ["up", "down"] and not h4_state.is_in_correction):
-            log(f"{self.symbol}: нет направленного тренда на 4H.")
+        if len(self.bars_15m) < 25:
             return None
 
-        if not (h1_state.trend == h4_state.trend and h1_state.is_in_correction):
-            log(f"{self.symbol}: на 1H нет коррекции в тренде {h4_state.trend}.")
+        self.swings = StructureDetector(self.bars_15m, self.atr_15m).detect_swing_points()
+        self.last = self.bars_15m[-1]
+        self.prev = self.bars_15m[-2]
+
+        return self.detect_flat_setup() or self.detect_momentum_setup()
+
+    def detect_flat_setup(self) -> SetupSignal | None:
+        d1, h4, h1 = self.mtf_states["1d"], self.mtf_states["4h"], self.mtf_states["1h"]
+
+        if not d1.is_range or not (h4.trend in ['flat', None] and h1.trend in ['flat', None]):
             return None
 
-        direction = "long" if h4_state.trend == "up" else "short"
+        log(f"{self.symbol} во флете. Проверка ложного пробоя и ретеста.")
+        recent = next((s for s in reversed(self.swings)
+                       if abs(s.price - d1.range_high) < self.atr_15m or
+                       abs(s.price - d1.range_low) < self.atr_15m), None)
+        if not recent:
+            return None
 
-        last_swing = next(
-            (s for s in reversed(swings)
-             if (direction == "long" and s.kind == "high") or
-                (direction == "short" and s.kind == "low")),
-            None
+        volume_ok = self.prev.volume > 1.2 * sum(b.volume for b in self.bars_15m[-21:-1]) / 20
+
+        is_false_break = (
+                recent.kind == 'high' and self.prev.high > recent.price > self.last.close or
+                recent.kind == 'low' and self.prev.low < recent.price < self.last.close
         )
-
-        if last_swing is None:
-            log(f"{self.symbol}: нет swing-точки для входа.")
-            return None
-
-        confirm_candle = bars_15m[-1]
-        previous_candle = bars_15m[-2]
-
-        confirmed_break = (
-            direction == "long" and previous_candle.close < last_swing.price < confirm_candle.close or
-            direction == "short" and previous_candle.close > last_swing.price > confirm_candle.close
+        is_break_and_retest = (
+                recent.kind == 'high' and self.prev.close < recent.price < self.last.high and self.last.close > recent.price or
+                recent.kind == 'low' and self.prev.close > recent.price > self.last.low and self.last.close < recent.price
         )
-
-        if not confirmed_break:
-            log(f"{self.symbol}: свеча не подтвердила пробой swing.")
+        if not (is_false_break or is_break_and_retest) or not volume_ok:
             return None
 
-        entry = confirm_candle.close
+        return self._build_signal("long" if recent.kind == 'low' else "short", recent, ["1d"],
+                                  "rebound" if is_false_break else "breakout",
+                                  "Цена вернулась после ложного пробоя" if is_false_break else "Цена закрепилась за уровнем")
 
-        if direction == "long":
-            sl_candidates = [s.price for s in swings if s.kind == "low" and s.index < last_swing.index]
-            tp_candidates = [s.price for s in swings if s.kind == "high" and s.index > last_swing.index]
-        else:
-            sl_candidates = [s.price for s in swings if s.kind == "high" and s.index < last_swing.index]
-            tp_candidates = [s.price for s in swings if s.kind == "low" and s.index > last_swing.index]
+    def detect_momentum_setup(self) -> SetupSignal | None:
+        h4, h1 = self.mtf_states["4h"], self.mtf_states["1h"]
+
+        if h4.trend not in ["up", "down"] or h4.is_in_correction:
+            return None
+        if h1.trend != h4.trend or not h1.is_in_correction:
+            return None
+
+        direction = "long" if h4.trend == "up" else "short"
+        last_swing = next((s for s in reversed(self.swings)
+                           if (direction == "long" and s.kind == "high") or
+                           (direction == "short" and s.kind == "low")), None)
+        if not last_swing:
+            return None
+
+        if not (
+                direction == "long" and self.prev.close < last_swing.price < self.last.close or
+                direction == "short" and self.prev.close > last_swing.price > self.last.close
+        ):
+            return None
+
+        return self._build_signal(direction, last_swing, ["4h", "1h"], "momentum", "Вход после коррекции в тренде")
+
+    def _build_signal(
+            self,
+            direction: Literal['long', 'short'],
+            pivot,
+            confirmed_tfs: List[str],
+            scenario: Literal['rebound', 'false_breakout', 'breakout', 'momentum'],
+            text: str
+    ) -> SetupSignal | None:
+        entry = self.last.close
+        sl_candidates = [s.price for s in self.swings if
+                         s.kind == ("low" if direction == "long" else "high") and s.index < pivot.index]
+        tp_candidates = [s.price for s in self.swings if
+                         s.kind == ("high" if direction == "long" else "low") and s.index > pivot.index]
 
         if not sl_candidates or not tp_candidates:
-            log(f"{self.symbol}: нет структурных SL/TP.")
             return None
 
         sl = sl_candidates[-1]
@@ -179,35 +109,23 @@ class SetupDetector:
         sl_pct = abs(entry - sl) / entry
         tp_pct = abs(tp - entry) / entry
 
-        if sl_pct < MIN_SL_PCT:
-            log(f"{self.symbol}: SL слишком мал — {sl_pct * 100:.2f}%")
-            return None
-
-        if tp_pct < MIN_TP_PCT:
-            log(f"{self.symbol}: TP слишком мал — {tp_pct * 100:.2f}%")
-            return None
-
-        # Проверка: SL не должен быть внутри тела текущей свечи
-        if last.low < sl < last.high:
-            log(f"{self.symbol}: SL внутри тела текущей свечи — пропускаем.")
+        if sl_pct < MIN_SL_PCT or tp_pct < MIN_TP_PCT:
             return None
 
         rr = abs(tp - entry) / abs(entry - sl)
-
         if rr < MIN_RR:
-            log(f"{self.symbol}: RR={rr:.2f} ниже порога.")
             return None
 
         return SetupSignal(
             symbol=self.symbol,
             direction=cast(Literal['long', 'short'], direction),
             confidence="high",
-            confirmed_timeframes=["4h", "1h"],
+            confirmed_timeframes=confirmed_tfs,
             rr=round(rr, 2),
-            text=f"Вход после коррекции в тренде",
-            timestamp=confirm_candle.timestamp,
+            text=text,
+            timestamp=self.last.timestamp,
             entry=entry,
             sl=sl,
             tp=tp,
-            scenario="momentum"
+            scenario=scenario
         )
