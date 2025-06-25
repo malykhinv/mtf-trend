@@ -58,7 +58,7 @@ class Scanner:
                             tp=signal.tp
                         )
                         self.orders_notifier.send_message(message)
-                    else:
+                    elif signal.is_event_signal:
                         self.events_notifier.send_message(message)
                 else:
                     log(f"Сетап по {symbol} не подтверждён.")

@@ -20,3 +20,7 @@ class SetupSignal:
     @property
     def is_order_signal(self) -> bool:
         return self.confidence == 'high' and self.tp is not None and self.sl is not None
+
+    @property
+    def is_event_signal(self) -> bool:
+        return self.confidence == 'medium' and self.rr
