@@ -29,11 +29,12 @@ class SetupDetector:
             log("Мало данных на 15м — минимум 25 свечей нужно.")
             return None
 
+        CONFIDENCE_MAP = {"low": 1, "medium": 2, "high": 3}
         candidates = filter(None, [
             self.flat_high(), self.flat_medium(), self.flat_low(),
             self.momentum_high(), self.momentum_medium(), self.momentum_low()
         ])
-        return max(candidates, key=lambda s: s.confidence_value(), default=None)
+        return max(candidates, key=lambda s: CONFIDENCE_MAP.get(s.confidence, 0), default=None)
 
     def flat_high(self) -> Optional[SetupSignal]:
         log("Пробуем flat_high...")
@@ -242,6 +243,7 @@ class SetupDetector:
         )
 
     def _find_swing_near(self, high: float, low: float):
+        log(f"Проверка границ диапазона: high={high}, low={low}")
         if high is None or low is None:
             log("Одна из границ диапазона — None. Прерываем поиск swing.")
             return None
