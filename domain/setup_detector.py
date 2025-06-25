@@ -34,7 +34,7 @@ class SetupDetector:
 
     def detect_flat_setup(self) -> SetupSignal | None:
         d1, h4, h1 = self.mtf_states["1d"], self.mtf_states["4h"], self.mtf_states["1h"]
-        confidence = "high"
+        confidence: Literal["low", "medium", "high"] = "high"
 
         if not d1.is_range:
             log("D1 не во флете.")
@@ -136,24 +136,37 @@ class SetupDetector:
             and s.index < reference_swing.index
             and abs(entry - s.price) > 0.3 * self.atr_15m
         ]
+
+        if not sl_candidates:
+            log("Нет подходящих SL swing — пробуем fallback.")
+            fallback_sl = (
+                min(b.low for b in self.bars_15m[-15:]) if direction == "long"
+                else max(b.high for b in self.bars_15m[-15:])
+            )
+            sl_candidates = [fallback_sl]
+
+        sl = sl_candidates[-1]
+
         tp_candidates = [
             s.price for s in self.swings
             if s.kind == ("high" if direction == "long" else "low")
             and s.index > reference_swing.index
         ]
 
-        if not sl_candidates or not tp_candidates:
-            log("Нет подходящих swing-точек для SL или TP.")
-            return None
+        min_rr = MIN_RR
+        tp = next((p for p in tp_candidates if abs(p - entry) / abs(entry - sl) >= min_rr), None)
 
-        sl = sl_candidates[-1]
-        tp = next((p for p in tp_candidates if abs(p - entry) / abs(entry - sl) >= MIN_RR), None)
+        if not tp:
+            log("Нет swing TP с нужным RR — пробуем fallback по экстремуму.")
+            fallback_tp = (
+                max(b.high for b in self.bars_15m[-20:]) if direction == "long"
+                else min(b.low for b in self.bars_15m[-20:])
+            )
+            tp = fallback_tp
 
-        if tp is None and confidence == "high":
-            log("Нет цели с нужным RR — не годится для high confidence.")
+        if sl is None or tp is None:
+            log("SL или TP не определены — отклоняем сигнал.")
             return None
-        if tp is None:
-            tp = tp_candidates[-1]
 
         rr = abs(tp - entry) / abs(entry - sl)
         sl_pct = abs(entry - sl) / entry
@@ -166,11 +179,13 @@ class SetupDetector:
             log("TP слишком близко — отклоняем.")
             return None
 
-        log(f"Сигнал {confidence.upper()}. RR: {rr:.2f}, SL: {sl}, TP: {tp}")
+        log(f"RR: {rr:.2f}, SL: {sl}, TP: {tp}")
+        log(f"Сигнал {confidence.upper()}.")
+
         return SetupSignal(
             symbol=self.symbol,
             direction=cast(Literal['long', 'short'], direction),
-            confidence=confidence,
+            confidence=cast(Literal["low", "medium", "high"], confidence),
             confirmed_timeframes=confirmed_tfs,
             rr=round(rr, 2),
             text=text,
@@ -180,3 +195,4 @@ class SetupDetector:
             tp=tp,
             scenario=scenario
         )
+

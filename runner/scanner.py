@@ -48,7 +48,7 @@ class Scanner:
                 detector = SetupDetector(symbol, bars_by_tf, atr_by_tf)
                 signal = detector.detect()
 
-                if signal is not None and signal.confidence in ['medium', 'high']:
+                if signal is not None:
                     message = format_message(signal)
                     if signal.is_order_signal:
                         self.trade_executor.execute(

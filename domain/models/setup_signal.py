@@ -9,12 +9,12 @@ class SetupSignal:
     direction: Literal['long', 'short']
     confidence: Literal['low', 'medium', 'high']
     confirmed_timeframes: List[str]
-    rr: float
     text: str
     timestamp: datetime
-    entry: float
-    sl: float
-    tp: float
+    entry: Optional[float]
+    rr: Optional[float]
+    sl: Optional[float]
+    tp: Optional[float]
     scenario: Optional[Literal['rebound', 'false_breakout', 'breakout', 'momentum']] = None
 
     @property
