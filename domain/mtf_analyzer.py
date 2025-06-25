@@ -40,7 +40,7 @@ class MTFAnalyzer:
         highs = [s for s in swings if s.kind == 'high']
         lows = [s for s in swings if s.kind == 'low']
 
-        # Проверка up-тренда: HH и HL устойчивые + дистанция swing'ов > 1.5 ATR
+        # Проверка up-тренда
         if len(highs) >= 3 and len(lows) >= 3:
             hh1, hh2 = highs[-2].price, highs[-1].price
             hl1, hl2 = lows[-2].price, lows[-1].price
@@ -69,7 +69,9 @@ class MTFAnalyzer:
             range_size = max_high - min_low
             total_move = abs(self.bars[-1].close - self.bars[-20].close)
 
-            if range_size / self.atr < 6 and total_move < 3 * self.atr:
+            if range_size / min_low > 0.5:
+                log("Диапазон слишком широкий (>50%) — не считаем флетом.")
+            elif range_size / self.atr < 6 and total_move < 3 * self.atr:
                 is_range = True
                 range_high = max_high
                 range_low = min_low

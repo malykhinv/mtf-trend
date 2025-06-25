@@ -235,7 +235,7 @@ class SetupDetector:
             log("SL/TP слишком близко для high confidence — отклоняем.")
             return None
 
-        log(f"Сигнал найден: RR={rr:.2f}, SL={sl:.2f}, TP={tp:.2f}, confidence={confidence}")
+        log(f"Сигнал найден: RR={rr:.2f}, SL={sl:.5f}, TP={tp:.5f}, confidence={confidence}")
 
         return SetupSignal(
             symbol=self.symbol,
