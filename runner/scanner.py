@@ -25,7 +25,8 @@ class Scanner:
 
         for symbol in symbols:
             try:
-                log(f"Анализ {symbol}")
+                print()
+                log(f"{symbol}")
                 bars_by_tf = self.loader.fetch_multiple_timeframes(symbol, TF_MAP)
 
                 if is_low_liquidity(bars_by_tf['1d']):

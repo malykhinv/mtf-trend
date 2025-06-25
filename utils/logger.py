@@ -1,7 +1,8 @@
-# utils/logger.py
 import logging
+import sys
 
 logging.basicConfig(
+    stream=sys.stdout,
     format="%(asctime)s %(message)s",
     datefmt="%H:%M:%S",
     level=logging.INFO

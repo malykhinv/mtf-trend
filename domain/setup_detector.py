@@ -24,7 +24,6 @@ class SetupDetector:
         self.prev = self.bars_15m[-2]
 
     def detect(self) -> Optional[SetupSignal]:
-        log(f"Анализ актива {self.symbol}.")
         if len(self.bars_15m) < 25:
             log("Мало данных на 15м — минимум 25 свечей нужно.")
             return None
