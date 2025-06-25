@@ -29,12 +29,12 @@ class SetupDetector:
             log("Мало данных на 15м — минимум 25 свечей нужно.")
             return None
 
-        CONFIDENCE_MAP = {"low": 1, "medium": 2, "high": 3}
+        confidence_map = {"low": 1, "medium": 2, "high": 3}
         candidates = filter(None, [
             self.flat_high(), self.flat_medium(), self.flat_low(),
             self.momentum_high(), self.momentum_medium(), self.momentum_low()
         ])
-        return max(candidates, key=lambda s: CONFIDENCE_MAP.get(s.confidence, 0), default=None)
+        return max(candidates, key=lambda s: confidence_map.get(s.confidence, 0), default=None)
 
     def flat_high(self) -> Optional[SetupSignal]:
         log("Пробуем flat_high...")
@@ -143,6 +143,8 @@ class SetupDetector:
     def momentum_medium(self) -> Optional[SetupSignal]:
         log("Пробуем momentum_medium...")
         h4 = self.mtf_states["4h"]
+        h1 = self.mtf_states["1h"]
+
         if h4.trend not in ["up", "down"]:
             log("4H без тренда.")
             return None
@@ -150,6 +152,14 @@ class SetupDetector:
         last_swing = self._get_trend_swing(h4.trend)
         if not last_swing:
             log("Нет swing по тренду.")
+            return None
+
+        # Добавляем фильтр: нужна коррекция на 1H или реакция на 15m
+        has_correction_on_1h = h1.is_in_correction
+        has_reaction_on_15m = self._has_moderate_15m_reaction(last_swing)
+
+        if not (has_correction_on_1h or has_reaction_on_15m):
+            log("Нет коррекции на 1H и реакции на 15m — отклоняем medium сигнал.")
             return None
 
         return self._try_build_signal(
