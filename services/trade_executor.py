@@ -1,7 +1,10 @@
-from typing import Literal
+from typing import Literal, cast
 from config.settings.constants import POSITION_USDT, MIN_RR
 from ccxt import binance
 
+from domain.models.order_side import OrderSide
+from domain.models.scenario import Scenario
+from domain.models.side import Side
 from utils.logger import log
 from services.position_tracker_service import PositionTrackerService
 
@@ -11,7 +14,12 @@ class TradeExecutor:
         self.client = client
         self.tracker = tracker
 
-    def execute(self, symbol: str, direction: Literal['long', 'short'], sl: float, tp: float,
+    def execute(self,
+                symbol: str,
+                scenario: Scenario,
+                side: Side,
+                sl: float,
+                tp: float,
                 amount_usdt: float = POSITION_USDT):
         try:
             market_symbol = self._to_market_symbol(symbol)
@@ -21,27 +29,27 @@ class TradeExecutor:
             if not self._validate_rr(entry, sl, tp, symbol):
                 return
 
-            if not self._validate_sl_tp(entry, sl, tp, direction, symbol):
+            if not self._validate_sl_tp(entry, sl, tp, side, symbol):
                 return
 
             precision_amount = market['precision']['amount'] if 'precision' in market else 6
             precision_price = market['precision']['price'] if 'precision' in market else 6
 
             amount = round(amount_usdt / entry, precision_amount)
-            side: Literal['buy', 'sell'] = 'buy' if direction == 'long' else 'sell'
-            opposite_side: Literal['buy', 'sell'] = 'sell' if direction == 'long' else 'buy'
+            open_side = OrderSide.BUY if side == Side.LONG else OrderSide.SELL
+            close_side = OrderSide.SELL if side == Side.LONG else OrderSide.BUY
 
             self.client.create_order(
                 symbol=market_symbol,
                 type='market',
-                side=side,
+                side=cast(Literal["buy", "sell"], open_side.value),
                 amount=amount
             )
 
             self.client.create_order(
                 symbol=market_symbol,
                 type='market',
-                side=opposite_side,
+                side=cast(Literal["buy", "sell"], close_side.value),
                 amount=amount,
                 params={
                     'type': 'TAKE_PROFIT_MARKET',
@@ -53,7 +61,7 @@ class TradeExecutor:
             self.client.create_order(
                 symbol=market_symbol,
                 type='market',
-                side=opposite_side,
+                side=cast(Literal["buy", "sell"], close_side.value),
                 amount=amount,
                 params={
                     'type': 'STOP_MARKET',
@@ -63,13 +71,12 @@ class TradeExecutor:
             )
 
             rr = round(abs(tp - entry) / abs(entry - sl), 2)
-            log(f"[ВХОД] {symbol} {direction.upper()} @ {entry}\nSL: {sl}, TP: {tp}, RR: {rr}")
+            log(f"[ВХОД] {symbol} {open_side} @ {entry}\nSL: {sl}, TP: {tp}, RR: {rr}")
 
-            scenario = 'rebound' if rr <= 4 else 'momentum'
             atr = abs(entry - sl)
             self.tracker.add_trade(
                 symbol=symbol,
-                direction=direction,
+                side=side,
                 entry=entry,
                 sl=sl,
                 tp=tp,
@@ -80,10 +87,7 @@ class TradeExecutor:
 
         except Exception as error:
             log(f"Исполнение ордера по {symbol} не удалось: {error}")
-
-    @staticmethod
-    def _to_market_symbol(symbol: str) -> str:
-        return symbol.replace("USDT", "/USDT")
+            raise
 
     def _get_price(self, market_symbol: str) -> float:
         ticker = self.client.fetch_ticker(market_symbol)
@@ -103,14 +107,14 @@ class TradeExecutor:
         return True
 
     @staticmethod
-    def _validate_sl_tp(entry: float, sl: float, tp: float, direction: str, symbol: str) -> bool:
+    def _validate_sl_tp(entry: float, sl: float, tp: float, side: Side, symbol: str) -> bool:
         def log_illegal():
             log(f"SL/TP не соответствуют направлению сделки по {symbol}: {entry}.")
 
-        if direction == 'long' and (sl >= entry or tp <= entry):
+        if side == Side.LONG and (sl >= entry or tp <= entry):
             log_illegal()
             return False
-        if direction == 'short' and (sl <= entry or tp >= entry):
+        if side == Side.SHORT and (sl <= entry or tp >= entry):
             log_illegal()
             return False
         return True

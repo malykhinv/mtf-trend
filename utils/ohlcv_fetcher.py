@@ -4,11 +4,12 @@ import ccxt
 import pandas as pd
 
 from utils.logger import log
+from utils.str_utils import clean_symbol
 
 # === НАСТРОЙКИ ===
 coin = 'SEI'
 symbol = 'SEI/USDT'
-symbol_clean = symbol.replace('/', '')
+symbol_clean = clean_symbol(symbol)
 limit = 500
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 output_dir = os.path.join(project_root, '.generated/ohlcv')

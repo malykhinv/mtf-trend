@@ -1,6 +1,9 @@
 from domain.models.bar import Bar
+from domain.models.price_direction import PriceDirection
 from domain.models.swing_point import SwingPoint
 from typing import List
+
+from domain.models.swing_type import SwingType
 from utils.logger import log
 
 class StructureDetector:
@@ -19,14 +22,14 @@ class StructureDetector:
             is_high = all(bar.high > self.bars[j].high for j in [i-2, i-1, i+1, i+2])
             is_low = all(bar.low < self.bars[j].low for j in [i-2, i-1, i+1, i+2])
 
-            if is_high and (direction != 'down' or abs(bar.high - last_extreme) > self.threshold):
-                swings.append(SwingPoint(index=i, price=bar.high, kind='high', confirmed=True))
-                direction = 'down'
+            if is_high and (direction != PriceDirection.DOWN or abs(bar.high - last_extreme) > self.threshold):
+                swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
+                direction = PriceDirection.DOWN
                 last_extreme = bar.high
 
-            elif is_low and (direction != 'up' or abs(bar.low - last_extreme) > self.threshold):
-                swings.append(SwingPoint(index=i, price=bar.low, kind='low', confirmed=True))
-                direction = 'up'
+            elif is_low and (direction != PriceDirection.UP or abs(bar.low - last_extreme) > self.threshold):
+                swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
+                direction = PriceDirection.UP
                 last_extreme = bar.low
 
         log(f"Всего swing-точек найдено: {len(swings)}.")

@@ -1,18 +1,22 @@
 from domain.models.bar import Bar
 from domain.models.mtf_state import MTFState
+from domain.models.phase import Phase
+from domain.models.price_direction import PriceDirection
+from domain.models.swing_type import SwingType
+from domain.models.timeframe import Timeframe
 from domain.structures import StructureDetector
 from utils.logger import log
-from typing import List, Literal, cast
+from typing import List
 
 
 class MTFAnalyzer:
-    def __init__(self, bars: List[Bar], timeframe: str, atr: float):
+    def __init__(self, bars: List[Bar], timeframe: Timeframe, atr: float):
         self.bars = bars
         self.timeframe = timeframe
         self.atr = atr
 
     def analyze(self) -> MTFState:
-        log(f"Анализ таймфрейма {self.timeframe.upper()}.")
+        log(f"Анализ таймфрейма {self.timeframe.value}.")
         detector = StructureDetector(self.bars, self.atr)
         swings = detector.detect_swing_points()
 
@@ -20,48 +24,48 @@ class MTFAnalyzer:
             log("Недостаточно swing-точек для анализа.")
             return MTFState(
                 timeframe=self.timeframe,
-                trend='flat',
+                phase=Phase.FLAT,
                 structure=swings,
                 is_in_correction=False,
-                correction_direction='none',
+                correction_direction=None,
                 rr_potential=0.0,
                 is_range=False,
                 range_high=None,
                 range_low=None
             )
 
-        trend: Literal['up', 'down', 'flat'] = 'flat'
-        correction_direction: Literal['up', 'down', 'none'] = 'none'
+        phase = None
+        correction_direction = None
         is_in_correction = False
         is_range = False
         range_high = None
         range_low = None
 
-        highs = [s for s in swings if s.kind == 'high']
-        lows = [s for s in swings if s.kind == 'low']
+        highs = [s for s in swings if s.type == SwingType.HIGH]
+        lows = [s for s in swings if s.type == SwingType.LOW]
 
         # Проверка up-тренда
         if len(highs) >= 3 and len(lows) >= 3:
             hh1, hh2 = highs[-2].price, highs[-1].price
             hl1, hl2 = lows[-2].price, lows[-1].price
             if hh2 > hh1 and hl2 > hl1 and min(abs(hh2 - hh1), abs(hl2 - hl1)) > 1.5 * self.atr:
-                trend = 'up'
+                phase = Phase.UPTREND
                 if hl2 < hl1:
                     is_in_correction = True
-                    correction_direction = 'down'
+                    correction_direction = PriceDirection.DOWN
 
         # Проверка down-тренда
-        if trend == 'flat' and len(highs) >= 3 and len(lows) >= 3:
+        if phase == Phase.FLAT and len(highs) >= 3 and len(lows) >= 3:
             lh1, lh2 = highs[-2].price, highs[-1].price
             ll1, ll2 = lows[-2].price, lows[-1].price
             if lh2 < lh1 and ll2 < ll1 and min(abs(lh1 - lh2), abs(ll1 - ll2)) > 1.5 * self.atr:
-                trend = 'down'
+                phase = Phase.DOWNTREND
                 if lh2 > lh1:
                     is_in_correction = True
-                    correction_direction = 'up'
+                    correction_direction = PriceDirection.UP
 
         # Проверка диапазона (флэт)
-        if trend == 'flat' and len(highs) >= 3 and len(lows) >= 3:
+        if phase == Phase.FLAT and len(highs) >= 3 and len(lows) >= 3:
             recent_highs = [h.price for h in highs[-3:]]
             recent_lows = [l.price for l in lows[-3:]]
             max_high = max(recent_highs)
@@ -78,19 +82,19 @@ class MTFAnalyzer:
 
         rr = 0.0
         last = swings[-1]
-        if trend == 'up':
+        if phase == Phase.UPTREND:
             rr = (last.price - min([b.low for b in self.bars[-10:]])) / self.atr
-        elif trend == 'down':
+        elif phase == Phase.DOWNTREND:
             rr = (max([b.high for b in self.bars[-10:]]) - last.price) / self.atr
 
-        log(f"Результат: тренд — {trend}, коррекция — {correction_direction if is_in_correction else 'нет'}, RR — {round(rr, 2)}.")
+        log(f"Результат: тренд — {phase}, коррекция — {correction_direction if is_in_correction else 'нет'}, RR — {round(rr, 2)}.")
 
         return MTFState(
             timeframe=self.timeframe,
-            trend=cast(Literal['up', 'down', 'flat'], trend),
+            phase=phase,
             structure=swings,
             is_in_correction=is_in_correction,
-            correction_direction=cast(Literal['up', 'down', 'none'], correction_direction),
+            correction_direction=correction_direction,
             rr_potential=round(rr, 2),
             is_range=is_range,
             range_high=range_high,

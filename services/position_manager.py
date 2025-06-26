@@ -1,24 +1,29 @@
-from typing import Literal
-
+from config.settings.constants import PROGRESS_RR_FAR, PROGRESS_RR_NEAR
 from data.loader import Loader
+from domain.models.order_side import OrderSide
+from domain.models.scenario import Scenario
+from domain.models.side import Side
+from domain.models.swing_type import SwingType
+from domain.models.timeframe import Timeframe
 from domain.structures import StructureDetector
 from utils.logger import log
+from utils.str_utils import market_symbol
 
 
 class PositionManager:
     def __init__(self,
                  symbol: str,
-                 direction: Literal['long', 'short'],
+                 side: Side,
                  entry: float,
                  sl: float,
                  tp: float,
-                 scenario: Literal['momentum', 'rebound'],
+                 scenario: Scenario,
                  client,
                  atr: float,
                  amount: float,
                  tracker):
         self.symbol = symbol
-        self.direction = direction
+        self.side = side
         self.entry = entry
         self.sl = sl
         self.tp = tp
@@ -33,94 +38,100 @@ class PositionManager:
         self.partial_exit_done = False
 
     def manage(self):
-        bars = self.loader.fetch_ohlcv(self.symbol, '5m', limit=50)
+        bars = self.loader.fetch_ohlcv(self.symbol, Timeframe.M5, limit=50)
         detector = StructureDetector(bars, self.atr)
         swings = detector.detect_swing_points()
 
         current_price = bars[-1].close
         progress_rr = abs(current_price - self.entry) / abs(self.entry - self.sl)
 
-        log(f"[PositionManager] {self.symbol} @ {current_price:.5f}, RR={progress_rr:.2f}")
+        log(f"{self.symbol} @ {current_price:.5f}, RR={progress_rr:.2f}")
 
-        if self.direction == 'long':
+        if self.side == Side.LONG:
             self._manage_long(progress_rr, swings)
         else:
             self._manage_short(progress_rr, swings)
 
     def _manage_long(self, progress_rr: float, swings):
-        # Частичный выход при +3R
-        if progress_rr >= 3.0 and not self.partial_exit_done:
+        # Частичный выход
+        if progress_rr >= PROGRESS_RR_FAR and not self.partial_exit_done:
             self._partial_close()
             self.partial_exit_done = True
 
-        # Перенос SL под HL после 2 HL
-        hl_candidates = [s for s in swings if s.kind == 'low']
-        if len(hl_candidates) >= 2 and progress_rr >= 1.0:
+        # Перенос SL под HL
+        hl_candidates = [s for s in swings if s.type == SwingType.LOW]
+        if len(hl_candidates) >= 2 and progress_rr >= PROGRESS_RR_NEAR:
             new_sl = hl_candidates[-1].price
             if new_sl > self.trailing_sl:
                 self._update_sl(new_sl)
 
         # Фиксация при сломе HL
-        if len(hl_candidates) >= 2 and hl_candidates[-1].price < hl_candidates[-2].price and progress_rr > 1.0:
-            log(f"[PositionManager] Слом HL на 5m — выход из {self.symbol}")
+        if (len(hl_candidates) >= 2 and
+                hl_candidates[-1].price < hl_candidates[-2].price and
+                progress_rr > PROGRESS_RR_NEAR):
+            log(f"Слом HL на 5m — выход из {self.symbol}")
             self._full_close()
 
     def _manage_short(self, progress_rr: float, swings):
-        lh_candidates = [s for s in swings if s.kind == 'high']
-        if progress_rr >= 3.0 and not self.partial_exit_done:
+        lh_candidates = [s for s in swings if s.type == SwingType.HIGH]
+        if progress_rr >= PROGRESS_RR_FAR and not self.partial_exit_done:
             self._partial_close()
             self.partial_exit_done = True
 
-        if len(lh_candidates) >= 2 and progress_rr >= 1.0:
+        if len(lh_candidates) >= 2 and progress_rr >= PROGRESS_RR_NEAR:
             new_sl = lh_candidates[-1].price
             if new_sl < self.trailing_sl:
                 self._update_sl(new_sl)
 
-        if len(lh_candidates) >= 2 and lh_candidates[-1].price > lh_candidates[-2].price and progress_rr > 1.0:
-            log(f"[PositionManager] Слом LH на 5m — выход из {self.symbol}")
+        if (len(lh_candidates) >= 2 and
+                lh_candidates[-1].price > lh_candidates[-2].price and
+                progress_rr > PROGRESS_RR_NEAR):
+            log(f"Слом LH на {Timeframe.M5.value} — выход из {self.symbol}")
             self._full_close()
 
     def _partial_close(self):
-        log(f"[PositionManager] Частичный выход из {self.symbol} на +3R")
+        log(f"Частичный выход из {self.symbol} на +{PROGRESS_RR_FAR}RR")
         try:
-            side = 'sell' if self.direction == 'long' else 'buy'
-            market_symbol = self.symbol.replace("USDT", "/USDT")
+            order_side = OrderSide.SELL if self.side == Side.LONG else OrderSide.BUY
+            symbol = market_symbol(self.symbol)
             amount_partial = round(self.amount * 0.5, 6)
             self.client.create_order(
-                symbol=market_symbol,
+                symbol=symbol,
                 type='market',
-                side=side,
+                side=order_side.value,
                 amount=amount_partial
             )
         except Exception as error:
             log(f"Ошибка при частичном выходе по {self.symbol}: {error}")
+            raise
 
     def _full_close(self):
-        log(f"[PositionManager] Полный выход из позиции по {self.symbol}")
+        log(f"Полный выход из позиции по {self.symbol}")
         try:
-            side = 'sell' if self.direction == 'long' else 'buy'
-            market_symbol = self.symbol.replace("USDT", "/USDT")
+            order_side = OrderSide.SELL if self.side == Side.LONG else OrderSide.BUY
+            symbol = market_symbol(self.symbol)
             self.client.create_order(
-                symbol=market_symbol,
+                symbol=symbol,
                 type='market',
-                side=side,
+                side=order_side.value,
                 amount=self.amount
             )
             self.tracker.mark_closed(self.symbol)
         except Exception as error:
             log(f"Ошибка при полном выходе по {self.symbol}: {error}")
+            raise
 
     def _update_sl(self, new_sl: float):
         self.trailing_sl = new_sl
-        log(f"[PositionManager] Обновление SL до {new_sl:.5f} по {self.symbol}")
+        log(f"Обновление SL до {new_sl:.5f} по {self.symbol}")
         try:
-            opposite_side = 'sell' if self.direction == 'long' else 'buy'
-            market_symbol = self.symbol.replace("USDT", "/USDT")
+            order_side = OrderSide.SELL if self.side == Side.LONG else OrderSide.BUY
+            symbol = market_symbol(self.symbol)
             market = self.client.market(market_symbol)
             self.client.create_order(
-                symbol=market_symbol,
+                symbol=symbol,
                 type='market',
-                side=opposite_side,
+                side=order_side,
                 amount=self.amount,
                 params={
                     'type': 'STOP_MARKET',
@@ -130,3 +141,4 @@ class PositionManager:
             )
         except Exception as error:
             log(f"Ошибка при обновлении SL по {self.symbol}: {error}")
+            raise

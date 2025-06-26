@@ -1,12 +1,7 @@
-TF_MAP = {
-    "1d": "1d",
-    "4h": "4h",
-    "1h": "1h",
-    "15m": "15m"
-}
-
 VOLUME_THRESHOLD_USDT = 50_000_000
 MIN_RR = 2
+PROGRESS_RR_NEAR = 1
+PROGRESS_RR_FAR = 3
 MIN_SL_PCT = 0.003
 MIN_TP_PCT = 0.010
 

@@ -2,7 +2,7 @@ from domain.models.bar import Bar
 from typing import List
 import statistics
 
-def is_low_liquidity(bars: List[Bar], threshold_usd: float = 100000) -> bool:
+def is_low_liquidity(bars: List[Bar], threshold_usd: float = 100_000) -> bool:
     avg_volume = statistics.mean([b.volume for b in bars[-20:]])
     low = avg_volume < threshold_usd
     return low

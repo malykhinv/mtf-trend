@@ -1,15 +1,17 @@
 from datetime import datetime, timedelta
 from data.db import get_connection
+from domain.models.side import Side
+
 
 class TradeLog:
     def __init__(self):
         self.conn = get_connection()
 
-    def record_trade(self, symbol: str, direction: str, amount_usdt: float):
+    def record_trade(self, symbol: str, side: Side, amount_usdt: float):
         with self.conn:
             self.conn.execute(
-                "INSERT INTO trades (symbol, direction, amount_usdt) VALUES (?, ?, ?)",
-                (symbol, direction, amount_usdt)
+                "INSERT INTO trades (symbol, side, amount_usdt) VALUES (?, ?, ?)",
+                (symbol, side.value, amount_usdt)
             )
 
     def trades_last_hour(self) -> int:

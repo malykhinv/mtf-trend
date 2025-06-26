@@ -27,3 +27,4 @@ class TelegramNotifier:
             log("Сообщение успешно отправлено в Telegram.")
         except Exception as error:
             log(f"Ошибка при отправке в Telegram: {error}")
+            raise

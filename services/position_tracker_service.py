@@ -1,8 +1,9 @@
+from domain.models.scenario import Scenario
+from domain.models.side import Side
 from services.position_manager import PositionManager
 from data.loader import Loader
 from data.db import get_connection
 from utils.logger import log
-from typing import Literal
 from data.binance_client import get_binance_client
 
 
@@ -15,16 +16,16 @@ class PositionTrackerService:
     def track_all(self):
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT symbol, direction, entry, sl, tp, scenario, atr, amount_usdt 
+            SELECT symbol, side, entry, sl, tp, scenario, atr, amount_usdt 
             FROM trades WHERE active = 1
         """)
         rows = cursor.fetchall()
 
         for row in rows:
-            symbol, direction, entry, sl, tp, scenario, atr, amount = row
+            symbol, side, entry, sl, tp, scenario, atr, amount = row
             manager = PositionManager(
                 symbol=symbol,
-                direction=direction,
+                side=side,
                 entry=entry,
                 sl=sl,
                 tp=tp,
@@ -38,16 +39,24 @@ class PositionTrackerService:
                 manager.manage()
             except Exception as error:
                 log(f"Ошибка в PositionManager для {symbol}: {error}")
+                raise
 
-    def add_trade(self, symbol: str, direction: Literal['long', 'short'], entry: float,
-                  sl: float, tp: float, scenario: str, atr: float, amount: float):
+    def add_trade(self,
+                  symbol: str,
+                  side: Side,
+                  entry: float,
+                  sl: float,
+                  tp: float,
+                  scenario: Scenario,
+                  atr: float,
+                  amount: float):
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO trades (symbol, direction, entry, sl, tp, scenario, atr, amount_usdt, active)
+            INSERT INTO trades (symbol, side, entry, sl, tp, scenario, atr, amount_usdt, active)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-        """, (symbol, direction, entry, sl, tp, scenario, atr, amount))
+        """, (symbol, side, entry, sl, tp, scenario, atr, amount))
         self.conn.commit()
-        log(f"[DB] Добавлена сделка {symbol} {direction} @ {entry}")
+        log(f"[DB] Добавлена сделка {symbol} {side} @ {entry}")
 
     def mark_closed(self, symbol: str):
         cursor = self.conn.cursor()

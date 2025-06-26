@@ -1,9 +1,10 @@
 from dataclasses import dataclass
-from typing import Literal
+from domain.models.swing_type import SwingType
+
 
 @dataclass
 class SwingPoint:
+    type: SwingType
     index: int
     price: float
-    kind: Literal['high', 'low']
     confirmed: bool
