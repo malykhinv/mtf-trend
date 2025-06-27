@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Dict
 
-from config.settings.constants import VOLUME_THRESHOLD_USDT
+from config.constants import VOLUME_THRESHOLD_USDT
 from data.binance_client import get_binance_client
 from domain.models.bar import Bar
 from domain.models.timeframe import Timeframe

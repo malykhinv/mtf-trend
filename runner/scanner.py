@@ -1,8 +1,8 @@
-from config.settings.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
+from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
 from domain.models.timeframe import Timeframe
 from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend
-from domain.setup_detector import SetupDetector
+from domain.detection.setup_detector import SetupDetector
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService

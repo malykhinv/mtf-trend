@@ -1,5 +1,5 @@
 import ccxt
-from config.settings.credentials import BINANCE_API_KEY, BINANCE_API_SECRET
+from config.credentials import BINANCE_API_KEY, BINANCE_API_SECRET
 
 
 def get_binance_client() -> ccxt.binance:

@@ -1,4 +1,4 @@
-from config.settings.constants import PROGRESS_RR_FAR, PROGRESS_RR_NEAR
+from config.constants import PROGRESS_RR_FAR, PROGRESS_RR_NEAR
 from data.loader import Loader
 from domain.models.order_side import OrderSide
 from domain.models.scenario import Scenario
@@ -47,7 +47,7 @@ class PositionManager:
 
         log(f"{self.symbol} @ {current_price:.5f}, RR={progress_rr:.2f}")
 
-        if self.side == Side.LONG:
+        if self.side.is_long:
             self._manage_long(progress_rr, swings)
         else:
             self._manage_short(progress_rr, swings)
@@ -59,7 +59,7 @@ class PositionManager:
             self.partial_exit_done = True
 
         # Перенос SL под HL
-        hl_candidates = [s for s in swings if s.type == SwingType.LOW]
+        hl_candidates = [s for s in swings if s.type.is_low]
         if len(hl_candidates) >= 2 and progress_rr >= PROGRESS_RR_NEAR:
             new_sl = hl_candidates[-1].price
             if new_sl > self.trailing_sl:
@@ -73,7 +73,7 @@ class PositionManager:
             self._full_close()
 
     def _manage_short(self, progress_rr: float, swings):
-        lh_candidates = [s for s in swings if s.type == SwingType.HIGH]
+        lh_candidates = [s for s in swings if s.type.is_high]
         if progress_rr >= PROGRESS_RR_FAR and not self.partial_exit_done:
             self._partial_close()
             self.partial_exit_done = True
@@ -92,7 +92,7 @@ class PositionManager:
     def _partial_close(self):
         log(f"Частичный выход из {self.symbol} на +{PROGRESS_RR_FAR}RR")
         try:
-            order_side = OrderSide.SELL if self.side == Side.LONG else OrderSide.BUY
+            order_side = OrderSide.SELL if self.side.is_long else OrderSide.BUY
             symbol = market_symbol(self.symbol)
             amount_partial = round(self.amount * 0.5, 6)
             self.client.create_order(
@@ -108,7 +108,7 @@ class PositionManager:
     def _full_close(self):
         log(f"Полный выход из позиции по {self.symbol}")
         try:
-            order_side = OrderSide.SELL if self.side == Side.LONG else OrderSide.BUY
+            order_side = OrderSide.SELL if self.side.is_long else OrderSide.BUY
             symbol = market_symbol(self.symbol)
             self.client.create_order(
                 symbol=symbol,
@@ -125,7 +125,7 @@ class PositionManager:
         self.trailing_sl = new_sl
         log(f"Обновление SL до {new_sl:.5f} по {self.symbol}")
         try:
-            order_side = OrderSide.SELL if self.side == Side.LONG else OrderSide.BUY
+            order_side = OrderSide.SELL if self.side.is_long else OrderSide.BUY
             symbol = market_symbol(self.symbol)
             market = self.client.market(market_symbol)
             self.client.create_order(

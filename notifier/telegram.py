@@ -1,6 +1,6 @@
 # notifier/telegram.py
 import requests
-from config.settings.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_BOT_CHAT_ID
+from config.credentials import TELEGRAM_BOT_CHAT_ID
 from utils.logger import log
 
 

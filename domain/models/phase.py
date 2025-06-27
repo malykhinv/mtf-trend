@@ -5,3 +5,15 @@ class Phase(str, Enum):
     UPTREND = "uptrend"
     DOWNTREND = "downtrend"
     FLAT = "flat"
+
+    @property
+    def is_uptrend(self) -> bool:
+        return self == Phase.UPTREND
+
+    @property
+    def is_downtrend(self) -> bool:
+        return self == Phase.DOWNTREND
+
+    @property
+    def is_flat(self) -> bool:
+        return self == Phase.FLAT

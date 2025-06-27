@@ -1,5 +1,5 @@
 from typing import Literal, cast
-from config.settings.constants import POSITION_USDT, MIN_RR
+from config.constants import POSITION_USDT, MIN_RR
 from ccxt import binance
 
 from domain.models.order_side import OrderSide
@@ -36,8 +36,8 @@ class TradeExecutor:
             precision_price = market['precision']['price'] if 'precision' in market else 6
 
             amount = round(amount_usdt / entry, precision_amount)
-            open_side = OrderSide.BUY if side == Side.LONG else OrderSide.SELL
-            close_side = OrderSide.SELL if side == Side.LONG else OrderSide.BUY
+            open_side = OrderSide.BUY if side.is_long else OrderSide.SELL
+            close_side = OrderSide.SELL if side.is_long else OrderSide.BUY
 
             self.client.create_order(
                 symbol=market_symbol,
@@ -111,10 +111,10 @@ class TradeExecutor:
         def log_illegal():
             log(f"SL/TP не соответствуют направлению сделки по {symbol}: {entry}.")
 
-        if side == Side.LONG and (sl >= entry or tp <= entry):
+        if side.is_long and (sl >= entry or tp <= entry):
             log_illegal()
             return False
-        if side == Side.SHORT and (sl <= entry or tp >= entry):
+        if side.is_short and (sl <= entry or tp >= entry):
             log_illegal()
             return False
         return True
