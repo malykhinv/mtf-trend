@@ -1,7 +1,11 @@
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
+from domain.detection.setup_detector import SetupDetector
+from domain.detection.phase_resolver import PhaseResolver
+from domain.models.confidence import Confidence
 from domain.models.timeframe import Timeframe
 from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend
+from domain.structures import StructureDetector
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
@@ -24,51 +28,93 @@ class Scanner:
 
         for symbol in symbols:
             try:
-                print()
-                log(f"{symbol}")
-                bars_by_tf = self.loader.fetch_multiple_timeframes(
-                    symbol,
-                    [Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15]
-                )
-
-                if is_low_liquidity(bars_by_tf[Timeframe.D1]):
-                    log(f"Низкая ликвидность по {symbol}. Пропускаем.")
-                    continue
-
-                if is_abnormal_spike(bars_by_tf[Timeframe.H1]):
-                    log(f"Аномальный всплеск по {symbol}. Пропускаем.")
-                    continue
-
-                atr_by_tf = {
-                    tf: sum([abs(b.high - b.low) for b in bars]) / len(bars)
-                    for tf, bars in bars_by_tf.items()
-                }
-
-                if is_anomalous_trend(bars_by_tf[Timeframe.H1], atr_by_tf[Timeframe.H1]):
-                    log(f"Аномально сильный тренд по {symbol}. Пропускаем.")
-                    continue
-
-                detector = SetupDetector(symbol, bars_by_tf, atr_by_tf)
-                signal = detector.detect()
-
-                if signal is not None:
-                    message = format_message(signal)
-                    if signal.is_order_signal:
-                        self.trade_executor.execute(
-                            symbol=signal.symbol,
-                            scenario=signal.scenario,
-                            side=signal.side,
-                            sl=signal.sl,
-                            tp=signal.tp
-                        )
-                        self.orders_notifier.send_message(message)
-                    elif signal.is_event_signal:
-                        self.events_notifier.send_message(message)
-                else:
-                    log(f"Сетап по {symbol} не подтверждён.")
-
+                self._process_symbol(symbol)
             except Exception as error:
-                log(f"Ошибка при обработке {symbol}: {error}")
+                log(f"✖ Ошибка при обработке {symbol}: {error}")
                 raise
 
         log("Цикл сканирования завершён.")
+
+    def _process_symbol(self, symbol):
+        print()
+        log(symbol)
+
+        bars_by_tf = self.loader.fetch_multiple_timeframes(
+            symbol, [Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15]
+        )
+
+        if not self._passes_filters(symbol, bars_by_tf):
+            return
+
+        atr_by_tf = self._calculate_atr(bars_by_tf)
+        mtf_states = self._resolve_phases(bars_by_tf, atr_by_tf)
+        swings = self._detect_swings(bars_by_tf[Timeframe.H4], atr_by_tf[Timeframe.H4])
+
+        self._check_setups(symbol, bars_by_tf, atr_by_tf, mtf_states, swings)
+
+    @staticmethod
+    def _passes_filters(symbol, bars_by_tf):
+        if is_low_liquidity(bars_by_tf[Timeframe.D1]):
+            log(f"✖ Низкая ликвидность по {symbol}.")
+            return False
+
+        if is_abnormal_spike(bars_by_tf[Timeframe.H1]):
+            log(f"✖ Аномальный всплеск по {symbol}.")
+            return False
+
+        atr_h1 = sum(abs(b.high - b.low) for b in bars_by_tf[Timeframe.H1]) / len(bars_by_tf[Timeframe.H1])
+        if is_anomalous_trend(bars_by_tf[Timeframe.H1], atr_h1):
+            log(f"✖ Аномально сильный тренд по {symbol}.")
+            return False
+
+        return True
+
+    @staticmethod
+    def _calculate_atr(bars_by_tf):
+        return {
+            tf: sum(abs(b.high - b.low) for b in bars) / len(bars)
+            for tf, bars in bars_by_tf.items()
+        }
+
+    @staticmethod
+    def _resolve_phases(bars_by_tf, atr_by_tf):
+        resolver = PhaseResolver(bars_by_tf, atr_by_tf)
+        return resolver.resolve()
+
+    @staticmethod
+    def _detect_swings(bars_h4, atr_h4):
+        detector = StructureDetector(bars_h4, atr_h4)
+        return detector.detect_swing_points()
+
+    def _check_setups(self, symbol, bars_by_tf, atr_by_tf, mtf_states, swings):
+        for confidence in [Confidence.STRONG, Confidence.MODERATE, Confidence.WEAK]:
+            setup_detector = SetupDetector(
+                symbol=symbol,
+                bars_by_tf=bars_by_tf,
+                atr_by_tf=atr_by_tf,
+                swings=swings,
+                mtf_states=mtf_states,
+                confidence=confidence
+            )
+            signal = setup_detector.detect()
+            if signal:
+                self._handle_signal(signal)
+                break
+        else:
+            log(f"✖ Сетап по {symbol} не подтверждён.")
+
+    def _handle_signal(self, signal):
+        message = format_message(signal)
+
+        if signal.is_order_signal:
+            self.trade_executor.execute(
+                symbol=signal.symbol,
+                scenario=signal.scenario,
+                side=signal.side,
+                sl=signal.sl,
+                tp=signal.tp
+            )
+            self.orders_notifier.send_message(message)
+
+        elif signal.is_event_signal:
+            self.events_notifier.send_message(message)

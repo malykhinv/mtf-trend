@@ -49,7 +49,9 @@ class BaseSetup(ABC):
 
         for confidence_condition, condition_func in levels:
             if confidence_condition:
-                self.entry, self.sl, self.tp, self.rr = self.define_rr()
+                rr_result = self.define_rr()
+                if rr_result:
+                    self.entry, self.sl, self.tp, self.rr = rr_result
                 if condition_func():
                     signal = self.build_signal()
                     self.log(self.message)

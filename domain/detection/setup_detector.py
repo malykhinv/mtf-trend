@@ -1,12 +1,14 @@
 from typing import Optional, List, Callable
 
+from domain.detection.momentum.impl.momentum_initiation import MomentumInitiation
+from domain.detection.momentum.impl.momentum_pullback import MomentumPullback
 from domain.models.setup_signal import SetupSignal
 from domain.models.confidence import Confidence
 from domain.detection.flat.impl.flat_bounce import FlatBounce
 from domain.detection.flat.impl.flat_fake_breakout import FlatFakeBreakout
 
 
-class FlatSetupGroup:
+class SetupDetector:
     def __init__(self, symbol, bars_by_tf, atr_by_tf, swings, mtf_states, confidence: Confidence):
         self.symbol = symbol
         self.bars_by_tf = bars_by_tf
@@ -18,7 +20,9 @@ class FlatSetupGroup:
     def detect(self) -> Optional[SetupSignal]:
         setup_classes: List[Callable] = [
             FlatFakeBreakout,
-            FlatBounce
+            FlatBounce,
+            MomentumInitiation,
+            MomentumPullback
         ]
 
         for setup_cls in setup_classes:
