@@ -97,16 +97,7 @@ class BaseSetup(ABC):
             sl=self.sl,
             tp=self.tp,
             scenario=self.scenario
-        ) if self.symbol \
-             and self.side \
-             and self.confidence \
-             and self.rr \
-             and self.last \
-             and self.entry \
-             and self.sl \
-             and self.tp \
-             and self.scenario \
-             else None
+        )
 
     # endregion
 

@@ -8,7 +8,6 @@ from domain.models.timeframe import Timeframe
 from config.constants import (
     SWING_PROXIMITY_ATR_MULTIPLIER,
     FLAT_MAX_CENTER_SHIFT_ATR,
-    STRONG_REACTION_VOLUME_MULTIPLIER,
     TOUCH_DISTANCE_ATR,
     CANDLE_AVG_VOLUME_PERIOD
 )
@@ -25,9 +24,8 @@ class FlatSetupBase(BaseSetup, ABC):
     # region Conditions
     def flat_market_condition(self) -> bool:
         if not (self.d1_state.is_range and self.range_high and self.range_low):
-            self.log("Не флет — отклоняем.")
+            self.log("✖ Не флет.")
             return False
-
         return True
 
     def flat_size_condition(self) -> bool:
@@ -35,9 +33,8 @@ class FlatSetupBase(BaseSetup, ABC):
         min_size = 2 * self.atr_15m
         max_size = 10 * self.atr_15m
         if not min_size <= size <= max_size:
-            self.log(f"Диапазон невалиден — отклоняем.")
+            self.log("✖ Диапазон слишком мал или велик.")
             return False
-
         return True
 
     def flat_center_condition(self) -> bool:
@@ -46,56 +43,58 @@ class FlatSetupBase(BaseSetup, ABC):
         past_center = (past_bar.close + past_bar.open) / 2
         shift = abs(current_center - past_center)
         if not shift < FLAT_MAX_CENTER_SHIFT_ATR * self.atr_15m:
-            self.log(f"Центр диапазона смещён — отклоняем.")
+            self.log("✖ Центр диапазона смещен.")
             return False
 
         return True
 
     def swing_condition(self):
         if not self.swing:
-            self.log(f"Нет swing у границы — отклоняем.")
+            self.log("✖ Нет свинга около границы.")
             return False
 
         return True
 
     def volume_condition(self, candle, avg_vol) -> bool:
-        if self.confidence.is_strong:
-            return candle.volume > STRONG_REACTION_VOLUME_MULTIPLIER * avg_vol
-        if self.confidence.is_moderate:
-            return candle.volume >= avg_vol
+        if not candle.volume >= avg_vol:
+            self.log("✖ Объем свечи ниже среднего.")
+            return False
         return True
 
-    @staticmethod
-    def wick_condition(candle: Bar, height_multiplier: float) -> bool:
+    def wick_condition(self, candle: Bar, height_multiplier: float) -> bool:
         full_range = candle.high - candle.low
         body = abs(candle.close - candle.open)
         wick = full_range - body
         if not wick < height_multiplier * full_range:
+            self.log("✖ Длина хвоста свечи превышает лимит.")
             return False
 
         return True
 
     def distance_condition(self, close: float, level: float, atr_multiplier: float = 1.0) -> bool:
         if not abs(close - level) < atr_multiplier * self.atr_15m:
+            self.log("✖ Цена закрытия далеко от уровня.")
             return False
 
         return True
 
     def touch_condition(self, price: float, level: float) -> bool:
         if not abs(price - level) < TOUCH_DISTANCE_ATR * self.atr_15m:
+            self.log("✖ Цена не коснулась уровня.")
             return False
 
         return True
 
-    @staticmethod
-    def direction_condition(candle, side: Side) -> bool:
+    def direction_condition(self, candle, side: Side) -> bool:
         if not candle.close > candle.open if side.is_long else candle.close < candle.open:
+            self.log("✖ Направление закрытия свечи не совпадает с предполагаемой стороной.")
             return False
 
         return True
 
     def returned_inside_range_condition(self, close: float) -> bool:
         if not self.range_low < close < self.range_high:
+            self.log("✖ Цена не вернулась внутрь диапазона.")
             return False
 
         return True

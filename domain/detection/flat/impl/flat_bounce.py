@@ -1,7 +1,7 @@
 from typing import Optional, Tuple
 
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR
+    MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.setup_signal import SetupSignal
 from domain.models.scenario import Scenario
@@ -24,6 +24,7 @@ class FlatBounce(FlatSetupBase):
     def has_strong_conditions(self) -> bool:
         return self.is_confirmed(
             self.has_moderate_conditions(),
+            self.volume_condition(self.candle, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_vol),
             self.wick_condition(self.candle, STRONG_REACTION_WICK_RATIO),
             self.distance_condition(self.candle.close, self.swing.price),
             self.rr_condition()
@@ -54,26 +55,57 @@ class FlatBounce(FlatSetupBase):
     # region RR
     def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
         entry = self.last.close
+
+        sl = self._define_sl_swings(entry)
+        if sl is None:
+            sl = self._define_sl_default()
+
+        tp = self._define_tp_swings(entry, sl)
+        if tp is None:
+            tp = self._define_tp_default()
+
+        rr = abs(tp - entry) / abs(entry - sl)
+        self.log(f"RR рассчитан: {round(rr, 2)}")
+
+        return entry, sl, tp, round(rr, 2)
+
+    def _define_sl_swings(self, entry: float) -> Optional[float]:
         sl_swings = [
             s for s in self.swings
             if s.type != self.swing.type and s.index < self.swing.index and abs(entry - s.price) > 0.3 * self.atr_15m
         ]
-        sl = sl_swings[-1].price if sl_swings else (
-            min(b.low for b in self.bars_15m[-SL_LOOKBACK_BARS:])
-            if self.side.is_long else max(b.high for b in self.bars_15m[-SL_LOOKBACK_BARS:])
-        )
+        if sl_swings:
+            self.log("Стоп по прошлым свингам найден.")
+            return sl_swings[-1].price
+        self.log("Подходящих прошлых свингов для стопа не найдено.")
+        return None
 
+    def _define_sl_default(self) -> float:
+        if self.side.is_long:
+            sl = min(b.low for b in self.bars_15m[-SL_LOOKBACK_BARS:])
+        else:
+            sl = max(b.high for b in self.bars_15m[-SL_LOOKBACK_BARS:])
+        self.log("Стоп выбран по минимумам/максимумам баров.")
+        return sl
+
+    def _define_tp_swings(self, entry: float, sl: float) -> Optional[float]:
         tp_swings = [
             s for s in self.swings
             if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW) and s.index > self.swing.index
         ]
-        tp = next((s.price for s in tp_swings if abs(s.price - entry) / abs(entry - sl) >= MIN_RR), None)
-        if not tp:
-            tp = max(b.high for b in self.bars_15m[-TP_LOOKAHEAD_BARS:]) \
-                if self.side.is_long else min(b.low for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
+        for s in tp_swings:
+            if abs(s.price - entry) / abs(entry - sl) >= MIN_RR:
+                self.log("Тейк по свингам найден.")
+                return s.price
+        self.log("Подходящих свингов для тейка не найдено.")
+        return None
 
-        rr = abs(tp - entry) / abs(entry - sl)
-
-        return entry, sl, tp, round(rr, 2)
+    def _define_tp_default(self) -> float:
+        if self.side.is_long:
+            tp = max(b.high for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
+        else:
+            tp = min(b.low for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
+        self.log("Тейк выбран по экстремумам баров.")
+        return tp
 
     # endregion
