@@ -9,7 +9,7 @@ logging.basicConfig(
 )
 
 def log(message: str) -> None:
-    logging.info(message)
+    logging.info(f"    {message}")
 
 def logw(message: str) -> None:
-    logging.info(f"✖ {message}")
+    logging.info(f"  ✕ {message}")

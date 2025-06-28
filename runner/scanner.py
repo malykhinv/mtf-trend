@@ -12,7 +12,7 @@ from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
 from services.trade_executor import TradeExecutor
-from utils.logger import log
+from utils.logger import log, logw
 
 
 class Scanner:
@@ -33,7 +33,7 @@ class Scanner:
                 try:
                     self._process_symbol(symbol, tfs)
                 except Exception as error:
-                    log(f"✖ Ошибка при обработке {symbol}: {error}")
+                    logw(f"Ошибка при обработке {symbol}: {error}")
                     raise
 
         log("Цикл сканирования завершён.")
@@ -56,16 +56,16 @@ class Scanner:
     @staticmethod
     def _passes_filters(symbol, bars_by_tf, tfs: MTFProfile):
         if is_low_liquidity(bars_by_tf[tfs.macro]):
-            log(f"✖ Низкая ликвидность по {symbol} ({tfs.macro}).")
+            logw(f"Низкая ликвидность по {symbol} ({tfs.macro}).")
             return False
 
         if is_abnormal_spike(bars_by_tf[tfs.setup]):
-            log(f"✖ Аномальный всплеск по {symbol} ({tfs.setup}).")
+            logw(f"Аномальный всплеск по {symbol} ({tfs.setup}).")
             return False
 
         atr_tf_setup = sum(abs(b.high - b.low) for b in bars_by_tf[tfs.setup]) / len(bars_by_tf[tfs.setup])
         if is_anomalous_trend(bars_by_tf[tfs.setup], atr_tf_setup):
-            log(f"✖ Аномально сильный тренд по {symbol}.")
+            logw(f"Аномально сильный тренд по {symbol}.")
             return False
 
         return True
@@ -100,7 +100,7 @@ class Scanner:
                 self._handle_signal(signal)
                 break
         else:
-            log(f"✖ Сетап по {symbol} не подтверждён.")
+            logw(f"Сетап по {symbol} не подтверждён.")
 
     def _handle_signal(self, signal):
         message = format_message(signal)
