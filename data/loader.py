@@ -4,6 +4,7 @@ from typing import List, Dict
 from config.constants import VOLUME_THRESHOLD_USDT
 from data.binance_client import get_binance_client
 from domain.models.bar import Bar
+from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
 from utils.logger import log
 from utils.str_utils import market_symbol, clean_symbol
@@ -33,9 +34,9 @@ class Loader:
 
     def fetch_multiple_timeframes(self,
                                   symbol: str,
-                                  tf_list: List[Timeframe],
+                                  tfs: MTFProfile,
                                   limit: int = 100) -> Dict[Timeframe, List[Bar]]:
-        return {tf: self.fetch_ohlcv(symbol, tf, limit=limit) for tf in tf_list}
+        return {tf: self.fetch_ohlcv(symbol, tf, limit=limit) for tf in tfs}
 
     def get_filtered_symbols(self, quote_asset: str = "USDT", min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> list:
         markets = self.binance.load_markets()

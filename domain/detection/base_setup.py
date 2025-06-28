@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple
 from config.constants import MIN_RR
 from domain.models.bar import Bar
 from domain.models.confidence import Confidence
+from domain.models.mtf_profile import MTFProfile
 from domain.models.scenario import Scenario
 from domain.models.setup_signal import SetupSignal
 from domain.models.swing_point import SwingPoint
@@ -20,7 +21,7 @@ class BaseSetup(ABC):
             swings: List[SwingPoint],
             confidence: Confidence,
             mtf_states: Dict[Timeframe, any],
-            tfs: List[Timeframe]
+            tfs: MTFProfile
     ):
         self.symbol = symbol
         self.bars_by_tf = bars_by_tf
@@ -29,10 +30,10 @@ class BaseSetup(ABC):
         self.confidence = confidence
         self.mtf_states = mtf_states
         self.tfs = tfs
-        self.bars_tf3 = self.bars_by_tf[self.tfs[3]]
-        self.atr_tf3 = self.atr_by_tf[self.tfs[3]]
-        self.last = self.bars_tf3[-1]
-        self.prev = self.bars_tf3[-2]
+        self.bars_tf_setup = self.bars_by_tf[self.tfs.setup]
+        self.atr_tf_setup = self.atr_by_tf[self.tfs.setup]
+        self.last = self.bars_tf_setup[-1]
+        self.prev = self.bars_tf_setup[-2]
         self.side = None
         self.entry = None
         self.sl = None

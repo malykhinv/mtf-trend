@@ -6,27 +6,27 @@ from typing import Optional
 class MomentumSetupBase(BaseSetup):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.tf0_state = self.mtf_states[self.tfs[0]]
-        self.tf1_state = self.mtf_states[self.tfs[1]]
-        self.tf2_state = self.mtf_states[self.tfs[2]]
+        self.tf_macro_state = self.mtf_states[self.tfs.macro]
+        self.tf_trend_state = self.mtf_states[self.tfs.trend]
+        self.tf_setup_state = self.mtf_states[self.tfs.setup]
         self.swing = self._find_recent_swing()
-        self.avg_volume = sum(b.volume for b in self.bars_tf3[-20:]) / 20
+        self.avg_volume = sum(b.volume for b in self.bars_tf_setup[-20:]) / 20
 
     def trend_condition(self) -> bool:
-        if not self.tf0_state.is_trend:
+        if not self.tf_macro_state.is_trend:
             self.log("✖ Нет глобального тренда на D1.")
             return False
         return True
 
     def impulse_condition(self) -> bool:
-        if not self.tf1_state.has_strong_move:
-            self.log(f"✖ Нет импульса на {self.tfs[1].value}.")
+        if not self.tf_trend_state.has_strong_move:
+            self.log(f"✖ Нет импульса на {self.tfs.trend.value}.")
             return False
         return True
 
     def pullback_condition(self) -> bool:
-        if not self.tf2_state.is_correction:
-            self.log(f"✖ Нет отката на {self.tfs[2].value}.")
+        if not self.tf_setup_state.is_correction:
+            self.log(f"✖ Нет отката на {self.tfs.setup.value}.")
             return False
         return True
 
@@ -52,9 +52,9 @@ class MomentumSetupBase(BaseSetup):
         return True
 
     def tf1_trend_condition(self) -> bool:
-        swings = self.tf1_state.swings
+        swings = self.tf_trend_state.swings
         if not swings or len(swings) < 4:
-            self.log(f"✖ Недостаточно свингов на {self.tfs[1].value} для анализа тренда.")
+            self.log(f"✖ Недостаточно свингов на {self.tfs.trend.value} для анализа тренда.")
             return False
 
         hh_count = 0
@@ -92,7 +92,7 @@ class MomentumSetupBase(BaseSetup):
         if ll_count >= 2 and lh_count >= 2:
             return True
 
-        self.log(f"✖ Трендовая структура на {self.tfs[1].value} не подтверждена.")
+        self.log(f"✖ Трендовая структура на {self.tfs.trend.value} не подтверждена.")
         return False
 
     def define_tp(self, entry: float, sl: float) -> Optional[float]:
@@ -117,8 +117,8 @@ class MomentumSetupBase(BaseSetup):
                 return max(candidates, key=lambda s: s.price).price
 
         # D1 уровни как fallback
-        tf0_high = self.tf0_state.range_high
-        tf0_low = self.tf0_state.range_low
+        tf0_high = self.tf_macro_state.range_high
+        tf0_low = self.tf_macro_state.range_low
 
         if self.side.is_long and tf0_high and tf0_high > entry:
             rr = abs(tf0_high - entry) / abs(entry - sl)

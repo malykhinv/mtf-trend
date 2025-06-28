@@ -1,8 +1,9 @@
 # region Общие параметры торговли
+from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
 
-MTF_PROFILE_GLOBAL = [Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15]
-MTF_PROFILE_INTRADAY = [Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5]
+MTF_PROFILE_GLOBAL = MTFProfile(Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5)
+MTF_PROFILE_INTRADAY = MTFProfile(Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5, Timeframe.M1)
 
 # Минимальный объем сделки в USDT для фильтрации ликвидности
 VOLUME_THRESHOLD_USDT = 50_000_000
@@ -23,7 +24,7 @@ MIN_SL_PCT = 0.003
 MIN_TP_PCT = 0.010
 
 # Включение или выключение торговли
-IS_TRADING_ENABLED = True
+IS_TRADING_ENABLED = False
 
 # Размер позиции в USDT
 POSITION_USDT = 10

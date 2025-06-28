@@ -5,7 +5,7 @@ from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
 from domain.detection.phase_resolver import PhaseResolver
 from domain.models.confidence import Confidence
-from domain.models.timeframe import Timeframe
+from domain.models.mtf_profile import MTFProfile
 from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend
 from domain.structures import StructureDetector
 from notifier.formatter import format_message
@@ -23,21 +23,21 @@ class Scanner:
         self.tracker = PositionTrackerService()
         self.trade_executor = TradeExecutor(self.loader.binance, self.tracker)
 
-    def run(self, tf_list: List[List[Timeframe]]):
+    def run(self, tfss: List[MTFProfile]):
         log("Запущен цикл сканирования.")
         symbols = self.loader.get_filtered_symbols()
         log(f"Отобрано {len(symbols)} символов для анализа.")
 
-        for symbol, tf_set in symbols, tf_list:
+        for symbol, tfs in zip(symbols, tfss):
             try:
-                self._process_symbol(symbol, tf_set)
+                self._process_symbol(symbol, tfs)
             except Exception as error:
                 log(f"✖ Ошибка при обработке {symbol}: {error}")
                 raise
 
         log("Цикл сканирования завершён.")
 
-    def _process_symbol(self, symbol: str, tfs: List[Timeframe]):
+    def _process_symbol(self, symbol: str, tfs: MTFProfile):
         print()
         log(symbol)
 
@@ -48,22 +48,22 @@ class Scanner:
 
         atr_by_tf = self._calculate_atr(bars_by_tf)
         mtf_states = self._resolve_phases(tfs, bars_by_tf, atr_by_tf)
-        swings = self._detect_swings(bars_by_tf[tfs[1]], atr_by_tf[tfs[1]])
+        swings = self._detect_swings(bars_by_tf[tfs.trend], atr_by_tf[tfs.trend])
 
         self._check_setups(symbol, tfs, bars_by_tf, atr_by_tf, mtf_states, swings)
 
     @staticmethod
-    def _passes_filters(symbol, bars_by_tf, tf_list):
-        if is_low_liquidity(bars_by_tf[tf_list[0]]):
-            log(f"✖ Низкая ликвидность по {symbol} ({tf_list[0]}).")
+    def _passes_filters(symbol, bars_by_tf, tfs: MTFProfile):
+        if is_low_liquidity(bars_by_tf[tfs.macro]):
+            log(f"✖ Низкая ликвидность по {symbol} ({tfs.macro}).")
             return False
 
-        if is_abnormal_spike(bars_by_tf[tf_list[2]]):
-            log(f"✖ Аномальный всплеск по {symbol} ({tf_list[2]}).")
+        if is_abnormal_spike(bars_by_tf[tfs.setup]):
+            log(f"✖ Аномальный всплеск по {symbol} ({tfs.setup}).")
             return False
 
-        atr_tf2 = sum(abs(b.high - b.low) for b in bars_by_tf[tf_list[2]]) / len(bars_by_tf[tf_list[2]])
-        if is_anomalous_trend(bars_by_tf[tf_list[2]], atr_tf2):
+        atr_tf_setup = sum(abs(b.high - b.low) for b in bars_by_tf[tfs.setup]) / len(bars_by_tf[tfs.setup])
+        if is_anomalous_trend(bars_by_tf[tfs.setup], atr_tf_setup):
             log(f"✖ Аномально сильный тренд по {symbol}.")
             return False
 

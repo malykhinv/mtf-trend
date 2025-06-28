@@ -15,7 +15,7 @@ from config.constants import (
 class FlatSetupBase(BaseSetup, ABC):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.tf0_state = self.mtf_states[self.tfs[0]]
+        self.tf0_state = self.mtf_states[self.tfs.macro]
         self.range_high = self.tf0_state.range_high
         self.range_low = self.tf0_state.range_low
         self.swing = self._find_swing_near_level()
@@ -29,8 +29,8 @@ class FlatSetupBase(BaseSetup, ABC):
 
     def flat_size_condition(self) -> bool:
         size = self.range_high - self.range_low
-        min_size = 2 * self.atr_tf3
-        max_size = 10 * self.atr_tf3
+        min_size = 2 * self.atr_tf_setup
+        max_size = 10 * self.atr_tf_setup
         if not min_size <= size <= max_size:
             self.log("✖ Диапазон слишком мал или велик.")
             return False
@@ -38,10 +38,10 @@ class FlatSetupBase(BaseSetup, ABC):
 
     def flat_center_condition(self) -> bool:
         current_center = (self.range_high + self.range_low) / 2
-        past_bar = self.bars_by_tf[self.tfs[0]][-4]
+        past_bar = self.bars_by_tf[self.tfs.macro][-4]
         past_center = (past_bar.close + past_bar.open) / 2
         shift = abs(current_center - past_center)
-        if not shift < FLAT_MAX_CENTER_SHIFT_ATR * self.atr_tf3:
+        if not shift < FLAT_MAX_CENTER_SHIFT_ATR * self.atr_tf_setup:
             self.log("✖ Центр диапазона смещен.")
             return False
 
@@ -71,14 +71,14 @@ class FlatSetupBase(BaseSetup, ABC):
         return True
 
     def distance_condition(self, close: float, level: float, atr_multiplier: float = 1.0) -> bool:
-        if not abs(close - level) < atr_multiplier * self.atr_tf3:
+        if not abs(close - level) < atr_multiplier * self.atr_tf_setup:
             self.log("✖ Цена закрытия далеко от уровня.")
             return False
 
         return True
 
     def touch_condition(self, price: float, level: float) -> bool:
-        if not abs(price - level) < TOUCH_DISTANCE_ATR * self.atr_tf3:
+        if not abs(price - level) < TOUCH_DISTANCE_ATR * self.atr_tf_setup:
             self.log("✖ Цена не коснулась уровня.")
             return False
 
@@ -102,20 +102,20 @@ class FlatSetupBase(BaseSetup, ABC):
 
     def _find_swing_near_level(self) -> Optional[SwingPoint]:
         for s in reversed(self.swings):
-            if abs(s.price - self.range_high) < SWING_PROXIMITY_ATR_MULTIPLIER * self.atr_tf3:
+            if abs(s.price - self.range_high) < SWING_PROXIMITY_ATR_MULTIPLIER * self.atr_tf_setup:
                 return s
-            if abs(s.price - self.range_low) < SWING_PROXIMITY_ATR_MULTIPLIER * self.atr_tf3:
+            if abs(s.price - self.range_low) < SWING_PROXIMITY_ATR_MULTIPLIER * self.atr_tf_setup:
                 return s
         return None
 
     def _find_swing_near(self, level: float) -> Optional[SwingPoint]:
         for s in reversed(self.swings):
-            if abs(s.price - level) < self.atr_tf3 * SWING_PROXIMITY_ATR_MULTIPLIER:
+            if abs(s.price - level) < self.atr_tf_setup * SWING_PROXIMITY_ATR_MULTIPLIER:
                 return s
         return None
 
     def _avg_volume(self) -> float:
-        return sum(b.volume for b in self.bars_tf3[-CANDLE_AVG_VOLUME_PERIOD - 1:-1]) / CANDLE_AVG_VOLUME_PERIOD
+        return sum(b.volume for b in self.bars_tf_setup[-CANDLE_AVG_VOLUME_PERIOD - 1:-1]) / CANDLE_AVG_VOLUME_PERIOD
 
     @staticmethod
     def _get_side(swing: SwingPoint) -> Side:

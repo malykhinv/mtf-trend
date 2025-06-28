@@ -2,10 +2,10 @@ from typing import List
 
 from config.constants import PROGRESS_RR_FAR, PROGRESS_RR_NEAR
 from data.loader import Loader
+from domain.models.mtf_profile import MTFProfile
 from domain.models.order_side import OrderSide
 from domain.models.scenario import Scenario
 from domain.models.side import Side
-from domain.models.timeframe import Timeframe
 from domain.structures import StructureDetector
 from utils.logger import log
 from utils.str_utils import market_symbol
@@ -14,7 +14,7 @@ from utils.str_utils import market_symbol
 class PositionManager:
     def __init__(self,
                  symbol: str,
-                 tfs: List[Timeframe],
+                 tfs: MTFProfile,
                  side: Side,
                  entry: float,
                  sl: float,
@@ -41,7 +41,7 @@ class PositionManager:
         self.partial_exit_done = False
 
     def manage(self):
-        bars = self.loader.fetch_ohlcv(self.symbol, self.tfs[-1], limit=50)
+        bars = self.loader.fetch_ohlcv(self.symbol, self.tfs.micro, limit=50)
         detector = StructureDetector(bars, self.atr)
         swings = detector.detect_swing_points()
 
@@ -89,7 +89,7 @@ class PositionManager:
         if (len(lh_candidates) >= 2 and
                 lh_candidates[-1].price > lh_candidates[-2].price and
                 progress_rr > PROGRESS_RR_NEAR):
-            log(f"Слом LH на {self.tfs[-1].value} — выход из {self.symbol}")
+            log(f"Слом LH на {self.tfs.micro.value} — выход из {self.symbol}")
             self._full_close()
 
     def _partial_close(self):

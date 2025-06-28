@@ -54,7 +54,7 @@ class MTFAnalyzer:
                     correction_direction = PriceDirection.DOWN
 
         # Проверка down-тренда
-        if phase.is_flat and len(highs) >= 3 and len(lows) >= 3:
+        if not phase and len(highs) >= 3 and len(lows) >= 3:
             lh1, lh2 = highs[-2].price, highs[-1].price
             ll1, ll2 = lows[-2].price, lows[-1].price
             if lh2 < lh1 and ll2 < ll1 and min(abs(lh1 - lh2), abs(ll1 - ll2)) > 1.5 * self.atr:
@@ -64,7 +64,7 @@ class MTFAnalyzer:
                     correction_direction = PriceDirection.UP
 
         # Проверка диапазона (флэт)
-        if phase.is_flat and len(highs) >= 3 and len(lows) >= 3:
+        if not phase and len(highs) >= 3 and len(lows) >= 3:
             recent_highs = [h.price for h in highs[-3:]]
             recent_lows = [l.price for l in lows[-3:]]
             max_high = max(recent_highs)
@@ -78,12 +78,13 @@ class MTFAnalyzer:
                 is_range = True
                 range_high = max_high
                 range_low = min_low
+                phase = Phase.FLAT
 
         rr = 0.0
         last = swings[-1]
-        if phase.is_uptrend:
+        if phase and phase.is_uptrend:
             rr = (last.price - min([b.low for b in self.bars[-10:]])) / self.atr
-        elif phase.is_downtrend:
+        elif phase and phase.is_downtrend:
             rr = (max([b.high for b in self.bars[-10:]]) - last.price) / self.atr
 
         log(f"Результат: тренд — {phase}, коррекция — {correction_direction if is_in_correction else 'нет'}, RR — {round(rr, 2)}.")
