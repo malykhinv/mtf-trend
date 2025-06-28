@@ -44,10 +44,10 @@ class MTFAnalyzer:
         lows = [s for s in swings if s.type.is_low]
 
         # Проверка up-тренда
-        if len(highs) >= 3 and len(lows) >= 3:
+        if len(highs) >= 2 and len(lows) >= 2:
             hh1, hh2 = highs[-2].price, highs[-1].price
             hl1, hl2 = lows[-2].price, lows[-1].price
-            if hh2 > hh1 and hl2 > hl1 and min(abs(hh2 - hh1), abs(hl2 - hl1)) > 1.5 * self.atr:
+            if hh2 > hh1 and hl2 > hl1 and min(abs(hh2 - hh1), abs(hl2 - hl1)) > 0.5 * self.atr:
                 phase = Phase.UPTREND
                 if hl2 < hl1:
                     is_in_correction = True
@@ -57,7 +57,7 @@ class MTFAnalyzer:
         if not phase and len(highs) >= 3 and len(lows) >= 3:
             lh1, lh2 = highs[-2].price, highs[-1].price
             ll1, ll2 = lows[-2].price, lows[-1].price
-            if lh2 < lh1 and ll2 < ll1 and min(abs(lh1 - lh2), abs(ll1 - ll2)) > 1.5 * self.atr:
+            if lh2 < lh1 and ll2 < ll1 and min(abs(lh1 - lh2), abs(ll1 - ll2)) > 0.5 * self.atr:
                 phase = Phase.DOWNTREND
                 if lh2 > lh1:
                     is_in_correction = True

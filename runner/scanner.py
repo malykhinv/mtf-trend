@@ -56,11 +56,11 @@ class Scanner:
     @staticmethod
     def _passes_filters(symbol, bars_by_tf, tfs: MTFProfile):
         if is_low_liquidity(bars_by_tf[tfs.macro]):
-            logw(f"Низкая ликвидность по {symbol} ({tfs.macro}).")
+            logw(f"Низкая ликвидность по {symbol} ({tfs.macro.value}).")
             return False
 
         if is_abnormal_spike(bars_by_tf[tfs.setup]):
-            logw(f"Аномальный всплеск по {symbol} ({tfs.setup}).")
+            logw(f"Аномальный всплеск по {symbol} ({tfs.setup.value}).")
             return False
 
         atr_tf_setup = sum(abs(b.high - b.low) for b in bars_by_tf[tfs.setup]) / len(bars_by_tf[tfs.setup])
