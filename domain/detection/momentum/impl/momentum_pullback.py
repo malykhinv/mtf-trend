@@ -11,25 +11,19 @@ class MomentumPullback(MomentumSetupBase):
 
     # region Conditions
     def has_strong_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.has_moderate_conditions(),
-            self.volume_condition(self.prev, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_volume),
-            self.wick_condition(self.prev, STRONG_REACTION_WICK_RATIO),
+        return self.has_moderate_conditions() and \
+            self.volume_condition(self.prev, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_volume) and \
+            self.wick_condition(self.prev, STRONG_REACTION_WICK_RATIO) and \
             self.rr_condition()
-        )
 
     def has_moderate_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.has_weak_conditions(),
-            self.volume_condition(self.prev, self.avg_volume),
+        return self.has_weak_conditions() and \
+            self.volume_condition(self.prev, self.avg_volume) and \
             self.wick_condition(self.prev, MODERATE_REACTION_WICK_RATIO)
-        )
 
     def has_weak_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.trend_condition(),
+        return self.trend_condition() and \
             self.pullback_condition()
-        )
 
     # endregion
 

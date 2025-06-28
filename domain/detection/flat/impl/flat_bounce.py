@@ -20,33 +20,27 @@ class FlatBounce(FlatSetupBase):
 
     # region Conditions
     def has_strong_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.has_moderate_conditions(),
-            self.volume_condition(self.candle, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_vol),
-            self.wick_condition(self.candle, STRONG_REACTION_WICK_RATIO),
-            self.distance_condition(self.candle.close, self.swing.price),
+        return self.has_moderate_conditions() and \
+            self.volume_condition(self.candle, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_vol) and \
+            self.wick_condition(self.candle, STRONG_REACTION_WICK_RATIO) and \
+            self.distance_condition(self.candle.close, self.swing.price) and \
             self.rr_condition()
-        )
 
     def has_moderate_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.has_weak_conditions(),
-            self.swing_condition(),
-            self.volume_condition(self.candle, self.avg_vol),
-            self.wick_condition(self.candle, MODERATE_REACTION_WICK_RATIO),
+        return self.has_weak_conditions() and \
+            self.swing_condition() and \
+            self.volume_condition(self.candle, self.avg_vol) and \
+            self.wick_condition(self.candle, MODERATE_REACTION_WICK_RATIO) and \
             self.distance_condition(self.candle.close, self.swing.price, TOUCH_DISTANCE_ATR)
-        )
 
     def has_weak_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.flat_market_condition(),
-            self.flat_size_condition(),
-            self.flat_center_condition(),
-            self.touch_condition(self.candle.low, self.swing.price) or
-            self.touch_condition(self.candle.high, self.swing.price),
-            self.returned_inside_range_condition(self.candle.close),
+        return self.flat_market_condition() and \
+            self.flat_size_condition() and \
+            self.flat_center_condition() and \
+            (self.touch_condition(self.candle.low, self.swing.price) or
+            self.touch_condition(self.candle.high, self.swing.price)) and \
+            self.returned_inside_range_condition(self.candle.close) and \
             self.direction_condition(self.candle, self.side)
-        )
 
     # endregion
 

@@ -64,10 +64,6 @@ class BaseSetup(ABC):
         self.logw("Факторы не подтверждены.")
         return None
 
-    @staticmethod
-    def is_confirmed(*conditions: bool) -> bool:
-        return all(conditions)
-
     # region RR
     def define_rr(self) -> Tuple[float, float, float, float]:
         pass
@@ -117,4 +113,4 @@ class BaseSetup(ABC):
         logw(self._get_log_message(message))
 
     def _get_log_message(self, message: str) -> str:
-        return f"{self.symbol} {self.scenario.capitalize()} {self.confidence.capitalize()}: {message}"
+        return f"{self.scenario.value} {self.confidence.capitalize()}: {message}"

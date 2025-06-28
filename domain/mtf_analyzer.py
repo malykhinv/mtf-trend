@@ -16,7 +16,6 @@ class MTFAnalyzer:
         self.atr = atr
 
     def analyze(self) -> MTFState:
-        log(f"Анализ таймфрейма {self.timeframe.value}.")
         detector = StructureDetector(self.bars, self.atr)
         swings = detector.detect_swing_points()
 
@@ -88,7 +87,10 @@ class MTFAnalyzer:
         elif phase and phase.is_downtrend:
             rr = (max([b.high for b in self.bars[-10:]]) - last.price) / self.atr
 
-        log(f"Результат: тренд — {phase}, коррекция — {correction_direction if is_in_correction else 'нет'}, RR — {round(rr, 2)}.")
+        log(f"{self.timeframe.value}: "
+            f"тренд — {phase.value}, "
+            f"коррекция — {correction_direction.value if is_in_correction else 'нет'}, "
+            f"RR — {round(rr, 2)}.")
 
         return MTFState(
             timeframe=self.timeframe,

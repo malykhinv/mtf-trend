@@ -21,29 +21,23 @@ class FlatFakeBreakout(FlatSetupBase):
 
     # region Conditions
     def has_strong_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.has_moderate_conditions(),
-            self.volume_condition(self.candle, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_vol),
-            self.wick_condition(self.candle, STRONG_REACTION_WICK_RATIO),
+        return self.has_moderate_conditions() and \
+            self.volume_condition(self.candle, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_vol) and \
+            self.wick_condition(self.candle, STRONG_REACTION_WICK_RATIO) and \
             self.rr_condition()
-        )
 
     def has_moderate_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.has_weak_conditions(),
-            self.volume_condition(self.candle, self.avg_vol),
-            self.wick_condition(self.candle, MODERATE_REACTION_WICK_RATIO),
-        )
+        return self.has_weak_conditions() and \
+            self.volume_condition(self.candle, self.avg_vol) and \
+            self.wick_condition(self.candle, MODERATE_REACTION_WICK_RATIO)
 
     def has_weak_conditions(self) -> bool:
-        return self.is_confirmed(
-            self.flat_market_condition(),
-            self.flat_size_condition(),
-            self.flat_center_condition(),
-            self.swing_condition(),
-            self.direction_condition(self.candle, self.side),
+        return self.flat_market_condition() and \
+            self.flat_size_condition() and \
+            self.flat_center_condition() and \
+            self.swing_condition() and \
+            self.direction_condition(self.candle, self.side) and \
             self._broke_and_returned_condition(self.candle)
-        )
 
     def _broke_and_returned_condition(self, candle) -> bool:
         if (candle.high > self.range_high > candle.close) or \

@@ -32,5 +32,4 @@ class StructureDetector:
                 direction = PriceDirection.UP
                 last_extreme = bar.low
 
-        log(f"Всего swing-точек найдено: {len(swings)}.")
         return swings
