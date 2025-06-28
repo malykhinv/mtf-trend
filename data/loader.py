@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Dict, Set
+from typing import List, Dict
 
 from config.constants import VOLUME_THRESHOLD_USDT
 from data.binance_client import get_binance_client

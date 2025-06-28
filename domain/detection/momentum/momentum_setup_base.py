@@ -1,6 +1,5 @@
 from config.constants import MIN_RR
 from domain.detection.base_setup import BaseSetup
-from domain.models.timeframe import Timeframe
 from typing import Optional
 
 

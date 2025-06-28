@@ -16,15 +16,16 @@ class PositionTrackerService:
     def track_all(self):
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT symbol, side, entry, sl, tp, scenario, atr, amount_usdt 
+            SELECT symbol, tfs, side, entry, sl, tp, scenario, atr, amount_usdt 
             FROM trades WHERE active = 1
         """)
         rows = cursor.fetchall()
 
         for row in rows:
-            symbol, side, entry, sl, tp, scenario, atr, amount = row
+            symbol, tfs, side, entry, sl, tp, scenario, atr, amount = row
             manager = PositionManager(
                 symbol=symbol,
+                tfs=tfs,
                 side=side,
                 entry=entry,
                 sl=sl,

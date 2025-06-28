@@ -1,5 +1,4 @@
 import traceback
-from typing import Set
 
 from config.constants import MTF_PROFILE_GLOBAL, MTF_PROFILE_INTRADAY
 from runner.scanner import Scanner

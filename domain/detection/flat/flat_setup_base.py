@@ -4,7 +4,6 @@ from domain.detection.base_setup import BaseSetup
 from domain.models.bar import Bar
 from domain.models.swing_point import SwingPoint
 from domain.models.side import Side
-from domain.models.timeframe import Timeframe
 from config.constants import (
     SWING_PROXIMITY_ATR_MULTIPLIER,
     FLAT_MAX_CENTER_SHIFT_ATR,
@@ -16,7 +15,7 @@ from config.constants import (
 class FlatSetupBase(BaseSetup, ABC):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.tf0_state = self.mtf_states[self.tf_list[0]]
+        self.tf0_state = self.mtf_states[self.tfs[0]]
         self.range_high = self.tf0_state.range_high
         self.range_low = self.tf0_state.range_low
         self.swing = self._find_swing_near_level()

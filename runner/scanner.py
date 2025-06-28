@@ -1,4 +1,4 @@
-from typing import List, Set
+from typing import List
 
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
@@ -47,7 +47,7 @@ class Scanner:
             return
 
         atr_by_tf = self._calculate_atr(bars_by_tf)
-        mtf_states = self._resolve_phases(bars_by_tf, atr_by_tf)
+        mtf_states = self._resolve_phases(tfs, bars_by_tf, atr_by_tf)
         swings = self._detect_swings(bars_by_tf[tfs[1]], atr_by_tf[tfs[1]])
 
         self._check_setups(symbol, tfs, bars_by_tf, atr_by_tf, mtf_states, swings)
@@ -74,8 +74,8 @@ class Scanner:
         return {tf: sum(abs(b.high - b.low) for b in bars) / len(bars) for tf, bars in bars_by_tf.items()}
 
     @staticmethod
-    def _resolve_phases(bars_by_tf, atr_by_tf):
-        resolver = PhaseResolver(bars_by_tf, atr_by_tf)
+    def _resolve_phases(tfs, bars_by_tf, atr_by_tf):
+        resolver = PhaseResolver(tfs, bars_by_tf, atr_by_tf)
         return resolver.resolve()
 
     @staticmethod
