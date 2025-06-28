@@ -36,23 +36,26 @@ class BaseSetup(ABC):
         self.sl = None
         self.tp = None
         self.rr = None
+        self.message = f"{self.scenario.value} : {self.confidence.value.capitalize()}"
 
     scenario: Scenario
 
     def detect(self) -> Optional[SetupSignal]:
-        self.log(f"Проверка {self.confidence.value.capitalize()} реакции...")
-        if self.confidence.is_strong:
-            self.entry, self.sl, self.tp, self.rr = self.define_rr()
-            if self.has_strong_conditions():
-                return self.build_signal("Флет: сильная реакция от границы")
+        levels = [
+            (self.confidence.is_strong, self.has_strong_conditions),
+            (self.confidence.is_moderate, self.has_moderate_conditions),
+            (self.confidence.is_weak, self.has_weak_conditions)
+        ]
 
-        if self.confidence.is_moderate and self.has_moderate_conditions():
-            return self.build_signal("Флет: умеренная реакция от границы")
+        for confidence_condition, condition_func in levels:
+            if confidence_condition:
+                self.entry, self.sl, self.tp, self.rr = self.define_rr()
+                if condition_func():
+                    signal = self.build_signal()
+                    self.log(self.message)
+                    return signal
 
-        if self.confidence.is_weak and self.has_weak_conditions():
-            return self.build_signal("Флет: слабый контакт с границей")
-
-        self.log(f"{self.confidence.value.capitalize()}-факторы не подтверждены.")
+        self.log("✖ Факторы не подтверждены.")
         return None
 
     @staticmethod
@@ -65,7 +68,7 @@ class BaseSetup(ABC):
 
     def rr_condition(self) -> bool:
         if self.rr < MIN_RR:
-            self.log(f"RR {self.rr:.2f} < MIN_RR — отклоняем.")
+            self.log(f"✖ RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
             return False
 
         return True
@@ -85,13 +88,13 @@ class BaseSetup(ABC):
     # endregion
 
     # region Signal
-    def build_signal(self, text: str) -> Optional[SetupSignal]:
+    def build_signal(self) -> Optional[SetupSignal]:
         return SetupSignal(
             symbol=self.symbol,
             side=self.side,
             confidence=self.confidence,
             rr=self.rr,
-            text=text,
+            text=self.message,
             timestamp=self.last.timestamp,
             entry=self.entry,
             sl=self.sl,
@@ -102,4 +105,4 @@ class BaseSetup(ABC):
     # endregion
 
     def log(self, message: str):
-        log(f"{self.symbol} {self.scenario}: {message}")
+        log(f"{self.symbol} {self.scenario.capitalize()} {self.confidence.capitalize()}: {message}")

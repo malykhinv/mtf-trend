@@ -1,12 +1,10 @@
 from typing import Optional, Tuple
 
-from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO
+from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, STRONG_REACTION_WICK_RATIO, \
+    MODERATE_REACTION_WICK_RATIO, STRONG_REACTION_VOLUME_MULTIPLIER
 from domain.detection.flat.flat_setup_base import FlatSetupBase
-from domain.models.setup_signal import SetupSignal
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
-from domain.models.timeframe import Timeframe
 
 
 class FlatFakeBreakout(FlatSetupBase):
@@ -17,6 +15,7 @@ class FlatFakeBreakout(FlatSetupBase):
         self.avg_vol = self._avg_volume()
         self.swing = self._find_swing_near_level()
         self.side = self._get_side(self.swing)
+        self.message = f"{self.scenario.value} : {self.confidence.value.capitalize()}"
 
     scenario = Scenario.FLAT_FAKE_BREAKOUT
 
@@ -24,6 +23,7 @@ class FlatFakeBreakout(FlatSetupBase):
     def has_strong_conditions(self) -> bool:
         return self.is_confirmed(
             self.has_moderate_conditions(),
+            self.volume_condition(self.candle, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_vol),
             self.wick_condition(self.candle, STRONG_REACTION_WICK_RATIO),
             self.rr_condition()
         )
@@ -41,27 +41,39 @@ class FlatFakeBreakout(FlatSetupBase):
             self.flat_size_condition(),
             self.flat_center_condition(),
             self.swing_condition(),
-            self.broke_and_returned_condition(self.candle),
-            self.direction_condition(self.candle, self.side)
+            self.direction_condition(self.candle, self.side),
+            self._broke_and_returned_condition(self.candle)
         )
 
-    def broke_and_returned_condition(self, candle) -> bool:
-        if (candle.high > self.range_high and candle.close < self.range_high) or \
-           (candle.low < self.range_low and candle.close > self.range_low):
-            self.log("Был выход за границу и возврат внутрь диапазона.")
+    def _broke_and_returned_condition(self, candle) -> bool:
+        if (candle.high > self.range_high > candle.close) or \
+           (candle.low < self.range_low < candle.close):
             return True
 
-        self.log("Не было ложного пробоя — отклоняем.")
+        self.log("✖ Не было ложного пробоя.")
         return False
 
     # endregion
 
     # region RR
     def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
-        entry = self.last.close
+        entry = self._define_entry()
 
-        sl = self.candle.low if self.side.is_long else self.candle.high
+        sl = self._define_sl()
 
+        tp = self._define_tp(entry, sl)
+
+        rr = abs(tp - entry) / abs(entry - sl)
+
+        return entry, sl, tp, round(rr, 2)
+
+    def _define_entry(self) -> float:
+        return self.last.close
+
+    def _define_sl(self) -> float:
+        return self.candle.low if self.side.is_long else self.candle.high
+
+    def _define_tp(self, entry: float, sl: float) -> float:
         tp_swings = [
             s for s in self.swings
             if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW) and s.index > self.swing.index
@@ -70,9 +82,6 @@ class FlatFakeBreakout(FlatSetupBase):
         if not tp:
             tp = max(b.high for b in self.bars_15m[-TP_LOOKAHEAD_BARS:]) \
                 if self.side.is_long else min(b.low for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
-
-        rr = abs(tp - entry) / abs(entry - sl)
-
-        return entry, sl, tp, round(rr, 2)
+        return tp
 
     # endregion
