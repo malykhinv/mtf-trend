@@ -1,6 +1,5 @@
 from config.constants import MIN_RR
 from domain.detection.base_setup import BaseSetup
-from domain.models.side import Side
 from domain.models.timeframe import Timeframe
 from typing import Optional
 
@@ -97,36 +96,36 @@ class MomentumSetupBase(BaseSetup):
         self.log("✖ Трендовая структура на H4 не подтверждена.")
         return False
 
-    def define_tp(self, entry: float, sl: float, side: Side) -> Optional[float]:
+    def define_tp(self, entry: float, sl: float) -> Optional[float]:
         swings = self.swings
 
         # Swing как главный вариант
         candidates = []
         for s in swings:
-            if side.is_long and s.type.is_high and s.price > entry:
+            if self.side.is_long and s.type.is_high and s.price > entry:
                 rr = abs(s.price - entry) / abs(entry - sl)
                 if rr >= MIN_RR:
                     candidates.append(s)
-            elif side.is_short and s.type.is_low and s.price < entry:
+            elif self.side.is_short and s.type.is_low and s.price < entry:
                 rr = abs(entry - s.price) / abs(entry - sl)
                 if rr >= MIN_RR:
                     candidates.append(s)
 
         if candidates:
-            if side.is_long:
+            if self.side.is_long:
                 return min(candidates, key=lambda s: s.price).price
-            elif side.is_short:
+            elif self.side.is_short:
                 return max(candidates, key=lambda s: s.price).price
 
         # D1 уровни как fallback
         d1_high = self.d1_state.range_high
         d1_low = self.d1_state.range_low
 
-        if side.is_long and d1_high and d1_high > entry:
+        if self.side.is_long and d1_high and d1_high > entry:
             rr = abs(d1_high - entry) / abs(entry - sl)
             if rr >= MIN_RR:
                 return d1_high
-        elif side.is_short and d1_low and d1_low < entry:
+        elif self.side.is_short and d1_low and d1_low < entry:
             rr = abs(entry - d1_low) / abs(entry - sl)
             if rr >= MIN_RR:
                 return d1_low

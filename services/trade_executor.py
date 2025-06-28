@@ -6,6 +6,7 @@ from domain.models.order_side import OrderSide
 from domain.models.scenario import Scenario
 from domain.models.side import Side
 from utils.logger import log
+from utils.str_utils import market_symbol
 from services.position_tracker_service import PositionTrackerService
 
 
@@ -22,9 +23,9 @@ class TradeExecutor:
                 tp: float,
                 amount_usdt: float = POSITION_USDT):
         try:
-            market_symbol = self._to_market_symbol(symbol)
-            entry = self._get_price(market_symbol)
-            market = self.client.market(market_symbol)
+            symbol_market = market_symbol(symbol)
+            entry = self._get_price(symbol_market)
+            market = self.client.market(symbol_market)
 
             if not self._validate_rr(entry, sl, tp, symbol):
                 return
@@ -40,14 +41,14 @@ class TradeExecutor:
             close_side = OrderSide.SELL if side.is_long else OrderSide.BUY
 
             self.client.create_order(
-                symbol=market_symbol,
+                symbol=symbol_market,
                 type='market',
                 side=cast(Literal["buy", "sell"], open_side.value),
                 amount=amount
             )
 
             self.client.create_order(
-                symbol=market_symbol,
+                symbol=symbol_market,
                 type='market',
                 side=cast(Literal["buy", "sell"], close_side.value),
                 amount=amount,
@@ -59,7 +60,7 @@ class TradeExecutor:
             )
 
             self.client.create_order(
-                symbol=market_symbol,
+                symbol=symbol_market,
                 type='market',
                 side=cast(Literal["buy", "sell"], close_side.value),
                 amount=amount,
@@ -89,8 +90,8 @@ class TradeExecutor:
             log(f"Исполнение ордера по {symbol} не удалось: {error}")
             raise
 
-    def _get_price(self, market_symbol: str) -> float:
-        ticker = self.client.fetch_ticker(market_symbol)
+    def _get_price(self, symbol_market: str) -> float:
+        ticker = self.client.fetch_ticker(symbol_market)
         return ticker['last'] if 'last' in ticker else 0.0
 
     @staticmethod

@@ -3,7 +3,6 @@ from data.loader import Loader
 from domain.models.order_side import OrderSide
 from domain.models.scenario import Scenario
 from domain.models.side import Side
-from domain.models.swing_type import SwingType
 from domain.models.timeframe import Timeframe
 from domain.structures import StructureDetector
 from utils.logger import log

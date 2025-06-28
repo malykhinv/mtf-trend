@@ -3,10 +3,8 @@ from typing import Optional, Tuple
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG_REACTION_WICK_RATIO, \
     MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER
 from domain.detection.flat.flat_setup_base import FlatSetupBase
-from domain.models.setup_signal import SetupSignal
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
-from domain.models.timeframe import Timeframe
 
 
 class FlatBounce(FlatSetupBase):

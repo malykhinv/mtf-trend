@@ -2,7 +2,6 @@ from domain.models.bar import Bar
 from domain.models.mtf_state import MTFState
 from domain.models.phase import Phase
 from domain.models.price_direction import PriceDirection
-from domain.models.swing_type import SwingType
 from domain.models.timeframe import Timeframe
 from domain.structures import StructureDetector
 from utils.logger import log

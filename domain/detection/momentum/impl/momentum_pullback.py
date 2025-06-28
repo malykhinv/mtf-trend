@@ -9,6 +9,7 @@ from domain.models.scenario import Scenario
 class MomentumPullback(MomentumSetupBase):
     scenario = Scenario.MOMENTUM_PULLBACK
 
+    # region Conditions
     def has_strong_conditions(self) -> bool:
         return self.is_confirmed(
             self.has_moderate_conditions(),
@@ -30,6 +31,10 @@ class MomentumPullback(MomentumSetupBase):
             self.pullback_condition()
         )
 
+    # endregion
+
+    # region RR
+
     def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
@@ -37,13 +42,17 @@ class MomentumPullback(MomentumSetupBase):
         if not self.h4_trend_condition():
             return None
 
-        tp = self.define_tp(entry, sl, self.side.is_long)
+        tp = self.define_tp(entry, sl)
 
         if tp is None:
             self.log("✖ Не удалось определить TP с достаточным RR.")
             return None
 
         rr = abs(tp - entry) / abs(entry - sl)
-        self.log(f"RR рассчитан: {round(rr, 2)} (Entry: {entry}, SL: {sl}, TP: {tp})")
+        self.log(f"Entry: {entry}")
+        self.log(f"SL: {sl}")
+        self.log(f"TP: {tp}")
+        self.log(f"RR: {round(rr, 2)}")
 
         return entry, sl, tp, round(rr, 2)
+    # endregion
