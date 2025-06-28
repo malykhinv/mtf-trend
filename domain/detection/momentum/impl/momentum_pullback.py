@@ -1,7 +1,7 @@
 from typing import Optional, Tuple
 
 from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, TP_LOOKAHEAD_BARS
+    MODERATE_REACTION_WICK_RATIO
 from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
 from domain.models.scenario import Scenario
 
@@ -33,7 +33,17 @@ class MomentumPullback(MomentumSetupBase):
     def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
-        tp = max(b.high for b in self.bars_15m[-TP_LOOKAHEAD_BARS:]) if self.side.is_long else min(
-            b.low for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
+
+        if not self.h4_trend_condition():
+            return None
+
+        tp = self.define_tp(entry, sl, self.side.is_long)
+
+        if tp is None:
+            self.log("✖ Не удалось определить TP с достаточным RR.")
+            return None
+
         rr = abs(tp - entry) / abs(entry - sl)
+        self.log(f"RR рассчитан: {round(rr, 2)} (Entry: {entry}, SL: {sl}, TP: {tp})")
+
         return entry, sl, tp, round(rr, 2)

@@ -1,10 +1,11 @@
 from config.constants import MIN_RR
 from domain.detection.base_setup import BaseSetup
+from domain.models.side import Side
 from domain.models.timeframe import Timeframe
+from typing import Optional
 
 
 class MomentumSetupBase(BaseSetup):
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.d1_state = self.mtf_states[Timeframe.D1]
@@ -51,6 +52,86 @@ class MomentumSetupBase(BaseSetup):
             self.log(f"✖ RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
             return False
         return True
+
+    def h4_trend_condition(self) -> bool:
+        swings = self.h4_state.swings
+        if not swings or len(swings) < 4:
+            self.log("✖ Недостаточно свингов на H4 для анализа тренда.")
+            return False
+
+        hh_count = 0
+        hl_count = 0
+        prev_high = None
+        prev_low = None
+
+        for swing in swings:
+            if swing.type.is_high:
+                if prev_high is None or swing.price > prev_high:
+                    hh_count += 1
+                    prev_high = swing.price
+            elif swing.type.is_low:
+                if prev_low is None or swing.price > prev_low:
+                    hl_count += 1
+                    prev_low = swing.price
+
+        ll_count = 0
+        lh_count = 0
+        prev_low_s = None
+        prev_high_s = None
+
+        for swing in swings:
+            if swing.type.is_low:
+                if prev_low_s is None or swing.price < prev_low_s:
+                    ll_count += 1
+                    prev_low_s = swing.price
+            elif swing.type.is_high:
+                if prev_high_s is None or swing.price < prev_high_s:
+                    lh_count += 1
+                    prev_high_s = swing.price
+
+        if hh_count >= 2 and hl_count >= 2:
+            return True
+        if ll_count >= 2 and lh_count >= 2:
+            return True
+
+        self.log("✖ Трендовая структура на H4 не подтверждена.")
+        return False
+
+    def define_tp(self, entry: float, sl: float, side: Side) -> Optional[float]:
+        swings = self.swings
+
+        # Swing как главный вариант
+        candidates = []
+        for s in swings:
+            if side.is_long and s.type.is_high and s.price > entry:
+                rr = abs(s.price - entry) / abs(entry - sl)
+                if rr >= MIN_RR:
+                    candidates.append(s)
+            elif side.is_short and s.type.is_low and s.price < entry:
+                rr = abs(entry - s.price) / abs(entry - sl)
+                if rr >= MIN_RR:
+                    candidates.append(s)
+
+        if candidates:
+            if side.is_long:
+                return min(candidates, key=lambda s: s.price).price
+            elif side.is_short:
+                return max(candidates, key=lambda s: s.price).price
+
+        # D1 уровни как fallback
+        d1_high = self.d1_state.range_high
+        d1_low = self.d1_state.range_low
+
+        if side.is_long and d1_high and d1_high > entry:
+            rr = abs(d1_high - entry) / abs(entry - sl)
+            if rr >= MIN_RR:
+                return d1_high
+        elif side.is_short and d1_low and d1_low < entry:
+            rr = abs(entry - d1_low) / abs(entry - sl)
+            if rr >= MIN_RR:
+                return d1_low
+
+        return None
 
     def _find_recent_swing(self):
         if self.swings:
