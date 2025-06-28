@@ -9,8 +9,9 @@ from domain.detection.flat.impl.flat_fake_breakout import FlatFakeBreakout
 
 
 class SetupDetector:
-    def __init__(self, symbol, bars_by_tf, atr_by_tf, swings, mtf_states, confidence: Confidence):
+    def __init__(self, symbol, tfs, bars_by_tf, atr_by_tf, swings, mtf_states, confidence: Confidence):
         self.symbol = symbol
+        self.tfs = tfs
         self.bars_by_tf = bars_by_tf
         self.atr_by_tf = atr_by_tf
         self.swings = swings
@@ -28,6 +29,7 @@ class SetupDetector:
         for setup_cls in setup_classes:
             setup = setup_cls(
                 symbol=self.symbol,
+                tfs=self.tfs,
                 bars_by_tf=self.bars_by_tf,
                 atr_by_tf=self.atr_by_tf,
                 swings=self.swings,

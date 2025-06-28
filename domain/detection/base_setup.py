@@ -20,6 +20,7 @@ class BaseSetup(ABC):
             swings: List[SwingPoint],
             confidence: Confidence,
             mtf_states: Dict[Timeframe, any],
+            tfs: List[Timeframe]
     ):
         self.symbol = symbol
         self.bars_by_tf = bars_by_tf
@@ -27,10 +28,11 @@ class BaseSetup(ABC):
         self.swings = swings
         self.confidence = confidence
         self.mtf_states = mtf_states
-        self.bars_15m = self.bars_by_tf[Timeframe.M15]
-        self.atr_15m = self.atr_by_tf[Timeframe.M15]
-        self.last = self.bars_15m[-1]
-        self.prev = self.bars_15m[-2]
+        self.tfs = tfs
+        self.bars_tf3 = self.bars_by_tf[self.tfs[3]]
+        self.atr_tf3 = self.atr_by_tf[self.tfs[3]]
+        self.last = self.bars_tf3[-1]
+        self.prev = self.bars_tf3[-2]
         self.side = None
         self.entry = None
         self.sl = None

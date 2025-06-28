@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Set
 
 from config.constants import VOLUME_THRESHOLD_USDT
 from data.binance_client import get_binance_client
@@ -31,8 +31,11 @@ class Loader:
             bars.append(bar)
         return bars
 
-    def fetch_multiple_timeframes(self, symbol: str, tfs: List[Timeframe], limit: int = 100) -> Dict[Timeframe, List[Bar]]:
-        return {tf: self.fetch_ohlcv(symbol, tf, limit=limit) for tf in tfs}
+    def fetch_multiple_timeframes(self,
+                                  symbol: str,
+                                  tf_list: List[Timeframe],
+                                  limit: int = 100) -> Dict[Timeframe, List[Bar]]:
+        return {tf: self.fetch_ohlcv(symbol, tf, limit=limit) for tf in tf_list}
 
     def get_filtered_symbols(self, quote_asset: str = "USDT", min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> list:
         markets = self.binance.load_markets()

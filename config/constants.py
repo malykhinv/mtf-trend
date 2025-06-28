@@ -1,4 +1,8 @@
 # region Общие параметры торговли
+from domain.models.timeframe import Timeframe
+
+MTF_PROFILE_GLOBAL = [Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15]
+MTF_PROFILE_INTRADAY = [Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5]
 
 # Минимальный объем сделки в USDT для фильтрации ликвидности
 VOLUME_THRESHOLD_USDT = 50_000_000

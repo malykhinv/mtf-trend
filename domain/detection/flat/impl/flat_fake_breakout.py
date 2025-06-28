@@ -80,8 +80,8 @@ class FlatFakeBreakout(FlatSetupBase):
         ]
         tp = next((s.price for s in tp_swings if abs(s.price - entry) / abs(entry - sl) >= MIN_RR), None)
         if not tp:
-            tp = max(b.high for b in self.bars_15m[-TP_LOOKAHEAD_BARS:]) \
-                if self.side.is_long else min(b.low for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
+            tp = max(b.high for b in self.bars_tf3[-TP_LOOKAHEAD_BARS:]) \
+                if self.side.is_long else min(b.low for b in self.bars_tf3[-TP_LOOKAHEAD_BARS:])
         return tp
 
     # endregion

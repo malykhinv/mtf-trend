@@ -39,7 +39,7 @@ class MomentumPullback(MomentumSetupBase):
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
 
-        if not self.h4_trend_condition():
+        if not self.tf1_trend_condition():
             return None
 
         tp = self.define_tp(entry, sl)

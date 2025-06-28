@@ -70,7 +70,7 @@ class FlatBounce(FlatSetupBase):
     def _define_sl_swings(self, entry: float) -> Optional[float]:
         sl_swings = [
             s for s in self.swings
-            if s.type != self.swing.type and s.index < self.swing.index and abs(entry - s.price) > 0.3 * self.atr_15m
+            if s.type != self.swing.type and s.index < self.swing.index and abs(entry - s.price) > 0.3 * self.atr_tf3
         ]
         if sl_swings:
             self.log("Стоп по прошлым свингам найден.")
@@ -80,9 +80,9 @@ class FlatBounce(FlatSetupBase):
 
     def _define_sl_default(self) -> float:
         if self.side.is_long:
-            sl = min(b.low for b in self.bars_15m[-SL_LOOKBACK_BARS:])
+            sl = min(b.low for b in self.bars_tf3[-SL_LOOKBACK_BARS:])
         else:
-            sl = max(b.high for b in self.bars_15m[-SL_LOOKBACK_BARS:])
+            sl = max(b.high for b in self.bars_tf3[-SL_LOOKBACK_BARS:])
         self.log("Стоп выбран по минимумам/максимумам баров.")
         return sl
 
@@ -100,9 +100,9 @@ class FlatBounce(FlatSetupBase):
 
     def _define_tp_default(self) -> float:
         if self.side.is_long:
-            tp = max(b.high for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
+            tp = max(b.high for b in self.bars_tf3[-TP_LOOKAHEAD_BARS:])
         else:
-            tp = min(b.low for b in self.bars_15m[-TP_LOOKAHEAD_BARS:])
+            tp = min(b.low for b in self.bars_tf3[-TP_LOOKAHEAD_BARS:])
         self.log("Тейк выбран по экстремумам баров.")
         return tp
 

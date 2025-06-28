@@ -50,7 +50,7 @@ class MomentumInitiation(MomentumSetupBase):
 
     def _retest_condition(self) -> bool:
         breakout_level = self.prev.high if self.side.is_long else self.prev.low
-        if not abs(self.last.close - breakout_level) < RETEST_TOLERANCE_ATR * self.atr_15m:
+        if not abs(self.last.close - breakout_level) < RETEST_TOLERANCE_ATR * self.atr_tf3:
             self.log("✖ Нет точного ретеста зоны пробоя.")
             return False
 
@@ -63,7 +63,7 @@ class MomentumInitiation(MomentumSetupBase):
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
 
-        if not self.h4_trend_condition():
+        if not self.tf1_trend_condition():
             return None
 
         tp = self.define_tp(entry, sl)
