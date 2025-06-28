@@ -1,7 +1,7 @@
 from typing import Tuple
 
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED
+    MODERATE_REACTION_WICK_RATIO, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED, MAX_SWING_LOOKBACK_BARS
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
@@ -76,7 +76,9 @@ class FlatFakeBreakout(FlatSetupBase):
 
         tp_swings = [
             s for s in self.swings
-            if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW) and s.index > self.swing.index
+            if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW)
+               and s.index > self.swing.index
+               and s.index - self.swing.index <= MAX_SWING_LOOKBACK_BARS
         ]
         tp = next((s.price for s in tp_swings if abs(s.price - entry) / abs(entry - sl) >= MIN_RR), None)
         if not tp:

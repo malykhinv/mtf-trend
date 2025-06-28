@@ -5,6 +5,8 @@ from domain.models.timeframe import Timeframe
 MTF_PROFILE_GLOBAL = MTFProfile(Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5)
 MTF_PROFILE_INTRADAY = MTFProfile(Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5, Timeframe.M1)
 
+MAX_SWING_LOOKBACK_BARS = 50
+
 FLOAT_UNDEFINED = 0.0
 
 # Минимальный объем сделки в USDT для фильтрации ликвидности

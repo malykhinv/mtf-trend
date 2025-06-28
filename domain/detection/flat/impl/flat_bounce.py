@@ -1,7 +1,8 @@
 from typing import Tuple
 
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED
+    MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED, \
+    MAX_SWING_LOOKBACK_BARS
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
@@ -69,7 +70,10 @@ class FlatBounce(FlatSetupBase):
     def _define_sl_swings(self, entry: float) -> float:
         sl_swings = [
             s for s in self.swings
-            if s.type != self.swing.type and s.index < self.swing.index and abs(entry - s.price) > 0.3 * self.atr_tf_setup
+            if s.type != self.swing.type
+               and s.index < self.swing.index
+               and self.swing.index - s.index <= MAX_SWING_LOOKBACK_BARS
+               and abs(entry - s.price) > 0.3 * self.atr_tf_setup
         ]
         if sl_swings:
             self.log("Стоп по прошлым свингам найден.")
@@ -92,7 +96,9 @@ class FlatBounce(FlatSetupBase):
 
         tp_swings = [
             s for s in self.swings
-            if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW) and s.index > self.swing.index
+            if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW)
+               and s.index > self.swing.index
+               and s.index - self.swing.index <= MAX_SWING_LOOKBACK_BARS
         ]
         for s in tp_swings:
             if abs(s.price - entry) / abs(entry - sl) >= MIN_RR:
