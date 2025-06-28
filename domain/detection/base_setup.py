@@ -113,4 +113,4 @@ class BaseSetup(ABC):
         logw(self._get_log_message(message))
 
     def _get_log_message(self, message: str) -> str:
-        return f"{self.scenario.value} {self.confidence.capitalize()}: {message}"
+        return f"{self.confidence.capitalize()} {self.scenario.value} : {message}"
