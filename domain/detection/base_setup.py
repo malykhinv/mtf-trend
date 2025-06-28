@@ -1,15 +1,16 @@
 from abc import ABC
 from typing import Dict, List, Optional, Tuple
 
-from config.constants import MIN_RR
+from config.constants import MIN_RR, FLOAT_UNDEFINED
 from domain.models.bar import Bar
 from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
 from domain.models.scenario import Scenario
 from domain.models.setup_signal import SetupSignal
+from domain.models.side import Side
 from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
-from utils.logger import log
+from utils.logger import log, logw
 
 
 class BaseSetup(ABC):
@@ -34,11 +35,11 @@ class BaseSetup(ABC):
         self.atr_tf_setup = self.atr_by_tf[self.tfs.setup]
         self.last = self.bars_tf_setup[-1]
         self.prev = self.bars_tf_setup[-2]
-        self.side = None
-        self.entry = None
-        self.sl = None
-        self.tp = None
-        self.rr = None
+        self.side = Side.UNDEFINED
+        self.entry = FLOAT_UNDEFINED
+        self.sl = FLOAT_UNDEFINED
+        self.tp = FLOAT_UNDEFINED
+        self.rr = FLOAT_UNDEFINED
         self.message = f"{self.scenario.value} : {self.confidence.value.capitalize()}"
 
     scenario: Scenario
@@ -60,7 +61,7 @@ class BaseSetup(ABC):
                     self.log(self.message)
                     return signal
 
-        self.log("✖ Факторы не подтверждены.")
+        self.logw("Факторы не подтверждены.")
         return None
 
     @staticmethod
@@ -68,12 +69,12 @@ class BaseSetup(ABC):
         return all(conditions)
 
     # region RR
-    def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
+    def define_rr(self) -> Tuple[float, float, float, float]:
         pass
 
     def rr_condition(self) -> bool:
         if self.rr < MIN_RR:
-            self.log(f"✖ RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
+            self.logw(f"RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
             return False
 
         return True
@@ -110,4 +111,10 @@ class BaseSetup(ABC):
     # endregion
 
     def log(self, message: str):
-        log(f"{self.symbol} {self.scenario.capitalize()} {self.confidence.capitalize()}: {message}")
+        log(self._get_log_message(message))
+
+    def logw(self, message: str):
+        logw(self._get_log_message(message))
+
+    def _get_log_message(self, message: str) -> str:
+        return f"{self.symbol} {self.scenario.capitalize()} {self.confidence.capitalize()}: {message}"

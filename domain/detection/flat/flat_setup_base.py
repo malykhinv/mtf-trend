@@ -23,7 +23,7 @@ class FlatSetupBase(BaseSetup, ABC):
     # region Conditions
     def flat_market_condition(self) -> bool:
         if not (self.tf0_state.is_range and self.range_high and self.range_low):
-            self.log("✖ Не флет.")
+            self.logw("Не флет.")
             return False
         return True
 
@@ -32,7 +32,7 @@ class FlatSetupBase(BaseSetup, ABC):
         min_size = 2 * self.atr_tf_setup
         max_size = 10 * self.atr_tf_setup
         if not min_size <= size <= max_size:
-            self.log("✖ Диапазон слишком мал или велик.")
+            self.logw("Диапазон слишком мал или велик.")
             return False
         return True
 
@@ -42,21 +42,21 @@ class FlatSetupBase(BaseSetup, ABC):
         past_center = (past_bar.close + past_bar.open) / 2
         shift = abs(current_center - past_center)
         if not shift < FLAT_MAX_CENTER_SHIFT_ATR * self.atr_tf_setup:
-            self.log("✖ Центр диапазона смещен.")
+            self.logw("Центр диапазона смещен.")
             return False
 
         return True
 
     def swing_condition(self):
         if not self.swing:
-            self.log("✖ Нет свинга около границы.")
+            self.logw("Нет свинга около границы.")
             return False
 
         return True
 
     def volume_condition(self, candle, avg_vol) -> bool:
         if not candle.volume >= avg_vol:
-            self.log("✖ Объем свечи ниже среднего.")
+            self.logw("Объем свечи ниже среднего.")
             return False
         return True
 
@@ -65,58 +65,61 @@ class FlatSetupBase(BaseSetup, ABC):
         body = abs(candle.close - candle.open)
         wick = full_range - body
         if not wick < height_multiplier * full_range:
-            self.log("✖ Длина хвоста свечи превышает лимит.")
+            self.logw("Длина хвоста свечи превышает лимит.")
             return False
 
         return True
 
     def distance_condition(self, close: float, level: float, atr_multiplier: float = 1.0) -> bool:
         if not abs(close - level) < atr_multiplier * self.atr_tf_setup:
-            self.log("✖ Цена закрытия далеко от уровня.")
+            self.logw("Цена закрытия далеко от уровня.")
             return False
 
         return True
 
     def touch_condition(self, price: float, level: float) -> bool:
         if not abs(price - level) < TOUCH_DISTANCE_ATR * self.atr_tf_setup:
-            self.log("✖ Цена не коснулась уровня.")
+            self.logw("Цена не коснулась уровня.")
             return False
 
         return True
 
     def direction_condition(self, candle, side: Side) -> bool:
         if not candle.close > candle.open if side.is_long else candle.close < candle.open:
-            self.log("✖ Направление закрытия свечи не совпадает с предполагаемой стороной.")
+            self.logw("Направление закрытия свечи не совпадает с предполагаемой стороной.")
             return False
 
         return True
 
     def returned_inside_range_condition(self, close: float) -> bool:
         if not self.range_low < close < self.range_high:
-            self.log("✖ Цена не вернулась внутрь диапазона.")
+            self.logw("Цена не вернулась внутрь диапазона.")
             return False
 
         return True
 
     # endregion
 
-    def _find_swing_near_level(self) -> Optional[SwingPoint]:
+    def _find_swing_near_level(self) -> SwingPoint:
         for s in reversed(self.swings):
             if abs(s.price - self.range_high) < SWING_PROXIMITY_ATR_MULTIPLIER * self.atr_tf_setup:
                 return s
             if abs(s.price - self.range_low) < SWING_PROXIMITY_ATR_MULTIPLIER * self.atr_tf_setup:
                 return s
-        return None
+        return SwingPoint.undefined()
 
-    def _find_swing_near(self, level: float) -> Optional[SwingPoint]:
+    def _find_swing_near(self, level: float) -> SwingPoint:
         for s in reversed(self.swings):
             if abs(s.price - level) < self.atr_tf_setup * SWING_PROXIMITY_ATR_MULTIPLIER:
                 return s
-        return None
+        return SwingPoint.undefined()
 
     def _avg_volume(self) -> float:
         return sum(b.volume for b in self.bars_tf_setup[-CANDLE_AVG_VOLUME_PERIOD - 1:-1]) / CANDLE_AVG_VOLUME_PERIOD
 
-    @staticmethod
-    def _get_side(swing: SwingPoint) -> Side:
+    def _get_side(self, swing: SwingPoint) -> Side:
+        if not swing:
+            self.logw("Swing не задан.")
+            return Side.UNDEFINED
+
         return Side.LONG if swing.type.is_low else Side.SHORT

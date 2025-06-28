@@ -28,18 +28,19 @@ class Scanner:
         symbols = self.loader.get_filtered_symbols()
         log(f"Отобрано {len(symbols)} символов для анализа.")
 
-        for symbol, tfs in zip(symbols, tfss):
-            try:
-                self._process_symbol(symbol, tfs)
-            except Exception as error:
-                log(f"✖ Ошибка при обработке {symbol}: {error}")
-                raise
+        for symbol in symbols:
+            for tfs in tfss:
+                try:
+                    self._process_symbol(symbol, tfs)
+                except Exception as error:
+                    log(f"✖ Ошибка при обработке {symbol}: {error}")
+                    raise
 
         log("Цикл сканирования завершён.")
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile):
         print()
-        log(symbol)
+        log(f"{symbol} : {tfs}")
 
         bars_by_tf = self.loader.fetch_multiple_timeframes(symbol, tfs)
 

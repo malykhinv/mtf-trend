@@ -14,7 +14,7 @@ class StructureDetector:
 
     def detect_swing_points(self) -> List[SwingPoint]:
         swings = []
-        direction = None
+        direction = PriceDirection.UNDEFINED
         last_extreme = self.bars[0].high if self.bars[1].close > self.bars[0].close else self.bars[0].low
 
         for i in range(2, len(self.bars) - 2):

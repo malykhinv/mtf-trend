@@ -10,3 +10,6 @@ logging.basicConfig(
 
 def log(message: str) -> None:
     logging.info(message)
+
+def logw(message: str) -> None:
+    logging.info(f"✖ {message}")

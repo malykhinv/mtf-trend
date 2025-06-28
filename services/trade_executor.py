@@ -1,11 +1,11 @@
 from typing import Literal, cast
-from config.constants import POSITION_USDT, MIN_RR
+from config.constants import POSITION_USDT, MIN_RR, FLOAT_UNDEFINED
 from ccxt import binance
 
 from domain.models.order_side import OrderSide
 from domain.models.scenario import Scenario
 from domain.models.side import Side
-from utils.logger import log
+from utils.logger import log, logw
 from utils.str_utils import market_symbol
 from services.position_tracker_service import PositionTrackerService
 
@@ -92,10 +92,14 @@ class TradeExecutor:
 
     def _get_price(self, symbol_market: str) -> float:
         ticker = self.client.fetch_ticker(symbol_market)
-        return ticker['last'] if 'last' in ticker else 0.0
+        return ticker['last'] if 'last' in ticker else FLOAT_UNDEFINED
 
     @staticmethod
     def _validate_rr(entry: float, sl: float, tp: float, symbol: str) -> bool:
+        if abs(entry - sl) < 1e-6:
+            logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return False
+
         risk = abs(entry - sl)
         reward = abs(tp - entry)
         if risk == 0:

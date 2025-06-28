@@ -1,7 +1,7 @@
-from typing import Optional, Tuple
+from typing import Tuple
 
 from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, RETEST_TOLERANCE_ATR
+    MODERATE_REACTION_WICK_RATIO, RETEST_TOLERANCE_ATR, FLOAT_UNDEFINED
 from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
 from domain.models.scenario import Scenario
 from domain.models.side import Side
@@ -45,11 +45,11 @@ class MomentumInitiation(MomentumSetupBase):
         или ниже предыдущего low для шорта.
         """
         if self.side.is_long and not self.last.close > self.prev.high:
-            self.log("✖ Нет подтверждения: закрытие не выше предыдущего high.")
+            self.logw("Нет подтверждения: закрытие не выше предыдущего high.")
             return False
 
         elif self.side.is_short and not self.last.close < self.prev.low:
-            self.log("✖ Нет подтверждения: закрытие не ниже предыдущего low.")
+            self.logw("Нет подтверждения: закрытие не ниже предыдущего low.")
             return False
 
         return True
@@ -57,7 +57,7 @@ class MomentumInitiation(MomentumSetupBase):
     def _retest_condition(self) -> bool:
         breakout_level = self.prev.high if self.side.is_long else self.prev.low
         if not abs(self.last.close - breakout_level) < RETEST_TOLERANCE_ATR * self.atr_tf_setup:
-            self.log("✖ Нет точного ретеста зоны пробоя.")
+            self.logw("Нет точного ретеста зоны пробоя.")
             return False
 
         return True
@@ -65,24 +65,27 @@ class MomentumInitiation(MomentumSetupBase):
     # endregion
 
     # region RR
-    def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
-
+    def define_rr(self) -> Tuple[float, float, float, float]:
+        undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
         if not self.tf1_trend_condition():
-            self.log(f"✖ Нет подходящего тренда на {self.tfs.trend.value}.")
-            return None
+            self.logw(f"Нет подходящего тренда на {self.tfs.trend.value}.")
+            return undefined_result
 
         if not self.side:
-            self.log("✖ Невозможно задать направление сделки.")
-            return None
+            self.logw("Невозможно задать направление сделки.")
+            return undefined_result
 
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
+        if abs(entry - sl) < 1e-6:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return undefined_result
 
         tp = self.define_tp(entry, sl)
 
         if tp is None:
-            self.log("✖ Не удалось определить TP с достаточным RR.")
-            return None
+            self.logw("Не удалось определить TP с достаточным RR.")
+            return undefined_result
 
         rr = abs(tp - entry) / abs(entry - sl)
         self.log(f"Entry: {entry}")
@@ -93,14 +96,14 @@ class MomentumInitiation(MomentumSetupBase):
         return entry, sl, tp, round(rr, 2)
     # endregion
 
-    def _get_side(self) -> Optional[Side]:
+    def _get_side(self) -> Side:
         tf_trend_state = self.mtf_states[self.tfs.trend]
         phase = tf_trend_state.phase
         if not phase:
-            self.log("✖ Невозможно определить side — фаза не трендовая.")
-            return None
+            self.logw("Невозможно определить side — фаза не трендовая.")
+            return Side.UNDEFINED
         elif tf_trend_state.phase.is_uptrend:
             return Side.LONG
         elif tf_trend_state.phase.is_downtrend:
             return Side.SHORT
-        return None
+        return Side.UNDEFINED

@@ -1,7 +1,7 @@
-from typing import Optional, Tuple
+from typing import Tuple
 
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, STRONG_REACTION_VOLUME_MULTIPLIER
+    MODERATE_REACTION_WICK_RATIO, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
@@ -50,19 +50,21 @@ class FlatFakeBreakout(FlatSetupBase):
            (candle.low < self.range_low < candle.close):
             return True
 
-        self.log("✖ Не было ложного пробоя.")
+        self.logw("Не было ложного пробоя.")
         return False
 
     # endregion
 
     # region RR
-    def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
+    def define_rr(self) -> Tuple[float, float, float, float]:
+        undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
         entry = self._define_entry()
-
         sl = self._define_sl()
+        if abs(entry - sl) < 1e-6:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return undefined_result
 
         tp = self._define_tp(entry, sl)
-
         rr = abs(tp - entry) / abs(entry - sl)
 
         return entry, sl, tp, round(rr, 2)
@@ -74,6 +76,10 @@ class FlatFakeBreakout(FlatSetupBase):
         return self.candle.low if self.side.is_long else self.candle.high
 
     def _define_tp(self, entry: float, sl: float) -> float:
+        if abs(entry - sl) < 1e-6:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return FLOAT_UNDEFINED
+
         tp_swings = [
             s for s in self.swings
             if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW) and s.index > self.swing.index

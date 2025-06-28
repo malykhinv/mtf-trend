@@ -1,6 +1,5 @@
-from config.constants import MIN_RR
+from config.constants import MIN_RR, FLOAT_UNDEFINED
 from domain.detection.base_setup import BaseSetup
-from typing import Optional
 
 
 class MomentumSetupBase(BaseSetup):
@@ -13,26 +12,20 @@ class MomentumSetupBase(BaseSetup):
         self.avg_volume = sum(b.volume for b in self.bars_tf_setup[-20:]) / 20
 
     def trend_condition(self) -> bool:
-        if not self.tf_macro_state.is_trend:
-            self.log("✖ Нет глобального тренда на D1.")
-            return False
-        return True
-
-    def impulse_condition(self) -> bool:
-        if not self.tf_trend_state.has_strong_move:
-            self.log(f"✖ Нет импульса на {self.tfs.trend.value}.")
+        if not self.tf_macro_state.phase.is_uptrend and not self.tf_macro_state.phase.is_downtrend:
+            self.logw(f"Нет глобального тренда на {self.tf_macro_state.timeframe.value}.")
             return False
         return True
 
     def pullback_condition(self) -> bool:
-        if not self.tf_setup_state.is_correction:
-            self.log(f"✖ Нет отката на {self.tfs.setup.value}.")
+        if not self.tf_setup_state.is_in_correction:
+            self.logw(f"Нет отката на {self.tfs.setup.value}.")
             return False
         return True
 
     def volume_condition(self, candle, avg_vol) -> bool:
         if not candle.volume >= avg_vol:
-            self.log("✖ Объем ниже среднего.")
+            self.logw("Объем ниже среднего.")
             return False
         return True
 
@@ -41,20 +34,20 @@ class MomentumSetupBase(BaseSetup):
         body = abs(candle.close - candle.open)
         wick = full_range - body
         if not wick < max_ratio * full_range:
-            self.log("✖ Длина хвоста свечи слишком большая.")
+            self.logw("Длина хвоста свечи слишком большая.")
             return False
         return True
 
     def rr_condition(self) -> bool:
         if self.rr < MIN_RR:
-            self.log(f"✖ RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
+            self.logw(f"RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
             return False
         return True
 
     def tf1_trend_condition(self) -> bool:
-        swings = self.tf_trend_state.swings
+        swings = self.tf_trend_state.structure
         if not swings or len(swings) < 4:
-            self.log(f"✖ Недостаточно свингов на {self.tfs.trend.value} для анализа тренда.")
+            self.logw(f"Недостаточно свингов на {self.tfs.trend.value} для анализа тренда.")
             return False
 
         hh_count = 0
@@ -92,10 +85,14 @@ class MomentumSetupBase(BaseSetup):
         if ll_count >= 2 and lh_count >= 2:
             return True
 
-        self.log(f"✖ Трендовая структура на {self.tfs.trend.value} не подтверждена.")
+        self.logw(f"Трендовая структура на {self.tfs.trend.value} не подтверждена.")
         return False
 
-    def define_tp(self, entry: float, sl: float) -> Optional[float]:
+    def define_tp(self, entry: float, sl: float) -> float:
+        if abs(entry - sl) < 1e-6:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return FLOAT_UNDEFINED
+
         swings = self.swings
 
         # Swing как главный вариант
@@ -116,7 +113,7 @@ class MomentumSetupBase(BaseSetup):
             elif self.side.is_short:
                 return max(candidates, key=lambda s: s.price).price
 
-        # D1 уровни как fallback
+        # Macro уровни как fallback
         tf0_high = self.tf_macro_state.range_high
         tf0_low = self.tf_macro_state.range_low
 
@@ -129,7 +126,7 @@ class MomentumSetupBase(BaseSetup):
             if rr >= MIN_RR:
                 return tf0_low
 
-        return None
+        return FLOAT_UNDEFINED
 
     def _find_recent_swing(self):
         if self.swings:

@@ -1,5 +1,3 @@
-from typing import List
-
 from config.constants import PROGRESS_RR_FAR, PROGRESS_RR_NEAR
 from data.loader import Loader
 from domain.models.mtf_profile import MTFProfile

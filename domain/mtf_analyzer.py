@@ -1,3 +1,4 @@
+from config.constants import FLOAT_UNDEFINED
 from domain.models.bar import Bar
 from domain.models.mtf_state import MTFState
 from domain.models.phase import Phase
@@ -26,19 +27,19 @@ class MTFAnalyzer:
                 phase=Phase.FLAT,
                 structure=swings,
                 is_in_correction=False,
-                correction_direction=None,
-                rr_potential=0.0,
+                correction_direction=PriceDirection.UNDEFINED,
+                rr_potential=FLOAT_UNDEFINED,
                 is_range=False,
-                range_high=None,
-                range_low=None
+                range_high=FLOAT_UNDEFINED,
+                range_low=FLOAT_UNDEFINED
             )
 
-        phase = None
-        correction_direction = None
+        phase = Phase.UNDEFINED
+        correction_direction = PriceDirection.UNDEFINED
         is_in_correction = False
         is_range = False
-        range_high = None
-        range_low = None
+        range_high = FLOAT_UNDEFINED
+        range_low = FLOAT_UNDEFINED
 
         highs = [s for s in swings if s.type.is_high]
         lows = [s for s in swings if s.type.is_low]
@@ -80,7 +81,7 @@ class MTFAnalyzer:
                 range_low = min_low
                 phase = Phase.FLAT
 
-        rr = 0.0
+        rr = FLOAT_UNDEFINED
         last = swings[-1]
         if phase and phase.is_uptrend:
             rr = (last.price - min([b.low for b in self.bars[-10:]])) / self.atr

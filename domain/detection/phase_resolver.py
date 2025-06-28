@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict
 
 from domain.models.mtf_profile import MTFProfile
 from domain.models.mtf_state import MTFState

@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
 
+from config.constants import FLOAT_UNDEFINED
 from domain.models.confidence import Confidence
-from domain.models.side import Side
 from domain.models.scenario import Scenario
+from domain.models.side import Side
 
 
 @dataclass
@@ -14,11 +14,11 @@ class SetupSignal:
     confidence: Confidence
     text: str
     timestamp: datetime
-    entry: Optional[float]
-    rr: Optional[float]
-    sl: Optional[float]
-    tp: Optional[float]
-    scenario: Optional[Scenario] = None
+    scenario: Scenario
+    entry: float = FLOAT_UNDEFINED
+    rr: float = FLOAT_UNDEFINED
+    sl: float = FLOAT_UNDEFINED
+    tp: float = FLOAT_UNDEFINED
 
     @property
     def is_order_signal(self) -> bool:

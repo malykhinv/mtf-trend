@@ -1,7 +1,7 @@
-from typing import Optional, Tuple
+from typing import Tuple
 
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER
+    MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
@@ -51,10 +51,15 @@ class FlatBounce(FlatSetupBase):
     # endregion
 
     # region RR
-    def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
+    def define_rr(self) -> Tuple[float, float, float, float]:
+        undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
         entry = self.last.close
-
         sl = self._define_sl_swings(entry)
+
+        if abs(entry - sl) < 1e-6:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return undefined_result
+
         if sl is None:
             sl = self._define_sl_default()
 
@@ -67,7 +72,7 @@ class FlatBounce(FlatSetupBase):
 
         return entry, sl, tp, round(rr, 2)
 
-    def _define_sl_swings(self, entry: float) -> Optional[float]:
+    def _define_sl_swings(self, entry: float) -> float:
         sl_swings = [
             s for s in self.swings
             if s.type != self.swing.type and s.index < self.swing.index and abs(entry - s.price) > 0.3 * self.atr_tf_setup
@@ -76,7 +81,7 @@ class FlatBounce(FlatSetupBase):
             self.log("Стоп по прошлым свингам найден.")
             return sl_swings[-1].price
         self.log("Подходящих прошлых свингов для стопа не найдено.")
-        return None
+        return FLOAT_UNDEFINED
 
     def _define_sl_default(self) -> float:
         if self.side.is_long:
@@ -86,7 +91,11 @@ class FlatBounce(FlatSetupBase):
         self.log("Стоп выбран по минимумам/максимумам баров.")
         return sl
 
-    def _define_tp_swings(self, entry: float, sl: float) -> Optional[float]:
+    def _define_tp_swings(self, entry: float, sl: float) -> float:
+        if abs(entry - sl) < 1e-6:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return FLOAT_UNDEFINED
+
         tp_swings = [
             s for s in self.swings
             if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW) and s.index > self.swing.index
@@ -96,7 +105,7 @@ class FlatBounce(FlatSetupBase):
                 self.log("Тейк по свингам найден.")
                 return s.price
         self.log("Подходящих свингов для тейка не найдено.")
-        return None
+        return FLOAT_UNDEFINED
 
     def _define_tp_default(self) -> float:
         if self.side.is_long:

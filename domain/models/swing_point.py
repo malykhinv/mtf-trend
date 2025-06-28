@@ -8,3 +8,12 @@ class SwingPoint:
     index: int
     price: float
     confirmed: bool
+
+    @classmethod
+    def undefined(cls):
+        return cls(
+            type=SwingType.UNDEFINED,
+            index=-1,
+            price=0.0,
+            confirmed=False
+        )

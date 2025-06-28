@@ -32,3 +32,6 @@ class MTFProfile:
         macro → trend → setup → entry → micro.
         """
         return iter((self.macro, self.trend, self.setup, self.entry, self.micro))
+
+    def __str__(self):
+        return f"{self.macro}-{self.trend}-{self.setup}-{self.entry}-{self.micro}"

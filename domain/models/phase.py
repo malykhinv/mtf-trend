@@ -5,6 +5,7 @@ class Phase(str, Enum):
     UPTREND = "uptrend"
     DOWNTREND = "downtrend"
     FLAT = "flat"
+    UNDEFINED = "undefined"
 
     @property
     def is_uptrend(self) -> bool:

@@ -1,7 +1,7 @@
-from typing import Optional, Tuple
+from typing import Tuple
 
 from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO
+    MODERATE_REACTION_WICK_RATIO, FLOAT_UNDEFINED
 from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
 from domain.models.scenario import Scenario
 
@@ -35,18 +35,24 @@ class MomentumPullback(MomentumSetupBase):
 
     # region RR
 
-    def define_rr(self) -> Optional[Tuple[float, float, float, float]]:
+    def define_rr(self) -> Tuple[float, float, float, float]:
+        undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
+
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
 
+        if abs(entry - sl) < 1e-6:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return undefined_result
+
         if not self.tf1_trend_condition():
-            return None
+            return undefined_result
 
         tp = self.define_tp(entry, sl)
 
         if tp is None:
-            self.log("✖ Не удалось определить TP с достаточным RR.")
-            return None
+            self.logw("Не удалось определить TP с достаточным RR.")
+            return undefined_result
 
         rr = abs(tp - entry) / abs(entry - sl)
         self.log(f"Entry: {entry}")

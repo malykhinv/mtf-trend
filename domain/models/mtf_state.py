@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List
 
-from domain.models.price_direction import PriceDirection
 from domain.models.phase import Phase
+from domain.models.price_direction import PriceDirection
 from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
 
@@ -10,11 +10,11 @@ from domain.models.timeframe import Timeframe
 @dataclass
 class MTFState:
     timeframe: Timeframe
-    phase: Optional[Phase]
+    phase: Phase
     structure: List[SwingPoint]
     is_in_correction: bool
-    correction_direction: Optional[PriceDirection]
+    correction_direction: PriceDirection
     rr_potential: float
     is_range: bool
-    range_high: Optional[float]
-    range_low: Optional[float]
+    range_high: float
+    range_low: float
