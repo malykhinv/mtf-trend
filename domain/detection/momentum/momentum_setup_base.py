@@ -9,7 +9,7 @@ class MomentumSetupBase(BaseSetup):
         self.tf_macro_state = self.mtf_states[self.tfs.macro]
         self.tf_trend_state = self.mtf_states[self.tfs.trend]
         self.tf_setup_state = self.mtf_states[self.tfs.setup]
-        self.side = self.get_side()
+        self.side = self._get_side()
         self.swing = self._find_recent_swing()
         self.avg_volume = sum(b.volume for b in self.bars_tf_setup[-20:]) / 20
 
@@ -116,21 +116,21 @@ class MomentumSetupBase(BaseSetup):
                 return max(candidates, key=lambda s: s.price).price
 
         # Macro уровни как fallback
-        tf0_high = self.tf_macro_state.range_high
-        tf0_low = self.tf_macro_state.range_low
+        tf_macro_high = self.tf_macro_state.range_high
+        tf_macro_low = self.tf_macro_state.range_low
 
-        if self.side.is_long and tf0_high and tf0_high > entry:
-            rr = abs(tf0_high - entry) / abs(entry - sl)
+        if self.side.is_long and tf_macro_high and tf_macro_high > entry:
+            rr = abs(tf_macro_high - entry) / abs(entry - sl)
             if rr >= MIN_RR:
-                return tf0_high
-        elif self.side.is_short and tf0_low and tf0_low < entry:
-            rr = abs(entry - tf0_low) / abs(entry - sl)
+                return tf_macro_high
+        elif self.side.is_short and tf_macro_low and tf_macro_low < entry:
+            rr = abs(entry - tf_macro_low) / abs(entry - sl)
             if rr >= MIN_RR:
-                return tf0_low
+                return tf_macro_low
 
         return FLOAT_UNDEFINED
 
-    def get_side(self) -> Side:
+    def _get_side(self) -> Side:
         tf_trend_state = self.mtf_states[self.tfs.trend]
         phase = tf_trend_state.phase
         if not phase:

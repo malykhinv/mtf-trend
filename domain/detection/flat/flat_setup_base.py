@@ -15,14 +15,14 @@ from config.constants import (
 class FlatSetupBase(BaseSetup, ABC):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.tf0_state = self.mtf_states[self.tfs.macro]
-        self.range_high = self.tf0_state.range_high
-        self.range_low = self.tf0_state.range_low
+        self.tf_macro_state = self.mtf_states[self.tfs.macro]
+        self.range_high = self.tf_macro_state.range_high
+        self.range_low = self.tf_macro_state.range_low
         self.swing = self._find_swing_near_level()
 
     # region Conditions
     def flat_market_condition(self) -> bool:
-        if not (self.tf0_state.is_range and self.range_high and self.range_low):
+        if not (self.tf_macro_state.is_range and self.range_high and self.range_low):
             self.logw("Не флет.")
             return False
         return True
