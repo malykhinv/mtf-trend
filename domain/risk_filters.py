@@ -2,19 +2,35 @@ from domain.models.bar import Bar
 from typing import List
 import statistics
 
+def is_stablecoin(symbol: str) -> bool:
+    return any(stable in symbol.upper() for stable in ["USDC", "BUSD", "DAI", "TUSD"])
+
+def has_messy_candles(bars: List[Bar], tail_ratio_threshold: float = 0.5, body_threshold: float = 0.1) -> bool:
+    """
+    tail_ratio_threshold: доля свечей с длинными хвостами (tail/total range > 0.5)
+    body_threshold: минимальный средний body size / range для чистых свечей
+    """
+    messy_count = 0
+    total = len(bars[-20:])
+    for bar in bars[-20:]:
+        range_ = bar.high - bar.low
+        upper_tail = bar.high - max(bar.close, bar.open)
+        lower_tail = min(bar.close, bar.open) - bar.low
+
+        if range_ == 0:
+            continue
+        if (upper_tail + lower_tail) / range_ > tail_ratio_threshold:
+            messy_count += 1
+
+    avg_body_ratio = statistics.mean(
+        [abs(b.close - b.open) / (b.high - b.low) if (b.high - b.low) > 0 else 0 for b in bars[-20:]]
+    )
+    return messy_count / total > 0.3 or avg_body_ratio < body_threshold
+
 def is_low_liquidity(bars: List[Bar], threshold_usd: float = 100_000) -> bool:
     avg_volume = statistics.mean([b.volume for b in bars[-20:]])
     low = avg_volume < threshold_usd
     return low
-
-def is_abnormal_wick_structure(bar: Bar, body_ratio_threshold: float = 0.3) -> bool:
-    full_range = bar.high - bar.low
-    body = abs(bar.close - bar.open)
-    if full_range == 0:
-        return True
-    body_ratio = body / full_range
-    return body_ratio < body_ratio_threshold
-
 
 def is_abnormal_spike(bars: List[Bar], spike_multiplier: float = 3.0, body_ratio: float = 2.0) -> bool:
     recent = bars[-1]

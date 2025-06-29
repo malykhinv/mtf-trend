@@ -6,7 +6,8 @@ from domain.detection.setup_detector import SetupDetector
 from domain.detection.phase_resolver import PhaseResolver
 from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
-from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend, is_abnormal_wick_structure
+from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend, is_stablecoin, \
+    has_messy_candles
 from domain.structures import StructureDetector
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
@@ -55,12 +56,16 @@ class Scanner:
 
     @staticmethod
     def _passes_filters(symbol, bars_by_tf, tfs: MTFProfile):
-        if is_low_liquidity(bars_by_tf[tfs.macro]):
-            logw(f"Низкая ликвидность по {symbol} ({tfs.macro.value}).")
+        if is_stablecoin(symbol):
+            logw(f"{symbol} фильтруется как стейблкоин.")
             return False
 
-        if is_abnormal_wick_structure(bars_by_tf[tfs.setup][-1]):
-            logw(f"Аномальная структура свечи по {symbol} ({tfs.setup.value}).")
+        if has_messy_candles(bars_by_tf[tfs.setup]):
+            logw(f"{symbol} фильтруется из-за грязных свечей ({tfs.setup.value}).")
+            return False
+
+        if is_low_liquidity(bars_by_tf[tfs.macro]):
+            logw(f"Низкая ликвидность по {symbol} ({tfs.macro.value}).")
             return False
 
         if is_abnormal_spike(bars_by_tf[tfs.setup]):
