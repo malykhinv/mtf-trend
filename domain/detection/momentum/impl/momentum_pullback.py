@@ -4,6 +4,7 @@ from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_
     MODERATE_REACTION_WICK_RATIO, FLOAT_UNDEFINED
 from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
 from domain.models.scenario import Scenario
+from utils.float_utils import is_defined
 
 
 class MomentumPullback(MomentumSetupBase):
@@ -35,7 +36,7 @@ class MomentumPullback(MomentumSetupBase):
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
 
-        if abs(entry - sl) < 1e-6:
+        if not is_defined(entry - sl):
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
@@ -43,10 +44,6 @@ class MomentumPullback(MomentumSetupBase):
             return undefined_result
 
         tp = self.define_tp(entry, sl)
-
-        if tp is None:
-            self.logw("Не удалось определить TP с достаточным RR.")
-            return undefined_result
 
         rr = abs(tp - entry) / abs(entry - sl)
         self.log(f"Entry: {entry}")

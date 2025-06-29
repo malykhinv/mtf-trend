@@ -1,7 +1,7 @@
 from abc import ABC
 from typing import Dict, List, Optional, Tuple
 
-from config.constants import MIN_RR, FLOAT_UNDEFINED
+from config.constants import MIN_RR, FLOAT_UNDEFINED, MIN_SL_PCT
 from domain.models.bar import Bar
 from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
@@ -10,6 +10,7 @@ from domain.models.setup_signal import SetupSignal
 from domain.models.side import Side
 from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
+from utils.float_utils import is_defined
 from utils.logger import log, logw
 
 
@@ -53,9 +54,21 @@ class BaseSetup(ABC):
 
         for confidence_condition, condition_func in levels:
             if confidence_condition:
-                rr_result = self.define_rr()
-                if rr_result:
-                    self.entry, self.sl, self.tp, self.rr = rr_result
+                if self.confidence.is_strong:
+                    self.entry, self.sl, self.tp, self.rr = self.define_rr()
+                    if not is_defined(self.entry, self.sl, self.tp, self.rr):
+                        self.logw("Некорректные Entry/SL/TP/RR, сигнал не будет построен.")
+                        return None
+                    sl_distance_pct = abs(self.entry - self.sl) / self.entry * 100
+                    tp_distance_pct = abs(self.tp - self.entry) / self.entry * 100
+                    if not sl_distance_pct >= MIN_SL_PCT:
+                        self.logw(f"SL слишком близко: {round(sl_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
+                        return None
+
+                    if not tp_distance_pct >= MIN_SL_PCT:
+                        self.logw(f"TP слишком близко: {round(tp_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
+                        return None
+
                 if condition_func():
                     signal = self.build_signal()
                     self.log(self.message)

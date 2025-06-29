@@ -27,7 +27,6 @@ class MTFAnalyzer:
                 structure=swings,
                 is_in_correction=False,
                 correction_direction=PriceDirection.UNDEFINED,
-                rr_potential=FLOAT_UNDEFINED,
                 is_range=True,
                 range_high=max([s.price for s in swings]) if swings else FLOAT_UNDEFINED,
                 range_low=min([s.price for s in swings]) if swings else FLOAT_UNDEFINED
@@ -59,17 +58,9 @@ class MTFAnalyzer:
             is_in_correction = True
             correction_direction = PriceDirection.UP
 
-        rr = FLOAT_UNDEFINED
-        last = swings[-1]
-        if phase.is_uptrend:
-            rr = (last.price - min([b.low for b in self.bars[-10:]])) / self.atr
-        elif phase.is_downtrend:
-            rr = (max([b.high for b in self.bars[-10:]]) - last.price) / self.atr
-
         log(f"{self.timeframe.value}: "
             f"тренд — {phase.value}, "
-            f"коррекция — {'да' if is_in_correction else 'нет'}, "
-            f"RR — {round(rr, 2)}.")
+            f"коррекция — {'да' if is_in_correction else 'нет'}")
 
         return MTFState(
             timeframe=self.timeframe,
@@ -77,7 +68,6 @@ class MTFAnalyzer:
             structure=swings,
             is_in_correction=is_in_correction,
             correction_direction=correction_direction,
-            rr_potential=round(rr, 2) if rr > 0.0 else FLOAT_UNDEFINED,
             is_range=phase.is_flat,
             range_high=max([s.price for s in swings]) if phase == Phase.FLAT else FLOAT_UNDEFINED,
             range_low=min([s.price for s in swings]) if phase == Phase.FLAT else FLOAT_UNDEFINED

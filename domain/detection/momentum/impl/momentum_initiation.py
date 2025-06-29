@@ -72,10 +72,6 @@ class MomentumInitiation(MomentumSetupBase):
 
         tp = self.define_tp(entry, sl)
 
-        if tp is None or not is_defined(tp):
-            self.logw("Не удалось определить TP с достаточным RR.")
-            return undefined_result
-
         rr = abs(tp - entry) / abs(entry - sl)
         self.log(f"Entry: {entry}")
         self.log(f"SL: {sl}")

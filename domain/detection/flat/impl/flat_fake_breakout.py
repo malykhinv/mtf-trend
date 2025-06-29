@@ -5,6 +5,7 @@ from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, STRONG_REACTION_WICK_RAT
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
+from utils.float_utils import is_defined
 
 
 class FlatFakeBreakout(FlatSetupBase):
@@ -54,7 +55,7 @@ class FlatFakeBreakout(FlatSetupBase):
         undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
         entry = self._define_entry()
         sl = self._define_sl()
-        if abs(entry - sl) < 1e-6:
+        if not is_defined(entry - sl):
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
