@@ -2,14 +2,18 @@ from domain.models.bar import Bar
 from typing import List
 import statistics
 
+# TODO FIXME
 def is_stablecoin(symbol: str) -> bool:
+    return False
     return any(stable in symbol.upper() for stable in ["USDC", "BUSD", "DAI", "TUSD"])
 
+# TODO FIXME
 def has_messy_candles(bars: List[Bar], tail_ratio_threshold: float = 0.5, body_threshold: float = 0.1) -> bool:
     """
     tail_ratio_threshold: доля свечей с длинными хвостами (tail/total range > 0.5)
     body_threshold: минимальный средний body size / range для чистых свечей
     """
+    return False
     messy_count = 0
     total = len(bars[-20:])
     for bar in bars[-20:]:

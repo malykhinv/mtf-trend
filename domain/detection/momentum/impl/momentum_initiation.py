@@ -4,15 +4,10 @@ from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_
     MODERATE_REACTION_WICK_RATIO, RETEST_TOLERANCE_ATR, FLOAT_UNDEFINED
 from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
 from domain.models.scenario import Scenario
-from domain.models.side import Side
+from utils.float_utils import is_defined
 
 
 class MomentumInitiation(MomentumSetupBase):
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.side = self._get_side()
-
     scenario = Scenario.MOMENTUM_INITIATION
 
     # region Conditions
@@ -71,13 +66,13 @@ class MomentumInitiation(MomentumSetupBase):
 
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
-        if abs(entry - sl) < 1e-6:
+        if not is_defined(entry - sl):
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
         tp = self.define_tp(entry, sl)
 
-        if tp is None:
+        if tp is None or not is_defined(tp):
             self.logw("Не удалось определить TP с достаточным RR.")
             return undefined_result
 
@@ -89,15 +84,3 @@ class MomentumInitiation(MomentumSetupBase):
 
         return entry, sl, tp, round(rr, 2)
     # endregion
-
-    def _get_side(self) -> Side:
-        tf_trend_state = self.mtf_states[self.tfs.trend]
-        phase = tf_trend_state.phase
-        if not phase:
-            self.logw("Невозможно определить side — фаза не трендовая.")
-            return Side.UNDEFINED
-        elif tf_trend_state.phase.is_uptrend:
-            return Side.LONG
-        elif tf_trend_state.phase.is_downtrend:
-            return Side.SHORT
-        return Side.UNDEFINED

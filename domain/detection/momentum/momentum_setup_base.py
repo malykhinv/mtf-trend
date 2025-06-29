@@ -1,5 +1,6 @@
 from config.constants import MIN_RR, FLOAT_UNDEFINED
 from domain.detection.base_setup import BaseSetup
+from domain.models.side import Side
 
 
 class MomentumSetupBase(BaseSetup):
@@ -8,6 +9,7 @@ class MomentumSetupBase(BaseSetup):
         self.tf_macro_state = self.mtf_states[self.tfs.macro]
         self.tf_trend_state = self.mtf_states[self.tfs.trend]
         self.tf_setup_state = self.mtf_states[self.tfs.setup]
+        self.side = self.get_side()
         self.swing = self._find_recent_swing()
         self.avg_volume = sum(b.volume for b in self.bars_tf_setup[-20:]) / 20
 
@@ -127,6 +129,18 @@ class MomentumSetupBase(BaseSetup):
                 return tf0_low
 
         return FLOAT_UNDEFINED
+
+    def get_side(self) -> Side:
+        tf_trend_state = self.mtf_states[self.tfs.trend]
+        phase = tf_trend_state.phase
+        if not phase:
+            self.logw("Невозможно определить side — фаза не трендовая.")
+            return Side.UNDEFINED
+        elif tf_trend_state.phase.is_uptrend:
+            return Side.LONG
+        elif tf_trend_state.phase.is_downtrend:
+            return Side.SHORT
+        return Side.UNDEFINED
 
     def _find_recent_swing(self):
         if self.swings:

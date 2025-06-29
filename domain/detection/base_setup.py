@@ -90,7 +90,7 @@ class BaseSetup(ABC):
     # endregion
 
     # region Signal
-    def build_signal(self) -> Optional[SetupSignal]:
+    def build_signal(self) -> SetupSignal:
         return SetupSignal(
             symbol=self.symbol,
             side=self.side,

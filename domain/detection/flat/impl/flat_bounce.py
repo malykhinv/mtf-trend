@@ -6,6 +6,7 @@ from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
+from utils.float_utils import is_defined
 
 
 class FlatBounce(FlatSetupBase):
@@ -51,15 +52,15 @@ class FlatBounce(FlatSetupBase):
         entry = self.last.close
         sl = self._define_sl_swings(entry)
 
-        if abs(entry - sl) < 1e-6:
+        if not is_defined(entry - sl):
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
-        if sl is None:
+        if not is_defined(sl):
             sl = self._define_sl_default()
 
         tp = self._define_tp_swings(entry, sl)
-        if tp is None:
+        if not is_defined(tp):
             tp = self._define_tp_default()
 
         rr = abs(tp - entry) / abs(entry - sl)

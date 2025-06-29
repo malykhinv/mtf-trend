@@ -66,9 +66,9 @@ class MTFAnalyzer:
         elif phase.is_downtrend:
             rr = (max([b.high for b in self.bars[-10:]]) - last.price) / self.atr
 
-        log(f"{self.timeframe.value}:"
-            f"тренд — {phase.value},"
-            f"коррекция — {'да' if is_in_correction else 'нет'},"
+        log(f"{self.timeframe.value}: "
+            f"тренд — {phase.value}, "
+            f"коррекция — {'да' if is_in_correction else 'нет'}, "
             f"RR — {round(rr, 2)}.")
 
         return MTFState(
