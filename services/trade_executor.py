@@ -5,6 +5,7 @@ from ccxt import binance
 from domain.models.order_side import OrderSide
 from domain.models.scenario import Scenario
 from domain.models.side import Side
+from utils.float_utils import precision
 from utils.logger import log, logw
 from utils.str_utils import market_symbol
 from services.position_tracker_service import PositionTrackerService
@@ -33,8 +34,8 @@ class TradeExecutor:
             if not self._validate_sl_tp(entry, sl, tp, side, symbol):
                 return
 
-            precision_amount = market['precision']['amount'] if 'precision' in market else 6
-            precision_price = market['precision']['price'] if 'precision' in market else 6
+            precision_amount = precision(market['precision']['amount']) if 'precision' in market else 6
+            precision_price = precision(market['precision']['price']) if 'precision' in market else 6
 
             amount = round(amount_usdt / entry, precision_amount)
             open_side = OrderSide.BUY if side.is_long else OrderSide.SELL
