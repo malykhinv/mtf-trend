@@ -8,7 +8,7 @@ from utils.logger import log
 
 
 class StructureDetector:
-    def __init__(self, bars: List[Bar], atr: float, threshold_multiplier: float = 1.5):
+    def __init__(self, bars: List[Bar], atr: float, threshold_multiplier: float = 1.0):
         self.bars = bars
         self.atr = atr
         self.threshold = atr * threshold_multiplier
