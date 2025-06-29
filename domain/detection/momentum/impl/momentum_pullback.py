@@ -1,10 +1,10 @@
 from typing import Tuple
 
 from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, FLOAT_UNDEFINED
+    MODERATE_REACTION_WICK_RATIO, FLOAT_UNDEFINED, MIN_SL_PCT, MIN_TP_PCT
 from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
 from domain.models.scenario import Scenario
-from utils.float_utils import is_defined
+from utils.float_utils import is_defined, get_pct
 
 
 class MomentumPullback(MomentumSetupBase):
@@ -36,14 +36,18 @@ class MomentumPullback(MomentumSetupBase):
         entry = self.last.close
         sl = self.prev.low if self.side.is_long else self.prev.high
 
-        if not is_defined(entry - sl):
-            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
-            return undefined_result
-
         if not self.tf_macro_trend_condition():
             return undefined_result
 
+        if not get_pct(sl, entry) > MIN_SL_PCT:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return undefined_result
+
         tp = self.define_tp(entry, sl)
+
+        if not get_pct(tp, entry) > MIN_TP_PCT:
+            self.logw(f"Entry и TP слишком близки (entry={entry}, tp={tp}).")
+            return undefined_result
 
         rr = abs(tp - entry) / abs(entry - sl)
         self.log(f"Entry: {entry}")

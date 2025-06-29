@@ -2,11 +2,11 @@ from typing import Tuple
 
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG_REACTION_WICK_RATIO, \
     MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED, \
-    MAX_SWING_LOOKBACK_BARS
+    MAX_SWING_LOOKBACK_BARS, MIN_SL_PCT, MIN_TP_PCT
 from domain.detection.flat.flat_setup_base import FlatSetupBase
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
-from utils.float_utils import is_defined
+from utils.float_utils import is_defined, get_pct
 
 
 class FlatBounce(FlatSetupBase):
@@ -52,16 +52,20 @@ class FlatBounce(FlatSetupBase):
         entry = self.last.close
         sl = self._define_sl_swings(entry)
 
-        if not is_defined(entry - sl):
-            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
-            return undefined_result
-
         if not is_defined(sl):
             sl = self._define_sl_default()
 
         tp = self._define_tp_swings(entry, sl)
         if not is_defined(tp):
             tp = self._define_tp_default()
+
+        if not get_pct(sl, entry) > MIN_SL_PCT:
+            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
+            return undefined_result
+
+        if not get_pct(tp, entry) > MIN_TP_PCT:
+            self.logw(f"Entry и TP слишком близки (entry={entry}, tp={tp}).")
+            return undefined_result
 
         rr = abs(tp - entry) / abs(entry - sl)
         self.log(f"RR рассчитан: {round(rr, 2)}")
@@ -91,10 +95,6 @@ class FlatBounce(FlatSetupBase):
         return sl
 
     def _define_tp_swings(self, entry: float, sl: float) -> float:
-        if abs(entry - sl) < 1e-6:
-            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
-            return FLOAT_UNDEFINED
-
         tp_swings = [
             s for s in self.swings
             if s.type == (SwingType.HIGH if self.side.is_long else SwingType.LOW)

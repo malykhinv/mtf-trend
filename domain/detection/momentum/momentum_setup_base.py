@@ -1,6 +1,7 @@
 from config.constants import MIN_RR, FLOAT_UNDEFINED
 from domain.detection.base_setup import BaseSetup
 from domain.models.side import Side
+from utils.float_utils import is_defined
 
 
 class MomentumSetupBase(BaseSetup):
@@ -91,10 +92,6 @@ class MomentumSetupBase(BaseSetup):
         return False
 
     def define_tp(self, entry: float, sl: float) -> float:
-        if abs(entry - sl) < 1e-6:
-            self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
-            return FLOAT_UNDEFINED
-
         swings = self.swings
 
         # Swing как главный вариант
