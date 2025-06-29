@@ -24,13 +24,13 @@ class StructureDetector:
             if is_high:
                 if direction != PriceDirection.DOWN or abs(bar.high - self.bars[i - 1].high) > self.threshold:
                     swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
-                    log(f"Swing HIGH добавлен: index={i}, price={bar.high}")
+                    # log(f"Swing HIGH добавлен: index={i}, price={bar.high}")
                     direction = PriceDirection.DOWN
             elif is_low:
                 if direction != PriceDirection.UP or abs(bar.low - self.bars[i - 1].low) > self.threshold:
                     swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
-                    log(f"Swing LOW добавлен: index={i}, price={bar.low}")
+                    # log(f"Swing LOW добавлен: index={i}, price={bar.low}")
                     direction = PriceDirection.UP
 
-        log(f"Общее количество swing точек: {len(swings)}.")
+        # log(f"Общее количество swing точек: {len(swings)}.")
         return swings
