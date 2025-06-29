@@ -2,87 +2,50 @@
 from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
 
+# Multi-timeframe profiles
 MTF_PROFILE_GLOBAL = MTFProfile(Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5)
 MTF_PROFILE_INTRADAY = MTFProfile(Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5, Timeframe.M1)
 
-MAX_SWING_LOOKBACK_BARS = 50
-
+# Trend and risk parameters
+TREND_SIZE_ATR_FACTOR = 0.2
+MAX_SWING_LOOKBACK_BARS = 5
+MAX_RANGE_SIZE_PCT = 50
 FLOAT_UNDEFINED = 0.0
 
-# Минимальный объем сделки в USDT для фильтрации ликвидности
+# Risk management
 VOLUME_THRESHOLD_USDT = 50_000_000
-
-# Минимальное требуемое соотношение риск/прибыль
 MIN_RR = 3
-
-# RR для контроля прогресса сделки (ближайшая цель)
 PROGRESS_RR_NEAR = 1
-
-# RR для контроля дальней цели
 PROGRESS_RR_FAR = 3
-
-# Минимальный процентный размер стоп-лосса
 MIN_SL_PCT = 0.003
-
-# Минимальный процентный размер тейк-профита
 MIN_TP_PCT = 0.010
 
-# Включение или выключение торговли
+# Trading control
 IS_TRADING_ENABLED = False
-
-# Размер позиции в USDT
 POSITION_USDT = 10
-
-# Максимальное количество сделок в час
 MAX_TRADES_PER_HOUR = 3
-
-# Минимальный интервал между сделками по одному инструменту (в минутах)
-MIN_COOLDOWN_PER_SYMBOL_MINUTES = 360  # 6 часов
+MIN_COOLDOWN_PER_SYMBOL_MINUTES = 360  # 6 hours
 
 # endregion
 
-# region Настройки свингов и диапазонов
-
-# Множитель ATR для определения близости к свингу
+# region Swing and range settings
 SWING_PROXIMITY_ATR_MULTIPLIER = 1.2
-
-# Максимальный сдвиг центра диапазона в ATR
 FLAT_MAX_CENTER_SHIFT_ATR = 1.0
-
-# Допустимая дистанция для условия касания уровня (ATR)
 TOUCH_DISTANCE_ATR = 1.5
-
 # endregion
 
-# region Настройки свечей и объемов
-
-# Множитель объема для сильной реакции
+# region Candle and volume settings
 STRONG_REACTION_VOLUME_MULTIPLIER = 1.2
-
-# Максимальное отношение хвоста свечи к общему диапазону для умеренной реакции
 MODERATE_REACTION_WICK_RATIO = 0.5
-
-# Максимальное отношение хвоста свечи к общему диапазону для сильной реакции
 STRONG_REACTION_WICK_RATIO = 0.3
-
-# Период для расчета среднего объема свечей (кол-во баров)
 CANDLE_AVG_VOLUME_PERIOD = 20
-
 # endregion
 
-# region Настройки TP и SL
-
-# Количество баров для поиска тейк-профита вперед
+# region TP and SL settings
 TP_LOOKAHEAD_BARS = 20
-
-# Количество баров для поиска стоп-лосса назад
 SL_LOOKBACK_BARS = 15
-
 # endregion
 
-# region Настройки ретеста
-
-# Допустимое отклонение ретеста уровня в ATR
+# region Retest settings
 RETEST_TOLERANCE_ATR = 0.75
-
 # endregion

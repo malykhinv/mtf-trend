@@ -6,6 +6,7 @@ from typing import List
 from domain.models.swing_type import SwingType
 from utils.logger import log
 
+
 class StructureDetector:
     def __init__(self, bars: List[Bar], atr: float, threshold_multiplier: float = 1.5):
         self.bars = bars
@@ -15,21 +16,23 @@ class StructureDetector:
     def detect_swing_points(self) -> List[SwingPoint]:
         swings = []
         direction = PriceDirection.UNDEFINED
-        last_extreme = self.bars[0].high if self.bars[1].close > self.bars[0].close else self.bars[0].low
-
-        for i in range(2, len(self.bars) - 2):
+        for i in range(1, len(self.bars) - 1):
             bar = self.bars[i]
-            is_high = all(bar.high > self.bars[j].high for j in [i-2, i-1, i+1, i+2])
-            is_low = all(bar.low < self.bars[j].low for j in [i-2, i-1, i+1, i+2])
+            is_high = bar.high > self.bars[i - 1].high and bar.high > self.bars[i + 1].high
+            is_low = bar.low < self.bars[i - 1].low and bar.low < self.bars[i + 1].low
 
-            if is_high and (direction != PriceDirection.DOWN or abs(bar.high - last_extreme) > self.threshold):
-                swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
-                direction = PriceDirection.DOWN
-                last_extreme = bar.high
+            threshold = self.atr * 1.0
 
-            elif is_low and (direction != PriceDirection.UP or abs(bar.low - last_extreme) > self.threshold):
-                swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
-                direction = PriceDirection.UP
-                last_extreme = bar.low
+            if is_high:
+                if direction != PriceDirection.DOWN or abs(bar.high - self.bars[i - 1].high) > threshold:
+                    swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
+                    log(f"Swing HIGH добавлен: index={i}, price={bar.high}")
+                    direction = PriceDirection.DOWN
+            elif is_low:
+                if direction != PriceDirection.UP or abs(bar.low - self.bars[i - 1].low) > threshold:
+                    swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
+                    log(f"Swing LOW добавлен: index={i}, price={bar.low}")
+                    direction = PriceDirection.UP
 
+        log(f"Общее количество swing точек: {len(swings)}.")
         return swings
