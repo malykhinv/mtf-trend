@@ -6,7 +6,7 @@ from domain.detection.setup_detector import SetupDetector
 from domain.detection.phase_resolver import PhaseResolver
 from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
-from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend
+from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend, is_abnormal_wick_structure
 from domain.structures import StructureDetector
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
@@ -59,6 +59,10 @@ class Scanner:
             logw(f"Низкая ликвидность по {symbol} ({tfs.macro.value}).")
             return False
 
+        if is_abnormal_wick_structure(bars_by_tf[tfs.setup][-1]):
+            logw(f"Аномальная структура свечи по {symbol} ({tfs.setup.value}).")
+            return False
+
         if is_abnormal_spike(bars_by_tf[tfs.setup]):
             logw(f"Аномальный всплеск по {symbol} ({tfs.setup.value}).")
             return False
@@ -80,8 +84,8 @@ class Scanner:
         return resolver.resolve()
 
     @staticmethod
-    def _detect_swings(bars_tf1, atr_tf1):
-        detector = StructureDetector(bars_tf1, atr_tf1)
+    def _detect_swings(bars_tf_macro, atr_tf_macro):
+        detector = StructureDetector(bars_tf_macro, atr_tf_macro)
         return detector.detect_swing_points()
 
     def _check_setups(self, symbol, tfs, bars_by_tf, atr_by_tf, mtf_states, swings):

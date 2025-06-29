@@ -61,7 +61,7 @@ class MomentumInitiation(MomentumSetupBase):
     # region RR
     def define_rr(self) -> Tuple[float, float, float, float]:
         undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
-        if not self.tf1_trend_condition():
+        if not self.tf_macro_trend_condition():
             self.logw(f"Нет подходящего тренда на {self.tfs.trend.value}.")
             return undefined_result
 

@@ -39,7 +39,7 @@ class MomentumPullback(MomentumSetupBase):
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
-        if not self.tf1_trend_condition():
+        if not self.tf_macro_trend_condition():
             return undefined_result
 
         tp = self.define_tp(entry, sl)

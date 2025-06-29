@@ -7,6 +7,15 @@ def is_low_liquidity(bars: List[Bar], threshold_usd: float = 100_000) -> bool:
     low = avg_volume < threshold_usd
     return low
 
+def is_abnormal_wick_structure(bar: Bar, body_ratio_threshold: float = 0.3) -> bool:
+    full_range = bar.high - bar.low
+    body = abs(bar.close - bar.open)
+    if full_range == 0:
+        return True
+    body_ratio = body / full_range
+    return body_ratio < body_ratio_threshold
+
+
 def is_abnormal_spike(bars: List[Bar], spike_multiplier: float = 3.0, body_ratio: float = 2.0) -> bool:
     recent = bars[-1]
     volumes = [b.volume for b in bars[-21:-1]]

@@ -44,7 +44,7 @@ class MomentumSetupBase(BaseSetup):
             return False
         return True
 
-    def tf1_trend_condition(self) -> bool:
+    def tf_macro_trend_condition(self) -> bool:
         swings = self.tf_trend_state.structure
         if not swings or len(swings) < 4:
             self.logw(f"Недостаточно свингов на {self.tfs.trend.value} для анализа тренда.")
