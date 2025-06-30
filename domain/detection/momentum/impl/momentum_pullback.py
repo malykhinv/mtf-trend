@@ -1,7 +1,7 @@
 from typing import Tuple
 
 from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_WICK_RATIO, \
-    MODERATE_REACTION_WICK_RATIO, FLOAT_UNDEFINED, MIN_SL_PCT, MIN_TP_PCT
+    MODERATE_REACTION_WICK_RATIO, FLOAT_UNDEFINED, MIN_SL_PCT, MIN_TP_PCT, MIN_RR
 from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
 from domain.models.scenario import Scenario
 from utils.float_utils import is_defined, get_pct
@@ -33,27 +33,102 @@ class MomentumPullback(MomentumSetupBase):
     def define_rr(self) -> Tuple[float, float, float, float]:
         undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
 
-        entry = self.last.close
-        sl = self.prev.low if self.side.is_long else self.prev.high
-
+        # 1️⃣ Проверка тренда на macro и trend
         if not self.tf_macro_trend_condition():
+            self.logw(f"Нет подходящего тренда на {self.tfs.trend.value}.")
             return undefined_result
 
-        if not get_pct(sl, entry) > MIN_SL_PCT:
+        if not self.side:
+            self.logw("Невозможно определить направление сделки.")
+            return undefined_result
+
+        # 2️⃣ Entry
+        entry = self.last.close
+
+        # 3️⃣ SL по swing
+        swing_candidates = [
+            s for s in reversed(self.swings)
+            if (self.side.is_long and s.type.is_low and s.price < entry) or
+               (self.side.is_short and s.type.is_high and s.price > entry)
+        ]
+
+        if swing_candidates:
+            swing_for_sl = swing_candidates[0]
+            sl = swing_for_sl.price
+        else:
+            # Fallback на экстремум предыдущей свечи
+            sl = self.prev.low if self.side.is_long else self.prev.high
+            self.logw("Используем экстремум предыдущей свечи для SL, так как нет swing.")
+
+        # Проверка минимальной дистанции SL
+        sl_distance_pct = get_pct(entry, sl)
+        if sl_distance_pct < MIN_SL_PCT:
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
-        tp = self.define_tp(entry, sl)
+        # 5️⃣ TP — приоритет swing по структурам (setup → trend → macro)
+        tp = FLOAT_UNDEFINED
+        rr = FLOAT_UNDEFINED
 
-        if not get_pct(tp, entry) > MIN_TP_PCT:
+        tf_candidates = [self.tfs.setup, self.tfs.trend, self.tfs.macro]
+
+        for tf in tf_candidates:
+            swings_tf = self.mtf_states[tf].structure
+            swing_targets = [
+                s for s in swings_tf
+                if (self.side.is_long and s.type.is_high and s.price > entry) or
+                   (self.side.is_short and s.type.is_low and s.price < entry)
+            ]
+
+            for target in swing_targets:
+                rr_candidate = abs(target.price - entry) / abs(entry - sl)
+                if rr_candidate >= MIN_RR:
+                    tp = target.price
+                    rr = round(rr_candidate, 2)
+                    break
+
+            if is_defined(tp):
+                break
+
+        # Fallback: экстремум последних 20 баров
+        if not is_defined(tp):
+            local_bars = self.bars_tf_setup[-20:]
+
+            if self.side.is_long:
+                highs_above_entry = [b.high for b in local_bars if b.high > entry]
+                if highs_above_entry:
+                    local_high = max(highs_above_entry)
+                    rr_candidate = abs(local_high - entry) / abs(entry - sl)
+                    if rr_candidate >= MIN_RR:
+                        tp = local_high
+                        rr = round(rr_candidate, 2)
+            else:
+                lows_below_entry = [b.low for b in local_bars if b.low < entry]
+                if lows_below_entry:
+                    local_low = min(lows_below_entry)
+                    rr_candidate = abs(entry - local_low) / abs(entry - sl)
+                    if rr_candidate >= MIN_RR:
+                        tp = local_low
+                        rr = round(rr_candidate, 2)
+
+        if not is_defined(tp):
+            self.logw("Нет подходящего swing или экстремума для TP с RR >= MIN_RR.")
+            return undefined_result
+
+        # Проверка минимальной дистанции TP
+        tp_distance_pct = get_pct(tp, entry)
+        if tp_distance_pct < MIN_TP_PCT:
             self.logw(f"Entry и TP слишком близки (entry={entry}, tp={tp}).")
             return undefined_result
 
-        rr = abs(tp - entry) / abs(entry - sl)
+        # 7️⃣ Финальный расчет RR
+        final_rr = abs(tp - entry) / abs(entry - sl)
+
         self.log(f"Entry: {entry}")
         self.log(f"SL: {sl}")
         self.log(f"TP: {tp}")
-        self.log(f"RR: {round(rr, 2)}")
+        self.log(f"RR: {round(final_rr, 2)}")
 
-        return entry, sl, tp, round(rr, 2)
+        return entry, sl, tp, round(final_rr, 2)
+
     # endregion
