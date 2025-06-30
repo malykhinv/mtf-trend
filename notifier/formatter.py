@@ -1,11 +1,12 @@
+from domain.models.confidence import Confidence
 from domain.models.setup_signal import SetupSignal
 
 
 def format_message(signal: SetupSignal) -> str:
     emoji_map = {
-        "low": "🌑",
-        "medium": "🌓",
-        "high": "🌕"
+        Confidence.WEAK: "🌑",
+        Confidence.MODERATE: "🌓",
+        Confidence.STRONG: "🌕"
     }
 
     emoji = emoji_map.get(signal.confidence, "🌑")

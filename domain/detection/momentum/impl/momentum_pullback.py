@@ -52,13 +52,12 @@ class MomentumPullback(MomentumSetupBase):
                (self.side.is_short and s.type.is_high and s.price > entry)
         ]
 
-        if swing_candidates:
-            swing_for_sl = swing_candidates[0]
-            sl = swing_for_sl.price
-        else:
-            # Fallback на экстремум предыдущей свечи
-            sl = self.prev.low if self.side.is_long else self.prev.high
-            self.logw("Используем экстремум предыдущей свечи для SL, так как нет swing.")
+        if not swing_candidates:
+            self.logw("Нет подходящего swing для SL.")
+            return undefined_result
+
+        swing_for_sl = swing_candidates[0]
+        sl = swing_for_sl.price
 
         # Проверка минимальной дистанции SL
         sl_distance_pct = get_pct(entry, sl)
