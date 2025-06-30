@@ -1,7 +1,6 @@
 from config.constants import MIN_RR, FLOAT_UNDEFINED
 from domain.detection.base_setup import BaseSetup
 from domain.models.side import Side
-from utils.float_utils import is_defined
 
 
 class MomentumSetupBase(BaseSetup):

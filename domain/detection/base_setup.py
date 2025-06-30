@@ -57,7 +57,7 @@ class BaseSetup(ABC):
                 if self.confidence.is_strong:
                     self.entry, self.sl, self.tp, self.rr = self.define_rr()
                     if not is_defined(self.entry, self.sl, self.tp, self.rr):
-                        self.logw("Некорректные Entry/SL/TP/RR, сигнал не будет построен.")
+                        self.logw("Некорректные Entry/SL/TP/RR")
                         return None
                     sl_distance_pct = abs(self.entry - self.sl) / self.entry * 100
                     tp_distance_pct = abs(self.tp - self.entry) / self.entry * 100

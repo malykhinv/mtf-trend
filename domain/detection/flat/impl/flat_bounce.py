@@ -55,13 +55,13 @@ class FlatBounce(FlatSetupBase):
         if not is_defined(sl):
             sl = self._define_sl_default()
 
-        tp = self._define_tp_swings(entry, sl)
-        if not is_defined(tp):
-            tp = self._define_tp_default()
-
         if not get_pct(sl, entry) > MIN_SL_PCT:
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
+
+        tp = self._define_tp_swings(entry, sl)
+        if not is_defined(tp):
+            tp = self._define_tp_default()
 
         if not get_pct(tp, entry) > MIN_TP_PCT:
             self.logw(f"Entry и TP слишком близки (entry={entry}, tp={tp}).")
