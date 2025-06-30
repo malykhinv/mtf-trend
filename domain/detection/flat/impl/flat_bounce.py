@@ -49,26 +49,42 @@ class FlatBounce(FlatSetupBase):
     # region RR
     def define_rr(self) -> Tuple[float, float, float, float]:
         undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
+
         entry = self.last.close
+
+        # SL: приоритет — swing в противоположную сторону
         sl = self._define_sl_swings(entry)
 
         if not is_defined(sl):
             sl = self._define_sl_default()
 
+        # Проверка минимальной дистанции SL
         if not get_pct(sl, entry) > MIN_SL_PCT:
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
+        # TP: приоритет swing
         tp = self._define_tp_swings(entry, sl)
-        if not is_defined(tp):
-            tp = self._define_tp_default()
 
-        if not get_pct(tp, entry) > MIN_TP_PCT:
+        # Fallback через метод _define_tp_default
+        if not is_defined(tp):
+            tp = self._define_tp_default(entry, sl)
+
+        # Проверка минимальной дистанции TP
+        if not is_defined(tp) or not get_pct(tp, entry) > MIN_TP_PCT:
             self.logw(f"Entry и TP слишком близки (entry={entry}, tp={tp}).")
             return undefined_result
 
+        # Финальный RR
         rr = abs(tp - entry) / abs(entry - sl)
-        self.log(f"RR рассчитан: {round(rr, 2)}")
+        if rr < MIN_RR:
+            self.logw(f"RR {round(rr, 2)} < MIN_RR ({MIN_RR}).")
+            return undefined_result
+
+        self.log(f"Entry: {entry}")
+        self.log(f"SL: {sl}")
+        self.log(f"TP: {tp}")
+        self.log(f"RR: {round(rr, 2)}")
 
         return entry, sl, tp, round(rr, 2)
 
@@ -108,12 +124,45 @@ class FlatBounce(FlatSetupBase):
         self.log("Подходящих свингов для тейка не найдено.")
         return FLOAT_UNDEFINED
 
-    def _define_tp_default(self) -> float:
-        if self.side.is_long:
-            tp = max(b.high for b in self.bars_tf_setup[-TP_LOOKAHEAD_BARS:])
+    def _define_tp_default(self, entry: float, sl: float) -> float:
+        """
+        Возвращает fallback TP:
+        1️⃣ Сначала midpoint диапазона (center).
+        2️⃣ Если midpoint не даёт RR >= MIN_RR, fallback на экстремум последних TP_LOOKAHEAD_BARS.
+        """
+        # Center диапазона
+        flat_center = (self.range_high + self.range_low) / 2
+
+        if self.side.is_long and flat_center > entry:
+            tp_candidate = flat_center
+        elif self.side.is_short and flat_center < entry:
+            tp_candidate = flat_center
         else:
-            tp = min(b.low for b in self.bars_tf_setup[-TP_LOOKAHEAD_BARS:])
-        self.log("Тейк выбран по экстремумам баров.")
-        return tp
+            tp_candidate = FLOAT_UNDEFINED
+
+        if is_defined(tp_candidate):
+            rr_candidate = abs(tp_candidate - entry) / abs(entry - sl)
+            if rr_candidate >= MIN_RR:
+                self.log("TP выбран по середине диапазона (center fallback).")
+                return tp_candidate
+            else:
+                self.logw("Midpoint не даёт достаточного RR, ищем дальше.")
+
+        # Fallback на экстремум последних баров
+        if self.side.is_long:
+            local_high = max(b.high for b in self.bars_tf_setup[-TP_LOOKAHEAD_BARS:])
+            rr_candidate = abs(local_high - entry) / abs(entry - sl)
+            if rr_candidate >= MIN_RR:
+                self.log("TP выбран по локальному high (fallback).")
+                return local_high
+        else:
+            local_low = min(b.low for b in self.bars_tf_setup[-TP_LOOKAHEAD_BARS:])
+            rr_candidate = abs(entry - local_low) / abs(entry - sl)
+            if rr_candidate >= MIN_RR:
+                self.log("TP выбран по локальному low (fallback).")
+                return local_low
+
+        self.logw("Нет подходящего fallback TP с RR >= MIN_RR.")
+        return FLOAT_UNDEFINED
 
     # endregion
