@@ -1,5 +1,6 @@
 from typing import List
 
+from config.constants import IS_TRADING_ENABLED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
@@ -115,14 +116,15 @@ class Scanner:
         message = format_message(signal)
 
         if signal.is_order_signal:
-            self.trade_executor.execute(
-                symbol=signal.symbol,
-                scenario=signal.scenario,
-                side=signal.side,
-                sl=signal.sl,
-                tp=signal.tp
-            )
             self.orders_notifier.send_message(message)
+            if IS_TRADING_ENABLED:
+                self.trade_executor.execute(
+                    symbol=signal.symbol,
+                    scenario=signal.scenario,
+                    side=signal.side,
+                    sl=signal.sl,
+                    tp=signal.tp
+                )
 
         elif signal.is_event_signal:
             self.events_notifier.send_message(message)
