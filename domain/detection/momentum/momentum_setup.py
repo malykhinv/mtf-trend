@@ -16,10 +16,7 @@ class MomentumSetup(Setup):
     def trend_condition(self) -> bool:
         if self.tf_macro_state.phase.is_trend:
             return True
-        if self.tf_macro_state.phase.is_flat and self.tf_trend_state.phase.is_trend:
-            return True
-
-        self.logw(f"Нет глобального тренда и тренда на {self.tfs.trend.value}.")
+        self.logw("Нет тренда на ключевых ТФ.")
         return False
 
     def pullback_condition(self) -> bool:

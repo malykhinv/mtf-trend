@@ -1,66 +1,73 @@
-from config.constants import FLOAT_UNDEFINED
-from domain.models.bar import Bar
-from domain.models.mtf_state import MTFState
+import numpy as np
 from domain.models.phase import Phase
+from domain.models.mtf_state import MTFState
+from domain.models.swing_point import SwingPoint
 from domain.models.price_direction import PriceDirection
+from domain.models.swing_type import SwingType
 from domain.models.timeframe import Timeframe
-from domain.structures import StructureDetector
 from utils.logger import log, logw
-from typing import List
 
 
 class MTFAnalyzer:
-    def __init__(self, bars: List[Bar], timeframe: Timeframe, atr: float):
+    def __init__(self, bars, timeframe: Timeframe, atr: float):
         self.bars = bars
         self.timeframe = timeframe
         self.atr = atr
 
     def analyze(self) -> MTFState:
-        detector = StructureDetector(self.bars, self.atr, threshold_multiplier=1.0)
-        swings = detector.detect_swing_points()
+        swings = self.detect_swing_points()
+        highs = [b.high for b in self.bars[-30:]]
+        lows = [b.low for b in self.bars[-30:]]
 
-        if len(swings) < 4:
-            logw("Недостаточно swing-точек для тренда. Помечаем как FLAT.")
-            return MTFState(
-                timeframe=self.timeframe,
-                phase=Phase.FLAT,
-                structure=swings,
-                is_in_correction=False,
-                correction_direction=PriceDirection.UNDEFINED,
-                is_range=True,
-                range_high=max([s.price for s in swings]) if swings else FLOAT_UNDEFINED,
-                range_low=min([s.price for s in swings]) if swings else FLOAT_UNDEFINED
-            )
+        x = np.arange(len(highs))
+        high_slope, _ = np.polyfit(x, highs, 1)
+        low_slope, _ = np.polyfit(x, lows, 1)
 
-        highs = [s for s in swings if s.type.is_high]
-        lows = [s for s in swings if s.type.is_low]
+        slope_diff = abs(high_slope - low_slope)
+        slope_avg = (high_slope + low_slope) / 2
 
-        lower_highs = sum(1 for i in range(1, len(highs)) if highs[i].price < highs[i - 1].price)
-        higher_lows = sum(1 for i in range(1, len(lows)) if lows[i].price > lows[i - 1].price)
+        # Swing-структура
+        hh_count, hl_count, ll_count, lh_count = self.count_swing_structures(swings)
 
-        downtrend_confidence = lower_highs / (len(highs) - 1) if len(highs) > 1 else 0
-        uptrend_confidence = higher_lows / (len(lows) - 1) if len(lows) > 1 else 0
+        log(f"{self.timeframe.value}: high_slope = {round(high_slope, 5)}, low_slope = {round(low_slope, 5)}")
+        log(f"{self.timeframe.value}: slope_diff = {round(slope_diff, 5)}, slope_avg = {round(slope_avg, 5)}")
+        log(f"{self.timeframe.value}: hh = {hh_count}, hl = {hl_count}, ll = {ll_count}, lh = {lh_count}")
 
-        if downtrend_confidence >= 0.7:
-            phase = Phase.DOWNTREND
-        elif uptrend_confidence >= 0.7:
-            phase = Phase.UPTREND
+        # Порог согласованности уклонов
+        range_size = max(highs) - min(lows)
+        bars_count = len(highs)
+        avg_slope_per_bar = range_size / bars_count
+        slope_trend_threshold = 0.3 * avg_slope_per_bar
+
+        slope_diff_threshold = 0.02
+
+        if slope_diff < slope_diff_threshold:
+            if hh_count >= 2 and hl_count >= 2 and slope_avg > slope_trend_threshold:
+                phase = Phase.UPTREND
+                log(f"{self.timeframe.value}: UPTREND (согласованные уклоны, swing подтвержден)")
+            elif ll_count >= 2 and lh_count >= 2 and slope_avg < -slope_trend_threshold:
+                phase = Phase.DOWNTREND
+                log(f"{self.timeframe.value}: DOWNTREND (согласованные уклоны, swing подтвержден)")
+            else:
+                phase = Phase.FLAT
+                logw(f"{self.timeframe.value}: swing-структура не подтверждена\n"
+                     f"slope_trend_threshold = {round(slope_trend_threshold, 5)}")
         else:
             phase = Phase.FLAT
+            logw(f"{self.timeframe.value}: "
+                 f"уклоны не согласованы (slope_diff {round(slope_diff, 5)} >= {slope_diff_threshold})")
 
-        # Добавляем определение коррекции
         is_in_correction = False
         correction_direction = PriceDirection.UNDEFINED
-        if phase.is_uptrend and swings[-1].type.is_low:
+
+        if phase.is_uptrend and swings and swings[-1].type.is_low:
             is_in_correction = True
             correction_direction = PriceDirection.DOWN
-        elif phase.is_downtrend and swings[-1].type.is_high:
+        elif phase.is_downtrend and swings and swings[-1].type.is_high:
             is_in_correction = True
             correction_direction = PriceDirection.UP
 
-        log(f"{self.timeframe.value}: "
-            f"тренд — {phase.value}, "
-            f"коррекция — {'да' if is_in_correction else 'нет'}")
+        log(f"{self.timeframe.value}: тренд — {phase.value}, коррекция — {'да' if is_in_correction else 'нет'}")
 
         return MTFState(
             timeframe=self.timeframe,
@@ -69,9 +76,53 @@ class MTFAnalyzer:
             is_in_correction=is_in_correction,
             correction_direction=correction_direction,
             is_range=phase.is_flat,
-            range_high=max([s.price for s in swings]) if phase == Phase.FLAT else FLOAT_UNDEFINED,
-            range_low=min([s.price for s in swings]) if phase == Phase.FLAT else FLOAT_UNDEFINED
+            range_high=max(highs),
+            range_low=min(lows)
         )
 
+    def detect_swing_points(self):
+        swings = []
+        direction = PriceDirection.UNDEFINED
+        threshold = self.atr * 0.8
 
+        for i in range(1, len(self.bars) - 1):
+            bar = self.bars[i]
+            prev_bar = self.bars[i - 1]
+            next_bar = self.bars[i + 1]
 
+            is_high = bar.high > prev_bar.high and bar.high > next_bar.high
+            is_low = bar.low < prev_bar.low and bar.low < next_bar.low
+
+            if is_high:
+                if direction != PriceDirection.DOWN or abs(bar.high - prev_bar.high) > threshold:
+                    swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
+                    direction = PriceDirection.DOWN
+            elif is_low:
+                if direction != PriceDirection.UP or abs(bar.low - prev_bar.low) > threshold:
+                    swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
+                    direction = PriceDirection.UP
+
+        return swings
+
+    @staticmethod
+    def count_swing_structures(swings):
+        hh, hl, ll, lh = 0, 0, 0, 0
+        prev_high, prev_low = None, None
+
+        for s in swings:
+            if s.type == SwingType.HIGH:
+                if prev_high is not None:
+                    if s.price > prev_high:
+                        hh += 1
+                    elif s.price < prev_high:
+                        lh += 1
+                prev_high = s.price
+            elif s.type == SwingType.LOW:
+                if prev_low is not None:
+                    if s.price > prev_low:
+                        hl += 1
+                    elif s.price < prev_low:
+                        ll += 1
+                prev_low = s.price
+
+        return hh, hl, ll, lh
