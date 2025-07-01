@@ -29,10 +29,6 @@ class MTFAnalyzer:
         # Swing-структура
         hh_count, hl_count, ll_count, lh_count = self.count_swing_structures(swings)
 
-        log(f"{self.timeframe.value}: high_slope = {round(high_slope, 5)}, low_slope = {round(low_slope, 5)}")
-        log(f"{self.timeframe.value}: slope_diff = {round(slope_diff, 5)}, slope_avg = {round(slope_avg, 5)}")
-        log(f"{self.timeframe.value}: hh = {hh_count}, hl = {hl_count}, ll = {ll_count}, lh = {lh_count}")
-
         # Порог согласованности уклонов
         range_size = max(highs) - min(lows)
         bars_count = len(highs)
