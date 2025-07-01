@@ -1,11 +1,17 @@
-import numpy as np
+from config.constants import (
+    STRONG_TREND_ATR_FACTOR,
+    MIN_HL_DISTANCE_ATR,
+    MIN_TREND_HH_COUNT,
+    MIN_TREND_HL_COUNT
+)
 from domain.models.phase import Phase
 from domain.models.mtf_state import MTFState
 from domain.models.swing_point import SwingPoint
 from domain.models.price_direction import PriceDirection
 from domain.models.swing_type import SwingType
 from domain.models.timeframe import Timeframe
-from utils.logger import log, logw
+from utils.logger import log
+from utils.plot_trend import plot_trend
 
 
 class MTFAnalyzer:
@@ -16,38 +22,14 @@ class MTFAnalyzer:
 
     def analyze(self) -> MTFState:
         swings = self.detect_swing_points()
-        highs = [b.high for b in self.bars[-30:]]
-        lows = [b.low for b in self.bars[-30:]]
+        plot_trend(self.bars, swings, timeframe_name=self.timeframe.value, file_name=f"trend_{self.timeframe.value}")
 
-        x = np.arange(len(highs))
-        high_slope, _ = np.polyfit(x, highs, 1)
-        low_slope, _ = np.polyfit(x, lows, 1)
-
-        slope_diff = abs(high_slope - low_slope)
-        slope_avg = (high_slope + low_slope) / 2
-
-        # Swing-структура
-        hh_count, hl_count, ll_count, lh_count = self.count_swing_structures(swings)
-
-        # Порог согласованности уклонов
-        range_size = max(highs) - min(lows)
-        bars_count = len(highs)
-        avg_slope_per_bar = range_size / bars_count
-        slope_trend_threshold = 0.3 * avg_slope_per_bar
-
-        slope_diff_threshold = 0.02
-
-        if slope_diff < slope_diff_threshold:
-            if hh_count >= 3 and hl_count >= 3 and slope_avg > slope_trend_threshold:
-                phase = Phase.UPTREND
-            elif ll_count >= 3 and lh_count >= 3 and slope_avg < -slope_trend_threshold:
-                phase = Phase.DOWNTREND
-            else:
-                phase = Phase.FLAT
+        if self.is_strong_uptrend(swings, self.atr):
+            phase = Phase.UPTREND
+        elif self.is_strong_downtrend(swings, self.atr):
+            phase = Phase.DOWNTREND
         else:
             phase = Phase.FLAT
-            logw(f"{self.timeframe.value}: "
-                 f"уклоны не согласованы (slope_diff {round(slope_diff, 5)} >= {slope_diff_threshold})")
 
         is_in_correction = False
         correction_direction = PriceDirection.UNDEFINED
@@ -59,7 +41,10 @@ class MTFAnalyzer:
             is_in_correction = True
             correction_direction = PriceDirection.UP
 
-        log(f"{self.timeframe.value}: тренд — {phase.value}, коррекция — {'да' if is_in_correction else 'нет'}")
+        highs = [b.high for b in self.bars[-30:]]
+        lows = [b.low for b in self.bars[-30:]]
+
+        log(f"{self.timeframe.value:<4} {phase.value.capitalize()}{', коррекция' if is_in_correction else ''}")
 
         return MTFState(
             timeframe=self.timeframe,
@@ -72,49 +57,100 @@ class MTFAnalyzer:
             range_low=min(lows)
         )
 
-    def detect_swing_points(self):
+    def detect_swing_points(self, atr_factor: float = 1.0, min_bars_between_swing: int = 3):
         swings = []
-        direction = PriceDirection.UNDEFINED
-        threshold = self.atr * 0.8
+        last_swing = None
+        atr_threshold = self.atr * atr_factor
 
         for i in range(1, len(self.bars) - 1):
             bar = self.bars[i]
             prev_bar = self.bars[i - 1]
             next_bar = self.bars[i + 1]
 
-            is_high = bar.high > prev_bar.high and bar.high > next_bar.high
-            is_low = bar.low < prev_bar.low and bar.low < next_bar.low
+            is_potential_high = bar.high > prev_bar.high and bar.high > next_bar.high
+            is_potential_low = bar.low < prev_bar.low and bar.low < next_bar.low
 
-            if is_high:
-                if direction != PriceDirection.DOWN or abs(bar.high - prev_bar.high) > threshold:
+            if last_swing and (i - last_swing.index) < min_bars_between_swing:
+                continue  # слишком близко к предыдущему свингу
+
+            if is_potential_high:
+                if last_swing and last_swing.type.is_low:
+                    if bar.high > last_swing.price + atr_threshold:
+                        swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
+                        last_swing = swings[-1]
+                elif last_swing and last_swing.type.is_high:
+                    if bar.high > last_swing.price + atr_threshold:
+                        swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
+                        last_swing = swings[-1]
+                elif not last_swing:
                     swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
-                    direction = PriceDirection.DOWN
-            elif is_low:
-                if direction != PriceDirection.UP or abs(bar.low - prev_bar.low) > threshold:
+                    last_swing = swings[-1]
+
+            elif is_potential_low:
+                if last_swing and last_swing.type.is_high:
+                    if bar.low < last_swing.price - atr_threshold:
+                        swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
+                        last_swing = swings[-1]
+                elif last_swing and last_swing.type.is_low:
+                    if bar.low < last_swing.price - atr_threshold:
+                        swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
+                        last_swing = swings[-1]
+                elif not last_swing:
                     swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
-                    direction = PriceDirection.UP
+                    last_swing = swings[-1]
 
         return swings
 
     @staticmethod
-    def count_swing_structures(swings):
-        hh, hl, ll, lh = 0, 0, 0, 0
-        prev_high, prev_low = None, None
+    def is_strong_uptrend(swings, atr: float):
+        if len(swings) < 4:
+            return False
 
-        for s in swings:
-            if s.type == SwingType.HIGH:
-                if prev_high is not None:
-                    if s.price > prev_high:
-                        hh += 1
-                    elif s.price < prev_high:
-                        lh += 1
-                prev_high = s.price
-            elif s.type == SwingType.LOW:
-                if prev_low is not None:
-                    if s.price > prev_low:
-                        hl += 1
-                    elif s.price < prev_low:
-                        ll += 1
-                prev_low = s.price
+        hh_count = 0
+        hl_count = 0
 
-        return hh, hl, ll, lh
+        for i in range(1, len(swings) - 1, 2):
+            prev = swings[i - 1]
+            curr = swings[i]
+
+            # Проверка сильного HH
+            if prev.type.is_low and curr.type.is_high:
+                if curr.price > prev.price + STRONG_TREND_ATR_FACTOR * atr:
+                    hh_count += 1
+
+            # Проверка высокого HL
+            if i + 1 < len(swings):
+                next_low = swings[i + 1]
+                if next_low.type.is_low:
+                    min_expected = prev.price + MIN_HL_DISTANCE_ATR * atr
+                    if next_low.price > min_expected:
+                        hl_count += 1
+
+        return hh_count >= MIN_TREND_HH_COUNT and hl_count >= MIN_TREND_HL_COUNT
+
+    @staticmethod
+    def is_strong_downtrend(swings, atr: float):
+        if len(swings) < 4:
+            return False
+
+        ll_count = 0
+        lh_count = 0
+
+        for i in range(1, len(swings) - 1, 2):
+            prev = swings[i - 1]
+            curr = swings[i]
+
+            # Проверка сильного LL
+            if prev.type.is_high and curr.type.is_low:
+                if curr.price < prev.price - STRONG_TREND_ATR_FACTOR * atr:
+                    ll_count += 1
+
+            # Проверка низкого LH
+            if i + 1 < len(swings):
+                next_high = swings[i + 1]
+                if next_high.type.is_high:
+                    max_expected = prev.price - MIN_HL_DISTANCE_ATR * atr
+                    if next_high.price < max_expected:
+                        lh_count += 1
+
+        return ll_count >= MIN_TREND_HH_COUNT and lh_count >= MIN_TREND_HL_COUNT
