@@ -1,3 +1,4 @@
+
 from config.constants import (
     STRONG_TREND_ATR_FACTOR,
     MIN_HL_DISTANCE_ATR,
@@ -13,7 +14,6 @@ from domain.models.timeframe import Timeframe
 from utils.logger import log
 from utils.plot_trend import plot_trend
 
-
 class MTFAnalyzer:
     def __init__(self, bars, timeframe: Timeframe, atr: float):
         self.bars = bars
@@ -21,7 +21,15 @@ class MTFAnalyzer:
         self.atr = atr
 
     def analyze(self) -> MTFState:
-        swings = self.detect_swing_points()
+        swings = self.detect_swing_points(atr_factor=1.0, min_bars_between_swing=3)
+        swings = self.clean_swings(swings, min_bars_between_swing=3)
+
+        swings = self.move_swings_in_range(swings, SwingType.LOW, min_bars_between_swing=3)
+        swings = self.move_swings_in_range(swings, SwingType.HIGH, min_bars_between_swing=3)
+        # Повторяем ещё раз при необходимости
+        swings = self.move_swings_in_range(swings, SwingType.LOW, min_bars_between_swing=3)
+        swings = self.move_swings_in_range(swings, SwingType.HIGH, min_bars_between_swing=3)
+
         plot_trend(self.bars, swings, timeframe_name=self.timeframe.value, file_name=f"trend_{self.timeframe.value}")
 
         if self.is_strong_uptrend(swings, self.atr):
@@ -71,35 +79,67 @@ class MTFAnalyzer:
             is_potential_low = bar.low < prev_bar.low and bar.low < next_bar.low
 
             if last_swing and (i - last_swing.index) < min_bars_between_swing:
-                continue  # слишком близко к предыдущему свингу
+                continue
 
             if is_potential_high:
-                if last_swing and last_swing.type.is_low:
-                    if bar.high > last_swing.price + atr_threshold:
-                        swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
-                        last_swing = swings[-1]
-                elif last_swing and last_swing.type.is_high:
-                    if bar.high > last_swing.price + atr_threshold:
-                        swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
-                        last_swing = swings[-1]
-                elif not last_swing:
+                if not last_swing or bar.high > last_swing.price + atr_threshold:
                     swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
                     last_swing = swings[-1]
 
             elif is_potential_low:
-                if last_swing and last_swing.type.is_high:
-                    if bar.low < last_swing.price - atr_threshold:
-                        swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
-                        last_swing = swings[-1]
-                elif last_swing and last_swing.type.is_low:
-                    if bar.low < last_swing.price - atr_threshold:
-                        swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
-                        last_swing = swings[-1]
-                elif not last_swing:
+                if not last_swing or bar.low < last_swing.price - atr_threshold:
                     swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
                     last_swing = swings[-1]
 
         return swings
+
+    def clean_swings(self, swings, min_bars_between_swing):
+        cleaned = []
+        for swing in swings:
+            if not cleaned:
+                cleaned.append(swing)
+                continue
+            last = cleaned[-1]
+            if swing.type == last.type:
+                if swing.type.is_high and swing.price > last.price:
+                    cleaned[-1] = swing
+                elif swing.type.is_low and swing.price < last.price:
+                    cleaned[-1] = swing
+            else:
+                cleaned.append(swing)
+        return cleaned
+
+    def move_swings_in_range(self, swings, type_to_adjust, min_bars_between_swing):
+        adjusted = swings.copy()
+        if type_to_adjust.is_low:
+            type_indices = [s.index for s in swings if s.type.is_high]
+        elif type_to_adjust.is_high:
+            type_indices = [s.index for s in swings if s.type.is_low]
+        else:
+            return adjusted
+
+        type_indices = [0] + type_indices + [len(self.bars) - 1]
+
+        for i in range(len(type_indices) - 1):
+            start_idx = type_indices[i]
+            end_idx = type_indices[i + 1]
+
+            for swing in adjusted:
+                if type_to_adjust == SwingType.LOW and swing.type.is_low:
+                    if start_idx < swing.index < end_idx:
+                        bars = self.bars[start_idx:end_idx + 1]
+                        min_bar = min(bars, key=lambda b: b.low)
+                        if abs(self.bars.index(min_bar) - swing.index) >= min_bars_between_swing:
+                            swing.index = self.bars.index(min_bar)
+                            swing.price = min_bar.low
+                elif type_to_adjust == SwingType.HIGH and swing.type.is_high:
+                    if start_idx < swing.index < end_idx:
+                        bars = self.bars[start_idx:end_idx + 1]
+                        max_bar = max(bars, key=lambda b: b.high)
+                        if abs(self.bars.index(max_bar) - swing.index) >= min_bars_between_swing:
+                            swing.index = self.bars.index(max_bar)
+                            swing.price = max_bar.high
+        return adjusted
 
     @staticmethod
     def is_strong_uptrend(swings, atr: float):
@@ -113,12 +153,10 @@ class MTFAnalyzer:
             prev = swings[i - 1]
             curr = swings[i]
 
-            # Проверка сильного HH
             if prev.type.is_low and curr.type.is_high:
                 if curr.price > prev.price + STRONG_TREND_ATR_FACTOR * atr:
                     hh_count += 1
 
-            # Проверка высокого HL
             if i + 1 < len(swings):
                 next_low = swings[i + 1]
                 if next_low.type.is_low:
@@ -140,12 +178,10 @@ class MTFAnalyzer:
             prev = swings[i - 1]
             curr = swings[i]
 
-            # Проверка сильного LL
             if prev.type.is_high and curr.type.is_low:
                 if curr.price < prev.price - STRONG_TREND_ATR_FACTOR * atr:
                     ll_count += 1
 
-            # Проверка низкого LH
             if i + 1 < len(swings):
                 next_high = swings[i + 1]
                 if next_high.type.is_high:
