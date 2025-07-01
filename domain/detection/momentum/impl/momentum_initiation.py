@@ -2,12 +2,12 @@ from typing import Tuple
 
 from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_WICK_RATIO, \
     MODERATE_REACTION_WICK_RATIO, RETEST_TOLERANCE_ATR, FLOAT_UNDEFINED, MIN_SL_PCT, MIN_TP_PCT, MIN_RR
-from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
+from domain.detection.momentum.momentum_setup import MomentumSetup
 from domain.models.scenario import Scenario
 from utils.float_utils import is_defined, get_pct
 
 
-class MomentumInitiation(MomentumSetupBase):
+class MomentumInitiation(MomentumSetup):
     scenario = Scenario.MOMENTUM_INITIATION
 
     # region Conditions
@@ -19,6 +19,7 @@ class MomentumInitiation(MomentumSetupBase):
 
     def has_moderate_conditions(self) -> bool:
         return self.has_weak_conditions() and \
+            self.tf_trend_condition() and \
             self.volume_condition(self.prev, self.avg_volume) and \
             self.wick_condition(self.prev, MODERATE_REACTION_WICK_RATIO)
 
@@ -56,10 +57,6 @@ class MomentumInitiation(MomentumSetupBase):
     # region RR
     def define_rr(self) -> Tuple[float, float, float, float]:
         undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
-
-        if not self.tf_macro_trend_condition():
-            self.logw(f"Нет подходящего тренда на {self.tfs.trend.value}.")
-            return undefined_result
 
         if not self.side:
             self.logw("Невозможно задать направление сделки.")

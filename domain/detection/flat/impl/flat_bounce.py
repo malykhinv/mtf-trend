@@ -3,13 +3,13 @@ from typing import Tuple
 from config.constants import TP_LOOKAHEAD_BARS, MIN_RR, SL_LOOKBACK_BARS, STRONG_REACTION_WICK_RATIO, \
     MODERATE_REACTION_WICK_RATIO, TOUCH_DISTANCE_ATR, STRONG_REACTION_VOLUME_MULTIPLIER, FLOAT_UNDEFINED, \
     MAX_SWING_LOOKBACK_BARS, MIN_SL_PCT, MIN_TP_PCT
-from domain.detection.flat.flat_setup_base import FlatSetupBase
+from domain.detection.flat.flat_setup import FlatSetup
 from domain.models.scenario import Scenario
 from domain.models.swing_type import SwingType
 from utils.float_utils import is_defined, get_pct
 
 
-class FlatBounce(FlatSetupBase):
+class FlatBounce(FlatSetup):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

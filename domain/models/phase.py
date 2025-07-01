@@ -16,5 +16,9 @@ class Phase(str, Enum):
         return self == Phase.DOWNTREND
 
     @property
+    def is_trend(self) -> bool:
+        return self.is_uptrend or self.is_downtrend
+
+    @property
     def is_flat(self) -> bool:
         return self == Phase.FLAT

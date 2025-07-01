@@ -14,7 +14,7 @@ from utils.float_utils import is_defined
 from utils.logger import log, logw
 
 
-class BaseSetup(ABC):
+class Setup(ABC):
     def __init__(
             self,
             symbol: str,

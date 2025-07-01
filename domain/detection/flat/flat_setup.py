@@ -1,6 +1,5 @@
 from abc import ABC
-from typing import Optional
-from domain.detection.base_setup import BaseSetup
+from domain.detection.setup import Setup
 from domain.models.bar import Bar
 from domain.models.swing_point import SwingPoint
 from domain.models.side import Side
@@ -12,7 +11,7 @@ from config.constants import (
 )
 
 
-class FlatSetupBase(BaseSetup, ABC):
+class FlatSetup(Setup, ABC):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tf_macro_state = self.mtf_states[self.tfs.macro]
@@ -29,7 +28,7 @@ class FlatSetupBase(BaseSetup, ABC):
 
     def flat_size_condition(self) -> bool:
         size = self.range_high - self.range_low
-        min_size = 2 * self.atr_tf_setup
+        min_size = 1.5 * self.atr_tf_setup
         max_size = 10 * self.atr_tf_setup
         if not min_size <= size <= max_size:
             self.logw("Диапазон слишком мал или велик.")

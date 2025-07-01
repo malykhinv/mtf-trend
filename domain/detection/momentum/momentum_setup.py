@@ -1,9 +1,9 @@
 from config.constants import MIN_RR, FLOAT_UNDEFINED
-from domain.detection.base_setup import BaseSetup
+from domain.detection.setup import Setup
 from domain.models.side import Side
 
 
-class MomentumSetupBase(BaseSetup):
+class MomentumSetup(Setup):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tf_macro_state = self.mtf_states[self.tfs.macro]
@@ -14,10 +14,13 @@ class MomentumSetupBase(BaseSetup):
         self.avg_volume = sum(b.volume for b in self.bars_tf_setup[-20:]) / 20
 
     def trend_condition(self) -> bool:
-        if not self.tf_macro_state.phase.is_uptrend and not self.tf_macro_state.phase.is_downtrend:
-            self.logw(f"Нет глобального тренда на {self.tf_macro_state.timeframe.value}.")
-            return False
-        return True
+        if self.tf_macro_state.phase.is_trend:
+            return True
+        if self.tf_macro_state.phase.is_flat and self.tf_trend_state.phase.is_trend:
+            return True
+
+        self.logw(f"Нет глобального тренда и тренда на {self.tfs.trend.value}.")
+        return False
 
     def pullback_condition(self) -> bool:
         if not self.tf_setup_state.is_in_correction:
@@ -46,7 +49,7 @@ class MomentumSetupBase(BaseSetup):
             return False
         return True
 
-    def tf_macro_trend_condition(self) -> bool:
+    def tf_trend_condition(self) -> bool:
         swings = self.tf_trend_state.structure
         if not swings or len(swings) < 4:
             self.logw(f"Недостаточно свингов на {self.tfs.trend.value} для анализа тренда.")

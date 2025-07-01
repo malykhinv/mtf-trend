@@ -2,12 +2,12 @@ from typing import Tuple
 
 from config.constants import STRONG_REACTION_VOLUME_MULTIPLIER, STRONG_REACTION_WICK_RATIO, \
     MODERATE_REACTION_WICK_RATIO, FLOAT_UNDEFINED, MIN_SL_PCT, MIN_TP_PCT, MIN_RR
-from domain.detection.momentum.momentum_setup_base import MomentumSetupBase
+from domain.detection.momentum.momentum_setup import MomentumSetup
 from domain.models.scenario import Scenario
 from utils.float_utils import is_defined, get_pct
 
 
-class MomentumPullback(MomentumSetupBase):
+class MomentumPullback(MomentumSetup):
     scenario = Scenario.MOMENTUM_PULLBACK
 
     # region Conditions
@@ -19,6 +19,7 @@ class MomentumPullback(MomentumSetupBase):
 
     def has_moderate_conditions(self) -> bool:
         return self.has_weak_conditions() and \
+            self.tf_trend_condition() and \
             self.volume_condition(self.prev, self.avg_volume) and \
             self.wick_condition(self.prev, MODERATE_REACTION_WICK_RATIO)
 
@@ -33,19 +34,14 @@ class MomentumPullback(MomentumSetupBase):
     def define_rr(self) -> Tuple[float, float, float, float]:
         undefined_result = FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
 
-        # 1️⃣ Проверка тренда на macro и trend
-        if not self.tf_macro_trend_condition():
-            self.logw(f"Нет подходящего тренда на {self.tfs.trend.value}.")
-            return undefined_result
-
         if not self.side:
             self.logw("Невозможно определить направление сделки.")
             return undefined_result
 
-        # 2️⃣ Entry
+        # Entry
         entry = self.last.close
 
-        # 3️⃣ SL по swing
+        # SL по swing
         swing_candidates = [
             s for s in reversed(self.swings)
             if (self.side.is_long and s.type.is_low and s.price < entry) or
@@ -65,9 +61,8 @@ class MomentumPullback(MomentumSetupBase):
             self.logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return undefined_result
 
-        # 5️⃣ TP — приоритет swing по структурам (setup → trend → macro)
+        # TP — приоритет swing по структурам (setup → trend → macro)
         tp = FLOAT_UNDEFINED
-        rr = FLOAT_UNDEFINED
 
         tf_candidates = [self.tfs.setup, self.tfs.trend, self.tfs.macro]
 
@@ -83,7 +78,6 @@ class MomentumPullback(MomentumSetupBase):
                 rr_candidate = abs(target.price - entry) / abs(entry - sl)
                 if rr_candidate >= MIN_RR:
                     tp = target.price
-                    rr = round(rr_candidate, 2)
                     break
 
             if is_defined(tp):
@@ -100,7 +94,6 @@ class MomentumPullback(MomentumSetupBase):
                     rr_candidate = abs(local_high - entry) / abs(entry - sl)
                     if rr_candidate >= MIN_RR:
                         tp = local_high
-                        rr = round(rr_candidate, 2)
             else:
                 lows_below_entry = [b.low for b in local_bars if b.low < entry]
                 if lows_below_entry:
@@ -108,7 +101,6 @@ class MomentumPullback(MomentumSetupBase):
                     rr_candidate = abs(entry - local_low) / abs(entry - sl)
                     if rr_candidate >= MIN_RR:
                         tp = local_low
-                        rr = round(rr_candidate, 2)
 
         if not is_defined(tp):
             self.logw("Нет подходящего swing или экстремума для TP с RR >= MIN_RR.")
