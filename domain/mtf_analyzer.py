@@ -42,16 +42,12 @@ class MTFAnalyzer:
         slope_diff_threshold = 0.02
 
         if slope_diff < slope_diff_threshold:
-            if hh_count >= 2 and hl_count >= 2 and slope_avg > slope_trend_threshold:
+            if hh_count >= 3 and hl_count >= 3 and slope_avg > slope_trend_threshold:
                 phase = Phase.UPTREND
-                log(f"{self.timeframe.value}: UPTREND (согласованные уклоны, swing подтвержден)")
-            elif ll_count >= 2 and lh_count >= 2 and slope_avg < -slope_trend_threshold:
+            elif ll_count >= 3 and lh_count >= 3 and slope_avg < -slope_trend_threshold:
                 phase = Phase.DOWNTREND
-                log(f"{self.timeframe.value}: DOWNTREND (согласованные уклоны, swing подтвержден)")
             else:
                 phase = Phase.FLAT
-                logw(f"{self.timeframe.value}: swing-структура не подтверждена\n"
-                     f"slope_trend_threshold = {round(slope_trend_threshold, 5)}")
         else:
             phase = Phase.FLAT
             logw(f"{self.timeframe.value}: "

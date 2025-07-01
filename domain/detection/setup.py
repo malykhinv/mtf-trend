@@ -54,21 +54,6 @@ class Setup(ABC):
 
         for confidence_condition, condition_func in levels:
             if confidence_condition:
-                if self.confidence.is_strong:
-                    self.entry, self.sl, self.tp, self.rr = self.define_rr()
-                    if not is_defined(self.entry, self.sl, self.tp, self.rr):
-                        self.logw("Некорректные Entry/SL/TP/RR")
-                        return None
-                    sl_distance_pct = abs(self.entry - self.sl) / self.entry * 100
-                    tp_distance_pct = abs(self.tp - self.entry) / self.entry * 100
-                    if not sl_distance_pct >= MIN_SL_PCT:
-                        self.logw(f"SL слишком близко: {round(sl_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
-                        return None
-
-                    if not tp_distance_pct >= MIN_SL_PCT:
-                        self.logw(f"TP слишком близко: {round(tp_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
-                        return None
-
                 if condition_func():
                     signal = self.build_signal()
                     self.log(self.message)
@@ -82,6 +67,22 @@ class Setup(ABC):
         pass
 
     def rr_condition(self) -> bool:
+        self.entry, self.sl, self.tp, self.rr = self.define_rr()
+
+        if not is_defined(self.entry, self.sl, self.tp, self.rr):
+            self.logw("Некорректные Entry/SL/TP/RR")
+            return False
+
+        sl_distance_pct = abs(self.entry - self.sl) / self.entry * 100
+        tp_distance_pct = abs(self.tp - self.entry) / self.entry * 100
+        if not sl_distance_pct >= MIN_SL_PCT:
+            self.logw(f"SL слишком близко: {round(sl_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
+            return False
+
+        if not tp_distance_pct >= MIN_SL_PCT:
+            self.logw(f"TP слишком близко: {round(tp_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
+            return False
+
         if self.rr < MIN_RR:
             self.logw(f"RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
             return False
