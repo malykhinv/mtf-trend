@@ -1,4 +1,3 @@
-
 from config.constants import (
     STRONG_TREND_ATR_FACTOR,
     MIN_HL_DISTANCE_ATR,
@@ -14,6 +13,7 @@ from domain.models.timeframe import Timeframe
 from utils.logger import log
 from utils.plot_trend import plot_trend
 
+
 class MTFAnalyzer:
     def __init__(self, bars, timeframe: Timeframe, atr: float):
         self.bars = bars
@@ -24,9 +24,6 @@ class MTFAnalyzer:
         swings = self.detect_swing_points(atr_factor=1.0, min_bars_between_swing=3)
         swings = self.clean_swings(swings, min_bars_between_swing=3)
 
-        swings = self.move_swings_in_range(swings, SwingType.LOW, min_bars_between_swing=3)
-        swings = self.move_swings_in_range(swings, SwingType.HIGH, min_bars_between_swing=3)
-        # Повторяем ещё раз при необходимости
         swings = self.move_swings_in_range(swings, SwingType.LOW, min_bars_between_swing=3)
         swings = self.move_swings_in_range(swings, SwingType.HIGH, min_bars_between_swing=3)
 
@@ -101,10 +98,11 @@ class MTFAnalyzer:
                 continue
             last = cleaned[-1]
             if swing.type == last.type:
-                if swing.type.is_high and swing.price > last.price:
-                    cleaned[-1] = swing
-                elif swing.type.is_low and swing.price < last.price:
-                    cleaned[-1] = swing
+                if abs(swing.index - last.index) >= min_bars_between_swing:
+                    if swing.type.is_high and swing.price > last.price:
+                        cleaned[-1] = swing
+                    elif swing.type.is_low and swing.price < last.price:
+                        cleaned[-1] = swing
             else:
                 cleaned.append(swing)
         return cleaned
@@ -125,19 +123,31 @@ class MTFAnalyzer:
             end_idx = type_indices[i + 1]
 
             for swing in adjusted:
-                if type_to_adjust == SwingType.LOW and swing.type.is_low:
+                if type_to_adjust.is_low and swing.type.is_low:
                     if start_idx < swing.index < end_idx:
                         bars = self.bars[start_idx:end_idx + 1]
                         min_bar = min(bars, key=lambda b: b.low)
-                        if abs(self.bars.index(min_bar) - swing.index) >= min_bars_between_swing:
-                            swing.index = self.bars.index(min_bar)
+                        new_index = self.bars.index(min_bar)
+                        # Проверяем: нет ли уже свинга в этом индексе
+                        occupied_indices = [s.index for s in adjusted if s != swing]
+                        if (
+                                abs(new_index - swing.index) >= min_bars_between_swing and
+                                new_index not in occupied_indices
+                        ):
+                            swing.index = new_index
                             swing.price = min_bar.low
-                elif type_to_adjust == SwingType.HIGH and swing.type.is_high:
+
+                elif type_to_adjust.is_high and swing.type.is_high:
                     if start_idx < swing.index < end_idx:
                         bars = self.bars[start_idx:end_idx + 1]
                         max_bar = max(bars, key=lambda b: b.high)
-                        if abs(self.bars.index(max_bar) - swing.index) >= min_bars_between_swing:
-                            swing.index = self.bars.index(max_bar)
+                        new_index = self.bars.index(max_bar)
+                        occupied_indices = [s.index for s in adjusted if s != swing]
+                        if (
+                                abs(new_index - swing.index) >= min_bars_between_swing and
+                                new_index not in occupied_indices
+                        ):
+                            swing.index = new_index
                             swing.price = max_bar.high
         return adjusted
 
