@@ -25,15 +25,16 @@ class MTFAnalyzer:
         swings = self.clean_swings(swings)
 
         # Итерационный процесс корректировки
-        changed = True
-        while changed:
+        while True:
             prev_indices = [s.index for s in swings]
 
+            # Последовательная доработка каждого свинга индивидуально, до сходимости
             swings = self.move_swings_in_range(swings, SwingType.LOW)
             swings = self.move_swings_in_range(swings, SwingType.HIGH)
 
             new_indices = [s.index for s in swings]
-            changed = new_indices != prev_indices
+            if new_indices == prev_indices:
+                break
 
         plot_trend(self.bars, swings, timeframe_name=self.timeframe.value, file_name=f"trend_{self.timeframe.value}")
 
@@ -65,7 +66,7 @@ class MTFAnalyzer:
             structure=swings,
             is_in_correction=is_in_correction,
             correction_direction=correction_direction,
-            is_range=phase.is_flat,
+            is_range=phase.is_flat or is_in_correction,
             range_high=max(highs),
             range_low=min(lows)
         )
@@ -118,42 +119,67 @@ class MTFAnalyzer:
 
     def move_swings_in_range(self, swings, type_to_adjust, min_bars_between_swing=MIN_BARS_BETWEEN_SWINGS):
         adjusted = swings.copy()
+
         if type_to_adjust == SwingType.LOW:
-            type_indices = [s.index for s in swings if s.type == SwingType.HIGH]
+            opposite_indices = [s.index for s in swings if s.type == SwingType.HIGH]
         else:
-            type_indices = [s.index for s in swings if s.type == SwingType.LOW]
+            opposite_indices = [s.index for s in swings if s.type == SwingType.LOW]
 
-        type_indices = [0] + type_indices + [len(self.bars) - 1]
+        all_indices = [0] + opposite_indices + [len(self.bars) - 1]
 
-        for i in range(len(type_indices) - 1):
-            start_idx = type_indices[i]
-            end_idx = type_indices[i + 1]
+        for i in range(len(all_indices) - 1):
+            start_idx = all_indices[i]
+            end_idx = all_indices[i + 1]
 
             for swing in adjusted:
-                if type_to_adjust == SwingType.LOW and swing.type == SwingType.LOW:
-                    if start_idx < swing.index < end_idx:
-                        bars = self.bars[start_idx:end_idx + 1]
-                        min_bar = min(bars, key=lambda b: b.low)
-                        new_index = self.bars.index(min_bar)
-                        occupied_indices = [s.index for s in adjusted if s != swing]
-                        if (
-                                abs(new_index - swing.index) >= min_bars_between_swing and
-                                new_index not in occupied_indices
-                        ):
-                            swing.index = new_index
-                            swing.price = min_bar.low
-                elif type_to_adjust == SwingType.HIGH and swing.type == SwingType.HIGH:
-                    if start_idx < swing.index < end_idx:
-                        bars = self.bars[start_idx:end_idx + 1]
-                        max_bar = max(bars, key=lambda b: b.high)
-                        new_index = self.bars.index(max_bar)
-                        occupied_indices = [s.index for s in adjusted if s != swing]
-                        if (
-                                abs(new_index - swing.index) >= min_bars_between_swing and
-                                new_index not in occupied_indices
-                        ):
-                            swing.index = new_index
-                            swing.price = max_bar.high
+                if swing.type == type_to_adjust and start_idx < swing.index < end_idx:
+                    changed = True
+                    while changed:
+                        prev_index = swing.index
+
+                        bars_segment = self.bars[start_idx:end_idx + 1]
+
+                        if type_to_adjust == SwingType.LOW:
+                            min_bar = min(bars_segment, key=lambda b: b.low)
+                            new_index = self.bars.index(min_bar)
+                            if new_index != swing.index:
+                                # Проверяем минимальную дистанцию
+                                left_neighbor = next((s for s in reversed(adjusted) if s.index < swing.index), None)
+                                right_neighbor = next((s for s in adjusted if s.index > swing.index), None)
+
+                                if (
+                                        (left_neighbor is None or abs(
+                                            new_index - left_neighbor.index) >= min_bars_between_swing)
+                                        and (right_neighbor is None or abs(
+                                    new_index - right_neighbor.index) >= min_bars_between_swing)
+                                ):
+                                    swing.index = new_index
+                                    swing.price = min_bar.low
+                                else:
+                                    # Не двигаем, если нарушается минимальная дистанция
+                                    changed = False
+                                    continue
+                        elif type_to_adjust == SwingType.HIGH:
+                            max_bar = max(bars_segment, key=lambda b: b.high)
+                            new_index = self.bars.index(max_bar)
+                            if new_index != swing.index:
+                                left_neighbor = next((s for s in reversed(adjusted) if s.index < swing.index), None)
+                                right_neighbor = next((s for s in adjusted if s.index > swing.index), None)
+
+                                if (
+                                        (left_neighbor is None or abs(
+                                            new_index - left_neighbor.index) >= min_bars_between_swing)
+                                        and (right_neighbor is None or abs(
+                                    new_index - right_neighbor.index) >= min_bars_between_swing)
+                                ):
+                                    swing.index = new_index
+                                    swing.price = max_bar.high
+                                else:
+                                    changed = False
+                                    continue
+
+                        changed = prev_index != swing.index
+
         return adjusted
 
     @staticmethod
