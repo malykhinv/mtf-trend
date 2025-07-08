@@ -16,6 +16,8 @@ class MomentumSetup(Setup):
     def trend_condition(self) -> bool:
         if self.tf_macro_state.phase.is_trend:
             return True
+        if self.tf_trend_state.phase.is_trend:
+            return True
         self.logw("Нет тренда на ключевых ТФ.")
         return False
 

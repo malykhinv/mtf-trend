@@ -37,7 +37,8 @@ class MTFAnalyzer:
                 break
 
         if has_plot:
-            plot_trend(self.bars, swings, timeframe_name=self.timeframe.value, file_name=f"trend_{self.timeframe.value}")
+            plot_trend(self.bars, swings, timeframe_name=self.timeframe.value,
+                       file_name=f"trend_{self.timeframe.value}")
 
         if self.is_strong_uptrend(swings, self.atr):
             phase = Phase.UPTREND
@@ -121,10 +122,10 @@ class MTFAnalyzer:
     def move_swings_in_range(self, swings, type_to_adjust, min_bars_between_swing=MIN_BARS_BETWEEN_SWINGS):
         adjusted = swings.copy()
 
-        if type_to_adjust == SwingType.LOW:
-            opposite_indices = [s.index for s in swings if s.type == SwingType.HIGH]
+        if type_to_adjust.is_low:
+            opposite_indices = [s.index for s in swings if s.type.is_high]
         else:
-            opposite_indices = [s.index for s in swings if s.type == SwingType.LOW]
+            opposite_indices = [s.index for s in swings if s.type.is_low]
 
         all_indices = [0] + opposite_indices + [len(self.bars) - 1]
 
@@ -140,7 +141,7 @@ class MTFAnalyzer:
 
                         bars_segment = self.bars[start_idx:end_idx + 1]
 
-                        if type_to_adjust == SwingType.LOW:
+                        if type_to_adjust.is_low:
                             min_bar = min(bars_segment, key=lambda b: b.low)
                             new_index = self.bars.index(min_bar)
                             if new_index != swing.index:
@@ -160,7 +161,7 @@ class MTFAnalyzer:
                                     # Не двигаем, если нарушается минимальная дистанция
                                     changed = False
                                     continue
-                        elif type_to_adjust == SwingType.HIGH:
+                        elif type_to_adjust.is_high:
                             max_bar = max(bars_segment, key=lambda b: b.high)
                             new_index = self.bars.index(max_bar)
                             if new_index != swing.index:

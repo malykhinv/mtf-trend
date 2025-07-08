@@ -15,6 +15,8 @@ class MomentumInitiation(MomentumSetup):
         return self.has_moderate_conditions() and \
             self.volume_condition(self.prev, STRONG_REACTION_VOLUME_MULTIPLIER * self.avg_volume) and \
             self.wick_condition(self.prev, STRONG_REACTION_WICK_RATIO) and \
+            (self._retest_condition() or
+            self._local_confirmation_condition()) and \
             self.rr_condition()
 
     def has_moderate_conditions(self) -> bool:
@@ -25,9 +27,7 @@ class MomentumInitiation(MomentumSetup):
 
     def has_weak_conditions(self) -> bool:
         return self.trend_condition() and \
-            self.pullback_condition() and \
-            self._local_confirmation_condition() and \
-            self._retest_condition()
+            self.pullback_condition()
 
     def _local_confirmation_condition(self) -> bool:
         """
