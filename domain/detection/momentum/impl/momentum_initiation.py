@@ -35,11 +35,11 @@ class MomentumInitiation(MomentumSetup):
         или ниже предыдущего low для шорта.
         """
         if self.side.is_long and not self.last.close > self.prev.high:
-            self.logw("Нет подтверждения: закрытие не выше предыдущего high.")
+            self.logw(f"Нет подтверждения: закрытие не выше предыдущего high {self.prev.high}.")
             return False
 
         elif self.side.is_short and not self.last.close < self.prev.low:
-            self.logw("Нет подтверждения: закрытие не ниже предыдущего low.")
+            self.logw(f"Нет подтверждения: закрытие не ниже предыдущего low ({self.prev.low}).")
             return False
 
         return True
@@ -47,7 +47,7 @@ class MomentumInitiation(MomentumSetup):
     def _retest_condition(self) -> bool:
         breakout_level = self.prev.high if self.side.is_long else self.prev.low
         if not abs(self.last.close - breakout_level) < RETEST_TOLERANCE_ATR * self.atr_tf_setup:
-            self.logw("Нет точного ретеста зоны пробоя.")
+            self.logw(f"Нет точного ретеста зоны пробоя ({breakout_level}).")
             return False
 
         return True

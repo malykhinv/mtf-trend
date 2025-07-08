@@ -20,7 +20,7 @@ class MTFAnalyzer:
         self.timeframe = timeframe
         self.atr = atr
 
-    def analyze(self) -> MTFState:
+    def analyze(self, has_plot: bool = False) -> MTFState:
         swings = self.detect_swing_points(atr_factor=1.0)
         swings = self.clean_swings(swings)
 
@@ -36,7 +36,8 @@ class MTFAnalyzer:
             if new_indices == prev_indices:
                 break
 
-        plot_trend(self.bars, swings, timeframe_name=self.timeframe.value, file_name=f"trend_{self.timeframe.value}")
+        if has_plot:
+            plot_trend(self.bars, swings, timeframe_name=self.timeframe.value, file_name=f"trend_{self.timeframe.value}")
 
         if self.is_strong_uptrend(swings, self.atr):
             phase = Phase.UPTREND

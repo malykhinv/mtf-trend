@@ -59,7 +59,6 @@ class Setup(ABC):
                     self.log(self.message)
                     return signal
 
-        self.logw("Факторы не подтверждены.")
         return None
 
     # region RR
