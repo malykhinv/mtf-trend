@@ -35,11 +35,11 @@ def plot_trend(bars: List[Bar], swings: List[SwingPoint], timeframe_name: str, f
     high_label_done = False
     low_label_done = False
     for sp in swings:
-        if sp.type == SwingType.HIGH:
+        if sp.type.is_high:
             label = 'Swing High' if not high_label_done else ""
             high_label_done = True
             plt.scatter(sp.index, sp.price, color='blue', marker='^', s=80, label=label)
-        elif sp.type == SwingType.LOW:
+        elif sp.type.is_low:
             label = 'Swing Low' if not low_label_done else ""
             low_label_done = True
             plt.scatter(sp.index, sp.price, color='orange', marker='v', s=80, label=label)

@@ -6,4 +6,5 @@ class Timeframe(str, Enum):
     H1 = "1h"
     M15 = "15m"
     M5 = "5m"
+    M3 = "3m"
     M1 = "1m"

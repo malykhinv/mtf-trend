@@ -1,36 +1,140 @@
+from config.constants import MIN_BARS_BETWEEN_SWINGS
 from domain.models.bar import Bar
-from domain.models.price_direction import PriceDirection
 from domain.models.swing_point import SwingPoint
 from typing import List
 
 from domain.models.swing_type import SwingType
-from utils.logger import log
 
 
 class StructureDetector:
-    def __init__(self, bars: List[Bar], atr: float, threshold_multiplier: float = 1.0):
-        self.bars = bars
-        self.atr = atr
-        self.threshold = atr * threshold_multiplier
 
-    def detect_swing_points(self) -> List[SwingPoint]:
+    def detect_swing_points(self, bars: List[Bar]) -> List[SwingPoint]:
         swings = []
-        direction = PriceDirection.UNDEFINED
-        for i in range(1, len(self.bars) - 1):
-            bar = self.bars[i]
-            is_high = bar.high > self.bars[i - 1].high and bar.high > self.bars[i + 1].high
-            is_low = bar.low < self.bars[i - 1].low and bar.low < self.bars[i + 1].low
+        last_swing = None
+        atr = self._calculate_atr(bars)
+        atr_factor = 1.0
+        atr_threshold = atr * atr_factor
 
-            if is_high:
-                if direction != PriceDirection.DOWN or abs(bar.high - self.bars[i - 1].high) > self.threshold:
+        for i in range(1, len(bars) - 1):
+            bar = bars[i]
+            prev_bar = bars[i - 1]
+            next_bar = bars[i + 1]
+
+            is_potential_high = bar.high > prev_bar.high and bar.high > next_bar.high
+            is_potential_low = bar.low < prev_bar.low and bar.low < next_bar.low
+
+            if last_swing and (i - last_swing.index) < MIN_BARS_BETWEEN_SWINGS:
+                continue
+
+            if is_potential_high:
+                if not last_swing or bar.high > last_swing.price + atr_threshold:
                     swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH, confirmed=True))
-                    # log(f"Swing HIGH добавлен: index={i}, price={bar.high}")
-                    direction = PriceDirection.DOWN
-            elif is_low:
-                if direction != PriceDirection.UP or abs(bar.low - self.bars[i - 1].low) > self.threshold:
-                    swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
-                    # log(f"Swing LOW добавлен: index={i}, price={bar.low}")
-                    direction = PriceDirection.UP
+                    last_swing = swings[-1]
 
-        # log(f"Общее количество swing точек: {len(swings)}.")
+            elif is_potential_low:
+                if not last_swing or bar.low < last_swing.price - atr_threshold:
+                    swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW, confirmed=True))
+                    last_swing = swings[-1]
+
+        swings = self._clean_swings(swings)
+
+        while True:
+            prev_indices = [s.index for s in swings]
+
+            # Последовательная доработка каждого свинга индивидуально, до сходимости
+            swings = self._move_swings_in_range(swings, bars, SwingType.LOW)
+            swings = self._move_swings_in_range(swings, bars, SwingType.HIGH)
+
+            new_indices = [s.index for s in swings]
+            if new_indices == prev_indices:
+                break
+
         return swings
+
+    @staticmethod
+    def _calculate_atr(bars):
+        return sum(abs(b.high - b.low) for b in bars) / len(bars)
+
+    @staticmethod
+    def _clean_swings(swings):
+        cleaned = []
+        for swing in swings:
+            if not cleaned:
+                cleaned.append(swing)
+                continue
+            last = cleaned[-1]
+            if swing.type == last.type:
+                if abs(swing.index - last.index) >= MIN_BARS_BETWEEN_SWINGS:
+                    if swing.type.is_high and swing.price > last.price:
+                        cleaned[-1] = swing
+                    elif swing.type.is_low and swing.price < last.price:
+                        cleaned[-1] = swing
+            else:
+                cleaned.append(swing)
+        return cleaned
+
+    @staticmethod
+    def _move_swings_in_range(bars, swings, type_to_adjust):
+        adjusted = swings.copy()
+
+        if type_to_adjust.is_low:
+            opposite_indices = [s.index for s in swings if s.type.is_high]
+        else:
+            opposite_indices = [s.index for s in swings if s.type.is_low]
+
+        all_indices = [0] + opposite_indices + [len(bars) - 1]
+
+        for i in range(len(all_indices) - 1):
+            start_idx = all_indices[i]
+            end_idx = all_indices[i + 1]
+
+            for swing in adjusted:
+                if swing.type == type_to_adjust and start_idx < swing.index < end_idx:
+                    changed = True
+                    while changed:
+                        prev_index = swing.index
+
+                        bars_segment = bars[start_idx:end_idx + 1]
+
+                        if type_to_adjust.is_low:
+                            min_bar = min(bars_segment, key=lambda b: b.low)
+                            new_index = bars.index(min_bar)
+                            if new_index != swing.index:
+                                # Проверяем минимальную дистанцию
+                                left_neighbor = next((s for s in reversed(adjusted) if s.index < swing.index), None)
+                                right_neighbor = next((s for s in adjusted if s.index > swing.index), None)
+
+                                if (
+                                        (left_neighbor is None or abs(
+                                            new_index - left_neighbor.index) >= MIN_BARS_BETWEEN_SWINGS)
+                                        and (right_neighbor is None or abs(
+                                    new_index - right_neighbor.index) >= MIN_BARS_BETWEEN_SWINGS)
+                                ):
+                                    swing.index = new_index
+                                    swing.price = min_bar.low
+                                else:
+                                    # Не двигаем, если нарушается минимальная дистанция
+                                    changed = False
+                                    continue
+                        elif type_to_adjust.is_high:
+                            max_bar = max(bars_segment, key=lambda b: b.high)
+                            new_index = bars.index(max_bar)
+                            if new_index != swing.index:
+                                left_neighbor = next((s for s in reversed(adjusted) if s.index < swing.index), None)
+                                right_neighbor = next((s for s in adjusted if s.index > swing.index), None)
+
+                                if (
+                                        (left_neighbor is None or abs(
+                                            new_index - left_neighbor.index) >= MIN_BARS_BETWEEN_SWINGS)
+                                        and (right_neighbor is None or abs(
+                                    new_index - right_neighbor.index) >= MIN_BARS_BETWEEN_SWINGS)
+                                ):
+                                    swing.index = new_index
+                                    swing.price = max_bar.high
+                                else:
+                                    changed = False
+                                    continue
+
+                        changed = prev_index != swing.index
+
+        return adjusted

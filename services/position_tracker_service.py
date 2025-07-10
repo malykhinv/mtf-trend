@@ -1,4 +1,3 @@
-from domain.models.scenario import Scenario
 from domain.models.side import Side
 from services.position_manager import PositionManager
 from data.loader import Loader
@@ -16,13 +15,13 @@ class PositionTrackerService:
     def track_all(self):
         cursor = self.conn.cursor()
         cursor.execute("""
-            SELECT symbol, tfs, side, entry, sl, tp, scenario, atr, amount_usdt 
+            SELECT symbol, tfs, side, entry, sl, tp, atr, amount_usdt 
             FROM trades WHERE active = 1
         """)
         rows = cursor.fetchall()
 
         for row in rows:
-            symbol, tfs, side, entry, sl, tp, scenario, atr, amount = row
+            symbol, tfs, side, entry, sl, tp, atr, amount = row
             manager = PositionManager(
                 symbol=symbol,
                 tfs=tfs,
@@ -30,7 +29,6 @@ class PositionTrackerService:
                 entry=entry,
                 sl=sl,
                 tp=tp,
-                scenario=scenario,
                 client=self.client,
                 atr=atr,
                 amount=amount,
@@ -48,14 +46,13 @@ class PositionTrackerService:
                   entry: float,
                   sl: float,
                   tp: float,
-                  scenario: Scenario,
                   atr: float,
                   amount: float):
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO trades (symbol, side, entry, sl, tp, scenario, atr, amount_usdt, active)
+            INSERT INTO trades (symbol, side, entry, sl, tp, atr, amount_usdt, active)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)
-        """, (symbol, side, entry, sl, tp, scenario, atr, amount))
+        """, (symbol, side, entry, sl, tp, atr, amount))
         self.conn.commit()
         log(f"[DB] Добавлена сделка {symbol} {side} @ {entry}")
 

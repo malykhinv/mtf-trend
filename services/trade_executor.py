@@ -3,9 +3,8 @@ from config.constants import POSITION_USDT, MIN_RR, FLOAT_UNDEFINED, MIN_SL_PCT,
 from ccxt import binance
 
 from domain.models.order_side import OrderSide
-from domain.models.scenario import Scenario
 from domain.models.side import Side
-from utils.float_utils import precision, is_defined, get_pct
+from utils.float_utils import precision, get_pct
 from utils.logger import log, logw
 from utils.str_utils import market_symbol
 from services.position_tracker_service import PositionTrackerService
@@ -18,7 +17,6 @@ class TradeExecutor:
 
     def execute(self,
                 symbol: str,
-                scenario: Scenario,
                 side: Side,
                 sl: float,
                 tp: float,
@@ -82,7 +80,6 @@ class TradeExecutor:
                 entry=entry,
                 sl=sl,
                 tp=tp,
-                scenario=scenario,
                 atr=atr,
                 amount=amount
             )

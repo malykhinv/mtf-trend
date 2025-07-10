@@ -2,7 +2,6 @@ from config.constants import PROGRESS_RR_FAR, PROGRESS_RR_NEAR
 from data.loader import Loader
 from domain.models.mtf_profile import MTFProfile
 from domain.models.order_side import OrderSide
-from domain.models.scenario import Scenario
 from domain.models.side import Side
 from domain.structures import StructureDetector
 from utils.logger import log
@@ -17,7 +16,6 @@ class PositionManager:
                  entry: float,
                  sl: float,
                  tp: float,
-                 scenario: Scenario,
                  client,
                  atr: float,
                  amount: float,
@@ -30,7 +28,6 @@ class PositionManager:
         self.tp = tp
         self.client = client
         self.tracker = tracker
-        self.scenario = scenario
         self.atr = atr
         self.amount = amount
         self.loader = Loader()
@@ -39,7 +36,7 @@ class PositionManager:
         self.partial_exit_done = False
 
     def manage(self):
-        bars = self.loader.fetch_ohlcv(self.symbol, self.tfs.micro, limit=50)
+        bars = self.loader.fetch_ohlcv(self.symbol, self.tfs.entry, limit=50)
         detector = StructureDetector(bars, self.atr)
         swings = detector.detect_swing_points()
 
@@ -87,7 +84,7 @@ class PositionManager:
         if (len(lh_candidates) >= 2 and
                 lh_candidates[-1].price > lh_candidates[-2].price and
                 progress_rr > PROGRESS_RR_NEAR):
-            log(f"Слом LH на {self.tfs.micro.value} — выход из {self.symbol}")
+            log(f"Слом LH на {self.tfs.entry.value} — выход из {self.symbol}")
             self._full_close()
 
     def _partial_close(self):

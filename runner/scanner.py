@@ -4,12 +4,10 @@ from config.constants import IS_TRADING_ENABLED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
-from domain.detection.phase_resolver import PhaseResolver
+from domain.models.bar import Bar
 from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
-from domain.risk_filters import is_low_liquidity, is_abnormal_spike, is_anomalous_trend, is_stablecoin, \
-    has_messy_candles
-from domain.structures import StructureDetector
+from domain.risk_filters import has_messy_candles, is_stablecoin, is_calm
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
@@ -20,6 +18,7 @@ from utils.logger import log, logw
 class Scanner:
     def __init__(self):
         self.loader = Loader()
+        self.setup_detector = SetupDetector()
         self.orders_notifier = TelegramNotifier(TELEGRAM_ORDERS_BOT_TOKEN)
         self.events_notifier = TelegramNotifier(TELEGRAM_EVENTS_BOT_TOKEN)
         self.tracker = PositionTrackerService()
@@ -44,73 +43,45 @@ class Scanner:
         print()
         log(f"{symbol} : {tfs}")
 
-        bars_by_tf = self.loader.fetch_multiple_timeframes(symbol, tfs)
+        bars_by_tf = {tfs.macro: self.loader.fetch_ohlcv(symbol, tfs.macro)}
 
-        if not self._passes_filters(symbol, bars_by_tf, tfs):
+        if not self._check_if_passes_macro_filters(symbol, bars_by_tf[tfs.macro]):
             return
 
-        atr_by_tf = self._calculate_atr(bars_by_tf)
-        mtf_states = self._resolve_phases(tfs, bars_by_tf, atr_by_tf)
-        swings = self._detect_swings(bars_by_tf[tfs.trend], atr_by_tf[tfs.trend])
+        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcv(symbol, tfs.setup)
+        bars_by_tf[tfs.entry] = self.loader.fetch_ohlcv(symbol, tfs.entry)
 
-        self._check_setups(symbol, tfs, bars_by_tf, atr_by_tf, mtf_states, swings)
+        self._check_setups(symbol, tfs, bars_by_tf)
 
     @staticmethod
-    def _passes_filters(symbol, bars_by_tf, tfs: MTFProfile):
+    def _check_if_passes_macro_filters(symbol: str, bars: List[Bar]):
         if is_stablecoin(symbol):
             logw(f"{symbol} фильтруется как стейблкоин.")
             return False
 
-        if has_messy_candles(bars_by_tf[tfs.setup]):
-            logw(f"{symbol} фильтруется из-за грязных свечей ({tfs.setup.value}).")
+        if has_messy_candles(bars):
+            logw(f"{symbol} фильтруется из-за грязных свечей.")
             return False
 
-        if is_low_liquidity(bars_by_tf[tfs.macro]):
-            logw(f"Низкая ликвидность по {symbol} ({tfs.macro.value}).")
-            return False
-
-        if is_abnormal_spike(bars_by_tf[tfs.setup]):
-            logw(f"Аномальный всплеск по {symbol} ({tfs.setup.value}).")
-            return False
-
-        atr_tf_setup = sum(abs(b.high - b.low) for b in bars_by_tf[tfs.setup]) / len(bars_by_tf[tfs.setup])
-        if is_anomalous_trend(bars_by_tf[tfs.setup], atr_tf_setup):
-            logw(f"Аномально сильный тренд по {symbol}.")
+        if not is_calm(bars):
+            logw(f"{symbol} фильтруется из-за большого диапазона.")
             return False
 
         return True
 
-    @staticmethod
-    def _calculate_atr(bars_by_tf):
-        return {tf: sum(abs(b.high - b.low) for b in bars) / len(bars) for tf, bars in bars_by_tf.items()}
-
-    @staticmethod
-    def _resolve_phases(tfs, bars_by_tf, atr_by_tf):
-        resolver = PhaseResolver(tfs, bars_by_tf, atr_by_tf)
-        return resolver.resolve()
-
-    @staticmethod
-    def _detect_swings(bars_tf_macro, atr_tf_macro):
-        detector = StructureDetector(bars_tf_macro, atr_tf_macro)
-        return detector.detect_swing_points()
-
-    def _check_setups(self, symbol, tfs, bars_by_tf, atr_by_tf, mtf_states, swings):
+    def _check_setups(self, symbol, tfs, bars_by_tf):
         for confidence in [Confidence.STRONG, Confidence.MODERATE, Confidence.WEAK]:
-            setup_detector = SetupDetector(
+            signal = self.setup_detector.detect(
                 symbol=symbol,
                 tfs=tfs,
                 bars_by_tf=bars_by_tf,
-                atr_by_tf=atr_by_tf,
-                swings=swings,
-                mtf_states=mtf_states,
                 confidence=confidence
             )
-            signal = setup_detector.detect()
             if signal:
                 self._handle_signal(signal)
                 break
         else:
-            logw(f"Сетап по {symbol} не подтверждён.")
+            logw(f"Сетап (pump) по {symbol} не подтверждён.")
 
     def _handle_signal(self, signal):
         message = format_message(signal)
@@ -120,7 +91,6 @@ class Scanner:
             if IS_TRADING_ENABLED:
                 self.trade_executor.execute(
                     symbol=signal.symbol,
-                    scenario=signal.scenario,
                     side=signal.side,
                     sl=signal.sl,
                     tp=signal.tp

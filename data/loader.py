@@ -14,30 +14,6 @@ class Loader:
     def __init__(self):
         self.binance = get_binance_client()
 
-    def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int = 100) -> List[Bar]:
-        symbol = market_symbol(symbol)
-
-        raw = self.binance.fetch_ohlcv(symbol.upper(), timeframe=timeframe.value, limit=limit)
-
-        bars = []
-        for entry in raw:
-            bar = Bar(
-                timestamp=datetime.fromtimestamp(entry[0] / 1000),
-                open=entry[1],
-                high=entry[2],
-                low=entry[3],
-                close=entry[4],
-                volume=entry[5]
-            )
-            bars.append(bar)
-        return bars
-
-    def fetch_multiple_timeframes(self,
-                                  symbol: str,
-                                  tfs: MTFProfile,
-                                  limit: int = 100) -> Dict[Timeframe, List[Bar]]:
-        return {tf: self.fetch_ohlcv(symbol, tf, limit=limit) for tf in tfs}
-
     def get_filtered_symbols(self, quote_asset: str = "USDT", min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> list:
         markets = self.binance.load_markets()
         symbols = []
@@ -57,3 +33,30 @@ class Loader:
             log(f"{symbol} добавлен в список.")
 
         return sorted(symbols)
+
+    def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int = 100) -> List[Bar]:
+        symbol = market_symbol(symbol)
+
+        raw = self.binance.fetch_ohlcv(symbol.upper(), timeframe=timeframe.value, limit=limit)
+
+        bars = []
+        for entry in raw:
+            bar = Bar(
+                timestamp=datetime.fromtimestamp(entry[0] / 1000),
+                open=entry[1],
+                high=entry[2],
+                low=entry[3],
+                close=entry[4],
+                volume=entry[5]
+            )
+            bars.append(bar)
+        return bars
+
+    def fetch_ohlcv_by_tfs(
+        self,
+        symbol: str,
+        tfs: MTFProfile,
+        limit: int = 100
+    ) -> Dict[Timeframe, List[Bar]]:
+        return {tf: self.fetch_ohlcv(symbol, tf, limit=limit) for tf in tfs}
+

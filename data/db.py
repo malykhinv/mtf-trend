@@ -14,7 +14,6 @@ def get_connection():
             entry REAL NOT NULL,
             sl REAL NOT NULL,
             tp REAL NOT NULL,
-            scenario TEXT NOT NULL,
             atr REAL NOT NULL,
             amount_usdt REAL NOT NULL,
             active INTEGER DEFAULT 1,

@@ -3,7 +3,6 @@ from datetime import datetime
 
 from config.constants import FLOAT_UNDEFINED
 from domain.models.confidence import Confidence
-from domain.models.scenario import Scenario
 from domain.models.side import Side
 
 
@@ -14,7 +13,6 @@ class SetupSignal:
     confidence: Confidence
     text: str
     timestamp: datetime
-    scenario: Scenario
     entry: float = FLOAT_UNDEFINED
     rr: float = FLOAT_UNDEFINED
     sl: float = FLOAT_UNDEFINED

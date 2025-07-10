@@ -14,7 +14,7 @@ def format_message(signal: SetupSignal) -> str:
     msg = (
         f"{emoji} *{signal.symbol}*\n\n"
         f"{signal.text}\n\n"
-        f"1:{round(signal.rr, 1)} {signal.side.value.upper()}"
+        f"1:{round(signal.rr, 1)}"
     )
 
     if signal.is_order_signal:
