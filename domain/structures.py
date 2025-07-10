@@ -42,8 +42,8 @@ class StructureDetector:
             prev_indices = [s.index for s in swings]
 
             # Последовательная доработка каждого свинга индивидуально, до сходимости
-            swings = self._move_swings_in_range(swings, bars, SwingType.LOW)
-            swings = self._move_swings_in_range(swings, bars, SwingType.HIGH)
+            swings = self._move_swings_in_range(bars, swings, SwingType.LOW)
+            swings = self._move_swings_in_range(bars, swings, SwingType.HIGH)
 
             new_indices = [s.index for s in swings]
             if new_indices == prev_indices:

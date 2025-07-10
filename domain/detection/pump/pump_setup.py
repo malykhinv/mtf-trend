@@ -74,7 +74,7 @@ class PumpSetup(Setup):
 
         period1_end_index = self._find_period1_end_index(bars, ema_series, atr_series)
 
-        if period1_end_index not in [0, len(bars) - 1]:
+        if not period1_end_index or period1_end_index not in [0, len(bars) - 1]:
             self.logw("Не удалось найти старт пампа по EMA и ATR.")
             return False
 
@@ -318,7 +318,7 @@ class PumpSetup(Setup):
             self.logw("Недостаточно swings для построения наклонки.")
             return False
 
-        self.main_high = max(swings, key=lambda s: s.price if s.type.is_high else FLOAT_UNDEFINED)
+        self.main_high = max(swings, key=lambda s: s.price if s.type.is_high else None)
 
         # Ищем первый correction high после main_high
         correction_highs = [s for s in working_swings if s.type.is_high and s.index > self.main_high.index]
