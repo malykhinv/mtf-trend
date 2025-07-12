@@ -13,6 +13,7 @@ from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
 from services.trade_executor import TradeExecutor
 from utils.logger import log, logw
+from utils.plot import Plot
 
 
 class Scanner:
@@ -78,16 +79,37 @@ class Scanner:
                 confidence=confidence
             )
             if signal:
-                self._handle_signal(signal)
+                self._handle_signal(signal, bars_by_tf[tfs.setup])
                 break
         else:
             logw(f"Сетап по {symbol} не подтверждён.")
 
-    def _handle_signal(self, signal):
+    def _handle_signal(self, signal, setup_bars: List[Bar]):
         message = format_message(signal)
 
+        # Генерация графика
+        plot = Plot(symbol=signal.symbol, bars=setup_bars)
+        plot.plot_main()
+
+        if signal.confidence.is_weak:
+            plot.mark_pump_start(signal.timestamp)
+
+        elif signal.confidence.is_moderate:
+            plot.mark_pump_start(signal.timestamp)
+            plot.mark_main_high(signal.tp)
+
+        elif signal.confidence.is_strong:
+            plot.mark_pump_start(signal.timestamp)
+            plot.mark_main_high(signal.tp)
+            plot.mark_breakout(len(setup_bars) - 1)
+
+        filename = f"{signal.symbol}_{signal.confidence.name.lower()}.png"
+        plot.save(filename)
+        image_path = f".generated/plot/charts/{filename}"
+
         if signal.is_order_signal:
-            self.orders_notifier.send_message(message)
+            self.orders_notifier.send_message(message, image_path)
+
             if IS_TRADING_ENABLED:
                 self.trade_executor.execute(
                     symbol=signal.symbol,
@@ -97,4 +119,4 @@ class Scanner:
                 )
 
         elif signal.is_event_signal:
-            self.events_notifier.send_message(message)
+            self.events_notifier.send_message(message, image_path)
