@@ -4,14 +4,18 @@ from domain.models.swing_point import SwingPoint
 from typing import List
 
 from domain.models.swing_type import SwingType
+from utils.math_utils import calculate_atr
 
 
 class StructureDetector:
 
     def detect_swing_points(self, bars: List[Bar]) -> List[SwingPoint]:
         swings = []
+        if len(bars) == 0:
+            return swings
+
         last_swing = None
-        atr = self._calculate_atr(bars)
+        atr = calculate_atr(bars)
         atr_factor = 1.0
         atr_threshold = atr * atr_factor
 
@@ -50,13 +54,6 @@ class StructureDetector:
                 break
 
         return swings
-
-    @staticmethod
-    def _calculate_atr(bars):
-        if len(bars) > 0:
-            return sum(abs(b.high - b.low) for b in bars) / len(bars)
-        else:
-            return FLOAT_UNDEFINED
 
     @staticmethod
     def _clean_swings(swings):

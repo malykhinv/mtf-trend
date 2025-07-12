@@ -2,7 +2,7 @@
 from typing import Dict, List
 
 from domain.detection.setup import Setup
-from domain.detection.trendline import TrendlineBuilder
+from domain.detection.trendline_builder import TrendlineBuilder
 from domain.models.bar import Bar
 from domain.models.confidence import Confidence
 from domain.models.ema import EMA
@@ -22,8 +22,11 @@ from config.constants import (
     MAX_BIG_BODY_SHARE
 )
 from domain.models.swing_point import SwingPoint
+from domain.models.swing_type import SwingType
 from domain.models.timeframe import Timeframe
+from domain.models.trendline import Trendline
 from domain.structures import StructureDetector
+from utils.math_utils import calculate_atr
 
 
 class PumpSetup(Setup):
@@ -36,29 +39,56 @@ class PumpSetup(Setup):
     ):
         super().__init__(symbol, bars_by_tf, confidence, tfs)
         self.structure_detector = StructureDetector()
+        self.trendline_builder = TrendlineBuilder()
         self.swings = []
         self.mid_p1 = FLOAT_UNDEFINED
         self.last = self.bars_setup[-1]
         self.consolidation_bars = []
         self.pump_bars = []
         self.correction_bars = []
-        self.main_high = None
+        self.main_high = SwingPoint.undefined()
         self.pump_timestamp = 0
 
     def has_strong_conditions(self) -> bool:
-        return self.has_moderate_conditions() and \
-            self._check_trendline_breakout(self.correction_bars, self.swings) and \
-            self._check_breakout_volume(self.bars_before_breakout, self.bars_after_breakout) and \
-            self._check_rr()
+        if not self.has_moderate_conditions():
+            return False
+
+        atr = calculate_atr(self.correction_bars)
+        trendline = self.trendline_builder.build(self.swings, atr)
+        if not self._check_trendline_validity(trendline):
+            return False
+
+        if not self._check_trendline_touches(trendline, self.correction_bars):
+            return False
+
+        if not self._check_trendline_breakout(trendline, self.correction_bars):
+            return False
+
+        if not self._check_rr():
+            return False
+
+        return True
 
     def has_moderate_conditions(self) -> bool:
+        if not self.has_weak_conditions():
+            return False
+
+        self.correction_bars = self._get_correction_bars(self.pump_bars)
         self.swings = swings = self.structure_detector.detect_swing_points(self.correction_bars)
-        return self.has_weak_conditions() and \
-            self._check_correction_structure(self.correction_bars, swings) and \
-            self._check_correction_depth()
+
+        if not self._check_correction_structure(self.correction_bars, swings):
+            return False
+
+        if not self._check_correction_depth():
+            return False
+
+        return True
 
     def has_weak_conditions(self) -> bool:
-        return self._check_pump_condition(self.bars_setup)
+        if not self._check_pump_condition(self.bars_setup):
+            return False
+
+        return True
 
     def _check_pump_condition(self, bars: List[Bar]) -> bool:
         """
@@ -81,27 +111,35 @@ class PumpSetup(Setup):
         period2_start_index = period1_end_index + 1
         self.pump_timestamp = bars[period2_start_index].timestamp
 
-        # ---------- Определяем период 1 и период 2 ----------
-        self.consolidation_bars = consolidation_bars_setup = bars[:period1_end_index]
-        self.pump_bars = pump_bars_setup = bars[period2_start_index:]
+        self.consolidation_bars = bars[:period1_end_index]
+        self.pump_bars = bars[period2_start_index:]
 
-        if not consolidation_bars_setup or not pump_bars_setup:
+        if not self.consolidation_bars or not self.pump_bars:
             self.logw("Недостаточно данных после разделения на периоды.")
             return False
 
+        high_bar = max(self.pump_bars, key=lambda b: b.high)
+        high_index_global = bars.index(high_bar)
+        self.main_high = SwingPoint(
+            type=SwingType.HIGH,
+            index=high_index_global,
+            price=high_bar.high,
+            confirmed=True
+        )
+
         # ---------- Проверка диапазона цены в консолидации ----------
-        high_p1 = max(b.high for b in consolidation_bars_setup)
-        low_p1 = min(b.low for b in consolidation_bars_setup)
+        high_p1 = max(b.high for b in self.consolidation_bars)
+        low_p1 = min(b.low for b in self.consolidation_bars)
         self.mid_p1 = (high_p1 + low_p1) / 2
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
 
         if range_p1_pct > MAX_RANGE_PCT:
-            self.logw(f"Диапазон цены в консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%")
+            self.logw(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%")
             return False
 
         # ---------- Проверка длительности периодов ----------
-        consolidation_start_time = consolidation_bars_setup[0].timestamp
-        consolidation_end_time = consolidation_bars_setup[-1].timestamp
+        consolidation_start_time = self.consolidation_bars[0].timestamp
+        consolidation_end_time = self.consolidation_bars[-1].timestamp
         delta = consolidation_end_time - consolidation_start_time
         consolidation_duration_hours = int(delta.total_seconds() / 3600)
 
@@ -130,24 +168,23 @@ class PumpSetup(Setup):
             return False
 
         # ---------- Объемы ----------
-        avg_vol_p1 = sum(b.volume for b in consolidation_bars_setup) / len(consolidation_bars_setup)
-        avg_vol_p2 = sum(b.volume for b in pump_bars_setup) / len(pump_bars_setup)
+        avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
+        avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
         if avg_vol_p2 < avg_vol_p1 * VOLUME_RATIO_MIN:
-            self.logw(f"Средний объем пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}")
+            self.logw(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}")
             return False
 
-        # ---------- Плавность роста ----------
-        atr_values = [abs(b.high - b.low) for b in pump_bars_setup]
-        avg_atr = sum(atr_values) / len(atr_values) if atr_values else 1
+        atr_values = [abs(b.high - b.low) for b in self.pump_bars]
+        avg_atr = sum(atr_values) / len(atr_values)
 
         big_body_count = 0
-        for b in pump_bars_setup:
+        for b in self.pump_bars:
             body = abs(b.close - b.open)
             if body > avg_atr * BIG_BODY_ATR_MULTIPLIER:
                 big_body_count += 1
 
-        big_body_share = big_body_count / len(pump_bars_setup) if pump_bars_setup else 1
+        big_body_share = big_body_count / len(self.pump_bars)
 
         if big_body_share > MAX_BIG_BODY_SHARE:
             self.logw(f"Рост слишком резкий: доля больших тел {big_body_share:.2f} > {MAX_BIG_BODY_SHARE}")
@@ -300,57 +337,51 @@ class PumpSetup(Setup):
         self.log("Структура коррекции подтверждена: есть LH и LL, нет закрытия ниже EMA.")
         return True
 
-    def _check_trendline_breakout(self, bars: List[Bar], swings: List[SwingPoint]) -> bool:
+    def _get_correction_bars(self, bars: List[Bar]) -> List[Bar]:
         """
-        Проверка пробоя наклонной линии.
-        - Строим наклонку без последних 3 баров.
-        - Проверяем закрытие последних двух баров выше линии.
+        Возвращает бары коррекции — все бары после главного high.
         """
-        if len(bars) < 5 or len(swings) < 2:
-            self.logw("Недостаточно данных для построения наклонки.")
+        if self.main_high.is_undefined:
+            self.logw("main_high не задан, не можем выделить correction bars.")
+            return []
+
+        correction_bars = bars[self.main_high.index + 1:]  # Все после main_high
+        if not correction_bars:
+            self.logw("После main_high нет баров для коррекции.")
+        return correction_bars
+
+    def _check_trendline_validity(self, trendline: Trendline) -> bool:
+        if not trendline or not trendline.valid:
+            self.logw("Наклонка невалидна.")
             return False
+        return True
 
-        # Оставляем бары без последних 3
-        working_bars = bars[:-3]
-        working_swings = [s for s in swings if s.index < len(working_bars)]
-
-        if len(working_swings) < 2:
-            self.logw("Недостаточно swings для построения наклонки.")
+    def _check_trendline_touches(self, trendline: Trendline, bars: List[Bar]) -> bool:
+        correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
+        touches = self.trendline_builder.count_touches(trendline, bars, correction_atr)
+        if touches < 2:
+            self.logw(f"Недостаточно касаний наклонки: {touches} < 2.")
             return False
+        self.log(f"Подтверждено касаний наклонки: {touches}.")
+        return True
 
-        self.main_high = max(swings, key=lambda s: s.price if s.type.is_high else None)
+    def _check_trendline_breakout(self, trendline: Trendline, bars: List[Bar]) -> bool:
+        correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
 
-        # Ищем первый correction high после main_high
-        correction_highs = [s for s in working_swings if s.type.is_high and s.index > self.main_high.index]
-        if not correction_highs:
-            self.logw("Нет correction high для построения наклонки.")
-            return False
-
-        correction_point = correction_highs[0]
-
-        # Строим наклонку
-        correction_atr = sum(abs(b.high - b.low) for b in working_bars) / len(working_bars)
-        trendline = TrendlineBuilder(working_bars, correction_atr)
-        trendline.build(self.main_high, correction_point)
-
-        if not trendline.is_valid:
-            self.logw("Наклонка невалидна после построения.")
-            return False
-
-        # Проверяем последние два бара
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
-            close_price = bars[idx].close
-            if not trendline.is_breakout(close_price, idx):
+            if not self.trendline_builder.has_breakout(trendline, bars, idx, correction_atr):
                 self.logw(f"Бар {idx} не закрепился выше наклонки.")
                 return False
+
+            # Заполняем вспомогательные списки
             self.bars_before_breakout = bars[:idx]
             self.bars_after_breakout = bars[idx + 1:]
 
         self.log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
         return True
 
-    def _check_breakout_volume(self, bars_before_breakout: List[Bar], bars_after_breakout: List[Bar]) -> bool:
+    def _check_trendline_breakout_volume(self, bars_before_breakout: List[Bar], bars_after_breakout: List[Bar]) -> bool:
         """
         Проверка объёма пробоя.
         - Средний объём в коррекции должен быть меньше среднего объёма на пробое.

@@ -1,8 +1,6 @@
 from domain.structures import StructureDetector
 from utils.logger import log
 from utils.str_utils import market_symbol
-from config.constants import PROGRESS_RR_FAR
-from datetime import datetime
 
 
 class PositionManager:

@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+
+from config.constants import FLOAT_UNDEFINED
 from domain.models.swing_type import SwingType
 
 
@@ -14,6 +16,10 @@ class SwingPoint:
         return cls(
             type=SwingType.UNDEFINED,
             index=-1,
-            price=0.0,
+            price=FLOAT_UNDEFINED,
             confirmed=False
         )
+
+    @property
+    def is_undefined(self) -> bool:
+        return self.type == SwingType.UNDEFINED

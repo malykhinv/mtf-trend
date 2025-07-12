@@ -2,7 +2,6 @@ import os
 import matplotlib.pyplot as plt
 
 from domain.models.swing_point import SwingPoint
-from domain.models.swing_type import SwingType
 from domain.models.bar import Bar
 from typing import List
 
