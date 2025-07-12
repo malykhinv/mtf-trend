@@ -42,10 +42,10 @@ def main():
     for tfs in mtf_profiles:
         profile_name = f"{tfs.macro.value}-{tfs.setup.value}-{tfs.entry.value}"
         print()
-        log(f"Проверка профиля {profile_name}")
+        log(f"Проверка {profile_name}")
 
         # Загружаем бары по профилю
-        bars_by_tf = loader.fetch_ohlcv_by_tfs(symbol, tfs, limit=150, to_time=target_time)
+        bars_by_tf = loader.fetch_ohlcv_by_tfs(symbol, tfs, limit=250, to_time=target_time)
         setup_bars = bars_by_tf[tfs.setup]
 
         # Строим график

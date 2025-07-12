@@ -35,3 +35,21 @@ MAX_BIG_BODY_SHARE = 0.5
 IS_TRADING_ENABLED = False
 POSITION_USDT = 10
 MIN_COOLDOWN_PER_SYMBOL_MINUTES = 360  # 6 hours
+
+# EMA periods and colors
+EMA_PERIODS = [20, 50, 100, 200]
+EMA_COLORS = {
+    20: '#2962FF',
+    50: '#FF6D00',
+    100: '#00C853',
+    200: '#D500F9'
+}
+
+# Candlestick width multiplier
+CANDLE_WIDTH_MULTIPLIER = 0.5
+
+# X-axis date locator params
+X_AXIS_MIN_TICKS = 15
+X_AXIS_MAX_TICKS = 30
+X_AXIS_MINUTELY_INTERVALS = [5, 10, 15, 30, 60]
+X_AXIS_TIME_FORMAT = '%H:%M'
