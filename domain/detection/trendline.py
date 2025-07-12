@@ -64,11 +64,13 @@ class TrendlineBuilder:
             temp_k = (candidate.price - self.point1.price) / (candidate.index - self.point1.index)
             temp_b = self.point1.price - temp_k * self.point1.index
 
-            # Проверка, что все бары между point1 и candidate не пробивают линию
             is_valid = True
             for i in range(self.point1.index + 1, candidate.index):
                 trendline_price = temp_k * i + temp_b
-                if self.bars[i].close > trendline_price:
+                close_price = self.bars[i].close
+                diff = close_price - trendline_price
+
+                if diff > self.atr:
                     is_valid = False
                     break
 
