@@ -25,6 +25,7 @@ class Setup(ABC):
         self.bars_entry = bars_by_tf[tfs.entry]
         self.confidence = confidence
         self.tfs = tfs
+        self.trendline = None
         self.entry = FLOAT_UNDEFINED
         self.sl = FLOAT_UNDEFINED
         self.tp = FLOAT_UNDEFINED
@@ -94,12 +95,13 @@ class Setup(ABC):
             symbol=self.symbol,
             side=Side.LONG,
             confidence=self.confidence,
-            rr=self.rr,
             text=self.message,
             timestamp=self.bars_entry[-1].timestamp,
+            trendline=self.trendline,
             entry=self.entry,
             sl=self.sl,
-            tp=self.tp
+            tp=self.tp,
+            rr=self.rr
         )
 
     # endregion

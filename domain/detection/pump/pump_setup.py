@@ -54,7 +54,7 @@ class PumpSetup(Setup):
             return False
 
         atr = calculate_atr(self.correction_bars)
-        trendline = self.trendline_builder.build(self.swings, atr)
+        self.trendline = trendline = self.trendline_builder.build(self.swings, atr)
         if not self._check_trendline_validity(trendline):
             return False
 
