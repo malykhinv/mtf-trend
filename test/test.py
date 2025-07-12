@@ -29,10 +29,10 @@ def main():
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
     mtf_profiles = [
-        MTF_PROFILE_1_1,
-        MTF_PROFILE_3_1,
-        MTF_PROFILE_3_3,
-        MTF_PROFILE_5_3,
+        # MTF_PROFILE_1_1,
+        # MTF_PROFILE_3_1,
+        # MTF_PROFILE_3_3,
+        # MTF_PROFILE_5_3,
         MTF_PROFILE_5_1,
     ]
 
@@ -60,7 +60,6 @@ def main():
                 log(f"✅ Setup найден! Тип: {signal.confidence.name}")
 
                 plot.mark_pump_start(signal.timestamp)
-                plot.mark_main_high(signal.tp)
 
                 if confidence in [Confidence.MODERATE, Confidence.STRONG]:
                     trendline = signal.trendline

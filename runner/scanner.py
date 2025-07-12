@@ -96,11 +96,9 @@ class Scanner:
 
         elif signal.confidence.is_moderate:
             plot.mark_pump_start(signal.timestamp)
-            plot.mark_main_high(signal.tp)
 
         elif signal.confidence.is_strong:
             plot.mark_pump_start(signal.timestamp)
-            plot.mark_main_high(signal.tp)
             plot.mark_breakout(len(setup_bars) - 1)
 
         filename = f"{signal.symbol}_{signal.confidence.name.lower()}.png"

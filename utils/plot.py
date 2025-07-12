@@ -108,13 +108,6 @@ class Plot:
         self.ax_price.text(pump_start_num, ymax, 'Start', color='yellow', fontsize=8)
         log("Отмечена точка старта пампа")
 
-    def mark_main_high(self, main_high_price: float):
-        times = [mdates.date2num(bar.timestamp) for bar in self.bars]
-        last_time = times[-1]
-        self.ax_price.axhline(main_high_price, color='green', linestyle='--', linewidth=1)
-        self.ax_price.text(last_time, main_high_price, 'Main High', color='green', fontsize=8)
-        log("Отмечен Main High")
-
     def mark_breakout(self, breakout_idx: int):
         if breakout_idx >= len(self.bars):
             log(f"Индекс пробоя {breakout_idx} выходит за пределы — отметка не будет добавлена")

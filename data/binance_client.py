@@ -9,7 +9,8 @@ def get_binance_client() -> ccxt.binance:
             'secret': BINANCE_API_SECRET,
             'enableRateLimit': True,
             'options': {
-                'adjustForTimeDifference': True
+                'adjustForTimeDifference': True,
+                'defaultType': 'future'
             }
         }
     )

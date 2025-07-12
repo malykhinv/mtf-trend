@@ -26,6 +26,7 @@ class Setup(ABC):
         self.confidence = confidence
         self.tfs = tfs
         self.trendline = None
+        self.setup_timestamp = None
         self.entry = FLOAT_UNDEFINED
         self.sl = FLOAT_UNDEFINED
         self.tp = FLOAT_UNDEFINED
@@ -96,7 +97,7 @@ class Setup(ABC):
             side=Side.LONG,
             confidence=self.confidence,
             text=self.message,
-            timestamp=self.bars_entry[-1].timestamp,
+            timestamp=self.setup_timestamp,
             trendline=self.trendline,
             entry=self.entry,
             sl=self.sl,

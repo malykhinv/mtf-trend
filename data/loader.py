@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
+from zoneinfo import ZoneInfo
 
 from config.constants import VOLUME_THRESHOLD_USDT
 from data.binance_client import get_binance_client
@@ -57,7 +58,8 @@ class Loader:
 
         bars = []
         for entry in raw:
-            ts = datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc)
+            belgrade_tz = ZoneInfo("Europe/Belgrade")
+            ts = datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(belgrade_tz)
             if to_time and ts > to_time:
                 continue  # Отсекаем бары строго после to_time (редкий случай)
             bar = Bar(
