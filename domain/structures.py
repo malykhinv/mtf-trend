@@ -1,4 +1,4 @@
-from config.constants import MIN_BARS_BETWEEN_SWINGS
+from config.constants import MIN_BARS_BETWEEN_SWINGS, FLOAT_UNDEFINED
 from domain.models.bar import Bar
 from domain.models.swing_point import SwingPoint
 from typing import List
@@ -53,7 +53,10 @@ class StructureDetector:
 
     @staticmethod
     def _calculate_atr(bars):
-        return sum(abs(b.high - b.low) for b in bars) / len(bars)
+        if len(bars) > 0:
+            return sum(abs(b.high - b.low) for b in bars) / len(bars)
+        else:
+            return FLOAT_UNDEFINED
 
     @staticmethod
     def _clean_swings(swings):

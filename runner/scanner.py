@@ -81,7 +81,7 @@ class Scanner:
                 self._handle_signal(signal)
                 break
         else:
-            logw(f"Сетап (pump) по {symbol} не подтверждён.")
+            logw(f"Сетап по {symbol} не подтверждён.")
 
     def _handle_signal(self, signal):
         message = format_message(signal)

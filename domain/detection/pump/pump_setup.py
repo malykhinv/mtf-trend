@@ -34,6 +34,7 @@ class PumpSetup(Setup):
             confidence: Confidence,
             tfs: MTFProfile
     ):
+        super().__init__(symbol, bars_by_tf, confidence, tfs)
         self.structure_detector = StructureDetector()
         self.swings = []
         self.mid_p1 = FLOAT_UNDEFINED
@@ -43,7 +44,6 @@ class PumpSetup(Setup):
         self.correction_bars = []
         self.main_high = None
         self.pump_timestamp = 0
-        super().__init__(symbol, bars_by_tf, confidence, tfs)
 
     def has_strong_conditions(self) -> bool:
         return self.has_moderate_conditions() and \
@@ -75,7 +75,7 @@ class PumpSetup(Setup):
         period1_end_index = self._find_period1_end_index(bars, ema_series, atr_series)
 
         if not period1_end_index or period1_end_index not in [0, len(bars) - 1]:
-            self.logw("Не удалось найти старт пампа по EMA и ATR.")
+            self.logw("Не удалось найти старт пампа.")
             return False
 
         period2_start_index = period1_end_index + 1
