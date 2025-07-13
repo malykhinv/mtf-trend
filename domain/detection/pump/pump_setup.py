@@ -335,11 +335,16 @@ class PumpSetup(Setup):
             atr_mean = mean([atr_series[i], atr_mean]) if is_defined(atr_mean) else atr_series[i]
             price = bars[i].close
 
-            price_ok = self._check_ema_structure(ema_p, atr_mean)
+            price_ok = self._check_ema_structure(ema_p, atr_mean) or self._check_ema_structure(ema_p)
             vol_ok = self._check_ema_structure(ema_v)
             oi_ok = True if ema_o is None else self._check_ema_structure(ema_o)
 
-            self.log(f"{i:>4} {bars[i].timestamp.strftime('%d.%m %H:%M')} {'+' if price_ok else ''} {'+' if vol_ok else ''} {'+' if oi_ok else ''}")
+            if sum([price_ok, vol_ok, oi_ok]) >= 1:
+                self.log(f"{i:>4} "
+                         f"{bars[i].timestamp.strftime('%d.%m %H:%M')} "
+                         f"{'+' if price_ok else ''} "
+                         f"{'+' if vol_ok else ''} "
+                         f"{'+' if oi_ok else ''}")
 
             price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
 

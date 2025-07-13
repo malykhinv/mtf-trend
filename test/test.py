@@ -15,16 +15,17 @@ from config.constants import (
     MTF_PROFILE_3_1,
     MTF_PROFILE_3_3,
     MTF_PROFILE_5_3,
-    MTF_PROFILE_5_1, BELGRADE_TZ
+    MTF_PROFILE_5_1,
+    BELGRADE_TZ
 )
 
 def main():
-    symbol = "STOUSDT"
+    symbol = "FISUSDT"
     year = 2025
     month = 7
-    day = 10
-    hour = 6
-    minute = 45
+    day = 7
+    hour = 12
+    minute = 25
     tz = BELGRADE_TZ
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
@@ -45,7 +46,7 @@ def main():
         log(f"Проверка {profile_name}")
 
         # Загружаем бары по профилю
-        bars_by_tf = loader.fetch_ohlcvi_by_tfs(symbol, tfs, limit=250, to_time=target_time)
+        bars_by_tf = loader.fetch_ohlcvi_by_tfs(symbol, tfs, limit=200, to_time=target_time)
         setup_bars = bars_by_tf[tfs.setup]
 
         # Строим график

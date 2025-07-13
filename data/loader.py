@@ -101,7 +101,7 @@ class Loader:
             self,
             symbol: str,
             timeframe: Timeframe,
-            limit: int = 250,
+            limit: int = 200,
             since: Optional[int] = None,
             end_time: Optional[int] = None
     ):
