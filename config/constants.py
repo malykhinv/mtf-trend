@@ -1,6 +1,10 @@
 # region Общие параметры торговли
+from zoneinfo import ZoneInfo
+
 from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
+
+BELGRADE_TZ = ZoneInfo("Europe/Belgrade")
 
 # Multi-timeframe profiles
 MTF_PROFILE_1_1 = MTFProfile(macro=Timeframe.D1, setup=Timeframe.M1, entry=Timeframe.M1)
@@ -26,7 +30,7 @@ MIN_TP_PCT = 1.0
 CONSOLIDATION_HOURS = 6
 PUMP_MIN_MINUTES = 20
 MIN_PUMP_PCT = 5
-MAX_RANGE_PCT = 5
+MAX_RANGE_PCT = 25
 VOLUME_RATIO_MIN = 5
 BIG_BODY_ATR_MULTIPLIER = 2
 MAX_BIG_BODY_SHARE = 0.5
@@ -53,3 +57,26 @@ X_AXIS_MIN_TICKS = 15
 X_AXIS_MAX_TICKS = 30
 X_AXIS_MINUTELY_INTERVALS = [5, 10, 15, 30, 60]
 X_AXIS_TIME_FORMAT = '%H:%M'
+
+# region Plotting constants
+COLOR_FACE = '#0e1117'
+COLOR_UP = '#26a69a'
+COLOR_DOWN = '#ef5350'
+COLOR_TRENDLINE = 'blue'
+COLOR_PUMP_START = 'yellow'
+COLOR_BREAKOUT = 'red'
+
+TRENDLINE_WIDTH = 1
+TRENDLINE_STYLE = '-'
+
+PUMP_START_LINE_STYLE = ':'
+PUMP_START_LINE_WIDTH = 1
+PUMP_START_TEXT_SIZE = 8
+
+BREAKOUT_MARKER_SIZE = 50
+
+EMA_ALPHA = 0.5
+EMA_LINEWIDTH = 1.5
+
+LEGEND_FONT_SIZE = 8
+# endregion

@@ -1,5 +1,5 @@
 # domain/detection/pump/pump_setup.py
-
+from statistics import mean
 from typing import List, Dict, Optional
 
 from domain.detection.setup import Setup
@@ -25,6 +25,7 @@ from config.constants import (
     MIN_PUMP_PCT,
     VOLUME_RATIO_MIN,
 )
+from utils.float_utils import is_defined
 from utils.math_utils import calculate_atr
 
 
@@ -326,18 +327,19 @@ class PumpSetup(Setup):
 
     def _find_pump_start_index(self, bars: List[Bar], ema_series_price: List[EMA], ema_series_vol: List[EMA],
                                ema_series_oi: List[Optional[EMA]], atr_series: List[float]) -> Optional[int]:
+        atr_mean = FLOAT_UNDEFINED
         for i in range(50, len(bars)):
             ema_p = ema_series_price[i]
             ema_v = ema_series_vol[i]
             ema_o = ema_series_oi[i] if ema_series_oi[i] else None
-            atr_val = atr_series[i]
+            atr_mean = mean([atr_series[i], atr_mean]) if is_defined(atr_mean) else atr_series[i]
             price = bars[i].close
 
-            price_ok = self._check_ema_structure(ema_p, atr_val)
-            vol_ok = self._check_ema_structure(ema_v, atr_val, use_atr=False)
-            oi_ok = True if ema_o is None else self._check_ema_structure(ema_o, atr_val, use_atr=False)
+            price_ok = self._check_ema_structure(ema_p, atr_mean)
+            vol_ok = self._check_ema_structure(ema_v)
+            oi_ok = True if ema_o is None else self._check_ema_structure(ema_o)
 
-            self.log(f"{bars[i].timestamp.strftime('%d.%m %H:%M')} {'+' if price_ok else ' '} {'+' if vol_ok else ' '} {'+' if oi_ok else ' '}")
+            self.log(f"{i:>4} {bars[i].timestamp.strftime('%d.%m %H:%M')} {'+' if price_ok else ''} {'+' if vol_ok else ''} {'+' if oi_ok else ''}")
 
             price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
 
@@ -349,15 +351,14 @@ class PumpSetup(Setup):
         return None
 
     @staticmethod
-    def _check_ema_structure(ema_obj: EMA, atr_value: float, use_atr: bool = True) -> bool:
+    def _check_ema_structure(ema_obj: EMA, atr_value: float = FLOAT_UNDEFINED) -> bool:
         order_ok = ema_obj.ema20 > ema_obj.ema50 > ema_obj.ema100 > ema_obj.ema200
 
-        if use_atr:
-            spacing_ok = (
-                (ema_obj.ema20 - ema_obj.ema50) > atr_value and
-                (ema_obj.ema50 - ema_obj.ema100) > atr_value and
-                (ema_obj.ema100 - ema_obj.ema200) > atr_value
-            )
+        if is_defined(atr_value):
+            spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50)
+            spacing_50_100 = (ema_obj.ema50 - ema_obj.ema100)
+            spacing_100_200 = (ema_obj.ema100 - ema_obj.ema200)
+            spacing_ok = spacing_20_50 > atr_value and spacing_50_100 > atr_value and spacing_100_200 > atr_value
         else:
             spacing_pct = 0.0025
             spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50) / ema_obj.ema50

@@ -18,77 +18,113 @@ from config.constants import (
     X_AXIS_MIN_TICKS,
     X_AXIS_MAX_TICKS,
     X_AXIS_MINUTELY_INTERVALS,
-    X_AXIS_TIME_FORMAT
+    X_AXIS_TIME_FORMAT,
+    FLOAT_UNDEFINED,
+    COLOR_UP,
+    COLOR_DOWN,
+    COLOR_TRENDLINE,
+    COLOR_PUMP_START,
+    COLOR_BREAKOUT,
+    TRENDLINE_WIDTH,
+    TRENDLINE_STYLE,
+    PUMP_START_LINE_STYLE,
+    PUMP_START_LINE_WIDTH,
+    PUMP_START_TEXT_SIZE,
+    BREAKOUT_MARKER_SIZE,
+    EMA_ALPHA,
+    EMA_LINEWIDTH,
+    LEGEND_FONT_SIZE, COLOR_FACE, BELGRADE_TZ,
 )
+
 
 class Plot:
     def __init__(self, symbol: str, bars: List[Bar]):
         self.symbol = symbol
         self.bars = bars
-        self.fig, (self.ax_price, self.ax_vol) = plt.subplots(
-            2, 1,
-            figsize=(14, 9),
-            gridspec_kw={"height_ratios": [3, 1]},
+        self.fig, (self.ax_price, self.ax_vol, self.ax_oi) = plt.subplots(
+            3, 1,
+            figsize=(14, 12),
+            gridspec_kw={"height_ratios": [3, 1, 1]},
             sharex=True,
-            facecolor='#0e1117'
+            facecolor=COLOR_FACE
         )
-        self.fig.patch.set_facecolor('#0e1117')
+        self.fig.patch.set_facecolor(COLOR_FACE)
 
-        self.ax_price.set_facecolor('#0e1117')
-        self.ax_vol.set_facecolor('#0e1117')
-        self.ax_price.tick_params(colors='gray', which='both', length=0)
-        self.ax_vol.tick_params(colors='gray', which='both', length=0)
-        self.ax_price.grid(False)
-        self.ax_vol.grid(False)
+        for ax in [self.ax_price, self.ax_vol, self.ax_oi]:
+            ax.set_facecolor(COLOR_FACE)
+            ax.tick_params(colors='gray', which='both', length=0)
+            ax.grid(False)
+
         self.ax_price.set_title(symbol, color='white', fontsize=14)
 
     def plot_main(self):
-        ohlc = []
-        closes = []
-        volumes = []
+        ohlc, closes, volumes, oi_values = [], [], [], []
 
         for bar in self.bars:
-            time_num = mdates.date2num(bar.timestamp)
+            ts_belgrade = bar.timestamp.astimezone(BELGRADE_TZ)
+            time_num = mdates.date2num(ts_belgrade)
             ohlc.append([time_num, bar.open, bar.high, bar.low, bar.close])
             closes.append(bar.close)
             volumes.append((time_num, bar.volume, bar.close >= bar.open))
+            oi_values.append(bar.oi)
 
         # Динамический width для свечей
-        time_nums = [mdates.date2num(bar.timestamp) for bar in self.bars]
+        time_nums = [mdates.date2num(bar.timestamp.astimezone(BELGRADE_TZ)) for bar in self.bars]
         if len(time_nums) >= 2:
             avg_diff = float(np.mean(np.diff(time_nums)))
             width = avg_diff * CANDLE_WIDTH_MULTIPLIER
         else:
             width = 0.0007
 
-        candlestick_ohlc(self.ax_price, ohlc, width=width, colorup='#26a69a', colordown='#ef5350')
+        candlestick_ohlc(self.ax_price, ohlc, width=width, colorup=COLOR_UP, colordown=COLOR_DOWN)
+
+        # Volume normalization
+        vol_values = np.array([v[1] for v in volumes])
+        vol_min, vol_max = vol_values.min(), vol_values.max()
 
         for t, vol, is_up in volumes:
-            color = '#26a69a' if is_up else '#ef5350'
+            color = COLOR_UP if is_up else COLOR_DOWN
             self.ax_vol.bar(t, vol, color=color, width=width)
 
-        # EMA
+        self.ax_vol.set_ylim(vol_min, vol_max * 1.05)
+
         closes_array = np.array(closes)
         for period in EMA_PERIODS:
             if len(closes_array) >= period:
                 ema = self.ema(closes_array, period)
-                times = [mdates.date2num(bar.timestamp) for bar in self.bars]
-                self.ax_price.plot(times, ema, linewidth=1.5, color=EMA_COLORS[period], alpha=0.5, label=f'EMA {period}')
+                self.ax_price.plot(time_nums, ema, linewidth=EMA_LINEWIDTH, color=EMA_COLORS[period], alpha=EMA_ALPHA,
+                                   label=f'EMA {period}')
 
-        self.ax_price.legend(loc='upper left', fontsize=8, facecolor='#0e1117', labelcolor='white')
+        self.ax_price.legend(loc='upper left', fontsize=LEGEND_FONT_SIZE, facecolor=COLOR_FACE, labelcolor='white')
 
-        # Ось X
+        # OI plot normalization
+        has_oi_data = any(oi != FLOAT_UNDEFINED for oi in oi_values)
+        if has_oi_data:
+            oi_array = np.array([oi if oi != FLOAT_UNDEFINED else np.nan for oi in oi_values])
+            oi_min, oi_max = np.nanmin(oi_array), np.nanmax(oi_array)
+
+            for t, oi, is_up in zip(time_nums, oi_values, [b.close >= b.open for b in self.bars]):
+                if oi != FLOAT_UNDEFINED:
+                    color = COLOR_UP if is_up else COLOR_DOWN
+                    self.ax_oi.bar(t, oi, color=color, width=width)
+
+            for period in EMA_PERIODS:
+                if np.count_nonzero(~np.isnan(oi_array)) >= period:
+                    ema = self.ema(oi_array, period)
+                    self.ax_oi.plot(time_nums, ema, linewidth=EMA_LINEWIDTH, color=EMA_COLORS[period], alpha=EMA_ALPHA,
+                                    label=f'EMA {period}')
+
+            self.ax_oi.set_ylim(oi_min, oi_max * 1.05)
+            self.ax_oi.legend(loc='upper left', fontsize=LEGEND_FONT_SIZE, facecolor=COLOR_FACE, labelcolor='white')
+
         locator = AutoDateLocator(minticks=X_AXIS_MIN_TICKS, maxticks=X_AXIS_MAX_TICKS)
         locator.intervald[mdates.MINUTELY] = X_AXIS_MINUTELY_INTERVALS
-        formatter = DateFormatter(X_AXIS_TIME_FORMAT)
+        formatter = DateFormatter(X_AXIS_TIME_FORMAT, tz=BELGRADE_TZ)
 
-        self.ax_vol.xaxis.set_major_locator(locator)
-        self.ax_price.xaxis.set_major_locator(locator)
-        self.ax_vol.xaxis.set_major_formatter(formatter)
-        self.ax_price.xaxis.set_major_formatter(formatter)
-
-        self.ax_price.tick_params(axis='x', colors='gray', labelsize=8)
-        self.ax_vol.tick_params(axis='x', colors='gray', labelsize=8)
+        for ax in [self.ax_price, self.ax_vol, self.ax_oi]:
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(formatter)
+            ax.tick_params(axis='x', colors='gray', labelsize=8)
 
         self.fig.tight_layout()
 
@@ -98,14 +134,18 @@ class Plot:
         k = 2 / (period + 1)
         ema[0] = data[0]
         for i in range(1, len(data)):
-            ema[i] = data[i] * k + ema[i - 1] * (1 - k)
+            if np.isnan(data[i]):
+                ema[i] = ema[i - 1]
+            else:
+                ema[i] = data[i] * k + ema[i - 1] * (1 - k)
         return ema
 
     def mark_pump_start(self, pump_start_time: datetime):
         pump_start_num = mdates.date2num(pump_start_time)
-        self.ax_price.axvline(pump_start_num, color='yellow', linestyle=':', linewidth=1)
+        self.ax_price.axvline(pump_start_num, color=COLOR_PUMP_START, linestyle=PUMP_START_LINE_STYLE,
+                              linewidth=PUMP_START_LINE_WIDTH)
         ymax = max(bar.high for bar in self.bars)
-        self.ax_price.text(pump_start_num, ymax, 'Start', color='yellow', fontsize=8)
+        self.ax_price.text(pump_start_num, ymax, 'Start', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
         log("Отмечена точка старта пампа")
 
     def mark_breakout(self, breakout_idx: int):
@@ -115,7 +155,7 @@ class Plot:
 
         time_num = mdates.date2num(self.bars[breakout_idx].timestamp)
         price = self.bars[breakout_idx].close
-        self.ax_price.scatter(time_num, price, color='red', s=50, zorder=5, label='Breakout')
+        self.ax_price.scatter(time_num, price, color=COLOR_BREAKOUT, s=BREAKOUT_MARKER_SIZE, zorder=5, label='Breakout')
         log("Отмечен пробой наклонки")
 
     def draw_trendline(self, trendline: Trendline, start_idx: int, end_idx: int):
@@ -126,7 +166,7 @@ class Plot:
         x_indices = list(range(start_idx, end_idx + 1))
         y_values = [trendline.get_value_at(i) for i in x_indices]
         times = [mdates.date2num(self.bars[i].timestamp) for i in x_indices]
-        self.ax_price.plot(times, y_values, color='blue', linestyle='-', linewidth=1)
+        self.ax_price.plot(times, y_values, color=COLOR_TRENDLINE, linestyle=TRENDLINE_STYLE, linewidth=TRENDLINE_WIDTH)
         log("Нарисована наклонка")
 
     def save(self, filename: str):

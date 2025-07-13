@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 from zoneinfo import ZoneInfo
 
-from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED
+from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED, BELGRADE_TZ
 from data.binance_client import get_binance_client
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
@@ -44,8 +44,10 @@ class Loader:
             has_oi: bool = False
     ) -> List[Bar]:
         since = None
+        end_time = None
         if to_time:
             since = int((to_time - timedelta(minutes=limit * self._timeframe_minutes(timeframe))).timestamp() * 1000)
+            end_time = int(to_time.timestamp() * 1000)
 
         raw = self.binance.fetch_ohlcv(
             symbol,
@@ -60,6 +62,7 @@ class Loader:
                 symbol=symbol,
                 timeframe=timeframe,
                 since=since,
+                end_time=end_time,
                 limit=limit
             )
             oi_values = [float(entry["sumOpenInterest"]) for entry in raw_oi]
@@ -68,8 +71,7 @@ class Loader:
 
         bars = []
         for i, entry in enumerate(raw):
-            belgrade_tz = ZoneInfo("Europe/Belgrade")
-            ts = datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(belgrade_tz)
+            ts = datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(BELGRADE_TZ)
             if to_time and ts > to_time:
                 continue
             oi_value = oi_values[i] if i < len(oi_values) else FLOAT_UNDEFINED
@@ -100,7 +102,8 @@ class Loader:
             symbol: str,
             timeframe: Timeframe,
             limit: int = 250,
-            since: Optional[int] = None
+            since: Optional[int] = None,
+            end_time: Optional[int] = None
     ):
         params = {
             'symbol': symbol,
@@ -108,7 +111,9 @@ class Loader:
             'limit': limit
         }
         if since:
-            params['since'] = since
+            params['startTime'] = since
+        if end_time:
+            params['endTime'] = end_time
 
         return self.binance.fapidata_get_openinteresthist(params)
 

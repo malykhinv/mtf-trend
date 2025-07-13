@@ -15,7 +15,7 @@ from config.constants import (
     MTF_PROFILE_3_1,
     MTF_PROFILE_3_3,
     MTF_PROFILE_5_3,
-    MTF_PROFILE_5_1
+    MTF_PROFILE_5_1, BELGRADE_TZ
 )
 
 def main():
@@ -25,7 +25,7 @@ def main():
     day = 10
     hour = 6
     minute = 45
-    tz = ZoneInfo("Europe/Belgrade")
+    tz = BELGRADE_TZ
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
     mtf_profiles = [
