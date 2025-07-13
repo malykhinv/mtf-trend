@@ -1,5 +1,6 @@
 # domain/detection/pump/pump_setup.py
-from typing import Dict, List
+
+from typing import List, Dict, Optional
 
 from domain.detection.setup import Setup
 from domain.detection.trendline_builder import TrendlineBuilder
@@ -7,9 +8,14 @@ from domain.models.bar import Bar
 from domain.models.confidence import Confidence
 from domain.models.ema import EMA
 from domain.models.mtf_profile import MTFProfile
+from domain.models.swing_point import SwingPoint
+from domain.models.swing_type import SwingType
+from domain.models.timeframe import Timeframe
+from domain.models.trendline import Trendline
+from domain.structures import StructureDetector
 from config.constants import (
-    MIN_RR,
     FLOAT_UNDEFINED,
+    MIN_RR,
     MIN_SL_PCT,
     MIN_TP_PCT,
     MAX_CORRECTION_PCT,
@@ -19,22 +25,11 @@ from config.constants import (
     MIN_PUMP_PCT,
     VOLUME_RATIO_MIN,
 )
-from domain.models.swing_point import SwingPoint
-from domain.models.swing_type import SwingType
-from domain.models.timeframe import Timeframe
-from domain.models.trendline import Trendline
-from domain.structures import StructureDetector
 from utils.math_utils import calculate_atr
 
 
 class PumpSetup(Setup):
-    def __init__(
-            self,
-            symbol: str,
-            bars_by_tf: Dict[Timeframe, List[Bar]],
-            confidence: Confidence,
-            tfs: MTFProfile
-    ):
+    def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], confidence: Confidence, tfs: MTFProfile):
         super().__init__(symbol, bars_by_tf, confidence, tfs)
         self.structure_detector = StructureDetector()
         self.trendline_builder = TrendlineBuilder()
@@ -52,6 +47,7 @@ class PumpSetup(Setup):
 
         atr = calculate_atr(self.correction_bars)
         self.trendline = trendline = self.trendline_builder.build(self.swings, atr)
+
         if not self._check_trendline_validity(trendline):
             return False
 
@@ -70,10 +66,19 @@ class PumpSetup(Setup):
         if not self.has_weak_conditions():
             return False
 
+        # Найти главный хай после пампа
+        main_high_bar = max(self.pump_bars, key=lambda b: b.high)
+        self.main_high = SwingPoint(
+            price=main_high_bar.high,
+            index=len(self.consolidation_bars) + self.pump_bars.index(main_high_bar),
+            type=SwingType.HIGH,
+            confirmed=True
+        )
+
         self.correction_bars = self._get_correction_bars(self.pump_bars)
         self.swings = swings = self.structure_detector.detect_swing_points(self.correction_bars)
 
-        if not self._check_correction_structure(self.correction_bars, swings):
+        if not self._check_correction_structure(swings):
             return False
 
         if not self._check_correction_depth():
@@ -82,26 +87,42 @@ class PumpSetup(Setup):
         return True
 
     def has_weak_conditions(self) -> bool:
-        if not self._check_pump_condition(self.bars_setup):
+        if not self._check_consolidation():
+            return False
+
+        if not self._check_pump_duration():
+            return False
+
+        if not self._check_pump_growth():
+            return False
+
+        if not self._check_volume():
             return False
 
         return True
 
-    def _check_pump_condition(self, bars: List[Bar]) -> bool:
-        """
-        Поиск period1 и period2 по EMA и ATR, затем проверка условий пампа.
-        """
-        if len(bars) < 100:
-            self.logw("Недостаточно истории баров.")
-            return False
+    def _check_consolidation(self) -> bool:
+        bars = self.bars_setup
 
-        # EMA series
-        ema_series = self._calculate_ema_series(bars)
+        closes = [b.close for b in bars]
+        volumes = [b.volume for b in bars]
+        oi_values = [b.oi for b in bars]
+
+        ema_series_price = self._calculate_ema_series_from_values(closes)
+        ema_series_vol = self._calculate_ema_series_from_values(volumes)
+        has_oi_data = any(oi != FLOAT_UNDEFINED for oi in oi_values)
+        ema_series_oi = self._calculate_ema_series_from_values(oi_values) if has_oi_data else [None] * len(bars)
         atr_series = self._calculate_atr_series(bars)
 
-        period1_end_index = self._find_period1_end_index_volume_filtered(bars, ema_series, atr_series)
+        period1_end_index = self._find_pump_start_index(
+            bars,
+            ema_series_price,
+            ema_series_vol,
+            ema_series_oi,
+            atr_series
+        )
 
-        if not period1_end_index or period1_end_index not in range(0, len(bars) - 1):
+        if period1_end_index is None or period1_end_index not in range(0, len(bars) - 1):
             self.logw("Не удалось найти старт пампа.")
             return False
 
@@ -115,44 +136,43 @@ class PumpSetup(Setup):
             self.logw("Недостаточно данных после разделения на периоды.")
             return False
 
-        high_bar = max(self.pump_bars, key=lambda b: b.high)
-        high_index_global = bars.index(high_bar)
-        self.main_high = SwingPoint(
-            type=SwingType.HIGH,
-            index=high_index_global,
-            price=high_bar.high,
-            confirmed=True
-        )
-
-        # ---------- Проверка диапазона цены в консолидации ----------
         high_p1 = max(b.high for b in self.consolidation_bars)
         low_p1 = min(b.low for b in self.consolidation_bars)
-        self.mid_p1 = (high_p1 + low_p1) / 2
-        range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
 
+        if low_p1 <= 0:
+            self.logw("Неверный low в консолидации (<= 0).")
+            return False
+
+        self.high_p1 = high_p1
+        self.mid_p1 = (high_p1 + low_p1) / 2
+
+        range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
         if range_p1_pct > MAX_RANGE_PCT:
             self.logw(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%")
             return False
 
-        # ---------- Проверка длительности периодов ----------
-        consolidation_start_time = self.consolidation_bars[0].timestamp
-        consolidation_end_time = self.consolidation_bars[-1].timestamp
-        delta = consolidation_end_time - consolidation_start_time
-        consolidation_duration_hours = int(delta.total_seconds() / 3600)
-
+        consolidation_duration_hours = int(
+            (self.consolidation_bars[-1].timestamp - self.consolidation_bars[0].timestamp).total_seconds() / 3600)
         if consolidation_duration_hours < CONSOLIDATION_HOURS:
             self.logw(f"Консолидация короче {CONSOLIDATION_HOURS}h: {consolidation_duration_hours:.0f}h")
             return False
 
-        delta = bars[-1].timestamp - bars[period2_start_index].timestamp
-        pump_duration_min = int(delta.total_seconds()) / 60
+        return True
 
+    def _check_pump_duration(self) -> bool:
+        bars = self.bars_setup
+        pump_start_index = len(self.consolidation_bars)
+        pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
         if pump_duration_min < PUMP_MIN_MINUTES:
             self.logw(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m")
             return False
+        return True
 
-        # ---------- Проверка роста цены после старта пампа ----------
-        pump_start_close = bars[period2_start_index].close
+    def _check_pump_growth(self) -> bool:
+        bars = self.bars_setup
+        pump_start_index = len(self.consolidation_bars)
+
+        pump_start_close = bars[pump_start_index].close
         pump_end_close = bars[-1].close
         pump_change_pct = (pump_end_close - pump_start_close) / pump_start_close * 100
 
@@ -160,11 +180,14 @@ class PumpSetup(Setup):
             self.logw(f"Рост цены недостаточный: {pump_change_pct:.1f}% < {MIN_PUMP_PCT}%")
             return False
 
-        if pump_end_close <= high_p1:
+        if pump_end_close <= self.high_p1:
             self.logw("Цена после старта не закрепилась выше high периода 1.")
             return False
 
-        # ---------- Объемы ----------
+        self.log(f"Памп подтверждён: рост {pump_change_pct:.0f}%")
+        return True
+
+    def _check_volume(self) -> bool:
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
@@ -172,116 +195,8 @@ class PumpSetup(Setup):
             self.logw(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}")
             return False
 
-        self.log(f"Памп подтверждён: рост {pump_change_pct:.0f}%, объём в {avg_vol_p2 / avg_vol_p1:.0f}x")
+        self.log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
         return True
-
-    def _find_period1_end_index_volume_filtered(self, bars, ema_series, atr_series, factor=1.5):
-        last_cross_idx = None
-
-        for i in range(50, len(bars)):
-            ema = ema_series[i]
-            atr_threshold = atr_series[i]
-
-            if ema.ema20 > ema.ema50 > ema.ema100 > ema.ema200 and \
-                    (ema.ema20 - ema.ema50) > atr_threshold and \
-                    (ema.ema50 - ema.ema100) > atr_threshold and \
-                    (ema.ema100 - ema.ema200) > atr_threshold:
-
-                avg_vol_p1 = sum(b.volume for b in bars[:i]) / max(len(bars[:i]), 1)
-                avg_vol_p2 = sum(b.volume for b in bars[i+1:]) / max(len(bars[i+1:]), 1)
-
-                if avg_vol_p2 >= avg_vol_p1 * VOLUME_RATIO_MIN:
-                    # Найти предыдущий cross point перед i
-                    for j in range(i - 1, 0, -1):
-                        ema_j = ema_series[j]
-                        price = bars[j].close
-                        if ema_j.ema20 < ema_j.ema50 or ema_j.ema50 < ema_j.ema100 or ema_j.ema100 < ema_j.ema200 or \
-                                price < ema_j.ema20 or price < ema_j.ema50 or price < ema_j.ema100 or price < ema_j.ema200:
-                            ts = bars[j].timestamp
-                            self.log(f"🔥 Найден предыдущий cross point: {ts.strftime('%d.%m %H:%M')}")
-                            return j
-
-                    # Если не нашли, вернуть начало
-                    return 0
-
-            if ema.ema20 < ema.ema50 or ema.ema50 < ema.ema100 or ema.ema100 < ema.ema200:
-                last_cross_idx = i
-
-            price = bars[i].close
-            if price < ema.ema20 or price < ema.ema50 or price < ema.ema100 or price < ema.ema200:
-                last_cross_idx = i
-
-        ts = bars[last_cross_idx].timestamp
-        self.log(f"🔥 {ts.strftime('%d.%m %H:%M')}")
-
-        return last_cross_idx
-
-    @staticmethod
-    def _calculate_ema_series(bars: List[Bar]):
-        """
-        bars: List[Bar]
-        periods: list of ints
-        Возвращает список EMA объектов, каждый соответствует бару.
-        """
-        periods = [20, 50, 100, 200]
-        closes = [b.close for b in bars]
-        ema_values = {p: [] for p in periods}
-        k_values = {p: 2 / (p + 1) for p in periods}
-
-        # Инициализируем EMA начальным SMA
-        for p in periods:
-            if len(closes) >= p:
-                sma = sum(closes[:p]) / p
-                ema_values[p].append(sma)
-            else:
-                ema_values[p].append(closes[0])
-
-        # Рассчитываем EMA для каждого бара
-        for i in range(1, len(closes)):
-            for p in periods:
-                prev_ema = ema_values[p][-1]
-                k = k_values[p]
-                ema = closes[i] * k + prev_ema * (1 - k)
-                ema_values[p].append(ema)
-
-        # Формируем список EMA объектов
-        ema_list = []
-        for i in range(len(bars)):
-            ema_obj = EMA(
-                ema20=ema_values[20][i],
-                ema50=ema_values[50][i],
-                ema100=ema_values[100][i],
-                ema200=ema_values[200][i],
-            )
-            ema_list.append(ema_obj)
-
-        return ema_list
-
-    @staticmethod
-    def _calculate_atr_series(bars, period=14):
-        """
-        bars: List[Bar]
-        period: int
-        Возвращает список ATR, каждый элемент соответствует бару.
-        """
-        trs = []
-        for i in range(1, len(bars)):
-            high = bars[i].high
-            low = bars[i].low
-            prev_close = bars[i - 1].close
-            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-            trs.append(tr)
-
-        atr_list = []
-        for i in range(len(trs)):
-            if i < period:
-                atr_list.append(sum(trs[:i + 1]) / (i + 1))
-            else:
-                prev_atr = atr_list[-1]
-                atr = (prev_atr * (period - 1) + trs[i]) / period
-                atr_list.append(atr)
-        atr_list.insert(0, 0.0)
-        return atr_list
 
     def _check_correction_depth(self) -> bool:
         rise = self.main_high.price - self.mid_p1
@@ -300,7 +215,7 @@ class PumpSetup(Setup):
         self.log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
         return True
 
-    def _check_correction_structure(self, bars: List[Bar], swings: List[SwingPoint]) -> bool:
+    def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
         """
         Проверка структуры коррекции.
         - Есть нисходящий тренд с LH и LL.
@@ -328,16 +243,7 @@ class PumpSetup(Setup):
             self.logw(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}")
             return False
 
-        ema_series = self._calculate_ema_series(bars)
-
-        # Проверка закрытия баров
-        for s in swings:
-            bar = bars[s.index]
-            if bar.close < ema_series[s.index].ema100:
-                self.logw(f"Закрытие ниже EMA на баре {s.index}.")
-                return False
-
-        self.log("Структура коррекции подтверждена: есть LH и LL, нет закрытия ниже EMA.")
+        self.log("Структура коррекции подтверждена: есть LH и LL.")
         return True
 
     def _get_correction_bars(self, bars: List[Bar]) -> List[Bar]:
@@ -348,7 +254,7 @@ class PumpSetup(Setup):
             self.logw("main_high не задан, не можем выделить correction bars.")
             return []
 
-        correction_bars = bars[self.main_high.index + 1:]  # Все после main_high
+        correction_bars = bars[self.main_high.index - len(self.consolidation_bars) + 1:]
         if not correction_bars:
             self.logw("После main_high нет баров для коррекции.")
         return correction_bars
@@ -384,57 +290,132 @@ class PumpSetup(Setup):
         self.log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
         return True
 
-    def _check_trendline_breakout_volume(self, bars_before_breakout: List[Bar], bars_after_breakout: List[Bar]) -> bool:
-        """
-        Проверка объёма пробоя.
-        - Средний объём в коррекции должен быть меньше среднего объёма на пробое.
-        """
-        avg_vol_before = sum(b.volume for b in bars_before_breakout) / len(bars_before_breakout)
-        avg_vol_after = sum(b.volume for b in bars_after_breakout) / len(bars_after_breakout)
-
-        if avg_vol_after <= avg_vol_before:
-            self.logw(f"Объём пробоя недостаточный: {avg_vol_after:.2f} ≤ {avg_vol_before:.2f}")
-            return False
-
-        self.log(f"Объём пробоя подтверждён: breakout {avg_vol_after:.2f} > correction {avg_vol_before:.2f}")
-        return True
-
-    def define_rr(self):
+    def _check_rr(self) -> bool:
         entry = self.last.close
         sl_candidates = [s.price for s in reversed(self.swings) if s.type.is_low and s.price < entry]
 
         if not sl_candidates:
             self.logw("Нет swing low для SL.")
-            return FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
+            return False
 
         sl = sl_candidates[0]
         tp = self.main_high.price
         if tp is None or tp <= entry:
             self.logw("Нет подходящего TP.")
-            return FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
+            return False
 
         sl_distance_pct = abs(entry - sl) / entry * 100
         tp_distance_pct = abs(tp - entry) / entry * 100
 
         if sl_distance_pct < MIN_SL_PCT:
-            self.logw(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT:.2f}%")
-            return FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
+            self.logw(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%")
+            return False
 
         if tp_distance_pct < MIN_TP_PCT:
-            self.logw(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT:.2f}%")
-            return FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
+            self.logw(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%")
+            return False
 
         rr = abs(tp - entry) / abs(entry - sl)
         if rr < MIN_RR:
             self.logw(f"RR {rr:.2f} меньше минимального {MIN_RR}.")
-            return FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED, FLOAT_UNDEFINED
+            return False
 
         self.log(
-            f"Entry: {entry:.5f}, "
-            f"SL: {sl:.5f}, "
-            f"TP: {tp:.5f}, "
-            f"SL%: {sl_distance_pct:.2f}, "
-            f"TP%: {tp_distance_pct:.2f}, "
-            f"RR: {rr:.2f}"
-        )
-        return entry, sl, tp, rr
+            f"RR подтверждён: Entry={entry:.5f}, SL={sl:.5f}, TP={tp:.5f}, SL%={sl_distance_pct:.2f}, TP%={tp_distance_pct:.2f}, RR={rr:.2f}")
+        return True
+
+    def _find_pump_start_index(self, bars: List[Bar], ema_series_price: List[EMA], ema_series_vol: List[EMA],
+                               ema_series_oi: List[Optional[EMA]], atr_series: List[float]) -> Optional[int]:
+        for i in range(50, len(bars)):
+            ema_p = ema_series_price[i]
+            ema_v = ema_series_vol[i]
+            ema_o = ema_series_oi[i] if ema_series_oi[i] else None
+            atr_val = atr_series[i]
+            price = bars[i].close
+
+            price_ok = self._check_ema_structure(ema_p, atr_val)
+            vol_ok = self._check_ema_structure(ema_v, atr_val, use_atr=False)
+            oi_ok = True if ema_o is None else self._check_ema_structure(ema_o, atr_val, use_atr=False)
+
+            self.log(f"{bars[i].timestamp.strftime('%d.%m %H:%M')} {'+' if price_ok else ' '} {'+' if vol_ok else ' '} {'+' if oi_ok else ' '}")
+
+            price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
+
+            if price_ok and vol_ok and oi_ok and price_above:
+                self.log(f"✨ {bars[i].timestamp.strftime('%d.%m %H:%M')}")
+                return i
+
+        self.logw("Старт пампа не найден.")
+        return None
+
+    @staticmethod
+    def _check_ema_structure(ema_obj: EMA, atr_value: float, use_atr: bool = True) -> bool:
+        order_ok = ema_obj.ema20 > ema_obj.ema50 > ema_obj.ema100 > ema_obj.ema200
+
+        if use_atr:
+            spacing_ok = (
+                (ema_obj.ema20 - ema_obj.ema50) > atr_value and
+                (ema_obj.ema50 - ema_obj.ema100) > atr_value and
+                (ema_obj.ema100 - ema_obj.ema200) > atr_value
+            )
+        else:
+            spacing_pct = 0.0025
+            spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50) / ema_obj.ema50
+            spacing_50_100 = (ema_obj.ema50 - ema_obj.ema100) / ema_obj.ema100
+            spacing_100_200 = (ema_obj.ema100 - ema_obj.ema200) / ema_obj.ema200
+            spacing_ok = spacing_20_50 > spacing_pct and spacing_50_100 > spacing_pct and spacing_100_200 > spacing_pct
+
+        return order_ok and spacing_ok
+
+    @staticmethod
+    def _calculate_ema_series_from_values(values: List[float]) -> List[EMA]:
+        periods = [20, 50, 100, 200]
+        ema_values = {p: [] for p in periods}
+        k_values = {p: 2 / (p + 1) for p in periods}
+
+        for p in periods:
+            if len(values) >= p:
+                sma = sum(values[:p]) / p
+                ema_values[p].append(sma)
+            else:
+                ema_values[p].append(values[0])
+
+        for i in range(1, len(values)):
+            for p in periods:
+                prev_ema = ema_values[p][-1]
+                k = k_values[p]
+                ema = values[i] * k + prev_ema * (1 - k)
+                ema_values[p].append(ema)
+
+        ema_list = []
+        for i in range(len(values)):
+            ema_obj = EMA(
+                ema20=ema_values[20][i],
+                ema50=ema_values[50][i],
+                ema100=ema_values[100][i],
+                ema200=ema_values[200][i],
+            )
+            ema_list.append(ema_obj)
+
+        return ema_list
+
+    @staticmethod
+    def _calculate_atr_series(bars: List[Bar], period: int = 14) -> List[float]:
+        trs = []
+        for i in range(1, len(bars)):
+            high = bars[i].high
+            low = bars[i].low
+            prev_close = bars[i - 1].close
+            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+            trs.append(tr)
+
+        atr_list = []
+        for i in range(len(trs)):
+            if i < period:
+                atr_list.append(sum(trs[:i + 1]) / (i + 1))
+            else:
+                prev_atr = atr_list[-1]
+                atr = (prev_atr * (period - 1) + trs[i]) / period
+                atr_list.append(atr)
+        atr_list.insert(0, 0.0)
+        return atr_list

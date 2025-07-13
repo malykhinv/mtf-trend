@@ -45,7 +45,7 @@ def main():
         log(f"Проверка {profile_name}")
 
         # Загружаем бары по профилю
-        bars_by_tf = loader.fetch_ohlcv_by_tfs(symbol, tfs, limit=250, to_time=target_time)
+        bars_by_tf = loader.fetch_ohlcvi_by_tfs(symbol, tfs, limit=250, to_time=target_time)
         setup_bars = bars_by_tf[tfs.setup]
 
         # Строим график

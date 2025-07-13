@@ -44,13 +44,13 @@ class Scanner:
         print()
         log(f"{symbol} : {tfs}")
 
-        bars_by_tf = {tfs.macro: self.loader.fetch_ohlcv(symbol, tfs.macro)}
+        bars_by_tf = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro)}
 
         if not self._check_if_passes_macro_filters(symbol, bars_by_tf[tfs.macro]):
             return
 
-        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcv(symbol, tfs.setup)
-        bars_by_tf[tfs.entry] = self.loader.fetch_ohlcv(symbol, tfs.entry)
+        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup)
+        bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry)
 
         self._check_setups(symbol, tfs, bars_by_tf)
 

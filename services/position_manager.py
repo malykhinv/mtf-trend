@@ -29,7 +29,7 @@ class PositionManager:
         self.tracker = tracker
 
     def manage(self):
-        bars = self.tracker.loader.fetch_ohlcv(self.symbol, '5m', limit=50)  # structure_tf
+        bars = self.tracker.loader.fetch_ohlcvi(self.symbol, '5m', limit=50)  # structure_tf
         detector = StructureDetector()
         swings = detector.detect_swing_points(bars)
 

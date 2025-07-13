@@ -1,4 +1,4 @@
-from config.constants import MIN_BARS_BETWEEN_SWINGS, FLOAT_UNDEFINED
+from config.constants import MIN_BARS_BETWEEN_SWINGS
 from domain.models.bar import Bar
 from domain.models.swing_point import SwingPoint
 from typing import List
