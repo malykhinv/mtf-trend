@@ -3,9 +3,10 @@ import matplotlib.dates as mdates
 import numpy as np
 from mplfinance.original_flavor import candlestick_ohlc
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from domain.models.bar import Bar
+from domain.models.timeframe import Timeframe
 from domain.models.trendline import Trendline
 from utils.logger import log
 
@@ -38,9 +39,11 @@ from config.constants import (
 
 
 class Plot:
-    def __init__(self, symbol: str, bars: List[Bar]):
+    def __init__(self, symbol: str, bars: List[Bar], tf: Timeframe, message: Optional[str] = None):
         self.symbol = symbol
         self.bars = bars
+        self.tf = tf
+        self.message = message
         self.fig, (self.ax_price, self.ax_vol, self.ax_oi) = plt.subplots(
             3, 1,
             figsize=(14, 12),
@@ -158,12 +161,12 @@ class Plot:
         self.ax_price.scatter(time_num, price, color=COLOR_BREAKOUT, s=BREAKOUT_MARKER_SIZE, zorder=5, label='Breakout')
         log("Отмечен пробой наклонки")
 
-    def draw_trendline(self, trendline: Trendline, start_idx: int, end_idx: int):
+    def draw_trendline(self, trendline: Trendline):
         if not trendline or not trendline.valid:
             log("Невалидная наклонка, не будет нарисована")
             return
 
-        x_indices = list(range(start_idx, end_idx + 1))
+        x_indices = list(range(trendline.point1_index, trendline.point2_index + 1))
         y_values = [trendline.get_value_at(i) for i in x_indices]
         times = [mdates.date2num(self.bars[i].timestamp) for i in x_indices]
         self.ax_price.plot(times, y_values, color=COLOR_TRENDLINE, linestyle=TRENDLINE_STYLE, linewidth=TRENDLINE_WIDTH)

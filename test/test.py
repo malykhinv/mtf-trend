@@ -50,7 +50,7 @@ def main():
         setup_bars = bars_by_tf[tfs.setup]
 
         # Строим график
-        plot = Plot(symbol=symbol, bars=setup_bars)
+        plot = Plot(symbol=symbol, bars=setup_bars, tf=tfs.setup)
         plot.plot_main()
 
         setup_found = False
@@ -65,7 +65,7 @@ def main():
                 if confidence in [Confidence.MODERATE, Confidence.STRONG]:
                     trendline = signal.trendline
                     if trendline:
-                        plot.draw_trendline(trendline, trendline.point1_index, trendline.point2_index)
+                        plot.draw_trendline(trendline)
 
                 if confidence == Confidence.STRONG:
                     plot.mark_breakout(len(setup_bars) - 1)

@@ -7,6 +7,8 @@ from domain.detection.setup_detector import SetupDetector
 from domain.models.bar import Bar
 from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
+from domain.models.setup_signal import SetupSignal
+from domain.models.timeframe import Timeframe
 from domain.risk_filters import has_messy_candles, is_stablecoin, is_calm
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
@@ -79,24 +81,22 @@ class Scanner:
                 confidence=confidence
             )
             if signal:
-                self._handle_signal(signal, bars_by_tf[tfs.setup])
+                tf = tfs.setup
+                self._handle_signal(signal, bars_by_tf[tf], tf)
                 break
 
-    def _handle_signal(self, signal, setup_bars: List[Bar]):
+    def _handle_signal(self, signal: SetupSignal, setup_bars: List[Bar], tf: Timeframe):
         message = format_message(signal)
 
         # Генерация графика
-        plot = Plot(symbol=signal.symbol, bars=setup_bars)
+        plot = Plot(symbol=signal.symbol, bars=setup_bars, tf=tf)
         plot.plot_main()
+        plot.mark_pump_start(signal.timestamp)
 
-        if signal.confidence.is_weak:
-            plot.mark_pump_start(signal.timestamp)
+        if signal.trendline:
+            plot.draw_trendline(signal.trendline)
 
-        elif signal.confidence.is_moderate:
-            plot.mark_pump_start(signal.timestamp)
-
-        elif signal.confidence.is_strong:
-            plot.mark_pump_start(signal.timestamp)
+        if signal.confidence.is_strong:
             plot.mark_breakout(len(setup_bars) - 1)
 
         filename = f"{signal.symbol}_{signal.confidence.name.lower()}.png"

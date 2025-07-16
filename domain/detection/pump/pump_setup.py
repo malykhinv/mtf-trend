@@ -1,4 +1,5 @@
 # domain/detection/pump/pump_setup.py
+from datetime import datetime
 from statistics import mean
 from typing import List, Dict, Optional
 
@@ -27,6 +28,7 @@ from config.constants import (
 )
 from utils.float_utils import is_defined
 from utils.math_utils import calculate_atr
+from utils.plot import Plot
 
 
 class PumpSetup(Setup):
@@ -134,14 +136,14 @@ class PumpSetup(Setup):
         self.pump_bars = bars[period2_start_index:]
 
         if not self.consolidation_bars or not self.pump_bars:
-            self.logw("Недостаточно данных после разделения на периоды.")
+            self._capture_pump("Недостаточно данных после разделения на периоды.")
             return False
 
         high_p1 = max(b.high for b in self.consolidation_bars)
         low_p1 = min(b.low for b in self.consolidation_bars)
 
         if low_p1 <= 0:
-            self.logw("Неверный low в консолидации (<= 0).")
+            self._capture_pump("Неверный low в консолидации (<= 0).")
             return False
 
         self.high_p1 = high_p1
@@ -149,13 +151,13 @@ class PumpSetup(Setup):
 
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
         if range_p1_pct > MAX_RANGE_PCT:
-            self.logw(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%")
+            self._capture_pump(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%")
             return False
 
         consolidation_duration_hours = int(
             (self.consolidation_bars[-1].timestamp - self.consolidation_bars[0].timestamp).total_seconds() / 3600)
         if consolidation_duration_hours < CONSOLIDATION_HOURS:
-            self.logw(f"Консолидация короче {CONSOLIDATION_HOURS}h: {consolidation_duration_hours:.0f}h")
+            self._capture_pump(f"Консолидация короче {CONSOLIDATION_HOURS}h: {consolidation_duration_hours:.0f}h")
             return False
 
         return True
@@ -165,7 +167,7 @@ class PumpSetup(Setup):
         pump_start_index = len(self.consolidation_bars)
         pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
         if pump_duration_min < PUMP_MIN_MINUTES:
-            self.logw(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m")
+            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m")
             return False
         return True
 
@@ -178,11 +180,11 @@ class PumpSetup(Setup):
         pump_change_pct = (pump_end_close - pump_start_close) / pump_start_close * 100
 
         if pump_change_pct < MIN_PUMP_PCT:
-            self.logw(f"Рост цены недостаточный: {pump_change_pct:.1f}% < {MIN_PUMP_PCT}%")
+            self._capture_pump(f"Рост цены недостаточный: {pump_change_pct:.1f}% < {MIN_PUMP_PCT}%")
             return False
 
         if pump_end_close <= self.high_p1:
-            self.logw("Цена после старта не закрепилась выше high периода 1.")
+            self._capture_pump("Цена после старта не закрепилась выше high периода 1.")
             return False
 
         self.log(f"Памп подтверждён: рост {pump_change_pct:.0f}%")
@@ -193,7 +195,7 @@ class PumpSetup(Setup):
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
         if avg_vol_p2 < avg_vol_p1 * VOLUME_RATIO_MIN:
-            self.logw(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}")
+            self._capture_pump(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}")
             return False
 
         self.log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
@@ -203,14 +205,14 @@ class PumpSetup(Setup):
         rise = self.main_high.price - self.mid_p1
 
         if rise <= 0:
-            self.logw("Некорректный рост перед коррекцией (<= 0).")
+            self._capture_pump("Некорректный рост перед коррекцией (<= 0).")
             return False
 
         correction_low = min(bar.low for bar in self.correction_bars)
         correction_depth = abs(self.main_high.price - correction_low) / rise * 100
 
         if correction_depth > MAX_CORRECTION_PCT:
-            self.logw(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%")
+            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%")
             return False
 
         self.log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
@@ -223,7 +225,7 @@ class PumpSetup(Setup):
         - Нет закрытия ниже EMA.
         """
         if not swings or len(swings) < 5:
-            self.logw("Недостаточно swing-поинтов для анализа коррекции.")
+            self._capture_pump("Недостаточно swing-поинтов для анализа коррекции.")
             return False
 
         # Проверяем LH
@@ -241,7 +243,7 @@ class PumpSetup(Setup):
                 ll_count += 1
 
         if lh_count < 2 or ll_count < 2:
-            self.logw(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}")
+            self._capture_pump(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}")
             return False
 
         self.log("Структура коррекции подтверждена: есть LH и LL.")
@@ -252,17 +254,17 @@ class PumpSetup(Setup):
         Возвращает бары коррекции — все бары после главного high.
         """
         if self.main_high.is_undefined:
-            self.logw("main_high не задан, не можем выделить correction bars.")
+            self._capture_pump("main_high не задан, не можем выделить correction bars.")
             return []
 
         correction_bars = bars[self.main_high.index - len(self.consolidation_bars) + 1:]
         if not correction_bars:
-            self.logw("После main_high нет баров для коррекции.")
+            self._capture_pump("После main_high нет баров для коррекции.")
         return correction_bars
 
     def _check_trendline_validity(self, trendline: Trendline) -> bool:
         if not trendline or not trendline.valid:
-            self.logw("Наклонка невалидна.")
+            self._capture_pump("Наклонка невалидна.")
             return False
         return True
 
@@ -270,7 +272,7 @@ class PumpSetup(Setup):
         correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
         touches = self.trendline_builder.count_touches(trendline, bars, correction_atr)
         if touches < 2:
-            self.logw(f"Недостаточно касаний наклонки: {touches} < 2.")
+            self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.")
             return False
         self.log(f"Подтверждено касаний наклонки: {touches}.")
         return True
@@ -281,7 +283,7 @@ class PumpSetup(Setup):
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
             if not self.trendline_builder.has_breakout(trendline, bars, idx, correction_atr):
-                self.logw(f"Бар {idx} не закрепился выше наклонки.")
+                self._capture_pump(f"Бар {idx} не закрепился выше наклонки.")
                 return False
 
             # Заполняем вспомогательные списки
@@ -296,33 +298,38 @@ class PumpSetup(Setup):
         sl_candidates = [s.price for s in reversed(self.swings) if s.type.is_low and s.price < entry]
 
         if not sl_candidates:
-            self.logw("Нет swing low для SL.")
+            self._capture_pump("Нет swing low для SL.")
             return False
 
         sl = sl_candidates[0]
         tp = self.main_high.price
         if tp is None or tp <= entry:
-            self.logw("Нет подходящего TP.")
+            self._capture_pump("Нет подходящего TP.")
             return False
 
         sl_distance_pct = abs(entry - sl) / entry * 100
         tp_distance_pct = abs(tp - entry) / entry * 100
 
         if sl_distance_pct < MIN_SL_PCT:
-            self.logw(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%")
+            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%")
             return False
 
         if tp_distance_pct < MIN_TP_PCT:
-            self.logw(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%")
+            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%")
             return False
 
         rr = abs(tp - entry) / abs(entry - sl)
         if rr < MIN_RR:
-            self.logw(f"RR {rr:.2f} меньше минимального {MIN_RR}.")
+            self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RR}.")
             return False
 
-        self.log(
-            f"RR подтверждён: Entry={entry:.5f}, SL={sl:.5f}, TP={tp:.5f}, SL%={sl_distance_pct:.2f}, TP%={tp_distance_pct:.2f}, RR={rr:.2f}")
+        self.log(f"RR подтверждён: "
+                 f"Entry={entry:.5f}, "
+                 f"SL={sl:.5f}, "
+                 f"TP={tp:.5f}, "
+                 f"SL%={sl_distance_pct:.2f}, "
+                 f"TP%={tp_distance_pct:.2f}, "
+                 f"RR={rr:.2f}")
         return True
 
     def _find_pump_start_index(self, bars: List[Bar], ema_series_price: List[EMA], ema_series_vol: List[EMA],
@@ -424,3 +431,18 @@ class PumpSetup(Setup):
                 atr_list.append(atr)
         atr_list.insert(0, 0.0)
         return atr_list
+
+    def _capture_pump(self, message: Optional[str]):
+        self.logw(message)
+        self._plot(message)
+
+    def _plot(self, message: Optional[str]):
+        plot = Plot(symbol=self.symbol, bars=self.bars_setup, tf=self.tfs.setup, message=message)
+        plot.plot_main()
+        plot.mark_pump_start(self.pump_bars[0].timestamp)
+
+        if self.trendline:
+            plot.draw_trendline(self.trendline)
+
+        filename = f"{self.symbol}_{self.tfs.setup.value}.png"
+        plot.save(filename)
