@@ -81,8 +81,6 @@ class Scanner:
             if signal:
                 self._handle_signal(signal, bars_by_tf[tfs.setup])
                 break
-        else:
-            logw(f"Сетап по {symbol} не подтверждён.")
 
     def _handle_signal(self, signal, setup_bars: List[Bar]):
         message = format_message(signal)

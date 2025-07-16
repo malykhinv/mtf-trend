@@ -339,7 +339,7 @@ class PumpSetup(Setup):
             vol_ok = self._check_ema_structure(ema_v)
             oi_ok = True if ema_o is None else self._check_ema_structure(ema_o)
 
-            if sum([price_ok, vol_ok, oi_ok]) >= 1:
+            if sum([price_ok, vol_ok, oi_ok]) >= 3:
                 self.log(f"{i:>4} "
                          f"{bars[i].timestamp.strftime('%d.%m %H:%M')} "
                          f"{'+' if price_ok else ''} "
@@ -352,7 +352,6 @@ class PumpSetup(Setup):
                 self.log(f"✨ {bars[i].timestamp.strftime('%d.%m %H:%M')}")
                 return i
 
-        self.logw("Старт пампа не найден.")
         return None
 
     @staticmethod
@@ -366,9 +365,9 @@ class PumpSetup(Setup):
             spacing_ok = spacing_20_50 > atr_value and spacing_50_100 > atr_value and spacing_100_200 > atr_value
         else:
             spacing_pct = 0.0025
-            spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50) / ema_obj.ema50
-            spacing_50_100 = (ema_obj.ema50 - ema_obj.ema100) / ema_obj.ema100
-            spacing_100_200 = (ema_obj.ema100 - ema_obj.ema200) / ema_obj.ema200
+            spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50) / ema_obj.ema50 if is_defined(ema_obj.ema50) else 0
+            spacing_50_100 = (ema_obj.ema50 - ema_obj.ema100) / ema_obj.ema100 if is_defined(ema_obj.ema100) else 0
+            spacing_100_200 = (ema_obj.ema100 - ema_obj.ema200) / ema_obj.ema200 if is_defined(ema_obj.ema200) else 0
             spacing_ok = spacing_20_50 > spacing_pct and spacing_50_100 > spacing_pct and spacing_100_200 > spacing_pct
 
         return order_ok and spacing_ok
