@@ -437,7 +437,11 @@ class PumpSetup(Setup):
         self._plot(message)
 
     def _plot(self, message: Optional[str]):
-        plot = Plot(symbol=self.symbol, bars=self.bars_setup, tf=self.tfs.setup, message=message)
+        plot = Plot(symbol=self.symbol,
+                    bars=self.bars_setup,
+                    tf=self.tfs.setup,
+                    message=message,
+                    save_dir = ".generated/plot/charts_skipped")
         plot.plot_main()
         plot.mark_pump_start(self.pump_bars[0].timestamp)
 

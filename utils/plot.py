@@ -5,6 +5,8 @@ from mplfinance.original_flavor import candlestick_ohlc
 from datetime import datetime
 from typing import List, Optional
 
+from pyexpat.errors import messages
+
 from domain.models.bar import Bar
 from domain.models.timeframe import Timeframe
 from domain.models.trendline import Trendline
@@ -39,11 +41,15 @@ from config.constants import (
 
 
 class Plot:
-    def __init__(self, symbol: str, bars: List[Bar], tf: Timeframe, message: Optional[str] = None):
+    def __init__(self,
+                 symbol: str,
+                 bars: List[Bar],
+                 tf: Timeframe,
+                 message: Optional[str] = None,
+                 save_dir=".generated/plot/charts"):
         self.symbol = symbol
         self.bars = bars
-        self.tf = tf
-        self.message = message
+        self.save_dir = save_dir
         self.fig, (self.ax_price, self.ax_vol, self.ax_oi) = plt.subplots(
             3, 1,
             figsize=(14, 12),
@@ -58,7 +64,13 @@ class Plot:
             ax.tick_params(colors='gray', which='both', length=0)
             ax.grid(False)
 
-        self.ax_price.set_title(symbol, color='white', fontsize=14)
+        self.ax_price.set_title(f"{symbol} ({tf.value})", color='white', fontsize=14)
+
+        if message:
+            self.ax_price.text(
+                0.01, 0.95, message, transform=self.ax_price.transAxes,
+                fontsize=10, color='orange', ha='left', va='top'
+            )
 
     def plot_main(self):
         ohlc, closes, volumes, oi_values = [], [], [], []
@@ -149,7 +161,6 @@ class Plot:
                               linewidth=PUMP_START_LINE_WIDTH)
         ymax = max(bar.high for bar in self.bars)
         self.ax_price.text(pump_start_num, ymax, 'Start', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
-        log("Отмечена точка старта пампа")
 
     def mark_breakout(self, breakout_idx: int):
         if breakout_idx >= len(self.bars):
@@ -173,9 +184,8 @@ class Plot:
         log("Нарисована наклонка")
 
     def save(self, filename: str):
-        save_dir = ".generated/plot/charts"
         import os
-        os.makedirs(save_dir, exist_ok=True)
-        full_path = os.path.join(save_dir, filename)
+        os.makedirs(self.save_dir, exist_ok=True)
+        full_path = os.path.join(self.save_dir, filename)
         plt.savefig(full_path, facecolor=self.fig.get_facecolor(), bbox_inches='tight')
         plt.close(self.fig)
