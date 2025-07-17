@@ -1,6 +1,4 @@
 # domain/detection/pump/pump_setup.py
-import asyncio
-import traceback
 from statistics import mean
 from typing import List, Dict, Optional
 
@@ -448,11 +446,7 @@ class PumpSetup(Setup):
 
     def _capture_pump(self, message: Optional[str]):
         self.logw(message)
-        try:
-            loop = asyncio.get_running_loop()
-            loop.create_task(asyncio.to_thread(self._plot, message))
-        except Exception as error:
-            self.log(f"Не удалось создать задачу для построения графика: {error}\n{traceback.format_exc()}")
+        self._plot(message)
 
     def _plot(self, message: Optional[str]):
         plot = Plot(symbol=self.symbol,

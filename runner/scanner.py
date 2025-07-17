@@ -1,4 +1,3 @@
-import asyncio
 from typing import List
 
 from config.constants import IS_TRADING_ENABLED
@@ -28,42 +27,34 @@ class Scanner:
         self.tracker = PositionTrackerService()
         self.trade_executor = TradeExecutor(self.loader.binance, self.tracker)
 
-    async def run(self, tfss: List[MTFProfile]):
+    def run(self, tfss: List[MTFProfile]):
         log("Запущен цикл сканирования.")
         symbols = self.loader.get_filtered_symbols()
         log(f"Отобрано {len(symbols)} символов для анализа.")
 
-        tasks = []
-
         for symbol in symbols:
             for tfs in tfss:
                 try:
-                    task = self._process_symbol(symbol, tfs)
-                    if asyncio.iscoroutine(task):
-                        tasks.append(task)
+                    self._process_symbol(symbol, tfs)
                 except Exception as error:
                     logw(f"Ошибка при обработке {symbol}: {error}")
                     raise
 
-        # Дождаться всех фонов задач
-        if tasks:
-            await asyncio.gather(*tasks)
-
         log("Цикл сканирования завершён.")
 
-    async def _process_symbol(self, symbol: str, tfs: MTFProfile):
+    def _process_symbol(self, symbol: str, tfs: MTFProfile):
         print()
         log(f"{symbol} : {tfs}")
 
         bars_by_tf = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro)}
 
         if not self._check_if_passes_macro_filters(symbol, bars_by_tf[tfs.macro]):
-            return None
+            return
 
         bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
         bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry)
 
-        return await self._check_setups(symbol, tfs, bars_by_tf)
+        self._check_setups(symbol, tfs, bars_by_tf)
 
     @staticmethod
     def _check_if_passes_macro_filters(symbol: str, bars: List[Bar]):
@@ -77,7 +68,7 @@ class Scanner:
 
         return True
 
-    async def _check_setups(self, symbol, tfs, bars_by_tf):
+    def _check_setups(self, symbol, tfs, bars_by_tf):
         for confidence in [Confidence.STRONG, Confidence.MODERATE, Confidence.WEAK]:
             signal = self.setup_detector.detect(
                 symbol=symbol,
@@ -87,23 +78,27 @@ class Scanner:
             )
             if signal:
                 tf = tfs.setup
-                return await self._handle_signal(signal, bars_by_tf[tf], tf)
-        return None
+                self._handle_signal(signal, bars_by_tf[tf], tf)
+                break
 
-    async def _handle_signal(self, signal: SetupSignal, setup_bars: List[Bar], tf: Timeframe):
+    def _handle_signal(self, signal: SetupSignal, setup_bars: List[Bar], tf: Timeframe):
         message = format_message(signal)
+
+        # Генерация графика
+        plot = Plot(symbol=signal.symbol, bars=setup_bars, tf=tf)
+        plot.plot_main()
+        plot.mark_pump_start(signal.timestamp)
+
+        if signal.trendline:
+            plot.draw_trendline(signal.trendline)
+
+        if signal.confidence.is_strong:
+            plot.mark_breakout(len(setup_bars) - 1)
+
         filename = f"{signal.symbol}_{signal.confidence.name.lower()}.png"
+        plot.save(filename)
         image_path = f".generated/plot/charts/{filename}"
 
-        plot = Plot(symbol=signal.symbol, bars=setup_bars, tf=tf)
-        await plot.generate_and_save(
-            filename=filename,
-            pump_start_time=signal.timestamp,
-            trendline=signal.trendline,
-        )
-        await asyncio.to_thread(self._send_signal, signal, message, image_path)
-
-    def _send_signal(self, signal: SetupSignal, message: str, image_path: str):
         if signal.is_order_signal:
             self.orders_notifier.send_message(message, image_path)
 

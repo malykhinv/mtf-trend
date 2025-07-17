@@ -67,6 +67,9 @@ def main():
                     if trendline:
                         plot.draw_trendline(trendline)
 
+                if confidence == Confidence.STRONG:
+                    plot.mark_breakout(len(setup_bars) - 1)
+
                 setup_found = True
                 break
 
