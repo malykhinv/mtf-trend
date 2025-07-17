@@ -66,17 +66,7 @@ class PumpSetup(Setup):
     def has_moderate_conditions(self) -> bool:
         if not self.has_weak_conditions():
             return False
-
-        # Найти главный хай после пампа
-        main_high_bar = max(self.pump_bars, key=lambda b: b.high)
-        self.main_high = SwingPoint(
-            price=main_high_bar.high,
-            index=len(self.consolidation_bars) + self.pump_bars.index(main_high_bar),
-            type=SwingType.HIGH,
-            confirmed=True
-        )
-
-        self.correction_bars = self._get_correction_bars(self.pump_bars)
+        self.correction_bars = self._get_correction_bars()
         self.swings = swings = self.structure_detector.detect_swing_points(self.correction_bars)
 
         if not self._check_correction_structure(swings):
@@ -91,13 +81,23 @@ class PumpSetup(Setup):
         if not self._check_consolidation():
             return False
 
-        if not self._check_pump_duration():
-            return False
+        # Найти главный хай после пампа
+        main_high_index, main_high_bar = max(enumerate(self.bars_setup), key=lambda item: item[1].high)
+
+        self.main_high = SwingPoint(
+            price=main_high_bar.high,
+            index=main_high_index,
+            type=SwingType.HIGH,
+            confirmed=True
+        )
 
         if not self._check_pump_growth():
             return False
 
         if not self._check_volume():
+            return False
+
+        if not self._check_pump_duration():
             return False
 
         return True
@@ -127,10 +127,10 @@ class PumpSetup(Setup):
             return False
 
         period2_start_index = period1_end_index + 1
-        self.setup_timestamp = bars[period2_start_index].timestamp
 
         self.consolidation_bars = bars[:period1_end_index]
         self.pump_bars = bars[period2_start_index:]
+        self.setup_timestamp = self.pump_bars[0].timestamp
 
         if not self.consolidation_bars or not self.pump_bars:
             self._capture_pump("Недостаточно данных после разделения на периоды.")
@@ -184,14 +184,11 @@ class PumpSetup(Setup):
             self._capture_pump("EMA100 и EMA200 невалидны.")
             return False
 
-        pump_growth_pct = (self.main_high.price - ema_base) / ema_base * 100
+        self.pump_growth = pump_growth = self.main_high.price - ema_base
+        pump_growth_pct = pump_growth / ema_base * 100
 
         if pump_growth_pct < MIN_PUMP_PCT:
             self._capture_pump(f"Рост цены от EMA недостаточный: {pump_growth_pct:.1f}% < {MIN_PUMP_PCT}%")
-            return False
-
-        if self.last.close <= self.high_p1:
-            self._capture_pump("Цена не закрепилась выше high периода 1.")
             return False
 
         self.log(f"Памп подтверждён: рост {pump_growth_pct:.1f}% от EMA")
@@ -209,14 +206,8 @@ class PumpSetup(Setup):
         return True
 
     def _check_correction_depth(self) -> bool:
-        rise = self.main_high.price - self.mid_p1
-
-        if rise <= 0:
-            self._capture_pump("Некорректный рост перед коррекцией (<= 0).")
-            return False
-
         correction_low = min(bar.low for bar in self.correction_bars)
-        correction_depth = abs(self.main_high.price - correction_low) / rise * 100
+        correction_depth = abs(self.main_high.price - correction_low) / self.pump_growth * 100
 
         if correction_depth > MAX_CORRECTION_PCT:
             self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%")
@@ -256,7 +247,7 @@ class PumpSetup(Setup):
         self.log("Структура коррекции подтверждена: есть LH и LL.")
         return True
 
-    def _get_correction_bars(self, bars: List[Bar]) -> List[Bar]:
+    def _get_correction_bars(self) -> List[Bar]:
         """
         Возвращает бары коррекции — все бары после главного high.
         """
@@ -264,7 +255,7 @@ class PumpSetup(Setup):
             self._capture_pump("main_high не задан, не можем выделить correction bars.")
             return []
 
-        correction_bars = bars[self.main_high.index - len(self.consolidation_bars) + 1:]
+        correction_bars = self.bars_setup[self.main_high.index + 1:]
         if not correction_bars:
             self._capture_pump("После main_high нет баров для коррекции.")
         return correction_bars
@@ -346,6 +337,7 @@ class PumpSetup(Setup):
                                ema_series_oi: List[Optional[EMA]],
                                atr_series: List[float]) -> Optional[int]:
         atr_mean = FLOAT_UNDEFINED
+        index_candidate = FLOAT_UNDEFINED
         for i in range(50, len(bars)):
             ema_p = ema_series_price[i]
             ema_v = ema_series_vol[i]
@@ -354,20 +346,18 @@ class PumpSetup(Setup):
             price = bars[i].close
 
             price_ok = self._check_ema_structure(ema_p, atr_mean) or self._check_ema_structure(ema_p)
-            vol_ok = self._check_ema_structure(ema_v)
             oi_ok = True if ema_o is None else self._check_ema_structure(ema_o)
+            vol_ok = self._check_ema_structure(ema_v)
 
-            if sum([price_ok, vol_ok, oi_ok]) >= 3:
-                self.log(f"{i:>4} "
-                         f"{bars[i].timestamp.strftime('%d.%m %H:%M')} "
-                         f"{'+' if price_ok else ''} "
-                         f"{'+' if vol_ok else ''} "
-                         f"{'+' if oi_ok else ''}")
-
+            factors_count = sum([price_ok, vol_ok, oi_ok])
+            if factors_count < 2 and is_defined(index_candidate):
+                index_candidate = FLOAT_UNDEFINED
+            if factors_count >= 2 and not is_defined(index_candidate):
+                index_candidate = i
             price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
 
             if price_ok and vol_ok and oi_ok and price_above:
-                for j in range(i, 0, -1):
+                for j in range(index_candidate, 0, -1):
                     bar_j = bars[j]
                     ema_j = ema_series_price[j]
 
@@ -383,8 +373,9 @@ class PumpSetup(Setup):
                         self.log(f"✨ {bars[j + 1].timestamp.strftime('%d.%m %H:%M')} ⬅ Сдвиг")
                         return j + 1
 
-                self.log(f"✨ {bars[i].timestamp.strftime('%d.%m %H:%M')}")
-                return i
+                index_candidate = index_candidate if is_defined(index_candidate) else i
+                self.log(f"✨ {bars[index_candidate].timestamp.strftime('%d.%m %H:%M')}")
+                return index_candidate
 
         return None
 
