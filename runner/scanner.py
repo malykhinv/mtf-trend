@@ -31,6 +31,7 @@ class Scanner:
         log("Запущен цикл сканирования.")
         symbols = self.loader.get_filtered_symbols()
         log(f"Отобрано {len(symbols)} символов для анализа.")
+        print()
 
         for symbol in symbols:
             for tfs in tfss:
@@ -43,7 +44,6 @@ class Scanner:
         log("Цикл сканирования завершён.")
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile):
-        print()
         log(f"{symbol} : {tfs}")
 
         bars_by_tf = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro)}
@@ -79,6 +79,7 @@ class Scanner:
             if signal:
                 tf = tfs.setup
                 self._handle_signal(signal, bars_by_tf[tf], tf)
+                print()
                 break
 
     def _handle_signal(self, signal: SetupSignal, setup_bars: List[Bar], tf: Timeframe):
@@ -92,13 +93,19 @@ class Scanner:
         if signal.trendline:
             plot.draw_trendline(signal.trendline)
 
-        if signal.confidence.is_strong:
-            plot.mark_breakout(len(setup_bars) - 1)
-
         filename = f"{signal.symbol}_{signal.confidence.name.lower()}.png"
         plot.save(filename)
         image_path = f".generated/plot/charts/{filename}"
 
+        plot = Plot(symbol=signal.symbol, bars=setup_bars, tf=tf)
+        plot.generate_and_save(
+            filename=filename,
+            pump_start_time=signal.timestamp,
+            trendline=signal.trendline,
+        )
+        self._send_signal(signal, message, image_path)
+
+    def _send_signal(self, signal: SetupSignal, message: str, image_path: str):
         if signal.is_order_signal:
             self.orders_notifier.send_message(message, image_path)
 

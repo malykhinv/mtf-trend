@@ -124,7 +124,6 @@ class PumpSetup(Setup):
         )
 
         if period1_end_index is None or period1_end_index not in range(0, len(bars) - 1):
-            self.logw("Не удалось найти старт пампа.")
             return False
 
         period2_start_index = period1_end_index + 1
@@ -454,11 +453,9 @@ class PumpSetup(Setup):
                     tf=self.tfs.setup,
                     message=message,
                     save_dir=".generated/plot/charts_skipped")
-        plot.plot_main()
-        plot.mark_pump_start(self.pump_bars[0].timestamp)
-
-        if self.trendline:
-            plot.draw_trendline(self.trendline)
-
         filename = f"{self.symbol}_{self.tfs.setup.value}.png"
-        plot.save(filename)
+        plot.generate_and_save(
+            filename=filename,
+            pump_start_time=self.pump_bars[0].timestamp,
+            trendline=self.trendline,
+        )
