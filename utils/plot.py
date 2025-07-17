@@ -158,7 +158,7 @@ class Plot:
         self.ax_price.axvline(pump_start_num, color=COLOR_PUMP_START, linestyle=PUMP_START_LINE_STYLE,
                               linewidth=PUMP_START_LINE_WIDTH)
         ymax = max(bar.high for bar in self.bars)
-        self.ax_price.text(pump_start_num, ymax, color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
+        self.ax_price.text(pump_start_num, ymax, '', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
 
     def mark_breakout(self, breakout_idx: int):
         if breakout_idx >= len(self.bars):
