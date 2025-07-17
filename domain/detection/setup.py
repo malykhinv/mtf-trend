@@ -45,6 +45,7 @@ class Setup(ABC):
                 if condition_func():
                     signal = self.build_signal()
                     self.log(self.message)
+                    print()
                     return signal
 
         return None

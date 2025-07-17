@@ -163,22 +163,38 @@ class PumpSetup(Setup):
         return True
 
     def _check_pump_growth(self) -> bool:
-        bars = self.bars_setup
-        pump_start_index = len(self.consolidation_bars)
-
-        pump_start_close = bars[pump_start_index].close
-        pump_end_close = bars[-1].close
-        pump_change_pct = (pump_end_close - pump_start_close) / pump_start_close * 100
-
-        if pump_change_pct < MIN_PUMP_PCT:
-            self._capture_pump(f"Рост цены недостаточный: {pump_change_pct:.1f}% < {MIN_PUMP_PCT}%")
+        if not self.main_high or self.main_high.is_undefined:
+            self._capture_pump("main_high не определён для оценки роста.")
             return False
 
-        if pump_end_close <= self.high_p1:
-            self._capture_pump("Цена после старта не закрепилась выше high периода 1.")
+        ema_series_price = self._calculate_ema_series_from_values([b.close for b in self.bars_setup])
+        main_high_index = self.main_high.index
+
+        if main_high_index >= len(ema_series_price):
+            self._capture_pump("main_high index вне диапазона EMA.")
             return False
 
-        self.log(f"Памп подтверждён: рост {pump_change_pct:.0f}%")
+        ema_obj = ema_series_price[main_high_index]
+
+        if is_defined(ema_obj.ema200) and ema_obj.ema200 > 0:
+            ema_base = ema_obj.ema200
+        elif is_defined(ema_obj.ema100) and ema_obj.ema100 > 0:
+            ema_base = ema_obj.ema100
+        else:
+            self._capture_pump("EMA100 и EMA200 невалидны.")
+            return False
+
+        pump_growth_pct = (self.main_high.price - ema_base) / ema_base * 100
+
+        if pump_growth_pct < MIN_PUMP_PCT:
+            self._capture_pump(f"Рост цены от EMA недостаточный: {pump_growth_pct:.1f}% < {MIN_PUMP_PCT}%")
+            return False
+
+        if self.last.close <= self.high_p1:
+            self._capture_pump("Цена не закрепилась выше high периода 1.")
+            return False
+
+        self.log(f"Памп подтверждён: рост {pump_growth_pct:.1f}% от EMA")
         return True
 
     def _check_volume(self) -> bool:
