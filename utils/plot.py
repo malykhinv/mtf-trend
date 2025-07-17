@@ -1,3 +1,5 @@
+import asyncio
+
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
@@ -25,13 +27,11 @@ from config.constants import (
     COLOR_DOWN,
     COLOR_TRENDLINE,
     COLOR_PUMP_START,
-    COLOR_BREAKOUT,
     TRENDLINE_WIDTH,
     TRENDLINE_STYLE,
     PUMP_START_LINE_STYLE,
     PUMP_START_LINE_WIDTH,
     PUMP_START_TEXT_SIZE,
-    BREAKOUT_MARKER_SIZE,
     EMA_ALPHA,
     EMA_LINEWIDTH,
     LEGEND_FONT_SIZE, COLOR_FACE, BELGRADE_TZ,
@@ -69,6 +69,19 @@ class Plot:
                 0.01, 0.85, message, transform=self.ax_price.transAxes,
                 fontsize=10, color='orange', ha='left', va='bottom'
             )
+
+    async def generate_and_save(self,
+                                filename: str, *,
+                                pump_start_time: datetime,
+                                trendline: Optional[Trendline] = None):
+        await asyncio.to_thread(self._generate_and_save_sync, filename, pump_start_time, trendline)
+
+    def _generate_and_save_sync(self, filename: str, pump_start_time, trendline):
+        self.plot_main()
+        self.mark_pump_start(pump_start_time)
+        if trendline:
+            self.draw_trendline(trendline)
+        self.save(filename)
 
     def plot_main(self):
         ohlc, closes, volumes, oi_values = [], [], [], []
@@ -159,16 +172,6 @@ class Plot:
                               linewidth=PUMP_START_LINE_WIDTH)
         ymax = max(bar.high for bar in self.bars)
         self.ax_price.text(pump_start_num, ymax, '', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
-
-    def mark_breakout(self, breakout_idx: int):
-        if breakout_idx >= len(self.bars):
-            log(f"Индекс пробоя {breakout_idx} выходит за пределы — отметка не будет добавлена")
-            return
-
-        time_num = mdates.date2num(self.bars[breakout_idx].timestamp)
-        price = self.bars[breakout_idx].close
-        self.ax_price.scatter(time_num, price, color=COLOR_BREAKOUT, s=BREAKOUT_MARKER_SIZE, zorder=5, label='Breakout')
-        log("Отмечен пробой наклонки")
 
     def draw_trendline(self, trendline: Trendline):
         if not trendline or not trendline.valid:
