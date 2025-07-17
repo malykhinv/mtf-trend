@@ -2,17 +2,26 @@ from config.constants import MAX_RANGE_SIZE_PCT
 from domain.models.bar import Bar
 from typing import List
 
-# TODO FIXME
-def is_stablecoin(symbol: str) -> bool:
-    return False
-    return any(stable in symbol.upper() for stable in ["USDC", "BUSD", "DAI", "TUSD"])
+def has_repeating_ohlc(bars: List[Bar], sequence_len: int = 2) -> bool:
+    """
+    Проверяет, есть ли хотя бы одна последовательность из `sequence_len` свечей подряд с одинаковыми OHLC.
+    """
+    if len(bars) < sequence_len:
+        return False
 
-# TODO FIXME
-def has_messy_candles(bars: List[Bar], tail_ratio_threshold: float = 0.5, body_threshold: float = 0.1) -> bool:
-    """
-    tail_ratio_threshold: доля свечей с длинными хвостами (tail/total range > 0.5)
-    body_threshold: минимальный средний body size / range для чистых свечей
-    """
+    count = 1
+    prev = bars[0]
+    for curr in bars[1:]:
+        if (curr.open == prev.open and
+            curr.high == prev.high and
+            curr.low == prev.low and
+            curr.close == prev.close):
+            count += 1
+            if count >= sequence_len:
+                return True
+        else:
+            count = 1
+        prev = curr
     return False
 
 

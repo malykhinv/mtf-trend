@@ -5,8 +5,6 @@ from mplfinance.original_flavor import candlestick_ohlc
 from datetime import datetime
 from typing import List, Optional
 
-from pyexpat.errors import messages
-
 from domain.models.bar import Bar
 from domain.models.timeframe import Timeframe
 from domain.models.trendline import Trendline
@@ -68,8 +66,8 @@ class Plot:
 
         if message:
             self.ax_price.text(
-                0.01, 0.95, message, transform=self.ax_price.transAxes,
-                fontsize=10, color='orange', ha='left', va='top'
+                0.01, 0.85, message, transform=self.ax_price.transAxes,
+                fontsize=10, color='orange', ha='left', va='bottom'
             )
 
     def plot_main(self):
@@ -160,7 +158,7 @@ class Plot:
         self.ax_price.axvline(pump_start_num, color=COLOR_PUMP_START, linestyle=PUMP_START_LINE_STYLE,
                               linewidth=PUMP_START_LINE_WIDTH)
         ymax = max(bar.high for bar in self.bars)
-        self.ax_price.text(pump_start_num, ymax, 'Start', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
+        self.ax_price.text(pump_start_num, ymax, color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
 
     def mark_breakout(self, breakout_idx: int):
         if breakout_idx >= len(self.bars):

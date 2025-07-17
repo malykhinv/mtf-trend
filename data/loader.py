@@ -1,6 +1,5 @@
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
-from zoneinfo import ZoneInfo
 
 from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED, BELGRADE_TZ
 from data.binance_client import get_binance_client

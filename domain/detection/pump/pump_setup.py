@@ -1,5 +1,4 @@
 # domain/detection/pump/pump_setup.py
-from datetime import datetime
 from statistics import mean
 from typing import List, Dict, Optional
 
@@ -20,7 +19,6 @@ from config.constants import (
     MIN_SL_PCT,
     MIN_TP_PCT,
     MAX_CORRECTION_PCT,
-    CONSOLIDATION_HOURS,
     MAX_RANGE_PCT,
     PUMP_MIN_MINUTES,
     MIN_PUMP_PCT,
@@ -152,12 +150,6 @@ class PumpSetup(Setup):
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
         if range_p1_pct > MAX_RANGE_PCT:
             self._capture_pump(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%")
-            return False
-
-        consolidation_duration_hours = int(
-            (self.consolidation_bars[-1].timestamp - self.consolidation_bars[0].timestamp).total_seconds() / 3600)
-        if consolidation_duration_hours < CONSOLIDATION_HOURS:
-            self._capture_pump(f"Консолидация короче {CONSOLIDATION_HOURS}h: {consolidation_duration_hours:.0f}h")
             return False
 
         return True
@@ -332,8 +324,12 @@ class PumpSetup(Setup):
                  f"RR={rr:.2f}")
         return True
 
-    def _find_pump_start_index(self, bars: List[Bar], ema_series_price: List[EMA], ema_series_vol: List[EMA],
-                               ema_series_oi: List[Optional[EMA]], atr_series: List[float]) -> Optional[int]:
+    def _find_pump_start_index(self,
+                               bars: List[Bar],
+                               ema_series_price: List[EMA],
+                               ema_series_vol: List[EMA],
+                               ema_series_oi: List[Optional[EMA]],
+                               atr_series: List[float]) -> Optional[int]:
         atr_mean = FLOAT_UNDEFINED
         for i in range(50, len(bars)):
             ema_p = ema_series_price[i]
@@ -356,6 +352,22 @@ class PumpSetup(Setup):
             price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
 
             if price_ok and vol_ok and oi_ok and price_above:
+                for j in range(i, 0, -1):
+                    bar_j = bars[j]
+                    ema_j = ema_series_price[j]
+
+                    price_below_ema = (
+                            bar_j.low < ema_j.ema20 or
+                            bar_j.low < ema_j.ema50 or
+                            bar_j.low < ema_j.ema100 or
+                            bar_j.low < ema_j.ema200
+                    )
+                    ema_crossed = not (ema_j.ema20 > ema_j.ema100)
+
+                    if price_below_ema or ema_crossed:
+                        self.log(f"✨ {bars[j + 1].timestamp.strftime('%d.%m %H:%M')} ⬅ Сдвиг")
+                        return j + 1
+
                 self.log(f"✨ {bars[i].timestamp.strftime('%d.%m %H:%M')}")
                 return i
 
@@ -441,7 +453,7 @@ class PumpSetup(Setup):
                     bars=self.bars_setup,
                     tf=self.tfs.setup,
                     message=message,
-                    save_dir = ".generated/plot/charts_skipped")
+                    save_dir=".generated/plot/charts_skipped")
         plot.plot_main()
         plot.mark_pump_start(self.pump_bars[0].timestamp)
 

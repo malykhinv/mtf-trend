@@ -9,7 +9,7 @@ from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
 from domain.models.timeframe import Timeframe
-from domain.risk_filters import has_messy_candles, is_stablecoin, is_calm
+from domain.risk_filters import is_calm, has_repeating_ohlc
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
@@ -51,18 +51,14 @@ class Scanner:
         if not self._check_if_passes_macro_filters(symbol, bars_by_tf[tfs.macro]):
             return
 
-        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup)
+        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
         bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry)
 
         self._check_setups(symbol, tfs, bars_by_tf)
 
     @staticmethod
     def _check_if_passes_macro_filters(symbol: str, bars: List[Bar]):
-        if is_stablecoin(symbol):
-            logw(f"{symbol} фильтруется как стейблкоин.")
-            return False
-
-        if has_messy_candles(bars):
+        if has_repeating_ohlc(bars):
             logw(f"{symbol} фильтруется из-за грязных свечей.")
             return False
 
