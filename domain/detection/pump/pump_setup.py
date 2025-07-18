@@ -25,7 +25,7 @@ from config.constants import (
     VOLUME_RATIO_MIN,
 )
 from utils.float_utils import is_defined
-from utils.logger import log
+from utils.logger import log, logw
 from utils.math_utils import calculate_atr
 from utils.plot import Plot
 
