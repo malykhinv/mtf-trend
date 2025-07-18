@@ -13,7 +13,6 @@ class SetupSignal:
     symbol: str
     side: Side
     confidence: Confidence
-    text: str
     timestamp: datetime
     trendline: Optional[Trendline] = None
     entry: float = FLOAT_UNDEFINED
@@ -27,4 +26,4 @@ class SetupSignal:
 
     @property
     def is_event_signal(self) -> bool:
-        return (self.confidence.is_weak or self.confidence.is_moderate) and self.rr
+        return self.confidence.is_weak or self.confidence.is_moderate

@@ -31,7 +31,6 @@ class Setup(ABC):
         self.sl = FLOAT_UNDEFINED
         self.tp = FLOAT_UNDEFINED
         self.rr = FLOAT_UNDEFINED
-        self.message = f"{self.confidence.value.capitalize()}"
 
     def validated_or_none(self) -> Optional[SetupSignal]:
         levels = [
@@ -44,7 +43,6 @@ class Setup(ABC):
             if confidence_condition:
                 if condition_func():
                     signal = self.build_signal()
-                    self.log(self.message)
                     print()
                     return signal
 
@@ -97,7 +95,6 @@ class Setup(ABC):
             symbol=self.symbol,
             side=Side.LONG,
             confidence=self.confidence,
-            text=self.message,
             timestamp=self.setup_timestamp,
             trendline=self.trendline,
             entry=self.entry,
