@@ -9,7 +9,6 @@ class SwingPoint:
     type: SwingType
     index: int
     price: float
-    confirmed: bool
 
     @classmethod
     def undefined(cls):
@@ -17,7 +16,6 @@ class SwingPoint:
             type=SwingType.UNDEFINED,
             index=-1,
             price=FLOAT_UNDEFINED,
-            confirmed=False
         )
 
     @property

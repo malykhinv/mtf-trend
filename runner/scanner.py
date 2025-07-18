@@ -5,7 +5,6 @@ from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TO
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
 from domain.models.bar import Bar
-from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
 from domain.models.timeframe import Timeframe
@@ -69,18 +68,11 @@ class Scanner:
         return True
 
     def _check_setups(self, symbol, tfs, bars_by_tf):
-        for confidence in [Confidence.STRONG, Confidence.MODERATE, Confidence.WEAK]:
-            signal = self.setup_detector.detect(
-                symbol=symbol,
-                tfs=tfs,
-                bars_by_tf=bars_by_tf,
-                confidence=confidence
-            )
-            if signal:
-                tf = tfs.setup
-                self._handle_signal(signal, bars_by_tf[tf], tf)
-                print()
-                break
+        signal = self.setup_detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
+        if signal:
+            tf = tfs.setup
+            self._handle_signal(signal, bars_by_tf[tf], tf)
+            print()
 
     def _handle_signal(self, signal: SetupSignal, setup_bars: List[Bar], tf: Timeframe):
         message = format_message(signal)

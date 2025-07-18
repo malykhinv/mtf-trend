@@ -56,7 +56,7 @@ def main():
         setup_found = False
 
         for confidence in [Confidence.STRONG, Confidence.MODERATE, Confidence.WEAK]:
-            signal = detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf, confidence=confidence)
+            signal = detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
             if signal:
                 log(f"✅ Setup найден! Тип: {signal.confidence.name}")
 

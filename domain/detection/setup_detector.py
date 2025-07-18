@@ -6,7 +6,6 @@ from domain.detection.pump.pump_setup import PumpSetup
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
-from domain.models.confidence import Confidence
 from domain.models.timeframe import Timeframe
 
 
@@ -17,17 +16,11 @@ class SetupDetector:
             symbol: str,
             tfs: MTFProfile,
             bars_by_tf: Dict[Timeframe, List[Bar]],
-            confidence: Confidence
     ) -> Optional[SetupSignal]:
         setup_classes: List[Callable] = [PumpSetup]
 
         for setup_cls in setup_classes:
-            setup = setup_cls(
-                symbol=symbol,
-                tfs=tfs,
-                bars_by_tf=bars_by_tf,
-                confidence=confidence
-            )
+            setup = setup_cls(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
             signal = setup.validated_or_none()
             if signal:
                 return signal

@@ -25,13 +25,14 @@ from config.constants import (
     VOLUME_RATIO_MIN,
 )
 from utils.float_utils import is_defined
+from utils.logger import log
 from utils.math_utils import calculate_atr
 from utils.plot import Plot
 
 
 class PumpSetup(Setup):
-    def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], confidence: Confidence, tfs: MTFProfile):
-        super().__init__(symbol, bars_by_tf, confidence, tfs)
+    def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], tfs: MTFProfile):
+        super().__init__(symbol, bars_by_tf, tfs)
         self.structure_detector = StructureDetector()
         self.trendline_builder = TrendlineBuilder()
         self.swings = []
@@ -61,6 +62,7 @@ class PumpSetup(Setup):
         if not self._check_rr():
             return False
 
+        self.confidence = Confidence.STRONG
         return True
 
     def has_moderate_conditions(self) -> bool:
@@ -75,6 +77,7 @@ class PumpSetup(Setup):
         if not self._check_correction_depth():
             return False
 
+        self.confidence = Confidence.MODERATE
         return True
 
     def has_weak_conditions(self) -> bool:
@@ -88,7 +91,6 @@ class PumpSetup(Setup):
             price=main_high_bar.high,
             index=main_high_index,
             type=SwingType.HIGH,
-            confirmed=True
         )
 
         if not self._check_pump_growth():
@@ -100,6 +102,7 @@ class PumpSetup(Setup):
         if not self._check_pump_duration():
             return False
 
+        self.confidence = Confidence.WEAK
         return True
 
     def _check_consolidation(self) -> bool:
@@ -191,7 +194,7 @@ class PumpSetup(Setup):
             self._capture_pump(f"Рост цены от EMA недостаточный: {pump_growth_pct:.1f}% < {MIN_PUMP_PCT}%")
             return False
 
-        self.log(f"Памп подтверждён: рост {pump_growth_pct:.1f}% от EMA")
+        log(f"Памп подтверждён: рост {pump_growth_pct:.1f}% от EMA")
         return True
 
     def _check_volume(self) -> bool:
@@ -202,7 +205,7 @@ class PumpSetup(Setup):
             self._capture_pump(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}")
             return False
 
-        self.log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
+        log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
         return True
 
     def _check_correction_depth(self) -> bool:
@@ -213,7 +216,7 @@ class PumpSetup(Setup):
             self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%")
             return False
 
-        self.log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
+        log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
         return True
 
     def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
@@ -244,7 +247,7 @@ class PumpSetup(Setup):
             self._capture_pump(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}")
             return False
 
-        self.log("Структура коррекции подтверждена: есть LH и LL.")
+        log("Структура коррекции подтверждена: есть LH и LL.")
         return True
 
     def _get_correction_bars(self) -> List[Bar]:
@@ -272,7 +275,7 @@ class PumpSetup(Setup):
         if touches < 2:
             self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.")
             return False
-        self.log(f"Подтверждено касаний наклонки: {touches}.")
+        log(f"Подтверждено касаний наклонки: {touches}.")
         return True
 
     def _check_trendline_breakout(self, trendline: Trendline, bars: List[Bar]) -> bool:
@@ -288,7 +291,7 @@ class PumpSetup(Setup):
             self.bars_before_breakout = bars[:idx]
             self.bars_after_breakout = bars[idx + 1:]
 
-        self.log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
+        log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
         return True
 
     def _check_rr(self) -> bool:
@@ -321,7 +324,7 @@ class PumpSetup(Setup):
             self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RR}.")
             return False
 
-        self.log(f"RR подтверждён: "
+        log(f"RR подтверждён: "
                  f"Entry={entry:.5f}, "
                  f"SL={sl:.5f}, "
                  f"TP={tp:.5f}, "
@@ -370,11 +373,11 @@ class PumpSetup(Setup):
                     ema_crossed = not (ema_j.ema20 > ema_j.ema100)
 
                     if price_below_ema or ema_crossed:
-                        self.log(f"✨ {bars[j + 1].timestamp.strftime('%d.%m %H:%M')} ⬅ Сдвиг")
+                        log(f"✨ {bars[j + 1].timestamp.strftime('%d.%m %H:%M')} ⬅ Сдвиг")
                         return j + 1
 
                 index_candidate = index_candidate if is_defined(index_candidate) else i
-                self.log(f"✨ {bars[index_candidate].timestamp.strftime('%d.%m %H:%M')}")
+                log(f"✨ {bars[index_candidate].timestamp.strftime('%d.%m %H:%M')}")
                 return index_candidate
 
         return None
@@ -451,7 +454,7 @@ class PumpSetup(Setup):
         return atr_list
 
     def _capture_pump(self, message: Optional[str]):
-        self.logw(message)
+        logw(message)
         self._plot(message)
 
     def _plot(self, message: Optional[str]):
