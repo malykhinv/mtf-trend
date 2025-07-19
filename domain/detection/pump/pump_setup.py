@@ -21,7 +21,7 @@ from config.constants import (
     MAX_RANGE_PCT,
     PUMP_MIN_MINUTES,
     MIN_PRICE_GROWTH_PCT,
-    VOLUME_RATIO_MIN,
+    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT,
 )
 from utils.decorator import inject_method_name
 from utils.float_utils import is_defined
