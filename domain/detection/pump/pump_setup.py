@@ -2,6 +2,8 @@
 from statistics import mean
 from typing import List, Dict, Optional
 
+from millify import millify as mf
+
 from domain.detection.setup import Setup
 from domain.detection.trendline_builder import TrendlineBuilder
 from domain.models.bar import Bar
@@ -156,7 +158,8 @@ class PumpSetup(Setup):
 
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
         if range_p1_pct > MAX_RANGE_PCT:
-            self._capture_pump(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%", Confidence.WEAK, self._name)
+            self._capture_pump(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%",
+                               Confidence.WEAK, self._name)
             return False
 
         return True
@@ -188,7 +191,8 @@ class PumpSetup(Setup):
         price_growth_pct = pump_growth / ema_base * 100
 
         if price_growth_pct < MIN_PRICE_GROWTH_PCT:
-            self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PCT}%", Confidence.MODERATE, self._name)
+            self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PCT}%",
+                               Confidence.MODERATE, self._name)
             return False
 
         log(f"Памп подтверждён: рост {price_growth_pct:.1f}% от EMA")
@@ -226,7 +230,11 @@ class PumpSetup(Setup):
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
         if avg_vol_p2 < avg_vol_p1 * VOLUME_RATIO_MIN:
-            self._capture_pump(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}", Confidence.WEAK, self._name)
+            self._capture_pump(
+                f"Объём пампа недостаточный: {mf(avg_vol_p2)} < {mf(avg_vol_p1 * VOLUME_RATIO_MIN)}",
+                Confidence.WEAK,
+                self._name
+            )
             return False
 
         log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
@@ -238,7 +246,8 @@ class PumpSetup(Setup):
         pump_start_index = len(self.consolidation_bars)
         pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
         if pump_duration_min < PUMP_MIN_MINUTES:
-            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m", Confidence.MODERATE, self._name)
+            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m",
+                               Confidence.MODERATE, self._name)
             return False
         return True
 
@@ -250,7 +259,11 @@ class PumpSetup(Setup):
         - Нет закрытия ниже EMA.
         """
         if not swings or len(swings) < 5:
-            self._capture_pump("Недостаточно swing-поинтов для анализа коррекции.", Confidence.MODERATE, self._name)
+            self._capture_pump(
+                "Недостаточно swing-поинтов для анализа коррекции.",
+                Confidence.MODERATE,
+                self._name
+            )
             return False
 
         # Проверяем LH
@@ -280,7 +293,8 @@ class PumpSetup(Setup):
         correction_depth = abs(self.main_high.price - correction_low) / self.price_growth * 100
 
         if correction_depth > MAX_CORRECTION_PCT:
-            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%", Confidence.MODERATE, self._name)
+            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%",
+                               Confidence.MODERATE, self._name)
             return False
 
         log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
@@ -341,11 +355,13 @@ class PumpSetup(Setup):
         tp_distance_pct = abs(tp - entry) / entry * 100
 
         if sl_distance_pct < MIN_SL_PCT:
-            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%", Confidence.STRONG, self._name)
+            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%", Confidence.STRONG,
+                               self._name)
             return False
 
         if tp_distance_pct < MIN_TP_PCT:
-            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%", Confidence.STRONG, self._name)
+            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%", Confidence.STRONG,
+                               self._name)
             return False
 
         rr = abs(tp - entry) / abs(entry - sl)
@@ -354,13 +370,14 @@ class PumpSetup(Setup):
             return False
 
         log(f"RR подтверждён: "
-                 f"Entry={entry:.5f}, "
-                 f"SL={sl:.5f}, "
-                 f"TP={tp:.5f}, "
-                 f"SL%={sl_distance_pct:.2f}, "
-                 f"TP%={tp_distance_pct:.2f}, "
-                 f"RR={rr:.2f}")
+            f"Entry={entry:.5f}, "
+            f"SL={sl:.5f}, "
+            f"TP={tp:.5f}, "
+            f"SL%={sl_distance_pct:.2f}, "
+            f"TP%={tp_distance_pct:.2f}, "
+            f"RR={rr:.2f}")
         return True
+
     # endregion
 
     # region Define
@@ -378,7 +395,8 @@ class PumpSetup(Setup):
         Возвращает бары коррекции — все бары после главного high.
         """
         if self.main_high.is_undefined:
-            self._capture_pump("main_high не задан, не можем выделить correction bars.", Confidence.MODERATE, self._name)
+            self._capture_pump("main_high не задан, не можем выделить correction bars.", Confidence.MODERATE,
+                               self._name)
             self.correction_bars = []
 
         correction_bars = self.bars_setup[self.main_high.index + 1:]
@@ -392,6 +410,7 @@ class PumpSetup(Setup):
     def _define_trendline(self):
         atr = calculate_atr(self.correction_bars)
         self.trendline = self.trendline_builder.build(self.swings, atr)
+
     # endregion
 
     # region Calculation
@@ -518,6 +537,7 @@ class PumpSetup(Setup):
                 atr_list.append(atr)
         atr_list.insert(0, 0.0)
         return atr_list
+
     # endregion
 
     # region Plot
