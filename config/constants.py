@@ -7,17 +7,18 @@ from domain.models.timeframe import Timeframe
 BELGRADE_TZ = ZoneInfo("Europe/Belgrade")
 
 # Multi-timeframe profiles
-MTF_PROFILE_1_1 = MTFProfile(macro=Timeframe.D1, setup=Timeframe.M1, entry=Timeframe.M1)
-MTF_PROFILE_3_1 = MTFProfile(macro=Timeframe.D1, setup=Timeframe.M3, entry=Timeframe.M1)
-MTF_PROFILE_3_3 = MTFProfile(macro=Timeframe.D1, setup=Timeframe.M3, entry=Timeframe.M3)
-MTF_PROFILE_5_3 = MTFProfile(macro=Timeframe.D1, setup=Timeframe.M5, entry=Timeframe.M3)
-MTF_PROFILE_5_1 = MTFProfile(macro=Timeframe.D1, setup=Timeframe.M5, entry=Timeframe.M1)
+MTF_PROFILE_1_1 = MTFProfile(macro=Timeframe.D1, context=Timeframe.M30, setup=Timeframe.M1, entry=Timeframe.M1)
+MTF_PROFILE_3_1 = MTFProfile(macro=Timeframe.D1, context=Timeframe.M30, setup=Timeframe.M3, entry=Timeframe.M1)
+MTF_PROFILE_3_3 = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M3, entry=Timeframe.M3)
+MTF_PROFILE_5_3 = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M5, entry=Timeframe.M3)
+MTF_PROFILE_5_1 = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M5, entry=Timeframe.M1)
 
 FLOAT_UNDEFINED = 0.0
 
 MIN_BARS_BETWEEN_SWINGS = 3
 MAX_RANGE_SIZE_PCT = 100
 MAX_CORRECTION_PCT = 50
+ACTUAL_CONTEXT_CANDLES = 6
 
 # Risk management
 VOLUME_THRESHOLD_USDT = 5_000_000

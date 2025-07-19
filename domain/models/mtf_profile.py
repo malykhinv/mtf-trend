@@ -6,6 +6,7 @@ from domain.models.timeframe import Timeframe
 @dataclass
 class MTFProfile:
     macro: Timeframe
+    context: Timeframe
     setup: Timeframe
     entry: Timeframe
 
@@ -14,7 +15,7 @@ class MTFProfile:
         Позволяет итерироваться по всем таймфреймам в порядке:
         macro → setup → entry.
         """
-        return iter((self.macro, self.setup, self.entry))
+        return iter((self.macro, self.context, self.setup, self.entry))
 
     def __str__(self):
-        return f"{self.macro.value}-{self.setup.value}-{self.entry.value}"
+        return f"{self.macro.value}-{self.context.value}-{self.setup.value}-{self.entry.value}"

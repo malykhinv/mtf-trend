@@ -8,7 +8,7 @@ from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
 from domain.models.timeframe import Timeframe
-from domain.risk_filters import is_calm, has_repeating_ohlc
+from domain.risk_filters import is_calm, has_repeating_ohlc, is_rising
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
@@ -51,6 +51,9 @@ class Scanner:
         if not self._check_if_passes_macro_filters(symbol, bars_by_tf[tfs.macro]):
             return
 
+        if not self._check_if_passes_context_filters(symbol, bars_by_tf[tfs.context]):
+            return
+
         bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
         bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry)
 
@@ -64,6 +67,22 @@ class Scanner:
 
         if not is_calm(bars):
             logw(f"{symbol} фильтруется из-за большого диапазона.")
+            return False
+
+        return True
+
+    @staticmethod
+    def _check_if_passes_context_filters(symbol: str, bars: List[Bar]):
+        if has_repeating_ohlc(bars):
+            logw(f"{symbol} фильтруется из-за грязных свечей.")
+            return False
+
+        if not is_calm(bars):
+            logw(f"{symbol} фильтруется из-за большого диапазона.")
+            return False
+
+        if not is_rising(bars):
+            logw(f"{symbol} фильтруется из-за отсутствия локального максимума.")
             return False
 
         return True

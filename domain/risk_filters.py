@@ -40,3 +40,15 @@ def is_calm(bars_1d: list[Bar]) -> bool:
 
     range_pct = (high - low) / low * 100
     return range_pct <= MAX_RANGE_SIZE_PCT
+
+def is_rising(bars: list[Bar]) -> bool:
+    if len(bars) <= ACTUAL_CONTEXT_CANDLES:
+        return False
+
+    recent = bars[-ACTUAL_CONTEXT_CANDLES:]
+    context = bars[:-ACTUAL_CONTEXT_CANDLES]
+
+    max_recent_high = max(bar.high for bar in recent)
+    max_context_high = max(bar.high for bar in context)
+
+    return max_recent_high > max_context_high
