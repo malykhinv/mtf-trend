@@ -1,3 +1,4 @@
+from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 
@@ -57,14 +58,30 @@ class Loader:
 
         # OI
         if has_oi:
-            raw_oi = self.fetch_oi(
-                symbol=symbol,
-                timeframe=timeframe,
-                since=since,
-                end_time=end_time,
-                limit=limit
-            )
-            oi_values = [float(entry["sumOpenInterest"]) for entry in raw_oi]
+            if self._timeframe_minutes(timeframe) < self._timeframe_minutes(Timeframe.M5):
+                timeframe = Timeframe.M5
+                since = int((to_time - timedelta(minutes=limit * self._timeframe_minutes(timeframe))).timestamp() * 1000)
+                raw_oi = self.fetch_oi(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    since=since,
+                    end_time=end_time,
+                    limit=limit
+                )
+                target_ts = [
+                    datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(BELGRADE_TZ)
+                    for entry in raw
+                ]
+                oi_values = self._map_oi_to_tf(target_ts, raw_oi)
+            else:
+                raw_oi = self.fetch_oi(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    since=since,
+                    end_time=end_time,
+                    limit=limit
+                )
+                oi_values = [float(entry["sumOpenInterest"]) for entry in raw_oi]
         else:
             oi_values = [FLOAT_UNDEFINED for _ in range(len(raw))]
 
@@ -131,3 +148,24 @@ class Loader:
             "1d": 1440
         }
         return tf_map.get(timeframe.value, 1)
+
+    @staticmethod
+    def _map_oi_to_tf(target_timestamps: List[datetime], oi_data: List[Dict]) -> List[float]:
+        # Преобразуем данные OI в словарь: {timestamp: oi_value}
+        oi_map = {
+            datetime.fromtimestamp(int(item['timestamp']) / 1000, tz=timezone.utc).astimezone(BELGRADE_TZ): float(
+                item['sumOpenInterest'])
+            for item in oi_data
+        }
+        sorted_ts = sorted(oi_map.keys())
+        sorted_oi = [oi_map[ts] for ts in sorted_ts]
+
+        # Интерполяция: ближайшее предыдущее значение
+        result = []
+        for ts in target_timestamps:
+            idx = bisect_right(sorted_ts, ts) - 1
+            if idx >= 0:
+                result.append(sorted_oi[idx])
+            else:
+                result.append(FLOAT_UNDEFINED)
+        return result

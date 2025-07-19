@@ -58,7 +58,7 @@ class Plot:
         for ax in [self.ax_price, self.ax_vol, self.ax_oi]:
             ax.set_facecolor(COLOR_FACE)
             ax.tick_params(colors='gray', which='both', length=0)
-            ax.grid(False)
+            ax.grid(True, color='gray', linestyle=':', linewidth=0.5, alpha=0.25)
 
         self.ax_price.set_title(f"{symbol} ({tf.value})", color='white', fontsize=14)
 

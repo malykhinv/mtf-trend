@@ -21,8 +21,8 @@ def main():
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
     mtf_profiles = [
-        constants.MTF_PROFILE_1_1,
-        # constants.MTF_PROFILE_3_1,
+        # constants.MTF_PROFILE_1_1,
+        constants.MTF_PROFILE_3_1,
         # constants.MTF_PROFILE_3_3,
         # constants.MTF_PROFILE_5_3,
         # constants.MTF_PROFILE_5_1,
