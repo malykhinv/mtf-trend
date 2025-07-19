@@ -2,21 +2,13 @@
 
 from datetime import datetime
 
+from config import constants
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
-from domain.models.confidence import Confidence
 from utils.plot import Plot
 from utils.logger import log, logw
 
-# Импортируем твои MTF-профили
-from config.constants import (
-    MTF_PROFILE_1_1,
-    MTF_PROFILE_3_1,
-    MTF_PROFILE_3_3,
-    MTF_PROFILE_5_3,
-    MTF_PROFILE_5_1,
-    BELGRADE_TZ
-)
+from config.constants import BELGRADE_TZ
 
 def main():
     symbol = "ACXUSDT"
@@ -29,11 +21,11 @@ def main():
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
     mtf_profiles = [
-        # MTF_PROFILE_1_1,
-        # MTF_PROFILE_3_1,
-        # MTF_PROFILE_3_3,
-        # MTF_PROFILE_5_3,
-        MTF_PROFILE_5_1,
+        constants.MTF_PROFILE_1_1,
+        # constants.MTF_PROFILE_3_1,
+        # constants.MTF_PROFILE_3_3,
+        # constants.MTF_PROFILE_5_3,
+        # constants.MTF_PROFILE_5_1,
     ]
 
     loader = Loader()
@@ -52,27 +44,19 @@ def main():
         plot = Plot(symbol=symbol, bars=setup_bars, tf=tfs.setup)
         plot.plot_main()
 
-        setup_found = False
+        signal = detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
+        if signal:
+            log(f"✅ {signal.confidence.value.capitalize()}")
 
-        for confidence in [Confidence.STRONG, Confidence.MODERATE, Confidence.WEAK]:
-            signal = detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
-            if signal:
-                log(f"✅ Setup найден! Тип: {signal.confidence.name}")
+            plot.mark_pump_start(signal.timestamp)
 
-                plot.mark_pump_start(signal.timestamp)
+            trendline = signal.trendline
+            if trendline:
+                plot.draw_trendline(trendline)
 
-                if confidence in [Confidence.MODERATE, Confidence.STRONG]:
-                    trendline = signal.trendline
-                    if trendline:
-                        plot.draw_trendline(trendline)
-
-                setup_found = True
-                break
-
-        if not setup_found:
+        if not signal:
             logw("❌ Setup не найден.")
 
-        # Сохраняем график
         filename = f"{symbol}_{profile_name}_plot.png"
         plot.save(filename)
 

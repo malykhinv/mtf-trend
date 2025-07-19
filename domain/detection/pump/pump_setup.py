@@ -43,10 +43,20 @@ class PumpSetup(Setup):
         self.correction_bars = []
         self.main_high = SwingPoint.undefined()
 
-    def has_strong_conditions(self) -> bool:
-        if not self.has_moderate_conditions():
-            return False
+    def define_confidence(self):
+        if self.confidence:
+            return
 
+        if not self.has_weak_conditions():
+            return
+
+        if not self.has_moderate_conditions():
+            return
+
+        if not self.has_strong_conditions():
+            return
+
+    def has_strong_conditions(self) -> bool:
         self._define_trendline()
 
         if not self._check_trendline_validity():
@@ -65,9 +75,6 @@ class PumpSetup(Setup):
         return True
 
     def has_moderate_conditions(self) -> bool:
-        if not self.has_weak_conditions():
-            return False
-
         self._define_correction_bars()
         self._define_swings()
 

@@ -31,7 +31,8 @@ class Setup(ABC):
         self.rr = FLOAT_UNDEFINED
 
     def validated_or_none(self) -> Optional[SetupSignal]:
-        if self.has_strong_conditions() or self.has_moderate_conditions() or self.has_weak_conditions():
+        self.define_confidence()
+        if self.confidence:
             signal = self.build_signal()
             print()
             return signal
@@ -68,13 +69,7 @@ class Setup(ABC):
     # endregion
 
     # region Conditions by confidence
-    def has_strong_conditions(self, *args) -> bool:
-        pass
-
-    def has_moderate_conditions(self, *args) -> bool:
-        pass
-
-    def has_weak_conditions(self, *args) -> bool:
+    def define_confidence(self, *args):
         pass
 
     # endregion
