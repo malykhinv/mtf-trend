@@ -30,7 +30,9 @@ class Scanner:
     def run(self, tfss: List[MTFProfile]):
         log("Запущен цикл сканирования.")
         symbols = self.loader.get_filtered_symbols()
-        log(f"Отобрано {len(symbols)} символов для анализа.")
+
+        if symbols:
+            log(f"Отобрано {len(symbols)} символов:\n" + "\n".join(symbols))
 
         for symbol in symbols:
             for tfs in tfss:
@@ -41,6 +43,7 @@ class Scanner:
                     raise
 
         log("Цикл сканирования завершён.")
+        print()
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile):
         bars_by_tf = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro)}
