@@ -1,7 +1,7 @@
 from enum import Enum
 
 
-class Confidence(str, Enum):
+class Confidence(Enum):
     WEAK = "weak"
     MODERATE = "moderate"
     STRONG = "strong"

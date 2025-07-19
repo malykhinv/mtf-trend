@@ -86,7 +86,7 @@ class Scanner:
         if signal.trendline:
             plot.draw_trendline(signal.trendline)
 
-        filename = f"{signal.symbol}_{signal.confidence.name.lower()}.png"
+        filename = f"{signal.confidence.value.capitalize()}_{signal.symbol}.png"
         plot.save(filename)
         image_path = f".generated/plot/charts/{filename}"
 
