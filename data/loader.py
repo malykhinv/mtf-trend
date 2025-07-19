@@ -60,7 +60,12 @@ class Loader:
         if has_oi:
             if self._timeframe_minutes(timeframe) < self._timeframe_minutes(Timeframe.M5):
                 timeframe = Timeframe.M5
-                since = int((to_time - timedelta(minutes=limit * self._timeframe_minutes(timeframe))).timestamp() * 1000)
+                since = None
+                end_time = None
+                if to_time:
+                    since = int(
+                        (to_time - timedelta(minutes=limit * self._timeframe_minutes(timeframe))).timestamp() * 1000)
+                    end_time = int(to_time.timestamp() * 1000)
                 raw_oi = self.fetch_oi(
                     symbol=symbol,
                     timeframe=timeframe,
