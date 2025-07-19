@@ -23,6 +23,7 @@ from config.constants import (
     MIN_PUMP_PCT,
     VOLUME_RATIO_MIN,
 )
+from utils.decorator import inject_method_name
 from utils.float_utils import is_defined
 from utils.logger import log, logw
 from utils.math_utils import calculate_atr
@@ -98,6 +99,7 @@ class PumpSetup(Setup):
         return True
 
     # region Check
+    @inject_method_name
     def _check_consolidation(self) -> bool:
         bars = self.bars_setup
 
@@ -129,14 +131,14 @@ class PumpSetup(Setup):
         self.setup_timestamp = self.pump_bars[0].timestamp
 
         if not self.consolidation_bars or not self.pump_bars:
-            self._capture_pump("Недостаточно данных после разделения на периоды.")
+            self._capture_pump("Недостаточно данных после разделения на периоды.", Confidence.WEAK, self._name)
             return False
 
         high_p1 = max(b.high for b in self.consolidation_bars)
         low_p1 = min(b.low for b in self.consolidation_bars)
 
         if low_p1 <= 0:
-            self._capture_pump("Неверный low в консолидации (<= 0).")
+            self._capture_pump("Неверный low в консолидации (<= 0).", Confidence.WEAK, self._name)
             return False
 
         self.high_p1 = high_p1
@@ -144,21 +146,22 @@ class PumpSetup(Setup):
 
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
         if range_p1_pct > MAX_RANGE_PCT:
-            self._capture_pump(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%")
+            self._capture_pump(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%", Confidence.WEAK, self._name)
             return False
 
         return True
 
+    @inject_method_name
     def _check_pump_growth(self) -> bool:
         if not self.main_high or self.main_high.is_undefined:
-            self._capture_pump("main_high не определён для оценки роста.")
+            self._capture_pump("main_high не определён для оценки роста.", Confidence.MODERATE, self._name)
             return False
 
         ema_series_price = self._calculate_ema_series_from_values([b.close for b in self.bars_setup])
         main_high_index = self.main_high.index
 
         if main_high_index >= len(ema_series_price):
-            self._capture_pump("main_high index вне диапазона EMA.")
+            self._capture_pump("main_high index вне диапазона EMA.", Confidence.MODERATE, self._name)
             return False
 
         ema_obj = ema_series_price[main_high_index]
@@ -168,39 +171,42 @@ class PumpSetup(Setup):
         elif is_defined(ema_obj.ema100) and ema_obj.ema100 > 0:
             ema_base = ema_obj.ema100
         else:
-            self._capture_pump("EMA100 и EMA200 невалидны.")
+            self._capture_pump("EMA100 и EMA200 невалидны.", Confidence.MODERATE, self._name)
             return False
 
         self.pump_growth = pump_growth = self.main_high.price - ema_base
         pump_growth_pct = pump_growth / ema_base * 100
 
         if pump_growth_pct < MIN_PUMP_PCT:
-            self._capture_pump(f"Рост цены от EMA недостаточный: {pump_growth_pct:.1f}% < {MIN_PUMP_PCT}%")
+            self._capture_pump(f"Рост цены от EMA недостаточный: {pump_growth_pct:.1f}% < {MIN_PUMP_PCT}%", Confidence.MODERATE, self._name)
             return False
 
         log(f"Памп подтверждён: рост {pump_growth_pct:.1f}% от EMA")
         return True
 
+    @inject_method_name
     def _check_volume(self) -> bool:
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
         if avg_vol_p2 < avg_vol_p1 * VOLUME_RATIO_MIN:
-            self._capture_pump(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}")
+            self._capture_pump(f"Объём пампа недостаточный: {avg_vol_p2:.0f} < {avg_vol_p1 * VOLUME_RATIO_MIN:.0f}", Confidence.WEAK, self._name)
             return False
 
         log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
         return True
 
+    @inject_method_name
     def _check_pump_duration(self) -> bool:
         bars = self.bars_setup
         pump_start_index = len(self.consolidation_bars)
         pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
         if pump_duration_min < PUMP_MIN_MINUTES:
-            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m")
+            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m", Confidence.MODERATE, self._name)
             return False
         return True
 
+    @inject_method_name
     def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
         """
         Проверка структуры коррекции.
@@ -208,7 +214,7 @@ class PumpSetup(Setup):
         - Нет закрытия ниже EMA.
         """
         if not swings or len(swings) < 5:
-            self._capture_pump("Недостаточно swing-поинтов для анализа коррекции.")
+            self._capture_pump("Недостаточно swing-поинтов для анализа коррекции.", Confidence.MODERATE, self._name)
             return False
 
         # Проверяем LH
@@ -226,39 +232,43 @@ class PumpSetup(Setup):
                 ll_count += 1
 
         if lh_count < 2 or ll_count < 2:
-            self._capture_pump(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}")
+            self._capture_pump(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}", Confidence.MODERATE, self._name)
             return False
 
         log("Структура коррекции подтверждена: есть LH и LL.")
         return True
 
+    @inject_method_name
     def _check_correction_depth(self) -> bool:
         correction_low = min(bar.low for bar in self.correction_bars)
         correction_depth = abs(self.main_high.price - correction_low) / self.pump_growth * 100
 
         if correction_depth > MAX_CORRECTION_PCT:
-            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%")
+            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%", Confidence.MODERATE, self._name)
             return False
 
         log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
         return True
 
+    @inject_method_name
     def _check_trendline_validity(self) -> bool:
         if not self.trendline or not self.trendline.valid:
-            self._capture_pump("Наклонка невалидна.")
+            self._capture_pump("Наклонка невалидна.", Confidence.STRONG, self._name)
             return False
         return True
 
+    @inject_method_name
     def _check_trendline_touches(self) -> bool:
         bars = self.correction_bars
         correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
         touches = self.trendline_builder.count_touches(self.trendline, bars, correction_atr)
         if touches < 2:
-            self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.")
+            self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
             return False
         log(f"Подтверждено касаний наклонки: {touches}.")
         return True
 
+    @inject_method_name
     def _check_trendline_breakout(self) -> bool:
         bars = self.correction_bars
         correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
@@ -266,44 +276,45 @@ class PumpSetup(Setup):
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
             if not self.trendline_builder.has_breakout(self.trendline, bars, idx, correction_atr):
-                self._capture_pump(f"Бар {idx} не закрепился выше наклонки.")
+                self._capture_pump(f"Бар {idx} не закрепился выше наклонки.", Confidence.STRONG, self._name)
                 return False
 
             # Заполняем вспомогательные списки
             self.bars_before_breakout = bars[:idx]
             self.bars_after_breakout = bars[idx + 1:]
 
-        log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
+        log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.", Confidence.STRONG, self._name)
         return True
 
+    @inject_method_name
     def _check_rr(self) -> bool:
         entry = self.last.close
         sl_candidates = [s.price for s in reversed(self.swings) if s.type.is_low and s.price < entry]
 
         if not sl_candidates:
-            self._capture_pump("Нет swing low для SL.")
+            self._capture_pump("Нет swing low для SL.", Confidence.STRONG, self._name)
             return False
 
         sl = sl_candidates[0]
         tp = self.main_high.price
         if tp is None or tp <= entry:
-            self._capture_pump("Нет подходящего TP.")
+            self._capture_pump("Нет подходящего TP.", Confidence.STRONG, self._name)
             return False
 
         sl_distance_pct = abs(entry - sl) / entry * 100
         tp_distance_pct = abs(tp - entry) / entry * 100
 
         if sl_distance_pct < MIN_SL_PCT:
-            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%")
+            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%", Confidence.STRONG, self._name)
             return False
 
         if tp_distance_pct < MIN_TP_PCT:
-            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%")
+            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%", Confidence.STRONG, self._name)
             return False
 
         rr = abs(tp - entry) / abs(entry - sl)
         if rr < MIN_RR:
-            self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RR}.")
+            self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RR}.", Confidence.STRONG, self._name)
             return False
 
         log(f"RR подтверждён: "
@@ -325,17 +336,18 @@ class PumpSetup(Setup):
             type=SwingType.HIGH,
         )
 
+    @inject_method_name
     def _define_correction_bars(self):
         """
         Возвращает бары коррекции — все бары после главного high.
         """
         if self.main_high.is_undefined:
-            self._capture_pump("main_high не задан, не можем выделить correction bars.")
+            self._capture_pump("main_high не задан, не можем выделить correction bars.", Confidence.MODERATE, self._name)
             self.correction_bars = []
 
         correction_bars = self.bars_setup[self.main_high.index + 1:]
         if not correction_bars:
-            self._capture_pump("После main_high нет баров для коррекции.")
+            self._capture_pump("После main_high нет баров для коррекции.", Confidence.MODERATE, self._name)
         self.correction_bars = correction_bars
 
     def _define_swings(self):
@@ -469,17 +481,17 @@ class PumpSetup(Setup):
     # endregion
 
     # region Plot
-    def _capture_pump(self, message: Optional[str]):
+    def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str):
         logw(message)
-        self._plot(message)
+        self._plot(message, confidence, reason)
 
-    def _plot(self, message: Optional[str]):
+    def _plot(self, message: Optional[str], confidence: Confidence, reason: str):
         plot = Plot(symbol=self.symbol,
                     bars=self.bars_setup,
                     tf=self.tfs.setup,
                     message=message,
                     save_dir=".generated/plot/charts_skipped")
-        filename = f"{self.symbol}_{self.tfs.setup.value}.png"
+        filename = f"{confidence.value.capitalize()}_{reason}_{self.tfs.setup.value}_{self.symbol}.png"
         plot.generate_and_save(
             filename=filename,
             pump_start_time=self.pump_bars[0].timestamp,
