@@ -20,7 +20,7 @@ from config.constants import (
     MAX_CORRECTION_PCT,
     MAX_RANGE_PCT,
     PUMP_MIN_MINUTES,
-    MIN_PUMP_PCT,
+    MIN_PRICE_GROWTH_PCT,
     VOLUME_RATIO_MIN,
 )
 from utils.decorator import inject_method_name
@@ -86,10 +86,13 @@ class PumpSetup(Setup):
 
         self._define_main_high()
 
-        if not self._check_pump_growth():
+        if not self._check_price_growth():
             return False
 
-        if not self._check_volume():
+        if not self._check_atr_growth():
+            return False
+
+        if not self._check_volume_growth():
             return False
 
         if not self._check_pump_duration():
@@ -152,7 +155,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
-    def _check_pump_growth(self) -> bool:
+    def _check_price_growth(self) -> bool:
         if not self.main_high or self.main_high.is_undefined:
             self._capture_pump("main_high не определён для оценки роста.", Confidence.MODERATE, self._name)
             return False
@@ -174,18 +177,44 @@ class PumpSetup(Setup):
             self._capture_pump("EMA100 и EMA200 невалидны.", Confidence.MODERATE, self._name)
             return False
 
-        self.pump_growth = pump_growth = self.main_high.price - ema_base
-        pump_growth_pct = pump_growth / ema_base * 100
+        self.price_growth = pump_growth = self.main_high.price - ema_base
+        price_growth_pct = pump_growth / ema_base * 100
 
-        if pump_growth_pct < MIN_PUMP_PCT:
-            self._capture_pump(f"Рост цены от EMA недостаточный: {pump_growth_pct:.1f}% < {MIN_PUMP_PCT}%", Confidence.MODERATE, self._name)
+        if price_growth_pct < MIN_PRICE_GROWTH_PCT:
+            self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PCT}%", Confidence.MODERATE, self._name)
             return False
 
-        log(f"Памп подтверждён: рост {pump_growth_pct:.1f}% от EMA")
+        log(f"Памп подтверждён: рост {price_growth_pct:.1f}% от EMA")
         return True
 
     @inject_method_name
-    def _check_volume(self) -> bool:
+    def _check_atr_growth(self) -> bool:
+        if not self.consolidation_bars or not self.pump_bars:
+            self._capture_pump("Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name)
+            return False
+
+        atr_p1 = calculate_atr(self.consolidation_bars)
+        atr_p2 = calculate_atr(self.pump_bars)
+
+        if atr_p1 <= 0:
+            self._capture_pump("ATR периода консолидации некорректен.", Confidence.WEAK, self._name)
+            return False
+
+        atr_growth_pct = (atr_p2 - atr_p1) / atr_p1 * 100
+
+        if atr_growth_pct < MIN_ATR_GROWTH_PCT:
+            self._capture_pump(
+                f"Рост ATR недостаточный: {atr_growth_pct:.2f}% < {MIN_ATR_GROWTH_PCT}%",
+                Confidence.WEAK,
+                self._name
+            )
+            return False
+
+        log(f"Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PCT}%")
+        return True
+
+    @inject_method_name
+    def _check_volume_growth(self) -> bool:
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
@@ -241,7 +270,7 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_correction_depth(self) -> bool:
         correction_low = min(bar.low for bar in self.correction_bars)
-        correction_depth = abs(self.main_high.price - correction_low) / self.pump_growth * 100
+        correction_depth = abs(self.main_high.price - correction_low) / self.price_growth * 100
 
         if correction_depth > MAX_CORRECTION_PCT:
             self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%", Confidence.MODERATE, self._name)
@@ -283,7 +312,7 @@ class PumpSetup(Setup):
             self.bars_before_breakout = bars[:idx]
             self.bars_after_breakout = bars[idx + 1:]
 
-        log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.", Confidence.STRONG, self._name)
+        log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
         return True
 
     @inject_method_name
