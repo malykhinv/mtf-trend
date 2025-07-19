@@ -32,7 +32,7 @@ class Scanner:
         symbols = self.loader.get_filtered_symbols()
 
         if symbols:
-            log(f"Отобрано {len(symbols)} символов:\n" + "\n".join(symbols))
+            log(f"Отобрано {len(symbols)} символов.")
 
         for symbol in symbols:
             for tfs in tfss:
