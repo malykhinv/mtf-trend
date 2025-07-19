@@ -7,7 +7,6 @@ from data.binance_client import get_binance_client
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
-from utils.logger import log
 from utils.str_utils import clean_symbol
 
 
@@ -31,7 +30,6 @@ class Loader:
 
             symbol = clean_symbol(symbol)
             symbols.append(symbol)
-            log(symbol)
 
         return sorted(symbols)
 
