@@ -126,12 +126,6 @@ class Plot:
                     color = COLOR_UP if is_up else COLOR_DOWN
                     self.ax_oi.bar(t, oi, color=color, width=width)
 
-            for period in EMA_PERIODS:
-                if np.count_nonzero(~np.isnan(oi_array)) >= period:
-                    ema = self.ema(oi_array, period)
-                    self.ax_oi.plot(time_nums, ema, linewidth=EMA_LINEWIDTH, color=EMA_COLORS[period], alpha=EMA_ALPHA,
-                                    label=f'EMA {period}')
-
             self.ax_oi.set_ylim(oi_min, oi_max * 1.05)
             self.ax_oi.legend(loc='upper left', fontsize=LEGEND_FONT_SIZE, facecolor=COLOR_FACE, labelcolor='white')
 
