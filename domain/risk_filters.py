@@ -1,4 +1,4 @@
-from config.constants import MAX_RANGE_SIZE_PCT
+from config.constants import MAX_RANGE_SIZE_PCT, ACTUAL_CONTEXT_CANDLES
 from domain.models.bar import Bar
 from typing import List
 
