@@ -1,7 +1,6 @@
 # test/test.py
 
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
@@ -20,12 +19,12 @@ from config.constants import (
 )
 
 def main():
-    symbol = "FISUSDT"
+    symbol = "ACXUSDT"
     year = 2025
     month = 7
-    day = 7
-    hour = 12
-    minute = 25
+    day = 19
+    hour = 9
+    minute = 20
     tz = BELGRADE_TZ
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 

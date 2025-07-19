@@ -127,7 +127,6 @@ class Plot:
                     self.ax_oi.bar(t, oi, color=color, width=width)
 
             self.ax_oi.set_ylim(oi_min, oi_max * 1.05)
-            self.ax_oi.legend(loc='upper left', fontsize=LEGEND_FONT_SIZE, facecolor=COLOR_FACE, labelcolor='white')
 
         locator = AutoDateLocator(minticks=X_AXIS_MIN_TICKS, maxticks=X_AXIS_MAX_TICKS)
         locator.intervald[mdates.MINUTELY] = X_AXIS_MINUTELY_INTERVALS
