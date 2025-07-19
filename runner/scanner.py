@@ -25,6 +25,7 @@ class Scanner:
         self.events_notifier = TelegramNotifier(TELEGRAM_EVENTS_BOT_TOKEN)
         self.tracker = PositionTrackerService()
         self.trade_executor = TradeExecutor(self.loader.binance, self.tracker)
+        self._sent_signals = {}  # {symbol: set(confidences)}
 
     def run(self, tfss: List[MTFProfile]):
         log("Запущен цикл сканирования.")
@@ -95,7 +96,18 @@ class Scanner:
             pump_start_time=signal.timestamp,
             trendline=signal.trendline,
         )
-        self._send_signal(signal, message, image_path)
+        # Проверка, отправлялся ли уже сигнал с таким confidence для этого символа
+        already_sent = (
+                signal.symbol in self._sent_signals and
+                signal.confidence in self._sent_signals[signal.symbol]
+        )
+        if already_sent:
+            logw(f"Сигнал уже отправлялся: {signal.symbol} [{signal.confidence.name}] — пропуск.")
+        else:
+            self._send_signal(signal, message, image_path)
+            if signal.symbol not in self._sent_signals:
+                self._sent_signals[signal.symbol] = set()
+            self._sent_signals[signal.symbol].add(signal.confidence)
 
     def _send_signal(self, signal: SetupSignal, message: str, image_path: str):
         if signal.is_order_signal:
