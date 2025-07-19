@@ -31,7 +31,6 @@ class Scanner:
         log("Запущен цикл сканирования.")
         symbols = self.loader.get_filtered_symbols()
         log(f"Отобрано {len(symbols)} символов для анализа.")
-        print()
 
         for symbol in symbols:
             for tfs in tfss:

@@ -19,6 +19,7 @@ class Loader:
         markets = self.binance.load_markets()
         symbols = []
 
+        log('Добавлены в список наблюдения:')
         for symbol, data in markets.items():
             if not data.get("active"):
                 continue
@@ -31,7 +32,7 @@ class Loader:
 
             symbol = clean_symbol(symbol)
             symbols.append(symbol)
-            log(f"{symbol} добавлен в список.")
+            log(symbol)
 
         return sorted(symbols)
 
