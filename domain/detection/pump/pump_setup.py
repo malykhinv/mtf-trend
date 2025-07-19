@@ -11,7 +11,6 @@ from domain.models.mtf_profile import MTFProfile
 from domain.models.swing_point import SwingPoint
 from domain.models.swing_type import SwingType
 from domain.models.timeframe import Timeframe
-from domain.models.trendline import Trendline
 from domain.structures import StructureDetector
 from config.constants import (
     FLOAT_UNDEFINED,
@@ -47,16 +46,15 @@ class PumpSetup(Setup):
         if not self.has_moderate_conditions():
             return False
 
-        atr = calculate_atr(self.correction_bars)
-        self.trendline = trendline = self.trendline_builder.build(self.swings, atr)
+        self._define_trendline()
 
-        if not self._check_trendline_validity(trendline):
+        if not self._check_trendline_validity():
             return False
 
-        if not self._check_trendline_touches(trendline, self.correction_bars):
+        if not self._check_trendline_touches():
             return False
 
-        if not self._check_trendline_breakout(trendline, self.correction_bars):
+        if not self._check_trendline_breakout():
             return False
 
         if not self._check_rr():
@@ -68,10 +66,11 @@ class PumpSetup(Setup):
     def has_moderate_conditions(self) -> bool:
         if not self.has_weak_conditions():
             return False
-        self.correction_bars = self._get_correction_bars()
-        self.swings = swings = self.structure_detector.detect_swing_points(self.correction_bars)
 
-        if not self._check_correction_structure(swings):
+        self._define_correction_bars()
+        self._define_swings()
+
+        if not self._check_correction_structure(self.swings):
             return False
 
         if not self._check_correction_depth():
@@ -84,14 +83,7 @@ class PumpSetup(Setup):
         if not self._check_consolidation():
             return False
 
-        # Найти главный хай после пампа
-        main_high_index, main_high_bar = max(enumerate(self.bars_setup), key=lambda item: item[1].high)
-
-        self.main_high = SwingPoint(
-            price=main_high_bar.high,
-            index=main_high_index,
-            type=SwingType.HIGH,
-        )
+        self._define_main_high()
 
         if not self._check_pump_growth():
             return False
@@ -105,6 +97,7 @@ class PumpSetup(Setup):
         self.confidence = Confidence.WEAK
         return True
 
+    # region Check
     def _check_consolidation(self) -> bool:
         bars = self.bars_setup
 
@@ -156,15 +149,6 @@ class PumpSetup(Setup):
 
         return True
 
-    def _check_pump_duration(self) -> bool:
-        bars = self.bars_setup
-        pump_start_index = len(self.consolidation_bars)
-        pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
-        if pump_duration_min < PUMP_MIN_MINUTES:
-            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m")
-            return False
-        return True
-
     def _check_pump_growth(self) -> bool:
         if not self.main_high or self.main_high.is_undefined:
             self._capture_pump("main_high не определён для оценки роста.")
@@ -208,15 +192,13 @@ class PumpSetup(Setup):
         log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
         return True
 
-    def _check_correction_depth(self) -> bool:
-        correction_low = min(bar.low for bar in self.correction_bars)
-        correction_depth = abs(self.main_high.price - correction_low) / self.pump_growth * 100
-
-        if correction_depth > MAX_CORRECTION_PCT:
-            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%")
+    def _check_pump_duration(self) -> bool:
+        bars = self.bars_setup
+        pump_start_index = len(self.consolidation_bars)
+        pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
+        if pump_duration_min < PUMP_MIN_MINUTES:
+            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m")
             return False
-
-        log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
         return True
 
     def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
@@ -250,40 +232,40 @@ class PumpSetup(Setup):
         log("Структура коррекции подтверждена: есть LH и LL.")
         return True
 
-    def _get_correction_bars(self) -> List[Bar]:
-        """
-        Возвращает бары коррекции — все бары после главного high.
-        """
-        if self.main_high.is_undefined:
-            self._capture_pump("main_high не задан, не можем выделить correction bars.")
-            return []
+    def _check_correction_depth(self) -> bool:
+        correction_low = min(bar.low for bar in self.correction_bars)
+        correction_depth = abs(self.main_high.price - correction_low) / self.pump_growth * 100
 
-        correction_bars = self.bars_setup[self.main_high.index + 1:]
-        if not correction_bars:
-            self._capture_pump("После main_high нет баров для коррекции.")
-        return correction_bars
+        if correction_depth > MAX_CORRECTION_PCT:
+            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%")
+            return False
 
-    def _check_trendline_validity(self, trendline: Trendline) -> bool:
-        if not trendline or not trendline.valid:
+        log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
+        return True
+
+    def _check_trendline_validity(self) -> bool:
+        if not self.trendline or not self.trendline.valid:
             self._capture_pump("Наклонка невалидна.")
             return False
         return True
 
-    def _check_trendline_touches(self, trendline: Trendline, bars: List[Bar]) -> bool:
+    def _check_trendline_touches(self) -> bool:
+        bars = self.correction_bars
         correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
-        touches = self.trendline_builder.count_touches(trendline, bars, correction_atr)
+        touches = self.trendline_builder.count_touches(self.trendline, bars, correction_atr)
         if touches < 2:
             self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.")
             return False
         log(f"Подтверждено касаний наклонки: {touches}.")
         return True
 
-    def _check_trendline_breakout(self, trendline: Trendline, bars: List[Bar]) -> bool:
+    def _check_trendline_breakout(self) -> bool:
+        bars = self.correction_bars
         correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
 
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
-            if not self.trendline_builder.has_breakout(trendline, bars, idx, correction_atr):
+            if not self.trendline_builder.has_breakout(self.trendline, bars, idx, correction_atr):
                 self._capture_pump(f"Бар {idx} не закрепился выше наклонки.")
                 return False
 
@@ -332,7 +314,39 @@ class PumpSetup(Setup):
                  f"TP%={tp_distance_pct:.2f}, "
                  f"RR={rr:.2f}")
         return True
+    # endregion
 
+    # region Define
+    def _define_main_high(self):
+        main_high_index, main_high_bar = max(enumerate(self.bars_setup), key=lambda item: item[1].high)
+        self.main_high = SwingPoint(
+            price=main_high_bar.high,
+            index=main_high_index,
+            type=SwingType.HIGH,
+        )
+
+    def _define_correction_bars(self):
+        """
+        Возвращает бары коррекции — все бары после главного high.
+        """
+        if self.main_high.is_undefined:
+            self._capture_pump("main_high не задан, не можем выделить correction bars.")
+            self.correction_bars = []
+
+        correction_bars = self.bars_setup[self.main_high.index + 1:]
+        if not correction_bars:
+            self._capture_pump("После main_high нет баров для коррекции.")
+        self.correction_bars = correction_bars
+
+    def _define_swings(self):
+        self.swings = self.structure_detector.detect_swing_points(self.correction_bars)
+
+    def _define_trendline(self):
+        atr = calculate_atr(self.correction_bars)
+        self.trendline = self.trendline_builder.build(self.swings, atr)
+    # endregion
+
+    # region Calculation
     def _find_pump_start_index(self,
                                bars: List[Bar],
                                ema_series_price: List[EMA],
@@ -452,7 +466,9 @@ class PumpSetup(Setup):
                 atr_list.append(atr)
         atr_list.insert(0, 0.0)
         return atr_list
+    # endregion
 
+    # region Plot
     def _capture_pump(self, message: Optional[str]):
         logw(message)
         self._plot(message)
@@ -469,3 +485,4 @@ class PumpSetup(Setup):
             pump_start_time=self.pump_bars[0].timestamp,
             trendline=self.trendline,
         )
+    # endregion
