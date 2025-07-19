@@ -28,9 +28,9 @@ class TelegramNotifier:
                 try:
                     response = requests.post(url, data=payload, files=files)
                     response.raise_for_status()
-                    log("Сообщение с изображением успешно отправлено в Telegram.")
+                    log("Сообщение с изображением успешно отправлено.")
                 except Exception as error:
-                    log(f"Ошибка при отправке изображения с сообщением в Telegram: {error}")
+                    log(f"Ошибка при отправке изображения с сообщением: {error}")
                     raise
         else:
             url = f"https://api.telegram.org/bot{self.token}/sendMessage"
@@ -42,7 +42,7 @@ class TelegramNotifier:
             try:
                 response = requests.post(url, json=payload)
                 response.raise_for_status()
-                log("Сообщение успешно отправлено в Telegram.")
+                log("Сообщение успешно отправлено.")
             except Exception as error:
-                log(f"Ошибка при отправке сообщения в Telegram: {error}")
+                log(f"Ошибка при отправке сообщения: {error}")
                 raise

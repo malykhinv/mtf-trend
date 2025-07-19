@@ -44,14 +44,12 @@ class Scanner:
         log("Цикл сканирования завершён.")
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile):
-        log(f"{symbol} : {tfs}")
-
         bars_by_tf = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro)}
-        if not self._check_if_passes_macro_filters(symbol, bars_by_tf[tfs.macro]):
+        if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
             return
 
         bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(symbol, tfs.context)
-        if not self._check_if_passes_context_filters(symbol, bars_by_tf[tfs.context]):
+        if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
             return
 
         bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, limit=200, has_oi=True)
@@ -59,29 +57,24 @@ class Scanner:
         self._check_setups(symbol, tfs, bars_by_tf)
 
     @staticmethod
-    def _check_if_passes_macro_filters(symbol: str, bars: List[Bar]):
+    def _check_if_passes_macro_filters(bars: List[Bar]):
         if has_repeating_ohlc(bars):
-            logw(f"{symbol} фильтруется из-за грязных свечей.")
             return False
 
         if not is_calm(bars):
-            logw(f"{symbol} фильтруется из-за большого диапазона.")
             return False
 
         return True
 
     @staticmethod
-    def _check_if_passes_context_filters(symbol: str, bars: List[Bar]):
+    def _check_if_passes_context_filters(bars: List[Bar]):
         if has_repeating_ohlc(bars):
-            logw(f"{symbol} фильтруется из-за грязных свечей.")
             return False
 
         if not is_calm(bars):
-            logw(f"{symbol} фильтруется из-за большого диапазона.")
             return False
 
         if not is_rising(bars):
-            logw(f"{symbol} фильтруется из-за отсутствия локального максимума.")
             return False
 
         return True

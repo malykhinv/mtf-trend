@@ -422,6 +422,10 @@ class PumpSetup(Setup):
             price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
 
             if price_ok and vol_ok and oi_ok and price_above:
+                def log_setup(index):
+                    print()
+                    log(f"{self.symbol} : {self.tfs} ✨ {bars[index].timestamp.strftime('%d.%m %H:%M')}")
+
                 for j in range(index_candidate, 0, -1):
                     bar_j = bars[j]
                     ema_j = ema_series_price[j]
@@ -435,11 +439,11 @@ class PumpSetup(Setup):
                     ema_crossed = not (ema_j.ema20 > ema_j.ema100)
 
                     if price_below_ema or ema_crossed:
-                        log(f"✨ {bars[j + 1].timestamp.strftime('%d.%m %H:%M')} ⬅ Сдвиг")
+                        log_setup(j + 1)
                         return j + 1
 
                 index_candidate = index_candidate if is_defined(index_candidate) else i
-                log(f"✨ {bars[index_candidate].timestamp.strftime('%d.%m %H:%M')}")
+                log_setup(index_candidate)
                 return index_candidate
 
         return None
