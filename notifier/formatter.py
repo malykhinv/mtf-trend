@@ -21,7 +21,7 @@ def format_message(signal: SetupSignal) -> str:
     if is_defined(signal.atr_growth_pct):
         details.append(f"ATR +{round(signal.atr_growth_pct)}%")
     if is_defined(signal.volume_growth_x):
-        details.append(f"Объём ✕{round(signal.volume_growth_x)}")
+        details.append(f"Объём ×{round(signal.volume_growth_x)}")
 
     if details:
         msg += "\n" + "\n".join(details)
