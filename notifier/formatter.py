@@ -15,15 +15,13 @@ def format_message(signal: SetupSignal) -> str:
     url = f"https://www.tradingview.com/symbols/{signal.symbol.replace('USDT', '')}USDT.P/"
     linked_symbol = f"[{signal.symbol}]({url})"
 
-    msg = f"{emoji} {linked_symbol}\n\n"
+    msg = f"{emoji} {linked_symbol} +{round(signal.price_growth_pct)}%\n\n"
 
     details = []
-    if is_defined(signal.price_growth_pct):
-        details.append(f"Рост цены: +{round(signal.price_growth_pct)}%")
     if is_defined(signal.atr_growth_pct):
-        details.append(f"Рост ATR: +{round(signal.atr_growth_pct)}%")
+        details.append(f"ATR +{round(signal.atr_growth_pct)}%")
     if is_defined(signal.volume_growth_x):
-        details.append(f"Рост объёма: x{round(signal.volume_growth_x)}")
+        details.append(f"Объём ✕{round(signal.volume_growth_x)}")
 
     if details:
         msg += "\n" + "\n".join(details)

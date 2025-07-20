@@ -577,7 +577,7 @@ class PumpSetup(Setup):
 
     # region Plot
     def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str):
-        logw(message)
+        logw(f"{self.symbol} {message}")
         self._plot(message, confidence, reason)
 
     def _plot(self, message: Optional[str], confidence: Confidence, reason: str):
