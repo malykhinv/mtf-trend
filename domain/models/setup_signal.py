@@ -19,6 +19,9 @@ class SetupSignal:
     sl: float = FLOAT_UNDEFINED
     tp: float = FLOAT_UNDEFINED
     rr: float = FLOAT_UNDEFINED
+    price_growth_pct: float = FLOAT_UNDEFINED
+    volume_growth_x: float = FLOAT_UNDEFINED
+    atr_growth_pct: float = FLOAT_UNDEFINED
 
     @property
     def is_order_signal(self) -> bool:

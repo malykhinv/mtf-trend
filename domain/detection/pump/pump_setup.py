@@ -204,7 +204,7 @@ class PumpSetup(Setup):
             return False
 
         self.price_growth = pump_growth = self.main_high.price - ema_base
-        price_growth_pct = pump_growth / ema_base * 100
+        self.price_growth_pct = price_growth_pct = pump_growth / ema_base * 100
 
         if price_growth_pct < MIN_PRICE_GROWTH_PCT:
             self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PCT}%",
@@ -227,7 +227,7 @@ class PumpSetup(Setup):
             self._capture_pump("ATR периода консолидации некорректен.", Confidence.WEAK, self._name)
             return False
 
-        atr_growth_pct = (atr_p2 - atr_p1) / atr_p1 * 100
+        self.atr_growth_pct = atr_growth_pct = (atr_p2 - atr_p1) / atr_p1 * 100
 
         if atr_growth_pct < MIN_ATR_GROWTH_PCT:
             self._capture_pump(
@@ -243,7 +243,7 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_volume_growth(self) -> bool:
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
-        avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
+        self.volume_growth_x = avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
         if avg_vol_p2 < avg_vol_p1 * VOLUME_RATIO_MIN:
             self._capture_pump(
@@ -456,12 +456,12 @@ class PumpSetup(Setup):
         for i in range(50, len(bars)):
             ema_p = ema_series_price[i]
             ema_v = ema_series_vol[i]
-            ema_o = ema_series_oi[i] if ema_series_oi[i] else None
+            ema_oi = ema_series_oi[i] if ema_series_oi[i] else None
             atr_mean = mean([atr_series[i], atr_mean]) if is_defined(atr_mean) else atr_series[i]
             price = bars[i].close
 
             price_ok = self._check_ema_structure(ema_p, atr_mean) or self._check_ema_structure(ema_p)
-            oi_ok = True if ema_o is None else self._check_ema_structure(ema_o)
+            oi_ok = False if ema_oi is None else self._check_ema_structure(ema_oi)
             vol_ok = self._check_ema_structure(ema_v)
 
             factors_count = sum([price_ok, vol_ok, oi_ok])

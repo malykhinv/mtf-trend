@@ -29,6 +29,9 @@ class Setup(ABC):
         self.sl = FLOAT_UNDEFINED
         self.tp = FLOAT_UNDEFINED
         self.rr = FLOAT_UNDEFINED
+        self.price_growth_pct = FLOAT_UNDEFINED
+        self.volume_growth_x = FLOAT_UNDEFINED
+        self.atr_growth_pct = FLOAT_UNDEFINED
 
     def validated_or_none(self) -> Optional[SetupSignal]:
         self.define_confidence()
@@ -85,7 +88,10 @@ class Setup(ABC):
             entry=self.entry,
             sl=self.sl,
             tp=self.tp,
-            rr=self.rr
+            rr=self.rr,
+            price_growth_pct=self.price_growth_pct,
+            volume_growth_x=self.volume_growth_x,
+            atr_growth_pct=self.atr_growth_pct
         )
 
     # endregion
