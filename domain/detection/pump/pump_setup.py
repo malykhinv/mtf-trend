@@ -24,6 +24,7 @@ from config.constants import (
     PUMP_MIN_MINUTES,
     MIN_PRICE_GROWTH_PCT,
     VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT, MAX_CORRECTION_BAR_SIZE_FACTOR, MIN_VOLUME_GROWTH, ATR_PERIOD,
+    PUMP_MAX_MINUTES,
 )
 from utils.decorator import inject_method_name
 from utils.float_utils import is_defined
@@ -265,9 +266,21 @@ class PumpSetup(Setup):
         pump_start_index = len(self.consolidation_bars)
         pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
         if pump_duration_min < PUMP_MIN_MINUTES:
-            self._capture_pump(f"Период пампа слишком короткий: {pump_duration_min:.0f}m < {PUMP_MIN_MINUTES}m",
-                               Confidence.MODERATE, self._name)
+            self._capture_pump(
+                f"Период пампа слишком короткий: {pump_duration_min}m < {PUMP_MIN_MINUTES}m",
+                Confidence.MODERATE,
+                self._name
+            )
             return False
+
+        if pump_duration_min > PUMP_MAX_MINUTES:
+            self._capture_pump(
+                f"Период пампа слишком длинный: {pump_duration_min}m > {PUMP_MAX_MINUTES}m",
+                Confidence.MODERATE,
+                self._name
+            )
+            return False
+
         return True
 
     @inject_method_name
