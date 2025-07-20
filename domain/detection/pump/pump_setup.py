@@ -23,7 +23,7 @@ from config.constants import (
     MAX_RANGE_PCT,
     PUMP_MIN_MINUTES,
     MIN_PRICE_GROWTH_PCT,
-    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT,
+    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT, MAX_CORRECTION_BAR_SIZE_FACTOR,
 )
 from utils.decorator import inject_method_name
 from utils.float_utils import is_defined
@@ -78,6 +78,11 @@ class PumpSetup(Setup):
 
     def has_moderate_conditions(self) -> bool:
         self._define_correction_bars()
+        self._define_correction_atr()
+
+        if not self._check_red_bars_size():
+            return False
+
         self._define_swings()
 
         if not self._check_correction_structure(self.swings):
@@ -252,6 +257,21 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    def _check_red_bars_size(self) -> bool:
+        red_bars = [bar for bar in self.correction_bars if bar.close < bar.open]
+
+        for bar in red_bars:
+            if bar.high - bar.low > self.correction_atr * MAX_CORRECTION_BAR_SIZE_FACTOR:
+                self._capture_pump(
+                    "Есть агрессивное движение в шорт.",
+                    Confidence.MODERATE,
+                    self._name
+                )
+                return False
+
+        return True
+
+    @inject_method_name
     def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
         """
         Проверка структуры коррекции.
@@ -310,8 +330,7 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_trendline_touches(self) -> bool:
         bars = self.correction_bars
-        correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
-        touches = self.trendline_builder.count_touches(self.trendline, bars, correction_atr)
+        touches = self.trendline_builder.count_touches(self.trendline, bars, self.correction_atr)
         if touches < 2:
             self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
             return False
@@ -321,11 +340,10 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_trendline_breakout(self) -> bool:
         bars = self.correction_bars
-        correction_atr = sum(abs(b.high - b.low) for b in bars) / len(bars)
 
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
-            if not self.trendline_builder.has_breakout(self.trendline, bars, idx, correction_atr):
+            if not self.trendline_builder.has_breakout(self.trendline, bars, idx, self.correction_atr):
                 self._capture_pump(f"Бар {idx} не закрепился выше наклонки.", Confidence.STRONG, self._name)
                 return False
 
@@ -404,12 +422,14 @@ class PumpSetup(Setup):
             self._capture_pump("После main_high нет баров для коррекции.", Confidence.MODERATE, self._name)
         self.correction_bars = correction_bars
 
+    def _define_correction_atr(self):
+        self.correction_atr = calculate_atr(self.correction_bars)
+
     def _define_swings(self):
         self.swings = self.structure_detector.detect_swing_points(self.correction_bars)
 
     def _define_trendline(self):
-        atr = calculate_atr(self.correction_bars)
-        self.trendline = self.trendline_builder.build(self.swings, atr)
+        self.trendline = self.trendline_builder.build(self.swings, self.correction_atr)
 
     # endregion
 
