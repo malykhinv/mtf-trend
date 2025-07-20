@@ -34,12 +34,12 @@ class StructureDetector:
 
             if is_potential_high:
                 if not last_swing or bar.high > last_swing.price + atr_threshold:
-                    swings.append(SwingPoint(index=i, price=bar.high, type=SwingType.HIGH))
+                    swings.append(SwingPoint(timestamp=bar.timestamp, index=i, price=bar.high, type=SwingType.HIGH))
                     last_swing = swings[-1]
 
             elif is_potential_low:
                 if not last_swing or bar.low < last_swing.price - atr_threshold:
-                    swings.append(SwingPoint(index=i, price=bar.low, type=SwingType.LOW))
+                    swings.append(SwingPoint(timestamp=bar.timestamp, index=i, price=bar.low, type=SwingType.LOW))
                     last_swing = swings[-1]
 
         swings = self._clean_swings(swings)
@@ -83,6 +83,9 @@ class StructureDetector:
             opposite_indices = [s.index for s in swings if s.type.is_high]
         else:
             opposite_indices = [s.index for s in swings if s.type.is_low]
+
+        if not opposite_indices:
+            return swings
 
         all_indices = [0] + opposite_indices + [len(bars) - 1]
 

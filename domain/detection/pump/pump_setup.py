@@ -416,6 +416,7 @@ class PumpSetup(Setup):
     def _define_main_high(self):
         main_high_index, main_high_bar = max(enumerate(self.bars_setup), key=lambda item: item[1].high)
         self.main_high = SwingPoint(
+            timestamp=main_high_bar.timestamp,
             price=main_high_bar.high,
             index=main_high_index,
             type=SwingType.HIGH,

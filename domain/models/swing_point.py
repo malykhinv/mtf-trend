@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 
 from config.constants import FLOAT_UNDEFINED
 from domain.models.swing_type import SwingType
@@ -7,6 +8,7 @@ from domain.models.swing_type import SwingType
 @dataclass
 class SwingPoint:
     type: SwingType
+    timestamp: datetime
     index: int
     price: float
 
@@ -14,6 +16,7 @@ class SwingPoint:
     def undefined(cls):
         return cls(
             type=SwingType.UNDEFINED,
+            timestamp=datetime.now(),
             index=-1,
             price=FLOAT_UNDEFINED,
         )
