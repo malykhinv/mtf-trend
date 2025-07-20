@@ -220,8 +220,8 @@ class PumpSetup(Setup):
             self._capture_pump("Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name)
             return False
 
-        atr_p1 = calculate_atr(bars=self.consolidation_bars, period=len(self.consolidation_bars) - 1)
-        atr_p2 = calculate_atr(bars=self.pump_bars, period=len(self.pump_bars) - 1)
+        atr_p1 = mean(calculate_atr(bars=self.consolidation_bars, period=len(self.consolidation_bars) - 1))
+        atr_p2 = mean(calculate_atr(bars=self.pump_bars, period=len(self.pump_bars) - 1))
 
         if atr_p1 <= 0:
             self._capture_pump("ATR периода консолидации некорректен.", Confidence.WEAK, self._name)
@@ -434,7 +434,7 @@ class PumpSetup(Setup):
         self.correction_bars = correction_bars
 
     def _define_correction_atr(self):
-        self.correction_atr = calculate_atr(self.correction_bars)
+        self.correction_atr = mean(calculate_atr(self.correction_bars))
 
     def _define_swings(self):
         self.swings = self.structure_detector.detect_swing_points(self.correction_bars)

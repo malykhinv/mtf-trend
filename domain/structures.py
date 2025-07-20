@@ -1,3 +1,5 @@
+from statistics import mean
+
 from config.constants import MIN_BARS_BETWEEN_SWINGS
 from domain.models.bar import Bar
 from domain.models.swing_point import SwingPoint
@@ -15,7 +17,7 @@ class StructureDetector:
             return swings
 
         last_swing = None
-        atr = calculate_atr(bars)
+        atr = mean(calculate_atr(bars))
         atr_factor = 1.0
         atr_threshold = atr * atr_factor
 
