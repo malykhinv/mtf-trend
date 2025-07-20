@@ -182,9 +182,9 @@ class Plot:
             bar_time = mdates.date2num(self.bars[sp.index].timestamp.astimezone(BELGRADE_TZ))
 
             if sp.type.is_high:
-                self.ax_price.scatter(bar_time, sp.price, color='blue', marker='^', s=80)
+                self.ax_price.scatter(bar_time, sp.price, color='white', marker='^', s=80)
             elif sp.type.is_low:
-                self.ax_price.scatter(bar_time, sp.price, color='orange', marker='v', s=80)
+                self.ax_price.scatter(bar_time, sp.price, color='white', marker='v', s=80)
 
     def plot_trendline(self, trendline: Trendline):
         if not trendline or not trendline.valid:
