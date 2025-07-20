@@ -49,7 +49,6 @@ class TrendlineBuilder:
             trendline: Trendline,
             bars: List[Bar],
             idx: int,
-            atr: float,
             tolerance_pct: float = 0.5
     ) -> bool:
         if not trendline or not trendline.valid:
@@ -60,7 +59,7 @@ class TrendlineBuilder:
         line_price = trendline.get_value_at(idx)
         diff = close_price - line_price
 
-        if diff > atr * tolerance_pct:
+        if diff > bars[idx].atr * tolerance_pct:
             log(f"Пробой подтверждён: close={close_price:.5f} > линия={line_price:.5f} (diff={diff:.5f})")
             return True
 
@@ -68,7 +67,7 @@ class TrendlineBuilder:
         return False
 
     @staticmethod
-    def count_touches(trendline: Trendline, bars: List[Bar], atr: float, tolerance_pct: float = 0.5) -> int:
+    def count_touches(trendline: Trendline, bars: List[Bar], tolerance_pct: float = 0.5) -> int:
         if not trendline or not trendline.valid:
             logw("Наклонка невалидна для подсчёта касаний.")
             return 0
@@ -78,7 +77,7 @@ class TrendlineBuilder:
         for i, bar in enumerate(bars):
             line_price = trendline.get_value_at(i)
             diff = abs(bar.close - line_price)
-            if diff < atr * tolerance_pct:
+            if diff < bar.atr * tolerance_pct:
                 touch_count += 1
 
         log(f"Касаний наклонки найдено: {touch_count}")

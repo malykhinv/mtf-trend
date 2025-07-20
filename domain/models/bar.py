@@ -13,3 +13,4 @@ class Bar:
     close: float
     volume: float
     oi: float = FLOAT_UNDEFINED
+    atr: float = FLOAT_UNDEFINED

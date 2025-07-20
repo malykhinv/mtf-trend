@@ -36,6 +36,7 @@ MAX_RANGE_PCT = 25
 VOLUME_RATIO_MIN = 5
 BIG_BODY_ATR_MULTIPLIER = 2
 MAX_BIG_BODY_SHARE = 0.5
+ATR_PERIOD = 14
 
 # Trading control
 IS_TRADING_ENABLED = False
@@ -50,6 +51,7 @@ EMA_COLORS = {
     100: '#ffb74d',
     200: '#ffa726'
 }
+ATR_COLOR = '#ffa726'
 
 # Candlestick width multiplier
 CANDLE_WIDTH_MULTIPLIER = 0.5

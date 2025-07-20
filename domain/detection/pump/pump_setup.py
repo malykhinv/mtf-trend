@@ -95,6 +95,9 @@ class PumpSetup(Setup):
         return True
 
     def has_weak_conditions(self) -> bool:
+        if not self._check_oi():
+            return False
+
         if not self._check_consolidation():
             return False
 
@@ -116,6 +119,14 @@ class PumpSetup(Setup):
         return True
 
     # region Check
+    @inject_method_name
+    def _check_oi(self):
+        if any(not is_defined(bar.oi) for bar in self.bars_setup):
+            self._capture_pump("Неверный OI (<= 0).", Confidence.WEAK, self._name)
+            return False
+
+        return True
+
     @inject_method_name
     def _check_consolidation(self) -> bool:
         bars = self.bars_setup
@@ -209,8 +220,8 @@ class PumpSetup(Setup):
             self._capture_pump("Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name)
             return False
 
-        atr_p1 = calculate_atr(self.consolidation_bars)
-        atr_p2 = calculate_atr(self.pump_bars)
+        atr_p1 = calculate_atr(bars=self.consolidation_bars, period=len(self.consolidation_bars) - 1)
+        atr_p2 = calculate_atr(bars=self.pump_bars, period=len(self.pump_bars) - 1)
 
         if atr_p1 <= 0:
             self._capture_pump("ATR периода консолидации некорректен.", Confidence.WEAK, self._name)
@@ -261,7 +272,7 @@ class PumpSetup(Setup):
         red_bars = [bar for bar in self.correction_bars if bar.close < bar.open]
 
         for bar in red_bars:
-            if bar.high - bar.low > self.correction_atr * MAX_CORRECTION_BAR_SIZE_FACTOR:
+            if bar.high - bar.low > bar.atr * MAX_CORRECTION_BAR_SIZE_FACTOR:
                 self._capture_pump(
                     "Есть агрессивное движение в шорт.",
                     Confidence.MODERATE,
@@ -330,7 +341,7 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_trendline_touches(self) -> bool:
         bars = self.correction_bars
-        touches = self.trendline_builder.count_touches(self.trendline, bars, self.correction_atr)
+        touches = self.trendline_builder.count_touches(self.trendline, bars)
         if touches < 2:
             self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
             return False
@@ -343,7 +354,7 @@ class PumpSetup(Setup):
 
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
-            if not self.trendline_builder.has_breakout(self.trendline, bars, idx, self.correction_atr):
+            if not self.trendline_builder.has_breakout(self.trendline, bars, idx):
                 self._capture_pump(f"Бар {idx} не закрепился выше наклонки.", Confidence.STRONG, self._name)
                 return False
 
@@ -574,7 +585,7 @@ class PumpSetup(Setup):
         filename = f"{confidence.value.capitalize()}_{reason}_{self.tfs.setup.value}_{self.symbol}.png"
         plot.generate_and_save(
             filename=filename,
-            pump_start_time=self.pump_bars[0].timestamp,
+            pump_start_time=self.pump_bars[0].timestamp if self.pump_bars else None,
             trendline=self.trendline,
         )
     # endregion

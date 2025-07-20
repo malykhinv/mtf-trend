@@ -2,11 +2,12 @@ from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional
 
-from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED, BELGRADE_TZ
+from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED, BELGRADE_TZ, ATR_PERIOD
 from data.binance_client import get_binance_client
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
+from utils.math_utils import calculate_atr
 from utils.str_utils import clean_symbol
 
 
@@ -104,6 +105,10 @@ class Loader:
                 oi=oi_value
             )
             bars.append(bar)
+
+        atrs = calculate_atr(bars)
+        for i in range(0, len(atrs)):
+            bars[i].atr = atrs[i]
 
         return bars
 

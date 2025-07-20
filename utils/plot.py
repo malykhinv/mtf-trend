@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import numpy as np
+from matplotlib.ticker import FuncFormatter
 from mplfinance.original_flavor import candlestick_ohlc
 from datetime import datetime
 from typing import List, Optional
@@ -32,9 +33,8 @@ from config.constants import (
     PUMP_START_TEXT_SIZE,
     EMA_ALPHA,
     EMA_LINEWIDTH,
-    LEGEND_FONT_SIZE, COLOR_FACE, BELGRADE_TZ,
+    LEGEND_FONT_SIZE, COLOR_FACE, BELGRADE_TZ, ATR_COLOR,
 )
-
 
 class Plot:
     def __init__(self,
@@ -46,16 +46,16 @@ class Plot:
         self.symbol = symbol
         self.bars = bars
         self.save_dir = save_dir
-        self.fig, (self.ax_price, self.ax_vol, self.ax_oi) = plt.subplots(
-            3, 1,
-            figsize=(14, 12),
-            gridspec_kw={"height_ratios": [3, 1, 1]},
+        self.fig, (self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr) = plt.subplots(
+            4, 1,
+            figsize=(14, 14),
+            gridspec_kw={"height_ratios": [4, 1, 1, 1]},
             sharex=True,
             facecolor=COLOR_FACE
         )
         self.fig.patch.set_facecolor(COLOR_FACE)
 
-        for ax in [self.ax_price, self.ax_vol, self.ax_oi]:
+        for ax in [self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr]:
             ax.set_facecolor(COLOR_FACE)
             ax.tick_params(colors='gray', which='both', length=0)
             ax.grid(True, color='gray', linestyle=':', linewidth=0.5, alpha=0.25)
@@ -68,15 +68,16 @@ class Plot:
                 fontsize=10, color='orange', ha='left', va='bottom'
             )
 
-    def generate_and_save(self, filename: str, pump_start_time, trendline) -> str:
+    def generate_and_save(self, filename: str, pump_start_time: Optional[datetime], trendline: Optional) -> str:
         self.plot_main()
-        self.mark_pump_start(pump_start_time)
+        if pump_start_time:
+            self.mark_pump_start(pump_start_time)
         if trendline:
             self.draw_trendline(trendline)
         return self.save(filename)
 
     def plot_main(self):
-        ohlc, closes, volumes, oi_values = [], [], [], []
+        ohlc, closes, volumes, oi_values, atr_values = [], [], [], [], []
 
         for bar in self.bars:
             ts_belgrade = bar.timestamp.astimezone(BELGRADE_TZ)
@@ -85,18 +86,13 @@ class Plot:
             closes.append(bar.close)
             volumes.append((time_num, bar.volume, bar.close >= bar.open))
             oi_values.append(bar.oi)
+            atr_values.append(bar.atr)
 
-        # Динамический width для свечей
         time_nums = [mdates.date2num(bar.timestamp.astimezone(BELGRADE_TZ)) for bar in self.bars]
-        if len(time_nums) >= 2:
-            avg_diff = float(np.mean(np.diff(time_nums)))
-            width = avg_diff * CANDLE_WIDTH_MULTIPLIER
-        else:
-            width = 0.0007
+        width = float(np.mean(np.diff(time_nums))) * CANDLE_WIDTH_MULTIPLIER if len(time_nums) >= 2 else 0.0007
 
         candlestick_ohlc(self.ax_price, ohlc, width=width, colorup=COLOR_UP, colordown=COLOR_DOWN)
 
-        # Volume normalization
         vol_values = np.array([v[1] for v in volumes])
         vol_min, vol_max = vol_values.min(), vol_values.max()
 
@@ -105,34 +101,47 @@ class Plot:
             self.ax_vol.bar(t, vol, color=color, width=width)
 
         self.ax_vol.set_ylim(vol_min, vol_max * 1.05)
+        self.ax_vol.set_ylabel("Volume", color='gray', fontsize=8)
 
         closes_array = np.array(closes)
         for period in EMA_PERIODS:
             if len(closes_array) >= period:
                 ema = self.ema(closes_array, period)
-                self.ax_price.plot(time_nums, ema, linewidth=EMA_LINEWIDTH, color=EMA_COLORS[period], alpha=EMA_ALPHA,
-                                   label=f'EMA {period}')
+                self.ax_price.plot(time_nums, ema, linewidth=EMA_LINEWIDTH, color=EMA_COLORS[period],
+                                   alpha=EMA_ALPHA, label=f'EMA {period}')
 
         self.ax_price.legend(loc='upper left', fontsize=LEGEND_FONT_SIZE, facecolor=COLOR_FACE, labelcolor='white')
 
-        # OI plot normalization
         has_oi_data = any(oi != FLOAT_UNDEFINED for oi in oi_values)
         if has_oi_data:
             oi_array = np.array([oi if oi != FLOAT_UNDEFINED else np.nan for oi in oi_values])
             oi_min, oi_max = np.nanmin(oi_array), np.nanmax(oi_array)
 
-            for t, oi, is_up in zip(time_nums, oi_values, [b.close >= b.open for b in self.bars]):
-                if oi != FLOAT_UNDEFINED:
-                    color = COLOR_UP if is_up else COLOR_DOWN
-                    self.ax_oi.bar(t, oi, color=color, width=width)
+            if oi_max > oi_min:
+                normalized_oi = (oi_array - oi_min) / (oi_max - oi_min)
+            else:
+                normalized_oi = np.zeros_like(oi_array)
 
-            self.ax_oi.set_ylim(oi_min, oi_max * 1.05)
+            for t, norm_oi, is_up in zip(time_nums, normalized_oi, [b.close >= b.open for b in self.bars]):
+                if not np.isnan(norm_oi):
+                    color = COLOR_UP if is_up else COLOR_DOWN
+                    self.ax_oi.bar(t, norm_oi, color=color, width=width)
+
+            self.ax_oi.set_ylim(0, 1.05)
+            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
+            self.ax_oi.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{int(y * 100)}%'))
+
+        atr_line = np.array(atr_values)
+        self.ax_atr.plot(time_nums, atr_line, color=ATR_COLOR, linewidth=1, linestyle='-')
+        atr_min, atr_max = np.nanmin(atr_line), np.nanmax(atr_line)
+        self.ax_atr.set_ylim(atr_min, atr_max * 1.05)
+        self.ax_atr.set_ylabel("ATR", color='gray', fontsize=8)
 
         locator = AutoDateLocator(minticks=X_AXIS_MIN_TICKS, maxticks=X_AXIS_MAX_TICKS)
         locator.intervald[mdates.MINUTELY] = X_AXIS_MINUTELY_INTERVALS
         formatter = DateFormatter(X_AXIS_TIME_FORMAT, tz=BELGRADE_TZ)
 
-        for ax in [self.ax_price, self.ax_vol, self.ax_oi]:
+        for ax in [self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr]:
             ax.xaxis.set_major_locator(locator)
             ax.xaxis.set_major_formatter(formatter)
             ax.tick_params(axis='x', colors='gray', labelsize=8)
