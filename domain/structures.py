@@ -18,7 +18,7 @@ class StructureDetector:
 
         last_swing = None
         atr = mean(calculate_atr(bars))
-        atr_factor = 1.0
+        atr_factor = 0.5 if len(swings) < 2 else 1.0
         atr_threshold = atr * atr_factor
 
         for i in range(1, len(bars) - 1):

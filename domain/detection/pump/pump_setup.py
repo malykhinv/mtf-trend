@@ -438,7 +438,7 @@ class PumpSetup(Setup):
         self.correction_bars = correction_bars
 
     def _define_correction_atr(self):
-        self.correction_atr = mean(calculate_atr(self.correction_bars))
+        self.correction_atr = mean(calculate_atr(self.correction_bars)) if self.correction_bars else FLOAT_UNDEFINED
 
     def _define_correction_swings(self):
         self.correction_swings = self.structure_detector.detect_swing_points(self.correction_bars)
