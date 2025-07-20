@@ -23,7 +23,7 @@ from config.constants import (
     MAX_RANGE_PCT,
     PUMP_MIN_MINUTES,
     MIN_PRICE_GROWTH_PCT,
-    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT, MAX_CORRECTION_BAR_SIZE_FACTOR, MIN_VOLUME_GROWTH,
+    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT, MAX_CORRECTION_BAR_SIZE_FACTOR, MIN_VOLUME_GROWTH, ATR_PERIOD,
 )
 from utils.decorator import inject_method_name
 from utils.float_utils import is_defined
@@ -553,7 +553,7 @@ class PumpSetup(Setup):
         return ema_list
 
     @staticmethod
-    def _calculate_atr_series(bars: List[Bar], period: int = 14) -> List[float]:
+    def _calculate_atr_series(bars: List[Bar], period: int = ATR_PERIOD) -> List[float]:
         trs = []
         for i in range(1, len(bars)):
             high = bars[i].high
