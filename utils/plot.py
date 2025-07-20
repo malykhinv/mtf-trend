@@ -68,12 +68,12 @@ class Plot:
                 fontsize=10, color='orange', ha='left', va='bottom'
             )
 
-    def generate_and_save(self, filename: str, pump_start_time, trendline):
+    def generate_and_save(self, filename: str, pump_start_time, trendline) -> str:
         self.plot_main()
         self.mark_pump_start(pump_start_time)
         if trendline:
             self.draw_trendline(trendline)
-        self.save(filename)
+        return self.save(filename)
 
     def plot_main(self):
         ohlc, closes, volumes, oi_values = [], [], [], []
@@ -169,9 +169,10 @@ class Plot:
         self.ax_price.plot(times, y_values, color=COLOR_TRENDLINE, linestyle=TRENDLINE_STYLE, linewidth=TRENDLINE_WIDTH)
         log("Нарисована наклонка")
 
-    def save(self, filename: str):
+    def save(self, filename: str) -> str:
         import os
         os.makedirs(self.save_dir, exist_ok=True)
         full_path = os.path.join(self.save_dir, filename)
         plt.savefig(full_path, facecolor=self.fig.get_facecolor(), bbox_inches='tight')
         plt.close(self.fig)
+        return full_path

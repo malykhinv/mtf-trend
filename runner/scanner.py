@@ -92,19 +92,10 @@ class Scanner:
         message = format_message(signal)
 
         # Генерация графика
-        plot = Plot(symbol=signal.symbol, bars=setup_bars, tf=tf)
-        plot.plot_main()
-        plot.mark_pump_start(signal.timestamp)
-
-        if signal.trendline:
-            plot.draw_trendline(signal.trendline)
-
         filename = f"{signal.confidence.value.capitalize()}_{signal.symbol}.png"
-        plot.save(filename)
-        image_path = f".generated/plot/charts/{filename}"
 
         plot = Plot(symbol=signal.symbol, bars=setup_bars, tf=tf)
-        plot.generate_and_save(
+        image_path = plot.generate_and_save(
             filename=filename,
             pump_start_time=signal.timestamp,
             trendline=signal.trendline,

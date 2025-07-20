@@ -11,18 +11,18 @@ from utils.logger import log, logw
 from config.constants import BELGRADE_TZ
 
 def main():
-    symbol = "ACXUSDT"
+    symbol = "HOTUSDT"
     year = 2025
     month = 7
-    day = 19
-    hour = 9
-    minute = 20
+    day = 20
+    hour = 8
+    minute = 0
     tz = BELGRADE_TZ
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
     mtf_profiles = [
-        # constants.MTF_PROFILE_1_1,
-        constants.MTF_PROFILE_3_1,
+        constants.MTF_PROFILE_1_1,
+        # constants.MTF_PROFILE_3_1,
         # constants.MTF_PROFILE_3_3,
         # constants.MTF_PROFILE_5_3,
         # constants.MTF_PROFILE_5_1,
