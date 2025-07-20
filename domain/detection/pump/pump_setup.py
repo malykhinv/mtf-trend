@@ -23,7 +23,7 @@ from config.constants import (
     MAX_RANGE_PCT,
     PUMP_MIN_MINUTES,
     MIN_PRICE_GROWTH_PCT,
-    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT, MAX_CORRECTION_BAR_SIZE_FACTOR,
+    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT, MAX_CORRECTION_BAR_SIZE_FACTOR, MIN_VOLUME_GROWTH,
 )
 from utils.decorator import inject_method_name
 from utils.float_utils import is_defined
@@ -243,15 +243,19 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_volume_growth(self) -> bool:
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
-        self.volume_growth_x = avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
+        avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
-        if avg_vol_p2 < avg_vol_p1 * VOLUME_RATIO_MIN:
+        volume_threshold = max(avg_vol_p1 * VOLUME_RATIO_MIN, MIN_VOLUME_GROWTH)
+
+        if avg_vol_p2 < volume_threshold:
             self._capture_pump(
-                f"Объём пампа недостаточный: {mf(avg_vol_p2)} < {mf(avg_vol_p1 * VOLUME_RATIO_MIN)}",
+                f"Объём пампа недостаточный: {mf(avg_vol_p2)} < {mf(volume_threshold)}",
                 Confidence.WEAK,
                 self._name
             )
             return False
+
+        self.volume_growth_x = abs(avg_vol_p2 - avg_vol_p1) / avg_vol_p1
 
         log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
         return True
