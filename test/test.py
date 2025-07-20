@@ -42,7 +42,13 @@ def main():
 
         signal = detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
 
-        plot = Plot(symbol=symbol, bars=setup_bars, correction_swings=signal.correction_swings, tf=tfs.setup)
+        plot = Plot(
+            symbol=symbol,
+            bars=setup_bars,
+            correction_swings=signal.correction_swings,
+            tf=tfs.setup,
+            save_dir='test'
+        )
         plot.plot_main()
         if signal:
             log(f"✅ {signal.confidence.value.capitalize()}")

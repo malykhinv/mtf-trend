@@ -100,7 +100,13 @@ class Scanner:
         # Генерация графика
         filename = f"{signal.confidence.value.capitalize()}_{signal.symbol}.png"
 
-        plot = Plot(symbol=signal.symbol, bars=setup_bars, correction_swings=signal.correction_swings, tf=tf)
+        plot = Plot(
+            symbol=signal.symbol,
+            bars=setup_bars,
+            correction_swings=signal.correction_swings,
+            tf=tf,
+            save_dir='confirmed'
+        )
         image_path = plot.generate_and_save(
             filename=filename,
             pump_start_time=signal.timestamp,

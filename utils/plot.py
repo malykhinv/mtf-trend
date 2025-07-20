@@ -44,11 +44,11 @@ class Plot:
                  correction_swings: List[SwingPoint],
                  tf: Timeframe,
                  message: Optional[str] = None,
-                 save_dir=".generated/plot/charts"):
+                 save_dir='unknown'):
         self.symbol = symbol
         self.bars = bars
         self.correction_swings = correction_swings
-        self.save_dir = save_dir
+        self.save_dir = '.generated/plot/' + save_dir
         self.fig, (self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr) = plt.subplots(
             4, 1,
             figsize=(14, 14),

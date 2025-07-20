@@ -599,7 +599,7 @@ class PumpSetup(Setup):
                     correction_swings=self.correction_swings,
                     tf=self.tfs.setup,
                     message=message,
-                    save_dir=".generated/plot/charts_skipped")
+                    save_dir="skipped")
         filename = f"{confidence.value.capitalize()}_{reason}_{self.tfs.setup.value}_{self.symbol}.png"
         plot.generate_and_save(
             filename=filename,
