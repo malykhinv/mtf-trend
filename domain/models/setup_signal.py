@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 
 from config.constants import FLOAT_UNDEFINED
 from domain.models.confidence import Confidence
 from domain.models.side import Side
+from domain.models.swing_point import SwingPoint
 from domain.models.trendline import Trendline
 
 
@@ -13,6 +14,7 @@ class SetupSignal:
     symbol: str
     side: Side
     confidence: Confidence
+    correction_swings: List[SwingPoint]
     timestamp: datetime
     trendline: Optional[Trendline] = None
     entry: float = FLOAT_UNDEFINED

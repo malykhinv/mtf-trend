@@ -40,11 +40,10 @@ def main():
         bars_by_tf = loader.fetch_ohlcvi_by_tfs(symbol, tfs, limit=200, to_time=target_time)
         setup_bars = bars_by_tf[tfs.setup]
 
-        # Строим график
-        plot = Plot(symbol=symbol, bars=setup_bars, tf=tfs.setup)
-        plot.plot_main()
-
         signal = detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
+
+        plot = Plot(symbol=symbol, bars=setup_bars, correction_swings=signal.correction_swings, tf=tfs.setup)
+        plot.plot_main()
         if signal:
             log(f"✅ {signal.confidence.value.capitalize()}")
 
@@ -52,7 +51,7 @@ def main():
 
             trendline = signal.trendline
             if trendline:
-                plot.draw_trendline(trendline)
+                plot.plot_trendline(trendline)
 
         if not signal:
             logw("❌ Setup не найден.")

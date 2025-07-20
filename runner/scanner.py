@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from config.constants import IS_TRADING_ENABLED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
@@ -7,6 +7,7 @@ from domain.detection.setup_detector import SetupDetector
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
+from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
 from domain.risk_filters import is_calm, has_repeating_ohlc, is_rising
 from notifier.formatter import format_message
@@ -88,13 +89,18 @@ class Scanner:
             self._handle_signal(signal, bars_by_tf[tf], tf)
             print()
 
-    def _handle_signal(self, signal: SetupSignal, setup_bars: List[Bar], tf: Timeframe):
+    def _handle_signal(
+            self,
+            signal: SetupSignal,
+            setup_bars: List[Bar],
+            tf: Timeframe
+    ):
         message = format_message(signal)
 
         # Генерация графика
         filename = f"{signal.confidence.value.capitalize()}_{signal.symbol}.png"
 
-        plot = Plot(symbol=signal.symbol, bars=setup_bars, tf=tf)
+        plot = Plot(symbol=signal.symbol, bars=setup_bars, correction_swings=signal.correction_swings, tf=tf)
         image_path = plot.generate_and_save(
             filename=filename,
             pump_start_time=signal.timestamp,

@@ -21,6 +21,7 @@ class Setup(ABC):
         self.symbol = symbol
         self.bars_setup = bars_by_tf[tfs.setup]
         self.bars_entry = bars_by_tf[tfs.entry]
+        self.correction_swings = []
         self.confidence = None
         self.tfs = tfs
         self.trendline = None
@@ -83,6 +84,7 @@ class Setup(ABC):
             symbol=self.symbol,
             side=Side.LONG,
             confidence=self.confidence,
+            correction_swings=self.correction_swings,
             timestamp=self.setup_timestamp,
             trendline=self.trendline,
             entry=self.entry,

@@ -37,7 +37,6 @@ class PumpSetup(Setup):
         super().__init__(symbol, bars_by_tf, tfs)
         self.structure_detector = StructureDetector()
         self.trendline_builder = TrendlineBuilder()
-        self.swings = []
         self.mid_p1 = FLOAT_UNDEFINED
         self.last = self.bars_setup[-1]
         self.consolidation_bars = []
@@ -83,9 +82,9 @@ class PumpSetup(Setup):
         if not self._check_red_bars_size():
             return False
 
-        self._define_swings()
+        self._define_correction_swings()
 
-        if not self._check_correction_structure(self.swings):
+        if not self._check_correction_structure(self.correction_swings):
             return False
 
         if not self._check_correction_depth():
@@ -372,7 +371,7 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_rr(self) -> bool:
         entry = self.last.close
-        sl_candidates = [s.price for s in reversed(self.swings) if s.type.is_low and s.price < entry]
+        sl_candidates = [s.price for s in reversed(self.correction_swings) if s.type.is_low and s.price < entry]
 
         if not sl_candidates:
             self._capture_pump("Нет swing low для SL.", Confidence.STRONG, self._name)
@@ -440,11 +439,11 @@ class PumpSetup(Setup):
     def _define_correction_atr(self):
         self.correction_atr = mean(calculate_atr(self.correction_bars))
 
-    def _define_swings(self):
-        self.swings = self.structure_detector.detect_swing_points(self.correction_bars)
+    def _define_correction_swings(self):
+        self.correction_swings = self.structure_detector.detect_swing_points(self.correction_bars)
 
     def _define_trendline(self):
-        self.trendline = self.trendline_builder.build(self.swings, self.correction_atr)
+        self.trendline = self.trendline_builder.build(self.correction_swings, self.correction_atr)
 
     # endregion
 
@@ -583,6 +582,7 @@ class PumpSetup(Setup):
     def _plot(self, message: Optional[str], confidence: Confidence, reason: str):
         plot = Plot(symbol=self.symbol,
                     bars=self.bars_setup,
+                    correction_swings=self.correction_swings,
                     tf=self.tfs.setup,
                     message=message,
                     save_dir=".generated/plot/charts_skipped")

@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from domain.models.bar import Bar
+from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
 from domain.models.trendline import Trendline
 from utils.logger import log
@@ -40,11 +41,13 @@ class Plot:
     def __init__(self,
                  symbol: str,
                  bars: List[Bar],
+                 correction_swings: List[SwingPoint],
                  tf: Timeframe,
                  message: Optional[str] = None,
                  save_dir=".generated/plot/charts"):
         self.symbol = symbol
         self.bars = bars
+        self.correction_swings = correction_swings
         self.save_dir = save_dir
         self.fig, (self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr) = plt.subplots(
             4, 1,
@@ -73,7 +76,7 @@ class Plot:
         if pump_start_time:
             self.mark_pump_start(pump_start_time)
         if trendline:
-            self.draw_trendline(trendline)
+            self.plot_trendline(trendline)
         return self.save(filename)
 
     def plot_main(self):
@@ -92,6 +95,8 @@ class Plot:
         width = float(np.mean(np.diff(time_nums))) * CANDLE_WIDTH_MULTIPLIER if len(time_nums) >= 2 else 0.0007
 
         candlestick_ohlc(self.ax_price, ohlc, width=width, colorup=COLOR_UP, colordown=COLOR_DOWN)
+
+        self.plot_swings()
 
         vol_values = np.array([v[1] for v in volumes])
         vol_min, vol_max = vol_values.min(), vol_values.max()
@@ -167,7 +172,21 @@ class Plot:
         ymax = max(bar.high for bar in self.bars)
         self.ax_price.text(pump_start_num, ymax, '', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
 
-    def draw_trendline(self, trendline: Trendline):
+    def plot_swings(self):
+        for sp in self.correction_swings:
+            if sp.is_undefined:
+                continue
+            if sp.index < 0 or sp.index >= len(self.bars):
+                continue
+
+            bar_time = mdates.date2num(self.bars[sp.index].timestamp.astimezone(BELGRADE_TZ))
+
+            if sp.type.is_high:
+                self.ax_price.scatter(bar_time, sp.price, color='blue', marker='^', s=80)
+            elif sp.type.is_low:
+                self.ax_price.scatter(bar_time, sp.price, color='orange', marker='v', s=80)
+
+    def plot_trendline(self, trendline: Trendline):
         if not trendline or not trendline.valid:
             log("Невалидная наклонка, не будет нарисована")
             return
