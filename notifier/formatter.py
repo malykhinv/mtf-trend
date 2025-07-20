@@ -24,7 +24,7 @@ def format_message(signal: SetupSignal) -> str:
         details.append(f"Объём ×{round(signal.volume_growth_x)}")
 
     if details:
-        msg += "\n" + "\n".join(details)
+        msg += "\n".join(details)
 
     if signal.is_order_signal:
         sl_pct = round(100 * abs(signal.entry - signal.sl) / signal.entry, 2)
