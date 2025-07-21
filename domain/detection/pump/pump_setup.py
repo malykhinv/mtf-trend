@@ -174,8 +174,11 @@ class PumpSetup(Setup):
 
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
         if range_p1_pct > MAX_RANGE_PCT:
-            self._capture_pump(f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%",
-                               Confidence.WEAK, self._name)
+            self._capture_pump(
+                f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%",
+                Confidence.WEAK,
+                self._name
+            )
             return False
 
         return True
@@ -183,14 +186,14 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_price_growth(self) -> bool:
         if not self.main_high or self.main_high.is_undefined:
-            self._capture_pump("main_high не определён для оценки роста.", Confidence.MODERATE, self._name)
+            self._capture_pump("main_high не определён для оценки роста.", Confidence.WEAK, self._name)
             return False
 
         ema_series_price = self._calculate_ema_series_from_values([b.close for b in self.bars_setup])
         main_high_index = self.main_high.index
 
         if main_high_index >= len(ema_series_price):
-            self._capture_pump("main_high index вне диапазона EMA.", Confidence.MODERATE, self._name)
+            self._capture_pump("main_high index вне диапазона EMA.", Confidence.WEAK, self._name)
             return False
 
         ema_obj = ema_series_price[main_high_index]
@@ -200,7 +203,7 @@ class PumpSetup(Setup):
         elif is_defined(ema_obj.ema100) and ema_obj.ema100 > 0:
             ema_base = ema_obj.ema100
         else:
-            self._capture_pump("EMA100 и EMA200 невалидны.", Confidence.MODERATE, self._name)
+            self._capture_pump("EMA100 и EMA200 невалидны.", Confidence.WEAK, self._name)
             return False
 
         self.price_growth = pump_growth = self.main_high.price - ema_base
@@ -208,7 +211,7 @@ class PumpSetup(Setup):
 
         if price_growth_pct < MIN_PRICE_GROWTH_PCT:
             self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PCT}%",
-                               Confidence.MODERATE, self._name)
+                               Confidence.WEAK, self._name)
             return False
 
         log(f"Памп подтверждён: рост {price_growth_pct:.1f}% от EMA")
@@ -268,7 +271,7 @@ class PumpSetup(Setup):
         if pump_duration_min < PUMP_MIN_MINUTES:
             self._capture_pump(
                 f"Период пампа слишком короткий: {pump_duration_min}m < {PUMP_MIN_MINUTES}m",
-                Confidence.MODERATE,
+                Confidence.WEAK,
                 self._name
             )
             return False
@@ -276,7 +279,7 @@ class PumpSetup(Setup):
         if pump_duration_min > PUMP_MAX_MINUTES:
             self._capture_pump(
                 f"Период пампа слишком длинный: {pump_duration_min}m > {PUMP_MAX_MINUTES}m",
-                Confidence.MODERATE,
+                Confidence.WEAK,
                 self._name
             )
             return False
@@ -340,8 +343,11 @@ class PumpSetup(Setup):
         correction_depth = abs(self.main_high.price - correction_low) / self.price_growth * 100
 
         if correction_depth > MAX_CORRECTION_PCT:
-            self._capture_pump(f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%",
-                               Confidence.MODERATE, self._name)
+            self._capture_pump(
+                f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%",
+                Confidence.MODERATE,
+                self._name
+            )
             return False
 
         log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")

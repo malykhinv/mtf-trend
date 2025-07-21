@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 from config.constants import IS_TRADING_ENABLED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
@@ -7,7 +7,6 @@ from domain.detection.setup_detector import SetupDetector
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
-from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
 from domain.risk_filters import is_calm, has_repeating_ohlc, is_rising
 from notifier.formatter import format_message
