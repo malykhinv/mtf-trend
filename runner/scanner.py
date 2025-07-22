@@ -8,7 +8,7 @@ from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
 from domain.models.timeframe import Timeframe
-from domain.risk_filters import is_calm, has_repeating_ohlc, is_rising
+from domain.risk_filters import is_calm, has_repeating_ohlc, is_rising, has_gaps
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
@@ -69,6 +69,9 @@ class Scanner:
 
     @staticmethod
     def _check_if_passes_context_filters(bars: List[Bar]):
+        if not has_gaps(bars):
+            return False
+
         if has_repeating_ohlc(bars):
             return False
 
