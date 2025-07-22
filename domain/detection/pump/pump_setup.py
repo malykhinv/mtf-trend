@@ -121,7 +121,7 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_oi(self):
         if any(not is_defined(bar.oi) for bar in self.bars_setup):
-            self._capture_pump("Неверный OI (<= 0).", Confidence.WEAK, self._name)
+            logw("Неверный OI (<= 0).")
             return False
 
         return True
@@ -246,7 +246,8 @@ class PumpSetup(Setup):
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
-        volume_threshold = max(avg_vol_p1 * VOLUME_RATIO_MIN, MIN_VOLUME_GROWTH)
+        min_volume_growth = MIN_VOLUME_GROWTH / mean(bar.close for bar in self.pump_bars)
+        volume_threshold = max(avg_vol_p1 * VOLUME_RATIO_MIN, min_volume_growth)
 
         if avg_vol_p2 < volume_threshold:
             self._capture_pump(

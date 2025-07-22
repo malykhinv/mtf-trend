@@ -11,12 +11,12 @@ from utils.logger import log, logw
 from config.constants import BELGRADE_TZ
 
 def main():
-    symbol = "CKBUSDT"
+    symbol = "ENSUSDT"
     year = 2025
     month = 7
-    day = 20
-    hour = 14
-    minute = 10
+    day = 22
+    hour = 18
+    minute = 0
     tz = BELGRADE_TZ
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
