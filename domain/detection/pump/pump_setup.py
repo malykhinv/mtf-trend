@@ -522,7 +522,11 @@ class PumpSetup(Setup):
                                  min(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200)
                     compact_ema = ema_spread < atr_j
 
-                    if sum([price_ok_j, vol_ok_j, oi_ok_j]) == 0 and compact_ema:
+                    factors_j = sum([price_ok_j, vol_ok_j, oi_ok_j])
+                    is_red_bar = bars[j].close < bars[j].open
+                    price_below_ema = bars[j].close < min(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200)
+
+                    if (factors_j == 0 and compact_ema) or (factors_j <= 1 and price_below_ema and is_red_bar):
                         log_setup(j + 1)
                         return j + 1
 
