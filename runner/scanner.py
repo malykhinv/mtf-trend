@@ -40,7 +40,6 @@ class Scanner:
                     self._process_symbol(symbol, tfs)
                 except Exception as error:
                     logw(f"Ошибка при обработке {symbol}: {error}")
-                    raise
 
         log("Цикл сканирования завершён.")
         print()
