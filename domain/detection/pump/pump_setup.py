@@ -329,7 +329,7 @@ class PumpSetup(Setup):
             if lows[i].price < lows[i - 1].price:
                 ll_count += 1
 
-        if lh_count < 2 or ll_count < 2:
+        if lh_count < 1 or ll_count < 1:
             self._capture_pump(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}", Confidence.MODERATE, self._name)
             return False
 
