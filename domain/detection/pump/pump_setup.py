@@ -456,13 +456,14 @@ class PumpSetup(Setup):
         self.correction_bars = correction_bars
 
     def _define_correction_atr(self):
-        self.correction_atr = mean(calculate_atr(self.correction_bars)) if self.correction_bars else FLOAT_UNDEFINED
+        self.correction_atrs = calculate_atr(self.correction_bars) if self.correction_bars else []
 
     def _define_correction_swings(self):
-        self.correction_swings = self.structure_detector.detect_swing_points(self.correction_bars)
+        self.correction_swings = self.structure_detector.detect_swing_points(self.correction_bars, self.correction_atrs)
 
     def _define_trendline(self):
-        self.trendline = self.trendline_builder.build(self.correction_swings, self.correction_atr)
+        atr = mean(self.correction_atrs) if self.correction_atrs else FLOAT_UNDEFINED
+        self.trendline = self.trendline_builder.build(self.correction_swings, atr)
 
     # endregion
 
