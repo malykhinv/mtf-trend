@@ -38,7 +38,6 @@ class PumpSetup(Setup):
         super().__init__(symbol, bars_by_tf, tfs)
         self.structure_detector = StructureDetector()
         self.trendline_builder = TrendlineBuilder()
-        self.mid_p1 = FLOAT_UNDEFINED
         self.last = self.bars_setup[-1]
         self.consolidation_bars = []
         self.pump_bars = []
@@ -170,7 +169,6 @@ class PumpSetup(Setup):
             return False
 
         self.high_p1 = high_p1
-        self.mid_p1 = (high_p1 + low_p1) / 2
 
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
         if range_p1_pct > MAX_RANGE_PCT:
@@ -476,22 +474,30 @@ class PumpSetup(Setup):
                                atr_series: List[float]) -> Optional[int]:
         atr_mean = FLOAT_UNDEFINED
         index_candidate = FLOAT_UNDEFINED
+
         for i in range(50, len(bars)):
             ema_p = ema_series_price[i]
             ema_v = ema_series_vol[i]
             ema_oi = ema_series_oi[i] if ema_series_oi[i] else None
-            atr_mean = mean([atr_series[i], atr_mean]) if is_defined(atr_mean) else atr_series[i]
+            atr_i = atr_series[i]
             price = bars[i].close
 
+            # Обновляем средний ATR
+            atr_mean = mean([atr_i, atr_mean]) if is_defined(atr_mean) else atr_i
+
+            # Проверка структуры
             price_ok = self._check_ema_structure(ema_p, atr_mean) or self._check_ema_structure(ema_p)
-            oi_ok = False if ema_oi is None else self._check_ema_structure(ema_oi)
             vol_ok = self._check_ema_structure(ema_v)
+            oi_ok = self._check_ema_structure(ema_oi) if ema_oi else False
 
             factors_count = sum([price_ok, vol_ok, oi_ok])
+
             if factors_count < 2 and is_defined(index_candidate):
                 index_candidate = FLOAT_UNDEFINED
             if factors_count >= 2 and not is_defined(index_candidate):
                 index_candidate = i
+
+            # Условие полного подтверждения пампа
             price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
 
             if price_ok and vol_ok and oi_ok and price_above:
@@ -499,27 +505,30 @@ class PumpSetup(Setup):
                     print()
                     log(f"{self.symbol} : {self.tfs} ✨ {bars[index].timestamp.strftime('%d.%m %H:%M')}")
 
-                for j in range(index_candidate, 0, -1):
-                    bar_j = bars[j]
+                # Назад до точки, где 0 факторов и EMA-компактность соблюдена
+                for j in range(index_candidate - 1, 0, -1):
                     ema_j = ema_series_price[j]
+                    vol_j = ema_series_vol[j]
+                    oi_j = ema_series_oi[j] if ema_series_oi[j] else None
+                    atr_j = atr_series[j]
 
-                    price_below_ema = (
-                            bar_j.low < ema_j.ema20 or
-                            bar_j.low < ema_j.ema50 or
-                            bar_j.low < ema_j.ema100 or
-                            bar_j.low < ema_j.ema200
-                    )
-                    ema_crossed = not (ema_j.ema20 > ema_j.ema100)
+                    price_ok_j = self._check_ema_structure(ema_j, atr_j) or self._check_ema_structure(ema_j)
+                    vol_ok_j = self._check_ema_structure(vol_j)
+                    oi_ok_j = self._check_ema_structure(oi_j) if oi_j else False
 
-                    if price_below_ema or ema_crossed:
+                    ema_spread = max(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200) - \
+                                 min(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200)
+                    compact_ema = ema_spread < atr_j
+
+                    if sum([price_ok_j, vol_ok_j, oi_ok_j]) == 0 and compact_ema:
                         log_setup(j + 1)
                         return j + 1
 
-                index_candidate = index_candidate if is_defined(index_candidate) else i
                 log_setup(index_candidate)
                 return index_candidate
 
         return None
+
 
     @staticmethod
     def _check_ema_structure(ema_obj: EMA, atr_value: float = FLOAT_UNDEFINED) -> bool:
