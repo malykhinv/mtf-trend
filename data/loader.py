@@ -45,7 +45,7 @@ class Loader:
         since = None
         end_time = None
         if to_time:
-            since = int((to_time - timedelta(minutes=limit * self._timeframe_minutes(timeframe))).timestamp() * 1000)
+            since = int((to_time - timedelta(minutes=limit * timeframe.minutes)).timestamp() * 1000)
             end_time = int(to_time.timestamp() * 1000)
 
         raw = self.binance.fetch_ohlcv(
@@ -57,13 +57,13 @@ class Loader:
 
         # OI
         if has_oi:
-            if self._timeframe_minutes(timeframe) < self._timeframe_minutes(Timeframe.M5):
+            if timeframe.minutes < Timeframe.M5.minutes:
                 timeframe = Timeframe.M5
                 since = None
                 end_time = None
                 if to_time:
                     since = int(
-                        (to_time - timedelta(minutes=limit * self._timeframe_minutes(timeframe))).timestamp() * 1000)
+                        (to_time - timedelta(minutes=limit * timeframe.minutes)).timestamp() * 1000)
                     end_time = int(to_time.timestamp() * 1000)
                 raw_oi = self.fetch_oi(
                     symbol=symbol,
@@ -140,22 +140,6 @@ class Loader:
             params['endTime'] = end_time
 
         return self.binance.fapidata_get_openinteresthist(params)
-
-    @staticmethod
-    def _timeframe_minutes(timeframe: Timeframe) -> int:
-        """Возвращает количество минут для данного таймфрейма."""
-        tf_map = {
-            "1m": 1,
-            "3m": 3,
-            "5m": 5,
-            "15m": 15,
-            "30m": 30,
-            "1h": 60,
-            "2h": 120,
-            "4h": 240,
-            "1d": 1440
-        }
-        return tf_map.get(timeframe.value, 1)
 
     @staticmethod
     def _map_oi_to_tf(target_timestamps: List[datetime], oi_data: List[Dict]) -> List[float]:

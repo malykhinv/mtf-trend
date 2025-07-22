@@ -246,7 +246,8 @@ class PumpSetup(Setup):
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
 
-        min_volume_growth = MIN_VOLUME_GROWTH / mean(bar.close for bar in self.pump_bars)
+        timeframe_factor = self.tfs.setup.minutes
+        min_volume_growth = MIN_VOLUME_GROWTH * timeframe_factor / mean(bar.close for bar in self.pump_bars)
         volume_threshold = max(avg_vol_p1 * VOLUME_RATIO_MIN, min_volume_growth)
 
         if avg_vol_p2 < volume_threshold:
