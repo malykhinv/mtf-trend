@@ -15,8 +15,8 @@ def main():
     year = 2025
     month = 7
     day = 22
-    hour = 18
-    minute = 0
+    hour = 20
+    minute = 40
     tz = BELGRADE_TZ
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
@@ -45,7 +45,7 @@ def main():
         plot = Plot(
             symbol=symbol,
             bars=setup_bars,
-            correction_swings=signal.correction_swings,
+            correction_swings=signal.correction_swings if signal else [],
             tf=tfs.setup,
             save_dir='test'
         )
