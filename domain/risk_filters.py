@@ -5,6 +5,12 @@ from typing import List
 def has_gaps(bars: List[Bar], eps: float = 1e-8) -> bool:
     """
     Проверяет наличие реальных гэпов: когда диапазоны [low, high] двух соседних свечей не пересекаются.
+
+    Args:
+        bars (List[Bar]): Список баров для проверки.
+        eps (float): Допуск для сравнения на float.
+    Returns:
+        bool: True, если найден хотя бы один гэп.
     """
     if len(bars) < 2:
         return False
@@ -17,6 +23,12 @@ def has_gaps(bars: List[Bar], eps: float = 1e-8) -> bool:
 def has_repeating_ohlc(bars: List[Bar], sequence_len: int = 2) -> bool:
     """
     Проверяет, есть ли хотя бы одна последовательность из `sequence_len` свечей подряд с одинаковыми OHLC.
+
+    Args:
+        bars (List[Bar]): Список баров для проверки.
+        sequence_len (int): Длина последовательности одинаковых баров.
+    Returns:
+        bool: True, если есть хотя бы такая последовательность.
     """
     if len(bars) < sequence_len:
         return False
@@ -38,7 +50,12 @@ def has_repeating_ohlc(bars: List[Bar], sequence_len: int = 2) -> bool:
 
 def is_calm(bars: List[Bar]) -> bool:
     """
-    Вычисляет диапазон (max - min) из уже загруженных баров.
+    Вычисляет относительный диапазон последних 7 баров и сравнивает с максимально допустимым.
+
+    Args:
+        bars (List[Bar]): Список баров для анализа.
+    Returns:
+        bool: True, если диапазон меньше MAX_RANGE_SIZE_PCT.
     """
     bars = bars[-7:]
     if len(bars) < 2:
@@ -54,7 +71,12 @@ def is_calm(bars: List[Bar]) -> bool:
 
 def is_rising(bars: List[Bar]) -> bool:
     """
-    Проверяет, превысили ли последние свечи предыдущий максимум.
+    Проверяет, превысили ли последние (актуальные) свечи предыдущий максимум (разворот).
+
+    Args:
+        bars (List[Bar]): Массив баров.
+    Returns:
+        bool: True, если свежие свечи обновили максимум относительно истории.
     """
     if len(bars) <= ACTUAL_CONTEXT_CANDLES:
         return False

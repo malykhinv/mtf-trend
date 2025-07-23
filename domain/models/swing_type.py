@@ -2,6 +2,9 @@ from enum import Enum
 
 
 class SwingType(str, Enum):
+    """
+    Тип экстремума: high (вершина), low (дно), undefined (служебное).
+    """
     HIGH = "high"
     LOW = "low"
     UNDEFINED = "undefined"

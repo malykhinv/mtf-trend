@@ -10,15 +10,26 @@ from domain.models.timeframe import Timeframe
 
 
 class SetupDetector:
-
+    """
+    Класс-детектор. Автоматически перебирает возможные типы сетапов, используя переданные данные и параметры.
+    """
     @staticmethod
     def detect(
             symbol: str,
             tfs: MTFProfile,
             bars_by_tf: Dict[Timeframe, List[Bar]],
     ) -> Optional[SetupSignal]:
-        setup_classes: List[Callable] = [PumpSetup]
+        """
+        Запускает перебор всех типов сетапов и возвращает первый валидный сигнальный объект.
 
+        Args:
+            symbol (str): Тикер.
+            tfs (MTFProfile): Профиль таймфреймов.
+            bars_by_tf (Dict[Timeframe, List[Bar]]): Бары по таймфреймам.
+        Returns:
+            Optional[SetupSignal]: Первый найденный рабочий сигнал, либо None.
+        """
+        setup_classes: List[Callable[[str, MTFProfile, Dict[Timeframe, List[Bar]]], SetupSignal]] = [PumpSetup]
         for setup_cls in setup_classes:
             setup = setup_cls(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
             signal = setup.validated_or_none()

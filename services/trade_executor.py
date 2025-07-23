@@ -11,7 +11,16 @@ from services.position_tracker_service import PositionTrackerService
 
 
 class TradeExecutor:
+    """
+    Класс для автоматического исполнения торговых сигналов (создания ордеров, стопов и тейк-профитов).
+    Управляет рисками и регистрирует входы в систему.
+    """
     def __init__(self, client: binance, tracker: PositionTrackerService):
+        """
+        Args:
+            client (binance): ccxt бинанс-клиент
+            tracker (PositionTrackerService): трекер для автофиксации сделок
+        """
         self.client = client
         self.tracker = tracker
 
@@ -20,7 +29,16 @@ class TradeExecutor:
                 side: Side,
                 sl: float,
                 tp: float,
-                amount_usdt: float = POSITION_USDT):
+                amount_usdt: float = POSITION_USDT) -> None:
+        """
+        Исполняет торговый сигнал: создаёт рыночную позицию, стоп и тейк, регистрирует сделку.
+        Args:
+            symbol (str): тикер
+            side (Side): LONG/SHORT
+            sl (float): стоп-лосс
+            tp (float): тейк-профит
+            amount_usdt (float): объём в долларах (по умолчанию глобальный)
+        """
         try:
             symbol_market = market_symbol(symbol)
             entry = self._get_price(symbol_market)
@@ -89,11 +107,23 @@ class TradeExecutor:
             raise
 
     def _get_price(self, symbol_market: str) -> float:
+        """
+        Получает последнюю цену по тикеру.
+        Args:
+            symbol_market (str): тикер (Binance-стиль)
+        Returns:
+            float: текущая/последняя цена
+        """
         ticker = self.client.fetch_ticker(symbol_market)
         return ticker['last'] if 'last' in ticker else FLOAT_UNDEFINED
 
     @staticmethod
     def _validate_rr(entry: float, sl: float, tp: float, symbol: str) -> bool:
+        """
+        Проверяет соответствие RR и относительных расстояний минимальным критериям.
+        Returns:
+            bool: True, если RR > MIN_RR и дистанции допустимы
+        """
         if not get_pct(sl, entry) > MIN_SL_PCT:
             logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return False
@@ -115,9 +145,13 @@ class TradeExecutor:
 
     @staticmethod
     def _validate_sl_tp(entry: float, sl: float, tp: float, side: Side, symbol: str) -> bool:
+        """
+        Проверяет валидность стоп/тейк относительно направления сделки (long/short).
+        Returns:
+            bool: True если SL/TP соответствуют направлению
+        """
         def log_illegal():
             log(f"SL/TP не соответствуют направлению сделки по {symbol}: {entry}.")
-
         if side.is_long and (sl >= entry or tp <= entry):
             log_illegal()
             return False

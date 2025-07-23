@@ -11,6 +11,10 @@ from domain.models.trendline import Trendline
 
 @dataclass
 class SetupSignal:
+    """
+    Представляет обнаруженный торговый сетап (сигнал для сделки или события).
+    Содержит всю аналитику: точки входа, стопа, тейка, RR, уверенность, бары коррекции и проч.
+    """
     symbol: str
     side: Side
     confidence: Confidence
@@ -27,6 +31,9 @@ class SetupSignal:
 
     @property
     def is_order_signal(self) -> bool:
+        """
+        True, если сигнал достаточно надёжен и подходит для генерации торговой заявки (стоп/тейк не пустые, уровень strong).
+        """
         return self.confidence.is_strong and self.tp is not None and self.sl is not None
 
     @property

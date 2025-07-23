@@ -11,21 +11,21 @@ from utils.logger import log, logw
 from config.constants import BELGRADE_TZ
 
 def main():
-    symbol = "DEGOUSDT"
+    symbol = "TNSRUSDT"
     year = 2025
     month = 7
     day = 22
-    hour = 21
-    minute = 0
+    hour = 18
+    minute = 58
     tz = BELGRADE_TZ
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
     mtf_profiles = [
-        # constants.MTF_PROFILE_1_1,
+        constants.MTF_PROFILE_1_1,
         # constants.MTF_PROFILE_3_1,
         # constants.MTF_PROFILE_3_3,
         # constants.MTF_PROFILE_5_3,
-        constants.MTF_PROFILE_5_1,
+        # constants.MTF_PROFILE_5_1,
     ]
 
     loader = Loader()

@@ -7,9 +7,20 @@ from domain.models.trendline import Trendline
 import numpy as np
 
 class TrendlineBuilder:
-
+    """
+    Построитель трендовых линий (наклонок) по точкам swing/high таймфрейма.
+    Использует линейную регрессию и аналитику для фильтрации некорректных наклонок.
+    """
     @staticmethod
     def build(swings: List[SwingPoint], atr: float) -> Optional[Trendline]:
+        """
+        Генерирует трендовую линию (наклонку) по переданным точкам swing, используя регрессию и фильтрацию выбросов.
+        Args:
+            swings (List[SwingPoint]): Список swing-точек/экстремумов для построения наклонки.
+            atr (float): ATR/волатильность для фильтрации шумов.
+        Returns:
+            Optional[Trendline]: Возвращает сгенерированную наклонку или None.
+        """
         if not swings or len(swings) < 2:
             logw("Недостаточно swings для построения наклонки.")
             return None
@@ -51,6 +62,16 @@ class TrendlineBuilder:
             idx: int,
             tolerance_pct: float = 0.5
     ) -> bool:
+        """
+        Проверяет, был ли пробой линии тренда вверх на конкретной свече.
+        Args:
+            trendline (Trendline): Объект наклонной линии.
+            bars (List[Bar]): Список баров.
+            idx (int): Индекс проверяемого бара.
+            tolerance_pct (float): Коэффициент чувствительности к ATR.
+        Returns:
+            bool: True если пробой был.
+        """
         if not trendline or not trendline.valid:
             logw("Наклонка невалидна для проверки пробоя.")
             return False
@@ -68,6 +89,15 @@ class TrendlineBuilder:
 
     @staticmethod
     def count_touches(trendline: Trendline, bars: List[Bar], tolerance_pct: float = 0.5) -> int:
+        """
+        Считает количество касаний линии тренда барами (по close c ATR-допуском).
+        Args:
+            trendline (Trendline): Наклонка.
+            bars (List[Bar]): Массив баров.
+            tolerance_pct (float): Толеранс по ATR.
+        Returns:
+            int: Число касаний.
+        """
         if not trendline or not trendline.valid:
             logw("Наклонка невалидна для подсчёта касаний.")
             return 0

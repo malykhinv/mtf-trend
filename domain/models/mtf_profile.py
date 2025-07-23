@@ -5,6 +5,10 @@ from domain.models.timeframe import Timeframe
 
 @dataclass
 class MTFProfile:
+    """
+    Описывает группы таймфреймов для multi-timeframe анализа:
+        macro, context, setup, entry.
+    """
     macro: Timeframe
     context: Timeframe
     setup: Timeframe

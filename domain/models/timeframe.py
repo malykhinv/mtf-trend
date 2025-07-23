@@ -7,6 +7,9 @@ _MINUTES_MAP = {
 }
 
 class Timeframe(str, Enum):
+    """
+    Список поддерживаемых таймфреймов для анализа и торговли.
+    """
     D1 = "1d"
     H4 = "4h"
     H1 = "1h"
@@ -18,6 +21,10 @@ class Timeframe(str, Enum):
 
     @property
     def minutes(self) -> int:
-        """Возвращает количество минут для данного таймфрейма."""
+        """
+        Возвращает количество минут для данного таймфрейма.
+        Returns:
+            int: длительность одного бара в минутах
+        """
         num, unit = int(self.value[:-1]), self.value[-1]
         return num * _MINUTES_MAP.get(unit, 1)

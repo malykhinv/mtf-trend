@@ -7,11 +7,21 @@ from config.constants import MIN_COOLDOWN_PER_SYMBOL_MINUTES
 
 
 class PositionTrackerService:
-    def __init__(self):
+    """
+    Сервис для отслеживания, обновления и фиксации статуса открытых и завершённых сделок (trade management).
+    Работает с SQLite и Binance API.
+    """
+    def __init__(self) -> None:
+        """
+        Инициализация соединения с Binance и БД.
+        """
         self.client = get_binance_client()
         self.conn = get_connection()
 
-    def track_all(self):
+    def track_all(self) -> None:
+        """
+        Обходит все открытые сделки и запускает PositionManager для сопровождения позиции.
+        """
         cursor = self.conn.cursor()
         cursor.execute("""
             SELECT id, symbol, side, entry, sl, tp, atr, amount_usdt, partial_exit_done
@@ -40,12 +50,13 @@ class PositionTrackerService:
                 log(f"Ошибка в PositionManager для {symbol}: {error}")
                 raise
 
-    def add_trade(self, symbol, side, entry, sl, tp, atr, amount):
+    def add_trade(self, symbol: str, side, entry: float, sl: float, tp: float, atr: float, amount: float) -> None:
+        """
+        Добавляет новую сделку в БД, ставит cooldown.
+        """
         cursor = self.conn.cursor()
-
         # Рассчитываем cooldown до
         cooldown_until = datetime.now() + timedelta(minutes=MIN_COOLDOWN_PER_SYMBOL_MINUTES)
-
         cursor.execute("""
             INSERT INTO trades (symbol, side, entry, sl, tp, atr, amount_usdt, active, cooldown_until)
             VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
@@ -53,7 +64,10 @@ class PositionTrackerService:
         self.conn.commit()
         log(f"[DB] Добавлена сделка {symbol} {side} @ {entry}")
 
-    def mark_partial_exit(self, trade_id):
+    def mark_partial_exit(self, trade_id: int) -> None:
+        """
+        Ставит флаг partial_exit_done и обновляет last_action_ts.
+        """
         cursor = self.conn.cursor()
         cursor.execute("""
             UPDATE trades SET partial_exit_done = 1, last_action_ts = ? WHERE id = ?
@@ -61,7 +75,10 @@ class PositionTrackerService:
         self.conn.commit()
         log(f"[DB] Частичный выход зафиксирован для сделки ID={trade_id}")
 
-    def mark_closed(self, trade_id):
+    def mark_closed(self, trade_id: int) -> None:
+        """
+        Ставит статус active=0 и обновляет last_action_ts — сделка полностью закрыта.
+        """
         cursor = self.conn.cursor()
         cursor.execute("""
             UPDATE trades SET active = 0, last_action_ts = ? WHERE id = ?

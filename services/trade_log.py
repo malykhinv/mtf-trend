@@ -2,12 +2,17 @@ from datetime import datetime, timedelta
 from data.db import get_connection
 from domain.models.side import Side
 
-
 class TradeLog:
-    def __init__(self):
+    """
+    Упростённый логгер исполненных сделок и их истории для отчётов и проверки (по времени, символу и т.д.).
+    """
+    def __init__(self) -> None:
         self.conn = get_connection()
 
-    def record_trade(self, symbol: str, side: Side, amount_usdt: float):
+    def record_trade(self, symbol: str, side: Side, amount_usdt: float) -> None:
+        """
+        Добавить новую исполненную сделку в БД (без стопов и подробностей).
+        """
         with self.conn:
             self.conn.execute(
                 "INSERT INTO trades (symbol, side, amount_usdt) VALUES (?, ?, ?)",
@@ -15,6 +20,9 @@ class TradeLog:
             )
 
     def trades_last_hour(self) -> int:
+        """
+        Возвращает количество сделок за последнюю 1 час.
+        """
         one_hour_ago = datetime.now() - timedelta(hours=1)
         result = self.conn.execute(
             "SELECT COUNT(*) FROM trades WHERE timestamp > ?",
@@ -23,6 +31,9 @@ class TradeLog:
         return result[0] if result else 0
 
     def traded_recently(self, symbol: str, minutes: int) -> bool:
+        """
+        Проверяет, была ли активность по символу за последние N минут.
+        """
         limit = datetime.now() - timedelta(minutes=minutes)
         result = self.conn.execute(
             "SELECT 1 FROM trades WHERE symbol = ? AND timestamp > ? LIMIT 1",
