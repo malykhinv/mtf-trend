@@ -69,7 +69,7 @@ class Scanner:
 
     @staticmethod
     def _check_if_passes_context_filters(bars: List[Bar]):
-        if not has_gaps(bars):
+        if has_gaps(bars):
             return False
 
         if has_repeating_ohlc(bars):
