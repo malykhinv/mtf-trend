@@ -1,6 +1,6 @@
 from domain.structures import StructureDetector
 from utils.logger import log
-from utils.str_utils import market_symbol
+from utils.math_utils import calculate_atr
 
 class PositionManager:
     """
@@ -36,7 +36,8 @@ class PositionManager:
         """
         bars = self.tracker.loader.fetch_ohlcvi(self.symbol, '5m', limit=50)  # structure_tf
         detector = StructureDetector()
-        swings = detector.detect_swing_points(bars)
+        atrs = calculate_atr(bars)
+        swings = detector.detect_swing_points(bars, atrs)
         current_price = bars[-1].close
         rr_progress = abs(current_price - self.entry) / abs(self.entry - self.sl)
         log(f"{self.symbol} @ {current_price:.5f}, RR прогресс: {rr_progress:.2f}")
@@ -63,7 +64,7 @@ class PositionManager:
             side = 'sell' if self.side == 'long' else 'buy'
             amount_partial = round(self.amount * 0.5, 6)
             self.client.create_order(
-                symbol=market_symbol(self.symbol),
+                symbol=self.symbol,
                 type='market',
                 side=side,
                 amount=amount_partial
@@ -81,7 +82,7 @@ class PositionManager:
         try:
             side = 'sell' if self.side == 'long' else 'buy'
             self.client.create_order(
-                symbol=market_symbol(self.symbol),
+                symbol=self.symbol,
                 type='market',
                 side=side,
                 amount=self.amount

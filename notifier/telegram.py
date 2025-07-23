@@ -43,7 +43,7 @@ class TelegramNotifier:
                     log("Сообщение с изображением успешно отправлено.")
                 except Exception as error:
                     log(f"Ошибка при отправке изображения с сообщением: {error}")
-                    raise
+                    return
         else:
             url: str = f"https://api.telegram.org/bot{self.token}/sendMessage"
             payload = {
@@ -57,4 +57,4 @@ class TelegramNotifier:
                 log("Сообщение успешно отправлено.")
             except Exception as error:
                 log(f"Ошибка при отправке сообщения: {error}")
-                raise
+                return

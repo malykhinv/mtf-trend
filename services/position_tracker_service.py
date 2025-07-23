@@ -55,6 +55,12 @@ class PositionTrackerService:
         Добавляет новую сделку в БД, ставит cooldown.
         """
         cursor = self.conn.cursor()
+        # Проверка: если уже есть активная сделка по symbol — новая не добавляется
+        cursor.execute("SELECT COUNT(*) FROM trades WHERE symbol = ? AND active = 1", (symbol,))
+        result = cursor.fetchone()
+        if result and result[0] > 0:
+            log(f"[DB] Есть активная сделка по {symbol}, новая не создаётся")
+            return
         # Рассчитываем cooldown до
         cooldown_until = datetime.now() + timedelta(minutes=MIN_COOLDOWN_PER_SYMBOL_MINUTES)
         cursor.execute("""

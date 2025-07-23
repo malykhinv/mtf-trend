@@ -1,7 +1,7 @@
 from abc import ABC
 from typing import Dict, List, Optional, Tuple
 
-from config.constants import MIN_RR, FLOAT_UNDEFINED, MIN_SL_PCT
+from config.constants import MIN_RR, FLOAT_UNDEFINED, MIN_SL_PCT, MIN_TP_PCT
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
@@ -81,8 +81,8 @@ class Setup(ABC):
         if not sl_distance_pct >= MIN_SL_PCT:
             logw(f"SL слишком близко: {round(sl_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
             return False
-        if not tp_distance_pct >= MIN_SL_PCT:
-            logw(f"TP слишком близко: {round(tp_distance_pct, 2)}% < {round(MIN_SL_PCT, 2)}%")
+        if not tp_distance_pct >= MIN_TP_PCT:
+            logw(f"TP слишком близко: {round(tp_distance_pct, 2)}% < {round(MIN_TP_PCT, 2)}%")
             return False
         if self.rr < MIN_RR:
             logw(f"RR {round(self.rr, 1)} < {round(MIN_RR, 1)}.")
