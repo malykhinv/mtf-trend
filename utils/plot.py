@@ -19,7 +19,7 @@ from matplotlib.dates import AutoDateLocator, DateFormatter
 from config.constants import (
     EMA_PERIODS,
     EMA_COLORS,
-    CANDLE_WIDTH_MULTIPLIER,
+    CANDLESTICK_WIDTH_MULTIPLIER,
     X_AXIS_MIN_TICKS,
     X_AXIS_MAX_TICKS,
     X_AXIS_MINUTELY_INTERVALS,
@@ -35,8 +35,14 @@ from config.constants import (
     PUMP_START_LINE_WIDTH,
     PUMP_START_TEXT_SIZE,
     EMA_ALPHA,
-    EMA_LINEWIDTH,
-    LEGEND_FONT_SIZE, COLOR_FACE, BELGRADE_TZ, ATR_COLOR, SWING_COLOR_HIGH, SWING_COLOR_LOW, SWING_SIZE,
+    EMA_LINE_WIDTH,
+    PLOT_LEGEND_FONT_SIZE,
+    COLOR_BACKGROUND,
+    TIMEZONE,
+    ATR_COLOR,
+    SWING_COLOR_HIGH,
+    SWING_COLOR_LOW,
+    SWING_MARKER_SIZE,
 )
 
 
@@ -70,11 +76,11 @@ class Plot:
             figsize=(14, 14),
             gridspec_kw={"height_ratios": [4, 1, 1, 1]},
             sharex=True,
-            facecolor=COLOR_FACE
+            facecolor=COLOR_BACKGROUND
         )
-        self.fig.patch.set_facecolor(COLOR_FACE)
+        self.fig.patch.set_facecolor(COLOR_BACKGROUND)
         for ax in [self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr]:
-            ax.set_facecolor(COLOR_FACE)
+            ax.set_facecolor(COLOR_BACKGROUND)
             ax.tick_params(colors='gray', which='both', length=0)
             ax.grid(True, color='gray', linestyle=':', linewidth=0.5, alpha=0.25)
         self.ax_price.set_title(f"{symbol} ({tf.value})", color='white', fontsize=14)
@@ -108,16 +114,16 @@ class Plot:
         ohlc, closes, volumes, oi_values, atr_values = [], [], [], [], []
 
         for bar in self.bars:
-            ts_belgrade = bar.timestamp.astimezone(BELGRADE_TZ)
-            time_num = mdates.date2num(ts_belgrade)
+            ts = bar.timestamp.astimezone(TIMEZONE)
+            time_num = mdates.date2num(ts)
             ohlc.append([time_num, bar.open, bar.high, bar.low, bar.close])
             closes.append(bar.close)
             volumes.append((time_num, bar.volume, bar.close >= bar.open))
             oi_values.append(bar.oi)
             atr_values.append(bar.atr)
 
-        time_nums = [mdates.date2num(bar.timestamp.astimezone(BELGRADE_TZ)) for bar in self.bars]
-        width = float(np.mean(np.diff(time_nums))) * CANDLE_WIDTH_MULTIPLIER if len(time_nums) >= 2 else 0.0007
+        time_nums = [mdates.date2num(bar.timestamp.astimezone(TIMEZONE)) for bar in self.bars]
+        width = float(np.mean(np.diff(time_nums))) * CANDLESTICK_WIDTH_MULTIPLIER if len(time_nums) >= 2 else 0.0007
 
         candlestick_ohlc(self.ax_price, ohlc, width=width, colorup=COLOR_UP, colordown=COLOR_DOWN)
 
@@ -137,10 +143,10 @@ class Plot:
         for period in EMA_PERIODS:
             if len(closes_array) >= period:
                 ema = self.ema(closes_array, period)
-                self.ax_price.plot(time_nums, ema, linewidth=EMA_LINEWIDTH, color=EMA_COLORS[period],
+                self.ax_price.plot(time_nums, ema, linewidth=EMA_LINE_WIDTH, color=EMA_COLORS[period],
                                    alpha=EMA_ALPHA, label=f'EMA {period}')
 
-        self.ax_price.legend(loc='upper left', fontsize=LEGEND_FONT_SIZE, facecolor=COLOR_FACE, labelcolor='white')
+        self.ax_price.legend(loc='upper left', fontsize=PLOT_LEGEND_FONT_SIZE, facecolor=COLOR_BACKGROUND, labelcolor='white')
 
         has_oi_data = any(oi != FLOAT_UNDEFINED for oi in oi_values)
         if has_oi_data:
@@ -169,7 +175,7 @@ class Plot:
 
         locator = AutoDateLocator(minticks=X_AXIS_MIN_TICKS, maxticks=X_AXIS_MAX_TICKS)
         locator.intervald[mdates.MINUTELY] = X_AXIS_MINUTELY_INTERVALS
-        formatter = DateFormatter(X_AXIS_TIME_FORMAT, tz=BELGRADE_TZ)
+        formatter = DateFormatter(X_AXIS_TIME_FORMAT, tz=TIMEZONE)
 
         for ax in [self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr]:
             ax.xaxis.set_major_locator(locator)
@@ -224,7 +230,7 @@ class Plot:
             if sp.is_undefined or sp.timestamp is None:
                 continue
 
-            bar_time = mdates.date2num(sp.timestamp.astimezone(BELGRADE_TZ))
+            bar_time = mdates.date2num(sp.timestamp.astimezone(TIMEZONE))
 
             # Получаем текущие границы оси
             ylim = self.ax_price.get_ylim()
@@ -232,15 +238,15 @@ class Plot:
 
             # Высота в координатах графика на основе пиксельного размера
             pixel_height = self.ax_price.get_window_extent().height
-            marker_size_pts = SWING_SIZE ** 0.5  # так как s — это площадь в pt²
+            marker_size_pts = SWING_MARKER_SIZE ** 0.5  # так как s — это площадь в pt²
             marker_height_data = y_range * (marker_size_pts / pixel_height)
 
             if sp.type.is_high:
                 marker_y = sp.price + marker_height_data / 2  # нижняя вершина на цене
-                self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_HIGH, marker='v', s=SWING_SIZE)
+                self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_HIGH, marker='v', s=SWING_MARKER_SIZE)
             elif sp.type.is_low:
                 marker_y = sp.price - marker_height_data / 2  # верхняя вершина на цене
-                self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_LOW, marker='^', s=SWING_SIZE)
+                self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_LOW, marker='^', s=SWING_MARKER_SIZE)
 
     def plot_trendline(self, trendline: Trendline):
         """

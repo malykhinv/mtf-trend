@@ -1,12 +1,11 @@
 from typing import Literal, cast
-from config.constants import POSITION_USDT, MIN_RR, FLOAT_UNDEFINED, MIN_SL_PCT, MIN_TP_PCT
+from config.constants import TRADE_POSITION_USDT, MIN_RISK_REWARD, FLOAT_UNDEFINED, MIN_STOP_LOSS_PERCENT, MIN_TAKE_PROFIT_PERCENT
 from ccxt import binance
 
 from domain.models.order_side import OrderSide
 from domain.models.side import Side
 from utils.float_utils import precision, get_pct
 from utils.logger import log, logw
-from utils.str_utils import market_symbol
 from services.position_tracker_service import PositionTrackerService
 
 
@@ -29,7 +28,7 @@ class TradeExecutor:
                 side: Side,
                 sl: float,
                 tp: float,
-                amount_usdt: float = POSITION_USDT) -> None:
+                amount_usdt: float = TRADE_POSITION_USDT) -> None:
         """
         Исполняет торговый сигнал: создаёт рыночную позицию, стоп и тейк, регистрирует сделку.
         Args:
@@ -40,7 +39,7 @@ class TradeExecutor:
             amount_usdt (float): объём в долларах (по умолчанию глобальный)
         """
         try:
-            symbol_market = market_symbol(symbol)
+            symbol_market = symbol
             entry = self._get_price(symbol_market)
             market = self.client.market(symbol_market)
 
@@ -124,11 +123,11 @@ class TradeExecutor:
         Returns:
             bool: True, если RR > MIN_RR и дистанции допустимы
         """
-        if not get_pct(sl, entry) > MIN_SL_PCT:
+        if not get_pct(sl, entry) > MIN_STOP_LOSS_PERCENT:
             logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return False
 
-        if not get_pct(tp, entry) > MIN_TP_PCT:
+        if not get_pct(tp, entry) > MIN_TAKE_PROFIT_PERCENT:
             logw(f"Entry и TP слишком близки (entry={entry}, tp={tp}).")
             return False
 
@@ -138,8 +137,8 @@ class TradeExecutor:
             log(f"{symbol}: риск равен 0. Невозможно рассчитать RR.")
             return False
         rr = reward / risk
-        if rr < MIN_RR:
-            log(f"{symbol}: RR={rr:.2f} ниже порога ({MIN_RR}).")
+        if rr < MIN_RISK_REWARD:
+            log(f"{symbol}: RR={rr:.2f} ниже порога ({MIN_RISK_REWARD}).")
             return False
         return True
 

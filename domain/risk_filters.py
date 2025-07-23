@@ -1,4 +1,4 @@
-from config.constants import MAX_RANGE_SIZE_PCT, ACTUAL_CONTEXT_CANDLES
+from config.constants import MAX_RANGE_PERCENT, NUM_CONTEXT_CANDLES
 from domain.models.bar import Bar
 from typing import List
 
@@ -67,7 +67,7 @@ def is_calm(bars: List[Bar]) -> bool:
         return False
 
     range_pct = (high - low) / low * 100
-    return range_pct <= MAX_RANGE_SIZE_PCT
+    return range_pct <= MAX_RANGE_PERCENT
 
 def is_rising(bars: List[Bar]) -> bool:
     """
@@ -78,11 +78,11 @@ def is_rising(bars: List[Bar]) -> bool:
     Returns:
         bool: True, если свежие свечи обновили максимум относительно истории.
     """
-    if len(bars) <= ACTUAL_CONTEXT_CANDLES:
+    if len(bars) <= NUM_CONTEXT_CANDLES:
         return False
 
-    recent = bars[-ACTUAL_CONTEXT_CANDLES:]
-    context = bars[:-ACTUAL_CONTEXT_CANDLES]
+    recent = bars[-NUM_CONTEXT_CANDLES:]
+    context = bars[:-NUM_CONTEXT_CANDLES]
 
     max_recent_high = max(bar.high for bar in recent)
     max_context_high = max(bar.high for bar in context)

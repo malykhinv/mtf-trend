@@ -1,6 +1,6 @@
 # domain/detection/setup_detector.py
 
-from typing import Optional, List, Callable, Dict
+from typing import Optional, List, Dict
 
 from domain.detection.pump.pump_setup import PumpSetup
 from domain.models.bar import Bar
@@ -29,7 +29,7 @@ class SetupDetector:
         Returns:
             Optional[SetupSignal]: Первый найденный рабочий сигнал, либо None.
         """
-        setup_classes: List[Callable[[str, MTFProfile, Dict[Timeframe, List[Bar]]], SetupSignal]] = [PumpSetup]
+        setup_classes = [PumpSetup]
         for setup_cls in setup_classes:
             setup = setup_cls(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
             signal = setup.validated_or_none()

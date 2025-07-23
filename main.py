@@ -10,11 +10,11 @@ if __name__ == "__main__":
     while True:
         try:
             tfss = [
-                constants.MTF_PROFILE_5_3,
-                constants.MTF_PROFILE_5_1,
-                constants.MTF_PROFILE_3_3,
-                constants.MTF_PROFILE_3_1,
-                constants.MTF_PROFILE_1_1,
+                constants.MTF_PROFILE_MACRO_5_3,
+                constants.MTF_PROFILE_MACRO_5_1,
+                constants.MTF_PROFILE_MACRO_3_3,
+                constants.MTF_PROFILE_MACRO_3_1,
+                constants.MTF_PROFILE_MACRO_1_1,
             ]
             scanner.run(tfss)
         except Exception as error:

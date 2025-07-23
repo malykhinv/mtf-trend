@@ -2,7 +2,7 @@ from bisect import bisect_right
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
 
-from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED, BELGRADE_TZ
+from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED, TIMEZONE
 from data.binance_client import get_binance_client
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
@@ -100,7 +100,7 @@ class Loader:
                     limit=limit
                 )
                 target_ts: List[datetime] = [
-                    datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(BELGRADE_TZ)
+                    datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(TIMEZONE)
                     for entry in raw
                 ]
                 oi_values: List[float] = self._map_oi_to_tf(target_ts, raw_oi)
@@ -118,7 +118,7 @@ class Loader:
 
         bars: List[Bar] = []
         for i, entry in enumerate(raw):
-            ts = datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(BELGRADE_TZ)
+            ts = datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(TIMEZONE)
             if to_time and ts > to_time:
                 continue
             oi_value = oi_values[i] if i < len(oi_values) else FLOAT_UNDEFINED
@@ -200,7 +200,7 @@ class Loader:
             List[float]: Массив значений OI (один на каждый бар).
         """
         oi_map: Dict[datetime, float] = {
-            datetime.fromtimestamp(int(item['timestamp']) / 1000, tz=timezone.utc).astimezone(BELGRADE_TZ): float(
+            datetime.fromtimestamp(int(item['timestamp']) / 1000, tz=timezone.utc).astimezone(TIMEZONE): float(
                 item['sumOpenInterest'])
             for item in oi_data
         }

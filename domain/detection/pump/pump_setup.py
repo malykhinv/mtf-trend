@@ -16,15 +16,15 @@ from domain.models.timeframe import Timeframe
 from domain.structures import StructureDetector
 from config.constants import (
     FLOAT_UNDEFINED,
-    MIN_RR,
-    MIN_SL_PCT,
-    MIN_TP_PCT,
-    MAX_CORRECTION_PCT,
-    MAX_RANGE_PCT,
-    PUMP_MIN_MINUTES,
-    MIN_PRICE_GROWTH_PCT,
-    VOLUME_RATIO_MIN, MIN_ATR_GROWTH_PCT, MAX_CORRECTION_BAR_SIZE_FACTOR, MIN_VOLUME_GROWTH, ATR_PERIOD,
-    PUMP_MAX_MINUTES,
+    MIN_RISK_REWARD,
+    MIN_STOP_LOSS_PERCENT,
+    MIN_TAKE_PROFIT_PERCENT,
+    MAX_CORRECTION_PERCENT,
+    MAX_RANGE_PERCENT_FOR_PUMP,
+    PUMP_MIN_DURATION_MINUTES,
+    MIN_PRICE_GROWTH_PERCENT,
+    MIN_ATR_GROWTH_PERCENT,
+    MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
 )
 from utils.decorator import inject_method_name
 from utils.float_utils import is_defined
@@ -175,9 +175,9 @@ class PumpSetup(Setup):
             return False
         self.high_p1 = high_p1
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
-        if range_p1_pct > MAX_RANGE_PCT:
+        if range_p1_pct > MAX_RANGE_PERCENT_FOR_PUMP:
             self._capture_pump(
-                f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PCT}%",
+                f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PERCENT_FOR_PUMP}%",
                 Confidence.WEAK,
                 self._name
             )
@@ -189,7 +189,7 @@ class PumpSetup(Setup):
         """
         Проверяет рост цены от EMA.
         Returns:
-            bool: True, если рост цены от EMA больше MIN_PRICE_GROWTH_PCT
+            bool: True, если рост цены от EMA больше MIN_PRICE_GROWTH_PERCENT
         """
         if not self.main_high or self.main_high.is_undefined:
             self._capture_pump("main_high не определён для оценки роста.", Confidence.WEAK, self._name)
@@ -209,8 +209,8 @@ class PumpSetup(Setup):
             return False
         self.price_growth = pump_growth = self.main_high.price - ema_base
         self.price_growth_pct = price_growth_pct = pump_growth / ema_base * 100
-        if price_growth_pct < MIN_PRICE_GROWTH_PCT:
-            self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PCT}%",
+        if price_growth_pct < MIN_PRICE_GROWTH_PERCENT:
+            self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PERCENT}%",
                                Confidence.WEAK, self._name)
             return False
         log(f"Памп подтверждён: рост {price_growth_pct:.1f}% от EMA")
@@ -221,7 +221,7 @@ class PumpSetup(Setup):
         """
         Проверяет рост ATR.
         Returns:
-            bool: True, если рост ATR больше MIN_ATR_GROWTH_PCT
+            bool: True, если рост ATR больше MIN_ATR_GROWTH_PERCENT
         """
         if not self.consolidation_bars or not self.pump_bars:
             self._capture_pump("Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name)
@@ -232,14 +232,14 @@ class PumpSetup(Setup):
             self._capture_pump("ATR периода консолидации некорректен.", Confidence.WEAK, self._name)
             return False
         self.atr_growth_pct = atr_growth_pct = (atr_p2 - atr_p1) / atr_p1 * 100
-        if atr_growth_pct < MIN_ATR_GROWTH_PCT:
+        if atr_growth_pct < MIN_ATR_GROWTH_PERCENT:
             self._capture_pump(
-                f"Рост ATR недостаточный: {atr_growth_pct:.2f}% < {MIN_ATR_GROWTH_PCT}%",
+                f"Рост ATR недостаточный: {atr_growth_pct:.2f}% < {MIN_ATR_GROWTH_PERCENT}%",
                 Confidence.WEAK,
                 self._name
             )
             return False
-        log(f"Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PCT}%")
+        log(f"Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PERCENT}%")
         return True
 
     @inject_method_name
@@ -253,7 +253,7 @@ class PumpSetup(Setup):
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
         timeframe_factor = self.tfs.setup.minutes
         min_volume_growth = MIN_VOLUME_GROWTH * timeframe_factor / mean(bar.close for bar in self.pump_bars)
-        volume_threshold = max(avg_vol_p1 * VOLUME_RATIO_MIN, min_volume_growth)
+        volume_threshold = max(avg_vol_p1 * MIN_VOLUME_RATIO, min_volume_growth)
         if avg_vol_p2 < volume_threshold:
             self._capture_pump(
                 f"Объём пампа недостаточный: {mf(avg_vol_p2)} < {mf(volume_threshold)}",
@@ -270,21 +270,21 @@ class PumpSetup(Setup):
         """
         Проверяет продолжительность пампа.
         Returns:
-            bool: True, если продолжительность пампа в пределах [PUMP_MIN_MINUTES, PUMP_MAX_MINUTES]
+            bool: True, если продолжительность пампа в пределах [PUMP_MIN_DURATION_MINUTES, PUMP_MAX_DURATION_MINUTES]
         """
         bars = self.bars_setup
         pump_start_index = len(self.consolidation_bars)
         pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
-        if pump_duration_min < PUMP_MIN_MINUTES:
+        if pump_duration_min < PUMP_MIN_DURATION_MINUTES:
             self._capture_pump(
-                f"Период пампа слишком короткий: {pump_duration_min}m < {PUMP_MIN_MINUTES}m",
+                f"Период пампа слишком короткий: {pump_duration_min}m < {PUMP_MIN_DURATION_MINUTES}m",
                 Confidence.WEAK,
                 self._name
             )
             return False
-        if pump_duration_min > PUMP_MAX_MINUTES:
+        if pump_duration_min > PUMP_MAX_DURATION_MINUTES:
             self._capture_pump(
-                f"Период пампа слишком длинный: {pump_duration_min}m > {PUMP_MAX_MINUTES}m",
+                f"Период пампа слишком длинный: {pump_duration_min}m > {PUMP_MAX_DURATION_MINUTES}m",
                 Confidence.WEAK,
                 self._name
             )
@@ -300,7 +300,7 @@ class PumpSetup(Setup):
         """
         red_bars = [bar for bar in self.correction_bars if bar.close < bar.open]
         for bar in red_bars:
-            if bar.high - bar.low > bar.atr * MAX_CORRECTION_BAR_SIZE_FACTOR:
+            if bar.high - bar.low > bar.atr * BIG_BODY_ATR_MULTIPLIER:
                 self._capture_pump(
                     "Есть агрессивное движение в шорт.",
                     Confidence.MODERATE,
@@ -348,18 +348,18 @@ class PumpSetup(Setup):
         """
         Проверяет глубину коррекции.
         Returns:
-            bool: True, если глубина коррекции не превышает MAX_CORRECTION_PCT
+            bool: True, если глубина коррекции не превышает MAX_CORRECTION_PERCENT
         """
         correction_low = min(bar.low for bar in self.correction_bars)
         correction_depth = abs(self.main_high.price - correction_low) / self.price_growth * 100
-        if correction_depth > MAX_CORRECTION_PCT:
+        if correction_depth > MAX_CORRECTION_PERCENT:
             self._capture_pump(
-                f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PCT}%",
+                f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PERCENT}%",
                 Confidence.MODERATE,
                 self._name
             )
             return False
-        log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PCT}%")
+        log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PERCENT}%")
         return True
 
     @inject_method_name
@@ -426,17 +426,17 @@ class PumpSetup(Setup):
             return False
         sl_distance_pct = abs(entry - sl) / entry * 100
         tp_distance_pct = abs(tp - entry) / entry * 100
-        if sl_distance_pct < MIN_SL_PCT:
-            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_SL_PCT}%", Confidence.STRONG,
+        if sl_distance_pct < MIN_STOP_LOSS_PERCENT:
+            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_STOP_LOSS_PERCENT}%", Confidence.STRONG,
                                self._name)
             return False
-        if tp_distance_pct < MIN_TP_PCT:
-            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TP_PCT}%", Confidence.STRONG,
+        if tp_distance_pct < MIN_TAKE_PROFIT_PERCENT:
+            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TAKE_PROFIT_PERCENT}%", Confidence.STRONG,
                                self._name)
             return False
         rr = abs(tp - entry) / abs(entry - sl)
-        if rr < MIN_RR:
-            self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RR}.", Confidence.STRONG, self._name)
+        if rr < MIN_RISK_REWARD:
+            self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RISK_REWARD}.", Confidence.STRONG, self._name)
             return False
         log(f"RR подтверждён: "
             f"Entry={entry:.5f}, "
