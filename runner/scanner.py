@@ -8,7 +8,7 @@ from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.setup_signal import SetupSignal
 from domain.models.timeframe import Timeframe
-from domain.risk_filters import is_calm, has_repeating_ohlc, is_rising, has_gaps
+from domain.risk_filters import is_calm, has_repeating_ohlc, has_gaps
 from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
@@ -76,9 +76,6 @@ class Scanner:
             return False
 
         if not is_calm(bars):
-            return False
-
-        if not is_rising(bars):
             return False
 
         return True
