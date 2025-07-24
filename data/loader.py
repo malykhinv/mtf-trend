@@ -24,31 +24,32 @@ class Loader:
         """
         self.binance = get_binance_client()
 
-    def get_filtered_symbols(self, quote_asset: str = "USDT", min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
+    def get_filtered_symbols(self, quote_asset: str = 'USDT', min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
         """
-        Возвращает список фьючерсных тикеров с фильтрацией по объему и статусу.
+        Возвращает отсортированный список тикеров (символов), подходящих по объёму торгов и активным рынкам.
         Args:
             quote_asset (str): Котируемая валюта (по умолчанию 'USDT').
             min_volume_usdt (float): Минимальный объём торгов в USDT.
         Returns:
-            List[str]: Список подходящих фьючерсных тикеров.
+            List[str]: Отсортированный список тикеров, удовлетворяющих условиям.
         """
-        markets: Dict[str, Any] = self.binance.load_markets(params={"type": "future"})
+        markets: Dict[str, Any] = self.binance.load_markets()
         symbols: List[str] = []
 
         for symbol, data in markets.items():
-            if not data.get("active"):
+            if not data.get('type') == 'futures':
                 continue
-            if data.get("type") != "future":
+            if not data.get('active'):
                 continue
             if not symbol.endswith(f"/{quote_asset}"):
                 continue
-            if "info" in data:
-                quote_volume = float(data["info"].get("quoteVolume", 0))
-                if quote_volume < min_volume_usdt:
+
+            if 'quoteVolume' in data and data['quoteVolume'] is not None:
+                if data['quoteVolume'] < min_volume_usdt:
                     continue
-            cleaned = clean_symbol(symbol)
-            symbols.append(cleaned)
+
+            symbol = clean_symbol(symbol)
+            symbols.append(symbol)
 
         return sorted(symbols)
 
