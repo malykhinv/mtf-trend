@@ -131,7 +131,7 @@ class PumpSetup(Setup):
         Returns:
             bool: True, если все OI определены и больше 0
         """
-        if any(not is_defined(bar.oi) for bar in self.bars_setup):
+        if all(not is_defined(bar.oi) for bar in self.bars_setup):
             logw("Неверный OI (<= 0).")
             return False
         return True

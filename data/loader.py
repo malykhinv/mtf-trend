@@ -1,14 +1,16 @@
 from bisect import bisect_right
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 
-from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED, TIMEZONE
+from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED
 from data.binance_client import get_binance_client
+from data.db import save_oi, load_oi
 from domain.models.bar import Bar
 from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
 from utils.math_utils import calculate_atr
 from utils.str_utils import clean_symbol
+from utils.time_utils import to_local_dt
 
 
 class Loader:
@@ -82,43 +84,27 @@ class Loader:
             limit=limit
         )
 
+        if not raw:
+            return []
+
         # OI
         if has_oi:
-            if timeframe.minutes < Timeframe.M5.minutes:
-                timeframe = Timeframe.M5
-                since = None
-                end_time = None
-                if to_time:
-                    since = int(
-                        (to_time - timedelta(minutes=limit * timeframe.minutes)).timestamp() * 1000)
-                    end_time = int(to_time.timestamp() * 1000)
-                raw_oi: List[Dict] = self.fetch_oi(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    since=since,
-                    end_time=end_time,
-                    limit=limit
-                )
-                target_ts: List[datetime] = [
-                    datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(TIMEZONE)
-                    for entry in raw
-                ]
-                oi_values: List[float] = self._map_oi_to_tf(target_ts, raw_oi)
+            raw_oi = self.fetch_oi_history(symbol, timeframe, limit=limit, since=since, end_time=end_time)
+            target_ts = [to_local_dt(entry[0])  for entry in raw]
+
+            if not raw_oi:
+                current_oi = self.fetch_oi(symbol)
+                last_ts = to_local_dt(raw[-1][0])
+                save_oi(symbol, timeframe, last_ts, current_oi)
+                oi_values = load_oi(symbol, timeframe, target_ts)
             else:
-                raw_oi: List[Dict] = self.fetch_oi(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    since=since,
-                    end_time=end_time,
-                    limit=limit
-                )
-                oi_values = [float(entry["sumOpenInterest"]) for entry in raw_oi]
+                oi_values = self._map_oi_to_tf(target_ts, raw_oi)
         else:
             oi_values = [FLOAT_UNDEFINED for _ in range(len(raw))]
 
         bars: List[Bar] = []
         for i, entry in enumerate(raw):
-            ts = datetime.fromtimestamp(entry[0] / 1000, tz=timezone.utc).astimezone(TIMEZONE)
+            ts = to_local_dt(entry[0])
             if to_time and ts > to_time:
                 continue
             oi_value = oi_values[i] if i < len(oi_values) else FLOAT_UNDEFINED
@@ -134,7 +120,7 @@ class Loader:
             bars.append(bar)
 
         atrs = calculate_atr(bars)
-        for i in range(0, len(atrs)):
+        for i in range(len(atrs)):
             bars[i].atr = atrs[i]
 
         return bars
@@ -158,7 +144,7 @@ class Loader:
         """
         return {tf: self.fetch_ohlcvi(symbol, tf, limit=limit, to_time=to_time, has_oi=tf == tfs.setup) for tf in tfs}
 
-    def fetch_oi(
+    def fetch_oi_history(
             self,
             symbol: str,
             timeframe: Timeframe,
@@ -189,30 +175,17 @@ class Loader:
 
         return self.binance.fapidata_get_openinteresthist(params)
 
+    def fetch_oi(self, symbol: str):
+        params: Dict[str, Any] = {'symbol': symbol}
+        return float(self.binance.fapipublic_get_openinterest(params))
+
     @staticmethod
     def _map_oi_to_tf(target_timestamps: List[datetime], oi_data: List[Dict]) -> List[float]:
-        """
-        Сопоставляет значения OI по ближайшему времени для конкретного набора баров.
-        Args:
-            target_timestamps (List[datetime]): Список меток времени баров.
-            oi_data (List[dict]): Данные по OI.
-        Returns:
-            List[float]: Массив значений OI (один на каждый бар).
-        """
-        oi_map: Dict[datetime, float] = {
-            datetime.fromtimestamp(int(item['timestamp']) / 1000, tz=timezone.utc).astimezone(TIMEZONE): float(
-                item['sumOpenInterest'])
-            for item in oi_data
-        }
-        sorted_ts: List[datetime] = sorted(oi_map.keys())
-        sorted_oi: List[float] = [oi_map[ts] for ts in sorted_ts]
-
-        # Интерполяция: ближайшее предыдущее значение
-        result: List[float] = []
+        oi_map = {to_local_dt(int(item['timestamp'])): float(item['sumOpenInterest']) for item in oi_data }
+        sorted_ts = sorted(oi_map.keys())
+        sorted_oi = [oi_map[ts] for ts in sorted_ts]
+        result = []
         for ts in target_timestamps:
             idx = bisect_right(sorted_ts, ts) - 1
-            if idx >= 0:
-                result.append(sorted_oi[idx])
-            else:
-                result.append(FLOAT_UNDEFINED)
+            result.append(sorted_oi[idx] if idx >= 0 else FLOAT_UNDEFINED)
         return result
