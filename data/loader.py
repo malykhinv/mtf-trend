@@ -34,14 +34,12 @@ class Loader:
         """
         markets: Dict[str, Any] = self.binance.load_markets()
         symbols: List[str] = []
-        asset = 'USDT'
-        assetSuffix = f":{asset}"
         for symbol, data in markets.items():
             if not data.get('linear'):
                 continue
             if not data.get('active'):
                 continue
-            if not symbol.endswith(asset):
+            if not symbol.endswith('USDT'):
                 continue
 
             if 'quoteVolume' in data and data['quoteVolume'] is not None:
@@ -49,7 +47,7 @@ class Loader:
                     continue
 
             symbol = clean_symbol(symbol)
-            symbols.append(symbol.removesuffix(assetSuffix))
+            symbols.append(symbol)
 
         return sorted(symbols)
 

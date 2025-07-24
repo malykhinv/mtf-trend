@@ -1,2 +1,2 @@
 def clean_symbol(symbol: str) -> str:
-    return symbol.replace('/', '')
+    return symbol.replace('/', '').split(':')[0]
