@@ -70,20 +70,20 @@ X_AXIS_TIME_FORMAT: str = '%H:%M'
 
 # region Plotting constants
 COLOR_BACKGROUND: str = '#0f0f0f'
+COLOR_BACKGROUND_NA: str = '#111111'
 COLOR_UP: str = '#078772'
 COLOR_DOWN: str = '#d42f2f'
 COLOR_TRENDLINE: str = '#765c99'
 COLOR_PUMP_START: str = '#ffa726'
+COLOR_OI: str = '#ffa726'
 
-TRENDLINE_WIDTH: int = 1
 TRENDLINE_STYLE: str = '-'
 
 PUMP_START_LINE_STYLE: str = '-'
-PUMP_START_LINE_WIDTH: int = 1
 PUMP_START_TEXT_SIZE: int = 8
 
 EMA_ALPHA: float = 0.2
-EMA_LINE_WIDTH: int = 1
+LINE_WIDTH: int = 1
 
 PLOT_LEGEND_FONT_SIZE: int = 8
 # endregion

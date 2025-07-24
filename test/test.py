@@ -14,9 +14,9 @@ def main():
     symbol = "TNSRUSDT"
     year = 2025
     month = 7
-    day = 22
-    hour = 18
-    minute = 58
+    day = 24
+    hour = 16
+    minute = 59
     tz = TIMEZONE
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
@@ -25,7 +25,7 @@ def main():
         # constants.MTF_PROFILE_MACRO_3_1,
         # constants.MTF_PROFILE_MACRO_3_3,
         # constants.MTF_PROFILE_MACRO_5_3,
-        # constants.MTF_PROFILE_MACRO_5_1,
+        constants.MTF_PROFILE_MACRO_5_1,
     ]
 
     loader = Loader()

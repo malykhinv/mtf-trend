@@ -1,4 +1,8 @@
 import matplotlib
+
+from utils.float_utils import is_defined
+from utils.math_utils import most
+
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
@@ -24,25 +28,22 @@ from config.constants import (
     X_AXIS_MAX_TICKS,
     X_AXIS_MINUTELY_INTERVALS,
     X_AXIS_TIME_FORMAT,
-    FLOAT_UNDEFINED,
     COLOR_UP,
     COLOR_DOWN,
     COLOR_TRENDLINE,
     COLOR_PUMP_START,
-    TRENDLINE_WIDTH,
     TRENDLINE_STYLE,
     PUMP_START_LINE_STYLE,
-    PUMP_START_LINE_WIDTH,
     PUMP_START_TEXT_SIZE,
     EMA_ALPHA,
-    EMA_LINE_WIDTH,
+    LINE_WIDTH,
     PLOT_LEGEND_FONT_SIZE,
     COLOR_BACKGROUND,
     TIMEZONE,
     ATR_COLOR,
     SWING_COLOR_HIGH,
     SWING_COLOR_LOW,
-    SWING_MARKER_SIZE,
+    SWING_MARKER_SIZE, COLOR_OI, COLOR_BACKGROUND_NA,
 )
 
 
@@ -143,14 +144,19 @@ class Plot:
         for period in EMA_PERIODS:
             if len(closes_array) >= period:
                 ema = self.ema(closes_array, period)
-                self.ax_price.plot(time_nums, ema, linewidth=EMA_LINE_WIDTH, color=EMA_COLORS[period],
+                self.ax_price.plot(time_nums, ema, linewidth=LINE_WIDTH, color=EMA_COLORS[period],
                                    alpha=EMA_ALPHA, label=f'EMA {period}')
 
-        self.ax_price.legend(loc='upper left', fontsize=PLOT_LEGEND_FONT_SIZE, facecolor=COLOR_BACKGROUND, labelcolor='white')
+        self.ax_price.legend(
+            loc='upper left',
+            fontsize=PLOT_LEGEND_FONT_SIZE,
+            facecolor=COLOR_BACKGROUND,
+            labelcolor='white'
+        )
 
-        has_oi_data = any(oi != FLOAT_UNDEFINED for oi in oi_values)
+        has_oi_data = most(oi_values, is_defined)
         if has_oi_data:
-            oi_array = np.array([oi if oi != FLOAT_UNDEFINED else np.nan for oi in oi_values])
+            oi_array = np.array([oi if is_defined(oi) else np.nan for oi in oi_values])
             oi_min, oi_max = np.nanmin(oi_array), np.nanmax(oi_array)
 
             if oi_max > oi_min:
@@ -158,17 +164,19 @@ class Plot:
             else:
                 normalized_oi = np.zeros_like(oi_array)
 
-            for t, norm_oi, is_up in zip(time_nums, normalized_oi, [b.close >= b.open for b in self.bars]):
-                if not np.isnan(norm_oi):
-                    color = COLOR_UP if is_up else COLOR_DOWN
-                    self.ax_oi.bar(t, norm_oi, color=color, width=width)
+            self.ax_oi.step(time_nums, normalized_oi, where='post', color=COLOR_OI, linewidth=LINE_WIDTH)
 
             self.ax_oi.set_ylim(0, 1.05)
             self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
             self.ax_oi.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{int(y * 100)}%'))
+        else:
+            self.ax_oi.set_facecolor(COLOR_BACKGROUND_NA)
+            self.ax_oi.set_xticks([])
+            self.ax_oi.set_yticks([])
+            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
 
         atr_line = np.array(atr_values)
-        self.ax_atr.plot(time_nums, atr_line, color=ATR_COLOR, linewidth=1, linestyle='-')
+        self.ax_atr.step(time_nums, atr_line, color=ATR_COLOR, linewidth=LINE_WIDTH, linestyle='-')
         atr_min, atr_max = np.nanmin(atr_line), np.nanmax(atr_line)
         self.ax_atr.set_ylim(atr_min, atr_max * 1.05)
         self.ax_atr.set_ylabel("ATR", color='gray', fontsize=8)
@@ -215,7 +223,7 @@ class Plot:
         """
         pump_start_num = mdates.date2num(pump_start_time)
         self.ax_price.axvline(pump_start_num, color=COLOR_PUMP_START, linestyle=PUMP_START_LINE_STYLE,
-                              linewidth=PUMP_START_LINE_WIDTH)
+                              linewidth=LINE_WIDTH)
         ymax = max(bar.high for bar in self.bars)
         self.ax_price.text(pump_start_num, ymax, '', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
 
@@ -262,7 +270,7 @@ class Plot:
         x_indices = list(range(trendline.point1_index, trendline.point2_index + 1))
         y_values = [trendline.get_value_at(i) for i in x_indices]
         times = [mdates.date2num(self.bars[i].timestamp) for i in x_indices]
-        self.ax_price.plot(times, y_values, color=COLOR_TRENDLINE, linestyle=TRENDLINE_STYLE, linewidth=TRENDLINE_WIDTH)
+        self.ax_price.plot(times, y_values, color=COLOR_TRENDLINE, linestyle=TRENDLINE_STYLE, linewidth=LINE_WIDTH)
         log("Нарисована наклонка")
 
     def save(self, filename: str) -> str:

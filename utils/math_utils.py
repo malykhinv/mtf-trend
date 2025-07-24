@@ -35,3 +35,21 @@ def calculate_atr(bars, period=ATR_PERIOD) -> list[float]:
         atr_values.append(avg_tr)
 
     return atr_values
+
+def most(items: list, predicate=None) -> bool:
+    if predicate is None:
+        predicate = bool
+
+    n = len(items)
+    half = n >> 1
+    passed = 0
+
+    for i in range(n):
+        if predicate(items[i]):
+            passed += 1
+            if passed > half:
+                return True
+        elif i - passed + 1 > half:
+            return False
+
+    return passed > half

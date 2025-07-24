@@ -175,9 +175,10 @@ class Loader:
 
         return self.binance.fapidata_get_openinteresthist(params)
 
-    def fetch_oi(self, symbol: str):
+    def fetch_oi(self, symbol: str) -> float:
         params: Dict[str, Any] = {'symbol': symbol}
-        return float(self.binance.fapipublic_get_openinterest(params))
+        result = self.binance.fapipublic_get_openinterest(params)
+        return float(result["openInterest"])
 
     @staticmethod
     def _map_oi_to_tf(target_timestamps: List[datetime], oi_data: List[Dict]) -> List[float]:
