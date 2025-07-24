@@ -24,24 +24,24 @@ class Loader:
         """
         self.binance = get_binance_client()
 
-    def get_filtered_symbols(self, quote_asset: str = 'USDT', min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
+    def get_filtered_symbols(self, min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
         """
         Возвращает отсортированный список тикеров (символов), подходящих по объёму торгов и активным рынкам.
         Args:
-            quote_asset (str): Котируемая валюта (по умолчанию 'USDT').
             min_volume_usdt (float): Минимальный объём торгов в USDT.
         Returns:
             List[str]: Отсортированный список тикеров, удовлетворяющих условиям.
         """
         markets: Dict[str, Any] = self.binance.load_markets()
         symbols: List[str] = []
-
+        asset = 'USDT'
+        assetSuffix = f":{asset}"
         for symbol, data in markets.items():
-            if not data.get('type') == 'futures':
+            if not data.get('linear'):
                 continue
             if not data.get('active'):
                 continue
-            if not symbol.endswith(f"/{quote_asset}"):
+            if not symbol.endswith(asset):
                 continue
 
             if 'quoteVolume' in data and data['quoteVolume'] is not None:
@@ -49,7 +49,7 @@ class Loader:
                     continue
 
             symbol = clean_symbol(symbol)
-            symbols.append(symbol)
+            symbols.append(symbol.removesuffix(assetSuffix))
 
         return sorted(symbols)
 
