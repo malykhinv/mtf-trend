@@ -67,7 +67,10 @@ class Scanner:
         if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
             return
         bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, limit=250, has_oi=True)
-        bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry)
+        if tfs.entry == tfs.setup:
+            bars_by_tf[tfs.entry] = bars_by_tf[tfs.setup]
+        else:
+            bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry)
         self._check_setups(symbol, tfs, bars_by_tf)
 
     @staticmethod
