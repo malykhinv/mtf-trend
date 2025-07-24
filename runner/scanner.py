@@ -1,3 +1,4 @@
+import traceback
 from typing import List, Dict, Set
 
 from config.constants import IS_TRADING_ENABLED
@@ -49,7 +50,7 @@ class Scanner:
                 try:
                     self._process_symbol(symbol, tfs)
                 except Exception as error:
-                    logw(f"Ошибка при обработке {symbol}: {error}")
+                    logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
         log("Цикл сканирования завершён.")
         print()
 
