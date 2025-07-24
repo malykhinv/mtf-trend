@@ -16,7 +16,7 @@ def main():
     month = 7
     day = 24
     hour = 6
-    minute = 30
+    minute = 25
     tz = TIMEZONE
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 

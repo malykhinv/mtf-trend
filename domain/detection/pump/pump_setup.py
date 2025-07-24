@@ -219,19 +219,30 @@ class PumpSetup(Setup):
     @inject_method_name
     def _check_atr_growth(self) -> bool:
         """
-        Проверяет рост ATR.
+        Проверяет рост ATR между консолидацией и пампом.
         Returns:
             bool: True, если рост ATR больше MIN_ATR_GROWTH_PERCENT
         """
         if not self.consolidation_bars or not self.pump_bars:
             self._capture_pump("Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name)
             return False
-        atr_p1 = mean(calculate_atr(bars=self.consolidation_bars, period=len(self.consolidation_bars) - 1))
-        atr_p2 = mean(calculate_atr(bars=self.pump_bars, period=len(self.pump_bars) - 1))
+
+        atr_p1_series = calculate_atr(self.consolidation_bars, period=ATR_PERIOD)
+        atr_p2_series = calculate_atr(self.pump_bars, period=ATR_PERIOD)
+
+        if not atr_p1_series or not atr_p2_series:
+            self._capture_pump("Ошибка при расчёте ATR.", Confidence.WEAK, self._name)
+            return False
+
+        atr_p1 = mean(atr_p1_series)
+        atr_p2 = mean(atr_p2_series)
+
         if atr_p1 <= 0:
             self._capture_pump("ATR периода консолидации некорректен.", Confidence.WEAK, self._name)
             return False
+
         self.atr_growth_pct = atr_growth_pct = (atr_p2 - atr_p1) / atr_p1 * 100
+
         if atr_growth_pct < MIN_ATR_GROWTH_PERCENT:
             self._capture_pump(
                 f"Рост ATR недостаточный: {atr_growth_pct:.2f}% < {MIN_ATR_GROWTH_PERCENT}%",
@@ -239,6 +250,7 @@ class PumpSetup(Setup):
                 self._name
             )
             return False
+
         log(f"Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PERCENT}%")
         return True
 
