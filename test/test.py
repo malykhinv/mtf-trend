@@ -11,21 +11,21 @@ from utils.logger import log, logw
 from config.constants import TIMEZONE
 
 def main():
-    symbol = "TNSRUSDT"
+    symbol = "LISTAUSDT"
     year = 2025
     month = 7
     day = 24
-    hour = 16
-    minute = 59
+    hour = 6
+    minute = 30
     tz = TIMEZONE
     target_time = datetime(year, month, day, hour, minute, tzinfo=tz)
 
     mtf_profiles = [
-        constants.MTF_PROFILE_MACRO_1_1,
-        # constants.MTF_PROFILE_MACRO_3_1,
-        # constants.MTF_PROFILE_MACRO_3_3,
+        # constants.MTF_PROFILE_MACRO_1_1,
+        constants.MTF_PROFILE_MACRO_3_1,
+        constants.MTF_PROFILE_MACRO_3_3,
         # constants.MTF_PROFILE_MACRO_5_3,
-        constants.MTF_PROFILE_MACRO_5_1,
+        # constants.MTF_PROFILE_MACRO_5_1,
     ]
 
     loader = Loader()

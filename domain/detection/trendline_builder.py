@@ -1,111 +1,108 @@
-from config.constants import FLOAT_UNDEFINED
+from typing import List, Optional
+import numpy as np
 from domain.models.bar import Bar
 from domain.models.swing_point import SwingPoint
-from typing import List, Optional
-from utils.logger import log, logw
 from domain.models.trendline import Trendline
-import numpy as np
+from utils.logger import log, logw
+
 
 class TrendlineBuilder:
-    """
-    Построитель трендовых линий (наклонок) по точкам swing/high таймфрейма.
-    Использует линейную регрессию и аналитику для фильтрации некорректных наклонок.
-    """
     @staticmethod
-    def build(swings: List[SwingPoint], atr: float) -> Optional[Trendline]:
-        """
-        Генерирует трендовую линию (наклонку) по переданным точкам swing, используя регрессию и фильтрацию выбросов.
-        Args:
-            swings (List[SwingPoint]): Список swing-точек/экстремумов для построения наклонки.
-            atr (float): ATR/волатильность для фильтрации шумов.
-        Returns:
-            Optional[Trendline]: Возвращает сгенерированную наклонку или None.
-        """
+    def build(swings: List[SwingPoint], bars: List[Bar]) -> Optional[Trendline]:
         if not swings or len(swings) < 2:
-            logw("Недостаточно swings для построения наклонки.")
+            logw("Недостаточно swing-точек для построения наклонки.")
             return None
 
-        point1 = max(swings, key=lambda s: s.price if s.type.is_high else FLOAT_UNDEFINED)
-        correction_highs = [s for s in swings if s.type.is_high and s.index > point1.index]
-
-        if not correction_highs:
-            logw("Нет correction high для построения наклонки.")
+        highs = [s for s in swings if s.type.is_high]
+        if len(highs) < 2:
+            logw("Недостаточно high-точек.")
             return None
 
-        # Используем все correction_highs для регрессии
-        x = np.array([s.index for s in correction_highs])
-        y = np.array([s.price for s in correction_highs])
+        main_high = max(highs, key=lambda s: s.price)
 
-        if len(x) < 2:
-            logw("Недостаточно high для регрессии.")
-            return None
+        # Кандидаты справа от main_high, ниже по цене
+        candidates = [
+            s for s in highs
+            if s.timestamp > main_high.timestamp and s.price < main_high.price
+        ]
 
-        # Линейная регрессия: y = kx + b
-        A = np.vstack([x, np.ones(len(x))]).T
-        k, b = np.linalg.lstsq(A, y, rcond=None)[0]
+        best_line = None
+        min_deviation = float("inf")
 
-        # Проверяем отклонения
-        deviations = np.abs(y - (k * x + b))
-        avg_dev = np.mean(deviations)
-        atr_threshold = 0.5
+        for candidate in candidates:
+            t1 = main_high.timestamp.timestamp()
+            t2 = candidate.timestamp.timestamp()
+            if t2 == t1:
+                continue
 
-        if avg_dev > atr * atr_threshold:
-            logw(f"Среднее отклонение {avg_dev:.5f} превышает допустимое ({atr * atr_threshold:.5f}).")
-            return None
+            k = (candidate.price - main_high.price) / (t2 - t1)
+            b = main_high.price - k * t1
 
-        return Trendline(k=k, b=b, point1_index=int(x[0]), point2_index=int(x[-1]), valid=True)
+            # Проверка всех свечей между двумя точками
+            crossed = False
+            deviations = []
+
+            for bar in bars:
+                if not (main_high.timestamp < bar.timestamp < candidate.timestamp):
+                    continue
+                t = bar.timestamp.timestamp()
+                y_line = k * t + b
+                deviation = abs(y_line - bar.high)
+                deviations.append(deviation)
+                if deviation > bar.atr:
+                    crossed = True
+                    break
+
+            if crossed:
+                continue
+
+            avg_dev = np.mean(deviations) if deviations else 0
+            if avg_dev < min_deviation:
+                min_deviation = avg_dev
+                best_line = Trendline(
+                    k=k,
+                    b=b,
+                    point1_time=main_high.timestamp,
+                    point2_time=candidate.timestamp,
+                    valid=True
+                )
+
+        if best_line:
+            log(f"Найдено подходящее построение наклонки: от {best_line.point1_time} до {best_line.point2_time}")
+            return best_line
+
+        logw("Не удалось построить допустимую наклонку.")
+        return None
 
     @staticmethod
-    def has_breakout(
-            trendline: Trendline,
-            bars: List[Bar],
-            idx: int,
-            tolerance_pct: float = 0.5
-    ) -> bool:
-        """
-        Проверяет, был ли пробой линии тренда вверх на конкретной свече.
-        Args:
-            trendline (Trendline): Объект наклонной линии.
-            bars (List[Bar]): Список баров.
-            idx (int): Индекс проверяемого бара.
-            tolerance_pct (float): Коэффициент чувствительности к ATR.
-        Returns:
-            bool: True если пробой был.
-        """
+    def has_breakout(trendline: Trendline, bars: List[Bar], idx: int, tolerance_pct: float = 0.5) -> bool:
         if not trendline or not trendline.valid:
             logw("Наклонка невалидна для проверки пробоя.")
             return False
+        if idx >= len(bars):
+            return False
 
-        close_price = bars[idx].close
-        line_price = trendline.get_value_at(idx)
-        diff = close_price - line_price
+        bar = bars[idx]
+        line_price = trendline.get_value_at_time(bar.timestamp)
+        diff = bar.close - line_price
 
-        if diff > bars[idx].atr * tolerance_pct:
-            log(f"Пробой подтверждён: close={close_price:.5f} > линия={line_price:.5f} (diff={diff:.5f})")
+        if diff > bar.atr * tolerance_pct:
+            log(f"Пробой подтверждён: close={bar.close:.5f} > линия={line_price:.5f} (diff={diff:.5f})")
             return True
 
-        logw(f"Нет пробоя: close={close_price:.5f}, линия={line_price:.5f}, diff={diff:.5f}")
+        logw(f"Нет пробоя: close={bar.close:.5f}, линия={line_price:.5f}, diff={diff:.5f}")
         return False
 
     @staticmethod
     def count_touches(trendline: Trendline, bars: List[Bar], tolerance_pct: float = 0.5) -> int:
-        """
-        Считает количество касаний линии тренда барами (по close c ATR-допуском).
-        Args:
-            trendline (Trendline): Наклонка.
-            bars (List[Bar]): Массив баров.
-            tolerance_pct (float): Толеранс по ATR.
-        Returns:
-            int: Число касаний.
-        """
         if not trendline or not trendline.valid:
             logw("Наклонка невалидна для подсчёта касаний.")
             return 0
 
         touch_count = 0
 
-        for i, bar in enumerate(bars):
-            line_price = trendline.get_value_at(i)
+        for bar in bars:
+            line_price = trendline.get_value_at_time(bar.timestamp)
             diff = abs(bar.close - line_price)
             if diff < bar.atr * tolerance_pct:
                 touch_count += 1

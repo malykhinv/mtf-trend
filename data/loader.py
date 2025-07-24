@@ -87,18 +87,30 @@ class Loader:
         if not raw:
             return []
 
+        target_ts = [to_local_dt(entry[0]) for entry in raw]
+
         # OI
         if has_oi:
             raw_oi = self.fetch_oi_history(symbol, timeframe, limit=limit, since=since, end_time=end_time)
-            target_ts = [to_local_dt(entry[0])  for entry in raw]
 
-            if not raw_oi:
+            if not raw_oi and timeframe.minutes < Timeframe.M5.minutes:
+                # fallback на 5m
+                tf_m5 = Timeframe.M5
+                m5_since = None
+                m5_end_time = None
+                if to_time:
+                    m5_since = int((to_time - timedelta(minutes=limit * tf_m5.minutes)).timestamp() * 1000)
+                    m5_end_time = int(to_time.timestamp() * 1000)
+
+                raw_oi = self.fetch_oi_history(symbol, tf_m5, limit=limit, since=m5_since, end_time=m5_end_time)
+
+            if raw_oi:
+                oi_values = self._map_oi_to_tf(target_ts, raw_oi)
+            else:
                 current_oi = self.fetch_oi(symbol)
-                last_ts = to_local_dt(raw[-1][0])
+                last_ts = target_ts[-1]
                 save_oi(symbol, timeframe, last_ts, current_oi)
                 oi_values = load_oi(symbol, timeframe, target_ts)
-            else:
-                oi_values = self._map_oi_to_tf(target_ts, raw_oi)
         else:
             oi_values = [FLOAT_UNDEFINED for _ in range(len(raw))]
 

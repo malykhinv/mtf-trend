@@ -381,8 +381,7 @@ class PumpSetup(Setup):
         Returns:
             bool: True, если количество касаний не менее 2
         """
-        bars = self.correction_bars
-        touches = self.trendline_builder.count_touches(self.trendline, bars)
+        touches = self.trendline_builder.count_touches(self.trendline, self.correction_bars)
         if touches < 2:
             self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
             return False
@@ -492,8 +491,7 @@ class PumpSetup(Setup):
         """
         Определяет наклонку по свинг-поинтам коррекции.
         """
-        atr = mean(self.correction_atrs) if self.correction_atrs else FLOAT_UNDEFINED
-        self.trendline = self.trendline_builder.build(self.correction_swings, atr)
+        self.trendline = self.trendline_builder.build(self.correction_swings, self.correction_bars)
 
     # endregion
 
