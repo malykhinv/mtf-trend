@@ -216,7 +216,7 @@ class PumpSetup(Setup):
             self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PERCENT}%",
                                Confidence.WEAK, self._name)
             return False
-        log(f"Рост цены подтверждён: {price_growth_pct:.1f}% от EMA")
+        log(f"{self.symbol} Рост цены подтверждён: {price_growth_pct:.1f}% от EMA")
         return True
 
     @inject_method_name
@@ -254,7 +254,7 @@ class PumpSetup(Setup):
             )
             return False
 
-        log(f"Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PERCENT}%")
+        log(f"{self.symbol} Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PERCENT}%")
         return True
 
     @inject_method_name
@@ -277,7 +277,7 @@ class PumpSetup(Setup):
             )
             return False
         self.volume_growth_x = abs(avg_vol_p2 - avg_vol_p1) / avg_vol_p1
-        log(f"Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
+        log(f"{self.symbol} Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
         return True
 
     @inject_method_name
@@ -374,7 +374,7 @@ class PumpSetup(Setup):
                 self._name
             )
             return False
-        log(f"Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PERCENT}%")
+        log(f"{self.symbol} Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PERCENT}%")
         return True
 
     @inject_method_name
@@ -400,7 +400,7 @@ class PumpSetup(Setup):
         if touches < 2:
             self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
             return False
-        log(f"Подтверждено касаний наклонки: {touches}.")
+        log(f"{self.symbol} Подтверждено касаний наклонки: {touches}.")
         return True
 
     @inject_method_name
@@ -452,12 +452,12 @@ class PumpSetup(Setup):
         if rr < MIN_RISK_REWARD:
             self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RISK_REWARD}.", Confidence.STRONG, self._name)
             return False
-        log(f"RR подтверждён: "
-            f"Entry={entry:.5f}, "
-            f"SL={sl:.5f}, "
-            f"TP={tp:.5f}, "
-            f"SL%={sl_distance_pct:.2f}, "
-            f"TP%={tp_distance_pct:.2f}, "
+        log(f"{self.symbol} RR подтверждён:\n"
+            f"Entry={entry:.5f}\n"
+            f"SL={sl:.5f}\n"
+            f"TP={tp:.5f}\n"
+            f"SL%={sl_distance_pct:.2f}\n"
+            f"TP%={tp_distance_pct:.2f}\n"
             f"RR={rr:.2f}")
         return True
 
