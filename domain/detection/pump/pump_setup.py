@@ -81,6 +81,7 @@ class PumpSetup(Setup):
         if not self._check_rr():
             return False
         self.confidence = Confidence.STRONG
+        self.log_setup()
         return True
 
     def has_moderate_conditions(self) -> bool:
@@ -99,6 +100,7 @@ class PumpSetup(Setup):
         if not self._check_correction_depth():
             return False
         self.confidence = Confidence.MODERATE
+        self.log_setup()
         return True
 
     def has_weak_conditions(self) -> bool:
@@ -121,6 +123,7 @@ class PumpSetup(Setup):
         if not self._check_pump_duration():
             return False
         self.confidence = Confidence.WEAK
+        self.log_setup()
         return True
 
     # region Check
@@ -213,7 +216,7 @@ class PumpSetup(Setup):
             self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PERCENT}%",
                                Confidence.WEAK, self._name)
             return False
-        log(f"Памп подтверждён: рост {price_growth_pct:.1f}% от EMA")
+        log(f"Рост цены подтверждён: {price_growth_pct:.1f}% от EMA")
         return True
 
     @inject_method_name
@@ -544,10 +547,6 @@ class PumpSetup(Setup):
                 index_candidate = i
             price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
             if price_ok and vol_ok and oi_ok and price_above:
-                def log_setup(index):
-                    print()
-                    log(f"{self.symbol} : {self.tfs} ✨ {bars[index].timestamp.strftime('%d.%m %H:%M')}")
-
                 for j in range(index_candidate - 1, 0, -1):
                     ema_j = ema_series_price[j]
                     vol_j = ema_series_vol[j]
@@ -563,9 +562,7 @@ class PumpSetup(Setup):
                     is_red_bar = bars[j].close < bars[j].open
                     price_below_ema = bars[j].close < min(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200)
                     if (factors_j == 0 and compact_ema) or (factors_j <= 1 and price_below_ema and is_red_bar):
-                        log_setup(j + 1)
                         return j + 1
-                log_setup(index_candidate)
                 return index_candidate
         return None
 
@@ -657,6 +654,11 @@ class PumpSetup(Setup):
         return atr_list
 
     # endregion
+
+    def log_setup(self):
+        print()
+        log(f"{self.symbol} : {self.tfs} "
+            f"✨ {self.confidence} {self.pump_bars[0].timestamp.strftime('%d.%m %H:%M')}")
 
     # region Plot
     def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
