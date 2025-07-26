@@ -1,3 +1,4 @@
+import time
 import traceback
 from typing import List, Dict, Set
 from concurrent.futures import ThreadPoolExecutor
@@ -43,10 +44,13 @@ class Scanner:
 
     def run(self, tfss: List[MTFProfile]) -> None:
         """Перебирает символы и профили таймфреймов и запускает обработку."""
+        start_time = time.perf_counter()
         log("Запущен цикл сканирования.")
+
         symbols: List[str] = self.loader.get_filtered_symbols()
         if symbols:
             log(f"Отобрано {len(symbols)} символов.")
+
         for symbol in symbols:
             self.loader.clear_cache()
             for tfs in tfss:
@@ -54,7 +58,12 @@ class Scanner:
                     self._process_symbol(symbol, tfs)
                 except Exception as error:
                     logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
-        log("Цикл сканирования завершён.")
+
+        duration = int(time.perf_counter() - start_time)
+        hours, remainder = divmod(duration, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        log(f"Цикл сканирования занял {hours:02d}:{minutes:02d}:{seconds:02d}.")
         print()
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile) -> None:
@@ -72,7 +81,7 @@ class Scanner:
             ttl_minutes=tfs.context.minutes,
         )
         if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
-            self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)  # fetch and discard
+            self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
             return
         bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(
             symbol,
