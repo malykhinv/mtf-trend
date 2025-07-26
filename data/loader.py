@@ -75,12 +75,7 @@ class Loader:
 
         since, end_time = self._calculate_time_bounds(to_time, timeframe, limit)
 
-        raw = self.binance.fetch_ohlcv(
-            symbol,
-            timeframe=timeframe.value,
-            since=since,
-            limit=limit
-        )
+        raw = self._fetch_ohlcv(symbol, timeframe, since, limit)
         if not raw:
             return []
 
@@ -96,6 +91,15 @@ class Loader:
         if use_cache:
             self._ohlcv_cache[cache_key] = (now, bars)
         return bars
+
+    @log_duration_ms
+    def _fetch_ohlcv(self, symbol, timeframe, since, limit):
+        return self.binance.fetch_ohlcv(
+            symbol,
+            timeframe=timeframe.value,
+            since=since,
+            limit=limit
+        )
 
     @log_duration_ms
     def _is_cache_valid(self, use_cache: bool, cache_key: tuple, now: datetime, ttl_minutes: int) -> bool:

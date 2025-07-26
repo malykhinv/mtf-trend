@@ -1,5 +1,8 @@
 from config.constants import ATR_PERIOD
+from utils.decorator import log_duration_ms
 
+
+@log_duration_ms
 def calculate_atr(bars, period=ATR_PERIOD) -> list[float]:
     """Возвращает список ATR по заданным барам."""
     atr_values = []
@@ -29,6 +32,7 @@ def calculate_atr(bars, period=ATR_PERIOD) -> list[float]:
 
     return atr_values
 
+@log_duration_ms
 def most(items: list, predicate=None) -> bool:
     if predicate is None:
         predicate = bool
