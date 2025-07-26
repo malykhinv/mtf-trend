@@ -36,7 +36,7 @@ def log_duration_ms(func):
         finally:
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             indent = "\t" * (_depth.value - 1)
-            if elapsed_ms > 500:
+            if elapsed_ms > 0:
                 log(f"⏱ {indent}{func.__qualname__} : {elapsed_ms} мс")
             _depth.value -= 1
     return wrapper
