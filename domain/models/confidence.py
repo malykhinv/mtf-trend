@@ -2,6 +2,8 @@ from enum import Enum
 
 
 class Confidence(Enum):
+    """Уровень уверенности торгового сигнала."""
+
     WEAK = "weak"
     MODERATE = "moderate"
     STRONG = "strong"

@@ -38,11 +38,7 @@ class Scanner:
         self._pending_signals: Dict[str, UpdateDetails] = {}
 
     def run(self, tfss: List[MTFProfile]) -> None:
-        """
-        Запускает основной цикл: перебирает символы и профили таймфреймов, запускает обработку по каждому символу.
-        Args:
-            tfss (List[MTFProfile]): Список профилей таймфреймов для мульти-анализ.
-        """
+        """Перебирает символы и профили таймфреймов и запускает обработку."""
         log("Запущен цикл сканирования.")
         symbols: List[str] = self.loader.get_filtered_symbols()
         if symbols:
@@ -58,12 +54,7 @@ class Scanner:
         print()
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile) -> None:
-        """
-        Основной процесс анализа по одному символу и профилю таймфреймов.
-        Args:
-            symbol (str): тикер
-            tfs (MTFProfile): профиль таймфреймов
-        """
+        """Обрабатывает один символ по заданному профилю таймфреймов."""
         bars_by_tf: Dict[Timeframe, List[Bar]] = {
             tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=30, use_cache=True, ttl_minutes=tfs.macro.minutes)
         }
@@ -86,13 +77,7 @@ class Scanner:
 
     @staticmethod
     def _check_if_passes_macro_filters(bars: List[Bar]) -> bool:
-        """
-        Проверка на базовые фильтры на дневном/широком таймфрейме.
-        Args:
-            bars (List[Bar]): Массив баров для анализа.
-        Returns:
-            bool: True, если все фильтры пройдены.
-        """
+        """Проверяет фильтры на дневном таймфрейме."""
         if has_repeating_ohlc(bars):
             return False
         if not is_calm(bars):
@@ -101,13 +86,7 @@ class Scanner:
 
     @staticmethod
     def _check_if_passes_context_filters(bars: List[Bar]) -> bool:
-        """
-        Проверка на фильтры контекстного таймфрейма.
-        Args:
-            bars (List[Bar]): Массив баров для анализа.
-        Returns:
-            bool: True, если все фильтры пройдены.
-        """
+        """Проверяет фильтры контекстного таймфрейма."""
         if has_gaps(bars):
             return False
         if has_repeating_ohlc(bars):
@@ -117,13 +96,7 @@ class Scanner:
         return True
 
     def _check_setups(self, symbol: str, tfs: MTFProfile, bars_by_tf: Dict[Timeframe, List[Bar]]) -> None:
-        """
-        Ищет сетапы среди отобранных баров, при наличии сигнала вызывает обработчик.
-        Args:
-            symbol (str): тикер
-            tfs (MTFProfile): профиль таймфреймов
-            bars_by_tf (dict): бары по всему набору таймфреймов
-        """
+        """Ищет сетапы и при наличии сигнала вызывает обработчик."""
         signal: SetupSignal | None = self.setup_detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
         if signal:
             tf = tfs.setup
@@ -138,13 +111,7 @@ class Scanner:
             tf: Timeframe,
             current_price: float | None
     ) -> None:
-        """
-        Обрабатывает и отправляет торговый сигнал, генерирует график, ведёт учёт отправленных сигналов, вызывает исполнителя.
-        Args:
-            signal (SetupSignal): найденный сигнал
-            setup_bars (List[Bar]): бары на рабочем таймфрейме
-            tf (Timeframe): рабочий таймфрейм
-        """
+        """Отправляет сигнал и при необходимости выполняет сделку."""
         message = format_message(signal)
         # Генерация графика
         filename = f"{signal.confidence.value.capitalize()}_{signal.symbol}.png"
@@ -197,13 +164,7 @@ class Scanner:
             self._sent_signals[signal.symbol].add(signal.confidence)
 
     def _send_signal(self, signal: SetupSignal, message: str, image_path: str) -> tuple[int | None, bool]:
-        """
-        Отправляет сигнал в Telegram-каналы, вызывает исполнение сделки для order-сигналов.
-        Args:
-            signal (SetupSignal): торговый сигнал
-            message (str): текст для Telegram
-            image_path (str): путь к картинке графика (скриншота)
-        """
+        """Отправляет сигнал в Telegram и, при необходимости, исполняет его."""
         msg_id = None
         if signal.is_order_signal:
             msg_id = self.orders_notifier.send_message(message, image_path)

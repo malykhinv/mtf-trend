@@ -12,15 +12,7 @@ class StructureDetector:
     Осуществляет выделение по ATR, фильтрацию, сдвиг в пределах диапазонов.
     """
     def detect_swing_points(self, bars: List[Bar], atrs: List[float]) -> List[SwingPoint]:
-        """
-        Выделяет swing-поинты по массиву баров и ATR.
-
-        Args:
-            bars (List[Bar]): Массив баров/свечей.
-            atrs (List[float]): Список значений ATR для анализа сигнал/шум.
-        Returns:
-            List[SwingPoint]: Список экстремумов (по цене high или low).
-        """
+        """Находит swing-поинты по барам и серии ATR."""
         swings: List[SwingPoint] = []
         if not bars or not atrs or len(bars) != len(atrs):
             return swings
@@ -56,13 +48,7 @@ class StructureDetector:
 
     @staticmethod
     def _clean_swings(swings: List[SwingPoint]) -> List[SwingPoint]:
-        """
-        Сохраняет только значимые свинги без затирания близких по типу (сохраняем, если между ними есть нужная дистанция).
-        Args:
-            swings (List[SwingPoint]): Исходный список swing-поинтов.
-        Returns:
-            List[SwingPoint]: Очищенный от шумовых/слишком близких по типу список.
-        """
+        """Удаляет шумовые или слишком близкие точки."""
         cleaned: List[SwingPoint] = []
         for swing in swings:
             if not cleaned:
@@ -81,15 +67,7 @@ class StructureDetector:
 
     @staticmethod
     def _move_swings_in_range(bars: List[Bar], swings: List[SwingPoint], type_to_adjust: SwingType) -> List[SwingPoint]:
-        """
-        Передвигает левый/правый swing-поинт в локальный экстремум в своём диапазоне (между swing другого типа).
-        Args:
-            bars (List[Bar]): исходный массив баров
-            swings (List[SwingPoint]): исходный список swing-points
-            type_to_adjust (SwingType): тип swing для корректировки (HIGH или LOW)
-        Returns:
-            List[SwingPoint]: новый список swing с уточнёнными индексами/ценами по краям секций
-        """
+        """Смещает крайние swing-точки к локальным экстремумам."""
         adjusted = swings.copy()
         opposite_indices = [s.index for s in swings if s.type != type_to_adjust]
         if not opposite_indices:
@@ -132,15 +110,7 @@ class StructureDetector:
 
     @staticmethod
     def _check_swing_spacing(swings: List[SwingPoint], current: SwingPoint, new_index: int) -> bool:
-        """
-        Проверка дистанции между swing-поинтами для предотвращения наложения.
-        Args:
-            swings (List[SwingPoint]): список свингов
-            current (SwingPoint): текущий swing
-            new_index (int): новая позиция
-        Returns:
-            bool: True, если сдвиг возможен, иначе False.
-        """
+        """Проверяет, не нарушится ли дистанция между свингами при сдвиге."""
         left_neighbor = next((s for s in reversed(swings) if s.index < current.index and s != current), None)
         right_neighbor = next((s for s in swings if s.index > current.index and s != current), None)
         left_ok = left_neighbor is None or abs(new_index - left_neighbor.index) >= MIN_BARS_BETWEEN_SWINGS

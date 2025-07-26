@@ -9,7 +9,9 @@ logging.basicConfig(
 )
 
 def log(message: str) -> None:
+    """Печатает информационное сообщение."""
     logging.info(f"    {message}")
 
 def logw(message: str) -> None:
+    """Печатает предупреждение."""
     logging.info(f"  ✕ {message}")

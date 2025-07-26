@@ -59,15 +59,7 @@ class Plot:
                  tf: Timeframe,
                  message: Optional[str] = None,
                  save_dir: str = 'unknown'):
-        """
-        Args:
-            symbol (str): тикер
-            bars (List[Bar]): массив баров
-            correction_swings (List[SwingPoint]): swing-поинты для визуализации
-            tf (Timeframe): рабочий таймфрейм
-            message (Optional[str]): коммент/причина
-            save_dir (str): поддиректория для сохранения
-        """
+        """Подготавливает окружение для построения графика."""
         self.symbol = symbol
         self.bars = bars
         self.correction_swings = correction_swings
@@ -92,15 +84,7 @@ class Plot:
             )
 
     def generate_and_save(self, filename: str, pump_start_time: Optional[datetime], trendline: Optional[Trendline]) -> str:
-        """
-        Строит график, отмечает pump/trendline и сохраняет картинку.
-        Args:
-            filename (str): имя итогового файла
-            pump_start_time (Optional[datetime]): точка старта пампа
-            trendline (Optional[Trendline]): объект наклонки, если есть
-        Returns:
-            str: путь к сохранённому файлу
-        """
+        """Строит график и сохраняет изображение."""
         self.plot_main()
         if pump_start_time:
             self.mark_pump_start(pump_start_time)
@@ -194,16 +178,7 @@ class Plot:
 
     @staticmethod
     def ema(data: np.ndarray, period: int) -> np.ndarray:
-        """
-        Calculates the Exponential Moving Average (EMA) of the given data.
-        
-        Args:
-            data (np.ndarray): The input data.
-            period (int): The EMA period.
-        
-        Returns:
-            np.ndarray: The EMA of the input data.
-        """
+        """Вычисляет экспоненциальную скользящую среднюю."""
         ema = np.zeros_like(data)
         k = 2 / (period + 1)
         ema[0] = data[0]
@@ -215,12 +190,7 @@ class Plot:
         return ema
 
     def mark_pump_start(self, pump_start_time: datetime):
-        """
-        Marks the pump start time on the plot.
-        
-        Args:
-            pump_start_time (datetime): The pump start time.
-        """
+        """Отмечает начало пампа на графике."""
         pump_start_num = mdates.date2num(pump_start_time)
         self.ax_price.axvline(pump_start_num, color=COLOR_PUMP_START, linestyle=PUMP_START_LINE_STYLE,
                               linewidth=LINE_WIDTH)
@@ -228,9 +198,7 @@ class Plot:
         self.ax_price.text(pump_start_num, ymax, '', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
 
     def plot_swings(self):
-        """
-        Plots the swing points on the chart.
-        """
+        """Рисует swing-точки на графике."""
         if not self.bars:
             return
 
@@ -257,12 +225,7 @@ class Plot:
                 self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_LOW, marker='^', s=SWING_MARKER_SIZE)
 
     def plot_trendline(self, trendline: Trendline):
-        """
-        Plots the trendline on the chart.
-        
-        Args:
-            trendline (Trendline): The trendline to plot.
-        """
+        """Рисует наклонку на графике, если она валидна."""
         if not trendline or not trendline.valid:
             log("Невалидная наклонка, не будет нарисована")
             return
@@ -274,15 +237,7 @@ class Plot:
         log("Нарисована наклонка")
 
     def save(self, filename: str) -> str:
-        """
-        Saves the plot to a file.
-        
-        Args:
-            filename (str): The filename to save the plot to.
-        
-        Returns:
-            str: The path to the saved file.
-        """
+        """Сохраняет построенный график в файл."""
         import os
         os.makedirs(self.save_dir, exist_ok=True)
         full_path = os.path.join(self.save_dir, filename)

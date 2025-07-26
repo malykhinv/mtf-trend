@@ -5,14 +5,7 @@ from utils.float_utils import is_defined
 def format_message(
     signal: SetupSignal,
 ) -> str:
-    """
-    Формирует красивое текстовое сообщение Telegram/лог о найденном сетапе.
-
-    Args:
-        signal (SetupSignal): торговый сигнал или событие
-    Returns:
-        str: готовое текстовое сообщение
-    """
+    """Формирует текстовое сообщение о найденном сетапе."""
     # emoji_map: Для визуализации confidence
     emoji_map = {
         Confidence.WEAK: "🌑",

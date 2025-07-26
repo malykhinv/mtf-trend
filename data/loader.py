@@ -31,13 +31,7 @@ class Loader:
         self._ohlcv_cache.clear()
 
     def get_filtered_symbols(self, min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
-        """
-        Возвращает отсортированный список тикеров (символов), подходящих по объёму торгов и активным рынкам.
-        Args:
-            min_volume_usdt (float): Минимальный объём торгов в USDT.
-        Returns:
-            List[str]: Отсортированный список тикеров, удовлетворяющих условиям.
-        """
+        """Возвращает список тикеров, подходящих по объёму торгов и активности."""
         markets: Dict[str, Any] = self.binance.load_markets()
         symbols: List[str] = []
         for symbol, data in markets.items():
@@ -67,18 +61,7 @@ class Loader:
             use_cache: bool = False,
             ttl_minutes: int = 0,
     ) -> List[Bar]:
-        """
-        Загружает OHLCV+OI для инструмента на нужном таймфрейме.
-
-        Args:
-            symbol (str): Тикер.
-            timeframe (Timeframe): Таймфрейм.
-            limit (int): Количество записей.
-            to_time (Optional[datetime]): Максимальная дата.
-            has_oi (bool): Флаг наличия OI.
-        Returns:
-            List[Bar]: Список баров со всеми параметрами.
-        """
+        """Загружает OHLCV и OI для инструмента на заданном таймфрейме."""
         cache_key = (symbol, timeframe, limit, has_oi)
         now = datetime.utcnow()
         if use_cache and cache_key in self._ohlcv_cache:
@@ -161,16 +144,7 @@ class Loader:
             limit: int = 500,
             to_time: Optional[datetime] = None,
     ) -> Dict[Timeframe, List[Bar]]:
-        """
-        Загружает OHLCVI для символа по нескольким таймфреймам.
-        Args:
-            symbol (str): Тикер.
-            tfs (MTFProfile): Профиль таймфреймов.
-            limit (int): Количество баров на таймфрейм.
-            to_time (Optional[datetime]): Максимальная дата.
-        Returns:
-            Dict[Timeframe, List[Bar]]: Словарь {таймфрейм: бары}.
-        """
+        """Загружает OHLCVI для символа сразу по нескольким таймфреймам."""
         return {tf: self.fetch_ohlcvi(symbol, tf, limit=limit, to_time=to_time, has_oi=tf == tfs.setup) for tf in tfs}
 
     def fetch_oi_history(
@@ -181,18 +155,7 @@ class Loader:
             since: Optional[int] = None,
             end_time: Optional[int] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Загружает историю открытого интереса для инструмента на выбранном таймфрейме.
-        Args:
-            symbol (str): Тикер.
-            timeframe (Timeframe): Таймфрейм.
-            limit (int): Количество элементов (максимум 500, см. Binance docs
-            https://binance-docs.github.io/apidocs/futures/en/#open-interest-hist-data).
-            since (Optional[int]): Начальный unix-millisec (или None).
-            end_time (Optional[int]): Конечный unix-millisec (или None).
-        Returns:
-            List[dict]: История OI.
-        """
+        """Получает историю открытого интереса на выбранном таймфрейме."""
         params: Dict[str, Any] = {
             'symbol': symbol,
             'period': timeframe.value,
@@ -212,6 +175,7 @@ class Loader:
 
     @staticmethod
     def _map_oi_to_tf(target_timestamps: List[datetime], oi_data: List[Dict]) -> List[float]:
+        """Соотносит значения OI с целевыми временными метками."""
         oi_map = {to_local_dt(int(item['timestamp'])): float(item['sumOpenInterest']) for item in oi_data }
         sorted_ts = sorted(oi_map.keys())
         sorted_oi = [oi_map[ts] for ts in sorted_ts]

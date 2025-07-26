@@ -1,14 +1,7 @@
 from config.constants import ATR_PERIOD
 
 def calculate_atr(bars, period=ATR_PERIOD) -> list[float]:
-    """
-    Вычисляет ATR (Average True Range) по массиву баров (индикатор волатильности).
-    Args:
-        bars: список bar-объектов с OHLC
-        period: окно усреднения ATR
-    Returns:
-        list[float]: Массив ATR по каждому бару, начиная с первого.
-    """
+    """Возвращает список ATR по заданным барам."""
     atr_values = []
     tr_values = []
     for i in range(len(bars)):

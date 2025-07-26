@@ -8,21 +8,12 @@ class TelegramNotifier:
     Класс отправки сообщений и изображений в Telegram через бота.
     """
     def __init__(self, token: str, chat_id: str = TELEGRAM_BOT_CHAT_ID) -> None:
-        """
-        Args:
-            token (str): токен Telegram-бота
-            chat_id (str, optional): id чата для отправки (по умолчанию TELEGRAM_BOT_CHAT_ID)
-        """
+        """Создаёт объект отправки сообщений в Telegram."""
         self.token: str = token
         self.chat_id: str = chat_id
 
     def send_message(self, text: str, image_path: str = None) -> int | None:
-        """
-        Отправить сообщение или изображение в Telegram.
-        Args:
-            text (str): текст сообщения
-            image_path (str|None): путь к изображению (опционально)
-        """
+        """Отправляет текст или картинку в Telegram."""
         if not self.token or not self.chat_id:
             log("Отсутствуют данные Telegram. Сообщение не отправлено.")
             return

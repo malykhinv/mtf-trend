@@ -39,12 +39,7 @@ class PumpSetup(Setup):
     Применяет разноплановые фильтры и проверки по структуре, объемам, ATR, OI, чтобы определить силу сигнала.
     """
     def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], tfs: MTFProfile) -> None:
-        """
-        Args:
-            symbol (str): тикер инструмента
-            bars_by_tf (Dict[Timeframe, List[Bar]]): словарь бары по таймфреймам
-            tfs (MTFProfile): профиль используемых таймфреймов
-        """
+        """Создаёт детектор пампов для указанного символа."""
         super().__init__(symbol, bars_by_tf, tfs)
         self.structure_detector: StructureDetector = StructureDetector()
         self.trendline_builder: TrendlineBuilder = TrendlineBuilder()
@@ -66,11 +61,7 @@ class PumpSetup(Setup):
             return
 
     def has_strong_conditions(self) -> bool:
-        """
-        Проверяет выполнение фильтров strong (сильный сигнал).
-        Returns:
-            bool: True, если все условия выполнены
-        """
+        """Проверяет выполнение фильтров сильного уровня."""
         self._define_trendline()
         if not self._check_trendline_validity():
             return False
@@ -85,11 +76,7 @@ class PumpSetup(Setup):
         return True
 
     def has_moderate_conditions(self) -> bool:
-        """
-        Проверяет выполнение moderate-фильтров (умеренный сигнал).
-        Returns:
-            bool: True, если все условия выполнены
-        """
+        """Проверяет выполнение фильтров умеренной силы."""
         self._define_correction_bars()
         self._define_correction_atr()
         if not self._check_red_bars_size():
@@ -104,11 +91,7 @@ class PumpSetup(Setup):
         return True
 
     def has_weak_conditions(self) -> bool:
-        """
-        Проверяет выполнение weak-фильтров (слабый сигнал).
-        Returns:
-            bool: True, если все условия выполнены
-        """
+        """Проверяет выполнение слабых фильтров."""
         if not self._check_oi():
             return False
         if not self._check_consolidation():
@@ -129,11 +112,7 @@ class PumpSetup(Setup):
     # region Check
     @inject_method_name
     def _check_oi(self) -> bool:
-        """
-        Проверяет, что все OI определены и больше 0.
-        Returns:
-            bool: True, если все OI определены и больше 0
-        """
+        """Проверяет, что все значения OI присутствуют и больше нуля."""
         if all(not is_defined(bar.oi) for bar in self.bars_setup):
             logw("Неверный OI (<= 0).")
             return False
@@ -141,11 +120,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_consolidation(self) -> bool:
-        """
-        Проверяет консолидацию: определение high_p1, проверка диапазона консолидации.
-        Returns:
-            bool: True, если консолидация определена и проходит проверку
-        """
+        """Проверяет консолидацию и разделяет периоды движения."""
         bars = self.bars_setup
         closes = [b.close for b in bars]
         volumes = [b.volume for b in bars]
@@ -189,11 +164,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_price_growth(self) -> bool:
-        """
-        Проверяет рост цены от EMA.
-        Returns:
-            bool: True, если рост цены от EMA больше MIN_PRICE_GROWTH_PERCENT
-        """
+        """Проверяет рост цены относительно EMA."""
         if not self.main_high or self.main_high.is_undefined:
             self._capture_pump("main_high не определён для оценки роста.", Confidence.WEAK, self._name)
             return False
@@ -221,11 +192,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_atr_growth(self) -> bool:
-        """
-        Проверяет рост ATR между консолидацией и пампом.
-        Returns:
-            bool: True, если рост ATR больше MIN_ATR_GROWTH_PERCENT
-        """
+        """Оценивает рост ATR между консолидацией и скачком."""
         if not self.consolidation_bars or not self.pump_bars:
             self._capture_pump("Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name)
             return False
@@ -259,11 +226,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_volume_growth(self) -> bool:
-        """
-        Проверяет рост объёма.
-        Returns:
-            bool: True, если рост объёма больше MIN_VOLUME_GROWTH
-        """
+        """Проверяет, что объём во время пампа значительно выше среднего."""
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
         timeframe_factor = self.tfs.setup.minutes
@@ -282,11 +245,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_pump_duration(self) -> bool:
-        """
-        Проверяет продолжительность пампа.
-        Returns:
-            bool: True, если продолжительность пампа в пределах [PUMP_MIN_DURATION_MINUTES, PUMP_MAX_DURATION_MINUTES]
-        """
+        """Проверяет, что длительность пампа находится в допустимых пределах."""
         bars = self.bars_setup
         pump_start_index = len(self.consolidation_bars)
         pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
@@ -308,11 +267,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_red_bars_size(self) -> bool:
-        """
-        Проверяет размер красных баров в коррекции.
-        Returns:
-            bool: True, если размер красных баров не превышает MAX_CORRECTION_BAR_SIZE_FACTOR * ATR
-        """
+        """Контролирует размер красных баров во время коррекции."""
         red_bars = [bar for bar in self.correction_bars if bar.close < bar.open]
         for bar in red_bars:
             if bar.high - bar.low > bar.atr * BIG_BODY_ATR_MULTIPLIER:
@@ -326,15 +281,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
-        """
-        Проверяет структуру коррекции.
-        - Есть нисходящий тренд с LH и LL.
-        - Нет закрытия ниже EMA.
-        Args:
-            swings (List[SwingPoint]): список свинг-поинтов коррекции
-        Returns:
-            bool: True, если структура коррекции проходит проверку
-        """
+        """Проверяет структуру коррекции по свинг-поинтам."""
         if not swings or len(swings) < 5:
             self._capture_pump(
                 "Недостаточно swing-поинтов для анализа коррекции.",
@@ -360,11 +307,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_correction_depth(self) -> bool:
-        """
-        Проверяет глубину коррекции.
-        Returns:
-            bool: True, если глубина коррекции не превышает MAX_CORRECTION_PERCENT
-        """
+        """Проверяет, что глубина коррекции не слишком велика."""
         correction_low = min(bar.low for bar in self.correction_bars)
         correction_depth = abs(self.main_high.price - correction_low) / self.price_growth * 100
         if correction_depth > MAX_CORRECTION_PERCENT:
@@ -379,11 +322,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_trendline_validity(self) -> bool:
-        """
-        Проверяет валидность наклонки.
-        Returns:
-            bool: True, если наклонка валидна
-        """
+        """Проверяет валидность найденной наклонки."""
         if not self.trendline or not self.trendline.valid:
             self._capture_pump("Наклонка невалидна.", Confidence.STRONG, self._name)
             return False
@@ -391,11 +330,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_trendline_touches(self) -> bool:
-        """
-        Проверяет количество касаний наклонки.
-        Returns:
-            bool: True, если количество касаний не менее 2
-        """
+        """Проверяет, что наклонка имеет минимум два касания."""
         touches = self.trendline_builder.count_touches(self.trendline, self.correction_bars)
         if touches < 2:
             self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
@@ -405,11 +340,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_trendline_breakout(self) -> bool:
-        """
-        Проверяет пробой и закрепление выше наклонки.
-        Returns:
-            bool: True, если пробой и закрепление подтверждены
-        """
+        """Проверяет пробой и закрепление цены выше наклонки."""
         bars = self.correction_bars
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
@@ -423,11 +354,7 @@ class PumpSetup(Setup):
 
     @inject_method_name
     def _check_rr(self) -> bool:
-        """
-        Проверяет RR (relation of risk).
-        Returns:
-            bool: True, если RR проходит проверку
-        """
+        """Оценивает RR на соответствие минимальным требованиям."""
         entry = self.last.close
         sl_candidates = [s.price for s in reversed(self.correction_swings) if s.type.is_low and s.price < entry]
         if not sl_candidates:
@@ -517,17 +444,7 @@ class PumpSetup(Setup):
                                ema_series_vol: List[EMA],
                                ema_series_oi: List[Optional[EMA]],
                                atr_series: List[float]) -> Optional[int]:
-        """
-        Находит индекс начала пампа.
-        Args:
-            bars (List[Bar]): бары
-            ema_series_price (List[EMA]): EMA цены
-            ema_series_vol (List[EMA]): EMA объёма
-            ema_series_oi (List[Optional[EMA]]): EMA OI
-            atr_series (List[float]): ATR
-        Returns:
-            Optional[int]: индекс начала пампа или None, если не найден
-        """
+        """Возвращает индекс начала пампа, если удалось определить."""
         atr_mean = FLOAT_UNDEFINED
         index_candidate = FLOAT_UNDEFINED
         for i in range(50, len(bars)):
@@ -568,14 +485,7 @@ class PumpSetup(Setup):
 
     @staticmethod
     def _check_ema_structure(ema_obj: EMA, atr_value: float = FLOAT_UNDEFINED) -> bool:
-        """
-        Проверяет выполнение структуры EMA на заданном баре (цена выше всех EMA, нужные расстояния).
-        Args:
-            ema_obj (EMA): Текущий объект EMA.
-            atr_value (float): Текущее значение ATR для дополнительной проверки расстояния.
-        Returns:
-            bool: True, если соблюдена структура EMA.
-        """
+        """Проверяет выполнение структуры EMA на заданном баре."""
         order_ok = ema_obj.ema20 > ema_obj.ema50 > ema_obj.ema100 > ema_obj.ema200
         if is_defined(atr_value):
             spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50)
@@ -592,13 +502,7 @@ class PumpSetup(Setup):
 
     @staticmethod
     def _calculate_ema_series_from_values(values: List[float]) -> List[EMA]:
-        """
-        Вычисляет значения EMA (20/50/100/200) по списку цен/объёмов/ою данных.
-        Args:
-            values (List[float]): последовательно список значений (например, цен закрытия, объёмов, OI)
-        Returns:
-            List[EMA]: Список объектов EMA на каждый элемент списка.
-        """
+        """Вычисляет EMA 20/50/100/200 по переданным значениям."""
         periods = [20, 50, 100, 200]
         ema_values = {p: [] for p in periods}
         k_values = {p: 2 / (p + 1) for p in periods}
@@ -627,14 +531,7 @@ class PumpSetup(Setup):
 
     @staticmethod
     def _calculate_atr_series(bars: List[Bar], period: int = ATR_PERIOD) -> List[float]:
-        """
-        Вычисляет значения ATR по заданной выборке баров.
-        Args:
-            bars (List[Bar]): список баров.
-            period (int): период ATR.
-        Returns:
-            List[float]: значения ATR по всей выборке.
-        """
+        """Вычисляет значения ATR по всей выборке баров."""
         trs = []
         for i in range(1, len(bars)):
             high = bars[i].high
@@ -662,24 +559,12 @@ class PumpSetup(Setup):
 
     # region Plot
     def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
-        """
-        Создаёт скриншот пампа.
-        Args:
-            message (Optional[str]): сообщение
-            confidence (Confidence): уровень доверия
-            reason (str): причина
-        """
+        """Создаёт скриншот и сохраняет информацию о пропущенном пампе."""
         logw(f"{self.symbol} {message}")
         self._plot(message, confidence, reason)
 
     def _plot(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
-        """
-        Создаёт и сохраняет скриншот пампа.
-        Args:
-            message (Optional[str]): сообщение
-            confidence (Confidence): уровень доверия
-            reason (str): причина
-        """
+        """Строит и сохраняет изображение пампа."""
         plot = Plot(symbol=self.symbol,
                     bars=self.bars_setup,
                     correction_swings=self.correction_swings,

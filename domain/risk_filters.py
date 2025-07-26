@@ -6,15 +6,7 @@ from utils.float_utils import is_defined
 
 
 def has_gaps(bars: List[Bar], eps: float = 1e-8) -> bool:
-    """
-    Проверяет наличие реальных гэпов: когда диапазоны [low, high] двух соседних свечей не пересекаются.
-
-    Args:
-        bars (List[Bar]): Список баров для проверки.
-        eps (float): Допуск для сравнения на float.
-    Returns:
-        bool: True, если найден хотя бы один гэп.
-    """
+    """Определяет наличие настоящих гэпов между свечами."""
     if len(bars) < 2:
         return False
 
@@ -24,15 +16,7 @@ def has_gaps(bars: List[Bar], eps: float = 1e-8) -> bool:
     return False
 
 def has_repeating_ohlc(bars: List[Bar], sequence_len: int = 2) -> bool:
-    """
-    Проверяет, есть ли хотя бы одна последовательность из `sequence_len` свечей подряд с одинаковыми OHLC.
-
-    Args:
-        bars (List[Bar]): Список баров для проверки.
-        sequence_len (int): Длина последовательности одинаковых баров.
-    Returns:
-        bool: True, если есть хотя бы такая последовательность.
-    """
+    """Ищет подряд идущие свечи с одинаковыми значениями OHLC."""
     if len(bars) < sequence_len:
         return False
 
@@ -52,14 +36,7 @@ def has_repeating_ohlc(bars: List[Bar], sequence_len: int = 2) -> bool:
     return False
 
 def is_calm(bars: List[Bar]) -> bool:
-    """
-    Вычисляет относительный диапазон последних 7 баров и сравнивает с максимально допустимым.
-
-    Args:
-        bars (List[Bar]): Список баров для анализа.
-    Returns:
-        bool: True, если диапазон меньше MAX_RANGE_SIZE_PCT.
-    """
+    """Проверяет, что последние бары имеют небольшой диапазон."""
     bars = bars[-7:]
     if len(bars) < 2:
         return False
@@ -73,14 +50,7 @@ def is_calm(bars: List[Bar]) -> bool:
     return range_pct <= MAX_RANGE_PERCENT
 
 def is_rising(bars: List[Bar]) -> bool:
-    """
-    Проверяет, превысили ли последние (актуальные) свечи предыдущий максимум (разворот).
-
-    Args:
-        bars (List[Bar]): Массив баров.
-    Returns:
-        bool: True, если свежие свечи обновили максимум относительно истории.
-    """
+    """Определяет, обновили ли последние свечи предыдущий максимум."""
     if len(bars) <= NUM_CONTEXT_CANDLES:
         return False
 

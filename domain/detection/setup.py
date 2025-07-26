@@ -22,12 +22,7 @@ class Setup(ABC):
             bars_by_tf: Dict[Timeframe, List[Bar]],
             tfs: MTFProfile
     ) -> None:
-        """
-        Args:
-            symbol (str): тикер инструмента
-            bars_by_tf (Dict[Timeframe, List[Bar]]): словарь, где ключ — таймфрейм, значение — бары
-            tfs (MTFProfile): профиль таймфреймов.
-        """
+        """Сохраняет исходные данные и профиль таймфреймов."""
         self.symbol: str = symbol
         self.bars_setup: List[Bar] = bars_by_tf[tfs.setup]
         self.correction_swings: List = []
@@ -44,11 +39,7 @@ class Setup(ABC):
         self.atr_growth_pct: float = FLOAT_UNDEFINED
 
     def validated_or_none(self) -> Optional[SetupSignal]:
-        """
-        Валидирует сетап и возвращает сигнал, если найдена надёжная точка входа.
-        Returns:
-            Optional[SetupSignal]: Сигнал на вход, либо None, если условия не выполнены.
-        """
+        """Возвращает сигнал, если все условия сетапа выполнены."""
         self.define_confidence()
         if self.confidence:
             signal = self.build_signal()
@@ -58,19 +49,11 @@ class Setup(ABC):
 
     # region RR
     def define_rr(self) -> Tuple[float, float, float, float]:
-        """
-        Абстрактный метод: вычислить точки Entry, SL, TP и соотношение RR.
-        Returns:
-            Tuple[float, float, float, float]: Entry, StopLoss, TakeProfit, RR
-        """
+        """Абстрактный метод расчёта Entry, SL, TP и соотношения RR."""
         pass
 
     def _check_rr(self) -> bool:
-        """
-        Проверка RR по Entry/SL/TP: достаточен ли потенциал сделки по ризик-реварду.
-        Returns:
-            bool: True если критерии RR выполнены, иначе False.
-        """
+        """Проверяет, соответствует ли сделка минимальным требованиям RR."""
         self.entry, self.sl, self.tp, self.rr = self.define_rr()
         if not is_defined(self.entry, self.sl, self.tp, self.rr):
             logw("Некорректные Entry/SL/TP/RR")
@@ -99,11 +82,7 @@ class Setup(ABC):
 
     # region Signal
     def build_signal(self) -> SetupSignal:
-        """
-        Формирует объект сигнала на открытие по найденному сетапу.
-        Returns:
-            SetupSignal: Попытка точки входа с максимальной детальностью.
-        """
+        """Создаёт объект сигнала на открытие позиции."""
         return SetupSignal(
             symbol=self.symbol,
             side=Side.LONG,

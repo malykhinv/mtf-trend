@@ -19,16 +19,7 @@ class SetupDetector:
             tfs: MTFProfile,
             bars_by_tf: Dict[Timeframe, List[Bar]],
     ) -> Optional[SetupSignal]:
-        """
-        Запускает перебор всех типов сетапов и возвращает первый валидный сигнальный объект.
-
-        Args:
-            symbol (str): Тикер.
-            tfs (MTFProfile): Профиль таймфреймов.
-            bars_by_tf (Dict[Timeframe, List[Bar]]): Бары по таймфреймам.
-        Returns:
-            Optional[SetupSignal]: Первый найденный рабочий сигнал, либо None.
-        """
+        """Перебирает возможные сетапы и возвращает первый подходящий сигнал."""
         setup_classes = [PumpSetup]
         for setup_cls in setup_classes:
             setup = setup_cls(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)

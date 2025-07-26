@@ -21,10 +21,6 @@ class Timeframe(str, Enum):
 
     @property
     def minutes(self) -> int:
-        """
-        Возвращает количество минут для данного таймфрейма.
-        Returns:
-            int: длительность одного бара в минутах
-        """
+        """Количество минут в одном баре данного таймфрейма."""
         num, unit = int(self.value[:-1]), self.value[-1]
         return num * _MINUTES_MAP.get(unit, 1)

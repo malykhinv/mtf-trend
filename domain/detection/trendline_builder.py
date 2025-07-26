@@ -9,6 +9,7 @@ from utils.logger import log, logw
 class TrendlineBuilder:
     @staticmethod
     def build(swings: List[SwingPoint], bars: List[Bar]) -> Optional[Trendline]:
+        """Строит наклонку по свингам, если это возможно."""
         if not swings or len(swings) < 2:
             logw("Недостаточно swing-точек для построения наклонки.")
             return None
@@ -76,6 +77,7 @@ class TrendlineBuilder:
 
     @staticmethod
     def has_breakout(trendline: Trendline, bars: List[Bar], idx: int, tolerance_pct: float = 0.5) -> bool:
+        """Проверяет факт пробоя наклонки на указанной свече."""
         if not trendline or not trendline.valid:
             logw("Наклонка невалидна для проверки пробоя.")
             return False
@@ -95,6 +97,7 @@ class TrendlineBuilder:
 
     @staticmethod
     def count_touches(trendline: Trendline, bars: List[Bar], tolerance_pct: float = 0.5) -> int:
+        """Считает количество касаний наклонки."""
         if not trendline or not trendline.valid:
             logw("Наклонка невалидна для подсчёта касаний.")
             return 0
