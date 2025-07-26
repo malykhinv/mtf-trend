@@ -99,6 +99,7 @@ class Scanner:
         )
         last_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
         if last_price:
+            log(f"Пытаемся обновить сигнал по {symbol} при цене {last_price}")
             self._update_pending_signal(symbol, last_price)
         self._check_setups(symbol, tfs, bars_by_tf)
 
@@ -165,6 +166,7 @@ class Scanner:
         else:
             msg_id, with_photo = self._send_signal(signal, message, image_path)
             if msg_id:
+                log(f"Сообщение отправлено, message_id={msg_id}")
                 highs = [s.price for s in signal.correction_swings if s.type.is_high]
                 lows = [s.price for s in signal.correction_swings if s.type.is_low]
                 if highs and lows and current_price:
@@ -214,12 +216,22 @@ class Scanner:
         with self._lock:
             info = self._pending_signals.get(symbol)
             if not info:
+                log(f"Нет активных сигналов для {symbol}")
                 return
             info.max_price = max(info.max_price, current_price)
             info.min_price = min(info.min_price, current_price)
+        log(
+            f"Анализ {symbol}: цена={current_price} high={info.high} "
+            f"low={info.low} entry={info.entry_price} "
+            f"max={info.max_price} min={info.min_price}"
+        )
         crossed_high = current_price >= info.high
         crossed_low = current_price <= info.low
         if crossed_high or crossed_low:
+            log(
+                f"Цена {'выше' if crossed_high else 'ниже'} целевого уровня "
+                f"для {symbol}"
+            )
             pct = (current_price - info.entry_price) / info.entry_price * 100
             if crossed_high:
                 peak_pct = (info.max_price - info.entry_price) / info.entry_price * 100

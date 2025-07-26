@@ -33,6 +33,9 @@ class TelegramNotifier:
                     response.raise_for_status()
                     result = response.json().get("result", {})
                     log("Сообщение с изображением успешно отправлено.")
+                    if isinstance(result, dict):
+                        msg_id = result.get("message_id")
+                        log(f"Получен message_id: {msg_id}")
                 except Exception as error:
                     log(f"Ошибка при отправке изображения с сообщением: {error}")
                     return None
@@ -48,6 +51,9 @@ class TelegramNotifier:
                 response.raise_for_status()
                 result = response.json().get("result", {})
                 log("Сообщение успешно отправлено.")
+                if isinstance(result, dict):
+                    msg_id = result.get("message_id")
+                    log(f"Получен message_id: {msg_id}")
             except Exception as error:
                 log(f"Ошибка при отправке сообщения: {error}")
                 return None
