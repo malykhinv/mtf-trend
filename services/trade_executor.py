@@ -133,7 +133,7 @@ class TradeExecutor:
 
         risk = abs(entry - sl)
         reward = abs(tp - entry)
-        if risk == 0:
+        if not is_defined(risk):
             log(f"{symbol}: риск равен 0. Невозможно рассчитать RR.")
             return False
         rr = reward / risk

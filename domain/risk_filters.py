@@ -2,6 +2,9 @@ from config.constants import MAX_RANGE_PERCENT, NUM_CONTEXT_CANDLES
 from domain.models.bar import Bar
 from typing import List
 
+from utils.float_utils import is_defined
+
+
 def has_gaps(bars: List[Bar], eps: float = 1e-8) -> bool:
     """
     Проверяет наличие реальных гэпов: когда диапазоны [low, high] двух соседних свечей не пересекаются.
@@ -63,7 +66,7 @@ def is_calm(bars: List[Bar]) -> bool:
 
     high = max(b.high for b in bars)
     low = min(b.low for b in bars)
-    if low == 0:
+    if not is_defined(low):
         return False
 
     range_pct = (high - low) / low * 100
