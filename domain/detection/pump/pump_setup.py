@@ -25,6 +25,7 @@ from config.constants import (
     MIN_PRICE_GROWTH_PERCENT,
     MIN_ATR_GROWTH_PERCENT,
     MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
+    IS_CAPTURING_ENABLED,
 )
 from utils.decorator import inject_method_name, log_duration_ms
 from concurrent.futures import ThreadPoolExecutor
@@ -603,7 +604,8 @@ class PumpSetup(Setup):
     @log_duration_ms
     def _capture_pump_task(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         logw(f"{self.symbol} {message}")
-        self._plot(message, confidence, reason)
+        if IS_CAPTURING_ENABLED:
+            self._plot(message, confidence, reason)
 
     @log_duration_ms
     def _plot(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
