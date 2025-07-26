@@ -54,8 +54,7 @@ class Scanner:
         for symbol in symbols:
             for tfs in tfss:
                 try:
-                    loader = Loader()
-                    self._process_symbol(symbol, tfs, loader)
+                    self._process_symbol(symbol, tfs)
                 except Exception as error:
                     logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
 
@@ -67,15 +66,14 @@ class Scanner:
         print()
 
 
-    def _process_symbol(self, symbol: str, tfs: MTFProfile, loader: Loader | None = None) -> None:
+    def _process_symbol(self, symbol: str, tfs: MTFProfile) -> None:
         """Обрабатывает один символ по заданному профилю таймфреймов."""
-        loader = loader or self.loader
         bars_by_tf: Dict[Timeframe, List[Bar]] = {
-            tfs.macro: loader.fetch_ohlcvi(symbol, tfs.macro, limit=30, use_cache=True, ttl_minutes=tfs.macro.minutes)
+            tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=30, use_cache=True, ttl_minutes=tfs.macro.minutes)
         }
         if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
             return
-        bars_by_tf[tfs.context] = loader.fetch_ohlcvi(
+        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(
             symbol,
             tfs.context,
             limit=50,
@@ -83,9 +81,9 @@ class Scanner:
             ttl_minutes=tfs.context.minutes,
         )
         if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
-            loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
+            self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
             return
-        bars_by_tf[tfs.setup] = loader.fetch_ohlcvi(
+        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(
             symbol,
             tfs.setup,
             has_oi=True,
