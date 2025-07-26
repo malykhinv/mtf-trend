@@ -22,7 +22,6 @@ from utils.logger import log
 from matplotlib.dates import AutoDateLocator, DateFormatter
 
 from config.constants import (
-    EMA_PERIODS,
     EMA_COLORS,
     CANDLESTICK_WIDTH_MULTIPLIER,
     X_AXIS_MIN_TICKS,
@@ -38,7 +37,6 @@ from config.constants import (
     PUMP_START_TEXT_SIZE,
     EMA_ALPHA,
     LINE_WIDTH,
-    PLOT_LEGEND_FONT_SIZE,
     COLOR_BACKGROUND,
     TIMEZONE,
     ATR_COLOR,

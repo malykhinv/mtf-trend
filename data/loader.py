@@ -1,7 +1,7 @@
 from bisect import bisect_right
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
-from concurrent.futures import ThreadPoolExecutor
+
 
 from utils.decorator import log_duration_ms
 
@@ -154,21 +154,15 @@ class Loader:
         """Загружает OHLCVI для символа сразу по нескольким таймфреймам."""
         tfs_list = list(tfs)
         result: Dict[Timeframe, List[Bar]] = {}
-        with ThreadPoolExecutor(max_workers=len(tfs_list)) as executor:
-            futures = {
-                executor.submit(
-                    self.fetch_ohlcvi,
-                    symbol,
-                    tf,
-                    limit=limit,
-                    to_time=to_time,
-                    has_oi=tf == tfs.setup,
-                ): tf
-                for tf in tfs_list
-            }
-            for future in as_completed(futures):
-                tf = futures[future]
-                result[tf] = future.result()
+        for tf in tfs_list:
+            bars = self.fetch_ohlcvi(
+                symbol,
+                tf,
+                limit=limit,
+                to_time=to_time,
+                has_oi=tf == tfs.setup,
+            )
+            result[tf] = bars
         return result
 
     @log_duration_ms

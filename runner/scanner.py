@@ -1,6 +1,7 @@
 import traceback
 from typing import List, Dict, Set
 from concurrent.futures import ThreadPoolExecutor
+import threading
 
 from config.constants import IS_TRADING_ENABLED, FLOAT_UNDEFINED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
@@ -37,6 +38,8 @@ class Scanner:
         self.trade_executor: TradeExecutor = TradeExecutor(self.loader.binance, self.tracker)
         self._sent_signals: Dict[str, Set] = {}  # {symbol: set(confidences)}
         self._pending_signals: Dict[str, UpdateDetails] = {}
+        self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=2)
+        self._lock = threading.Lock()
 
     def run(self, tfss: List[MTFProfile]) -> None:
         """Перебирает символы и профили таймфреймов и запускает обработку."""
@@ -61,27 +64,21 @@ class Scanner:
         }
         if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
             return
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            future_context = executor.submit(
-                self.loader.fetch_ohlcvi,
-                symbol,
-                tfs.context,
-                limit=50,
-                use_cache=True,
-                ttl_minutes=tfs.context.minutes,
-            )
-            future_setup = executor.submit(
-                self.loader.fetch_ohlcvi,
-                symbol,
-                tfs.setup,
-                has_oi=True,
-            )
-            bars_by_tf[tfs.context] = future_context.result()
-            if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
-                # дождёмся завершения, но результат игнорируем
-                future_setup.result()
-                return
-            bars_by_tf[tfs.setup] = future_setup.result()
+        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(
+            symbol,
+            tfs.context,
+            limit=50,
+            use_cache=True,
+            ttl_minutes=tfs.context.minutes,
+        )
+        if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
+            self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)  # fetch and discard
+            return
+        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(
+            symbol,
+            tfs.setup,
+            has_oi=True,
+        )
         last_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
         if last_price:
             self._update_pending_signal(symbol, last_price)
@@ -113,7 +110,7 @@ class Scanner:
         if signal:
             tf = tfs.setup
             current_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
-            self._handle_signal(signal, bars_by_tf[tf], tf, current_price)
+            self._executor.submit(self._handle_signal, signal, bars_by_tf[tf], tf, current_price)
             print()
 
     def _handle_signal(
@@ -140,10 +137,11 @@ class Scanner:
             trendline=signal.trendline,
         )
         # Проверка, отправлялся ли уже сигнал с таким confidence для этого символа
-        already_sent = (
+        with self._lock:
+            already_sent = (
                 signal.symbol in self._sent_signals and
                 signal.confidence in self._sent_signals[signal.symbol]
-        )
+            )
         if already_sent:
             logw(f"Сигнал уже отправлялся: {signal.symbol} [{signal.confidence.name}] — пропуск.")
         else:
@@ -159,21 +157,23 @@ class Scanner:
                         if current_price != low
                         else FLOAT_UNDEFINED
                     )
-                    self._pending_signals[signal.symbol] = UpdateDetails(
-                        message_id=msg_id,
-                        notifier=self.orders_notifier if signal.is_order_signal else self.events_notifier,
-                        with_photo=bool(image_path),
-                        text=message,
-                        high=high,
-                        low=low,
-                        entry_price=current_price,
-                        rr=rr,
-                        max_price=current_price,
-                        min_price=current_price,
-                    )
-            if signal.symbol not in self._sent_signals:
-                self._sent_signals[signal.symbol] = set()
-            self._sent_signals[signal.symbol].add(signal.confidence)
+                    with self._lock:
+                        self._pending_signals[signal.symbol] = UpdateDetails(
+                            message_id=msg_id,
+                            notifier=self.orders_notifier if signal.is_order_signal else self.events_notifier,
+                            with_photo=bool(image_path),
+                            text=message,
+                            high=high,
+                            low=low,
+                            entry_price=current_price,
+                            rr=rr,
+                            max_price=current_price,
+                            min_price=current_price,
+                        )
+            with self._lock:
+                if signal.symbol not in self._sent_signals:
+                    self._sent_signals[signal.symbol] = set()
+                self._sent_signals[signal.symbol].add(signal.confidence)
 
     def _send_signal(self, signal: SetupSignal, message: str, image_path: str) -> tuple[int | None, bool]:
         """Отправляет сигнал в Telegram и, при необходимости, исполняет его."""
@@ -193,11 +193,12 @@ class Scanner:
 
     def _update_pending_signal(self, symbol: str, current_price: float) -> None:
         """Обновляет текст сообщения, когда цена достигает экстремумов."""
-        info = self._pending_signals.get(symbol)
-        if not info:
-            return
-        info.max_price = max(info.max_price, current_price)
-        info.min_price = min(info.min_price, current_price)
+        with self._lock:
+            info = self._pending_signals.get(symbol)
+            if not info:
+                return
+            info.max_price = max(info.max_price, current_price)
+            info.min_price = min(info.min_price, current_price)
         crossed_high = current_price >= info.high
         crossed_low = current_price <= info.low
         if crossed_high or crossed_low:
@@ -213,4 +214,5 @@ class Scanner:
             )
             notifier: TelegramNotifier = info.notifier
             notifier.edit_message(info.message_id, new_text, info.with_photo)
-            del self._pending_signals[symbol]
+            with self._lock:
+                del self._pending_signals[symbol]

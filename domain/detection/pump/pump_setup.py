@@ -27,10 +27,13 @@ from config.constants import (
     MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
 )
 from utils.decorator import inject_method_name, log_duration_ms
+from concurrent.futures import ThreadPoolExecutor
 from utils.float_utils import is_defined
 from utils.logger import log, logw
 from utils.math_utils import calculate_atr
 from utils.plot import Plot
+
+_capture_executor = ThreadPoolExecutor(max_workers=2)
 
 
 class PumpSetup(Setup):
@@ -593,9 +596,12 @@ class PumpSetup(Setup):
             f"✨ {self.confidence} {self.pump_bars[0].timestamp.strftime('%d.%m %H:%M')}")
 
     # region Plot
-    @log_duration_ms
     def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         """Создаёт скриншот и сохраняет информацию о пропущенном пампе."""
+        _capture_executor.submit(self._capture_pump_task, message, confidence, reason)
+
+    @log_duration_ms
+    def _capture_pump_task(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         logw(f"{self.symbol} {message}")
         self._plot(message, confidence, reason)
 
