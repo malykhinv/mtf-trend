@@ -604,7 +604,6 @@ class PumpSetup(Setup):
         logw(f"{self.symbol} {message}")
         if IS_CAPTURING_ENABLED:
             _capture_executor.submit(self._plot, message, confidence, reason)
-            self._plot(message, confidence, reason)
 
     @log_duration_ms
     def _plot(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
