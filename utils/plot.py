@@ -141,11 +141,10 @@ class Plot:
         self.ax_vol.set_ylim(vol_min, vol_max * 1.05)
 
         closes_array = np.array(closes)
-        for period in [20, 200]:
+        for period in [20, 50, 100, 200]:
             if len(closes_array) >= period:
                 ema = self.ema(closes_array, period)
-                self.ax_price.plot(time_nums, ema, linewidth=LINE_WIDTH, color=EMA_COLORS[period],
-                                   alpha=EMA_ALPHA)
+                self.ax_price.plot(time_nums, ema, linewidth=LINE_WIDTH, color=EMA_COLORS[period], alpha=EMA_ALPHA)
 
         has_oi_data = most(oi_values, is_defined)
         if has_oi_data:
