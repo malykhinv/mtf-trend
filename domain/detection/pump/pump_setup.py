@@ -26,7 +26,7 @@ from config.constants import (
     MIN_ATR_GROWTH_PERCENT,
     MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
 )
-from utils.decorator import inject_method_name
+from utils.decorator import inject_method_name, log_duration_ms
 from utils.float_utils import is_defined
 from utils.logger import log, logw
 from utils.math_utils import calculate_atr
@@ -49,6 +49,7 @@ class PumpSetup(Setup):
         self.correction_bars: List[Bar] = []
         self.main_high: SwingPoint = SwingPoint.undefined()
 
+    @log_duration_ms
     def define_confidence(self) -> None:
         """Определяет силу сигнала (confidence) по степени выполнения условий фильтров."""
         if self.confidence:
@@ -60,6 +61,7 @@ class PumpSetup(Setup):
         if not self.has_strong_conditions():
             return
 
+    @log_duration_ms
     def has_strong_conditions(self) -> bool:
         """Проверяет выполнение фильтров сильного уровня."""
         self._define_trendline()
@@ -75,6 +77,7 @@ class PumpSetup(Setup):
         self.log_setup()
         return True
 
+    @log_duration_ms
     def has_moderate_conditions(self) -> bool:
         """Проверяет выполнение фильтров умеренной силы."""
         self._define_correction_bars()
@@ -90,6 +93,7 @@ class PumpSetup(Setup):
         self.log_setup()
         return True
 
+    @log_duration_ms
     def has_weak_conditions(self) -> bool:
         """Проверяет выполнение слабых фильтров."""
         if not self._check_oi():
@@ -111,6 +115,7 @@ class PumpSetup(Setup):
 
     # region Check
     @inject_method_name
+    @log_duration_ms
     def _check_oi(self) -> bool:
         """Проверяет, что все значения OI присутствуют и больше нуля."""
         if all(not is_defined(bar.oi) for bar in self.bars_setup):
@@ -119,6 +124,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_consolidation(self) -> bool:
         """Проверяет консолидацию и разделяет периоды движения."""
         bars = self.bars_setup
@@ -163,6 +169,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_price_growth(self) -> bool:
         """Проверяет рост цены относительно EMA."""
         if not self.main_high or self.main_high.is_undefined:
@@ -191,6 +198,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_atr_growth(self) -> bool:
         """Оценивает рост ATR между консолидацией и скачком."""
         if not self.consolidation_bars or not self.pump_bars:
@@ -225,6 +233,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_volume_growth(self) -> bool:
         """Проверяет, что объём во время пампа значительно выше среднего."""
         avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
@@ -244,6 +253,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_pump_duration(self) -> bool:
         """Проверяет, что длительность пампа находится в допустимых пределах."""
         bars = self.bars_setup
@@ -266,6 +276,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_red_bars_size(self) -> bool:
         """Контролирует размер красных баров во время коррекции."""
         red_bars = [bar for bar in self.correction_bars if bar.close < bar.open]
@@ -280,6 +291,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
         """Проверяет структуру коррекции по свинг-поинтам."""
         if not swings or len(swings) < 5:
@@ -306,6 +318,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_correction_depth(self) -> bool:
         """Проверяет, что глубина коррекции не слишком велика."""
         correction_low = min(bar.low for bar in self.correction_bars)
@@ -321,6 +334,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_trendline_validity(self) -> bool:
         """Проверяет валидность найденной наклонки."""
         if not self.trendline or not self.trendline.valid:
@@ -329,6 +343,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_trendline_touches(self) -> bool:
         """Проверяет, что наклонка имеет минимум два касания."""
         touches = self.trendline_builder.count_touches(self.trendline, self.correction_bars)
@@ -339,6 +354,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_trendline_breakout(self) -> bool:
         """Проверяет пробой и закрепление цены выше наклонки."""
         bars = self.correction_bars
@@ -353,6 +369,7 @@ class PumpSetup(Setup):
         return True
 
     @inject_method_name
+    @log_duration_ms
     def _check_rr(self) -> bool:
         """Оценивает RR на соответствие минимальным требованиям."""
         entry = self.last.close
@@ -391,6 +408,7 @@ class PumpSetup(Setup):
     # endregion
 
     # region Define
+    @log_duration_ms
     def _define_main_high(self) -> None:
         """
         Определяет главный хай для пампа.
@@ -404,6 +422,7 @@ class PumpSetup(Setup):
         )
 
     @inject_method_name
+    @log_duration_ms
     def _define_correction_bars(self) -> None:
         """
         Возвращает бары коррекции — все бары после главного high.
@@ -417,18 +436,21 @@ class PumpSetup(Setup):
             self._capture_pump("После main_high нет баров для коррекции.", Confidence.MODERATE, self._name)
         self.correction_bars = correction_bars
 
+    @log_duration_ms
     def _define_correction_atr(self) -> None:
         """
         Определяет ATR для коррекции.
         """
         self.correction_atrs = calculate_atr(self.correction_bars) if self.correction_bars else []
 
+    @log_duration_ms
     def _define_correction_swings(self) -> None:
         """
         Определяет свинг-поинты коррекции.
         """
         self.correction_swings = self.structure_detector.detect_swing_points(self.correction_bars, self.correction_atrs)
 
+    @log_duration_ms
     def _define_trendline(self) -> None:
         """
         Определяет наклонку по свинг-поинтам коррекции.
@@ -438,6 +460,7 @@ class PumpSetup(Setup):
     # endregion
 
     # region Calculation
+    @log_duration_ms
     def _find_pump_start_index(self,
                                bars: List[Bar],
                                ema_series_price: List[EMA],
@@ -484,6 +507,7 @@ class PumpSetup(Setup):
         return None
 
     @staticmethod
+    @log_duration_ms
     def _check_ema_structure(ema_obj: EMA, atr_value: float = FLOAT_UNDEFINED) -> bool:
         """Проверяет выполнение структуры EMA на заданном баре."""
         order_ok = ema_obj.ema20 > ema_obj.ema50 > ema_obj.ema100 > ema_obj.ema200
@@ -501,6 +525,7 @@ class PumpSetup(Setup):
         return order_ok and spacing_ok
 
     @staticmethod
+    @log_duration_ms
     def _calculate_ema_series_from_values(values: List[float]) -> List[EMA]:
         """Вычисляет EMA 20/50/100/200 по переданным значениям."""
         periods = [20, 50, 100, 200]
@@ -530,6 +555,7 @@ class PumpSetup(Setup):
         return ema_list
 
     @staticmethod
+    @log_duration_ms
     def _calculate_atr_series(bars: List[Bar], period: int = ATR_PERIOD) -> List[float]:
         """Вычисляет значения ATR по всей выборке баров."""
         trs = []
@@ -558,11 +584,13 @@ class PumpSetup(Setup):
             f"✨ {self.confidence} {self.pump_bars[0].timestamp.strftime('%d.%m %H:%M')}")
 
     # region Plot
+    @log_duration_ms
     def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         """Создаёт скриншот и сохраняет информацию о пропущенном пампе."""
         logw(f"{self.symbol} {message}")
         self._plot(message, confidence, reason)
 
+    @log_duration_ms
     def _plot(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         """Строит и сохраняет изображение пампа."""
         plot = Plot(symbol=self.symbol,

@@ -1,5 +1,6 @@
 import matplotlib
 
+from utils.decorator import log_duration_ms
 from utils.float_utils import is_defined
 from utils.math_utils import most
 
@@ -83,6 +84,7 @@ class Plot:
                 fontsize=10, color='orange', ha='left', va='bottom'
             )
 
+    @log_duration_ms
     def generate_and_save(self, filename: str, pump_start_time: Optional[datetime], trendline: Optional[Trendline]) -> str:
         """Строит график и сохраняет изображение."""
         self.plot_main()
@@ -92,13 +94,14 @@ class Plot:
             self.plot_trendline(trendline)
         return self.save(filename)
 
+    @log_duration_ms
     def generate_and_save_simplified(self, filename: str, pump_start_time: Optional[datetime], trendline: Optional[Trendline]) -> str:
         """Строит график упрощённым способом и сохраняет изображение.
 
         При сохранении используются параметры ``bbox_inches=None`` и пониженное
         значение ``dpi`` для уменьшения размера файла.
         """
-        self.plot_main_simplified()
+        self._plot_main_simplified()
         if pump_start_time:
             self.mark_pump_start(pump_start_time)
         if trendline:
@@ -189,7 +192,8 @@ class Plot:
 
         self.fig.tight_layout()
 
-    def plot_main_simplified(self):
+    @log_duration_ms
+    def _plot_main_simplified(self):
         """Упрощённая версия построения графика без дополнительных вычислений"""
         ohlc, closes, volumes, oi_values, atr_values = [], [], [], [], []
 
@@ -282,6 +286,7 @@ class Plot:
                 ema[i] = data[i] * k + ema[i - 1] * (1 - k)
         return ema
 
+    @log_duration_ms
     def mark_pump_start(self, pump_start_time: datetime):
         """Отмечает начало пампа на графике."""
         pump_start_num = mdates.date2num(pump_start_time)
@@ -290,6 +295,7 @@ class Plot:
         ymax = max(bar.high for bar in self.bars)
         self.ax_price.text(pump_start_num, ymax, '', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
 
+    @log_duration_ms
     def plot_swings(self):
         """Рисует swing-точки на графике."""
         if not self.bars:
@@ -317,6 +323,7 @@ class Plot:
                 marker_y = sp.price - marker_height_data / 2  # верхняя вершина на цене
                 self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_LOW, marker='^', s=SWING_MARKER_SIZE)
 
+    @log_duration_ms
     def plot_trendline(self, trendline: Trendline):
         """Рисует наклонку на графике, если она валидна."""
         if not trendline or not trendline.valid:
@@ -336,6 +343,7 @@ class Plot:
         )
         log("Нарисована наклонка")
 
+    @log_duration_ms
     def save(self, filename: str, *, bbox_inches: str | None = 'tight', dpi: int | None = None) -> str:
         """Сохраняет построенный график в файл."""
         import os

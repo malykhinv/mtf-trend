@@ -2,6 +2,8 @@ from bisect import bisect_right
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
 
+from utils.decorator import log_duration_ms
+
 from config.constants import VOLUME_THRESHOLD_USDT, FLOAT_UNDEFINED
 from data.binance_client import get_binance_client
 from data.db import save_oi, load_oi
@@ -26,10 +28,12 @@ class Loader:
         # {(symbol, timeframe, limit): (timestamp, bars)}
         self._ohlcv_cache: Dict[tuple, tuple] = {}
 
+    @log_duration_ms
     def clear_cache(self) -> None:
         """Очистка кэша OHLCV."""
         self._ohlcv_cache.clear()
 
+    @log_duration_ms
     def get_filtered_symbols(self, min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
         """Возвращает список тикеров, подходящих по объёму торгов и активности."""
         markets: Dict[str, Any] = self.binance.load_markets()
@@ -51,6 +55,7 @@ class Loader:
 
         return sorted(symbols)
 
+    @log_duration_ms
     def fetch_ohlcvi(
             self,
             symbol: str,
@@ -137,6 +142,7 @@ class Loader:
             self._ohlcv_cache[cache_key] = (now, bars)
         return bars
 
+    @log_duration_ms
     def fetch_ohlcvi_by_tfs(
             self,
             symbol: str,
@@ -147,6 +153,7 @@ class Loader:
         """Загружает OHLCVI для символа сразу по нескольким таймфреймам."""
         return {tf: self.fetch_ohlcvi(symbol, tf, limit=limit, to_time=to_time, has_oi=tf == tfs.setup) for tf in tfs}
 
+    @log_duration_ms
     def fetch_oi_history(
             self,
             symbol: str,
@@ -168,12 +175,14 @@ class Loader:
 
         return self.binance.fapidata_get_openinteresthist(params)
 
+    @log_duration_ms
     def fetch_oi(self, symbol: str) -> float:
         params: Dict[str, Any] = {'symbol': symbol}
         result = self.binance.fapipublic_get_openinterest(params)
         return float(result["openInterest"])
 
     @staticmethod
+    @log_duration_ms
     def _map_oi_to_tf(target_timestamps: List[datetime], oi_data: List[Dict]) -> List[float]:
         """Соотносит значения OI с целевыми временными метками."""
         oi_map = {to_local_dt(int(item['timestamp'])): float(item['sumOpenInterest']) for item in oi_data }
