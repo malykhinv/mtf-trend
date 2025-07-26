@@ -279,20 +279,17 @@ class Plot:
         if not self.bars:
             return
 
+        ylim = self.ax_price.get_ylim()
+        y_range = ylim[1] - ylim[0]
+        pixel_height = self.ax_price.get_window_extent().height
+        marker_size_pts = SWING_MARKER_SIZE ** 0.5  # так как s — это площадь в pt²
+        marker_height_data = y_range * (marker_size_pts / pixel_height)
+
         for sp in self.correction_swings:
             if sp.is_undefined or sp.timestamp is None:
                 continue
 
             bar_time = mdates.date2num(sp.timestamp.astimezone(TIMEZONE))
-
-            # Получаем текущие границы оси
-            ylim = self.ax_price.get_ylim()
-            y_range = ylim[1] - ylim[0]
-
-            # Высота в координатах графика на основе пиксельного размера
-            pixel_height = self.ax_price.get_window_extent().height
-            marker_size_pts = SWING_MARKER_SIZE ** 0.5  # так как s — это площадь в pt²
-            marker_height_data = y_range * (marker_size_pts / pixel_height)
 
             if sp.type.is_high:
                 marker_y = sp.price + marker_height_data / 2  # нижняя вершина на цене
