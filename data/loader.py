@@ -91,7 +91,8 @@ class Loader:
 
         # OI
         if has_oi:
-            raw_oi = self.fetch_oi_history(symbol, timeframe, limit=limit, since=since, end_time=end_time)
+            oi_limit = min(limit, 500)
+            raw_oi = self.fetch_oi_history(symbol, timeframe, limit=oi_limit, since=since, end_time=end_time)
 
             if not raw_oi and timeframe.minutes < Timeframe.M5.minutes:
                 # fallback на 5m
@@ -102,7 +103,7 @@ class Loader:
                     m5_since = int((to_time - timedelta(minutes=limit * tf_m5.minutes)).timestamp() * 1000)
                     m5_end_time = int(to_time.timestamp() * 1000)
 
-                raw_oi = self.fetch_oi_history(symbol, tf_m5, limit=limit, since=m5_since, end_time=m5_end_time)
+                raw_oi = self.fetch_oi_history(symbol, tf_m5, limit=oi_limit, since=m5_since, end_time=m5_end_time)
 
             if raw_oi:
                 oi_values = self._map_oi_to_tf(target_ts, raw_oi)
@@ -160,7 +161,7 @@ class Loader:
             self,
             symbol: str,
             timeframe: Timeframe,
-            limit: int = 1000,
+            limit: int = 500,
             since: Optional[int] = None,
             end_time: Optional[int] = None
     ) -> List[Dict[str, Any]]:
@@ -169,7 +170,8 @@ class Loader:
         Args:
             symbol (str): Тикер.
             timeframe (Timeframe): Таймфрейм.
-            limit (int): Количество элементов.
+            limit (int): Количество элементов (максимум 500, см. Binance docs
+            https://binance-docs.github.io/apidocs/futures/en/#open-interest-hist-data).
             since (Optional[int]): Начальный unix-millisec (или None).
             end_time (Optional[int]): Конечный unix-millisec (или None).
         Returns:
