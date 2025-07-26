@@ -92,6 +92,19 @@ class Plot:
             self.plot_trendline(trendline)
         return self.save(filename)
 
+    def generate_and_save_simplified(self, filename: str, pump_start_time: Optional[datetime], trendline: Optional[Trendline]) -> str:
+        """Строит график упрощённым способом и сохраняет изображение.
+
+        При сохранении используются параметры ``bbox_inches=None`` и пониженное
+        значение ``dpi`` для уменьшения размера файла.
+        """
+        self.plot_main_simplified()
+        if pump_start_time:
+            self.mark_pump_start(pump_start_time)
+        if trendline:
+            self.plot_trendline(trendline)
+        return self.save(filename, bbox_inches=None, dpi=60)
+
     def plot_main(self):
         """
         Основная функция построения графика.
@@ -176,6 +189,86 @@ class Plot:
 
         self.fig.tight_layout()
 
+    def plot_main_simplified(self):
+        """Упрощённая версия построения графика без дополнительных вычислений"""
+        ohlc, closes, volumes, oi_values, atr_values = [], [], [], [], []
+
+        for bar in self.bars:
+            ts = bar.timestamp.astimezone(TIMEZONE)
+            time_num = mdates.date2num(ts)
+            ohlc.append([time_num, bar.open, bar.high, bar.low, bar.close])
+            closes.append(bar.close)
+            volumes.append((time_num, bar.volume, bar.close >= bar.open))
+            oi_values.append(bar.oi)
+            atr_values.append(bar.atr)
+
+        time_nums = [mdates.date2num(bar.timestamp.astimezone(TIMEZONE)) for bar in self.bars]
+        width = float(np.mean(np.diff(time_nums))) * CANDLESTICK_WIDTH_MULTIPLIER if len(time_nums) >= 2 else 0.0007
+
+        candlestick_ohlc(self.ax_price, ohlc, width=width, colorup=COLOR_UP, colordown=COLOR_DOWN)
+
+        self.plot_swings()
+
+        vol_values = np.array([v[1] for v in volumes])
+        vol_min, vol_max = vol_values.min(), vol_values.max()
+
+        for t, vol, is_up in volumes:
+            color = COLOR_UP if is_up else COLOR_DOWN
+            self.ax_vol.bar(t, vol, color=color, width=width)
+
+        self.ax_vol.set_ylim(vol_min, vol_max * 1.05)
+        self.ax_vol.set_ylabel("Volume", color='gray', fontsize=8)
+
+        closes_array = np.array(closes)
+        for period in EMA_PERIODS:
+            if len(closes_array) >= period:
+                ema = self.ema(closes_array, period)
+                self.ax_price.plot(time_nums, ema, linewidth=LINE_WIDTH, color=EMA_COLORS[period],
+                                   alpha=EMA_ALPHA, label=f'EMA {period}')
+
+        self.ax_price.legend(
+            loc='upper left',
+            fontsize=PLOT_LEGEND_FONT_SIZE,
+            facecolor=COLOR_BACKGROUND,
+            labelcolor='white'
+        )
+
+        has_oi_data = most(oi_values, is_defined)
+        if has_oi_data:
+            oi_array = np.array([oi if is_defined(oi) else np.nan for oi in oi_values])
+            oi_min, oi_max = np.nanmin(oi_array), np.nanmax(oi_array)
+
+            if oi_max > oi_min:
+                normalized_oi = (oi_array - oi_min) / (oi_max - oi_min)
+            else:
+                normalized_oi = np.zeros_like(oi_array)
+
+            self.ax_oi.step(time_nums, normalized_oi, where='post', color=COLOR_OI, linewidth=LINE_WIDTH)
+
+            self.ax_oi.set_ylim(0, 1.05)
+            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
+            self.ax_oi.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{int(y * 100)}%'))
+        else:
+            self.ax_oi.set_facecolor(COLOR_BACKGROUND_NA)
+            self.ax_oi.set_xticks([])
+            self.ax_oi.set_yticks([])
+            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
+
+        atr_line = np.array(atr_values)
+        self.ax_atr.step(time_nums, atr_line, color=ATR_COLOR, linewidth=LINE_WIDTH, linestyle='-')
+        atr_min, atr_max = np.nanmin(atr_line), np.nanmax(atr_line)
+        self.ax_atr.set_ylim(atr_min, atr_max * 1.05)
+        self.ax_atr.set_ylabel("ATR", color='gray', fontsize=8)
+
+        locator = AutoDateLocator(minticks=X_AXIS_MIN_TICKS, maxticks=X_AXIS_MAX_TICKS)
+        locator.intervald[mdates.MINUTELY] = X_AXIS_MINUTELY_INTERVALS
+        formatter = DateFormatter(X_AXIS_TIME_FORMAT, tz=TIMEZONE)
+
+        for ax in [self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr]:
+            ax.xaxis.set_major_locator(locator)
+            ax.xaxis.set_major_formatter(formatter)
+            ax.tick_params(axis='x', colors='gray', labelsize=8)
+
     @staticmethod
     def ema(data: np.ndarray, period: int) -> np.ndarray:
         """Вычисляет экспоненциальную скользящую среднюю."""
@@ -230,17 +323,29 @@ class Plot:
             log("Невалидная наклонка, не будет нарисована")
             return
 
-        x_indices = list(range(trendline.point1_index, trendline.point2_index + 1))
-        y_values = [trendline.get_value_at(i) for i in x_indices]
-        times = [mdates.date2num(self.bars[i].timestamp) for i in x_indices]
-        self.ax_price.plot(times, y_values, color=COLOR_TRENDLINE, linestyle=TRENDLINE_STYLE, linewidth=LINE_WIDTH)
+        t1_num = mdates.date2num(trendline.point1_time)
+        t2_num = mdates.date2num(trendline.point2_time)
+        y1 = trendline.get_value_at_time(trendline.point1_time)
+        y2 = trendline.get_value_at_time(trendline.point2_time)
+        self.ax_price.plot(
+            [t1_num, t2_num],
+            [y1, y2],
+            color=COLOR_TRENDLINE,
+            linestyle=TRENDLINE_STYLE,
+            linewidth=LINE_WIDTH,
+        )
         log("Нарисована наклонка")
 
-    def save(self, filename: str) -> str:
+    def save(self, filename: str, *, bbox_inches: str | None = 'tight', dpi: int | None = None) -> str:
         """Сохраняет построенный график в файл."""
         import os
         os.makedirs(self.save_dir, exist_ok=True)
         full_path = os.path.join(self.save_dir, filename)
-        plt.savefig(full_path, facecolor=self.fig.get_facecolor(), bbox_inches='tight')
+        plt.savefig(
+            full_path,
+            facecolor=self.fig.get_facecolor(),
+            bbox_inches=bbox_inches,
+            dpi=dpi,
+        )
         plt.close(self.fig)
         return full_path

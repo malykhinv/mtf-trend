@@ -572,7 +572,7 @@ class PumpSetup(Setup):
                     message=message,
                     save_dir="skipped")
         filename = f"{confidence.value.capitalize()}_{reason}_{self.tfs.setup.value}_{self.symbol}.png"
-        plot.generate_and_save(
+        plot.generate_and_save_simplified(
             filename=filename,
             pump_start_time=self.pump_bars[0].timestamp if self.pump_bars else None,
             trendline=self.trendline,
