@@ -69,57 +69,86 @@ class Loader:
     ) -> List[Bar]:
         """Загружает OHLCV и OI для инструмента на заданном таймфрейме."""
         cache_key = (symbol, timeframe, limit, has_oi)
-        now = datetime.utcnow()
-        if use_cache and cache_key in self._ohlcv_cache:
-            ts_cached, cached_bars = self._ohlcv_cache[cache_key]
-            if now - ts_cached < timedelta(minutes=ttl_minutes):
-                return cached_bars
+        now = datetime.now()
+        if self._is_cache_valid(use_cache, cache_key, now, ttl_minutes):
+            return self._ohlcv_cache[cache_key][1]
 
-        since: Optional[int] = None
-        end_time: Optional[int] = None
-        if to_time:
-            since = int((to_time - timedelta(minutes=limit * timeframe.minutes)).timestamp() * 1000)
-            end_time = int(to_time.timestamp() * 1000)
+        since, end_time = self._calculate_time_bounds(to_time, timeframe, limit)
 
-        raw: List[Any] = self.binance.fetch_ohlcv(
+        raw = self.binance.fetch_ohlcv(
             symbol,
             timeframe=timeframe.value,
             since=since,
             limit=limit
         )
-
         if not raw:
             return []
 
         target_ts = [to_local_dt(entry[0]) for entry in raw]
+        oi_values = self._get_oi_values(symbol, timeframe, limit, since, end_time, to_time, has_oi, target_ts)
 
-        # OI
-        if has_oi:
-            oi_limit = min(limit, 500)
-            raw_oi = self.fetch_oi_history(symbol, timeframe, limit=oi_limit, since=since, end_time=end_time)
+        bars = self._build_bars(raw, oi_values, to_time)
 
-            if not raw_oi and timeframe.minutes < Timeframe.M5.minutes:
-                # fallback на 5m
-                tf_m5 = Timeframe.M5
-                m5_since = None
-                m5_end_time = None
-                if to_time:
-                    m5_since = int((to_time - timedelta(minutes=limit * tf_m5.minutes)).timestamp() * 1000)
-                    m5_end_time = int(to_time.timestamp() * 1000)
+        atrs = calculate_atr(bars)
+        for i in range(len(atrs)):
+            bars[i].atr = atrs[i]
 
-                raw_oi = self.fetch_oi_history(symbol, tf_m5, limit=oi_limit, since=m5_since, end_time=m5_end_time)
+        if use_cache:
+            self._ohlcv_cache[cache_key] = (now, bars)
+        return bars
 
-            if raw_oi:
-                oi_values = self._map_oi_to_tf(target_ts, raw_oi)
-            else:
-                current_oi = self.fetch_oi(symbol)
-                last_ts = target_ts[-1]
-                save_oi(symbol, timeframe, last_ts, current_oi)
-                oi_values = load_oi(symbol, timeframe, target_ts)
+    @log_duration_ms
+    def _is_cache_valid(self, use_cache: bool, cache_key: tuple, now: datetime, ttl_minutes: int) -> bool:
+        return use_cache and cache_key in self._ohlcv_cache and \
+            now - self._ohlcv_cache[cache_key][0] < timedelta(minutes=ttl_minutes)
+
+    @log_duration_ms
+    def _calculate_time_bounds(self, to_time: Optional[datetime], timeframe: Timeframe, limit: int) -> tuple:
+        if not to_time:
+            return None, None
+        since = int((to_time - timedelta(minutes=limit * timeframe.minutes)).timestamp() * 1000)
+        end_time = int(to_time.timestamp() * 1000)
+        return since, end_time
+
+    @log_duration_ms
+    def _get_oi_values(
+            self,
+            symbol: str,
+            timeframe: Timeframe,
+            limit: int,
+            since: Optional[int],
+            end_time: Optional[int],
+            to_time: Optional[datetime],
+            has_oi: bool,
+            target_ts: List[datetime]
+    ) -> List[float]:
+        if not has_oi:
+            return [FLOAT_UNDEFINED for _ in range(len(target_ts))]
+
+        oi_limit = min(limit, 500)
+        raw_oi = self.fetch_oi_history(symbol, timeframe, limit=oi_limit, since=since, end_time=end_time)
+
+        if not raw_oi and timeframe.minutes < Timeframe.M5.minutes:
+            tf_m5 = Timeframe.M5
+            m5_since, m5_end_time = self._calculate_time_bounds(to_time, tf_m5, limit)
+            raw_oi = self.fetch_oi_history(symbol, tf_m5, limit=oi_limit, since=m5_since, end_time=m5_end_time)
+
+        if raw_oi:
+            return self._map_oi_to_tf(target_ts, raw_oi)
         else:
-            oi_values = [FLOAT_UNDEFINED for _ in range(len(raw))]
+            current_oi = self.fetch_oi(symbol)
+            last_ts = target_ts[-1]
+            save_oi(symbol, timeframe, last_ts, current_oi)
+            return load_oi(symbol, timeframe, target_ts)
 
-        bars: List[Bar] = []
+    @log_duration_ms
+    def _build_bars(
+            self,
+            raw: List[Any],
+            oi_values: List[float],
+            to_time: Optional[datetime]
+    ) -> List[Bar]:
+        bars = []
         for i, entry in enumerate(raw):
             ts = to_local_dt(entry[0])
             if to_time and ts > to_time:
@@ -135,12 +164,6 @@ class Loader:
                 oi=oi_value
             )
             bars.append(bar)
-
-        atrs = calculate_atr(bars)
-        for i in range(len(atrs)):
-            bars[i].atr = atrs[i]
-        if use_cache:
-            self._ohlcv_cache[cache_key] = (now, bars)
         return bars
 
     @log_duration_ms
