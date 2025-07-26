@@ -63,10 +63,10 @@ class Scanner:
             symbol (str): тикер
             tfs (MTFProfile): профиль таймфреймов
         """
-        bars_by_tf: Dict[Timeframe, List[Bar]] = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=50)}
+        bars_by_tf: Dict[Timeframe, List[Bar]] = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=30)}
         if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
             return
-        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(symbol, tfs.context, limit=100)
+        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(symbol, tfs.context, limit=50)
         if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
             return
         bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
