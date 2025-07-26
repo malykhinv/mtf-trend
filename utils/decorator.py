@@ -1,5 +1,6 @@
 import time
 
+from config.constants import IS_FUNCTION_DURATION_LOG_ENABLED
 from utils.logger import log
 
 
@@ -16,9 +17,10 @@ def inject_method_name(func):
             delattr(self, '_name')
     return wrapper
 
-
 def log_duration_ms(func):
     """Декоратор: логирует время выполнения метода в миллисекундах."""
+    if not IS_FUNCTION_DURATION_LOG_ENABLED:
+        return func
 
     def wrapper(*args, **kwargs):
         start = time.perf_counter()
@@ -27,7 +29,6 @@ def log_duration_ms(func):
         finally:
             elapsed_ms = int((time.perf_counter() - start) * 1000)
             if elapsed_ms > 200:
-                name = func.__qualname__
-                log(f"{name} : {elapsed_ms} мс")
-
+                log(f"{func.__qualname__} : {elapsed_ms} мс")
     return wrapper
+
