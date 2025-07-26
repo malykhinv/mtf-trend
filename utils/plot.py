@@ -60,6 +60,7 @@ class Plot:
                  save_dir: str = 'unknown'):
         """Подготавливает окружение для построения графика."""
         self.symbol = symbol
+        self.tf = tf
         self.bars = bars
         self.correction_swings = correction_swings
         self.save_dir = '.generated/plot/' + save_dir
@@ -75,8 +76,8 @@ class Plot:
             ax.set_facecolor(COLOR_BACKGROUND)
             ax.tick_params(colors='gray', which='both', length=0)
             ax.grid(True, color='gray', linestyle=':', linewidth=0.5, alpha=0.25)
-        # По умолчанию скрываем подпись графика, оставляя только сообщение
-        self.ax_price.set_title('')
+        title = f"{self.symbol} {self.tf.value}"
+        self.ax_price.set_title(title, color='white')
         if message:
             self.ax_price.text(
                 0.01, 0.85, message, transform=self.ax_price.transAxes,
