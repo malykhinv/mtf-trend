@@ -142,7 +142,7 @@ class Loader:
             self,
             symbol: str,
             tfs: MTFProfile,
-            limit: int = 1000,
+            limit: int = 500,
             to_time: Optional[datetime] = None,
     ) -> Dict[Timeframe, List[Bar]]:
         """

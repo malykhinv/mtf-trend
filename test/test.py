@@ -37,7 +37,7 @@ def main():
         log(f"Проверка {profile_name}")
 
         # Загружаем бары по профилю
-        bars_by_tf = loader.fetch_ohlcvi_by_tfs(symbol, tfs, limit=1000, to_time=target_time)
+        bars_by_tf = loader.fetch_ohlcvi_by_tfs(symbol, tfs, to_time=target_time)
         setup_bars = bars_by_tf[tfs.setup]
 
         signal = detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
