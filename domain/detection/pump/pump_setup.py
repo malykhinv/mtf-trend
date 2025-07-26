@@ -33,6 +33,7 @@ from utils.float_utils import is_defined
 from utils.logger import log, logw
 from utils.math_utils import calculate_atr
 from utils.plot import Plot
+import numpy as np
 
 _capture_executor = ThreadPoolExecutor(max_workers=2)
 
@@ -532,37 +533,35 @@ class PumpSetup(Setup):
     @log_duration_ms
     def _calculate_ema_series_from_values(values: List[float]) -> List[EMA]:
         """Вычисляет EMA 20/50/100/200 по переданным значениям."""
-        import numpy as np
-
-        periods = [20, 50, 100, 200]
+        periods = np.array([20, 50, 100, 200])
         values_arr = np.asarray(values, dtype=float)
+        if values_arr.size == 0:
+            return []
+
+        k = 2 / (periods + 1)
         ema_matrix = np.zeros((len(periods), len(values_arr)))
 
-        for idx, p in enumerate(periods):
-            k = 2 / (p + 1)
-            if len(values_arr) >= p:
-                ema_matrix[idx, 0] = values_arr[:p].mean()
-            else:
-                ema_matrix[idx, 0] = values_arr[0]
-            for i in range(1, len(values_arr)):
-                ema_matrix[idx, i] = values_arr[i] * k + ema_matrix[idx, i - 1] * (1 - k)
+        start = [values_arr[:p].mean() if len(values_arr) >= p else values_arr[0] for p in periods]
+        ema_matrix[:, 0] = np.array(start, dtype=float)
 
-        ema_list: List[EMA] = []
-        for i in range(len(values_arr)):
-            ema_obj = EMA(
+        for i in range(1, len(values_arr)):
+            ema_matrix[:, i] = values_arr[i] * k + ema_matrix[:, i - 1] * (1 - k)
+
+        ema_list = [
+            EMA(
                 ema20=float(ema_matrix[0, i]),
                 ema50=float(ema_matrix[1, i]),
                 ema100=float(ema_matrix[2, i]),
                 ema200=float(ema_matrix[3, i]),
             )
-            ema_list.append(ema_obj)
+            for i in range(len(values_arr))
+        ]
         return ema_list
 
     @staticmethod
     @log_duration_ms
     def _calculate_atr_series(bars: List[Bar], period: int = ATR_PERIOD) -> List[float]:
         """Вычисляет значения ATR по всей выборке баров."""
-        import numpy as np
 
         if not bars:
             return []
