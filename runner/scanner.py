@@ -48,6 +48,7 @@ class Scanner:
         if symbols:
             log(f"Отобрано {len(symbols)} символов.")
         for symbol in symbols:
+            self.loader.clear_cache()
             for tfs in tfss:
                 try:
                     self._process_symbol(symbol, tfs)
@@ -63,18 +64,22 @@ class Scanner:
             symbol (str): тикер
             tfs (MTFProfile): профиль таймфреймов
         """
-        bars_by_tf: Dict[Timeframe, List[Bar]] = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=30)}
+        bars_by_tf: Dict[Timeframe, List[Bar]] = {
+            tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=30, use_cache=True, ttl_minutes=tfs.macro.minutes)
+        }
         if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
             return
-        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(symbol, tfs.context, limit=50)
+        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(
+            symbol,
+            tfs.context,
+            limit=50,
+            use_cache=True,
+            ttl_minutes=tfs.context.minutes,
+        )
         if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
             return
         bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
-        if tfs.entry == tfs.setup:
-            bars_by_tf[tfs.entry] = bars_by_tf[tfs.setup]
-        else:
-            bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry, limit=100)
-        last_price = bars_by_tf[tfs.entry][-1].close if bars_by_tf[tfs.entry] else None
+        last_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
         if last_price:
             self._update_pending_signal(symbol, last_price)
         self._check_setups(symbol, tfs, bars_by_tf)
@@ -122,7 +127,7 @@ class Scanner:
         signal: SetupSignal | None = self.setup_detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
         if signal:
             tf = tfs.setup
-            current_price = bars_by_tf[tfs.entry][-1].close if bars_by_tf[tfs.entry] else None
+            current_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
             self._handle_signal(signal, bars_by_tf[tf], tf, current_price)
             print()
 

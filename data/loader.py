@@ -23,6 +23,12 @@ class Loader:
         Инициализирует клиент Binance через ccxt.
         """
         self.binance = get_binance_client()
+        # {(symbol, timeframe, limit): (timestamp, bars)}
+        self._ohlcv_cache: Dict[tuple, tuple] = {}
+
+    def clear_cache(self) -> None:
+        """Очистка кэша OHLCV."""
+        self._ohlcv_cache.clear()
 
     def get_filtered_symbols(self, min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
         """
@@ -57,7 +63,9 @@ class Loader:
             timeframe: Timeframe,
             limit: int = 500,
             to_time: Optional[datetime] = None,
-            has_oi: bool = False
+            has_oi: bool = False,
+            use_cache: bool = False,
+            ttl_minutes: int = 0,
     ) -> List[Bar]:
         """
         Загружает OHLCV+OI для инструмента на нужном таймфрейме.
@@ -71,6 +79,13 @@ class Loader:
         Returns:
             List[Bar]: Список баров со всеми параметрами.
         """
+        cache_key = (symbol, timeframe, limit, has_oi)
+        now = datetime.utcnow()
+        if use_cache and cache_key in self._ohlcv_cache:
+            ts_cached, cached_bars = self._ohlcv_cache[cache_key]
+            if now - ts_cached < timedelta(minutes=ttl_minutes):
+                return cached_bars
+
         since: Optional[int] = None
         end_time: Optional[int] = None
         if to_time:
@@ -135,7 +150,8 @@ class Loader:
         atrs = calculate_atr(bars)
         for i in range(len(atrs)):
             bars[i].atr = atrs[i]
-
+        if use_cache:
+            self._ohlcv_cache[cache_key] = (now, bars)
         return bars
 
     def fetch_ohlcvi_by_tfs(

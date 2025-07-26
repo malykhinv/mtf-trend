@@ -32,7 +32,7 @@ def main():
     detector = SetupDetector()
 
     for tfs in mtf_profiles:
-        profile_name = f"{tfs.macro.value}-{tfs.setup.value}-{tfs.entry.value}"
+        profile_name = f"{tfs.macro.value}-{tfs.context.value}-{tfs.setup.value}"
         print()
         log(f"Проверка {profile_name}")
 

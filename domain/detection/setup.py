@@ -30,7 +30,6 @@ class Setup(ABC):
         """
         self.symbol: str = symbol
         self.bars_setup: List[Bar] = bars_by_tf[tfs.setup]
-        self.bars_entry: List[Bar] = bars_by_tf[tfs.entry]
         self.correction_swings: List = []
         self.confidence: Optional = None
         self.tfs: MTFProfile = tfs

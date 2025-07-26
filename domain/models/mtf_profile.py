@@ -7,19 +7,18 @@ from domain.models.timeframe import Timeframe
 class MTFProfile:
     """
     Описывает группы таймфреймов для multi-timeframe анализа:
-        macro, context, setup, entry.
+        macro, context, setup.
     """
     macro: Timeframe
     context: Timeframe
     setup: Timeframe
-    entry: Timeframe
 
     def __iter__(self):
         """
         Позволяет итерироваться по всем таймфреймам в порядке:
-        macro → setup → entry.
+        macro → context → setup.
         """
-        return iter((self.macro, self.context, self.setup, self.entry))
+        return iter((self.macro, self.context, self.setup))
 
     def __str__(self):
-        return f"{self.macro.value}-{self.context.value}-{self.setup.value}-{self.entry.value}"
+        return f"{self.macro.value}-{self.context.value}-{self.setup.value}"

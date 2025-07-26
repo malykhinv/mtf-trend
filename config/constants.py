@@ -8,11 +8,11 @@ from domain.models.timeframe import Timeframe
 TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
 # Multi-timeframe profiles
-MTF_PROFILE_MACRO_1_1: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.M30, setup=Timeframe.M1, entry=Timeframe.M1)
-MTF_PROFILE_MACRO_3_1: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.M30, setup=Timeframe.M3, entry=Timeframe.M1)
-MTF_PROFILE_MACRO_3_3: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M3, entry=Timeframe.M3)
-MTF_PROFILE_MACRO_5_3: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M5, entry=Timeframe.M3)
-MTF_PROFILE_MACRO_5_1: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M5, entry=Timeframe.M1)
+MTF_PROFILE_MACRO_1_1: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.M30, setup=Timeframe.M1)
+MTF_PROFILE_MACRO_3_1: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.M30, setup=Timeframe.M3)
+MTF_PROFILE_MACRO_3_3: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M3)
+MTF_PROFILE_MACRO_5_3: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M5)
+MTF_PROFILE_MACRO_5_1: MTFProfile = MTFProfile(macro=Timeframe.D1, context=Timeframe.H1, setup=Timeframe.M5)
 
 FLOAT_UNDEFINED: float = 0.0
 
