@@ -99,7 +99,6 @@ class Scanner:
         )
         last_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
         if last_price:
-            log(f"Пытаемся обновить сигнал по {symbol} при цене {last_price}")
             self._update_pending_signal(symbol, last_price)
         self._check_setups(symbol, tfs, bars_by_tf)
 
@@ -216,7 +215,6 @@ class Scanner:
         with self._lock:
             info = self._pending_signals.get(symbol)
             if not info:
-                log(f"Нет активных сигналов для {symbol}")
                 return
             info.max_price = max(info.max_price, current_price)
             info.min_price = min(info.min_price, current_price)
