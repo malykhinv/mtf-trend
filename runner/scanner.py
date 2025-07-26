@@ -1,5 +1,6 @@
 import traceback
 from typing import List, Dict, Set
+from concurrent.futures import ThreadPoolExecutor
 
 from config.constants import IS_TRADING_ENABLED, FLOAT_UNDEFINED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
@@ -60,16 +61,27 @@ class Scanner:
         }
         if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
             return
-        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(
-            symbol,
-            tfs.context,
-            limit=50,
-            use_cache=True,
-            ttl_minutes=tfs.context.minutes,
-        )
-        if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
-            return
-        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future_context = executor.submit(
+                self.loader.fetch_ohlcvi,
+                symbol,
+                tfs.context,
+                limit=50,
+                use_cache=True,
+                ttl_minutes=tfs.context.minutes,
+            )
+            future_setup = executor.submit(
+                self.loader.fetch_ohlcvi,
+                symbol,
+                tfs.setup,
+                has_oi=True,
+            )
+            bars_by_tf[tfs.context] = future_context.result()
+            if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
+                # дождёмся завершения, но результат игнорируем
+                future_setup.result()
+                return
+            bars_by_tf[tfs.setup] = future_setup.result()
         last_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
         if last_price:
             self._update_pending_signal(symbol, last_price)
