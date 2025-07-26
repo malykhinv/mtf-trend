@@ -55,7 +55,7 @@ class Loader:
             self,
             symbol: str,
             timeframe: Timeframe,
-            limit: int = 100,
+            limit: int = 500,
             to_time: Optional[datetime] = None,
             has_oi: bool = False
     ) -> List[Bar]:
@@ -141,7 +141,7 @@ class Loader:
             self,
             symbol: str,
             tfs: MTFProfile,
-            limit: int = 100,
+            limit: int = 1000,
             to_time: Optional[datetime] = None,
     ) -> Dict[Timeframe, List[Bar]]:
         """
@@ -160,7 +160,7 @@ class Loader:
             self,
             symbol: str,
             timeframe: Timeframe,
-            limit: int = 200,
+            limit: int = 1000,
             since: Optional[int] = None,
             end_time: Optional[int] = None
     ) -> List[Dict[str, Any]]:
