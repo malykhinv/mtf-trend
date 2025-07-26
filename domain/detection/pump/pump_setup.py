@@ -24,7 +24,11 @@ from config.constants import (
     PUMP_MIN_DURATION_MINUTES,
     MIN_PRICE_GROWTH_PERCENT,
     MIN_ATR_GROWTH_PERCENT,
-    MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
+    MIN_VOLUME_RATIO,
+    MIN_VOLUME_GROWTH,
+    ATR_PERIOD,
+    PUMP_MAX_DURATION_MINUTES,
+    BIG_BODY_ATR_MULTIPLIER,
 )
 from utils.decorator import inject_method_name, log_duration_ms
 from concurrent.futures import ThreadPoolExecutor
@@ -41,7 +45,10 @@ class PumpSetup(Setup):
     Детектор ситуаций типа Pump (скачка цены) по заданному символу, биржевым барам и профилю таймфреймов.
     Применяет разноплановые фильтры и проверки по структуре, объемам, ATR, OI, чтобы определить силу сигнала.
     """
-    def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], tfs: MTFProfile) -> None:
+
+    def __init__(
+        self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], tfs: MTFProfile
+    ) -> None:
         """Создаёт детектор пампов для указанного символа."""
         super().__init__(symbol, bars_by_tf, tfs)
         self.structure_detector: StructureDetector = StructureDetector()
@@ -137,28 +144,36 @@ class PumpSetup(Setup):
         ema_series_price = self._calculate_ema_series_from_values(closes)
         ema_series_vol = self._calculate_ema_series_from_values(volumes)
         has_oi_data = any(oi != FLOAT_UNDEFINED for oi in oi_values)
-        ema_series_oi = self._calculate_ema_series_from_values(oi_values) if has_oi_data else [None] * len(bars)
+        ema_series_oi = (
+            self._calculate_ema_series_from_values(oi_values)
+            if has_oi_data
+            else [None] * len(bars)
+        )
         atr_series = self._calculate_atr_series(bars)
         period1_end_index = self._find_pump_start_index(
-            bars,
-            ema_series_price,
-            ema_series_vol,
-            ema_series_oi,
-            atr_series
+            bars, ema_series_price, ema_series_vol, ema_series_oi, atr_series
         )
-        if period1_end_index is None or period1_end_index not in range(0, len(bars) - 1):
+        if period1_end_index is None or period1_end_index not in range(
+            0, len(bars) - 1
+        ):
             return False
         period2_start_index = period1_end_index + 1
         self.consolidation_bars = bars[:period1_end_index]
         self.pump_bars = bars[period2_start_index:]
         self.setup_timestamp = self.pump_bars[0].timestamp
         if not self.consolidation_bars or not self.pump_bars:
-            self._capture_pump("Недостаточно данных после разделения на периоды.", Confidence.WEAK, self._name)
+            self._capture_pump(
+                "Недостаточно данных после разделения на периоды.",
+                Confidence.WEAK,
+                self._name,
+            )
             return False
         high_p1 = max(b.high for b in self.consolidation_bars)
         low_p1 = min(b.low for b in self.consolidation_bars)
         if low_p1 <= 0:
-            self._capture_pump("Неверный low в консолидации (<= 0).", Confidence.WEAK, self._name)
+            self._capture_pump(
+                "Неверный low в консолидации (<= 0).", Confidence.WEAK, self._name
+            )
             return False
         self.high_p1 = high_p1
         range_p1_pct = abs(high_p1 - low_p1) / low_p1 * 100
@@ -166,7 +181,7 @@ class PumpSetup(Setup):
             self._capture_pump(
                 f"Диапазон консолидации слишком большой: {range_p1_pct:.1f}% > {MAX_RANGE_PERCENT_FOR_PUMP}%",
                 Confidence.WEAK,
-                self._name
+                self._name,
             )
             return False
         return True
@@ -176,12 +191,18 @@ class PumpSetup(Setup):
     def _check_price_growth(self) -> bool:
         """Проверяет рост цены относительно EMA."""
         if not self.main_high or self.main_high.is_undefined:
-            self._capture_pump("main_high не определён для оценки роста.", Confidence.WEAK, self._name)
+            self._capture_pump(
+                "main_high не определён для оценки роста.", Confidence.WEAK, self._name
+            )
             return False
-        ema_series_price = self._calculate_ema_series_from_values([b.close for b in self.bars_setup])
+        ema_series_price = self._calculate_ema_series_from_values(
+            [b.close for b in self.bars_setup]
+        )
         main_high_index = self.main_high.index
         if main_high_index >= len(ema_series_price):
-            self._capture_pump("main_high index вне диапазона EMA.", Confidence.WEAK, self._name)
+            self._capture_pump(
+                "main_high index вне диапазона EMA.", Confidence.WEAK, self._name
+            )
             return False
         ema_obj = ema_series_price[main_high_index]
         if is_defined(ema_obj.ema200) and ema_obj.ema200 > 0:
@@ -189,13 +210,18 @@ class PumpSetup(Setup):
         elif is_defined(ema_obj.ema100) and ema_obj.ema100 > 0:
             ema_base = ema_obj.ema100
         else:
-            self._capture_pump("EMA100 и EMA200 невалидны.", Confidence.WEAK, self._name)
+            self._capture_pump(
+                "EMA100 и EMA200 невалидны.", Confidence.WEAK, self._name
+            )
             return False
         self.price_growth = pump_growth = self.main_high.price - ema_base
         self.price_growth_pct = price_growth_pct = pump_growth / ema_base * 100
         if price_growth_pct < MIN_PRICE_GROWTH_PERCENT:
-            self._capture_pump(f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PERCENT}%",
-                               Confidence.WEAK, self._name)
+            self._capture_pump(
+                f"Рост цены от EMA недостаточный: {price_growth_pct:.1f}% < {MIN_PRICE_GROWTH_PERCENT}%",
+                Confidence.WEAK,
+                self._name,
+            )
             return False
         log(f"{self.symbol} Рост цены подтверждён: {price_growth_pct:.1f}% от EMA")
         return True
@@ -205,7 +231,9 @@ class PumpSetup(Setup):
     def _check_atr_growth(self) -> bool:
         """Оценивает рост ATR между консолидацией и скачком."""
         if not self.consolidation_bars or not self.pump_bars:
-            self._capture_pump("Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name)
+            self._capture_pump(
+                "Недостаточно данных для оценки ATR.", Confidence.WEAK, self._name
+            )
             return False
 
         atr_p1_series = calculate_atr(self.consolidation_bars, period=ATR_PERIOD)
@@ -219,7 +247,9 @@ class PumpSetup(Setup):
         atr_p2 = mean(atr_p2_series)
 
         if atr_p1 <= 0:
-            self._capture_pump("ATR периода консолидации некорректен.", Confidence.WEAK, self._name)
+            self._capture_pump(
+                "ATR периода консолидации некорректен.", Confidence.WEAK, self._name
+            )
             return False
 
         self.atr_growth_pct = atr_growth_pct = (atr_p2 - atr_p1) / atr_p1 * 100
@@ -228,27 +258,35 @@ class PumpSetup(Setup):
             self._capture_pump(
                 f"Рост ATR недостаточный: {atr_growth_pct:.2f}% < {MIN_ATR_GROWTH_PERCENT}%",
                 Confidence.WEAK,
-                self._name
+                self._name,
             )
             return False
 
-        log(f"{self.symbol} Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PERCENT}%")
+        log(
+            f"{self.symbol} Рост ATR подтверждён: {atr_growth_pct:.2f}% ≥ {MIN_ATR_GROWTH_PERCENT}%"
+        )
         return True
 
     @inject_method_name
     @log_duration_ms
     def _check_volume_growth(self) -> bool:
         """Проверяет, что объём во время пампа значительно выше среднего."""
-        avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
+        avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(
+            self.consolidation_bars
+        )
         avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
         timeframe_factor = self.tfs.setup.minutes
-        min_volume_growth = MIN_VOLUME_GROWTH * timeframe_factor / mean(bar.close for bar in self.pump_bars)
+        min_volume_growth = (
+            MIN_VOLUME_GROWTH
+            * timeframe_factor
+            / mean(bar.close for bar in self.pump_bars)
+        )
         volume_threshold = max(avg_vol_p1 * MIN_VOLUME_RATIO, min_volume_growth)
         if avg_vol_p2 < volume_threshold:
             self._capture_pump(
                 f"Объём пампа недостаточный: {mf(avg_vol_p2)} < {mf(volume_threshold)}",
                 Confidence.WEAK,
-                self._name
+                self._name,
             )
             return False
         self.volume_growth_x = abs(avg_vol_p2 - avg_vol_p1) / avg_vol_p1
@@ -261,19 +299,21 @@ class PumpSetup(Setup):
         """Проверяет, что длительность пампа находится в допустимых пределах."""
         bars = self.bars_setup
         pump_start_index = len(self.consolidation_bars)
-        pump_duration_min = int((bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60)
+        pump_duration_min = int(
+            (bars[-1].timestamp - bars[pump_start_index].timestamp).total_seconds() / 60
+        )
         if pump_duration_min < PUMP_MIN_DURATION_MINUTES:
             self._capture_pump(
                 f"Период пампа слишком короткий: {pump_duration_min}m < {PUMP_MIN_DURATION_MINUTES}m",
                 Confidence.WEAK,
-                self._name
+                self._name,
             )
             return False
         if pump_duration_min > PUMP_MAX_DURATION_MINUTES:
             self._capture_pump(
                 f"Период пампа слишком длинный: {pump_duration_min}m > {PUMP_MAX_DURATION_MINUTES}m",
                 Confidence.WEAK,
-                self._name
+                self._name,
             )
             return False
         return True
@@ -286,9 +326,7 @@ class PumpSetup(Setup):
         for bar in red_bars:
             if bar.high - bar.low > bar.atr * BIG_BODY_ATR_MULTIPLIER:
                 self._capture_pump(
-                    "Есть агрессивное движение в шорт.",
-                    Confidence.MODERATE,
-                    self._name
+                    "Есть агрессивное движение в шорт.", Confidence.MODERATE, self._name
                 )
                 return False
         return True
@@ -301,7 +339,7 @@ class PumpSetup(Setup):
             self._capture_pump(
                 "Недостаточно swing-поинтов для анализа коррекции.",
                 Confidence.MODERATE,
-                self._name
+                self._name,
             )
             return False
         lh_count = 0
@@ -315,7 +353,11 @@ class PumpSetup(Setup):
             if lows[i].price < lows[i - 1].price:
                 ll_count += 1
         if lh_count < 1 or ll_count < 1:
-            self._capture_pump(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}", Confidence.MODERATE, self._name)
+            self._capture_pump(
+                f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}",
+                Confidence.MODERATE,
+                self._name,
+            )
             return False
         log("Структура коррекции подтверждена: есть LH и LL.")
         return True
@@ -325,15 +367,19 @@ class PumpSetup(Setup):
     def _check_correction_depth(self) -> bool:
         """Проверяет, что глубина коррекции не слишком велика."""
         correction_low = min(bar.low for bar in self.correction_bars)
-        correction_depth = abs(self.main_high.price - correction_low) / self.price_growth * 100
+        correction_depth = (
+            abs(self.main_high.price - correction_low) / self.price_growth * 100
+        )
         if correction_depth > MAX_CORRECTION_PERCENT:
             self._capture_pump(
                 f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PERCENT}%",
                 Confidence.MODERATE,
-                self._name
+                self._name,
             )
             return False
-        log(f"{self.symbol} Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PERCENT}%")
+        log(
+            f"{self.symbol} Глубина коррекции подтверждена: {correction_depth:.2f}% ≤ {MAX_CORRECTION_PERCENT}%"
+        )
         return True
 
     @inject_method_name
@@ -349,9 +395,15 @@ class PumpSetup(Setup):
     @log_duration_ms
     def _check_trendline_touches(self) -> bool:
         """Проверяет, что наклонка имеет минимум два касания."""
-        touches = self.trendline_builder.count_touches(self.trendline, self.correction_bars)
+        touches = self.trendline_builder.count_touches(
+            self.trendline, self.correction_bars
+        )
         if touches < 2:
-            self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
+            self._capture_pump(
+                f"Недостаточно касаний наклонки: {touches} < 2.",
+                Confidence.STRONG,
+                self._name,
+            )
             return False
         log(f"{self.symbol} Подтверждено касаний наклонки: {touches}.")
         return True
@@ -364,10 +416,14 @@ class PumpSetup(Setup):
         last_two_indices = [len(bars) - 2, len(bars) - 1]
         for idx in last_two_indices:
             if not self.trendline_builder.has_breakout(self.trendline, bars, idx):
-                self._capture_pump(f"Бар {idx} не закрепился выше наклонки.", Confidence.STRONG, self._name)
+                self._capture_pump(
+                    f"Бар {idx} не закрепился выше наклонки.",
+                    Confidence.STRONG,
+                    self._name,
+                )
                 return False
             self.bars_before_breakout = bars[:idx]
-            self.bars_after_breakout = bars[idx + 1:]
+            self.bars_after_breakout = bars[idx + 1 :]
         log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
         return True
 
@@ -376,7 +432,11 @@ class PumpSetup(Setup):
     def _check_rr(self) -> bool:
         """Оценивает RR на соответствие минимальным требованиям."""
         entry = self.last.close
-        sl_candidates = [s.price for s in reversed(self.correction_swings) if s.type.is_low and s.price < entry]
+        sl_candidates = [
+            s.price
+            for s in reversed(self.correction_swings)
+            if s.type.is_low and s.price < entry
+        ]
         if not sl_candidates:
             self._capture_pump("Нет swing low для SL.", Confidence.STRONG, self._name)
             return False
@@ -388,24 +448,36 @@ class PumpSetup(Setup):
         sl_distance_pct = abs(entry - sl) / entry * 100
         tp_distance_pct = abs(tp - entry) / entry * 100
         if sl_distance_pct < MIN_STOP_LOSS_PERCENT:
-            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_STOP_LOSS_PERCENT}%", Confidence.STRONG,
-                               self._name)
+            self._capture_pump(
+                f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_STOP_LOSS_PERCENT}%",
+                Confidence.STRONG,
+                self._name,
+            )
             return False
         if tp_distance_pct < MIN_TAKE_PROFIT_PERCENT:
-            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TAKE_PROFIT_PERCENT}%", Confidence.STRONG,
-                               self._name)
+            self._capture_pump(
+                f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TAKE_PROFIT_PERCENT}%",
+                Confidence.STRONG,
+                self._name,
+            )
             return False
         rr = abs(tp - entry) / abs(entry - sl)
         if rr < MIN_RISK_REWARD:
-            self._capture_pump(f"RR {rr:.2f} меньше минимального {MIN_RISK_REWARD}.", Confidence.STRONG, self._name)
+            self._capture_pump(
+                f"RR {rr:.2f} меньше минимального {MIN_RISK_REWARD}.",
+                Confidence.STRONG,
+                self._name,
+            )
             return False
-        log(f"{self.symbol} RR подтверждён:\n"
+        log(
+            f"{self.symbol} RR подтверждён:\n"
             f"Entry={entry:.5f}\n"
             f"SL={sl:.5f}\n"
             f"TP={tp:.5f}\n"
             f"SL%={sl_distance_pct:.2f}\n"
             f"TP%={tp_distance_pct:.2f}\n"
-            f"RR={rr:.2f}")
+            f"RR={rr:.2f}"
+        )
         return True
 
     # endregion
@@ -416,7 +488,9 @@ class PumpSetup(Setup):
         """
         Определяет главный хай для пампа.
         """
-        main_high_index, main_high_bar = max(enumerate(self.bars_setup), key=lambda item: item[1].high)
+        main_high_index, main_high_bar = max(
+            enumerate(self.bars_setup), key=lambda item: item[1].high
+        )
         self.main_high = SwingPoint(
             timestamp=main_high_bar.timestamp,
             price=main_high_bar.high,
@@ -431,12 +505,19 @@ class PumpSetup(Setup):
         Возвращает бары коррекции — все бары после главного high.
         """
         if self.main_high.is_undefined:
-            self._capture_pump("main_high не задан, не можем выделить correction bars.", Confidence.MODERATE,
-                               self._name)
+            self._capture_pump(
+                "main_high не задан, не можем выделить correction bars.",
+                Confidence.MODERATE,
+                self._name,
+            )
             self.correction_bars = []
-        correction_bars = self.bars_setup[self.main_high.index + 1:]
+        correction_bars = self.bars_setup[self.main_high.index + 1 :]
         if not correction_bars:
-            self._capture_pump("После main_high нет баров для коррекции.", Confidence.MODERATE, self._name)
+            self._capture_pump(
+                "После main_high нет баров для коррекции.",
+                Confidence.MODERATE,
+                self._name,
+            )
         self.correction_bars = correction_bars
 
     @log_duration_ms
@@ -444,69 +525,127 @@ class PumpSetup(Setup):
         """
         Определяет ATR для коррекции.
         """
-        self.correction_atrs = calculate_atr(self.correction_bars) if self.correction_bars else []
+        self.correction_atrs = (
+            calculate_atr(self.correction_bars) if self.correction_bars else []
+        )
 
     @log_duration_ms
     def _define_correction_swings(self) -> None:
         """
         Определяет свинг-поинты коррекции.
         """
-        self.correction_swings = self.structure_detector.detect_swing_points(self.correction_bars, self.correction_atrs)
+        self.correction_swings = self.structure_detector.detect_swing_points(
+            self.correction_bars, self.correction_atrs
+        )
 
     @log_duration_ms
     def _define_trendline(self) -> None:
         """
         Определяет наклонку по свинг-поинтам коррекции.
         """
-        self.trendline = self.trendline_builder.build(self.correction_swings, self.correction_bars)
+        self.trendline = self.trendline_builder.build(
+            self.correction_swings, self.correction_bars
+        )
 
     # endregion
 
     # region Calculation
     @log_duration_ms
-    def _find_pump_start_index(self,
-                               bars: List[Bar],
-                               ema_series_price: List[EMA],
-                               ema_series_vol: List[EMA],
-                               ema_series_oi: List[Optional[EMA]],
-                               atr_series: List[float]) -> Optional[int]:
+    def _find_pump_start_index(
+        self,
+        bars: List[Bar],
+        ema_series_price: List[EMA],
+        ema_series_vol: List[EMA],
+        ema_series_oi: List[Optional[EMA]],
+        atr_series: List[float],
+    ) -> Optional[int]:
         """Возвращает индекс начала пампа, если удалось определить."""
+        import numpy as np
+
+        if not bars:
+            return None
+
+        closes = np.array([b.close for b in bars])
+        opens = np.array([b.open for b in bars])
+        atr = np.asarray(atr_series, dtype=float)
+
+        price_ema20 = np.array([e.ema20 for e in ema_series_price])
+        price_ema50 = np.array([e.ema50 for e in ema_series_price])
+        price_ema100 = np.array([e.ema100 for e in ema_series_price])
+        price_ema200 = np.array([e.ema200 for e in ema_series_price])
+
+        vol_ok_arr = np.array(
+            [self._check_ema_structure(e) for e in ema_series_vol], dtype=bool
+        )
+        oi_ok_arr = np.array(
+            [self._check_ema_structure(e) if e else False for e in ema_series_oi],
+            dtype=bool,
+        )
+
+        price_ok_plain = np.array(
+            [self._check_ema_structure(e) for e in ema_series_price], dtype=bool
+        )
+        price_ok_with_atr = np.array(
+            [
+                self._check_ema_structure(e, float(atr[idx]))
+                for idx, e in enumerate(ema_series_price)
+            ],
+            dtype=bool,
+        )
+
+        price_ok_inner = price_ok_plain | price_ok_with_atr
+
+        ema_max = np.maximum.reduce(
+            [price_ema20, price_ema50, price_ema100, price_ema200]
+        )
+        ema_min = np.minimum.reduce(
+            [price_ema20, price_ema50, price_ema100, price_ema200]
+        )
+
+        compact_ema_arr = (ema_max - ema_min) < atr
+        price_below_arr = closes < ema_min
+        is_red_arr = closes < opens
+
+        factors_arr = (
+            price_ok_inner.astype(int) + vol_ok_arr.astype(int) + oi_ok_arr.astype(int)
+        )
+        condition_arr = ((factors_arr == 0) & compact_ema_arr) | (
+            (factors_arr <= 1) & price_below_arr & is_red_arr
+        )
+
+        price_above_arr = (
+            (closes > price_ema20)
+            & (closes > price_ema50)
+            & (closes > price_ema100)
+            & (closes > price_ema200)
+        )
+
         atr_mean = FLOAT_UNDEFINED
         index_candidate = FLOAT_UNDEFINED
+
         for i in range(50, len(bars)):
+            atr_i = atr[i]
             ema_p = ema_series_price[i]
-            ema_v = ema_series_vol[i]
-            ema_oi = ema_series_oi[i] if ema_series_oi[i] else None
-            atr_i = atr_series[i]
-            price = bars[i].close
-            atr_mean = mean([atr_i, atr_mean]) if is_defined(atr_mean) else atr_i
-            price_ok = self._check_ema_structure(ema_p, atr_mean) or self._check_ema_structure(ema_p)
-            vol_ok = self._check_ema_structure(ema_v)
-            oi_ok = self._check_ema_structure(ema_oi) if ema_oi else False
+            atr_mean = (atr_mean + atr_i) / 2 if is_defined(atr_mean) else atr_i
+            price_ok = self._check_ema_structure(ema_p, atr_mean) or price_ok_plain[i]
+            vol_ok = vol_ok_arr[i]
+            oi_ok = oi_ok_arr[i]
+
             factors_count = sum([price_ok, vol_ok, oi_ok])
             if factors_count < 2 and is_defined(index_candidate):
                 index_candidate = FLOAT_UNDEFINED
             if factors_count >= 2 and not is_defined(index_candidate):
                 index_candidate = i
-            price_above = price > ema_p.ema20 and price > ema_p.ema50 and price > ema_p.ema100 and price > ema_p.ema200
-            if price_ok and vol_ok and oi_ok and price_above:
-                for j in range(index_candidate - 1, 0, -1):
-                    ema_j = ema_series_price[j]
-                    vol_j = ema_series_vol[j]
-                    oi_j = ema_series_oi[j] if ema_series_oi[j] else None
-                    atr_j = atr_series[j]
-                    price_ok_j = self._check_ema_structure(ema_j, atr_j) or self._check_ema_structure(ema_j)
-                    vol_ok_j = self._check_ema_structure(vol_j)
-                    oi_ok_j = self._check_ema_structure(oi_j) if oi_j else False
-                    ema_spread = max(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200) - \
-                                 min(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200)
-                    compact_ema = ema_spread < atr_j
-                    factors_j = sum([price_ok_j, vol_ok_j, oi_ok_j])
-                    is_red_bar = bars[j].close < bars[j].open
-                    price_below_ema = bars[j].close < min(ema_j.ema20, ema_j.ema50, ema_j.ema100, ema_j.ema200)
-                    if (factors_j == 0 and compact_ema) or (factors_j <= 1 and price_below_ema and is_red_bar):
-                        return j + 1
-                return index_candidate
+
+            if price_ok and vol_ok and oi_ok and price_above_arr[i]:
+                idx = int(index_candidate)
+                if idx <= 0:
+                    return None
+                candidates = np.nonzero(condition_arr[:idx])[0]
+                if candidates.size > 0:
+                    return int(candidates[-1] + 1)
+                return idx
+
         return None
 
     @staticmethod
@@ -515,16 +654,36 @@ class PumpSetup(Setup):
         """Проверяет выполнение структуры EMA на заданном баре."""
         order_ok = ema_obj.ema20 > ema_obj.ema50 > ema_obj.ema100 > ema_obj.ema200
         if is_defined(atr_value):
-            spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50)
-            spacing_50_100 = (ema_obj.ema50 - ema_obj.ema100)
-            spacing_100_200 = (ema_obj.ema100 - ema_obj.ema200)
-            spacing_ok = spacing_20_50 > atr_value and spacing_50_100 > atr_value and spacing_100_200 > atr_value
+            spacing_20_50 = ema_obj.ema20 - ema_obj.ema50
+            spacing_50_100 = ema_obj.ema50 - ema_obj.ema100
+            spacing_100_200 = ema_obj.ema100 - ema_obj.ema200
+            spacing_ok = (
+                spacing_20_50 > atr_value
+                and spacing_50_100 > atr_value
+                and spacing_100_200 > atr_value
+            )
         else:
             spacing_pct = 0.0025
-            spacing_20_50 = (ema_obj.ema20 - ema_obj.ema50) / ema_obj.ema50 if is_defined(ema_obj.ema50) else 0
-            spacing_50_100 = (ema_obj.ema50 - ema_obj.ema100) / ema_obj.ema100 if is_defined(ema_obj.ema100) else 0
-            spacing_100_200 = (ema_obj.ema100 - ema_obj.ema200) / ema_obj.ema200 if is_defined(ema_obj.ema200) else 0
-            spacing_ok = spacing_20_50 > spacing_pct and spacing_50_100 > spacing_pct and spacing_100_200 > spacing_pct
+            spacing_20_50 = (
+                (ema_obj.ema20 - ema_obj.ema50) / ema_obj.ema50
+                if is_defined(ema_obj.ema50)
+                else 0
+            )
+            spacing_50_100 = (
+                (ema_obj.ema50 - ema_obj.ema100) / ema_obj.ema100
+                if is_defined(ema_obj.ema100)
+                else 0
+            )
+            spacing_100_200 = (
+                (ema_obj.ema100 - ema_obj.ema200) / ema_obj.ema200
+                if is_defined(ema_obj.ema200)
+                else 0
+            )
+            spacing_ok = (
+                spacing_20_50 > spacing_pct
+                and spacing_50_100 > spacing_pct
+                and spacing_100_200 > spacing_pct
+            )
         return order_ok and spacing_ok
 
     @staticmethod
@@ -544,7 +703,9 @@ class PumpSetup(Setup):
             else:
                 ema_matrix[idx, 0] = values_arr[0]
             for i in range(1, len(values_arr)):
-                ema_matrix[idx, i] = values_arr[i] * k + ema_matrix[idx, i - 1] * (1 - k)
+                ema_matrix[idx, i] = values_arr[i] * k + ema_matrix[idx, i - 1] * (
+                    1 - k
+                )
 
         ema_list: List[EMA] = []
         for i in range(len(values_arr)):
@@ -571,17 +732,15 @@ class PumpSetup(Setup):
         closes = np.array([b.close for b in bars])
 
         prev_closes = np.concatenate(([closes[0]], closes[:-1]))
-        tr = np.maximum.reduce([
-            highs - lows,
-            np.abs(highs - prev_closes),
-            np.abs(lows - prev_closes)
-        ])
+        tr = np.maximum.reduce(
+            [highs - lows, np.abs(highs - prev_closes), np.abs(lows - prev_closes)]
+        )
 
         atr = np.zeros_like(tr)
         atr[0] = tr[:period].mean() if len(tr) >= period else tr[0]
         for i in range(1, len(tr)):
             if i < period:
-                atr[i] = tr[:i + 1].mean()
+                atr[i] = tr[: i + 1].mean()
             else:
                 atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
 
@@ -592,32 +751,43 @@ class PumpSetup(Setup):
 
     def log_setup(self):
         print()
-        log(f"{self.symbol} : {self.tfs} "
-            f"✨ {self.confidence} {self.pump_bars[0].timestamp.strftime('%d.%m %H:%M')}")
+        log(
+            f"{self.symbol} : {self.tfs} "
+            f"✨ {self.confidence} {self.pump_bars[0].timestamp.strftime('%d.%m %H:%M')}"
+        )
 
     # region Plot
-    def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
+    def _capture_pump(
+        self, message: Optional[str], confidence: Confidence, reason: str
+    ) -> None:
         """Создаёт скриншот и сохраняет информацию о пропущенном пампе."""
         _capture_executor.submit(self._capture_pump_task, message, confidence, reason)
 
     @log_duration_ms
-    def _capture_pump_task(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
+    def _capture_pump_task(
+        self, message: Optional[str], confidence: Confidence, reason: str
+    ) -> None:
         logw(f"{self.symbol} {message}")
         self._plot(message, confidence, reason)
 
     @log_duration_ms
-    def _plot(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
+    def _plot(
+        self, message: Optional[str], confidence: Confidence, reason: str
+    ) -> None:
         """Строит и сохраняет изображение пампа."""
-        plot = Plot(symbol=self.symbol,
-                    bars=self.bars_setup,
-                    correction_swings=self.correction_swings,
-                    tf=self.tfs.setup,
-                    message=message,
-                    save_dir="skipped")
+        plot = Plot(
+            symbol=self.symbol,
+            bars=self.bars_setup,
+            correction_swings=self.correction_swings,
+            tf=self.tfs.setup,
+            message=message,
+            save_dir="skipped",
+        )
         filename = f"{confidence.value.capitalize()}_{reason}_{self.tfs.setup.value}_{self.symbol}.png"
         plot.generate_and_save_simplified(
             filename=filename,
             pump_start_time=self.pump_bars[0].timestamp if self.pump_bars else None,
             trendline=self.trendline,
         )
+
     # endregion
