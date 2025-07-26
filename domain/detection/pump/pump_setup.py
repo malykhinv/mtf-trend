@@ -591,20 +591,19 @@ class PumpSetup(Setup):
 
     # endregion
 
+    @log_duration_ms
     def log_setup(self):
         print()
         log(f"{self.symbol} : {self.tfs} "
             f"✨ {self.confidence} {self.pump_bars[0].timestamp.strftime('%d.%m %H:%M')}")
 
     # region Plot
+    @log_duration_ms
     def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         """Создаёт скриншот и сохраняет информацию о пропущенном пампе."""
-        _capture_executor.submit(self._capture_pump_task, message, confidence, reason)
-
-    @log_duration_ms
-    def _capture_pump_task(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         logw(f"{self.symbol} {message}")
         if IS_CAPTURING_ENABLED:
+            _capture_executor.submit(self._plot, message, confidence, reason)
             self._plot(message, confidence, reason)
 
     @log_duration_ms
