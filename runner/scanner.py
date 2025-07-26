@@ -1,3 +1,4 @@
+import traceback
 from typing import List, Dict, Set
 
 from config.constants import IS_TRADING_ENABLED, FLOAT_UNDEFINED
@@ -13,6 +14,7 @@ from notifier.formatter import format_message
 from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
 from services.trade_executor import TradeExecutor
+from domain.models.update_details import UpdateDetails
 from utils.logger import log, logw
 from utils.plot import Plot
 
@@ -33,7 +35,7 @@ class Scanner:
         self.tracker: PositionTrackerService = PositionTrackerService()
         self.trade_executor: TradeExecutor = TradeExecutor(self.loader.binance, self.tracker)
         self._sent_signals: Dict[str, Set] = {}  # {symbol: set(confidences)}
-        self._pending_signals: Dict[str, Dict] = {}
+        self._pending_signals: Dict[str, UpdateDetails] = {}
 
     def run(self, tfss: List[MTFProfile]) -> None:
         """
@@ -50,7 +52,7 @@ class Scanner:
                 try:
                     self._process_symbol(symbol, tfs)
                 except Exception as error:
-                    logw(f"Ошибка при обработке {symbol}: {error}")
+                    logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
         log("Цикл сканирования завершён.")
         print()
 
@@ -173,18 +175,18 @@ class Scanner:
                         if current_price != low
                         else FLOAT_UNDEFINED
                     )
-                    self._pending_signals[signal.symbol] = {
-                        "message_id": msg_id,
-                        "notifier": self.orders_notifier if signal.is_order_signal else self.events_notifier,
-                        "with_photo": bool(image_path),
-                        "text": message,
-                        "high": high,
-                        "low": low,
-                        "entry_price": current_price,
-                        "rr": rr,
-                        "max_price": current_price,
-                        "min_price": current_price,
-                    }
+                    self._pending_signals[signal.symbol] = UpdateDetails(
+                        message_id=msg_id,
+                        notifier=self.orders_notifier if signal.is_order_signal else self.events_notifier,
+                        with_photo=bool(image_path),
+                        text=message,
+                        high=high,
+                        low=low,
+                        entry_price=current_price,
+                        rr=rr,
+                        max_price=current_price,
+                        min_price=current_price,
+                    )
             if signal.symbol not in self._sent_signals:
                 self._sent_signals[signal.symbol] = set()
             self._sent_signals[signal.symbol].add(signal.confidence)
@@ -212,25 +214,25 @@ class Scanner:
         return msg_id, bool(image_path)
 
     def _update_pending_signal(self, symbol: str, current_price: float) -> None:
-        """Updates and finalizes a pending Telegram message when price hits extremes."""
+        """Обновляет текст сообщения, когда цена достигает экстремумов."""
         info = self._pending_signals.get(symbol)
         if not info:
             return
-        info["max_price"] = max(info["max_price"], current_price)
-        info["min_price"] = min(info["min_price"], current_price)
-        crossed_high = current_price >= info["high"]
-        crossed_low = current_price <= info["low"]
+        info.max_price = max(info.max_price, current_price)
+        info.min_price = min(info.min_price, current_price)
+        crossed_high = current_price >= info.high
+        crossed_low = current_price <= info.low
         if crossed_high or crossed_low:
-            pct = (current_price - info["entry_price"]) / info["entry_price"] * 100
+            pct = (current_price - info.entry_price) / info.entry_price * 100
             if crossed_high:
-                peak_pct = (info["max_price"] - info["entry_price"]) / info["entry_price"] * 100
-                extra = f"Max rise: {peak_pct:+.2f}%"
+                peak_pct = (info.max_price - info.entry_price) / info.entry_price * 100
+                extra = f"Максимальный рост: {peak_pct:+.2f}%"
             else:
-                drop_pct = (info["min_price"] - info["entry_price"]) / info["entry_price"] * 100
-                extra = f"Max drop: {drop_pct:+.2f}%"
+                drop_pct = (info.min_price - info.entry_price) / info.entry_price * 100
+                extra = f"Максимальное падение: {drop_pct:+.2f}%"
             new_text = (
-                f"{info['text']}\n\nResult: {pct:+.2f}% RR {info['rr']:.2f}\n{extra}"
+                f"{info.text}\n\nРезультат: {pct:+.2f}% RR {info.rr:.1f}\n{extra}"
             )
-            notifier: TelegramNotifier = info["notifier"]
-            notifier.edit_message(info["message_id"], new_text, info["with_photo"])
+            notifier: TelegramNotifier = info.notifier
+            notifier.edit_message(info.message_id, new_text, info.with_photo)
             del self._pending_signals[symbol]
