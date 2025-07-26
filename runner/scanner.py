@@ -63,17 +63,17 @@ class Scanner:
             symbol (str): тикер
             tfs (MTFProfile): профиль таймфреймов
         """
-        bars_by_tf: Dict[Timeframe, List[Bar]] = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro)}
+        bars_by_tf: Dict[Timeframe, List[Bar]] = {tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=50)}
         if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
             return
-        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(symbol, tfs.context)
+        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(symbol, tfs.context, limit=100)
         if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
             return
-        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, limit=1000, has_oi=True)
+        bars_by_tf[tfs.setup] = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
         if tfs.entry == tfs.setup:
             bars_by_tf[tfs.entry] = bars_by_tf[tfs.setup]
         else:
-            bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry)
+            bars_by_tf[tfs.entry] = self.loader.fetch_ohlcvi(symbol, tfs.entry, limit=100)
         last_price = bars_by_tf[tfs.entry][-1].close if bars_by_tf[tfs.entry] else None
         if last_price:
             self._update_pending_signal(symbol, last_price)
