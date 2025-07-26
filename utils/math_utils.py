@@ -5,32 +5,31 @@ from utils.decorator import log_duration_ms
 @log_duration_ms
 def calculate_atr(bars, period=ATR_PERIOD) -> list[float]:
     """Возвращает список ATR по заданным барам."""
-    atr_values = []
-    tr_values = []
-    for i in range(len(bars)):
-        high = bars[i].high
-        low = bars[i].low
+    import numpy as np
 
-        if i == 0:
-            tr = high - low  # без prev_close
-        else:
-            prev_close = bars[i - 1].close
-            tr = max(
-                high - low,
-                abs(high - prev_close),
-                abs(low - prev_close)
-            )
+    if not bars:
+        return []
 
-        tr_values.append(tr)
+    highs = np.asarray([b.high for b in bars], dtype=float)
+    lows = np.asarray([b.low for b in bars], dtype=float)
+    closes = np.asarray([b.close for b in bars], dtype=float)
 
-        if i < period:
-            avg_tr = sum(tr_values) / len(tr_values)
-        else:
-            avg_tr = sum(tr_values[-period:]) / period
+    prev_closes = np.concatenate(([closes[0]], closes[:-1]))
+    tr = np.maximum.reduce([
+        highs - lows,
+        np.abs(highs - prev_closes),
+        np.abs(lows - prev_closes)
+    ])
 
-        atr_values.append(avg_tr)
+    cumsum = np.cumsum(tr)
+    atr = np.empty_like(tr)
 
-    return atr_values
+    p = min(period, len(tr))
+    atr[:p] = cumsum[:p] / (np.arange(p) + 1)
+    if len(tr) > period:
+        atr[period:] = (cumsum[period:] - cumsum[:-period]) / period
+
+    return atr.tolist()
 
 @log_duration_ms
 def most(items: list, predicate=None) -> bool:
