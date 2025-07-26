@@ -16,8 +16,7 @@ class TelegramNotifier:
         """Отправляет текст или картинку в Telegram."""
         if not self.token or not self.chat_id:
             log("Отсутствуют данные Telegram. Сообщение не отправлено.")
-            return
-        result = None
+            return None
         if image_path:
             url: str = f"https://api.telegram.org/bot{self.token}/sendPhoto"
             with open(image_path, "rb") as image_file:
