@@ -77,7 +77,8 @@ class Plot:
             ax.set_facecolor(COLOR_BACKGROUND)
             ax.tick_params(colors='gray', which='both', length=0)
             ax.grid(True, color='gray', linestyle=':', linewidth=0.5, alpha=0.25)
-        self.ax_price.set_title(f"{symbol} ({tf.value})", color='white', fontsize=14)
+        # По умолчанию скрываем подпись графика, оставляя только сообщение
+        self.ax_price.set_title('')
         if message:
             self.ax_price.text(
                 0.01, 0.85, message, transform=self.ax_price.transAxes,
@@ -106,7 +107,8 @@ class Plot:
             self.mark_pump_start(pump_start_time)
         if trendline:
             self.plot_trendline(trendline)
-        return self.save(filename, bbox_inches=None, dpi=60)
+        # Сохраняем с более низким DPI, чтобы уменьшить размер файла
+        return self.save(filename, bbox_inches=None, dpi=50)
 
     def plot_main(self):
         """
@@ -138,21 +140,13 @@ class Plot:
             self.ax_vol.bar(t, vol, color=color, width=width)
 
         self.ax_vol.set_ylim(vol_min, vol_max * 1.05)
-        self.ax_vol.set_ylabel("Volume", color='gray', fontsize=8)
 
         closes_array = np.array(closes)
-        for period in EMA_PERIODS:
+        for period in [20, 200]:
             if len(closes_array) >= period:
                 ema = self.ema(closes_array, period)
                 self.ax_price.plot(time_nums, ema, linewidth=LINE_WIDTH, color=EMA_COLORS[period],
-                                   alpha=EMA_ALPHA, label=f'EMA {period}')
-
-        self.ax_price.legend(
-            loc='upper left',
-            fontsize=PLOT_LEGEND_FONT_SIZE,
-            facecolor=COLOR_BACKGROUND,
-            labelcolor='white'
-        )
+                                   alpha=EMA_ALPHA)
 
         has_oi_data = most(oi_values, is_defined)
         if has_oi_data:
@@ -167,19 +161,16 @@ class Plot:
             self.ax_oi.step(time_nums, normalized_oi, where='post', color=COLOR_OI, linewidth=LINE_WIDTH)
 
             self.ax_oi.set_ylim(0, 1.05)
-            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
             self.ax_oi.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{int(y * 100)}%'))
         else:
             self.ax_oi.set_facecolor(COLOR_BACKGROUND_NA)
             self.ax_oi.set_xticks([])
             self.ax_oi.set_yticks([])
-            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
 
         atr_line = np.array(atr_values)
         self.ax_atr.step(time_nums, atr_line, color=ATR_COLOR, linewidth=LINE_WIDTH, linestyle='-')
         atr_min, atr_max = np.nanmin(atr_line), np.nanmax(atr_line)
         self.ax_atr.set_ylim(atr_min, atr_max * 1.05)
-        self.ax_atr.set_ylabel("ATR", color='gray', fontsize=8)
 
         locator = AutoDateLocator(minticks=X_AXIS_MIN_TICKS, maxticks=X_AXIS_MAX_TICKS)
         locator.intervald[mdates.MINUTELY] = X_AXIS_MINUTELY_INTERVALS
@@ -221,21 +212,13 @@ class Plot:
             self.ax_vol.bar(t, vol, color=color, width=width)
 
         self.ax_vol.set_ylim(vol_min, vol_max * 1.05)
-        self.ax_vol.set_ylabel("Volume", color='gray', fontsize=8)
 
         closes_array = np.array(closes)
-        for period in EMA_PERIODS:
+        for period in [20, 200]:
             if len(closes_array) >= period:
                 ema = self.ema(closes_array, period)
                 self.ax_price.plot(time_nums, ema, linewidth=LINE_WIDTH, color=EMA_COLORS[period],
-                                   alpha=EMA_ALPHA, label=f'EMA {period}')
-
-        self.ax_price.legend(
-            loc='upper left',
-            fontsize=PLOT_LEGEND_FONT_SIZE,
-            facecolor=COLOR_BACKGROUND,
-            labelcolor='white'
-        )
+                                   alpha=EMA_ALPHA)
 
         has_oi_data = most(oi_values, is_defined)
         if has_oi_data:
@@ -250,19 +233,16 @@ class Plot:
             self.ax_oi.step(time_nums, normalized_oi, where='post', color=COLOR_OI, linewidth=LINE_WIDTH)
 
             self.ax_oi.set_ylim(0, 1.05)
-            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
             self.ax_oi.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{int(y * 100)}%'))
         else:
             self.ax_oi.set_facecolor(COLOR_BACKGROUND_NA)
             self.ax_oi.set_xticks([])
             self.ax_oi.set_yticks([])
-            self.ax_oi.set_ylabel("OI", color='gray', fontsize=8)
 
         atr_line = np.array(atr_values)
         self.ax_atr.step(time_nums, atr_line, color=ATR_COLOR, linewidth=LINE_WIDTH, linestyle='-')
         atr_min, atr_max = np.nanmin(atr_line), np.nanmax(atr_line)
         self.ax_atr.set_ylim(atr_min, atr_max * 1.05)
-        self.ax_atr.set_ylabel("ATR", color='gray', fontsize=8)
 
         locator = AutoDateLocator(minticks=X_AXIS_MIN_TICKS, maxticks=X_AXIS_MAX_TICKS)
         locator.intervald[mdates.MINUTELY] = X_AXIS_MINUTELY_INTERVALS

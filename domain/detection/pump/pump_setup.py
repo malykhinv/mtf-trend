@@ -528,28 +528,28 @@ class PumpSetup(Setup):
     @log_duration_ms
     def _calculate_ema_series_from_values(values: List[float]) -> List[EMA]:
         """Вычисляет EMA 20/50/100/200 по переданным значениям."""
+        import numpy as np
+
         periods = [20, 50, 100, 200]
-        ema_values = {p: [] for p in periods}
-        k_values = {p: 2 / (p + 1) for p in periods}
-        for p in periods:
-            if len(values) >= p:
-                sma = sum(values[:p]) / p
-                ema_values[p].append(sma)
+        values_arr = np.asarray(values, dtype=float)
+        ema_matrix = np.zeros((len(periods), len(values_arr)))
+
+        for idx, p in enumerate(periods):
+            k = 2 / (p + 1)
+            if len(values_arr) >= p:
+                ema_matrix[idx, 0] = values_arr[:p].mean()
             else:
-                ema_values[p].append(values[0])
-        for i in range(1, len(values)):
-            for p in periods:
-                prev_ema = ema_values[p][-1]
-                k = k_values[p]
-                ema = values[i] * k + prev_ema * (1 - k)
-                ema_values[p].append(ema)
+                ema_matrix[idx, 0] = values_arr[0]
+            for i in range(1, len(values_arr)):
+                ema_matrix[idx, i] = values_arr[i] * k + ema_matrix[idx, i - 1] * (1 - k)
+
         ema_list: List[EMA] = []
-        for i in range(len(values)):
+        for i in range(len(values_arr)):
             ema_obj = EMA(
-                ema20=ema_values[20][i],
-                ema50=ema_values[50][i],
-                ema100=ema_values[100][i],
-                ema200=ema_values[200][i],
+                ema20=float(ema_matrix[0, i]),
+                ema50=float(ema_matrix[1, i]),
+                ema100=float(ema_matrix[2, i]),
+                ema200=float(ema_matrix[3, i]),
             )
             ema_list.append(ema_obj)
         return ema_list
@@ -558,23 +558,32 @@ class PumpSetup(Setup):
     @log_duration_ms
     def _calculate_atr_series(bars: List[Bar], period: int = ATR_PERIOD) -> List[float]:
         """Вычисляет значения ATR по всей выборке баров."""
-        trs = []
-        for i in range(1, len(bars)):
-            high = bars[i].high
-            low = bars[i].low
-            prev_close = bars[i - 1].close
-            tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-            trs.append(tr)
-        atr_list: List[float] = []
-        for i in range(len(trs)):
+        import numpy as np
+
+        if not bars:
+            return []
+
+        highs = np.array([b.high for b in bars])
+        lows = np.array([b.low for b in bars])
+        closes = np.array([b.close for b in bars])
+
+        prev_closes = np.concatenate(([closes[0]], closes[:-1]))
+        tr = np.maximum.reduce([
+            highs - lows,
+            np.abs(highs - prev_closes),
+            np.abs(lows - prev_closes)
+        ])
+
+        atr = np.zeros_like(tr)
+        atr[0] = tr[:period].mean() if len(tr) >= period else tr[0]
+        for i in range(1, len(tr)):
             if i < period:
-                atr_list.append(sum(trs[:i + 1]) / (i + 1))
+                atr[i] = tr[:i + 1].mean()
             else:
-                prev_atr = atr_list[-1]
-                atr = (prev_atr * (period - 1) + trs[i]) / period
-                atr_list.append(atr)
-        atr_list.insert(0, 0.0)
-        return atr_list
+                atr[i] = (atr[i - 1] * (period - 1) + tr[i]) / period
+
+        atr = np.insert(atr, 0, 0.0)
+        return atr.tolist()
 
     # endregion
 
