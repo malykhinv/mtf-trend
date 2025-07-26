@@ -5,11 +5,12 @@ from typing import List
 
 from config.constants import FLOAT_UNDEFINED
 from domain.models.timeframe import Timeframe
+from utils.decorator import log_duration_ms
 
 DB_PATH = Path(__file__).parent.parent / ".generated" / "db" / "trades.sqlite"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-
+@log_duration_ms
 def get_connection() -> sqlite3.Connection:
     """
     Создаёт и возвращает соединение с SQLite-базой данных.
@@ -49,7 +50,7 @@ def get_connection() -> sqlite3.Connection:
 
     return conn
 
-
+@log_duration_ms
 def save_oi(symbol: str, tf: Timeframe, timestamp: datetime, oi: float) -> None:
     """
     Сохраняет OI для конкретного тикера и таймфрейма в базу, ограничивая историю 1500 записями.
@@ -74,7 +75,7 @@ def save_oi(symbol: str, tf: Timeframe, timestamp: datetime, oi: float) -> None:
         """, (symbol, tf.value))
         conn.commit()
 
-
+@log_duration_ms
 def load_oi(symbol: str, tf: Timeframe, timestamps: List[datetime]) -> List[float]:
     """
     Загружает значения OI из базы данных, соответствующие заданным временным меткам.

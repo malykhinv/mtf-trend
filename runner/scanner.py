@@ -4,7 +4,7 @@ from typing import List, Dict, Set
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from config.constants import IS_TRADING_ENABLED, FLOAT_UNDEFINED, SCAN_MAX_WORKERS
+from config.constants import IS_TRADING_ENABLED, FLOAT_UNDEFINED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
@@ -51,13 +51,13 @@ class Scanner:
         if symbols:
             log(f"Отобрано {len(symbols)} символов.")
 
-        with ThreadPoolExecutor(max_workers=SCAN_MAX_WORKERS) as executor:
-            futures = [
-                executor.submit(self._process_symbol_thread, symbol, tfs)
-                for symbol in symbols for tfs in tfss
-            ]
-            for future in futures:
-                future.result()
+        for symbol in symbols:
+            for tfs in tfss:
+                try:
+                    loader = Loader()
+                    self._process_symbol(symbol, tfs, loader)
+                except Exception as error:
+                    logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
 
         duration = int(time.perf_counter() - start_time)
         hours, remainder = divmod(duration, 3600)
@@ -66,13 +66,6 @@ class Scanner:
         log(f"Цикл сканирования занял {hours:02d}:{minutes:02d}:{seconds:02d}.")
         print()
 
-    def _process_symbol_thread(self, symbol: str, tfs: MTFProfile) -> None:
-        """Wrapper для параллельной обработки одного символа."""
-        loader = Loader()
-        try:
-            self._process_symbol(symbol, tfs, loader)
-        except Exception as error:
-            logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile, loader: Loader | None = None) -> None:
         """Обрабатывает один символ по заданному профилю таймфреймов."""
