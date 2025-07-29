@@ -1,4 +1,5 @@
 import matplotlib
+from threading import Lock
 
 from utils.decorator import log_duration_ms
 from utils.float_utils import is_defined
@@ -18,6 +19,9 @@ from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
 from domain.models.trendline import Trendline
 from utils.logger import log
+
+# Protects all matplotlib calls to avoid race conditions in multi-threaded usage
+MATPLOTLIB_LOCK = Lock()
 
 from matplotlib.dates import AutoDateLocator, DateFormatter
 
@@ -64,13 +68,14 @@ class Plot:
         self.bars = bars
         self.correction_swings = correction_swings
         self.save_dir = '.generated/plot/' + save_dir
-        self.fig, (self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr) = plt.subplots(
-            4, 1,
-            figsize=(14, 14),
-            gridspec_kw={"height_ratios": [4, 1, 1, 1]},
-            sharex=True,
-            facecolor=COLOR_BACKGROUND
-        )
+        with MATPLOTLIB_LOCK:
+            self.fig, (self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr) = plt.subplots(
+                4, 1,
+                figsize=(14, 14),
+                gridspec_kw={"height_ratios": [4, 1, 1, 1]},
+                sharex=True,
+                facecolor=COLOR_BACKGROUND
+            )
         self.fig.patch.set_facecolor(COLOR_BACKGROUND)
         for ax in [self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr]:
             ax.set_facecolor(COLOR_BACKGROUND)
@@ -324,11 +329,12 @@ class Plot:
         import os
         os.makedirs(self.save_dir, exist_ok=True)
         full_path = os.path.join(self.save_dir, filename)
-        plt.savefig(
-            full_path,
-            facecolor=self.fig.get_facecolor(),
-            bbox_inches=bbox_inches,
-            dpi=dpi,
-        )
-        plt.close(self.fig)
+        with MATPLOTLIB_LOCK:
+            plt.savefig(
+                full_path,
+                facecolor=self.fig.get_facecolor(),
+                bbox_inches=bbox_inches,
+                dpi=dpi,
+            )
+            plt.close(self.fig)
         return full_path
