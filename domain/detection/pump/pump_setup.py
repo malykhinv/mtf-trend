@@ -327,7 +327,7 @@ class PumpSetup(Setup):
     def _check_correction_depth(self) -> bool:
         """Проверяет, что глубина коррекции не слишком велика."""
         correction_low = min(bar.low for bar in self.correction_bars)
-        correction_depth = abs(self.main_high.price - correction_low) / self.price_growth * 100
+        correction_depth = abs(self.main_high.price - correction_low) / self.main_high.price * 100
         if correction_depth > MAX_CORRECTION_PERCENT:
             self._capture_pump(
                 f"Глубина коррекции слишком большая: {correction_depth:.2f}% > {MAX_CORRECTION_PERCENT}%",
