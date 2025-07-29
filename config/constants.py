@@ -46,6 +46,7 @@ IS_CAPTURING_ENABLED: bool = True
 IS_TRADING_ENABLED: bool = False
 TRADE_POSITION_USDT: int = 10
 MIN_COOLDOWN_PER_SYMBOL_MINUTES: int = 360  # 6 hours
+ACTIVE_SETUP_TIMEOUT_MINUTES: int = 60
 
 # EMA periods and colors
 EMA_PERIODS: list[int] = [20, 50, 100, 200]

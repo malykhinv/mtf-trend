@@ -1,6 +1,7 @@
 import time
 import traceback
 from typing import List, Dict, Set
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
@@ -18,6 +19,8 @@ from notifier.telegram import TelegramNotifier
 from services.position_tracker_service import PositionTrackerService
 from services.trade_executor import TradeExecutor
 from domain.models.update_details import UpdateDetails
+from domain.models.active_setup import ActiveSetup
+from config.constants import ACTIVE_SETUP_TIMEOUT_MINUTES
 from utils.logger import log, logw
 from utils.plot import Plot
 
@@ -39,8 +42,11 @@ class Scanner:
         self.trade_executor: TradeExecutor = TradeExecutor(self.loader.binance, self.tracker)
         self._sent_signals: Dict[str, Set] = {}  # {symbol: set(confidences)}
         self._pending_signals: Dict[str, UpdateDetails] = {}
+        self._active_setups: Dict[str, ActiveSetup] = {}
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=2)
         self._lock = threading.Lock()
+        self._monitor_thread = threading.Thread(target=self._monitor_active_setups, daemon=True)
+        self._monitor_thread.start()
 
     def run(self, tfss: List[MTFProfile]) -> None:
         """Перебирает символы и профили таймфреймов и запускает обработку."""
@@ -117,16 +123,15 @@ class Scanner:
         """Ищет сетапы и при наличии сигнала вызывает обработчик."""
         signal: SetupSignal | None = self.setup_detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf)
         if signal:
-            tf = tfs.setup
             current_price = bars_by_tf[tfs.setup][-1].close if bars_by_tf[tfs.setup] else None
-            self._executor.submit(self._handle_signal, signal, bars_by_tf[tf], tf, current_price)
+            self._executor.submit(self._handle_signal, signal, bars_by_tf[tfs.setup], tfs, current_price)
             print()
 
     def _handle_signal(
             self,
             signal: SetupSignal,
             setup_bars: List[Bar],
-            tf: Timeframe,
+            tfs: MTFProfile,
             current_price: float | None
     ) -> None:
         """Отправляет сигнал и при необходимости выполняет сделку."""
@@ -137,7 +142,7 @@ class Scanner:
             symbol=signal.symbol,
             bars=setup_bars,
             correction_swings=signal.correction_swings,
-            tf=tf,
+            tf=tfs.setup,
             save_dir='confirmed'
         )
         image_path = plot.generate_and_save(
@@ -174,10 +179,16 @@ class Scanner:
                             max_price=current_price,
                             min_price=current_price,
                         )
-            with self._lock:
-                if signal.symbol not in self._sent_signals:
-                    self._sent_signals[signal.symbol] = set()
-                self._sent_signals[signal.symbol].add(signal.confidence)
+        with self._lock:
+            if signal.symbol not in self._sent_signals:
+                self._sent_signals[signal.symbol] = set()
+            self._sent_signals[signal.symbol].add(signal.confidence)
+            self._active_setups[signal.symbol] = ActiveSetup(
+                symbol=signal.symbol,
+                tfs=tfs,
+                pump_start_time=signal.timestamp,
+                last_checked=datetime.now()
+            )
 
     def _send_signal(self, signal: SetupSignal, message: str, image_path: str) -> tuple[int | None, bool]:
         """Отправляет сигнал в Telegram и, при необходимости, исполняет его."""
@@ -222,3 +233,58 @@ class Scanner:
                 notifier.edit_message(info.message_id, new_text, info.with_photo)
             with self._lock:
                 del self._pending_signals[symbol]
+
+    def _monitor_active_setups(self) -> None:
+        """Фоновый цикл повторной проверки активных сетапов."""
+        while True:
+            time.sleep(60)
+            with self._lock:
+                items = list(self._active_setups.items())
+            for symbol, active in items:
+                self._recheck_setup(symbol, active)
+
+    def _recheck_setup(self, symbol: str, active_setup: ActiveSetup) -> None:
+        if datetime.now() - active_setup.pump_start_time > timedelta(minutes=ACTIVE_SETUP_TIMEOUT_MINUTES):
+            with self._lock:
+                self._active_setups.pop(symbol, None)
+            return
+
+        tfs = active_setup.tfs
+        bars_by_tf: Dict[Timeframe, List[Bar]] = {
+            tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=30, use_cache=True, ttl_minutes=tfs.macro.minutes)
+        }
+        if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
+            with self._lock:
+                self._active_setups.pop(symbol, None)
+            return
+        bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(
+            symbol,
+            tfs.context,
+            limit=50,
+            use_cache=True,
+            ttl_minutes=tfs.context.minutes,
+        )
+        if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
+            with self._lock:
+                self._active_setups.pop(symbol, None)
+            return
+
+        setup_bars = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
+        bars_by_tf[tfs.setup] = [b for b in setup_bars if b.timestamp >= active_setup.pump_start_time]
+        if not bars_by_tf[tfs.setup]:
+            with self._lock:
+                self._active_setups.pop(symbol, None)
+            return
+
+        signal = self.setup_detector.detect(
+            symbol=symbol,
+            tfs=tfs,
+            bars_by_tf=bars_by_tf,
+            pump_start_time=active_setup.pump_start_time,
+        )
+        if not signal:
+            with self._lock:
+                self._active_setups.pop(symbol, None)
+        else:
+            active_setup.last_checked = datetime.now()
+

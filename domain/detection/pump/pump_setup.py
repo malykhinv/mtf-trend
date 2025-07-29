@@ -1,6 +1,7 @@
 # domain/detection/pump/pump_setup.py
 from statistics import mean
 from typing import List, Dict, Optional
+from datetime import datetime
 
 from millify import millify as mf
 
@@ -43,7 +44,8 @@ class PumpSetup(Setup):
     Детектор ситуаций типа Pump (скачка цены) по заданному символу, биржевым барам и профилю таймфреймов.
     Применяет разноплановые фильтры и проверки по структуре, объемам, ATR, OI, чтобы определить силу сигнала.
     """
-    def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], tfs: MTFProfile) -> None:
+    def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], tfs: MTFProfile,
+                 pump_start_time: Optional[datetime] = None) -> None:
         """Создаёт детектор пампов для указанного символа."""
         super().__init__(symbol, bars_by_tf, tfs)
         self.structure_detector: StructureDetector = StructureDetector()
@@ -53,6 +55,7 @@ class PumpSetup(Setup):
         self.pump_bars: List[Bar] = []
         self.correction_bars: List[Bar] = []
         self.main_high: SwingPoint = SwingPoint.undefined()
+        self.pump_start_time = pump_start_time
 
     @log_duration_ms
     def define_confidence(self) -> None:
@@ -141,15 +144,21 @@ class PumpSetup(Setup):
         has_oi_data = any(oi != FLOAT_UNDEFINED for oi in oi_values)
         ema_series_oi = self._calculate_ema_series_from_values(oi_values) if has_oi_data else [None] * len(bars)
         atr_series = self._calculate_atr_series(bars)
-        period1_end_index = self._find_pump_start_index(
-            bars,
-            ema_series_price,
-            ema_series_vol,
-            ema_series_oi,
-            atr_series
-        )
-        if period1_end_index is None or period1_end_index not in range(0, len(bars) - 1):
-            return False
+        if self.pump_start_time:
+            pump_index = next((i for i, b in enumerate(bars) if b.timestamp == self.pump_start_time), None)
+            if pump_index is None or pump_index < 1:
+                return False
+            period1_end_index = pump_index - 1
+        else:
+            period1_end_index = self._find_pump_start_index(
+                bars,
+                ema_series_price,
+                ema_series_vol,
+                ema_series_oi,
+                atr_series
+            )
+            if period1_end_index is None or period1_end_index not in range(0, len(bars) - 1):
+                return False
         period2_start_index = period1_end_index + 1
         self.consolidation_bars = bars[:period1_end_index]
         self.pump_bars = bars[period2_start_index:]
