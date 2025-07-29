@@ -27,6 +27,7 @@ from config.constants import (
     MIN_ATR_GROWTH_PERCENT,
     MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
     IS_CAPTURING_ENABLED,
+    MAX_BIG_BODY_SHARE,
 )
 from utils.decorator import inject_method_name, log_duration_ms
 from concurrent.futures import ThreadPoolExecutor
@@ -43,6 +44,7 @@ class PumpSetup(Setup):
     """
     Детектор ситуаций типа Pump (скачка цены) по заданному символу, биржевым барам и профилю таймфреймов.
     Применяет разноплановые фильтры и проверки по структуре, объемам, ATR, OI, чтобы определить силу сигнала.
+    В том числе отбрасывает пампы, начинающиеся с аномально больших свечей.
     """
     def __init__(self, symbol: str, bars_by_tf: Dict[Timeframe, List[Bar]], tfs: MTFProfile,
                  pump_start_time: Optional[datetime] = None) -> None:
@@ -116,6 +118,8 @@ class PumpSetup(Setup):
         if not self._check_volume_growth():
             return False
         if not self._check_pump_duration():
+            return False
+        if not self._check_pump_bars_size():
             return False
         self.confidence = Confidence.WEAK
         self.log_setup()
@@ -287,6 +291,31 @@ class PumpSetup(Setup):
                 self._name
             )
             return False
+        return True
+
+    @inject_method_name
+    @log_duration_ms
+    def _check_pump_bars_size(self) -> bool:
+        """Фильтрует пампы с чрезмерно большими свечами в начале движения."""
+        pump_start_idx = len(self.consolidation_bars)
+        if pump_start_idx >= len(self.bars_setup) or not self.pump_bars:
+            return False
+
+        amp = self.main_high.price - self.bars_setup[pump_start_idx].open
+        if amp <= 0:
+            return False
+
+        relative_high_idx = self.main_high.index - pump_start_idx
+        relative_high_idx = max(0, min(relative_high_idx, len(self.pump_bars) - 1))
+
+        start_idx = max(0, pump_start_idx - 2)
+        bars_to_check = self.bars_setup[start_idx:pump_start_idx] + self.pump_bars[0:relative_high_idx + 1]
+
+        for bar in bars_to_check:
+            if bar.high - bar.low > amp * MAX_BIG_BODY_SHARE:
+                self._capture_pump("Большая свеча в начале пампа", Confidence.WEAK, self._name)
+                return False
+
         return True
 
     @inject_method_name
