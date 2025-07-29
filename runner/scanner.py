@@ -4,7 +4,7 @@ from typing import List, Dict, Set
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from config.constants import IS_TRADING_ENABLED, FLOAT_UNDEFINED
+from config.constants import IS_TRADING_ENABLED
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
@@ -162,11 +162,6 @@ class Scanner:
                 if highs and lows and current_price:
                     high = max(highs)
                     low = min(lows)
-                    rr = (
-                        (high - current_price) / (current_price - low)
-                        if current_price != low
-                        else FLOAT_UNDEFINED
-                    )
                     with self._lock:
                         self._pending_signals[signal.symbol] = UpdateDetails(
                             message_id=msg_id,
@@ -176,7 +171,6 @@ class Scanner:
                             high=high,
                             low=low,
                             entry_price=current_price,
-                            rr=rr,
                             max_price=current_price,
                             min_price=current_price,
                         )
@@ -207,6 +201,7 @@ class Scanner:
             info = self._pending_signals.get(symbol)
             if not info:
                 return
+            prev_max = info.max_price
             info.max_price = max(info.max_price, current_price)
             info.min_price = min(info.min_price, current_price)
         log(
@@ -221,17 +216,9 @@ class Scanner:
                 f"Цена {'выше' if crossed_high else 'ниже'} целевого уровня "
                 f"для {symbol}"
             )
-            pct = (current_price - info.entry_price) / info.entry_price * 100
-            if crossed_high:
-                peak_pct = (info.max_price - info.entry_price) / info.entry_price * 100
-                extra = f"Максимальный рост: {peak_pct:+.2f}%"
-            else:
-                drop_pct = (info.min_price - info.entry_price) / info.entry_price * 100
-                extra = f"Максимальное падение: {drop_pct:+.2f}%"
-            new_text = (
-                f"{info.text}\n\nРезультат: {pct:+.2f}% RR {info.rr:.1f}\n{extra}"
-            )
-            notifier: TelegramNotifier = info.notifier
-            notifier.edit_message(info.message_id, new_text, info.with_photo)
+            if crossed_high and info.max_price > prev_max:
+                new_text = f"{info.text}\n\nМаксимум обновлен"
+                notifier: TelegramNotifier = info.notifier
+                notifier.edit_message(info.message_id, new_text, info.with_photo)
             with self._lock:
                 del self._pending_signals[symbol]

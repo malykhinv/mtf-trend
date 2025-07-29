@@ -11,6 +11,5 @@ class UpdateDetails:
     high: float
     low: float
     entry_price: float
-    rr: float
     max_price: float
     min_price: float
