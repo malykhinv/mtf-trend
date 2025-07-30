@@ -2,6 +2,7 @@ import sqlite3
 from pathlib import Path
 from datetime import datetime
 from typing import List
+import threading
 
 from config.constants import FLOAT_UNDEFINED
 from domain.models.timeframe import Timeframe
@@ -10,12 +11,20 @@ from utils.decorator import log_duration_ms
 DB_PATH = Path(__file__).parent.parent / ".generated" / "db" / "trades.sqlite"
 DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
+# Lock used for write operations to avoid "database is locked" errors
+# when multiple threads access the database.
+DB_LOCK = threading.Lock()
+
 @log_duration_ms
 def get_connection() -> sqlite3.Connection:
     """
     Создаёт и возвращает соединение с SQLite-базой данных.
+    Использует WAL journal и 30-секундный таймаут подключения для уменьшения
+    вероятности ошибок "database is locked".
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    # Enable WAL mode for better concurrency
+    conn.execute("PRAGMA journal_mode=WAL")
 
     # Таблица трейдов
     conn.execute("""
@@ -56,7 +65,7 @@ def save_oi(symbol: str, tf: Timeframe, timestamp: datetime, oi: float) -> None:
     Сохраняет OI для конкретного тикера и таймфрейма в базу, ограничивая историю 1500 записями.
     """
     ts = timestamp.replace(second=0, microsecond=0).isoformat()
-    with get_connection() as conn:
+    with DB_LOCK, get_connection() as conn:
         conn.execute("""
             INSERT INTO oi_history (symbol, tf, timestamp, oi)
             VALUES (?, ?, ?, ?)
