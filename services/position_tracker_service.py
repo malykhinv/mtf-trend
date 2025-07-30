@@ -4,6 +4,7 @@ from services.position_manager import PositionManager
 from utils.logger import log
 from data.binance_client import get_binance_client
 from config.constants import MIN_COOLDOWN_PER_SYMBOL_MINUTES
+from data.loader import Loader
 
 
 class PositionTrackerService:
@@ -11,11 +12,13 @@ class PositionTrackerService:
     Сервис для отслеживания, обновления и фиксации статуса открытых и завершённых сделок (trade management).
     Работает с SQLite и Binance API.
     """
-    def __init__(self) -> None:
+    def __init__(self, loader: Loader | None = None) -> None:
         """
         Инициализация соединения с Binance и БД.
+        Принимает общий Loader, чтобы использовать единый экземпляр.
         """
         self.client = get_binance_client()
+        self.loader = loader or Loader()
 
     def track_all(self) -> None:
         """
