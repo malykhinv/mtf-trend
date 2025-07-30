@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 
 from domain.models.mtf_profile import MTFProfile
 from domain.models.timeframe import Timeframe
+from openpyxl.styles import PatternFill
 
 # Timezone
 TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
@@ -88,4 +89,8 @@ EMA_ALPHA: float = 0.2
 LINE_WIDTH: int = 1
 
 PLOT_LEGEND_FONT_SIZE: int = 8
+# Заполнение для устаревших записей в XLSX
+FILL_OUTDATED_ENTRY: PatternFill = PatternFill(
+    start_color="CCCCCC", end_color="CCCCCC", fill_type="solid"
+)
 # endregion
