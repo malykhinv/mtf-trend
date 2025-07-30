@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from data.db import get_connection
+from data.db import get_connection, DB_LOCK
 from services.position_manager import PositionManager
 from utils.logger import log
 from data.binance_client import get_binance_client
@@ -62,7 +62,7 @@ class PositionTrackerService:
         """
         Добавляет новую сделку в БД, ставит cooldown.
         """
-        with get_connection() as conn:
+        with DB_LOCK, get_connection() as conn:
             cursor = conn.cursor()
             # Проверка: если уже есть активная сделка по symbol — новая не добавляется
             cursor.execute(
@@ -89,7 +89,7 @@ class PositionTrackerService:
         """
         Ставит флаг partial_exit_done и обновляет last_action_ts.
         """
-        with get_connection() as conn:
+        with DB_LOCK, get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """
@@ -104,7 +104,7 @@ class PositionTrackerService:
         """
         Ставит статус active=0 и обновляет last_action_ts — сделка полностью закрыта.
         """
-        with get_connection() as conn:
+        with DB_LOCK, get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 """

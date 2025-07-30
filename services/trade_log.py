@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from data.db import get_connection
+from data.db import get_connection, DB_LOCK
 from domain.models.side import Side
 
 class TradeLog:
@@ -13,7 +13,7 @@ class TradeLog:
         """
         Добавить новую исполненную сделку в БД (без стопов и подробностей).
         """
-        with get_connection() as conn:
+        with DB_LOCK, get_connection() as conn:
             conn.execute(
                 "INSERT INTO trades (symbol, side, amount_usdt) VALUES (?, ?, ?)",
                 (symbol, side.value, amount_usdt)
