@@ -5,6 +5,7 @@ from utils.logger import log
 from data.binance_client import get_binance_client
 from config.constants import MIN_COOLDOWN_PER_SYMBOL_MINUTES
 from data.loader import Loader
+import threading
 
 
 class PositionTrackerService:
@@ -19,6 +20,7 @@ class PositionTrackerService:
         """
         self.client = get_binance_client()
         self.loader = loader or Loader()
+        self._client_lock = threading.Lock()
 
     def track_all(self) -> None:
         """
@@ -44,6 +46,7 @@ class PositionTrackerService:
                 sl=sl,
                 tp=tp,
                 client=self.client,
+                client_lock=self._client_lock,
                 atr=atr,
                 amount=amount,
                 partial_exit_done=bool(partial_exit_done),

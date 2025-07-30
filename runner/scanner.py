@@ -40,7 +40,11 @@ class Scanner:
         self.orders_notifier: TelegramNotifier = TelegramNotifier(TELEGRAM_ORDERS_BOT_TOKEN)
         self.events_notifier: TelegramNotifier = TelegramNotifier(TELEGRAM_EVENTS_BOT_TOKEN)
         self.tracker: PositionTrackerService = PositionTrackerService(self.loader)
-        self.trade_executor: TradeExecutor = TradeExecutor(self.loader.binance, self.tracker)
+        self.trade_executor: TradeExecutor = TradeExecutor(
+            self.loader.binance,
+            self.tracker,
+            client_lock=self.loader._client_lock
+        )
         self._sent_signals: Dict[str, Set] = {}  # {symbol: set(confidences)}
         self._pending_signals: Dict[str, UpdateDetails] = {}
         self._active_setups: Dict[str, ActiveSetup] = {}
