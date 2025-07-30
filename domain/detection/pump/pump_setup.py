@@ -639,7 +639,7 @@ class PumpSetup(Setup):
     def _capture_pump(self, message: Optional[str], confidence: Confidence, reason: str) -> None:
         """Создаёт скриншот и сохраняет информацию о пропущенном пампе."""
         logw(f"{self.symbol} {message}")
-        if IS_CAPTURING_ENABLED:
+        if IS_CAPTURING_ENABLED and not confidence.is_weak:
             _capture_executor.submit(self._plot, message, confidence, reason)
 
     @log_duration_ms
@@ -652,7 +652,7 @@ class PumpSetup(Setup):
                     message=message,
                     save_dir="skipped")
         filename = f"{confidence.value.capitalize()}_{reason}_{self.tfs.setup.value}_{self.symbol}.png"
-        plot.generate_and_save_simplified(
+        plot.generate_and_save(
             filename=filename,
             pump_start_time=self.pump_bars[0].timestamp if self.pump_bars else None,
             trendline=self.trendline,
