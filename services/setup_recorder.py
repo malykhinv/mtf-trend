@@ -3,7 +3,6 @@ import threading
 import time
 from typing import List
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
 from datetime import datetime, timedelta
 
 from openpyxl import Workbook, load_workbook
@@ -12,26 +11,12 @@ from data.loader import Loader
 
 from config.constants import FILL_OUTDATED_ENTRY, CROSS_MONITOR_HISTORY_BARS
 from utils.logger import logw
+from utils.setup_log_utils import HEADERS, row_from_signal
+from domain.models.setup_log_column import SetupLogColumn
 
 FILE_PATH = os.path.join('.generated', 'xls', 'setup_log.xlsx')
 
 
-
-class SetupLogColumn(str, Enum):
-    TIMESTAMP = 'Timestamp'
-    SYMBOL = 'Symbol'
-    SIDE = 'Side'
-    CONFIDENCE = 'Confidence'
-    ENTRY = 'Entry'
-    SL = 'SL'
-    TP = 'TP'
-    RR = 'RR'
-    TF = 'TF'
-    MAIN_HIGH_CROSSED = 'main_high_crossed'
-    CORRECTION_LOW_CROSSED = 'correction_low_crossed'
-
-
-HEADERS = [c.value for c in SetupLogColumn]
 
 _CONF_ORDER = {
     'weak': 0,
@@ -60,26 +45,10 @@ class SetupLog:
             ws.append(HEADERS)
         return wb, ws
 
-    @staticmethod
-    def _row_from_signal(signal, setup_tf: Timeframe) -> List:
-        return [
-            signal.timestamp.isoformat(),
-            signal.symbol,
-            getattr(signal.side, 'value', str(signal.side)),
-            getattr(signal.confidence, 'value', str(signal.confidence)),
-            signal.entry,
-            signal.sl,
-            signal.tp,
-            signal.rr,
-            setup_tf.value,
-            None,
-            None,
-        ]
-
     def _write_setup(self, signal, setup_tf: Timeframe) -> None:
         with self.lock:
             wb, ws = self._ensure_workbook()
-            new_row = self._row_from_signal(signal, setup_tf)
+            new_row = row_from_signal(signal, setup_tf)
             last_idx = None
             for idx, row in enumerate(ws.iter_rows(min_row=2, values_only=False), start=2):
                 if row[1].value == signal.symbol:

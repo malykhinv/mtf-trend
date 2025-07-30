@@ -1,6 +1,7 @@
 from domain.models.confidence import Confidence
 from domain.models.setup_signal import SetupSignal
 from utils.float_utils import is_defined
+from utils.tradingview import tradingview_link
 
 def format_message(
     signal: SetupSignal,
@@ -13,7 +14,7 @@ def format_message(
         Confidence.STRONG: "🌕",
     }
     emoji = emoji_map.get(signal.confidence, "🌑")
-    url = f"https://www.tradingview.com/symbols/{signal.symbol.replace('USDT', '')}USDT.P/"
+    url = tradingview_link(signal.symbol)
     linked_symbol = f"[{signal.symbol}]({url})"
     msg = f"{emoji} {linked_symbol} +{round(signal.price_growth_pct)}%\n\n"
     details = []
