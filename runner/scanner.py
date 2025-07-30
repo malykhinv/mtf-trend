@@ -23,6 +23,7 @@ from domain.models.active_setup import ActiveSetup
 from config.constants import ACTIVE_SETUP_TIMEOUT_MINUTES
 from utils.logger import log, logw
 from utils.plot import Plot
+from services.setup_recorder import record_setup
 
 
 class Scanner:
@@ -135,6 +136,7 @@ class Scanner:
             current_price: float | None
     ) -> None:
         """Отправляет сигнал и при необходимости выполняет сделку."""
+        record_setup(signal)
         message = format_message(signal)
         # Генерация графика
         filename = f"{signal.confidence.value.capitalize()}_{signal.symbol}.png"
