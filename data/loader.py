@@ -30,6 +30,7 @@ class Loader:
         # {(symbol, timeframe, limit): (timestamp, bars)}
         self._ohlcv_cache: Dict[tuple, tuple] = {}
         self._cache_lock = threading.Lock()
+        self._client_lock = threading.Lock()
 
     @log_duration_ms
     def clear_cache(self) -> None:
@@ -40,7 +41,8 @@ class Loader:
     @log_duration_ms
     def get_filtered_symbols(self, min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
         """Возвращает список тикеров, подходящих по объёму торгов и активности."""
-        markets: Dict[str, Any] = self.binance.load_markets()
+        with self._client_lock:
+            markets: Dict[str, Any] = self.binance.load_markets()
         symbols: List[str] = []
         for symbol, data in markets.items():
             if not data.get('linear'):
@@ -100,12 +102,13 @@ class Loader:
 
     @log_duration_ms
     def _fetch_ohlcv(self, symbol, timeframe, since, limit):
-        return self.binance.fetch_ohlcv(
-            symbol,
-            timeframe=timeframe.value,
-            since=since,
-            limit=limit
-        )
+        with self._client_lock:
+            return self.binance.fetch_ohlcv(
+                symbol,
+                timeframe=timeframe.value,
+                since=since,
+                limit=limit
+            )
 
     @log_duration_ms
     def _is_cache_valid(self, use_cache: bool, cache_key: tuple, now: datetime, ttl_minutes: int) -> bool:
@@ -218,12 +221,14 @@ class Loader:
         if end_time:
             params['endTime'] = end_time
 
-        return self.binance.fapidata_get_openinteresthist(params)
+        with self._client_lock:
+            return self.binance.fapidata_get_openinteresthist(params)
 
     @log_duration_ms
     def fetch_oi(self, symbol: str) -> float:
         params: Dict[str, Any] = {'symbol': symbol}
-        result = self.binance.fapipublic_get_openinterest(params)
+        with self._client_lock:
+            result = self.binance.fapipublic_get_openinterest(params)
         return float(result["openInterest"])
 
     @staticmethod

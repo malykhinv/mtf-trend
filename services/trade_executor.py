@@ -1,4 +1,5 @@
 from typing import Literal, cast
+import threading
 from config.constants import TRADE_POSITION_USDT, MIN_RISK_REWARD, FLOAT_UNDEFINED, MIN_STOP_LOSS_PERCENT, MIN_TAKE_PROFIT_PERCENT
 from ccxt import binance
 
@@ -14,10 +15,11 @@ class TradeExecutor:
     Класс для автоматического исполнения торговых сигналов (создания ордеров, стопов и тейк-профитов).
     Управляет рисками и регистрирует входы в систему.
     """
-    def __init__(self, client: binance, tracker: PositionTrackerService):
+    def __init__(self, client: binance, tracker: PositionTrackerService, client_lock: threading.Lock | None = None):
         """Сохраняет клиента биржи и трекер сделок."""
         self.client = client
         self.tracker = tracker
+        self._client_lock = client_lock or threading.Lock()
 
     def execute(self,
                 symbol: str,
@@ -29,7 +31,8 @@ class TradeExecutor:
         try:
             symbol_market = symbol
             entry = self._get_price(symbol_market)
-            market = self.client.market(symbol_market)
+            with self._client_lock:
+                market = self.client.market(symbol_market)
 
             if not self._validate_rr(entry, sl, tp, symbol):
                 return
@@ -44,36 +47,39 @@ class TradeExecutor:
             open_side = OrderSide.BUY if side.is_long else OrderSide.SELL
             close_side = OrderSide.SELL if side.is_long else OrderSide.BUY
 
-            self.client.create_order(
-                symbol=symbol_market,
-                type='market',
-                side=cast(Literal["buy", "sell"], open_side.value),
-                amount=amount
-            )
+            with self._client_lock:
+                self.client.create_order(
+                    symbol=symbol_market,
+                    type='market',
+                    side=cast(Literal["buy", "sell"], open_side.value),
+                    amount=amount
+                )
 
-            self.client.create_order(
-                symbol=symbol_market,
-                type='market',
-                side=cast(Literal["buy", "sell"], close_side.value),
-                amount=amount,
-                params={
-                    'type': 'TAKE_PROFIT_MARKET',
-                    'stopPrice': round(tp, precision_price),
-                    'closePosition': True
+            with self._client_lock:
+                self.client.create_order(
+                    symbol=symbol_market,
+                    type='market',
+                    side=cast(Literal["buy", "sell"], close_side.value),
+                    amount=amount,
+                    params={
+                        'type': 'TAKE_PROFIT_MARKET',
+                        'stopPrice': round(tp, precision_price),
+                        'closePosition': True
                 }
-            )
+                )
 
-            self.client.create_order(
-                symbol=symbol_market,
-                type='market',
-                side=cast(Literal["buy", "sell"], close_side.value),
-                amount=amount,
-                params={
-                    'type': 'STOP_MARKET',
-                    'stopPrice': round(sl, precision_price),
-                    'closePosition': True
+            with self._client_lock:
+                self.client.create_order(
+                    symbol=symbol_market,
+                    type='market',
+                    side=cast(Literal["buy", "sell"], close_side.value),
+                    amount=amount,
+                    params={
+                        'type': 'STOP_MARKET',
+                        'stopPrice': round(sl, precision_price),
+                        'closePosition': True
                 }
-            )
+                )
 
             rr = round(abs(tp - entry) / abs(entry - sl), 2)
             log(f"[ВХОД] {symbol} {open_side} @ {entry}\nSL: {sl}, TP: {tp}, RR: {rr}")
@@ -95,7 +101,8 @@ class TradeExecutor:
 
     def _get_price(self, symbol_market: str) -> float:
         """Возвращает последнюю цену по тикеру."""
-        ticker = self.client.fetch_ticker(symbol_market)
+        with self._client_lock:
+            ticker = self.client.fetch_ticker(symbol_market)
         return ticker['last'] if 'last' in ticker else FLOAT_UNDEFINED
 
     @staticmethod
