@@ -14,6 +14,7 @@ class PositionManager:
                  sl: float,
                  tp: float,
                  client,
+                 client_lock,
                  atr: float,
                  amount: float,
                  partial_exit_done: bool,
@@ -25,6 +26,7 @@ class PositionManager:
         self.sl = sl
         self.tp = tp
         self.client = client
+        self.client_lock = client_lock
         self.atr = atr
         self.amount = amount
         self.partial_exit_done = partial_exit_done
@@ -63,12 +65,13 @@ class PositionManager:
         try:
             side = 'sell' if self.side == 'long' else 'buy'
             amount_partial = round(self.amount * 0.5, 6)
-            self.client.create_order(
-                symbol=self.symbol,
-                type='market',
-                side=side,
-                amount=amount_partial
-            )
+            with self.client_lock:
+                self.client.create_order(
+                    symbol=self.symbol,
+                    type='market',
+                    side=side,
+                    amount=amount_partial
+                )
             self.tracker.mark_partial_exit(self.trade_id)
         except Exception as error:
             log(f"Ошибка при частичном выходе: {error}")
@@ -81,12 +84,13 @@ class PositionManager:
         log(f"Полный выход из позиции {self.symbol}")
         try:
             side = 'sell' if self.side == 'long' else 'buy'
-            self.client.create_order(
-                symbol=self.symbol,
-                type='market',
-                side=side,
-                amount=self.amount
-            )
+            with self.client_lock:
+                self.client.create_order(
+                    symbol=self.symbol,
+                    type='market',
+                    side=side,
+                    amount=self.amount
+                )
             self.tracker.mark_closed(self.trade_id)
         except Exception as error:
             log(f"Ошибка при полном выходе: {error}")
