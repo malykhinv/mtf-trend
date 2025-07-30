@@ -23,7 +23,7 @@ from domain.models.active_setup import ActiveSetup
 from config.constants import ACTIVE_SETUP_TIMEOUT_MINUTES
 from utils.logger import log, logw
 from utils.plot import Plot
-from services.setup_recorder import record_setup
+from services.setup_recorder import SetupLog
 
 
 class Scanner:
@@ -44,10 +44,12 @@ class Scanner:
         self._sent_signals: Dict[str, Set] = {}  # {symbol: set(confidences)}
         self._pending_signals: Dict[str, UpdateDetails] = {}
         self._active_setups: Dict[str, ActiveSetup] = {}
+        self.setup_log: SetupLog = SetupLog()
         self._executor: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=2)
         self._lock = threading.Lock()
         self._monitor_thread = threading.Thread(target=self._monitor_active_setups, daemon=True)
         self._monitor_thread.start()
+        self.setup_log.start_monitor(self.loader)
 
     def run(self, tfss: List[MTFProfile]) -> None:
         """Перебирает символы и профили таймфреймов и запускает обработку."""
@@ -136,7 +138,7 @@ class Scanner:
             current_price: float | None
     ) -> None:
         """Отправляет сигнал и при необходимости выполняет сделку."""
-        record_setup(signal)
+        self.setup_log.record_setup(signal, tfs.setup)
         message = format_message(signal)
         # Генерация графика
         filename = f"{signal.confidence.value.capitalize()}_{signal.symbol}.png"
@@ -289,4 +291,6 @@ class Scanner:
                 self._active_setups.pop(symbol, None)
         else:
             active_setup.last_checked = datetime.now()
+
+
 

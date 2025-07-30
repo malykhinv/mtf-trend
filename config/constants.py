@@ -93,4 +93,6 @@ PLOT_LEGEND_FONT_SIZE: int = 8
 FILL_OUTDATED_ENTRY: PatternFill = PatternFill(
     start_color="CCCCCC", end_color="CCCCCC", fill_type="solid"
 )
+# Количество баров, используемых для мониторинга пересечения цен
+CROSS_MONITOR_HISTORY_BARS: int = 500
 # endregion
