@@ -39,7 +39,7 @@ class Scanner:
         self.setup_detector: SetupDetector = SetupDetector()
         self.orders_notifier: TelegramNotifier = TelegramNotifier(TELEGRAM_ORDERS_BOT_TOKEN)
         self.events_notifier: TelegramNotifier = TelegramNotifier(TELEGRAM_EVENTS_BOT_TOKEN)
-        self.tracker: PositionTrackerService = PositionTrackerService()
+        self.tracker: PositionTrackerService = PositionTrackerService(self.loader)
         self.trade_executor: TradeExecutor = TradeExecutor(self.loader.binance, self.tracker)
         self._sent_signals: Dict[str, Set] = {}  # {symbol: set(confidences)}
         self._pending_signals: Dict[str, UpdateDetails] = {}
