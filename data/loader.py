@@ -1,6 +1,7 @@
 from bisect import bisect_right
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Any
+import threading
 
 
 from utils.decorator import log_duration_ms
@@ -28,11 +29,13 @@ class Loader:
         self.binance = get_binance_client()
         # {(symbol, timeframe, limit): (timestamp, bars)}
         self._ohlcv_cache: Dict[tuple, tuple] = {}
+        self._cache_lock = threading.Lock()
 
     @log_duration_ms
     def clear_cache(self) -> None:
         """Очистка кэша OHLCV."""
-        self._ohlcv_cache.clear()
+        with self._cache_lock:
+            self._ohlcv_cache.clear()
 
     @log_duration_ms
     def get_filtered_symbols(self, min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
@@ -70,8 +73,10 @@ class Loader:
         """Загружает OHLCV и OI для инструмента на заданном таймфрейме."""
         cache_key = (symbol, timeframe, limit, has_oi)
         now = datetime.now()
-        if self._is_cache_valid(use_cache, cache_key, now, ttl_minutes):
-            return self._ohlcv_cache[cache_key][1]
+        if use_cache:
+            with self._cache_lock:
+                if self._is_cache_valid(use_cache, cache_key, now, ttl_minutes):
+                    return self._ohlcv_cache[cache_key][1]
 
         since, end_time = self._calculate_time_bounds(to_time, timeframe, limit)
 
@@ -89,7 +94,8 @@ class Loader:
             bars[i].atr = atrs[i]
 
         if use_cache:
-            self._ohlcv_cache[cache_key] = (now, bars)
+            with self._cache_lock:
+                self._ohlcv_cache[cache_key] = (now, bars)
         return bars
 
     @log_duration_ms

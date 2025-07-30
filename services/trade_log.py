@@ -7,14 +7,14 @@ class TradeLog:
     Упростённый логгер исполненных сделок и их истории для отчётов и проверки (по времени, символу и т.д.).
     """
     def __init__(self) -> None:
-        self.conn = get_connection()
+        pass
 
     def record_trade(self, symbol: str, side: Side, amount_usdt: float) -> None:
         """
         Добавить новую исполненную сделку в БД (без стопов и подробностей).
         """
-        with self.conn:
-            self.conn.execute(
+        with get_connection() as conn:
+            conn.execute(
                 "INSERT INTO trades (symbol, side, amount_usdt) VALUES (?, ?, ?)",
                 (symbol, side.value, amount_usdt)
             )
@@ -24,10 +24,11 @@ class TradeLog:
         Возвращает количество сделок за последнюю 1 час.
         """
         one_hour_ago = datetime.now() - timedelta(hours=1)
-        result = self.conn.execute(
-            "SELECT COUNT(*) FROM trades WHERE timestamp > ?",
-            (one_hour_ago.isoformat(),)
-        ).fetchone()
+        with get_connection() as conn:
+            result = conn.execute(
+                "SELECT COUNT(*) FROM trades WHERE timestamp > ?",
+                (one_hour_ago.isoformat(),)
+            ).fetchone()
         return result[0] if result else 0
 
     def traded_recently(self, symbol: str, minutes: int) -> bool:
@@ -35,8 +36,9 @@ class TradeLog:
         Проверяет, была ли активность по символу за последние N минут.
         """
         limit = datetime.now() - timedelta(minutes=minutes)
-        result = self.conn.execute(
-            "SELECT 1 FROM trades WHERE symbol = ? AND timestamp > ? LIMIT 1",
-            (symbol, limit.isoformat())
-        ).fetchone()
+        with get_connection() as conn:
+            result = conn.execute(
+                "SELECT 1 FROM trades WHERE symbol = ? AND timestamp > ? LIMIT 1",
+                (symbol, limit.isoformat())
+            ).fetchone()
         return result is not None
