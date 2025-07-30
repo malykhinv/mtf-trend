@@ -1,6 +1,7 @@
 from domain.structures import StructureDetector
 from utils.logger import log
 from utils.math_utils import calculate_atr
+from domain.models.timeframe import Timeframe
 
 class PositionManager:
     """
@@ -36,7 +37,7 @@ class PositionManager:
         """
         Автоматически сопровождает открытую позицию: trailing stop, частичный и полный выход, логгирование RR-прогресса.
         """
-        bars = self.tracker.loader.fetch_ohlcvi(self.symbol, '5m', limit=50)  # structure_tf
+        bars = self.tracker.loader.fetch_ohlcvi(self.symbol, Timeframe.M5, limit=50)  # structure_tf
         detector = StructureDetector()
         atrs = calculate_atr(bars)
         swings = detector.detect_swing_points(bars, atrs)
