@@ -1,11 +1,12 @@
 import os
 import threading
 import time
-from typing import List
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
 from openpyxl import Workbook, load_workbook
+
+from domain.models.confidence import Confidence
 from domain.models.timeframe import Timeframe
 from data.loader import Loader
 
@@ -14,22 +15,17 @@ from utils.logger import logw
 from utils.setup_log_utils import HEADERS, row_from_signal
 from domain.models.setup_log_column import SetupLogColumn
 
-FILE_PATH = os.path.join('.generated', 'xls', 'setup_log.xlsx')
-
-
-
 _CONF_ORDER = {
-    'weak': 0,
-    'moderate': 1,
-    'strong': 2,
+    Confidence.WEAK.name: 0,
+    Confidence.MODERATE.name: 1,
+    Confidence.STRONG.name: 2,
 }
-
 
 class SetupLog:
     """Класс для работы с журналом сетапов в XLSX-файле."""
 
-    def __init__(self, file_path: str = FILE_PATH) -> None:
-        self.file_path = file_path
+    def __init__(self) -> None:
+        self.file_path = os.path.join('.generated', 'xls', 'setup_log.xlsx')
         self.lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._thread: threading.Thread | None = None
@@ -104,6 +100,7 @@ class SetupLog:
             correction_low_crossed,
         )
 
+    # noinspection PyBroadException
     def check_crossings(self, loader: Loader) -> None:
         with self.lock:
             if not os.path.exists(self.file_path):
@@ -142,17 +139,22 @@ class SetupLog:
                 tf = Timeframe(tf_str)
             except Exception:
                 tf = Timeframe.M1
+            try:
+                sl_val = float(row[sl_idx])
+                tp_val = float(row[tp_idx])
+            except (TypeError, ValueError):
+                continue
             if datetime.now() - pump_time > timedelta(minutes=CROSS_MONITOR_HISTORY_BARS * tf.minutes):
                 continue
             bars = loader.fetch_ohlcvi(symbol, tf, limit=CROSS_MONITOR_HISTORY_BARS)
-            main_crossed = bool(main_val)
-            corr_crossed = bool(corr_val)
+            main_crossed = str(main_val).lower() == "true"
+            corr_crossed = str(corr_val).lower() == "true"
             for b in bars:
                 if b.timestamp < pump_time:
                     continue
-                if not main_crossed and b.high >= float(row[tp_idx]):
+                if not main_crossed and b.high >= tp_val:
                     main_crossed = True
-                if not corr_crossed and b.low <= float(row[sl_idx]):
+                if not corr_crossed and b.low <= sl_val:
                     corr_crossed = True
             if (main_crossed and main_val in (None, '')) or (corr_crossed and corr_val in (None, '')):
                 self.update_setup_row(

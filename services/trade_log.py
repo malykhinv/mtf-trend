@@ -9,7 +9,8 @@ class TradeLog:
     def __init__(self) -> None:
         pass
 
-    def record_trade(self, symbol: str, side: Side, amount_usdt: float) -> None:
+    @staticmethod
+    def record_trade(symbol: str, side: Side, amount_usdt: float) -> None:
         """
         Добавить новую исполненную сделку в БД (без стопов и подробностей).
         """
@@ -19,7 +20,8 @@ class TradeLog:
                 (symbol, side.value, amount_usdt)
             )
 
-    def trades_last_hour(self) -> int:
+    @staticmethod
+    def trades_last_hour() -> int:
         """
         Возвращает количество сделок за последнюю 1 час.
         """
@@ -31,7 +33,8 @@ class TradeLog:
             ).fetchone()
         return result[0] if result else 0
 
-    def traded_recently(self, symbol: str, minutes: int) -> bool:
+    @staticmethod
+    def traded_recently(symbol: str, minutes: int) -> bool:
         """
         Проверяет, была ли активность по символу за последние N минут.
         """

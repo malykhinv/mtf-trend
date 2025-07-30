@@ -58,7 +58,8 @@ class PositionTrackerService:
                 log(f"Ошибка в PositionManager для {symbol}: {error}")
                 raise
 
-    def add_trade(self, symbol: str, side, entry: float, sl: float, tp: float, atr: float, amount: float) -> None:
+    @staticmethod
+    def add_trade(symbol: str, side, entry: float, sl: float, tp: float, atr: float, amount: float) -> None:
         """
         Добавляет новую сделку в БД, ставит cooldown.
         """
@@ -85,7 +86,8 @@ class PositionTrackerService:
             conn.commit()
             log(f"[DB] Добавлена сделка {symbol} {side} @ {entry}")
 
-    def mark_partial_exit(self, trade_id: int) -> None:
+    @staticmethod
+    def mark_partial_exit(trade_id: int) -> None:
         """
         Ставит флаг partial_exit_done и обновляет last_action_ts.
         """
@@ -100,7 +102,8 @@ class PositionTrackerService:
             conn.commit()
             log(f"[DB] Частичный выход зафиксирован для сделки ID={trade_id}")
 
-    def mark_closed(self, trade_id: int) -> None:
+    @staticmethod
+    def mark_closed(trade_id: int) -> None:
         """
         Ставит статус active=0 и обновляет last_action_ts — сделка полностью закрыта.
         """

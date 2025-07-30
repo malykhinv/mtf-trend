@@ -5,7 +5,7 @@ from ccxt import binance
 
 from domain.models.order_side import OrderSide
 from domain.models.side import Side
-from utils.float_utils import precision, get_pct
+from utils.float_utils import precision, get_pct, is_defined
 from utils.logger import log, logw
 from services.position_tracker_service import PositionTrackerService
 

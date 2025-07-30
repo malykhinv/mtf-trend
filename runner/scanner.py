@@ -43,7 +43,7 @@ class Scanner:
         self.trade_executor: TradeExecutor = TradeExecutor(
             self.loader.binance,
             self.tracker,
-            client_lock=self.loader._client_lock
+            client_lock=self.loader.client_lock
         )
         self._sent_signals: Dict[str, Set] = {}  # {symbol: set(confidences)}
         self._pending_signals: Dict[str, UpdateDetails] = {}

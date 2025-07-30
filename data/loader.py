@@ -30,7 +30,7 @@ class Loader:
         # {(symbol, timeframe, limit): (timestamp, bars)}
         self._ohlcv_cache: Dict[tuple, tuple] = {}
         self._cache_lock = threading.Lock()
-        self._client_lock = threading.Lock()
+        self.client_lock = threading.Lock()
 
     @log_duration_ms
     def clear_cache(self) -> None:
@@ -41,7 +41,7 @@ class Loader:
     @log_duration_ms
     def get_filtered_symbols(self, min_volume_usdt: float = VOLUME_THRESHOLD_USDT) -> List[str]:
         """Возвращает список тикеров, подходящих по объёму торгов и активности."""
-        with self._client_lock:
+        with self.client_lock:
             markets: Dict[str, Any] = self.binance.load_markets()
         symbols: List[str] = []
         for symbol, data in markets.items():
@@ -102,7 +102,7 @@ class Loader:
 
     @log_duration_ms
     def _fetch_ohlcv(self, symbol, timeframe, since, limit):
-        with self._client_lock:
+        with self.client_lock:
             return self.binance.fetch_ohlcv(
                 symbol,
                 timeframe=timeframe.value,
@@ -221,13 +221,13 @@ class Loader:
         if end_time:
             params['endTime'] = end_time
 
-        with self._client_lock:
+        with self.client_lock:
             return self.binance.fapidata_get_openinteresthist(params)
 
     @log_duration_ms
     def fetch_oi(self, symbol: str) -> float:
         params: Dict[str, Any] = {'symbol': symbol}
-        with self._client_lock:
+        with self.client_lock:
             result = self.binance.fapipublic_get_openinterest(params)
         return float(result["openInterest"])
 
