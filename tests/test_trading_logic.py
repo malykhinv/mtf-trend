@@ -94,7 +94,9 @@ def test_scan_and_enter_executes_long(monkeypatch):
     monkeypatch.setattr(
         main,
         "evaluate_breakout",
-        lambda ohlcv, level, cvd, delta_oi, volume_stats, funding: [Signal("long", 101, 99, 103, 105)],
+        lambda ohlcv, level, cvd, delta_oi, volume_stats, funding, volume_spike=2.0: [
+            Signal("long", 101, 99, 103, 105)
+        ],
     )
 
     main.open_long = False
