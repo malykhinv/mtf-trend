@@ -1,0 +1,19 @@
+api:
+  api_key: "YOUR_API_KEY"
+  api_secret: "YOUR_API_SECRET"
+
+trading_defaults:
+  leverage: 1
+  margin_mode: "cross"
+
+risk_limits:
+  max_position_size: 1000
+  daily_loss_limit: 500
+
+data_paths:
+  data_dir: "data/"
+  log_dir: "logs/"
+
+feature_toggles:
+  enable_notifications: true
+  use_sandbox: false
