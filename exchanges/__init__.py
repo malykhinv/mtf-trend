@@ -12,6 +12,7 @@ Example
 """
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Dict, Optional, Type
 
@@ -48,6 +49,7 @@ class BaseExchange(ABC):
 
 _EXCHANGES: Dict[str, Type[BaseExchange]] = {}
 _current: Optional[BaseExchange] = None
+API_TIMEOUT = 30
 
 
 def register(name: str, cls: Type[BaseExchange]) -> None:
@@ -71,28 +73,51 @@ async def place_order(
     """Place an order using the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await _current.place_order(symbol, side, quantity, price)
+    return await asyncio.wait_for(
+        _current.place_order(symbol, side, quantity, price), API_TIMEOUT
+    )
 
 
 async def fetch_funding(symbol: str) -> float:
     """Fetch the funding rate for ``symbol`` from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await _current.fetch_funding(symbol)
+    return await asyncio.wait_for(_current.fetch_funding(symbol), API_TIMEOUT)
 
 
 async def get_orderbook(symbol: str, depth: int = 5) -> dict:
     """Retrieve the latest order book from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await _current.get_orderbook(symbol, depth)
+    return await asyncio.wait_for(
+        _current.get_orderbook(symbol, depth), API_TIMEOUT
+    )
 
 
 async def get_balance() -> dict:
     """Return the account balance from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await _current.get_balance()
+    return await asyncio.wait_for(_current.get_balance(), API_TIMEOUT)
+
+
+async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
+    """Place offsetting buy and sell orders with rollback on failure."""
+
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+
+    long_order: Dict = await place_order(symbol, "BUY", quantity)
+    try:
+        short_order: Dict = await place_order(symbol, "SELL", quantity)
+    except Exception as exc:
+        # Attempt to rollback the long leg if the short leg fails
+        try:
+            await place_order(symbol, "SELL", quantity)
+        finally:
+            pass
+        raise RuntimeError("Hedge placement failed; long leg rolled back") from exc
+    return {"long": long_order, "short": short_order}
 
 # Import built-in exchanges so they register themselves with the factory.
 from . import binance as _binance  # noqa: F401

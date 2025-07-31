@@ -6,8 +6,8 @@ losing trades.  Trading can be paused when risk limits are violated.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Dict
+from dataclasses import dataclass, field
+from typing import Dict, Set
 
 
 @dataclass
@@ -27,6 +27,7 @@ class RiskState:
     daily_loss: float = 0.0
     consecutive_losses: int = 0
     paused: bool = False
+    open_symbols: Set[str] = field(default_factory=set)
 
 
 _limits = RiskLimits()
@@ -60,6 +61,24 @@ def update_position(delta: float) -> None:
     """Update the tracked position size by ``delta`` units."""
 
     _state.current_position = max(_state.current_position + delta, 0.0)
+
+
+def is_symbol_open(symbol: str) -> bool:
+    """Return ``True`` if a position for ``symbol`` is currently open."""
+
+    return symbol in _state.open_symbols
+
+
+def mark_symbol_open(symbol: str) -> None:
+    """Record ``symbol`` as having an open position."""
+
+    _state.open_symbols.add(symbol)
+
+
+def mark_symbol_closed(symbol: str) -> None:
+    """Remove ``symbol`` from the set of open positions."""
+
+    _state.open_symbols.discard(symbol)
 
 
 def record_pnl(pnl: float) -> None:

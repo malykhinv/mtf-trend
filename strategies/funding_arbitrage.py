@@ -11,7 +11,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import Dict
 
-from exchanges import fetch_funding, get_orderbook, place_order
+from exchanges import fetch_funding, get_orderbook, hedge, place_order
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 
@@ -88,12 +88,12 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     ``quantity`` units of ``symbol``.  Real-world usage should handle errors and
     slippage appropriately.
     """
-    if not risk_control.can_open_position(quantity):
-        raise RuntimeError("Risk limits exceeded or trading paused")
-    long_order = await place_order(symbol, "BUY", quantity)
-    short_order = await place_order(symbol, "SELL", quantity)
+    if not risk_control.can_open_position(quantity) or risk_control.is_symbol_open(symbol):
+        raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
+    orders = await hedge(symbol, quantity)
     risk_control.update_position(quantity)
-    return {"long": long_order, "short": short_order}
+    risk_control.mark_symbol_open(symbol)
+    return orders
 
 
 async def close_neutral_position(
@@ -101,9 +101,15 @@ async def close_neutral_position(
 ) -> Dict[str, Dict]:
     """Close an existing neutral position and record PnL."""
     close_long = await place_order(symbol, "SELL", quantity)
-    close_short = await place_order(symbol, "BUY", quantity)
+    try:
+        close_short = await place_order(symbol, "BUY", quantity)
+    except Exception as exc:
+        # Rollback long close to restore neutrality
+        await place_order(symbol, "BUY", quantity)
+        raise RuntimeError("Failed to close hedge; rolled back long leg") from exc
     risk_control.update_position(-quantity)
     risk_control.record_pnl(pnl)
+    risk_control.mark_symbol_closed(symbol)
     return {"long": close_long, "short": close_short}
 
 
@@ -115,7 +121,11 @@ async def monitor_neutral_position(
 ) -> None:
     """Monitor a neutral position and close it when exit criteria are met."""
     while True:
-        metrics = await get_market_metrics(symbol)
+        try:
+            metrics = await get_market_metrics(symbol)
+        except asyncio.TimeoutError:
+            await close_neutral_position(symbol, quantity)
+            break
         if check_exit_conditions(metrics, exit_thresholds):
             await close_neutral_position(symbol, quantity)
             break
