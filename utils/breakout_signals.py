@@ -25,6 +25,44 @@ class Signal:
     tp2: float
 
 
+def allow_long(ohlcv: pd.DataFrame) -> bool:
+    """Return ``True`` if a long trade is allowed.
+
+    A long is permitted when the close is above the 20-period EMA and the
+    two most recent candles are bullish.
+    """
+
+    if ohlcv.shape[0] < 2:
+        return False
+
+    ema20 = ohlcv["close"].ewm(span=20, adjust=False).mean().iloc[-1]
+    last = ohlcv.iloc[-1]
+    prev = ohlcv.iloc[-2]
+    consecutive_up = (last["close"] > last["open"]) and (
+        prev["close"] > prev["open"]
+    )
+    return bool(last["close"] > ema20 and consecutive_up)
+
+
+def allow_short(ohlcv: pd.DataFrame) -> bool:
+    """Return ``True`` if a short trade is allowed.
+
+    A short is permitted when the close is below the 20-period EMA and the
+    two most recent candles are bearish.
+    """
+
+    if ohlcv.shape[0] < 2:
+        return False
+
+    ema20 = ohlcv["close"].ewm(span=20, adjust=False).mean().iloc[-1]
+    last = ohlcv.iloc[-1]
+    prev = ohlcv.iloc[-2]
+    consecutive_down = (last["close"] < last["open"]) and (
+        prev["close"] < prev["open"]
+    )
+    return bool(last["close"] < ema20 and consecutive_down)
+
+
 def evaluate_breakout(
     ohlcv: pd.DataFrame,
     cluster_levels: pd.DataFrame,
@@ -110,6 +148,7 @@ def evaluate_breakout(
         and funding_ok_long
         and oi_ok_long
         and cvd_ok_long
+        and allow_long(df)
     ):
         entry = float(level["high"])
         stop = float(level["low"])
@@ -123,6 +162,7 @@ def evaluate_breakout(
         and funding_ok_short
         and oi_ok_short
         and cvd_ok_short
+        and allow_short(df)
     ):
         entry = float(level["low"])
         stop = float(level["high"])
@@ -132,4 +172,4 @@ def evaluate_breakout(
     return signals
 
 
-__all__ = ["Signal", "evaluate_breakout"]
+__all__ = ["Signal", "evaluate_breakout", "allow_long", "allow_short"]

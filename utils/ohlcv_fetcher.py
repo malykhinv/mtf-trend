@@ -110,16 +110,33 @@ def update_data(
 
 
 def fetch_all_from_config(
-    config: dict, start: str | pd.Timestamp, end: str | pd.Timestamp
+    config: dict,
+    start: str | pd.Timestamp,
+    end: str | pd.Timestamp,
+    *,
+    timeframe: str = "1m",
 ) -> List[Path]:
-    """Fetch data for all symbols defined in the configuration dict."""
+    """Fetch data for all symbols defined in the configuration dict.
+
+    Parameters
+    ----------
+    config:
+        Configuration dictionary containing at least a ``symbols`` list and
+        optional ``data_paths`` entry with ``data_dir``.
+    start, end:
+        Time range for which to fetch data.
+    timeframe:
+        Candle timeframe passed through to :func:`update_data`.
+    """
 
     data_dir = Path(config.get("data_paths", {}).get("data_dir", "data")) / "raw_data"
     symbols: Iterable[str] = config.get("symbols", [])
     results: List[Path] = []
 
     for symbol in symbols:
-        results.append(update_data(symbol, start, end, data_dir=data_dir))
+        results.append(
+            update_data(symbol, start, end, timeframe=timeframe, data_dir=data_dir)
+        )
 
     return results
 

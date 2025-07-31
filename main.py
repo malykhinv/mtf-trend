@@ -26,7 +26,8 @@ class DataCollector:
         logging.info("Collecting market data")
         end = pd.Timestamp.utcnow()
         start = end - pd.Timedelta(days=1)
-        fetch_all_from_config(self.config, start, end)
+        # Fetch 5 minute candles for all configured symbols
+        fetch_all_from_config(self.config, start, end, timeframe="5m")
         return {}
 
 
