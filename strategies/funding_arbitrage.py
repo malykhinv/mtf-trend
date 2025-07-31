@@ -11,11 +11,13 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any, Dict
 import time
+from datetime import datetime
 
 from exchanges import fetch_funding, get_orderbook, hedge, place_order
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG
+from utils.logger import log_trade
 
 
 @dataclass
@@ -144,13 +146,32 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     orders = await hedge(symbol, quantity)
     risk_control.update_position(quantity)
     risk_control.mark_symbol_open(symbol)
+    now = time.time()
     _positions[symbol] = {
-        "entry_timestamp": time.time(),
+        "entry_timestamp": now,
         "entry_futures_price": entry_metrics.futures_price,
         "entry_spot_price": entry_metrics.spot_price,
         "entry_basis": entry_metrics.basis,
+        "entry_funding": entry_metrics.funding_rate,
         "quantity": quantity,
     }
+    log_trade(
+        {
+            "symbol": symbol,
+            "entry_time": datetime.fromtimestamp(now).isoformat(),
+            "exit_time": None,
+            "entry_futures_price": entry_metrics.futures_price,
+            "exit_futures_price": None,
+            "entry_spot_price": entry_metrics.spot_price,
+            "exit_spot_price": None,
+            "entry_basis": entry_metrics.basis,
+            "exit_basis": None,
+            "funding": entry_metrics.funding_rate,
+            "quantity": quantity,
+            "pnl": 0.0,
+            "exit_reasons": None,
+        }
+    )
     return orders
 
 
@@ -210,13 +231,37 @@ async def monitor_neutral_position(
         if reasons:
             await close_neutral_position(symbol, quantity, pnl)
             if entry:
+                exit_basis = (
+                    ((metrics.futures_price - metrics.spot_price) / metrics.spot_price) * 100
+                    if metrics.spot_price
+                    else float("inf")
+                )
+                exit_ts = time.time()
                 entry.update(
                     {
-                        "exit_timestamp": time.time(),
+                        "exit_timestamp": exit_ts,
                         "exit_reasons": reasons,
                         "exit_futures_price": metrics.futures_price,
                         "exit_spot_price": metrics.spot_price,
+                        "exit_basis": exit_basis,
                         "pnl": pnl,
+                    }
+                )
+                log_trade(
+                    {
+                        "symbol": symbol,
+                        "entry_time": datetime.fromtimestamp(entry.get("entry_timestamp", exit_ts)).isoformat(),
+                        "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
+                        "entry_futures_price": entry.get("entry_futures_price"),
+                        "exit_futures_price": metrics.futures_price,
+                        "entry_spot_price": entry.get("entry_spot_price"),
+                        "exit_spot_price": metrics.spot_price,
+                        "entry_basis": entry.get("entry_basis"),
+                        "exit_basis": exit_basis,
+                        "funding": entry.get("entry_funding"),
+                        "quantity": entry.get("quantity"),
+                        "pnl": pnl,
+                        "exit_reasons": reasons,
                     }
                 )
             break
