@@ -14,6 +14,7 @@ from typing import Any, Dict
 import yaml
 
 from risk import risk_control
+from strategies.funding_arbitrage import get_thresholds
 
 # Global configuration dictionary that other modules can import.
 CONFIG: Dict[str, Any] = {}
@@ -32,6 +33,7 @@ def load_config(path: str = "config.yaml") -> None:
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as f:
         CONFIG = yaml.safe_load(f) or {}
+    CONFIG["thresholds"] = get_thresholds(CONFIG.get("thresholds", {}))
 
 
 def initialize_bot() -> None:
