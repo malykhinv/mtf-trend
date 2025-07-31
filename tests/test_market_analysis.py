@@ -11,6 +11,12 @@ class Dummy:
     def screen(self, data):
         return data
 
+
+class DummyFilter:
+    def __init__(self, allow_long=True, allow_short=True):
+        self.allow_long = allow_long
+        self.allow_short = allow_short
+
     def filter(self, data):
         return data
 
@@ -32,12 +38,9 @@ def test_price_above_ema():
 
 
 def test_scan_and_enter_cancels_long(monkeypatch):
-    btc = pd.DataFrame({"close": [6, 5, 4, 3, 2, 1]})
-    eth = pd.DataFrame({"close": [6, 5, 4, 3, 2, 1]})
-    monkeypatch.setattr(main, "load_btc_eth_candles", lambda: {"BTC/USDT": btc, "ETH/USDT": eth})
     main.data_collector = Dummy()
     main.screener = Dummy()
-    main.trend_filter = Dummy()
+    main.trend_filter = DummyFilter(allow_long=False)
     main.open_long = True
     main.open_short = False
     main.scan_and_enter()
@@ -45,12 +48,9 @@ def test_scan_and_enter_cancels_long(monkeypatch):
 
 
 def test_scan_and_enter_cancels_short(monkeypatch):
-    btc = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6]})
-    eth = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6]})
-    monkeypatch.setattr(main, "load_btc_eth_candles", lambda: {"BTC/USDT": btc, "ETH/USDT": eth})
     main.data_collector = Dummy()
     main.screener = Dummy()
-    main.trend_filter = Dummy()
+    main.trend_filter = DummyFilter(allow_short=False)
     main.open_short = True
     main.open_long = False
     main.scan_and_enter()
