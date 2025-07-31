@@ -189,7 +189,7 @@ class SetupLog:
                     outcome = 'dump'
                     break
             if outcome:
-                depth_pct = min(80.0, (tp_val - min_low) / pump_range * 100)
+                depth_pct = min(80.0, max(0.0, (tp_val - min_low) / pump_range * 100))
                 self.update_setup_row(
                     timestamp=ts_str,
                     symbol=symbol,
