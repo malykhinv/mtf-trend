@@ -21,7 +21,7 @@ from utils.market_analysis import (
 from utils.cvd import get_cvd
 from utils.futures_screener import screen_futures
 from utils.range_clusters import find_tight_range_clusters
-from utils.breakout_signals import evaluate_breakout
+from utils.breakout_signals import evaluate_breakout, Signal
 from utils.futures_trader import FuturesTrader
 
 
@@ -231,32 +231,11 @@ def scan_and_enter() -> None:
     symbols = screener.screen()[:10]
     data = data_collector.collect(symbols)
     data = {s: data.get(s) for s in symbols if s in data}
-    filtered_data = trend_filter.filter(data)
-    global selected_symbols
-    selected_symbols = list(filtered_data.keys())
-    for symbol in filtered_data:
+
+    # Evaluate breakout signals for each symbol
+    signals_by_symbol: dict[str, list[Signal]] = {}
+    for symbol, info in data.items():
         logging.debug("Prepared data for %s", symbol)
-
-    global open_long, open_short, trader
-    if open_long and not getattr(trend_filter, "allow_long", True):
-        logging.info("Conditions violated for long; cancelling long position")
-        open_long = False
-    if open_short and not getattr(trend_filter, "allow_short", True):
-        logging.info("Conditions violated for short; cancelling short position")
-        open_short = False
-    if not risk_manager:
-        return
-    if trader is None:
-        trader = FuturesTrader(
-            data_collector.api_key,
-            data_collector.api_secret,
-            exchange_name=data_collector.config.get("api", {}).get(
-                "futures_exchange", "binanceusdm"
-            ),
-            risk_manager=risk_manager,
-        )
-
-    for symbol, info in filtered_data.items():
         ohlcv = info.get("ohlcv")
         if ohlcv is None or ohlcv.empty:
             continue
@@ -286,30 +265,59 @@ def scan_and_enter() -> None:
             pd.Series(dtype="float64"),
             funding,
         )
-        if not signals or not risk_manager.can_open_trade():
-            continue
-        sig = signals[0]
-        try:
-            size = risk_manager.open_trade(sig.entry, sig.stop)
-        except ValueError:
-            continue
-        side = "buy" if sig.direction == "long" else "sell"
-        executed = trader.place_limit_maker_order(
-            symbol, side, size, sig.entry, tp=sig.tp1, sl=sig.stop
+        if signals:
+            signals_by_symbol[symbol] = signals
+
+    # Filter signals based on BTC/ETH trend
+    filtered_signals = trend_filter.filter(signals_by_symbol)
+    global selected_symbols
+    selected_symbols = list(filtered_signals.keys())
+
+    global open_long, open_short, trader
+    if open_long and not getattr(trend_filter, "allow_long", True):
+        logging.info("Conditions violated for long; cancelling long position")
+        open_long = False
+    if open_short and not getattr(trend_filter, "allow_short", True):
+        logging.info("Conditions violated for short; cancelling short position")
+        open_short = False
+    if not risk_manager:
+        return
+    if trader is None:
+        trader = FuturesTrader(
+            data_collector.api_key,
+            data_collector.api_secret,
+            exchange_name=data_collector.config.get("api", {}).get(
+                "futures_exchange", "binanceusdm"
+            ),
+            risk_manager=risk_manager,
         )
-        if not executed:
-            executed = trader.place_market_order(
-                symbol, side, size, tp=sig.tp1, sl=sig.stop
+
+    for symbol, sigs in filtered_signals.items():
+        sig_list = sigs if isinstance(sigs, list) else [sigs]
+        for sig in sig_list:
+            if not risk_manager.can_open_trade():
+                continue
+            try:
+                size = risk_manager.open_trade(sig.entry, sig.stop)
+            except ValueError:
+                continue
+            side = "buy" if sig.direction == "long" else "sell"
+            executed = trader.place_limit_maker_order(
+                symbol, side, size, sig.entry, tp=sig.tp1, sl=sig.stop
             )
-        if not executed:
-            risk_manager.close_trade(0.0)
-            continue
-        if sig.direction == "long":
-            open_long = True
-            open_short = False
-        else:
-            open_short = True
-            open_long = False
+            if not executed:
+                executed = trader.place_market_order(
+                    symbol, side, size, tp=sig.tp1, sl=sig.stop
+                )
+            if not executed:
+                risk_manager.close_trade(0.0)
+                continue
+            if sig.direction == "long":
+                open_long = True
+                open_short = False
+            else:
+                open_short = True
+                open_long = False
 def daily_equity_and_risk_check() -> None:
     """Perform daily equity and risk checks and send summary."""
     logging.info("Running daily equity and risk checks")
