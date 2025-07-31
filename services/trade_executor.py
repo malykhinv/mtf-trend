@@ -15,7 +15,7 @@ class TradeExecutor:
     Класс для автоматического исполнения торговых сигналов (создания ордеров, стопов и тейк-профитов).
     Управляет рисками и регистрирует входы в систему.
     """
-    def __init__(self, client: binance, tracker: PositionTrackerService, client_lock: threading.Lock | None = None):
+    def __init__(self, client: binance, tracker: PositionTrackerService, client_lock: threading.Lock = None):
         """Сохраняет клиента биржи и трекер сделок."""
         self.client = client
         self.tracker = tracker
