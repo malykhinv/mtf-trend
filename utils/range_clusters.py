@@ -7,6 +7,8 @@ from typing import List
 
 import pandas as pd
 
+from .plotting import plot_clusters
+
 
 @dataclass
 class RangeCluster:
@@ -104,36 +106,6 @@ def find_tight_range_clusters(
             )
 
     return pd.DataFrame(clusters)
-
-
-def plot_clusters(ohlc: pd.DataFrame, clusters: pd.DataFrame) -> None:
-    """Visualize clusters by highlighting them on a price chart.
-
-    Parameters
-    ----------
-    ohlc:
-        DataFrame with a ``close`` column and an index representing time (or a
-        ``timestamp`` column which will be used as index).
-    clusters:
-        DataFrame produced by :func:`find_tight_range_clusters`.
-    """
-
-    df = ohlc.copy()
-    if "timestamp" in df.columns:
-        df["timestamp"] = pd.to_datetime(df["timestamp"])
-        df = df.set_index("timestamp")
-
-    try:
-        import matplotlib.pyplot as plt
-    except Exception as exc:  # pragma: no cover - only executed without mpl
-        raise RuntimeError("matplotlib is required for plotting") from exc
-
-    ax = df["close"].plot(figsize=(10, 4))
-    for _, row in clusters.iterrows():
-        ax.axvspan(row["start"], row["end"], color="orange", alpha=0.3)
-    ax.set_title("Tight Range Clusters")
-    ax.set_ylabel("Price")
-    plt.show()
 
 
 __all__ = ["find_tight_range_clusters", "plot_clusters"]
