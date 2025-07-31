@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Dict
 
 from exchanges import fetch_funding, get_orderbook, place_order
+from risk import risk_control
 
 
 @dataclass
@@ -86,15 +87,22 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     ``quantity`` units of ``symbol``.  Real-world usage should handle errors and
     slippage appropriately.
     """
+    if not risk_control.can_open_position(quantity):
+        raise RuntimeError("Risk limits exceeded or trading paused")
     long_order = await place_order(symbol, "BUY", quantity)
     short_order = await place_order(symbol, "SELL", quantity)
+    risk_control.update_position(quantity)
     return {"long": long_order, "short": short_order}
 
 
-async def close_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
-    """Close an existing neutral position by reversing both legs."""
+async def close_neutral_position(
+    symbol: str, quantity: float, pnl: float = 0.0
+) -> Dict[str, Dict]:
+    """Close an existing neutral position and record PnL."""
     close_long = await place_order(symbol, "SELL", quantity)
     close_short = await place_order(symbol, "BUY", quantity)
+    risk_control.update_position(-quantity)
+    risk_control.record_pnl(pnl)
     return {"long": close_long, "short": close_short}
 
 
