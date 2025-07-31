@@ -7,6 +7,14 @@ symbols:
   - "BTC/USDT"
   - "ETH/USDT"
 
+fetcher:
+  symbol: "BTC/USDT"
+  limit: 1000
+  timeframes:
+    - "1m"
+    - "5m"
+    - "1h"
+
 trading_defaults:
   leverage: 1
   margin_mode: "cross"
