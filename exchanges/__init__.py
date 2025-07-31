@@ -16,9 +16,13 @@ import asyncio
 from abc import ABC, abstractmethod
 import logging
 import time
-from typing import Dict, Optional, Type
+from typing import Any, Coroutine, Dict, Optional, Set, Tuple, Type
+
+from risk import risk_control
 
 logger = logging.getLogger(__name__)
+
+_OUTSTANDING: Set[Tuple[str, str]] = set()
 
 # ---------------------------------------------------------------------------
 # Base interface
@@ -100,14 +104,46 @@ def configure(name: str, **kwargs) -> None:
     _current = cls(**kwargs)
 
 
+async def _handle_timeout() -> None:
+    """Cancel all outstanding orders and pause trading."""
+
+    logger.error("API call exceeded %s seconds; cancelling outstanding orders", API_TIMEOUT)
+    if _current is not None:
+        for market, oid in list(_OUTSTANDING):
+            try:
+                await asyncio.wait_for(
+                    _current.cancel_order(oid, market), API_TIMEOUT
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                logger.error("Failed to cancel %s %s: %s", market, oid, exc)
+        _OUTSTANDING.clear()
+    risk_control.pause()
+
+
+async def _await_with_timeout(coro: Coroutine[Any, Any, Any]) -> Any:
+    try:
+        return await asyncio.wait_for(coro, API_TIMEOUT)
+    except asyncio.TimeoutError:
+        await _handle_timeout()
+        raise
+
+
+def _track_order(market: str, order_id: str) -> None:
+    _OUTSTANDING.add((market, order_id))
+
+
+def _untrack_order(market: str, order_id: str) -> None:
+    _OUTSTANDING.discard((market, order_id))
+
+
 async def place_order(
     symbol: str, side: str, quantity: float, price: float | None = None
 ) -> dict:
     """Place an order using the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await asyncio.wait_for(
-        _current.place_order(symbol, side, quantity, price), API_TIMEOUT
+    return await _await_with_timeout(
+        _current.place_order(symbol, side, quantity, price)
     )
 
 
@@ -125,12 +161,14 @@ async def _poll_fill(order_id: str, market: str) -> None:
 
     start = time.monotonic()
     while True:
-        status = await asyncio.wait_for(
-            _current.get_order_status(order_id, market), API_TIMEOUT
+        status = await _await_with_timeout(
+            _current.get_order_status(order_id, market)
         )
         if status.get("status") == "FILLED":
+            _untrack_order(market, order_id)
             return
         if time.monotonic() - start > API_TIMEOUT:
+            await _handle_timeout()
             raise RuntimeError(f"Order {order_id} not filled in time")
         await asyncio.sleep(0.5)
 
@@ -142,6 +180,7 @@ async def place_spot_order(
 
     order = await place_order(symbol, side, quantity, price)
     order_id = str(order.get("orderId") or order.get("id") or "")
+    _track_order("spot", order_id)
     await _poll_fill(order_id, "spot")
     return order
 
@@ -153,6 +192,7 @@ async def place_perp_order(
 
     order = await place_order(symbol, side, quantity, price)
     order_id = str(order.get("orderId") or order.get("id") or "")
+    _track_order("perp", order_id)
     await _poll_fill(order_id, "perp")
     return order
 
@@ -161,23 +201,21 @@ async def fetch_funding(symbol: str) -> float:
     """Fetch the funding rate for ``symbol`` from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await asyncio.wait_for(_current.fetch_funding(symbol), API_TIMEOUT)
+    return await _await_with_timeout(_current.fetch_funding(symbol))
 
 
 async def get_orderbook(symbol: str, depth: int = 5) -> dict:
     """Retrieve the latest order book from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await asyncio.wait_for(
-        _current.get_orderbook(symbol, depth), API_TIMEOUT
-    )
+    return await _await_with_timeout(_current.get_orderbook(symbol, depth))
 
 
 async def get_balance() -> dict:
     """Return the account balance from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
-    return await asyncio.wait_for(_current.get_balance(), API_TIMEOUT)
+    return await _await_with_timeout(_current.get_balance())
 
 
 async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
@@ -197,8 +235,8 @@ async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
     except Exception as exc:
         # Rollback the spot leg if the futures leg fails in any way.
         try:
-            cancel_resp = await asyncio.wait_for(
-                _current.cancel_order(spot_id, "spot"), API_TIMEOUT
+            cancel_resp = await _await_with_timeout(
+                _current.cancel_order(spot_id, "spot")
             )
             logger.warning("Rolled back spot order %s: %s", spot_id, cancel_resp)
         except Exception as cancel_exc:  # pragma: no cover - best effort

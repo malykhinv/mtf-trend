@@ -16,6 +16,8 @@ risk:
   max_position_size: 1000
   max_daily_loss: 500
   max_consecutive_losses: 3
+  max_open_positions: 5
+  deposit_cap_pct: 0.3
 bot:
   poll_interval: 5
   whitelist:
