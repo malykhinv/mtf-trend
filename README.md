@@ -27,7 +27,7 @@ The project implements a multi-timeframe breakout system. OHLCV data is searched
 - **utils/breakout_signals.py** – evaluates whether price breaks above/below the most recent range with supporting volume, CVD, OI and funding filters, returning `Signal` objects【F:utils/breakout_signals.py†L3-L8】【F:utils/breakout_signals.py†L66-L111】.
 - **utils/ohlcv_fetcher.py** – downloads OHLCV candles via ccxt with retry logic and can update all symbols listed in the configuration【F:utils/ohlcv_fetcher.py†L1-L10】【F:utils/ohlcv_fetcher.py†L51-L66】.
 - **utils/futures_trader.py** – wraps ccxt futures APIs to submit market or limit-maker orders, manage TP/SL exits and log trades【F:utils/futures_trader.py†L3-L8】.
-- **utils/risk.py** – `RiskManager` enforces per-trade risk, total open risk, daily drawdown and consecutive loss limits【F:utils/risk.py†L11-L29】.
+- **utils/risk.py** – `RiskManager` enforces per-trade risk, total open risk, daily drawdown and consecutive loss limits (halts after 5 losses by default)【F:utils/risk.py†L11-L29】.
 - **utils/trade_logger.py** – appends executed trades to `trades.csv` and provides daily win rate, average RR and equity change summaries【F:utils/trade_logger.py†L3-L30】【F:utils/trade_logger.py†L33-L64】.
 - **main.py** – orchestrates live trading: collects data, screens for setups, applies trend filters, checks risk and sends daily summaries via Telegram【F:main.py†L18-L32】【F:main.py†L72-L94】.
 
