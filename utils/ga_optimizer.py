@@ -8,9 +8,11 @@ is then evaluated on the hold-out test set.  The evaluation metric is:
 
     Sharpe Ratio * Win Rate * (Profit / Drawdown)
 
-The strategy used for evaluation is a very small moving-average crossover
-system with stop-loss and take-profit levels derived from recent price
-range (``cluster_width``).
+The strategy used for evaluation is a minimal breakout-style system that
+relies on exponential moving averages, volume spikes and cumulative
+volume delta (CVD).  Stop-loss and two take-profit levels are derived
+from the recent price range (``cluster_width``) and user defined
+risk-reward multiples.
 """
 
 from dataclasses import dataclass
@@ -26,19 +28,27 @@ class Genome:
     """Container for strategy parameters."""
 
     cluster_width: int  # lookback for recent range calculation
-    sl_ratio: float     # stop-loss multiple of the range
-    tp_ratio: float     # take-profit multiple of the range
-    ema_fast: int       # fast EMA period
-    ema_slow: int       # slow EMA period
+    candle_depth: int   # lookback for volume averages
+    sl: float           # stop-loss multiple of the range
+    tp1_rr: float       # risk-reward for first take profit
+    tp2_rr: float       # risk-reward for second take profit
+    ema_short: int      # short EMA period
+    ema_long: int       # long EMA period
+    delta_volume_spike: float  # volume spike multiplier
+    cvd_ema: int        # smoothing period for CVD
 
 
 # Parameter boundaries used for random initialization and mutation
 BOUNDS = {
     "cluster_width": (5, 50),
-    "sl_ratio": (0.5, 3.0),
-    "tp_ratio": (0.5, 5.0),
-    "ema_fast": (5, 50),
-    "ema_slow": (10, 200),
+    "candle_depth": (5, 50),
+    "sl": (0.5, 3.0),
+    "tp1_rr": (0.5, 3.0),
+    "tp2_rr": (1.0, 6.0),
+    "ema_short": (5, 50),
+    "ema_long": (10, 200),
+    "delta_volume_spike": (1.0, 5.0),
+    "cvd_ema": (1, 20),
 }
 
 
@@ -48,12 +58,16 @@ def random_genome() -> Genome:
     while True:
         g = Genome(
             cluster_width=random.randint(*BOUNDS["cluster_width"]),
-            sl_ratio=random.uniform(*BOUNDS["sl_ratio"]),
-            tp_ratio=random.uniform(*BOUNDS["tp_ratio"]),
-            ema_fast=random.randint(*BOUNDS["ema_fast"]),
-            ema_slow=random.randint(*BOUNDS["ema_slow"]),
+            candle_depth=random.randint(*BOUNDS["candle_depth"]),
+            sl=random.uniform(*BOUNDS["sl"]),
+            tp1_rr=random.uniform(*BOUNDS["tp1_rr"]),
+            tp2_rr=random.uniform(*BOUNDS["tp2_rr"]),
+            ema_short=random.randint(*BOUNDS["ema_short"]),
+            ema_long=random.randint(*BOUNDS["ema_long"]),
+            delta_volume_spike=random.uniform(*BOUNDS["delta_volume_spike"]),
+            cvd_ema=random.randint(*BOUNDS["cvd_ema"]),
         )
-        if g.ema_fast < g.ema_slow:
+        if g.ema_short < g.ema_long and g.tp1_rr < g.tp2_rr:
             return g
 
 
@@ -68,10 +82,12 @@ def mutate(genome: Genome, rate: float = 0.1) -> Genome:
             else:
                 data[key] = random.uniform(low, high)
     g = Genome(**data)
-    if g.ema_fast >= g.ema_slow:
-        g.ema_fast, g.ema_slow = min(g.ema_fast, g.ema_slow - 1), max(
-            g.ema_fast + 1, g.ema_slow
+    if g.ema_short >= g.ema_long:
+        g.ema_short, g.ema_long = min(g.ema_short, g.ema_long - 1), max(
+            g.ema_short + 1, g.ema_long
         )
+    if g.tp1_rr >= g.tp2_rr:
+        g.tp1_rr, g.tp2_rr = sorted((g.tp1_rr, g.tp2_rr))
     return g
 
 
@@ -84,8 +100,10 @@ def crossover(a: Genome, b: Genome) -> Genome:
     for i, key in enumerate(keys):
         child_data[key] = getattr(a, key) if i < point else getattr(b, key)
     child = Genome(**child_data)
-    if child.ema_fast >= child.ema_slow:
-        child.ema_fast = max(BOUNDS["ema_fast"][0], child.ema_slow - 1)
+    if child.ema_short >= child.ema_long:
+        child.ema_short = max(BOUNDS["ema_short"][0], child.ema_long - 1)
+    if child.tp1_rr >= child.tp2_rr:
+        child.tp1_rr, child.tp2_rr = sorted((child.tp1_rr, child.tp2_rr))
     return child
 
 
@@ -95,54 +113,111 @@ def evaluate(genome: Genome, data: pd.DataFrame) -> float:
     if data.empty:
         return 0.0
 
+    required = {"open", "high", "low", "close", "volume"}
+    if not required.issubset(data.columns):
+        missing = ", ".join(sorted(required - set(data.columns)))
+        raise ValueError(f"Data must contain columns: {missing}")
+
     df = data.copy()
-    df["ema_fast"] = df["close"].ewm(span=genome.ema_fast).mean()
-    df["ema_slow"] = df["close"].ewm(span=genome.ema_slow).mean()
+    df["ema_short"] = df["close"].ewm(span=genome.ema_short).mean()
+    df["ema_long"] = df["close"].ewm(span=genome.ema_long).mean()
     df["range"] = (
         df["close"].rolling(genome.cluster_width).max()
         - df["close"].rolling(genome.cluster_width).min()
     )
+    df["avg_volume"] = df["volume"].rolling(genome.candle_depth).mean()
+    df["volume_spike"] = df["volume"] > (genome.delta_volume_spike * df["avg_volume"])
+
+    change = df["close"].diff().fillna(0)
+    direction_arr = np.where(change > 0, 1, np.where(change < 0, -1, 0))
+    df["cvd"] = (direction_arr * df["volume"].astype(float)).cumsum()
+    df["cvd_ema"] = df["cvd"].ewm(span=genome.cvd_ema).mean()
+    df["cvd_delta"] = df["cvd_ema"].diff()
+
     df.dropna(inplace=True)
 
     returns: List[float] = []
     in_trade = False
-    entry_price = 0.0
-    stop = 0.0
-    target = 0.0
+    entry = stop = tp1 = tp2 = 0.0
+    trade_dir = 1  # 1 long, -1 short
+    hit_tp1 = False
+
+    def trade_return(entry_price: float, exit_price: float, dir_: int) -> float:
+        return (exit_price / entry_price) - 1.0 if dir_ == 1 else (entry_price / exit_price) - 1.0
 
     for i in range(1, len(df)):
         prev = df.iloc[i - 1]
         row = df.iloc[i]
 
         if not in_trade:
-            cross_up = prev["ema_fast"] <= prev["ema_slow"] and row["ema_fast"] > row["ema_slow"]
-            if cross_up:
-                entry_price = row["close"]
-                rng = row["range"] or 1e-6
-                stop = entry_price - genome.sl_ratio * rng
-                target = entry_price + genome.tp_ratio * rng
+            cross_up = prev["ema_short"] <= prev["ema_long"] and row["ema_short"] > row["ema_long"]
+            cross_down = prev["ema_short"] >= prev["ema_long"] and row["ema_short"] < row["ema_long"]
+            vol_ok = bool(row["volume_spike"])
+            cvd_up = row["cvd_delta"] > 0
+            cvd_down = row["cvd_delta"] < 0
+
+            rng = row["range"] or 1e-6
+
+            if cross_up and vol_ok and cvd_up:
+                entry = row["close"]
+                risk = genome.sl * rng
+                stop = entry - risk
+                tp1 = entry + genome.tp1_rr * risk
+                tp2 = entry + genome.tp2_rr * risk
                 in_trade = True
+                trade_dir = 1
+                hit_tp1 = False
+            elif cross_down and vol_ok and cvd_down:
+                entry = row["close"]
+                risk = genome.sl * rng
+                stop = entry + risk
+                tp1 = entry - genome.tp1_rr * risk
+                tp2 = entry - genome.tp2_rr * risk
+                in_trade = True
+                trade_dir = -1
+                hit_tp1 = False
         else:
             price = row["close"]
-            exit_trade = False
-            if price <= stop or price >= target:
-                exit_price = price
-                exit_trade = True
-            else:
-                cross_down = prev["ema_fast"] >= prev["ema_slow"] and row["ema_fast"] < row["ema_slow"]
-                if cross_down:
-                    exit_price = price
-                    exit_trade = True
-            if exit_trade:
-                ret = (exit_price / entry_price) - 1.0
-                returns.append(ret)
-                in_trade = False
+            if trade_dir == 1:  # long
+                if not hit_tp1:
+                    if price <= stop:
+                        returns.append(trade_return(entry, stop, trade_dir))
+                        in_trade = False
+                    elif price >= tp1:
+                        hit_tp1 = True
+                        stop = entry
+                else:
+                    if price <= stop:
+                        returns.append(trade_return(entry, stop, trade_dir))
+                        in_trade = False
+                    elif price >= tp2:
+                        returns.append(trade_return(entry, tp2, trade_dir))
+                        in_trade = False
+            else:  # short
+                if not hit_tp1:
+                    if price >= stop:
+                        returns.append(trade_return(entry, stop, trade_dir))
+                        in_trade = False
+                    elif price <= tp1:
+                        hit_tp1 = True
+                        stop = entry
+                else:
+                    if price >= stop:
+                        returns.append(trade_return(entry, stop, trade_dir))
+                        in_trade = False
+                    elif price <= tp2:
+                        returns.append(trade_return(entry, tp2, trade_dir))
+                        in_trade = False
 
     if not returns:
         return 0.0
 
     returns_arr = np.array(returns)
-    sharpe = returns_arr.mean() / returns_arr.std(ddof=1) * np.sqrt(len(returns_arr)) if returns_arr.std(ddof=1) else 0.0
+    sharpe = (
+        returns_arr.mean() / returns_arr.std(ddof=1) * np.sqrt(len(returns_arr))
+        if returns_arr.std(ddof=1)
+        else 0.0
+    )
     winrate = (returns_arr > 0).mean()
     equity = returns_arr.cumsum()
     peak = np.maximum.accumulate(equity)
@@ -175,8 +250,10 @@ def optimize(
         The best genome found and its fitness on the test set.
     """
 
-    if "close" not in data.columns:
-        raise ValueError("Data must contain a 'close' column")
+    required = {"open", "high", "low", "close", "volume"}
+    if not required.issubset(data.columns):
+        missing = ", ".join(sorted(required - set(data.columns)))
+        raise ValueError(f"Data must contain columns: {missing}")
 
     split = int(len(data) * 0.7)
     train, test = data.iloc[:split], data.iloc[split:]
