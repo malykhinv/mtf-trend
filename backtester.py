@@ -24,6 +24,7 @@ import numpy as np
 
 from utils.range_clusters import find_tight_range_clusters
 from utils.breakout_signals import evaluate_breakout, Signal
+from utils.plotting import plot_equity
 
 
 @dataclass
@@ -92,6 +93,7 @@ def run_backtest(
     *,
     data_dir: str | Path = "data/raw_data",
     trades_path: str | Path = "trades.csv",
+    equity_path: str | Path | None = None,
 ) -> dict:
     """Run a simple breakout backtest and return summary statistics."""
 
@@ -249,6 +251,12 @@ def run_backtest(
 
     trades_df = pd.DataFrame([asdict(t) for t in trades])
     trades_df.to_csv(trades_path, index=False)
+
+    if not trades_df.empty:
+        fig = plot_equity(trades_df, price=df)
+        equity_path = Path(equity_path) if equity_path is not None else Path("data") / "equity.png"
+        equity_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(equity_path)
 
     winrate = wins / len(trades) if trades else 0.0
     avg_rr = sum(rr_list) / len(rr_list) if rr_list else 0.0
