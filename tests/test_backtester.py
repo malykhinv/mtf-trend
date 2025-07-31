@@ -32,8 +32,16 @@ def test_backtester_produces_trade(tmp_path):
 
     trades_path = tmp_path / "trades.csv"
     stats = run_backtest("ETHUSDT", data_dir=data_dir, trades_path=trades_path)
-
-    assert stats["pnl"] > 0
     trades = pd.read_csv(trades_path)
-    assert len(trades) == 1
-    assert trades.loc[0, "pnl"] == 3
+
+    # two exit events: partial at tp1 and trailing stop for the rest
+    assert len(trades) == 2
+    # first exit is partial with half position remaining and stop as trail
+    assert trades.loc[0, "remaining"] == 0.5
+    assert trades.loc[0, "trail"] == trades.loc[0, "stop"]
+    assert trades.loc[0, "pnl"] == 1.5
+    # final exit closes remaining position and moves trailing stop higher
+    assert trades.loc[1, "remaining"] == 0.0
+    assert trades.loc[1, "trail"] > trades.loc[0, "trail"]
+    # reported pnl equals sum of individual trade pnls
+    assert abs(trades["pnl"].sum() - stats["pnl"]) < 1e-6
