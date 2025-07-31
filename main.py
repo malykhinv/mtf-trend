@@ -114,11 +114,53 @@ class Screener:
 
 
 class TrendFilter:
-    """Placeholder trend filter."""
+    """Filter trading signals based on broader market trend.
+
+    The filter inspects recent 5 minute candles for BTC and ETH to decide
+    whether long or short signals should be allowed.  Long signals are
+    rejected when BTC shows a consecutive down move for at least five
+    minutes or when the latest close is below its 20 period EMA.  Short
+    signals are rejected when BTC has moved up for at least five
+    consecutive minutes.  Only signals that pass these checks are returned.
+    """
 
     def filter(self, data: Any) -> Any:
         logging.info("Applying trend filters")
-        return data
+
+        # Load recent BTC and ETH candles to determine the broader trend
+        candles = load_btc_eth_candles()
+        btc = candles.get("BTC/USDT")
+        eth = candles.get("ETH/USDT")
+
+        # Determine simple trend characteristics
+        btc_up = has_consecutive_move(btc, "up")
+        btc_down = has_consecutive_move(btc, "down")
+        eth_up = has_consecutive_move(eth, "up")
+        eth_down = has_consecutive_move(eth, "down")
+        btc_above = price_above_ema(btc)
+        eth_above = price_above_ema(eth)
+
+        allow_long = not (btc_down or not btc_above)
+        allow_short = not btc_up
+
+        filtered: dict[str, Any] = {}
+        for symbol, signals in (data or {}).items():
+            # ``signals`` may be a list of Signal objects or a single Signal.
+            # We normalise to a list to simplify processing.
+            sig_list = signals if isinstance(signals, list) else [signals]
+            passed = []
+            for sig in sig_list:
+                direction = getattr(sig, "direction", None)
+                if direction == "long" and not allow_long:
+                    continue
+                if direction == "short" and not allow_short:
+                    continue
+                passed.append(sig)
+            if passed:
+                # Preserve original structure (list vs single object)
+                filtered[symbol] = passed if isinstance(signals, list) else passed[0]
+
+        return filtered
 
 
 from utils.risk import RiskManager
@@ -152,9 +194,9 @@ def scan_and_enter() -> None:
     else:
         symbols = list(screened)[:10]
         filtered_data = {s: data.get(s) for s in symbols if s in data}
+    filtered_data = trend_filter.filter(filtered_data)
     global selected_symbols
-    selected_symbols = symbols
-    trends = trend_filter.filter(filtered_data)
+    selected_symbols = list(filtered_data.keys())
     for symbol in filtered_data:
         logging.debug("Prepared data for %s", symbol)
 
