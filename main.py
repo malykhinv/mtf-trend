@@ -227,8 +227,9 @@ def scan_and_enter() -> None:
             ohlcv = ohlcv.set_index("timestamp")
         clusters = find_tight_range_clusters(
             ohlcv.reset_index()[["timestamp", "high", "low", "close"]],
-            atr_multiplier=2.0,
-            min_bars=5,
+            atr_multiplier=0.5,
+            min_bars=10,
+            max_bars=30,
         )
         if clusters.empty:
             continue

@@ -218,8 +218,9 @@ def run_backtest(
         window = df.iloc[: i + 1]
         clusters = find_tight_range_clusters(
             window[["timestamp", "high", "low", "close"]],
-            atr_multiplier=2.0,
-            min_bars=5,
+            atr_multiplier=0.5,
+            min_bars=10,
+            max_bars=30,
         )
         if clusters.empty:
             continue
