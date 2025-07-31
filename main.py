@@ -234,15 +234,24 @@ def scan_and_enter() -> None:
     for symbol in filtered_data:
         logging.debug("Prepared data for %s", symbol)
 
-    global open_long, open_short
+    global open_long, open_short, trader
     if open_long and not getattr(trend_filter, "allow_long", True):
         logging.info("Conditions violated for long; cancelling long position")
         open_long = False
     if open_short and not getattr(trend_filter, "allow_short", True):
         logging.info("Conditions violated for short; cancelling short position")
         open_short = False
-    if not risk_manager or not trader:
+    if not risk_manager:
         return
+    if trader is None:
+        trader = FuturesTrader(
+            data_collector.api_key,
+            data_collector.api_secret,
+            exchange_name=data_collector.config.get("api", {}).get(
+                "futures_exchange", "binanceusdm"
+            ),
+            risk_manager=risk_manager,
+        )
 
     for symbol, info in filtered_data.items():
         ohlcv = info.get("ohlcv")
@@ -349,12 +358,8 @@ def main() -> None:
         exchange_name=config.get("api", {}).get("futures_exchange", "binanceusdm")
     )
     trend_filter = TrendFilter()
-    risk_manager = RiskManager(fetch_balance)
-    trader = FuturesTrader(
-        api_key,
-        api_secret,
-        exchange_name=config.get("api", {}).get("futures_exchange", "binanceusdm"),
-    )
+    risk_manager = RiskManager(fetch_balance, max_open_trades=10)
+    trader = None
 
     schedule.every(5).minutes.do(scan_and_enter)
     schedule.every().day.at("00:00").do(daily_equity_and_risk_check)

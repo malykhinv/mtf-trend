@@ -15,6 +15,7 @@ import ccxt
 import pandas as pd
 
 from .trade_logger import append_trade
+from .risk import RiskManager
 
 
 class FuturesTrader:
@@ -38,6 +39,7 @@ class FuturesTrader:
         exchange_name: str = "binanceusdm",
         exchange: Optional[ccxt.Exchange] = None,
         trade_logger: Callable[[Dict[str, Any]], None] | None = append_trade,
+        risk_manager: RiskManager | None = None,
     ) -> None:
         if exchange is None:
             exchange_class = getattr(ccxt, exchange_name)
@@ -51,6 +53,7 @@ class FuturesTrader:
             )
         self.exchange = exchange
         self.trade_logger = trade_logger
+        self.risk_manager = risk_manager
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -112,7 +115,7 @@ class FuturesTrader:
             ts = filled_order.get("timestamp")
             entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
             exit_events = self.manage_exit_orders(symbol, side, amount, tp, sl)
-            if exit_events and self.trade_logger:
+            if exit_events:
                 direction = "long" if side.lower() == "buy" else "short"
                 risk = abs(entry_price - sl) if sl is not None else 0.0
                 for i, (exit_price, exit_time) in enumerate(exit_events):
@@ -122,20 +125,23 @@ class FuturesTrader:
                         else entry_price - exit_price
                     )
                     rr = pnl / risk if risk else 0.0
-                    self.trade_logger(
-                        {
-                            "symbol": symbol,
-                            "direction": direction,
-                            "entry_time": entry_time,
-                            "entry": entry_price,
-                            "stop": sl if sl is not None else 0.0,
-                            "tp": tp if (tp is not None and i == 0) else 0.0,
-                            "exit_time": exit_time,
-                            "exit": exit_price,
-                            "pnl": pnl,
-                            "rr": rr,
-                        }
-                    )
+                    if self.trade_logger:
+                        self.trade_logger(
+                            {
+                                "symbol": symbol,
+                                "direction": direction,
+                                "entry_time": entry_time,
+                                "entry": entry_price,
+                                "stop": sl if sl is not None else 0.0,
+                                "tp": tp if (tp is not None and i == 0) else 0.0,
+                                "exit_time": exit_time,
+                                "exit": exit_price,
+                                "pnl": pnl,
+                                "rr": rr,
+                            }
+                        )
+                    if self.risk_manager:
+                        self.risk_manager.close_trade(pnl)
             return True
         return False
 
@@ -177,7 +183,7 @@ class FuturesTrader:
             ts = filled_order.get("timestamp")
             entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
             exit_events = self.manage_exit_orders(symbol, side, amount, tp, sl)
-            if exit_events and self.trade_logger:
+            if exit_events:
                 direction = "long" if side.lower() == "buy" else "short"
                 risk = abs(entry_price - sl) if sl is not None else 0.0
                 for i, (exit_price, exit_time) in enumerate(exit_events):
@@ -187,20 +193,23 @@ class FuturesTrader:
                         else entry_price - exit_price
                     )
                     rr = pnl / risk if risk else 0.0
-                    self.trade_logger(
-                        {
-                            "symbol": symbol,
-                            "direction": direction,
-                            "entry_time": entry_time,
-                            "entry": entry_price,
-                            "stop": sl if sl is not None else 0.0,
-                            "tp": tp if (tp is not None and i == 0) else 0.0,
-                            "exit_time": exit_time,
-                            "exit": exit_price,
-                            "pnl": pnl,
-                            "rr": rr,
-                        }
-                    )
+                    if self.trade_logger:
+                        self.trade_logger(
+                            {
+                                "symbol": symbol,
+                                "direction": direction,
+                                "entry_time": entry_time,
+                                "entry": entry_price,
+                                "stop": sl if sl is not None else 0.0,
+                                "tp": tp if (tp is not None and i == 0) else 0.0,
+                                "exit_time": exit_time,
+                                "exit": exit_price,
+                                "pnl": pnl,
+                                "rr": rr,
+                            }
+                        )
+                    if self.risk_manager:
+                        self.risk_manager.close_trade(pnl)
             return True
         return False
 

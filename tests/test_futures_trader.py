@@ -97,7 +97,21 @@ def test_exit_orders_with_trailing_stop_and_logging():
     exchange = DummyExchange()
     exchange.ticker_prices = [20000, 20050, 20050]
     logs = []
-    trader = FuturesTrader("key", "secret", exchange=exchange, trade_logger=logs.append)
+    class DummyRisk:
+        def __init__(self):
+            self.pnls = []
+
+        def close_trade(self, pnl):
+            self.pnls.append(pnl)
+
+    risk = DummyRisk()
+    trader = FuturesTrader(
+        "key",
+        "secret",
+        exchange=exchange,
+        trade_logger=logs.append,
+        risk_manager=risk,
+    )
 
     trader.place_market_order("BTC/USDT", "buy", 1, tp=21000, sl=19000)
 
@@ -121,6 +135,7 @@ def test_exit_orders_with_trailing_stop_and_logging():
     assert len(logs) == 2
     assert logs[0]["exit"] == 21000
     assert logs[1]["exit"] > 19000
+    assert len(risk.pnls) == 2
 
 
 def test_retry_on_network_error():
