@@ -69,7 +69,10 @@ class SetupLog:
 
     def _update_row(self, timestamp: str, symbol: str,
                     main_high_crossed: bool | None = None,
-                    correction_low_crossed: bool | None = None) -> None:
+                    correction_low_crossed: bool | None = None,
+                    correction_depth_pct: float | None = None,
+                    time_to_main_high: int | None = None,
+                    outcome: str | None = None) -> None:
         with self.lock:
             wb, ws = self._ensure_workbook()
             headers = [c.value for c in ws[1]]
@@ -78,6 +81,9 @@ class SetupLog:
                 symbol_idx = headers.index(SetupLogColumn.SYMBOL.value) + 1
                 mh_idx = headers.index(SetupLogColumn.MAIN_HIGH_CROSSED.value) + 1
                 cl_idx = headers.index(SetupLogColumn.CORRECTION_LOW_CROSSED.value) + 1
+                cd_idx = headers.index(SetupLogColumn.CORRECTION_DEPTH_PCT.value) + 1
+                tm_idx = headers.index(SetupLogColumn.TIME_TO_MAIN_HIGH.value) + 1
+                outcome_idx = headers.index(SetupLogColumn.OUTCOME.value) + 1
             except ValueError:
                 return
             for row in ws.iter_rows(min_row=2):
@@ -86,18 +92,30 @@ class SetupLog:
                         row[mh_idx - 1].value = str(bool(main_high_crossed))
                     if correction_low_crossed is not None and row[cl_idx - 1].value in (None, ''):
                         row[cl_idx - 1].value = str(bool(correction_low_crossed))
+                    if correction_depth_pct is not None and row[cd_idx - 1].value in (None, ''):
+                        row[cd_idx - 1].value = float(correction_depth_pct)
+                    if time_to_main_high is not None and row[tm_idx - 1].value in (None, ''):
+                        row[tm_idx - 1].value = int(time_to_main_high)
+                    if outcome is not None and row[outcome_idx - 1].value in (None, ''):
+                        row[outcome_idx - 1].value = str(outcome)
                     break
             wb.save(self.file_path)
 
     def update_setup_row(self, timestamp: str, symbol: str,
                          main_high_crossed: bool | None = None,
-                         correction_low_crossed: bool | None = None) -> None:
+                         correction_low_crossed: bool | None = None,
+                         correction_depth_pct: float | None = None,
+                         time_to_main_high: int | None = None,
+                         outcome: str | None = None) -> None:
         self._executor.submit(
             self._update_row,
             timestamp,
             symbol,
             main_high_crossed,
             correction_low_crossed,
+            correction_depth_pct,
+            time_to_main_high,
+            outcome,
         )
 
     # noinspection PyBroadException
@@ -116,8 +134,9 @@ class SetupLog:
             sl_idx = headers.index(SetupLogColumn.SL.value)
             tp_idx = headers.index(SetupLogColumn.TP.value)
             tf_idx = headers.index(SetupLogColumn.TF.value)
-            mh_idx = headers.index(SetupLogColumn.MAIN_HIGH_CROSSED.value)
-            cl_idx = headers.index(SetupLogColumn.CORRECTION_LOW_CROSSED.value)
+            depth_idx = headers.index(SetupLogColumn.CORRECTION_DEPTH_PCT.value)
+            time_idx = headers.index(SetupLogColumn.TIME_TO_MAIN_HIGH.value)
+            outcome_idx = headers.index(SetupLogColumn.OUTCOME.value)
         except ValueError:
             return
 
@@ -126,9 +145,8 @@ class SetupLog:
             symbol = row[symbol_idx]
             if not ts_str or not symbol:
                 continue
-            main_val = row[mh_idx]
-            corr_val = row[cl_idx]
-            if main_val not in (None, '') and corr_val not in (None, ''):
+            outcome_val = row[outcome_idx]
+            if outcome_val not in (None, ''):
                 continue
             try:
                 pump_time = datetime.fromisoformat(ts_str)
@@ -144,24 +162,42 @@ class SetupLog:
                 tp_val = float(row[tp_idx])
             except (TypeError, ValueError):
                 continue
+            pump_range = tp_val - sl_val
+            if pump_range <= 0:
+                continue
             if datetime.now() - pump_time > timedelta(minutes=CROSS_MONITOR_HISTORY_BARS * tf.minutes):
                 continue
             bars = loader.fetch_ohlcvi(symbol, tf, limit=CROSS_MONITOR_HISTORY_BARS)
-            main_crossed = str(main_val).lower() == "true"
-            corr_crossed = str(corr_val).lower() == "true"
+            pump_level = tp_val + pump_range
+            dump_level = tp_val - 0.8 * pump_range
+            min_low = float('inf')
+            time_to_main = None
+            sl_crossed = False
+            outcome = None
             for b in bars:
                 if b.timestamp < pump_time:
                     continue
-                if not main_crossed and b.high >= tp_val:
-                    main_crossed = True
-                if not corr_crossed and b.low <= sl_val:
-                    corr_crossed = True
-            if (main_crossed and main_val in (None, '')) or (corr_crossed and corr_val in (None, '')):
+                min_low = min(min_low, b.low)
+                if b.low <= sl_val:
+                    sl_crossed = True
+                if time_to_main is None and b.high >= tp_val:
+                    time_to_main = int((b.timestamp - pump_time).total_seconds() // 60)
+                if b.high >= pump_level:
+                    outcome = 'pump'
+                    break
+                if b.low <= dump_level:
+                    outcome = 'dump'
+                    break
+            if outcome:
+                depth_pct = min(80.0, (tp_val - min_low) / pump_range * 100)
                 self.update_setup_row(
                     timestamp=ts_str,
                     symbol=symbol,
-                    main_high_crossed=main_crossed if main_val in (None, '') else None,
-                    correction_low_crossed=corr_crossed if corr_val in (None, '') else None,
+                    main_high_crossed=time_to_main is not None,
+                    correction_low_crossed=sl_crossed,
+                    correction_depth_pct=depth_pct,
+                    time_to_main_high=time_to_main if outcome == 'pump' else None,
+                    outcome=outcome,
                 )
 
     def start_monitor(self, loader: Loader, interval: int = 60) -> None:
