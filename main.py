@@ -40,7 +40,9 @@ def initialize_bot() -> None:
     """Placeholder for any initialization logic using ``CONFIG``."""
     api_keys = CONFIG.get("api_keys", {})
     print(f"Initializing bot with API keys: {list(api_keys.keys())}")
-    risk_control.configure(CONFIG.get("risk", {}))
+    risk_control.configure(
+        CONFIG.get("risk", {}), CONFIG.get("bot", {}).get("deposit_size")
+    )
 
 
 def start_processing_loops() -> None:

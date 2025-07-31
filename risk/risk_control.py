@@ -1,13 +1,15 @@
 """Basic risk management helpers.
 
-This module tracks position sizes, accumulated losses, and consecutive
-losing trades.  Trading can be paused when risk limits are violated.
+This module tracks position sizes, accumulated losses, outstanding
+positions, and consecutive losing trades. Trading can be paused when risk
+limits are violated and automatically resumed after a cooldown period.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Set
+from typing import Dict, Optional, Set
+import time
 
 
 @dataclass
@@ -17,31 +19,53 @@ class RiskLimits:
     max_position_size: float = float("inf")
     max_daily_loss: float = float("inf")
     max_consecutive_losses: int = float("inf")
+    max_open_positions: int = float("inf")
+    deposit_cap: float = float("inf")
 
 
 @dataclass
 class RiskState:
     """Runtime risk state tracked across trades."""
 
-    current_position: float = 0.0
+    total_notional: float = 0.0
     daily_loss: float = 0.0
     consecutive_losses: int = 0
     paused: bool = False
     open_symbols: Set[str] = field(default_factory=set)
+    open_positions: int = 0
+    pause_until: Optional[float] = None
 
 
 _limits = RiskLimits()
 _state = RiskState()
 
 
-def configure(config: Dict[str, float]) -> None:
-    """Configure risk limits from a dictionary."""
+def configure(config: Dict[str, float], deposit_size: Optional[float] = None) -> None:
+    """Configure risk limits from a dictionary.
+
+    Parameters
+    ----------
+    config:
+        Dictionary containing risk configuration values.
+    deposit_size:
+        Size of the trading account's deposit. Used to derive the absolute
+        deposit exposure limit from ``deposit_cap_pct`` if ``deposit_cap`` is
+        not specified directly.
+    """
 
     global _limits
+    deposit_cap = config.get("deposit_cap", float("inf"))
+    if deposit_cap is float("inf") and deposit_size is not None:
+        pct = config.get("deposit_cap_pct")
+        if pct is not None:
+            deposit_cap = pct * deposit_size
+
     _limits = RiskLimits(
         max_position_size=config.get("max_position_size", float("inf")),
         max_daily_loss=config.get("max_daily_loss", float("inf")),
         max_consecutive_losses=config.get("max_consecutive_losses", float("inf")),
+        max_open_positions=config.get("max_open_positions", float("inf")),
+        deposit_cap=deposit_cap,
     )
 
 
@@ -50,7 +74,11 @@ def can_open_position(quantity: float) -> bool:
 
     if _state.paused:
         return False
-    if _state.current_position + quantity > _limits.max_position_size:
+    if _state.open_positions >= _limits.max_open_positions:
+        return False
+    if _state.total_notional + quantity > _limits.deposit_cap:
+        return False
+    if _state.total_notional + quantity > _limits.max_position_size:
         return False
     if _state.daily_loss >= _limits.max_daily_loss:
         return False
@@ -58,9 +86,9 @@ def can_open_position(quantity: float) -> bool:
 
 
 def update_position(delta: float) -> None:
-    """Update the tracked position size by ``delta`` units."""
+    """Update the tracked notional exposure by ``delta`` units."""
 
-    _state.current_position = max(_state.current_position + delta, 0.0)
+    _state.total_notional = max(_state.total_notional + delta, 0.0)
 
 
 def is_symbol_open(symbol: str) -> bool:
@@ -73,12 +101,21 @@ def mark_symbol_open(symbol: str) -> None:
     """Record ``symbol`` as having an open position."""
 
     _state.open_symbols.add(symbol)
+    _state.open_positions = len(_state.open_symbols)
 
 
 def mark_symbol_closed(symbol: str) -> None:
     """Remove ``symbol`` from the set of open positions."""
 
     _state.open_symbols.discard(symbol)
+    _state.open_positions = len(_state.open_symbols)
+
+
+def pause(duration: Optional[float] = None) -> None:
+    """Pause trading for ``duration`` seconds or indefinitely."""
+
+    _state.paused = True
+    _state.pause_until = time.time() + duration if duration else None
 
 
 def record_pnl(pnl: float) -> None:
@@ -88,7 +125,7 @@ def record_pnl(pnl: float) -> None:
         _state.daily_loss += abs(pnl)
         _state.consecutive_losses += 1
         if _state.consecutive_losses >= _limits.max_consecutive_losses:
-            _state.paused = True
+            pause(24 * 3600)
     else:
         _state.consecutive_losses = 0
 
@@ -96,4 +133,8 @@ def record_pnl(pnl: float) -> None:
 def is_paused() -> bool:
     """Return ``True`` if trading is currently paused."""
 
+    if _state.paused and _state.pause_until and time.time() >= _state.pause_until:
+        _state.paused = False
+        _state.pause_until = None
+        _state.consecutive_losses = 0
     return _state.paused
