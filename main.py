@@ -10,6 +10,7 @@ import pandas as pd
 import schedule
 import yaml
 from dotenv import load_dotenv
+import ccxt
 from utils.ohlcv_fetcher import fetch_all_from_config
 
 
@@ -47,11 +48,7 @@ class TrendFilter:
         return data
 
 
-class RiskManager:
-    """Placeholder risk manager."""
-
-    def evaluate(self, data: Any) -> None:
-        logging.info("Evaluating risk")
+from utils.risk import RiskManager
 
 
 def load_config(path: str | Path = "config.yaml") -> dict:
@@ -77,7 +74,6 @@ def scan_and_enter() -> None:
     data = data_collector.collect()
     screened = screener.screen(data)
     trends = trend_filter.filter(screened)
-    risk_manager.evaluate(trends)
 
 
 def daily_equity_and_risk_check() -> None:
@@ -100,11 +96,20 @@ def main() -> None:
     api_secret = os.getenv("API_SECRET", config["api"]["api_secret"])
     logging.info("API credentials loaded")
 
+    def fetch_balance() -> float:
+        exchange = ccxt.binance({"apiKey": api_key, "secret": api_secret})
+        try:
+            balance = exchange.fetch_balance()
+            return balance["total"].get("USDT", 0.0)
+        except Exception:
+            logging.exception("Failed to fetch balance")
+            return 0.0
+
     global data_collector, screener, trend_filter, risk_manager
     data_collector = DataCollector(api_key, api_secret, config)
     screener = Screener()
     trend_filter = TrendFilter()
-    risk_manager = RiskManager()
+    risk_manager = RiskManager(fetch_balance)
 
     schedule.every(5).minutes.do(scan_and_enter)
     schedule.every().day.at("00:00").do(daily_equity_and_risk_check)
