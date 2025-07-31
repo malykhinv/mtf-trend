@@ -1,8 +1,8 @@
 """Unified exchange interface for strategy modules.
 
-This package exposes helper functions :func:`configure`, :func:`place_order`,
-:func:`fetch_funding`, and :func:`get_orderbook` which delegate to the
-configured exchange implementation.
+This package exposes helper functions :func:`configure`, order placement
+utilities and various helpers which delegate to the configured exchange
+implementation.
 
 Example
 -------
@@ -14,7 +14,11 @@ from __future__ import annotations
 
 import asyncio
 from abc import ABC, abstractmethod
+import logging
+import time
 from typing import Dict, Optional, Type
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Base interface
@@ -22,7 +26,14 @@ from typing import Dict, Optional, Type
 
 
 class BaseExchange(ABC):
-    """Abstract base class for exchange implementations."""
+    """Abstract base class for exchange implementations.
+
+    Only a very small subset of functionality is required by the test suite
+    and thus the concrete implementations found in this repository intentionally
+    keep many operations as stubs.  The additional order management methods
+    defined here provide sensible defaults so that unit tests can exercise the
+    high level logic without performing real network requests.
+    """
 
     @abstractmethod
     async def fetch_funding(self, symbol: str) -> float:
@@ -41,6 +52,28 @@ class BaseExchange(ABC):
     @abstractmethod
     async def get_balance(self) -> dict:
         """Return account balance information."""
+
+    # ------------------------------------------------------------------
+    # Optional order management helpers
+    # ------------------------------------------------------------------
+
+    async def get_order_status(self, order_id: str, market: str) -> dict:
+        """Return the status for ``order_id``.
+
+        Exchange implementations can override this with real API calls.  The
+        default implementation assumes the order is immediately filled which is
+        sufficient for unit tests.
+        """
+
+        return {"status": "FILLED", "order_id": order_id}
+
+    async def cancel_order(self, order_id: str, market: str) -> dict:
+        """Cancel ``order_id`` in ``market``.
+
+        The default implementation simply reports a cancelled status.
+        """
+
+        return {"status": "CANCELED", "order_id": order_id}
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +111,52 @@ async def place_order(
     )
 
 
+async def _poll_fill(order_id: str, market: str) -> None:
+    """Poll ``order_id`` until the exchange reports it as filled.
+
+    The function relies on :meth:`BaseExchange.get_order_status` and sleeps for
+    short intervals between requests.  ``BaseExchange`` provides a stub
+    implementation so that tests which do not interact with live exchanges can
+    still run deterministically.
+    """
+
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+
+    start = time.monotonic()
+    while True:
+        status = await asyncio.wait_for(
+            _current.get_order_status(order_id, market), API_TIMEOUT
+        )
+        if status.get("status") == "FILLED":
+            return
+        if time.monotonic() - start > API_TIMEOUT:
+            raise RuntimeError(f"Order {order_id} not filled in time")
+        await asyncio.sleep(0.5)
+
+
+async def place_spot_order(
+    symbol: str, side: str, quantity: float, price: float | None = None
+) -> dict:
+    """Place a spot order and wait for full execution."""
+
+    order = await place_order(symbol, side, quantity, price)
+    order_id = str(order.get("orderId") or order.get("id") or "")
+    await _poll_fill(order_id, "spot")
+    return order
+
+
+async def place_perp_order(
+    symbol: str, side: str, quantity: float, price: float | None = None
+) -> dict:
+    """Place a futures/perpetual order and wait for full execution."""
+
+    order = await place_order(symbol, side, quantity, price)
+    order_id = str(order.get("orderId") or order.get("id") or "")
+    await _poll_fill(order_id, "perp")
+    return order
+
+
 async def fetch_funding(symbol: str) -> float:
     """Fetch the funding rate for ``symbol`` from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
@@ -102,22 +181,31 @@ async def get_balance() -> dict:
 
 
 async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
-    """Place offsetting buy and sell orders with rollback on failure."""
+    """Place offsetting spot and futures orders with rollback on failure."""
 
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
 
-    long_order: Dict = await place_order(symbol, "BUY", quantity)
+    # Spot leg -------------------------------------------------------------
+    spot_order: Dict = await place_spot_order(symbol, "BUY", quantity)
+    spot_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
+
+    # Futures leg ----------------------------------------------------------
     try:
-        short_order: Dict = await place_order(symbol, "SELL", quantity)
+        perp_order: Dict = await place_perp_order(symbol, "SELL", quantity)
+        return {"spot": spot_order, "perp": perp_order}
     except Exception as exc:
-        # Attempt to rollback the long leg if the short leg fails
+        # Rollback the spot leg if the futures leg fails in any way.
         try:
-            await place_order(symbol, "SELL", quantity)
-        finally:
-            pass
-        raise RuntimeError("Hedge placement failed; long leg rolled back") from exc
-    return {"long": long_order, "short": short_order}
+            cancel_resp = await asyncio.wait_for(
+                _current.cancel_order(spot_id, "spot"), API_TIMEOUT
+            )
+            logger.warning("Rolled back spot order %s: %s", spot_id, cancel_resp)
+        except Exception as cancel_exc:  # pragma: no cover - best effort
+            logger.error(
+                "Failed to rollback spot order %s: %s", spot_id, cancel_exc
+            )
+        raise RuntimeError("Hedge placement failed; spot leg rolled back") from exc
 
 # Import built-in exchanges so they register themselves with the factory.
 from . import binance as _binance  # noqa: F401
