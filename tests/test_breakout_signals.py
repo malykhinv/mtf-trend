@@ -27,10 +27,11 @@ def test_long_breakout_signal():
     cluster = pd.DataFrame({"high": [102], "low": [98]})
     cvd = pd.Series([1, 2, 3, 4, 6], index=idx)
     oi = pd.Series([100, 102, 103, 105, 110], index=idx)
+    delta_oi = oi.diff().fillna(0)
     volume_stats = pd.Series({"avg_volume": 120})
     funding = 0.005
 
-    signals = evaluate_breakout(ohlcv, cluster, cvd, oi, volume_stats, funding)
+    signals = evaluate_breakout(ohlcv, cluster, cvd, delta_oi, volume_stats, funding)
     assert signals, "Expected a breakout signal"
     sig = signals[0]
     assert isinstance(sig, Signal)
@@ -56,11 +57,12 @@ def test_breakout_blocked_by_trend_filter():
     cluster = pd.DataFrame({"high": [102], "low": [98]})
     cvd = pd.Series([1, 2, 3, 4, 6], index=idx)
     oi = pd.Series([100, 102, 103, 105, 110], index=idx)
+    delta_oi = oi.diff().fillna(0)
     volume_stats = pd.Series({"avg_volume": 120})
     funding = 0.005
 
     # Trend filter should block this potential breakout
-    signals = evaluate_breakout(ohlcv, cluster, cvd, oi, volume_stats, funding)
+    signals = evaluate_breakout(ohlcv, cluster, cvd, delta_oi, volume_stats, funding)
     assert signals == []
 
 

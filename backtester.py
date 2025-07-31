@@ -80,6 +80,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     direction = np.where(change > 0, 1, np.where(change < 0, -1, 0))
     df["cvd"] = (direction * df["volume"].astype(float)).cumsum()
     df["oi"] = df.get("open_interest", pd.Series(0, index=df.index)).astype(float)
+    df["delta_oi"] = df["oi"].diff().fillna(0)
     df["avg_volume"] = df["volume"].rolling(20).mean()
     if "funding" not in df.columns:
         df["funding"] = 0.0
@@ -226,14 +227,14 @@ def run_backtest(
             continue
         level = clusters.iloc[[-1]][["high", "low"]]
         cvd_series = window["cvd"]
-        oi_series = window["oi"]
+        delta_oi_series = window["delta_oi"]
         volume_stats = pd.Series({"avg_volume": window["avg_volume"].iloc[-1]})
         funding = float(window["funding"].iloc[-1])
         signals = evaluate_breakout(
             window[["open", "high", "low", "close", "volume"]],
             level,
             cvd_series,
-            oi_series,
+            delta_oi_series,
             volume_stats,
             funding,
         )
