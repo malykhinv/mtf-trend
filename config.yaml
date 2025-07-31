@@ -4,9 +4,21 @@ api_keys:
 thresholds:
   buy_signal: 0.8
   sell_signal: 0.2
+  funding_rate: 0.0003
+  basis: 0.5
+  liquidity: 0.0
+  volume: 0.0
+  volatility: 1.0
+  open_interest: 0.0
+  min_trade_size: 0.0
+  max_trade_size: 1000.0
 risk:
   max_position_size: 1000
   max_daily_loss: 500
   max_consecutive_losses: 3
 bot:
   poll_interval: 5
+  whitelist:
+    - BTCUSDT
+    - ETHUSDT
+  deposit_size: 1000

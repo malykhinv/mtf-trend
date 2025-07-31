@@ -14,6 +14,7 @@ from typing import Dict
 from exchanges import fetch_funding, get_orderbook, hedge, place_order
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
+from main import CONFIG
 
 
 @dataclass
@@ -24,10 +25,16 @@ class MarketMetrics:
     spread: float
     liquidity: float
     volatility: float
+    spot_price: float
+    futures_price: float
+    volume: float
+    open_interest: float
+    slippage: float
+    basis: float
 
 
 async def get_market_metrics(symbol: str, depth: int = 5) -> MarketMetrics:
-    """Fetch funding, spread, liquidity and a naive volatility estimate.
+    """Fetch comprehensive market metrics for ``symbol``.
 
     Parameters
     ----------
@@ -43,27 +50,65 @@ async def get_market_metrics(symbol: str, depth: int = 5) -> MarketMetrics:
 
     if bids and asks:
         spread = asks[0][0] - bids[0][0]
-        mid = (asks[0][0] + bids[0][0]) / 2
-        volatility = spread / mid if mid else float("inf")
+        futures_price = (asks[0][0] + bids[0][0]) / 2
+        volatility = spread / futures_price if futures_price else float("inf")
+        slippage = spread / futures_price if futures_price else float("inf")
     else:
         spread = float("inf")
+        futures_price = float("nan")
         volatility = float("inf")
+        slippage = float("inf")
 
+    spot_price = float(orderbook.get("spot_price", futures_price))
+    volume = float(orderbook.get("volume", 0.0))
+    open_interest = float(orderbook.get("open_interest", 0.0))
     liquidity = sum(q for _, q in bids) + sum(q for _, q in asks)
-    return MarketMetrics(funding, spread, liquidity, volatility)
+    basis = (
+        ((futures_price - spot_price) / spot_price) * 100
+        if spot_price
+        else float("inf")
+    )
+
+    return MarketMetrics(
+        funding,
+        spread,
+        liquidity,
+        volatility,
+        spot_price,
+        futures_price,
+        volume,
+        open_interest,
+        slippage,
+        basis,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Condition checks
 # ---------------------------------------------------------------------------
 
-def check_entry_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) -> bool:
+def check_entry_conditions(
+    symbol: str,
+    quantity: float,
+    metrics: MarketMetrics,
+    thresholds: Dict[str, float],
+) -> bool:
     """Return ``True`` if all entry thresholds are satisfied."""
+
+    whitelist = CONFIG.get("bot", {}).get("whitelist", [])
+
     return (
         abs(metrics.funding_rate) >= thresholds.get("funding_rate", 0.0)
-        and metrics.spread <= thresholds.get("spread", float("inf"))
+        and metrics.basis <= thresholds.get("basis", float("inf"))
         and metrics.liquidity >= thresholds.get("liquidity", 0.0)
+        and metrics.volume >= thresholds.get("volume", 0.0)
         and metrics.volatility <= thresholds.get("volatility", float("inf"))
+        and metrics.open_interest <= thresholds.get("open_interest", float("inf"))
+        and thresholds.get("min_trade_size", 0.0)
+        <= quantity
+        <= thresholds.get("max_trade_size", float("inf"))
+        and symbol in whitelist
+        and not risk_control.is_symbol_open(symbol)
     )
 
 
@@ -88,6 +133,12 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     ``quantity`` units of ``symbol``.  Real-world usage should handle errors and
     slippage appropriately.
     """
+    bot_cfg = CONFIG.get("bot", {})
+    if symbol not in bot_cfg.get("whitelist", []):
+        raise RuntimeError("Symbol not whitelisted")
+    deposit = bot_cfg.get("deposit_size", float("inf"))
+    if quantity > deposit:
+        raise RuntimeError("Trade size exceeds deposit")
     if not risk_control.can_open_position(quantity) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
     orders = await hedge(symbol, quantity)
