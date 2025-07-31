@@ -78,7 +78,6 @@ class FuturesTrader:
         self, symbol: str, leverage: int = 3, margin_mode: str = "ISOLATED"
     ) -> None:
         """Ensure isolated margin and leverage for ``symbol``."""
-
         self._retry(self.exchange.set_margin_mode, margin_mode, symbol)
         self._retry(self.exchange.set_leverage, leverage, symbol)
 
@@ -93,9 +92,14 @@ class FuturesTrader:
     ) -> bool:
         """Place a MARKET order and optional TP/SL exits."""
 
-        self.set_margin_and_leverage(symbol)
-        order = self._retry(self.exchange.create_order, symbol, "market", side, amount)
-        filled_order = self.monitor_fill(order["id"], symbol)
+        try:
+            self.set_margin_and_leverage(symbol)
+            order = self._retry(
+                self.exchange.create_order, symbol, "market", side, amount
+            )
+            filled_order = self.monitor_fill(order["id"], symbol)
+        except ccxt.BaseError:
+            return False
         if filled_order:
             entry_price = float(
                 filled_order.get("average") or filled_order.get("price") or 0.0
@@ -141,12 +145,21 @@ class FuturesTrader:
     ) -> bool:
         """Place a LIMIT-MAKER order with optional TP/SL."""
 
-        self.set_margin_and_leverage(symbol)
-        params = {"timeInForce": "GTX"}
-        order = self._retry(
-            self.exchange.create_order, symbol, "limit", side, amount, price, params
-        )
-        filled_order = self.monitor_fill(order["id"], symbol)
+        try:
+            self.set_margin_and_leverage(symbol)
+            params = {"timeInForce": "GTX"}
+            order = self._retry(
+                self.exchange.create_order,
+                symbol,
+                "limit",
+                side,
+                amount,
+                price,
+                params,
+            )
+            filled_order = self.monitor_fill(order["id"], symbol)
+        except ccxt.BaseError:
+            return False
         if filled_order:
             entry_price = float(
                 filled_order.get("average") or filled_order.get("price") or price
@@ -188,7 +201,10 @@ class FuturesTrader:
 
         start = time.time()
         while time.time() - start < timeout:
-            order = self._retry(self.exchange.fetch_order, order_id, symbol)
+            try:
+                order = self._retry(self.exchange.fetch_order, order_id, symbol)
+            except ccxt.BaseError:
+                return None
             if order.get("status") == "closed":
                 return order
             time.sleep(1)
@@ -213,28 +229,34 @@ class FuturesTrader:
         sl_id: str | None = None
 
         if tp is not None:
-            tp_order = self._retry(
-                self.exchange.create_order,
-                symbol,
-                "limit",
-                opposite,
-                amount,
-                tp,
-                {"reduceOnly": True},
-            )
-            tp_id = tp_order.get("id")
+            try:
+                tp_order = self._retry(
+                    self.exchange.create_order,
+                    symbol,
+                    "limit",
+                    opposite,
+                    amount,
+                    tp,
+                    {"reduceOnly": True},
+                )
+                tp_id = tp_order.get("id")
+            except ccxt.BaseError:
+                return None
 
         if sl is not None:
-            sl_order = self._retry(
-                self.exchange.create_order,
-                symbol,
-                "stop",
-                opposite,
-                amount,
-                None,
-                {"stopPrice": sl, "reduceOnly": True},
-            )
-            sl_id = sl_order.get("id")
+            try:
+                sl_order = self._retry(
+                    self.exchange.create_order,
+                    symbol,
+                    "stop",
+                    opposite,
+                    amount,
+                    None,
+                    {"stopPrice": sl, "reduceOnly": True},
+                )
+                sl_id = sl_order.get("id")
+            except ccxt.BaseError:
+                return None
 
         if not tp_id and not sl_id:
             return None
@@ -243,21 +265,33 @@ class FuturesTrader:
             tp_status = None
             sl_status = None
             if tp_id:
-                tp_status = self._retry(self.exchange.fetch_order, tp_id, symbol).get(
-                    "status"
-                )
+                try:
+                    tp_status = self._retry(
+                        self.exchange.fetch_order, tp_id, symbol
+                    ).get("status")
+                except ccxt.BaseError:
+                    return None
             if sl_id:
-                sl_status = self._retry(self.exchange.fetch_order, sl_id, symbol).get(
-                    "status"
-                )
+                try:
+                    sl_status = self._retry(
+                        self.exchange.fetch_order, sl_id, symbol
+                    ).get("status")
+                except ccxt.BaseError:
+                    return None
 
             if tp_status == "closed":
                 if sl_id:
-                    self._retry(self.exchange.cancel_order, sl_id, symbol)
+                    try:
+                        self._retry(self.exchange.cancel_order, sl_id, symbol)
+                    except ccxt.BaseError:
+                        pass
                 return tp if tp is not None else None
             if sl_status == "closed":
                 if tp_id:
-                    self._retry(self.exchange.cancel_order, tp_id, symbol)
+                    try:
+                        self._retry(self.exchange.cancel_order, tp_id, symbol)
+                    except ccxt.BaseError:
+                        pass
                 return sl if sl is not None else None
             time.sleep(1)
 

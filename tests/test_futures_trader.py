@@ -108,3 +108,14 @@ def test_retry_on_network_error():
     # ensure fetch_order eventually called
     assert exchange.fetch_order_calls
 
+
+def test_market_order_network_failure():
+    class FailingExchange(DummyExchange):
+        def create_order(self, *args, **kwargs):  # type: ignore[override]
+            raise ccxt.NetworkError("timeout")
+
+    exchange = FailingExchange()
+    trader = FuturesTrader("key", "secret", exchange=exchange)
+
+    assert not trader.place_market_order("BTC/USDT", "buy", 1)
+
