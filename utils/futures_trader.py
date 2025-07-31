@@ -8,10 +8,13 @@ leverage.  It also monitors order fills, submits take-profit/stop-loss exit
 orders and retries API calls on transient network errors.
 """
 
-from typing import Callable, Optional
+from typing import Callable, Optional, Dict, Any
 import time
 
 import ccxt
+import pandas as pd
+
+from .trade_logger import append_trade
 
 
 class FuturesTrader:
@@ -34,6 +37,7 @@ class FuturesTrader:
         api_secret: str,
         exchange_name: str = "binanceusdm",
         exchange: Optional[ccxt.Exchange] = None,
+        trade_logger: Callable[[Dict[str, Any]], None] | None = append_trade,
     ) -> None:
         if exchange is None:
             exchange_class = getattr(ccxt, exchange_name)
@@ -46,6 +50,7 @@ class FuturesTrader:
                 }
             )
         self.exchange = exchange
+        self.trade_logger = trade_logger
 
     # ------------------------------------------------------------------
     # internal helpers
@@ -90,10 +95,39 @@ class FuturesTrader:
 
         self.set_margin_and_leverage(symbol)
         order = self._retry(self.exchange.create_order, symbol, "market", side, amount)
-        filled = self.monitor_fill(order["id"], symbol)
-        if filled:
-            self.manage_exit_orders(symbol, side, amount, tp, sl)
-        return filled
+        filled_order = self.monitor_fill(order["id"], symbol)
+        if filled_order:
+            entry_price = float(
+                filled_order.get("average") or filled_order.get("price") or 0.0
+            )
+            ts = filled_order.get("timestamp")
+            entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
+            exit_price = self.manage_exit_orders(symbol, side, amount, tp, sl)
+            if exit_price is not None and self.trade_logger:
+                direction = "long" if side.lower() == "buy" else "short"
+                pnl = (
+                    exit_price - entry_price
+                    if direction == "long"
+                    else entry_price - exit_price
+                )
+                risk = abs(entry_price - sl) if sl is not None else 0.0
+                rr = pnl / risk if risk else 0.0
+                self.trade_logger(
+                    {
+                        "symbol": symbol,
+                        "direction": direction,
+                        "entry_time": entry_time,
+                        "entry": entry_price,
+                        "stop": sl if sl is not None else 0.0,
+                        "tp": tp if tp is not None else 0.0,
+                        "exit_time": pd.Timestamp.utcnow(),
+                        "exit": exit_price,
+                        "pnl": pnl,
+                        "rr": rr,
+                    }
+                )
+            return True
+        return False
 
     # ------------------------------------------------------------------
     def place_limit_maker_order(
@@ -112,22 +146,53 @@ class FuturesTrader:
         order = self._retry(
             self.exchange.create_order, symbol, "limit", side, amount, price, params
         )
-        filled = self.monitor_fill(order["id"], symbol)
-        if filled:
-            self.manage_exit_orders(symbol, side, amount, tp, sl)
-        return filled
+        filled_order = self.monitor_fill(order["id"], symbol)
+        if filled_order:
+            entry_price = float(
+                filled_order.get("average") or filled_order.get("price") or price
+            )
+            ts = filled_order.get("timestamp")
+            entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
+            exit_price = self.manage_exit_orders(symbol, side, amount, tp, sl)
+            if exit_price is not None and self.trade_logger:
+                direction = "long" if side.lower() == "buy" else "short"
+                pnl = (
+                    exit_price - entry_price
+                    if direction == "long"
+                    else entry_price - exit_price
+                )
+                risk = abs(entry_price - sl) if sl is not None else 0.0
+                rr = pnl / risk if risk else 0.0
+                self.trade_logger(
+                    {
+                        "symbol": symbol,
+                        "direction": direction,
+                        "entry_time": entry_time,
+                        "entry": entry_price,
+                        "stop": sl if sl is not None else 0.0,
+                        "tp": tp if tp is not None else 0.0,
+                        "exit_time": pd.Timestamp.utcnow(),
+                        "exit": exit_price,
+                        "pnl": pnl,
+                        "rr": rr,
+                    }
+                )
+            return True
+        return False
 
     # ------------------------------------------------------------------
-    def monitor_fill(self, order_id: str, symbol: str, timeout: float = 30.0) -> bool:
+    def monitor_fill(
+        self, order_id: str, symbol: str, timeout: float = 30.0
+    ) -> Optional[Dict[str, Any]]:
         """Poll the exchange until ``order_id`` is filled or timed out."""
 
         start = time.time()
         while time.time() - start < timeout:
             order = self._retry(self.exchange.fetch_order, order_id, symbol)
             if order.get("status") == "closed":
-                return True
+                return order
             time.sleep(1)
-        return False
+        return None
 
     # ------------------------------------------------------------------
     def manage_exit_orders(
@@ -137,8 +202,11 @@ class FuturesTrader:
         amount: float,
         tp: float | None,
         sl: float | None,
-    ) -> None:
-        """Submit TP/SL orders and cancel the remaining when one fills."""
+    ) -> float | None:
+        """Submit TP/SL orders and cancel the remaining when one fills.
+
+        Returns the exit price when either TP or SL is hit, otherwise ``None``.
+        """
 
         opposite = "sell" if side.lower() == "buy" else "buy"
         tp_id: str | None = None
@@ -169,7 +237,7 @@ class FuturesTrader:
             sl_id = sl_order.get("id")
 
         if not tp_id and not sl_id:
-            return
+            return None
 
         while True:
             tp_status = None
@@ -186,10 +254,10 @@ class FuturesTrader:
             if tp_status == "closed":
                 if sl_id:
                     self._retry(self.exchange.cancel_order, sl_id, symbol)
-                break
+                return tp if tp is not None else None
             if sl_status == "closed":
                 if tp_id:
                     self._retry(self.exchange.cancel_order, tp_id, symbol)
-                break
+                return sl if sl is not None else None
             time.sleep(1)
 

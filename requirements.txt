@@ -4,3 +4,4 @@ schedule
 ccxt
 pandas
 matplotlib
+requests
