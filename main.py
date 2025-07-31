@@ -13,6 +13,11 @@ from dotenv import load_dotenv
 import ccxt
 from utils.ohlcv_fetcher import fetch_all_from_config
 from utils.trade_logger import daily_summary, send_telegram_message
+from utils.market_analysis import (
+    load_btc_eth_candles,
+    has_consecutive_move,
+    price_above_ema,
+)
 
 
 class DataCollector:
@@ -76,6 +81,23 @@ def scan_and_enter() -> None:
     screened = screener.screen(data)
     trends = trend_filter.filter(screened)
 
+    candles = load_btc_eth_candles()
+    btc = candles.get("BTC/USDT")
+    eth = candles.get("ETH/USDT")
+    btc_up = has_consecutive_move(btc, "up")
+    btc_down = has_consecutive_move(btc, "down")
+    eth_up = has_consecutive_move(eth, "up")
+    eth_down = has_consecutive_move(eth, "down")
+    btc_above = price_above_ema(btc)
+
+    global open_long, open_short
+    if open_long and (btc_down or eth_down or not btc_above):
+        logging.info("Conditions violated for long; cancelling long position")
+        open_long = False
+    if open_short and (btc_up or eth_up or btc_above):
+        logging.info("Conditions violated for short; cancelling short position")
+        open_short = False
+
 
 def daily_equity_and_risk_check() -> None:
     """Perform daily equity and risk checks and send summary."""
@@ -99,6 +121,8 @@ data_collector: Optional[DataCollector] = None
 screener: Optional[Screener] = None
 trend_filter: Optional[TrendFilter] = None
 risk_manager: Optional[RiskManager] = None
+open_long: bool = False
+open_short: bool = False
 
 def main() -> None:
     config = load_config()
