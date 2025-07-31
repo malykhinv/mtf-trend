@@ -1,3 +1,5 @@
 PyYAML
 python-dotenv
 schedule
+ccxt
+pandas

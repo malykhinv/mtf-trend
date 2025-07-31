@@ -6,13 +6,15 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import pandas as pd
 import schedule
 import yaml
 from dotenv import load_dotenv
+from utils.ohlcv_fetcher import fetch_all_from_config
 
 
 class DataCollector:
-    """Placeholder data collector."""
+    """Collect OHLCV data for configured symbols."""
 
     def __init__(self, api_key: str, api_secret: str, config: dict) -> None:
         self.api_key = api_key
@@ -20,7 +22,11 @@ class DataCollector:
         self.config = config
 
     def collect(self) -> Any:
+        """Fetch recent OHLCV data for all configured symbols."""
         logging.info("Collecting market data")
+        end = pd.Timestamp.utcnow()
+        start = end - pd.Timedelta(days=1)
+        fetch_all_from_config(self.config, start, end)
         return {}
 
 
