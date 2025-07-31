@@ -90,7 +90,12 @@ class FuturesTrader:
         tp: float | None = None,
         sl: float | None = None,
     ) -> bool:
-        """Place a MARKET order and optional TP/SL exits."""
+        """Place a MARKET order and optional TP/SL exits.
+
+        If ``tp`` is provided two take-profit targets are used: ``tp`` for
+        half the position size and a trailing stop for the remaining half. The
+        trailing stop is managed inside :meth:`manage_exit_orders`.
+        """
 
         try:
             self.set_margin_and_leverage(symbol)
@@ -106,30 +111,31 @@ class FuturesTrader:
             )
             ts = filled_order.get("timestamp")
             entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
-            exit_price = self.manage_exit_orders(symbol, side, amount, tp, sl)
-            if exit_price is not None and self.trade_logger:
+            exit_events = self.manage_exit_orders(symbol, side, amount, tp, sl)
+            if exit_events and self.trade_logger:
                 direction = "long" if side.lower() == "buy" else "short"
-                pnl = (
-                    exit_price - entry_price
-                    if direction == "long"
-                    else entry_price - exit_price
-                )
                 risk = abs(entry_price - sl) if sl is not None else 0.0
-                rr = pnl / risk if risk else 0.0
-                self.trade_logger(
-                    {
-                        "symbol": symbol,
-                        "direction": direction,
-                        "entry_time": entry_time,
-                        "entry": entry_price,
-                        "stop": sl if sl is not None else 0.0,
-                        "tp": tp if tp is not None else 0.0,
-                        "exit_time": pd.Timestamp.utcnow(),
-                        "exit": exit_price,
-                        "pnl": pnl,
-                        "rr": rr,
-                    }
-                )
+                for i, (exit_price, exit_time) in enumerate(exit_events):
+                    pnl = (
+                        exit_price - entry_price
+                        if direction == "long"
+                        else entry_price - exit_price
+                    )
+                    rr = pnl / risk if risk else 0.0
+                    self.trade_logger(
+                        {
+                            "symbol": symbol,
+                            "direction": direction,
+                            "entry_time": entry_time,
+                            "entry": entry_price,
+                            "stop": sl if sl is not None else 0.0,
+                            "tp": tp if (tp is not None and i == 0) else 0.0,
+                            "exit_time": exit_time,
+                            "exit": exit_price,
+                            "pnl": pnl,
+                            "rr": rr,
+                        }
+                    )
             return True
         return False
 
@@ -143,7 +149,11 @@ class FuturesTrader:
         tp: float | None = None,
         sl: float | None = None,
     ) -> bool:
-        """Place a LIMIT-MAKER order with optional TP/SL."""
+        """Place a LIMIT-MAKER order with optional TP/SL.
+
+        Behaviour is identical to :meth:`place_market_order` with respect to
+        take-profit handling.
+        """
 
         try:
             self.set_margin_and_leverage(symbol)
@@ -166,30 +176,31 @@ class FuturesTrader:
             )
             ts = filled_order.get("timestamp")
             entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
-            exit_price = self.manage_exit_orders(symbol, side, amount, tp, sl)
-            if exit_price is not None and self.trade_logger:
+            exit_events = self.manage_exit_orders(symbol, side, amount, tp, sl)
+            if exit_events and self.trade_logger:
                 direction = "long" if side.lower() == "buy" else "short"
-                pnl = (
-                    exit_price - entry_price
-                    if direction == "long"
-                    else entry_price - exit_price
-                )
                 risk = abs(entry_price - sl) if sl is not None else 0.0
-                rr = pnl / risk if risk else 0.0
-                self.trade_logger(
-                    {
-                        "symbol": symbol,
-                        "direction": direction,
-                        "entry_time": entry_time,
-                        "entry": entry_price,
-                        "stop": sl if sl is not None else 0.0,
-                        "tp": tp if tp is not None else 0.0,
-                        "exit_time": pd.Timestamp.utcnow(),
-                        "exit": exit_price,
-                        "pnl": pnl,
-                        "rr": rr,
-                    }
-                )
+                for i, (exit_price, exit_time) in enumerate(exit_events):
+                    pnl = (
+                        exit_price - entry_price
+                        if direction == "long"
+                        else entry_price - exit_price
+                    )
+                    rr = pnl / risk if risk else 0.0
+                    self.trade_logger(
+                        {
+                            "symbol": symbol,
+                            "direction": direction,
+                            "entry_time": entry_time,
+                            "entry": entry_price,
+                            "stop": sl if sl is not None else 0.0,
+                            "tp": tp if (tp is not None and i == 0) else 0.0,
+                            "exit_time": exit_time,
+                            "exit": exit_price,
+                            "pnl": pnl,
+                            "rr": rr,
+                        }
+                    )
             return True
         return False
 
@@ -218,15 +229,23 @@ class FuturesTrader:
         amount: float,
         tp: float | None,
         sl: float | None,
-    ) -> float | None:
-        """Submit TP/SL orders and cancel the remaining when one fills.
+    ) -> list[tuple[float, pd.Timestamp]]:
+        """Submit TP/SL orders and manage a trailing stop.
 
-        Returns the exit price when either TP or SL is hit, otherwise ``None``.
+        Two take-profit targets are supported: ``tp`` for 50% of the position
+        size and a trailing stop for the remaining half. A fixed ``sl`` can be
+        supplied which acts as the initial stop loss before the trailing stop
+        kicks in.  The function returns a list of ``(exit_price, exit_time)``
+        tuples for each filled exit order.
         """
 
         opposite = "sell" if side.lower() == "buy" else "buy"
         tp_id: str | None = None
         sl_id: str | None = None
+        events: list[tuple[float, pd.Timestamp]] = []
+        half_amount = amount / 2
+        trailing_step = 0.002
+        current_stop = sl if sl is not None else 0.0
 
         if tp is not None:
             try:
@@ -235,13 +254,13 @@ class FuturesTrader:
                     symbol,
                     "limit",
                     opposite,
-                    amount,
+                    half_amount,
                     tp,
                     {"reduceOnly": True},
                 )
                 tp_id = tp_order.get("id")
             except ccxt.BaseError:
-                return None
+                return events
 
         if sl is not None:
             try:
@@ -256,42 +275,134 @@ class FuturesTrader:
                 )
                 sl_id = sl_order.get("id")
             except ccxt.BaseError:
-                return None
+                return events
 
         if not tp_id and not sl_id:
-            return None
+            return events
+
+        tp_filled = False
+        highest: float | None = None
 
         while True:
             tp_status = None
             sl_status = None
-            if tp_id:
+            if tp_id and not tp_filled:
                 try:
                     tp_status = self._retry(
                         self.exchange.fetch_order, tp_id, symbol
                     ).get("status")
                 except ccxt.BaseError:
-                    return None
+                    return events
             if sl_id:
                 try:
                     sl_status = self._retry(
                         self.exchange.fetch_order, sl_id, symbol
                     ).get("status")
                 except ccxt.BaseError:
-                    return None
+                    return events
 
-            if tp_status == "closed":
+            if not tp_filled and tp_status == "closed":
+                events.append((tp if tp is not None else 0.0, pd.Timestamp.utcnow()))
+                tp_filled = True
+                # replace stop for remaining half
                 if sl_id:
                     try:
                         self._retry(self.exchange.cancel_order, sl_id, symbol)
                     except ccxt.BaseError:
                         pass
-                return tp if tp is not None else None
-            if sl_status == "closed":
-                if tp_id:
+                if sl is not None:
+                    try:
+                        sl_order = self._retry(
+                            self.exchange.create_order,
+                            symbol,
+                            "stop",
+                            opposite,
+                            half_amount,
+                            None,
+                            {"stopPrice": sl, "reduceOnly": True},
+                        )
+                        sl_id = sl_order.get("id")
+                        current_stop = sl
+                    except ccxt.BaseError:
+                        return events
+                try:
+                    ticker = self._retry(self.exchange.fetch_ticker, symbol)
+                    price = float(ticker.get("last") or 0.0)
+                except ccxt.BaseError:
+                    price = 0.0
+                highest = price
+            elif sl_status == "closed":
+                if tp_id and not tp_filled:
                     try:
                         self._retry(self.exchange.cancel_order, tp_id, symbol)
                     except ccxt.BaseError:
                         pass
-                return sl if sl is not None else None
-            time.sleep(1)
+                events.append((current_stop, pd.Timestamp.utcnow()))
+                return events
+
+            if tp_filled and sl_id:
+                try:
+                    ticker = self._retry(self.exchange.fetch_ticker, symbol)
+                    price = float(ticker.get("last") or 0.0)
+                except ccxt.BaseError:
+                    price = highest if highest is not None else 0.0
+
+                if side.lower() == "buy":
+                    if highest is None or price > highest:
+                        highest = price
+                    new_stop = (highest or price) * (1 - trailing_step)
+                    if new_stop > current_stop:
+                        try:
+                            self._retry(self.exchange.cancel_order, sl_id, symbol)
+                        except ccxt.BaseError:
+                            pass
+                        try:
+                            sl_order = self._retry(
+                                self.exchange.create_order,
+                                symbol,
+                                "stop",
+                                opposite,
+                                half_amount,
+                                None,
+                                {"stopPrice": new_stop, "reduceOnly": True},
+                            )
+                            sl_id = sl_order.get("id")
+                            current_stop = new_stop
+                        except ccxt.BaseError:
+                            return events
+                else:
+                    if highest is None or price < highest:
+                        highest = price
+                    new_stop = (highest or price) * (1 + trailing_step)
+                    if sl is not None and new_stop < current_stop:
+                        try:
+                            self._retry(self.exchange.cancel_order, sl_id, symbol)
+                        except ccxt.BaseError:
+                            pass
+                        try:
+                            sl_order = self._retry(
+                                self.exchange.create_order,
+                                symbol,
+                                "stop",
+                                opposite,
+                                half_amount,
+                                None,
+                                {"stopPrice": new_stop, "reduceOnly": True},
+                            )
+                            sl_id = sl_order.get("id")
+                            current_stop = new_stop
+                        except ccxt.BaseError:
+                            return events
+
+                try:
+                    sl_status = self._retry(
+                        self.exchange.fetch_order, sl_id, symbol
+                    ).get("status")
+                except ccxt.BaseError:
+                    return events
+                if sl_status == "closed":
+                    events.append((current_stop, pd.Timestamp.utcnow()))
+                    return events
+
+            time.sleep(0.1)
 
