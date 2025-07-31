@@ -27,9 +27,9 @@ import pandas as pd
 class Genome:
     """Container for strategy parameters."""
 
-    cluster_width: int  # lookback for recent range calculation
-    candle_depth: int   # lookback for volume averages
-    sl: float           # stop-loss multiple of the range
+    cluster_width: float  # width of recent range as % of price
+    candle_depth: int     # lookback for volume averages
+    sl: float             # stop-loss fraction of the range
     tp1_rr: float       # risk-reward for first take profit
     tp2_rr: float       # risk-reward for second take profit
     ema_short: int      # short EMA period
@@ -40,15 +40,15 @@ class Genome:
 
 # Parameter boundaries used for random initialization and mutation
 BOUNDS = {
-    "cluster_width": (5, 50),
-    "candle_depth": (5, 50),
-    "sl": (0.5, 3.0),
-    "tp1_rr": (0.5, 3.0),
-    "tp2_rr": (1.0, 6.0),
-    "ema_short": (5, 50),
-    "ema_long": (10, 200),
-    "delta_volume_spike": (1.0, 5.0),
-    "cvd_ema": (1, 20),
+    "cluster_width": (0.3, 1.5),
+    "candle_depth": (10, 30),
+    "sl": (0.2, 0.6),
+    "tp1_rr": (1.2, 2.0),
+    "tp2_rr": (2.5, 5.0),
+    "ema_short": (5, 15),
+    "ema_long": (10, 30),
+    "delta_volume_spike": (1.2, 3.0),
+    "cvd_ema": (2, 5),
 }
 
 
@@ -57,7 +57,7 @@ def random_genome() -> Genome:
 
     while True:
         g = Genome(
-            cluster_width=random.randint(*BOUNDS["cluster_width"]),
+            cluster_width=random.uniform(*BOUNDS["cluster_width"]),
             candle_depth=random.randint(*BOUNDS["candle_depth"]),
             sl=random.uniform(*BOUNDS["sl"]),
             tp1_rr=random.uniform(*BOUNDS["tp1_rr"]),
@@ -121,10 +121,7 @@ def evaluate(genome: Genome, data: pd.DataFrame) -> float:
     df = data.copy()
     df["ema_short"] = df["close"].ewm(span=genome.ema_short).mean()
     df["ema_long"] = df["close"].ewm(span=genome.ema_long).mean()
-    df["range"] = (
-        df["close"].rolling(genome.cluster_width).max()
-        - df["close"].rolling(genome.cluster_width).min()
-    )
+    df["range"] = df["close"] * (genome.cluster_width / 100.0)
     df["avg_volume"] = df["volume"].rolling(genome.candle_depth).mean()
     df["volume_spike"] = df["volume"] > (genome.delta_volume_spike * df["avg_volume"])
 
