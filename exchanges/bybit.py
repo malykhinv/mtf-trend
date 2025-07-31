@@ -61,6 +61,19 @@ class BybitExchange(BaseExchange):
             data = await resp.json()
         return float(data["result"]["list"][0]["fundingRate"])
 
+    async def fetch_funding_history(
+        self, symbol: str, hours: int = 8, limit: int = 3
+    ) -> list[float]:
+        session = await self._session_get()
+        url = f"{self.REST_URL}/v5/market/funding/history"
+        end_time = int(time.time() * 1000)
+        start_time = end_time - hours * 3600 * 1000
+        params = {"symbol": symbol, "startTime": start_time, "endTime": end_time, "limit": limit}
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+        records = data.get("result", {}).get("list", [])
+        return [float(item.get("fundingRate", 0.0)) for item in records]
+
     async def place_order(
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
@@ -87,6 +100,22 @@ class BybitExchange(BaseExchange):
         params = self._sign("GET", url_path, {"accountType": "UNIFIED"})
         async with session.get(url, params=params) as resp:
             return await resp.json()
+
+    async def get_stats(self, symbol: str) -> dict:
+        session = await self._session_get()
+        ticker_url = f"{self.REST_URL}/v5/market/tickers"
+        t_params = {"category": "linear", "symbol": symbol}
+        async with session.get(ticker_url, params=t_params) as resp:
+            ticker = await resp.json()
+        tick = (ticker.get("result", {}).get("list") or [{}])[0]
+        volume = float(tick.get("turnover24h", 0.0))
+        oi_url = f"{self.REST_URL}/v5/market/open-interest"
+        oi_params = {"category": "linear", "symbol": symbol}
+        async with session.get(oi_url, params=oi_params) as resp:
+            oi = await resp.json()
+        oi_list = oi.get("result", {}).get("list") or [{}]
+        open_interest = float(oi_list[0].get("openInterest", 0.0))
+        return {"volume_24h": volume, "open_interest": open_interest}
 
     # ------------------------------------------------------------------
     # WebSocket handling

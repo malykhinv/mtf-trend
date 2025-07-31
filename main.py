@@ -135,7 +135,7 @@ def start_processing_loops() -> None:
                     if risk_control.is_paused() or risk_control.is_symbol_open(symbol):
                         continue
                     try:
-                        metrics = await strategy.get_market_metrics(symbol)
+                        metrics = await strategy.get_market_metrics(symbol, quantity)
                     except Exception as exc:
                         print(f"Metrics error {name} {symbol}: {exc}")
                         continue
