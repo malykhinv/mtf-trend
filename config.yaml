@@ -1,0 +1,11 @@
+api_keys:
+  binance: YOUR_BINANCE_API_KEY
+  secret: YOUR_BINANCE_SECRET
+thresholds:
+  buy_signal: 0.8
+  sell_signal: 0.2
+risk:
+  max_position_size: 1000
+  max_daily_loss: 500
+bot:
+  poll_interval: 5
