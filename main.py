@@ -20,6 +20,9 @@ from utils.market_analysis import (
 )
 from utils.cvd import get_cvd
 from utils.futures_screener import screen_futures
+from utils.range_clusters import find_tight_range_clusters
+from utils.breakout_signals import evaluate_breakout
+from utils.futures_trader import FuturesTrader
 
 
 class DataCollector:
@@ -216,8 +219,62 @@ def scan_and_enter() -> None:
     if open_short and (btc_up or eth_up or btc_above):
         logging.info("Conditions violated for short; cancelling short position")
         open_short = False
+    if not risk_manager or not trader:
+        return
 
-
+    for symbol, info in filtered_data.items():
+        ohlcv = info.get("ohlcv")
+        if ohlcv is None or ohlcv.empty:
+            continue
+        ohlcv = ohlcv.copy()
+        if "timestamp" in ohlcv.columns:
+            ohlcv["timestamp"] = pd.to_datetime(ohlcv["timestamp"])
+            ohlcv = ohlcv.set_index("timestamp")
+        clusters = find_tight_range_clusters(
+            ohlcv.reset_index()[["timestamp", "high", "low", "close"]],
+            atr_multiplier=2.0,
+            min_bars=5,
+        )
+        if clusters.empty:
+            continue
+        levels = clusters.iloc[[-1]][["high", "low"]]
+        cvd = info.get("cvd", pd.Series(dtype="float64"))
+        cvd = cvd.reindex(ohlcv.index).fillna(method="ffill").fillna(0)
+        oi_val = float(info.get("open_interest", 0.0))
+        oi = pd.Series([oi_val] * len(ohlcv), index=ohlcv.index)
+        funding = float(info.get("funding_rate", 0.0))
+        signals = evaluate_breakout(
+            ohlcv[["open", "high", "low", "close", "volume"]],
+            levels,
+            cvd,
+            oi,
+            pd.Series(dtype="float64"),
+            funding,
+        )
+        if not signals or not risk_manager.can_open_trade():
+            continue
+        sig = signals[0]
+        try:
+            size = risk_manager.open_trade(sig.entry, sig.stop)
+        except ValueError:
+            continue
+        side = "buy" if sig.direction == "long" else "sell"
+        executed = trader.place_limit_maker_order(
+            symbol, side, size, sig.entry, tp=sig.tp1, sl=sig.stop
+        )
+        if not executed:
+            executed = trader.place_market_order(
+                symbol, side, size, tp=sig.tp1, sl=sig.stop
+            )
+        if not executed:
+            risk_manager.close_trade(0.0)
+            continue
+        if sig.direction == "long":
+            open_long = True
+            open_short = False
+        else:
+            open_short = True
+            open_long = False
 def daily_equity_and_risk_check() -> None:
     """Perform daily equity and risk checks and send summary."""
     logging.info("Running daily equity and risk checks")
@@ -240,6 +297,7 @@ data_collector: Optional[DataCollector] = None
 screener: Optional[Screener] = None
 trend_filter: Optional[TrendFilter] = None
 risk_manager: Optional[RiskManager] = None
+trader: Optional[FuturesTrader] = None
 open_long: bool = False
 open_short: bool = False
 selected_symbols: list[str] = []
@@ -262,13 +320,18 @@ def main() -> None:
             logging.exception("Failed to fetch balance")
             return 0.0
 
-    global data_collector, screener, trend_filter, risk_manager
+    global data_collector, screener, trend_filter, risk_manager, trader
     data_collector = DataCollector(api_key, api_secret, config)
     screener = Screener(
         exchange_name=config.get("api", {}).get("futures_exchange", "binanceusdm")
     )
     trend_filter = TrendFilter()
     risk_manager = RiskManager(fetch_balance)
+    trader = FuturesTrader(
+        api_key,
+        api_secret,
+        exchange_name=config.get("api", {}).get("futures_exchange", "binanceusdm"),
+    )
 
     schedule.every(5).minutes.do(scan_and_enter)
     schedule.every().day.at("00:00").do(daily_equity_and_risk_check)
