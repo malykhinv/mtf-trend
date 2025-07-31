@@ -26,14 +26,14 @@ class RiskManager:
         trading is halted (default 5%).
     max_consecutive_losses:
         Number of consecutive losing trades before trading is halted
-        (default 3).
+        (default 5).
     """
 
     balance_fetcher: Callable[[], float]
     risk_per_trade_pct: float = 0.01
     max_open_risk_pct: float = 0.10
     daily_drawdown_pct: float = 0.05
-    max_consecutive_losses: int = 3
+    max_consecutive_losses: int = 5
     db_path: str | Path = "risk_state.db"
 
     open_positions: List[float] = field(default_factory=list)
