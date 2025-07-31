@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from config.constants import IS_TRADING_ENABLED
+from config.constants import IS_TRADING_ENABLED, ACTIVE_SETUP_TIMEOUT_MINUTES, TIMEZONE
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
@@ -20,7 +20,6 @@ from services.position_tracker_service import PositionTrackerService
 from services.trade_executor import TradeExecutor
 from domain.models.update_details import UpdateDetails
 from domain.models.active_setup import ActiveSetup
-from config.constants import ACTIVE_SETUP_TIMEOUT_MINUTES
 from utils.logger import log, logw
 from utils.plot import Plot
 from services.setup_recorder import SetupLog
@@ -195,7 +194,7 @@ class Scanner:
                 symbol=signal.symbol,
                 tfs=tfs,
                 pump_start_time=signal.timestamp,
-                last_checked=datetime.now()
+                last_checked=datetime.now(tz=TIMEZONE)
             )
 
     def _send_signal(self, signal: SetupSignal, message: str, image_path: str) -> tuple[int | None, bool]:
@@ -252,7 +251,7 @@ class Scanner:
                 self._recheck_setup(symbol, active)
 
     def _recheck_setup(self, symbol: str, active_setup: ActiveSetup) -> None:
-        if datetime.now() - active_setup.pump_start_time > timedelta(minutes=ACTIVE_SETUP_TIMEOUT_MINUTES):
+        if datetime.now(tz=TIMEZONE) - active_setup.pump_start_time > timedelta(minutes=ACTIVE_SETUP_TIMEOUT_MINUTES):
             with self._lock:
                 self._active_setups.pop(symbol, None)
             return
@@ -294,7 +293,7 @@ class Scanner:
             with self._lock:
                 self._active_setups.pop(symbol, None)
         else:
-            active_setup.last_checked = datetime.now()
+            active_setup.last_checked = datetime.now(tz=TIMEZONE)
 
 
 
