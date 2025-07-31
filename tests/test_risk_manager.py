@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from utils.risk import RiskManager
@@ -92,3 +94,23 @@ def test_state_persistence(tmp_path):
 
     rm3 = RiskManager(fetch_balance, max_consecutive_losses=2, db_path=db)
     assert rm3.trading_halted
+
+
+def test_max_open_trades_limit(tmp_path):
+    balance = 1000.0
+
+    def fetch_balance():
+        return balance
+
+    rm = RiskManager(fetch_balance, max_open_trades=2, db_path=tmp_path / "state.db")
+    rm.open_trade(100, 90)
+    rm.open_trade(100, 90)
+    assert rm.open_trades == 2
+    assert not rm.can_open_trade()
+    with pytest.raises(ValueError):
+        rm.open_trade(100, 90)
+    rm.close_trade(10)
+    assert rm.open_trades == 1
+    assert rm.can_open_trade()
+    rm.open_trade(100, 90)
+    assert rm.open_trades == 2

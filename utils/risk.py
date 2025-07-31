@@ -27,6 +27,9 @@ class RiskManager:
     max_consecutive_losses:
         Number of consecutive losing trades before trading is halted
         (default 5).
+    max_open_trades:
+        Maximum number of concurrent open trades allowed. ``None`` means no
+        limit.
     """
 
     balance_fetcher: Callable[[], float]
@@ -34,9 +37,11 @@ class RiskManager:
     max_open_risk_pct: float = 0.10
     daily_drawdown_pct: float = 0.05
     max_consecutive_losses: int = 5
+    max_open_trades: int | None = None
     db_path: str | Path = "risk_state.db"
 
     open_positions: List[float] = field(default_factory=list)
+    open_trades: int = 0
     consecutive_losses: int = 0
     daily_start_balance: float | None = None
     trading_halted: bool = False
@@ -46,6 +51,7 @@ class RiskManager:
         self.db_path = Path(self.db_path)
         self._init_db()
         self._load_state()
+        self.open_trades = len(self.open_positions)
 
     # ------------------------------------------------------------------
     # database helpers
@@ -137,6 +143,8 @@ class RiskManager:
         self._ensure_daily_reset()
         if self.trading_halted:
             return False
+        if self.max_open_trades is not None and self.open_trades >= self.max_open_trades:
+            return False
         balance = self._get_balance()
         return self.open_risk < balance * self.max_open_risk_pct
 
@@ -151,6 +159,7 @@ class RiskManager:
             raise ValueError("Open risk would exceed limit")
         size = self.position_size(entry, stop, risk=risk)
         self.open_positions.append(risk)
+        self.open_trades += 1
         self._save_state()
         return size
 
@@ -160,6 +169,8 @@ class RiskManager:
         if self.open_positions:
             # Remove risk for the oldest open position
             self.open_positions.pop(0)
+            if self.open_trades > 0:
+                self.open_trades -= 1
         balance = self._get_balance()
         # Update consecutive losses
         if pnl < 0:
