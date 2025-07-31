@@ -5,11 +5,11 @@ import main
 
 
 class Dummy:
-    def collect(self):
+    def collect(self, symbols=None):
         return {}
 
-    def screen(self, data):
-        return data
+    def screen(self):
+        return []
 
 
 class DummyFilter:
