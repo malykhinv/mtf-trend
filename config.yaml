@@ -8,6 +8,7 @@ thresholds:
   basis: 0.5
   liquidity: 0.0
   volume: 0.0
+  holding_time: 172800
   volatility: 1.0
   open_interest: 0.0
   min_trade_size: 0.0
