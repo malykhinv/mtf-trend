@@ -7,6 +7,7 @@ from domain.models.confidence import Confidence
 from domain.models.side import Side
 from domain.models.swing_point import SwingPoint
 from domain.models.trendline import Trendline
+from utils.float_utils import is_defined
 
 
 @dataclass
@@ -34,7 +35,10 @@ class SetupSignal:
         """
         True, если сигнал достаточно надёжен и подходит для генерации торговой заявки (стоп/тейк не пустые, уровень strong).
         """
-        return self.confidence.is_strong and self.tp is not None and self.sl is not None
+        return (
+            self.confidence.is_strong
+            and is_defined(self.tp, self.sl)
+        )
 
     @property
     def is_event_signal(self) -> bool:
