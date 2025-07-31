@@ -3,9 +3,9 @@ from __future__ import annotations
 """Breakout evaluation utilities.
 
 This module provides a function to evaluate breakout conditions using
-market data, cluster levels, cumulative volume delta (CVD), open interest
-(OI) and volume statistics.  The resulting signals describe potential
-trades with entry, stop and take profit levels.
+market data, cluster levels, cumulative volume delta (CVD), changes in
+open interest (ΔOI) and volume statistics.  The resulting signals
+describe potential trades with entry, stop and take profit levels.
 """
 
 from dataclasses import dataclass
@@ -67,7 +67,7 @@ def evaluate_breakout(
     ohlcv: pd.DataFrame,
     cluster_levels: pd.DataFrame,
     cvd: pd.Series,
-    oi: pd.Series,
+    delta_oi: pd.Series,
     volume_stats: pd.Series,
     funding: float,
     *,
@@ -88,8 +88,9 @@ def evaluate_breakout(
         columns.
     cvd:
         Cumulative volume delta series aligned with ``ohlcv``.
-    oi:
-        Open interest series aligned with ``ohlcv``.
+    delta_oi:
+        Change in open interest aligned with ``ohlcv``. Positive values
+        indicate increasing participation.
     volume_stats:
         Deprecated.  Retained for backward compatibility but ignored.
     funding:
@@ -135,9 +136,8 @@ def evaluate_breakout(
     funding_ok_long = funding <= funding_limit
     funding_ok_short = funding >= -funding_limit
 
-    delta_oi = oi.diff().iloc[-1]
-    oi_ok_long = delta_oi >= delta_oi_thresh
-    oi_ok_short = delta_oi <= -delta_oi_thresh
+    delta_oi_last = delta_oi.iloc[-1] if not delta_oi.empty else 0.0
+    oi_ok = delta_oi_last > delta_oi_thresh
 
     cvd_smoothed = cvd.ewm(span=3, adjust=False).mean()
     cvd_delta = cvd_smoothed.diff().iloc[-1]
@@ -152,7 +152,7 @@ def evaluate_breakout(
         and vol_ok
         and ema_bull
         and funding_ok_long
-        and oi_ok_long
+        and oi_ok
         and cvd_ok_long
         and allow_long(df)
     ):
@@ -175,7 +175,7 @@ def evaluate_breakout(
         and vol_ok
         and ema_bear
         and funding_ok_short
-        and oi_ok_short
+        and oi_ok
         and cvd_ok_short
         and allow_short(df)
     ):

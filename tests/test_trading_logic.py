@@ -72,7 +72,8 @@ def test_scan_and_enter_executes_long(monkeypatch):
         "ohlcv": ohlcv,
         "cvd": cvd,
         "volume_delta": 0.0,
-        "open_interest": 10.0,
+        "open_interest": pd.Series([10, 11], index=timestamps),
+        "delta_oi": pd.Series([0, 1], index=timestamps),
         "funding_rate": 0.0,
     }
     main.data_collector = DummyCollector({symbol: info})
@@ -91,7 +92,7 @@ def test_scan_and_enter_executes_long(monkeypatch):
     monkeypatch.setattr(
         main,
         "evaluate_breakout",
-        lambda ohlcv, level, cvd, oi, volume_stats, funding: [Signal("long", 101, 99, 103, 105)],
+        lambda ohlcv, level, cvd, delta_oi, volume_stats, funding: [Signal("long", 101, 99, 103, 105)],
     )
 
     main.open_long = False

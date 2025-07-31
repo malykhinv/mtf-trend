@@ -69,16 +69,42 @@ class DataCollector:
                 vol_delta = 0.0
 
             try:
-                oi_info = self.exchange.fetch_open_interest(symbol)
-                open_interest = float(
-                    oi_info.get("openInterestAmount")
-                    or oi_info.get("openInterest")
-                    or oi_info.get("openInterestValue")
-                    or 0.0
+                limit = len(df) if not df.empty else 100
+                oi_hist = self.exchange.fetch_open_interest_history(
+                    symbol, timeframe="5m", limit=limit
                 )
+                oi_df = pd.DataFrame(oi_hist)
+                if not oi_df.empty:
+                    oi_df["timestamp"] = pd.to_datetime(oi_df["timestamp"], unit="ms")
+                    oi_col = next(
+                        (
+                            c
+                            for c in [
+                                "openInterest",
+                                "openInterestAmount",
+                                "openInterestValue",
+                            ]
+                            if c in oi_df.columns
+                        ),
+                        None,
+                    )
+                    if oi_col is not None:
+                        oi_series = oi_df.set_index("timestamp")[oi_col].astype(float)
+                        if not df.empty:
+                            oi_series = oi_series.reindex(df["timestamp"]).fillna(method="ffill")
+                        delta_oi = oi_series.diff().fillna(0)
+                    else:
+                        oi_series = pd.Series(dtype="float64")
+                        delta_oi = pd.Series(dtype="float64")
+                else:
+                    oi_series = pd.Series(dtype="float64")
+                    delta_oi = pd.Series(dtype="float64")
             except Exception:
-                logging.exception("Failed to fetch open interest for %s", symbol)
-                open_interest = 0.0
+                logging.exception(
+                    "Failed to fetch open interest history for %s", symbol
+                )
+                oi_series = pd.Series(dtype="float64")
+                delta_oi = pd.Series(dtype="float64")
 
             try:
                 fr = self.exchange.fetch_funding_rate(symbol)
@@ -94,7 +120,8 @@ class DataCollector:
                 "ohlcv": df,
                 "cvd": cvd,
                 "volume_delta": vol_delta,
-                "open_interest": open_interest,
+                "open_interest": oi_series,
+                "delta_oi": delta_oi,
                 "funding_rate": funding_rate,
             }
 
@@ -236,14 +263,14 @@ def scan_and_enter() -> None:
         levels = clusters.iloc[[-1]][["high", "low"]]
         cvd = info.get("cvd", pd.Series(dtype="float64"))
         cvd = cvd.reindex(ohlcv.index).fillna(method="ffill").fillna(0)
-        oi_val = float(info.get("open_interest", 0.0))
-        oi = pd.Series([oi_val] * len(ohlcv), index=ohlcv.index)
+        delta_oi = info.get("delta_oi", pd.Series(dtype="float64"))
+        delta_oi = delta_oi.reindex(ohlcv.index).fillna(0)
         funding = float(info.get("funding_rate", 0.0))
         signals = evaluate_breakout(
             ohlcv[["open", "high", "low", "close", "volume"]],
             levels,
             cvd,
-            oi,
+            delta_oi,
             pd.Series(dtype="float64"),
             funding,
         )
