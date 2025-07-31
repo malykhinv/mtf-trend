@@ -96,9 +96,11 @@ def evaluate_breakout(
     funding:
         Current funding rate.  Positive values indicate longs pay shorts.
     volume_spike:
-        Deprecated.  Average volume is computed from the last 15 periods and
-        a spike is considered when the current volume exceeds 1.5× that
-        average and the change exceeds two standard deviations.
+        Multiplier applied to both the average volume and the standard
+        deviation of volume changes.  A volume spike is detected when the
+        latest volume exceeds ``volume_spike`` × the rolling average and the
+        change in volume exceeds ``volume_spike`` × the rolling standard
+        deviation.
     ema_short, ema_long:
         Spans for the short and long exponential moving averages (typically
         5–15 and 10–30 respectively).
@@ -128,7 +130,9 @@ def evaluate_breakout(
     vol_delta = df["volume"].diff().iloc[-1]
     if pd.isna(avg_volume) or pd.isna(vol_sigma) or pd.isna(vol_delta):
         return []
-    vol_ok = (last["volume"] > 1.5 * avg_volume) and (vol_delta > 2 * vol_sigma)
+    vol_ok = (last["volume"] > volume_spike * avg_volume) and (
+        vol_delta > volume_spike * vol_sigma
+    )
 
     ema_bull = last["ema_short"] > last["ema_long"]
     ema_bear = last["ema_short"] < last["ema_long"]

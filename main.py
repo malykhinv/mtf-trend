@@ -225,8 +225,15 @@ def init_logging(log_dir: str | Path) -> None:
     )
 
 
-def scan_and_enter() -> None:
-    """Run periodic scanning and entry logic."""
+def scan_and_enter(volume_spike: float = 2.0) -> None:
+    """Run periodic scanning and entry logic.
+
+    Parameters
+    ----------
+    volume_spike:
+        Multiplier applied to volume statistics when generating breakout
+        signals.
+    """
     logging.info("Running scan and entry logic")
     symbols = screener.screen()[:10]
     data = data_collector.collect(symbols)
@@ -264,6 +271,7 @@ def scan_and_enter() -> None:
             delta_oi,
             pd.Series(dtype="float64"),
             funding,
+            volume_spike=volume_spike,
         )
         if signals:
             signals_by_symbol[symbol] = signals
@@ -372,7 +380,8 @@ def main() -> None:
     risk_manager = RiskManager(fetch_balance, max_open_trades=10)
     trader = None
 
-    schedule.every(5).minutes.do(scan_and_enter)
+    vol_spike = config.get("strategy", {}).get("volume_spike", 2.0)
+    schedule.every(5).minutes.do(scan_and_enter, volume_spike=vol_spike)
     schedule.every().day.at("00:00").do(daily_equity_and_risk_check)
     logging.info("Scheduler started")
 

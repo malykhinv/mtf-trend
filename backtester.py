@@ -95,8 +95,15 @@ def run_backtest(
     data_dir: str | Path = "data/raw_data",
     trades_path: str | Path = "trades.csv",
     equity_path: str | Path | None = None,
+    volume_spike: float = 2.0,
 ) -> dict:
-    """Run a simple breakout backtest and return summary statistics."""
+    """Run a simple breakout backtest and return summary statistics.
+
+    Parameters
+    ----------
+    volume_spike:
+        Multiplier applied to volume statistics when generating signals.
+    """
 
     df = load_data(symbol, data_dir)
     if start:
@@ -237,6 +244,7 @@ def run_backtest(
             delta_oi_series,
             volume_stats,
             funding,
+            volume_spike=volume_spike,
         )
         if not signals:
             continue
@@ -282,12 +290,24 @@ def parse_args() -> argparse.Namespace:
         default="data/raw_data",
         help="Directory containing CSV data",
     )
+    parser.add_argument(
+        "--volume-spike",
+        type=float,
+        default=2.0,
+        help="Volume spike multiplier",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    stats = run_backtest(args.symbol, args.start, args.end, data_dir=args.data_dir)
+    stats = run_backtest(
+        args.symbol,
+        args.start,
+        args.end,
+        data_dir=args.data_dir,
+        volume_spike=args.volume_spike,
+    )
     for key, value in stats.items():
         print(f"{key}: {value}")
 
