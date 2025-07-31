@@ -13,6 +13,8 @@ from typing import Any, Dict
 
 import yaml
 
+from risk import risk_control
+
 # Global configuration dictionary that other modules can import.
 CONFIG: Dict[str, Any] = {}
 
@@ -36,6 +38,7 @@ def initialize_bot() -> None:
     """Placeholder for any initialization logic using ``CONFIG``."""
     api_keys = CONFIG.get("api_keys", {})
     print(f"Initializing bot with API keys: {list(api_keys.keys())}")
+    risk_control.configure(CONFIG.get("risk", {}))
 
 
 def start_processing_loops() -> None:

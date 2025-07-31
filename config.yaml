@@ -7,5 +7,6 @@ thresholds:
 risk:
   max_position_size: 1000
   max_daily_loss: 500
+  max_consecutive_losses: 3
 bot:
   poll_interval: 5
