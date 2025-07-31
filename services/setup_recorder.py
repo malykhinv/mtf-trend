@@ -81,8 +81,6 @@ class SetupLog:
                 symbol_idx = headers.index(SetupLogColumn.SYMBOL.value) + 1
                 mh_idx = headers.index(SetupLogColumn.MAIN_HIGH_CROSSED.value) + 1
                 cl_idx = headers.index(SetupLogColumn.CORRECTION_LOW_CROSSED.value) + 1
-                cd_idx = headers.index(SetupLogColumn.CORRECTION_DEPTH_PCT.value) + 1
-                tm_idx = headers.index(SetupLogColumn.TIME_TO_MAIN_HIGH.value) + 1
                 outcome_idx = headers.index(SetupLogColumn.OUTCOME.value) + 1
             except ValueError:
                 return
@@ -134,8 +132,6 @@ class SetupLog:
             sl_idx = headers.index(SetupLogColumn.SL.value)
             tp_idx = headers.index(SetupLogColumn.TP.value)
             tf_idx = headers.index(SetupLogColumn.TF.value)
-            depth_idx = headers.index(SetupLogColumn.CORRECTION_DEPTH_PCT.value)
-            time_idx = headers.index(SetupLogColumn.TIME_TO_MAIN_HIGH.value)
             outcome_idx = headers.index(SetupLogColumn.OUTCOME.value)
         except ValueError:
             return
