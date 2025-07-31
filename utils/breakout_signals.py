@@ -72,8 +72,8 @@ def evaluate_breakout(
     funding: float,
     *,
     volume_spike: float = 2.0,
-    ema_short: int = 21,
-    ema_long: int = 55,
+    ema_short: int = 15,
+    ema_long: int = 30,
     funding_limit: float = 0.01,
     delta_oi_thresh: float = 0.0,
 ) -> List[Signal]:
@@ -91,14 +91,16 @@ def evaluate_breakout(
     oi:
         Open interest series aligned with ``ohlcv``.
     volume_stats:
-        Series containing at least an ``avg_volume`` value.
+        Deprecated.  Retained for backward compatibility but ignored.
     funding:
         Current funding rate.  Positive values indicate longs pay shorts.
     volume_spike:
-        Multiplier of average volume that must be exceeded to consider a
-        breakout valid.
+        Deprecated.  Average volume is computed from the last 15 periods and
+        a spike is considered when the current volume exceeds 1.5× that
+        average and the change exceeds two standard deviations.
     ema_short, ema_long:
-        Spans for the short and long exponential moving averages.
+        Spans for the short and long exponential moving averages (typically
+        5–15 and 10–30 respectively).
     funding_limit:
         Maximum absolute funding rate allowed for signals.
     delta_oi_thresh:
@@ -119,10 +121,13 @@ def evaluate_breakout(
     df["ema_long"] = df["close"].ewm(span=ema_long, adjust=False).mean()
     last = df.iloc[-1]
 
-    avg_volume = float(volume_stats.get("avg_volume", df["volume"].mean()))
-    if avg_volume == 0:
+    vol_window = df["volume"].rolling(window=15, min_periods=1)
+    avg_volume = vol_window.mean().iloc[-1]
+    vol_sigma = vol_window.std().iloc[-1]
+    vol_delta = df["volume"].diff().iloc[-1]
+    if pd.isna(avg_volume) or pd.isna(vol_sigma) or pd.isna(vol_delta):
         return []
-    vol_ok = last["volume"] > volume_spike * avg_volume
+    vol_ok = (last["volume"] > 1.5 * avg_volume) and (vol_delta > 2 * vol_sigma)
 
     ema_bull = last["ema_short"] > last["ema_long"]
     ema_bear = last["ema_short"] < last["ema_long"]
@@ -134,7 +139,8 @@ def evaluate_breakout(
     oi_ok_long = delta_oi >= delta_oi_thresh
     oi_ok_short = delta_oi <= -delta_oi_thresh
 
-    cvd_delta = cvd.diff().iloc[-1]
+    cvd_smoothed = cvd.ewm(span=3, adjust=False).mean()
+    cvd_delta = cvd_smoothed.diff().iloc[-1]
     cvd_ok_long = cvd_delta > 0
     cvd_ok_short = cvd_delta < 0
 
@@ -151,9 +157,18 @@ def evaluate_breakout(
         and allow_long(df)
     ):
         entry = float(level["high"])
-        stop = float(level["low"])
-        risk = entry - stop
-        signals.append(Signal("long", entry, stop, entry + risk, entry + 2 * risk))
+        cluster_stop = float(level["low"])
+        risk = max(entry - cluster_stop, 0.004 * entry)
+        stop = entry - risk
+        signals.append(
+            Signal(
+                "long",
+                entry,
+                stop,
+                entry + 1.5 * risk,
+                entry + 3 * risk,
+            )
+        )
 
     if (
         last["close"] < level["low"]
@@ -165,9 +180,18 @@ def evaluate_breakout(
         and allow_short(df)
     ):
         entry = float(level["low"])
-        stop = float(level["high"])
-        risk = stop - entry
-        signals.append(Signal("short", entry, stop, entry - risk, entry - 2 * risk))
+        cluster_stop = float(level["high"])
+        risk = max(cluster_stop - entry, 0.004 * entry)
+        stop = entry + risk
+        signals.append(
+            Signal(
+                "short",
+                entry,
+                stop,
+                entry - 1.5 * risk,
+                entry - 3 * risk,
+            )
+        )
 
     return signals
 
