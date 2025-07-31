@@ -59,6 +59,23 @@ class BinanceExchange(BaseExchange):
             data = await resp.json()
         return float(data[0]["fundingRate"])
 
+    async def fetch_funding_history(
+        self, symbol: str, hours: int = 8, limit: int = 3
+    ) -> list[float]:
+        session = await self._session_get()
+        url = f"{self.REST_URL}/fapi/v1/fundingRate"
+        end_time = int(time.time() * 1000)
+        start_time = end_time - hours * 3600 * 1000
+        params = {
+            "symbol": symbol,
+            "startTime": start_time,
+            "endTime": end_time,
+            "limit": limit,
+        }
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+        return [float(entry["fundingRate"]) for entry in data]
+
     async def place_order(
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
@@ -84,6 +101,19 @@ class BinanceExchange(BaseExchange):
         headers = {"X-MBX-APIKEY": self.api_key}
         async with session.get(url, params=params, headers=headers) as resp:
             return await resp.json()
+
+    async def get_stats(self, symbol: str) -> dict:
+        session = await self._session_get()
+        ticker_url = f"{self.REST_URL}/fapi/v1/ticker/24hr"
+        params = {"symbol": symbol}
+        async with session.get(ticker_url, params=params) as resp:
+            ticker = await resp.json()
+        volume = float(ticker.get("volume", 0.0))
+        oi_url = f"{self.REST_URL}/fapi/v1/openInterest"
+        async with session.get(oi_url, params=params) as resp:
+            oi = await resp.json()
+        open_interest = float(oi.get("openInterest", 0.0))
+        return {"volume_24h": volume, "open_interest": open_interest}
 
     # ------------------------------------------------------------------
     # WebSocket handling

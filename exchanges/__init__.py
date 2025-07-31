@@ -57,6 +57,16 @@ class BaseExchange(ABC):
     async def get_balance(self) -> dict:
         """Return account balance information."""
 
+    @abstractmethod
+    async def fetch_funding_history(
+        self, symbol: str, hours: int = 8, limit: int = 3
+    ) -> list[float]:
+        """Return recent funding rates for ``symbol`` within ``hours``."""
+
+    @abstractmethod
+    async def get_stats(self, symbol: str) -> dict:
+        """Return market stats such as 24h volume and open interest."""
+
     # ------------------------------------------------------------------
     # Optional order management helpers
     # ------------------------------------------------------------------
@@ -216,6 +226,24 @@ async def get_balance() -> dict:
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
     return await _await_with_timeout(_current.get_balance())
+
+
+async def fetch_funding_history(
+    symbol: str, hours: int = 8, limit: int = 3
+) -> list[float]:
+    """Return recent funding rates for ``symbol`` from the exchange."""
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+    return await _await_with_timeout(
+        _current.fetch_funding_history(symbol, hours, limit)
+    )
+
+
+async def get_stats(symbol: str) -> dict:
+    """Return market stats such as 24h volume and open interest."""
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+    return await _await_with_timeout(_current.get_stats(symbol))
 
 
 async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:

@@ -13,7 +13,13 @@ from typing import Any, Dict
 import time
 from datetime import datetime
 
-from exchanges import fetch_funding, get_orderbook, hedge, place_order
+from exchanges import (
+    fetch_funding_history,
+    get_orderbook,
+    get_stats,
+    hedge,
+    place_order,
+)
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG
@@ -36,17 +42,29 @@ class MarketMetrics:
     basis: float
 
 
-async def get_market_metrics(symbol: str, depth: int = 5) -> MarketMetrics:
+async def get_market_metrics(
+    symbol: str, trade_size: float, depth: int = 5
+) -> MarketMetrics:
     """Fetch comprehensive market metrics for ``symbol``.
 
     Parameters
     ----------
     symbol:
         Trading pair symbol understood by the configured exchange.
+    trade_size:
+        Quantity to trade when estimating slippage.
     depth:
         Order book depth to request for liquidity calculations.  Defaults to 5.
     """
-    funding = await fetch_funding(symbol)
+    history = await fetch_funding_history(symbol, hours=8, limit=3)
+    if history:
+        k = 2 / (len(history) + 1)
+        funding = history[0]
+        for rate in history[1:]:
+            funding = rate * k + funding * (1 - k)
+    else:
+        funding = 0.0
+
     orderbook = await get_orderbook(symbol, depth=depth)
     bids = [(float(p), float(q)) for p, q in orderbook.get("bids", [])]
     asks = [(float(p), float(q)) for p, q in orderbook.get("asks", [])]
@@ -55,16 +73,29 @@ async def get_market_metrics(symbol: str, depth: int = 5) -> MarketMetrics:
         spread = asks[0][0] - bids[0][0]
         futures_price = (asks[0][0] + bids[0][0]) / 2
         volatility = spread / futures_price if futures_price else float("inf")
-        slippage = spread / futures_price if futures_price else float("inf")
+        remaining = trade_size
+        cost = 0.0
+        for price, qty in asks:
+            take = min(remaining, qty)
+            cost += take * price
+            remaining -= take
+            if remaining <= 0:
+                break
+        if remaining > 0:
+            slippage = float("inf")
+        else:
+            avg_price = cost / trade_size
+            slippage = abs(avg_price - futures_price) / futures_price
     else:
         spread = float("inf")
         futures_price = float("nan")
         volatility = float("inf")
         slippage = float("inf")
 
+    stats = await get_stats(symbol)
     spot_price = float(orderbook.get("spot_price", futures_price))
-    volume = float(orderbook.get("volume", 0.0))
-    open_interest = float(orderbook.get("open_interest", 0.0))
+    volume = float(stats.get("volume_24h", 0.0))
+    open_interest = float(stats.get("open_interest", 0.0))
     liquidity = sum(q for _, q in bids) + sum(q for _, q in asks)
     basis = (
         ((futures_price - spot_price) / spot_price) * 100
@@ -107,6 +138,7 @@ def check_entry_conditions(
         and metrics.volume >= thresholds.get("volume", 0.0)
         and metrics.volatility <= thresholds.get("volatility", float("inf"))
         and metrics.open_interest <= thresholds.get("open_interest", float("inf"))
+        and metrics.slippage <= thresholds.get("slippage", float("inf"))
         and thresholds.get("min_trade_size", 0.0)
         <= quantity
         <= thresholds.get("max_trade_size", float("inf"))
@@ -142,7 +174,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         raise RuntimeError("Trade size exceeds deposit")
     if not risk_control.can_open_position(quantity) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
-    entry_metrics = await get_market_metrics(symbol)
+    entry_metrics = await get_market_metrics(symbol, quantity)
     orders = await hedge(symbol, quantity)
     risk_control.update_position(quantity)
     risk_control.mark_symbol_open(symbol)
@@ -202,7 +234,7 @@ async def monitor_neutral_position(
     entry = _positions.get(symbol, {})
     while True:
         try:
-            metrics = await get_market_metrics(symbol)
+            metrics = await get_market_metrics(symbol, quantity)
         except asyncio.TimeoutError:
             await close_neutral_position(symbol, quantity)
             break
