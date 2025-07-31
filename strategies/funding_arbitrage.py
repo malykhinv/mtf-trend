@@ -13,6 +13,7 @@ from typing import Dict
 
 from exchanges import fetch_funding, get_orderbook, place_order
 from risk import risk_control
+from ai.parameter_optimizer import load_thresholds as _load_thresholds
 
 
 @dataclass
@@ -119,3 +120,20 @@ async def monitor_neutral_position(
             await close_neutral_position(symbol, quantity)
             break
         await asyncio.sleep(poll_interval)
+
+
+# ---------------------------------------------------------------------------
+# Dynamic parameter loading
+# ---------------------------------------------------------------------------
+
+def get_thresholds(config_thresholds: Dict[str, float]) -> Dict[str, float]:
+    """Return strategy thresholds merged with any optimized values.
+
+    Parameters
+    ----------
+    config_thresholds:
+        Thresholds configured in ``config.yaml``.  Values produced by the
+        optimizer take precedence over these defaults.
+    """
+
+    return _load_thresholds(config_thresholds)
