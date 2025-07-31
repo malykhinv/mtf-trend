@@ -3,3 +3,4 @@ python-dotenv
 schedule
 ccxt
 pandas
+matplotlib
