@@ -18,6 +18,7 @@ from utils.market_analysis import (
     has_consecutive_move,
     price_above_ema,
 )
+from utils.cvd import get_cvd
 
 
 class DataCollector:
@@ -27,15 +28,73 @@ class DataCollector:
         self.api_key = api_key
         self.api_secret = api_secret
         self.config = config
+        exchange_name = config.get("api", {}).get("futures_exchange", "binanceusdm")
+        exchange_class = getattr(ccxt, exchange_name)
+        self.exchange = exchange_class(
+            {
+                "apiKey": api_key,
+                "secret": api_secret,
+                "enableRateLimit": True,
+            }
+        )
 
     def collect(self) -> Any:
-        """Fetch recent OHLCV data for all configured symbols."""
+        """Fetch recent OHLCV data and metrics for all configured symbols."""
         logging.info("Collecting market data")
         end = pd.Timestamp.utcnow()
         start = end - pd.Timedelta(days=1)
-        # Fetch 5 minute candles for all configured symbols
         fetch_all_from_config(self.config, start, end, timeframe="5m")
-        return {}
+
+        data_dir = (
+            Path(self.config.get("data_paths", {}).get("data_dir", "data"))
+            / "raw_data"
+        )
+        results: dict[str, dict[str, Any]] = {}
+        for symbol in self.config.get("symbols", []):
+            ohlcv_file = data_dir / f"{symbol.replace('/', '')}_5m.csv"
+            df = pd.DataFrame()
+            if ohlcv_file.exists():
+                df = pd.read_csv(ohlcv_file, parse_dates=["timestamp"])
+
+            try:
+                cvd = get_cvd(symbol, "5m")
+                vol_delta = float(df["volume"].diff().iloc[-1]) if not df.empty else 0.0
+            except Exception:
+                logging.exception("Failed to compute CVD/volume delta for %s", symbol)
+                cvd = pd.Series(dtype="float64")
+                vol_delta = 0.0
+
+            try:
+                oi_info = self.exchange.fetch_open_interest(symbol)
+                open_interest = float(
+                    oi_info.get("openInterestAmount")
+                    or oi_info.get("openInterest")
+                    or oi_info.get("openInterestValue")
+                    or 0.0
+                )
+            except Exception:
+                logging.exception("Failed to fetch open interest for %s", symbol)
+                open_interest = 0.0
+
+            try:
+                fr = self.exchange.fetch_funding_rate(symbol)
+                funding_rate = float(
+                    fr.get("fundingRate")
+                    or fr.get("info", {}).get("fundingRate", 0.0)
+                )
+            except Exception:
+                logging.exception("Failed to fetch funding rate for %s", symbol)
+                funding_rate = 0.0
+
+            results[symbol] = {
+                "ohlcv": df,
+                "cvd": cvd,
+                "volume_delta": vol_delta,
+                "open_interest": open_interest,
+                "funding_rate": funding_rate,
+            }
+
+        return results
 
 
 class Screener:
