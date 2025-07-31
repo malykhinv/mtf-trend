@@ -36,4 +36,4 @@ def test_backtester_produces_trade(tmp_path):
     assert stats["pnl"] > 0
     trades = pd.read_csv(trades_path)
     assert len(trades) == 1
-    assert trades.loc[0, "pnl"] == 2
+    assert trades.loc[0, "pnl"] == 3

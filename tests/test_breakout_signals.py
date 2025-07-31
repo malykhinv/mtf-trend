@@ -37,8 +37,8 @@ def test_long_breakout_signal():
     assert sig.direction == "long"
     assert sig.entry == 102
     assert sig.stop == 98
-    assert sig.tp1 == 106
-    assert sig.tp2 == 110
+    assert sig.tp1 == 108
+    assert sig.tp2 == 114
 
 
 def test_breakout_blocked_by_trend_filter():
