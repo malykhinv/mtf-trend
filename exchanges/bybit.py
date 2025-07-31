@@ -1,0 +1,143 @@
+"""Bybit exchange implementation."""
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import json
+import time
+from typing import Any, Dict, Optional
+
+import aiohttp
+import websockets
+
+from . import BaseExchange, register
+
+
+class BybitExchange(BaseExchange):
+    """Minimal Bybit client supporting REST and WebSocket operations."""
+
+    REST_URL = "https://api.bybit.com"
+    WS_URL = "wss://stream.bybit.com/v5/public/linear"
+
+    def __init__(self, api_key: str, api_secret: str) -> None:
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self._session: Optional[aiohttp.ClientSession] = None
+        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._orderbooks: Dict[str, Dict[str, Any]] = {}
+        self._ws_tasks: Dict[str, asyncio.Task] = {}
+
+    # ------------------------------------------------------------------
+    # REST utilities
+    # ------------------------------------------------------------------
+
+    async def _session_get(self) -> aiohttp.ClientSession:
+        if self._session is None:
+            self._session = aiohttp.ClientSession()
+        return self._session
+
+    def _sign(self, method: str, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        params = params.copy()
+        params["api_key"] = self.api_key
+        params["timestamp"] = int(time.time() * 1000)
+        query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        sign_str = method + path + query
+        signature = hmac.new(
+            self.api_secret.encode(), sign_str.encode(), hashlib.sha256
+        ).hexdigest()
+        params["sign"] = signature
+        return params
+
+    # ------------------------------------------------------------------
+    # Public methods
+    # ------------------------------------------------------------------
+
+    async def fetch_funding(self, symbol: str) -> float:
+        session = await self._session_get()
+        url = f"{self.REST_URL}/v5/market/funding/history"
+        params = {"symbol": symbol, "limit": 1}
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+        return float(data["result"]["list"][0]["fundingRate"])
+
+    async def place_order(
+        self, symbol: str, side: str, quantity: float, price: float | None = None
+    ) -> dict:
+        session = await self._session_get()
+        url_path = "/v5/order/create"
+        url = f"{self.REST_URL}{url_path}"
+        body: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "qty": quantity,
+            "orderType": "Market" if price is None else "Limit",
+        }
+        if price is not None:
+            body["price"] = price
+        headers = {"Content-Type": "application/json"}
+        body = self._sign("POST", url_path, body)
+        async with session.post(url, json=body, headers=headers) as resp:
+            return await resp.json()
+
+    async def get_balance(self) -> dict:
+        session = await self._session_get()
+        url_path = "/v5/account/wallet-balance"
+        url = f"{self.REST_URL}{url_path}"
+        params = self._sign("GET", url_path, {"accountType": "UNIFIED"})
+        async with session.get(url, params=params) as resp:
+            return await resp.json()
+
+    # ------------------------------------------------------------------
+    # WebSocket handling
+    # ------------------------------------------------------------------
+
+    async def _connect(self, symbol: str) -> websockets.WebSocketClientProtocol:
+        while True:
+            try:
+                ws = await websockets.connect(self.WS_URL)
+                sub = {
+                    "op": "subscribe",
+                    "args": [f"orderbook.1.{symbol}"],
+                }
+                await ws.send(json.dumps(sub))
+                return ws
+            except Exception:
+                await asyncio.sleep(5)
+
+    async def _listen(self, symbol: str) -> None:
+        while True:
+            try:
+                if self._ws is None:
+                    self._ws = await self._connect(symbol)
+                msg = await self._ws.recv()
+                data = json.loads(msg)
+                if data.get("topic", "").startswith("orderbook"):
+                    book = data.get("data") or {}
+                    self._orderbooks[symbol] = {
+                        "bids": book.get("b", []),
+                        "asks": book.get("a", []),
+                    }
+            except Exception:
+                await asyncio.sleep(1)
+                if self._ws is not None:
+                    try:
+                        await self._ws.close()
+                    except Exception:
+                        pass
+                self._ws = None
+
+    async def get_orderbook(self, symbol: str, depth: int = 5) -> dict:
+        if symbol not in self._ws_tasks:
+            self._ws_tasks[symbol] = asyncio.create_task(self._listen(symbol))
+        return self._orderbooks.get(symbol, {"bids": [], "asks": []})
+
+    async def __aexit__(self, *exc_info: Any) -> None:  # pragma: no cover
+        if self._session is not None:
+            await self._session.close()
+        if self._ws is not None:
+            await self._ws.close()
+
+
+# Register exchange
+register("bybit", BybitExchange)
