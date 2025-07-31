@@ -84,8 +84,8 @@ def test_scan_and_enter_executes_long(monkeypatch):
     eth = pd.DataFrame({"close": [1, 2, 3, 4, 5, 6]})
     monkeypatch.setattr(main, "load_btc_eth_candles", lambda: {"BTC/USDT": btc, "ETH/USDT": eth})
 
-    def fake_clusters(df, atr_multiplier=2.0, min_bars=5, max_bars=30):
-        return pd.DataFrame([{"start": timestamps[0], "end": timestamps[-1], "high": 101, "low": 99, "duration": 2}])
+    def fake_clusters(df, atr_multiplier=0.5, min_bars=10, max_bars=30):
+        return pd.DataFrame([{ "start": timestamps[0], "end": timestamps[-1], "high": 101, "low": 99, "duration": 10 }])
 
     monkeypatch.setattr(main, "find_tight_range_clusters", fake_clusters)
     monkeypatch.setattr(

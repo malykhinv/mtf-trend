@@ -5,7 +5,7 @@ import pandas as pd
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from backtester import run_backtest
+import backtester
 
 
 def create_sample_data(path: Path) -> None:
@@ -25,14 +25,21 @@ def create_sample_data(path: Path) -> None:
     df.to_csv(path, index=False)
 
 
-def test_backtester_produces_trade(tmp_path):
+def test_backtester_produces_trade(tmp_path, monkeypatch):
     data_dir = tmp_path / "data" / "raw_data"
     csv_path = data_dir / "ETHUSDT.csv"
     create_sample_data(csv_path)
 
+    def fake_clusters(df, atr_multiplier=0.5, min_bars=10, max_bars=30):
+        return pd.DataFrame(
+            [{"start": df["timestamp"].iloc[0], "end": df["timestamp"].iloc[-1], "high": 101, "low": 99, "duration": 10}]
+        )
+
+    monkeypatch.setattr(backtester, "find_tight_range_clusters", fake_clusters)
+
     trades_path = tmp_path / "trades.csv"
     equity_path = tmp_path / "equity.png"
-    stats = run_backtest(
+    stats = backtester.run_backtest(
         "ETHUSDT", data_dir=data_dir, trades_path=trades_path, equity_path=equity_path
     )
     trades = pd.read_csv(trades_path)
