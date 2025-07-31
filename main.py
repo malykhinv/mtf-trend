@@ -12,6 +12,7 @@ import yaml
 from dotenv import load_dotenv
 import ccxt
 from utils.ohlcv_fetcher import fetch_all_from_config
+from utils.trade_logger import daily_summary, send_telegram_message
 
 
 class DataCollector:
@@ -77,8 +78,20 @@ def scan_and_enter() -> None:
 
 
 def daily_equity_and_risk_check() -> None:
-    """Perform daily equity and risk checks."""
+    """Perform daily equity and risk checks and send summary."""
     logging.info("Running daily equity and risk checks")
+    summary = daily_summary()
+    msg = (
+        f"Daily summary\n"
+        f"Winrate: {summary['winrate']:.2%}\n"
+        f"Avg RR: {summary['avg_rr']:.2f}\n"
+        f"Equity change: {summary['equity_change']:.2f}"
+    )
+    logging.info(msg)
+    token = os.getenv("TELEGRAM_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if token and chat_id:
+        send_telegram_message(token, chat_id, msg)
 
 
 # Instances are created in main() and used by scheduled jobs
