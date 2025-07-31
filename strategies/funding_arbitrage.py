@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Dict
+from typing import Any, Dict
+import time
 
 from exchanges import fetch_funding, get_orderbook, hedge, place_order
 from risk import risk_control
@@ -126,13 +127,11 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
 # Position management
 # ---------------------------------------------------------------------------
 
-async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
-    """Open offsetting long and short positions.
+_positions: Dict[str, Dict[str, Any]] = {}
 
-    This naive implementation simply places a buy and a sell market order for
-    ``quantity`` units of ``symbol``.  Real-world usage should handle errors and
-    slippage appropriately.
-    """
+
+async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
+    """Open offsetting long and short positions and record entry details."""
     bot_cfg = CONFIG.get("bot", {})
     if symbol not in bot_cfg.get("whitelist", []):
         raise RuntimeError("Symbol not whitelisted")
@@ -141,9 +140,17 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         raise RuntimeError("Trade size exceeds deposit")
     if not risk_control.can_open_position(quantity) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
+    entry_metrics = await get_market_metrics(symbol)
     orders = await hedge(symbol, quantity)
     risk_control.update_position(quantity)
     risk_control.mark_symbol_open(symbol)
+    _positions[symbol] = {
+        "entry_timestamp": time.time(),
+        "entry_futures_price": entry_metrics.futures_price,
+        "entry_spot_price": entry_metrics.spot_price,
+        "entry_basis": entry_metrics.basis,
+        "quantity": quantity,
+    }
     return orders
 
 
@@ -171,14 +178,47 @@ async def monitor_neutral_position(
     poll_interval: float = 5.0,
 ) -> None:
     """Monitor a neutral position and close it when exit criteria are met."""
+    entry = _positions.get(symbol, {})
     while True:
         try:
             metrics = await get_market_metrics(symbol)
         except asyncio.TimeoutError:
             await close_neutral_position(symbol, quantity)
             break
+        reasons = []
         if check_exit_conditions(metrics, exit_thresholds):
-            await close_neutral_position(symbol, quantity)
+            reasons.append("threshold")
+        if metrics.funding_rate < 0.0001:
+            reasons.append("funding")
+        if metrics.basis > 1.0:
+            reasons.append("basis")
+        if entry:
+            exit_slippage = abs(metrics.futures_price - entry.get("entry_futures_price", 0.0)) / max(entry.get("entry_futures_price", 1.0), 1e-9)
+            if exit_slippage > 0.005:
+                reasons.append("slippage")
+            hold_time = time.time() - entry.get("entry_timestamp", time.time())
+            if hold_time > 48 * 3600:
+                reasons.append("time")
+            pnl = (
+                (metrics.futures_price - entry.get("entry_futures_price", 0.0))
+                - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
+            ) * quantity
+            if pnl < 0:
+                reasons.append("pnl")
+        else:
+            pnl = 0.0
+        if reasons:
+            await close_neutral_position(symbol, quantity, pnl)
+            if entry:
+                entry.update(
+                    {
+                        "exit_timestamp": time.time(),
+                        "exit_reasons": reasons,
+                        "exit_futures_price": metrics.futures_price,
+                        "exit_spot_price": metrics.spot_price,
+                        "pnl": pnl,
+                    }
+                )
             break
         await asyncio.sleep(poll_interval)
 
