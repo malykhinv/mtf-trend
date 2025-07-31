@@ -108,11 +108,11 @@ class TradeExecutor:
     @staticmethod
     def _validate_rr(entry: float, sl: float, tp: float, symbol: str) -> bool:
         """Проверяет, что RR и расстояния удовлетворяют минимуму."""
-        if not get_pct(sl, entry) > MIN_STOP_LOSS_PERCENT:
+        if not get_pct(entry, sl) > MIN_STOP_LOSS_PERCENT:
             logw(f"Entry и SL слишком близки (entry={entry}, sl={sl}).")
             return False
 
-        if not get_pct(tp, entry) > MIN_TAKE_PROFIT_PERCENT:
+        if not get_pct(entry, tp) > MIN_TAKE_PROFIT_PERCENT:
             logw(f"Entry и TP слишком близки (entry={entry}, tp={tp}).")
             return False
 
