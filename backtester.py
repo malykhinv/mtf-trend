@@ -35,11 +35,31 @@ class Trade:
     entry_time: pd.Timestamp
     entry: float
     stop: float
-    tp: float
+    tp1: float
+    tp2: float
+    remaining: float
+    trail: float
     exit_time: pd.Timestamp
     exit: float
     pnl: float
     rr: float
+
+
+@dataclass
+class Position:
+    """State of an open trade."""
+
+    symbol: str
+    direction: str
+    entry_time: pd.Timestamp
+    entry: float
+    stop: float
+    tp1: float
+    tp2: float
+    remaining: float = 1.0
+    trail: float | None = None
+    peak: float | None = None
+    tp1_hit: bool = False
 
 
 def load_data(symbol: str, data_dir: str | Path) -> pd.DataFrame:
@@ -86,55 +106,111 @@ def run_backtest(
     equity = 10000.0
     peak_equity = equity
     max_drawdown = 0.0
-    open_trade: Optional[Trade] = None
+    open_trade: Optional[Position] = None
     trades: List[Trade] = []
     rr_list: List[float] = []
     wins = 0
 
+    def record_exit(pos: Position, price: float, size: float, ts: pd.Timestamp) -> None:
+        nonlocal equity, peak_equity, max_drawdown, rr_list, wins, trades
+        pnl = (price - pos.entry) * size if pos.direction == "long" else (pos.entry - price) * size
+        risk_unit = abs(pos.entry - pos.stop)
+        rr = ((price - pos.entry) if pos.direction == "long" else (pos.entry - price)) / risk_unit if risk_unit else 0.0
+        equity += pnl
+        peak_equity = max(peak_equity, equity)
+        max_drawdown = max(max_drawdown, (peak_equity - equity) / peak_equity)
+        rr_list.append(rr)
+        if pnl > 0:
+            wins += 1
+        trades.append(
+            Trade(
+                pos.symbol,
+                pos.direction,
+                pos.entry_time,
+                pos.entry,
+                pos.stop,
+                pos.tp1,
+                pos.tp2,
+                pos.remaining,
+                pos.trail if pos.trail is not None else pos.stop,
+                ts,
+                price,
+                pnl,
+                rr,
+            )
+        )
+
     for i, row in df.iterrows():
-        # First manage any open trade using current bar
+        # Manage open trade
         if open_trade is not None:
-            closed = False
+            active_stop = open_trade.trail if open_trade.trail is not None else open_trade.stop
             if open_trade.direction == "long":
-                if row["low"] <= open_trade.stop:
-                    exit_price = open_trade.stop
-                    closed = True
-                elif row["high"] >= open_trade.tp:
-                    exit_price = open_trade.tp
-                    closed = True
+                if row["low"] <= active_stop:
+                    size = open_trade.remaining
+                    open_trade.remaining = 0.0
+                    record_exit(open_trade, active_stop, size, row["timestamp"])
+                    open_trade = None
+                    continue
+                if not open_trade.tp1_hit and row["high"] >= open_trade.tp1:
+                    size = open_trade.remaining / 2
+                    open_trade.remaining -= size
+                    open_trade.tp1_hit = True
+                    open_trade.peak = open_trade.tp1
+                    open_trade.trail = open_trade.stop
+                    record_exit(open_trade, open_trade.tp1, size, row["timestamp"])
+                if open_trade.tp1_hit:
+                    open_trade.peak = max(open_trade.peak or open_trade.tp1, row["high"])
+                    new_trail = open_trade.peak * (1 - 0.002)
+                    if open_trade.trail is None or new_trail > open_trade.trail:
+                        open_trade.trail = new_trail
+                    active_stop = open_trade.trail
+                    if row["low"] <= active_stop:
+                        size = open_trade.remaining
+                        open_trade.remaining = 0.0
+                        record_exit(open_trade, active_stop, size, row["timestamp"])
+                        open_trade = None
+                        continue
+                    if row["high"] >= open_trade.tp2:
+                        size = open_trade.remaining
+                        open_trade.remaining = 0.0
+                        record_exit(open_trade, open_trade.tp2, size, row["timestamp"])
+                        open_trade = None
+                        continue
             else:  # short
-                if row["high"] >= open_trade.stop:
-                    exit_price = open_trade.stop
-                    closed = True
-                elif row["low"] <= open_trade.tp:
-                    exit_price = open_trade.tp
-                    closed = True
-            if closed:
-                pnl = exit_price - open_trade.entry if open_trade.direction == "long" else open_trade.entry - exit_price
-                risk = abs(open_trade.entry - open_trade.stop)
-                rr = pnl / risk if risk else 0.0
-                equity += pnl
-                peak_equity = max(peak_equity, equity)
-                max_drawdown = max(max_drawdown, (peak_equity - equity) / peak_equity)
-                rr_list.append(rr)
-                if pnl > 0:
-                    wins += 1
-                trades.append(
-                    Trade(
-                        symbol,
-                        open_trade.direction,
-                        open_trade.entry_time,
-                        open_trade.entry,
-                        open_trade.stop,
-                        open_trade.tp,
-                        row["timestamp"],
-                        exit_price,
-                        pnl,
-                        rr,
-                    )
-                )
-                open_trade = None
-                continue  # move to next bar
+                if row["high"] >= active_stop:
+                    size = open_trade.remaining
+                    open_trade.remaining = 0.0
+                    record_exit(open_trade, active_stop, size, row["timestamp"])
+                    open_trade = None
+                    continue
+                if not open_trade.tp1_hit and row["low"] <= open_trade.tp1:
+                    size = open_trade.remaining / 2
+                    open_trade.remaining -= size
+                    open_trade.tp1_hit = True
+                    open_trade.peak = open_trade.tp1
+                    open_trade.trail = open_trade.stop
+                    record_exit(open_trade, open_trade.tp1, size, row["timestamp"])
+                if open_trade.tp1_hit:
+                    open_trade.peak = min(open_trade.peak or open_trade.tp1, row["low"])
+                    new_trail = open_trade.peak * (1 + 0.002)
+                    if open_trade.trail is None or new_trail < open_trade.trail:
+                        open_trade.trail = new_trail
+                    active_stop = open_trade.trail
+                    if row["high"] >= active_stop:
+                        size = open_trade.remaining
+                        open_trade.remaining = 0.0
+                        record_exit(open_trade, active_stop, size, row["timestamp"])
+                        open_trade = None
+                        continue
+                    if row["low"] <= open_trade.tp2:
+                        size = open_trade.remaining
+                        open_trade.remaining = 0.0
+                        record_exit(open_trade, open_trade.tp2, size, row["timestamp"])
+                        open_trade = None
+                        continue
+
+        if open_trade is not None:
+            continue
 
         # No open trade -> look for new signal
         window = df.iloc[: i + 1]
@@ -161,60 +237,15 @@ def run_backtest(
         if not signals:
             continue
         sig = signals[0]
-        open_trade = Trade(
+        open_trade = Position(
             symbol=symbol,
             direction=sig.direction,
             entry_time=row["timestamp"],
             entry=sig.entry,
             stop=sig.stop,
-            tp=sig.tp1,
-            exit_time=row["timestamp"],
-            exit=sig.entry,
-            pnl=0.0,
-            rr=0.0,
+            tp1=sig.tp1,
+            tp2=sig.tp2,
         )
-        # Immediately check if trade would have hit stop or target in this bar
-        if sig.direction == "long":
-            if row["low"] <= sig.stop:
-                exit_price = sig.stop
-            elif row["high"] >= sig.tp1:
-                exit_price = sig.tp1
-            else:
-                continue
-            pnl = exit_price - sig.entry
-            risk = abs(sig.entry - sig.stop)
-            rr = pnl / risk if risk else 0.0
-        else:  # short
-            if row["high"] >= sig.stop:
-                exit_price = sig.stop
-            elif row["low"] <= sig.tp1:
-                exit_price = sig.tp1
-            else:
-                continue
-            pnl = sig.entry - exit_price
-            risk = abs(sig.stop - sig.entry)
-            rr = pnl / risk if risk else 0.0
-        equity += pnl
-        peak_equity = max(peak_equity, equity)
-        max_drawdown = max(max_drawdown, (peak_equity - equity) / peak_equity)
-        rr_list.append(rr)
-        if pnl > 0:
-            wins += 1
-        trades.append(
-            Trade(
-                symbol,
-                sig.direction,
-                row["timestamp"],
-                sig.entry,
-                sig.stop,
-                sig.tp1,
-                row["timestamp"],
-                exit_price,
-                pnl,
-                rr,
-            )
-        )
-        open_trade = None
 
     trades_df = pd.DataFrame([asdict(t) for t in trades])
     trades_df.to_csv(trades_path, index=False)
