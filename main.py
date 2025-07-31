@@ -42,19 +42,27 @@ class DataCollector:
             }
         )
 
-    def collect(self) -> Any:
-        """Fetch recent OHLCV data and metrics for all configured symbols."""
+    def collect(self, symbols: Optional[list[str]] = None) -> Any:
+        """Fetch recent OHLCV data and metrics for the given symbols.
+
+        Parameters
+        ----------
+        symbols:
+            Optional list of symbols to collect data for. If not provided,
+            ``config['symbols']`` is used.
+        """
         logging.info("Collecting market data")
         end = pd.Timestamp.utcnow()
         start = end - pd.Timedelta(days=1)
-        fetch_all_from_config(self.config, start, end, timeframe="5m")
+        symbols = symbols or self.config.get("symbols", [])
+        fetch_all_from_config({**self.config, "symbols": symbols}, start, end, timeframe="5m")
 
         data_dir = (
             Path(self.config.get("data_paths", {}).get("data_dir", "data"))
             / "raw_data"
         )
         results: dict[str, dict[str, Any]] = {}
-        for symbol in self.config.get("symbols", []):
+        for symbol in symbols:
             ohlcv_file = data_dir / f"{symbol.replace('/', '')}_5m.csv"
             df = pd.DataFrame()
             if ohlcv_file.exists():
@@ -220,15 +228,10 @@ def init_logging(log_dir: str | Path) -> None:
 def scan_and_enter() -> None:
     """Run periodic scanning and entry logic."""
     logging.info("Running scan and entry logic")
-    data = data_collector.collect()
-    screened = screener.screen(data)
-    if isinstance(screened, dict):
-        symbols = list(screened.keys())[:10]
-        filtered_data = {s: screened[s] for s in symbols}
-    else:
-        symbols = list(screened)[:10]
-        filtered_data = {s: data.get(s) for s in symbols if s in data}
-    filtered_data = trend_filter.filter(filtered_data)
+    symbols = screener.screen()[:10]
+    data = data_collector.collect(symbols)
+    data = {s: data.get(s) for s in symbols if s in data}
+    filtered_data = trend_filter.filter(data)
     global selected_symbols
     selected_symbols = list(filtered_data.keys())
     for symbol in filtered_data:

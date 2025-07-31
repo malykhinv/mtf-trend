@@ -7,7 +7,9 @@ class DummyCollector:
     def __init__(self, data):
         self._data = data
 
-    def collect(self):
+    def collect(self, symbols=None):
+        if symbols:
+            return {s: self._data[s] for s in symbols}
         return self._data
 
 
@@ -15,7 +17,7 @@ class DummyScreener:
     def __init__(self, symbol):
         self.symbol = symbol
 
-    def screen(self, data):
+    def screen(self):
         return [self.symbol]
 
 
