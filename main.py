@@ -19,6 +19,7 @@ from utils.market_analysis import (
     price_above_ema,
 )
 from utils.cvd import get_cvd
+from utils.futures_screener import screen_futures
 
 
 class DataCollector:
@@ -98,11 +99,18 @@ class DataCollector:
 
 
 class Screener:
-    """Placeholder screener."""
+    """Wrapper around :func:`utils.futures_screener.screen_futures`."""
 
-    def screen(self, data: Any) -> Any:
-        logging.info("Screening data")
-        return data
+    def __init__(self, exchange_name: str = "binanceusdm") -> None:
+        self.exchange_name = exchange_name
+
+    def screen(self, data: Any | None = None, max_symbols: int = 10) -> list[str]:
+        """Return a list of symbols matching the screener criteria."""
+        logging.info("Screening futures markets")
+        metrics = screen_futures(
+            exchange_name=self.exchange_name, max_positions=max_symbols
+        )
+        return [m.symbol for m in metrics]
 
 
 class TrendFilter:
@@ -138,7 +146,17 @@ def scan_and_enter() -> None:
     logging.info("Running scan and entry logic")
     data = data_collector.collect()
     screened = screener.screen(data)
-    trends = trend_filter.filter(screened)
+    if isinstance(screened, dict):
+        symbols = list(screened.keys())[:10]
+        filtered_data = {s: screened[s] for s in symbols}
+    else:
+        symbols = list(screened)[:10]
+        filtered_data = {s: data.get(s) for s in symbols if s in data}
+    global selected_symbols
+    selected_symbols = symbols
+    trends = trend_filter.filter(filtered_data)
+    for symbol in filtered_data:
+        logging.debug("Prepared data for %s", symbol)
 
     candles = load_btc_eth_candles()
     btc = candles.get("BTC/USDT")
@@ -182,6 +200,7 @@ trend_filter: Optional[TrendFilter] = None
 risk_manager: Optional[RiskManager] = None
 open_long: bool = False
 open_short: bool = False
+selected_symbols: list[str] = []
 
 def main() -> None:
     config = load_config()
@@ -203,7 +222,9 @@ def main() -> None:
 
     global data_collector, screener, trend_filter, risk_manager
     data_collector = DataCollector(api_key, api_secret, config)
-    screener = Screener()
+    screener = Screener(
+        exchange_name=config.get("api", {}).get("futures_exchange", "binanceusdm")
+    )
     trend_filter = TrendFilter()
     risk_manager = RiskManager(fetch_balance)
 
