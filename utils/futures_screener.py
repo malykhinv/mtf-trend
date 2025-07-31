@@ -1,9 +1,9 @@
 """Futures market screener.
 
-Fetches various metrics (24h/1h volume, spread, ATR, and standard
-Deviation growth) for all futures symbols on an exchange and selects
-top candidates according to basic volume rule and a maximum number of
-positions.
+Fetches various metrics (24h/1h volume, spread, ATR, ATR growth, and
+standard deviation growth) for all futures symbols on an exchange and
+selects top candidates according to basic volume rule and a maximum
+number of positions.
 """
 
 from __future__ import annotations
@@ -22,7 +22,9 @@ class SymbolMetrics:
     vol_24h: float
     vol_1h: float
     spread: float
+    midpoint: float
     atr: float
+    atr_growth: float
     stddev_growth: float
 
 
@@ -60,6 +62,7 @@ def fetch_metrics(exchange: ccxt.Exchange, symbol: str) -> SymbolMetrics | None:
         bid = ticker.get("bid") or 0.0
         ask = ticker.get("ask") or 0.0
         spread = ask - bid
+        midpoint = (ask + bid) / 2 if ask and bid else 0.0
 
         ohlcv_1h = exchange.fetch_ohlcv(symbol, timeframe="1h", limit=25)
         df_1h = pd.DataFrame(
@@ -74,7 +77,13 @@ def fetch_metrics(exchange: ccxt.Exchange, symbol: str) -> SymbolMetrics | None:
         )
         sd_growth = stddev_growth(df_1m, df_1h)
 
-        return SymbolMetrics(symbol, vol_24h, vol_1h, spread, atr, sd_growth)
+        atr_recent = atr_from_ohlcv(df_1m.iloc[-30:])
+        atr_prev = atr_from_ohlcv(df_1m.iloc[:30])
+        atr_growth = (atr_recent / atr_prev) if atr_prev else 0.0
+
+        return SymbolMetrics(
+            symbol, vol_24h, vol_1h, spread, midpoint, atr, atr_growth, sd_growth
+        )
     except Exception:
         return None
 
@@ -105,8 +114,18 @@ def screen_futures(
             continue
 
         m = fetch_metrics(exchange, symbol)
-        if m:
-            metrics.append(m)
+        if not m:
+            continue
+        # Additional screening conditions
+        if m.vol_1h < 200_000:
+            continue
+        if not m.midpoint or m.spread / m.midpoint > 0.0025:
+            continue
+        if m.atr_growth < 1.25:
+            continue
+        if m.stddev_growth < 1.20:
+            continue
+        metrics.append(m)
 
     metrics.sort(key=lambda m: m.atr, reverse=True)
     return metrics[:max_positions]
@@ -117,5 +136,6 @@ if __name__ == "__main__":
     for m in selected:
         print(
             f"{m.symbol}: vol24h={m.vol_24h:,.0f} vol1h={m.vol_1h:,.0f} "
-            f"spread={m.spread:.6f} atr={m.atr:.6f} sd_growth={m.stddev_growth:.3f}"
+            f"spread={m.spread:.6f} atr={m.atr:.6f} "
+            f"atr_growth={m.atr_growth:.2f} sd_growth={m.stddev_growth:.3f}"
         )
