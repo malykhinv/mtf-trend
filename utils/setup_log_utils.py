@@ -25,4 +25,7 @@ def row_from_signal(signal: SetupSignal, setup_tf: Timeframe) -> list:
         tradingview_link(signal.symbol),
         None,
         None,
+        None,
+        None,
+        None,
     ]

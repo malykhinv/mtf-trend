@@ -18,4 +18,7 @@ class SetupLogColumn(str, Enum):
     TRADINGVIEW = 'tradingview'
     MAIN_HIGH_CROSSED = 'main_high_crossed'
     CORRECTION_LOW_CROSSED = 'correction_low_crossed'
+    CORRECTION_DEPTH_PCT = 'correction_depth_pct'
+    TIME_TO_MAIN_HIGH = 'time_to_main_high'
+    OUTCOME = 'outcome'
 
