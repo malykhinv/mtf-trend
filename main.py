@@ -121,10 +121,12 @@ class TrendFilter:
 
     The filter inspects recent 5 minute candles for BTC and ETH to decide
     whether long or short signals should be allowed.  Long signals are
-    rejected when BTC shows a consecutive down move for at least five
-    minutes or when the latest close is below its 20 period EMA.  Short
-    signals are rejected when BTC has moved up for at least five
-    consecutive minutes.  Only signals that pass these checks are returned.
+    rejected when either coin shows a consecutive down move for at least
+    five minutes or when the latest close is below its 20 period EMA.
+    Short signals are rejected when BTC or ETH has moved up for at least
+    five consecutive minutes.  Only signals that pass these checks are
+    returned.  The decisions are stored on the instance as ``allow_long``
+    and ``allow_short`` for reuse elsewhere.
     """
 
     def filter(self, data: Any) -> Any:
@@ -143,8 +145,10 @@ class TrendFilter:
         btc_above = price_above_ema(btc)
         eth_above = price_above_ema(eth)
 
-        allow_long = not (btc_down or not btc_above)
-        allow_short = not btc_up
+        allow_long = not (btc_down or eth_down or not btc_above or not eth_above)
+        allow_short = not (btc_up or eth_up)
+        self.allow_long = allow_long
+        self.allow_short = allow_short
 
         filtered: dict[str, Any] = {}
         for symbol, signals in (data or {}).items():
@@ -203,20 +207,11 @@ def scan_and_enter() -> None:
     for symbol in filtered_data:
         logging.debug("Prepared data for %s", symbol)
 
-    candles = load_btc_eth_candles()
-    btc = candles.get("BTC/USDT")
-    eth = candles.get("ETH/USDT")
-    btc_up = has_consecutive_move(btc, "up")
-    btc_down = has_consecutive_move(btc, "down")
-    eth_up = has_consecutive_move(eth, "up")
-    eth_down = has_consecutive_move(eth, "down")
-    btc_above = price_above_ema(btc)
-
     global open_long, open_short
-    if open_long and (btc_down or eth_down or not btc_above):
+    if open_long and not getattr(trend_filter, "allow_long", True):
         logging.info("Conditions violated for long; cancelling long position")
         open_long = False
-    if open_short and (btc_up or eth_up or btc_above):
+    if open_short and not getattr(trend_filter, "allow_short", True):
         logging.info("Conditions violated for short; cancelling short position")
         open_short = False
     if not risk_manager or not trader:

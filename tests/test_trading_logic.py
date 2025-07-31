@@ -20,6 +20,10 @@ class DummyScreener:
 
 
 class DummyFilter:
+    def __init__(self, allow_long=True, allow_short=True):
+        self.allow_long = allow_long
+        self.allow_short = allow_short
+
     def filter(self, data):
         return data
 
