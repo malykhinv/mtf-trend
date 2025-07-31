@@ -130,18 +130,27 @@ def check_entry_conditions(
     """Return ``True`` if all entry thresholds are satisfied."""
 
     whitelist = CONFIG.get("bot", {}).get("whitelist", [])
+    deposit = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
+    max_deposit_trade = deposit * thresholds.get("deposit_pct", 1.0)
+    spread_pct = (
+        metrics.spread / metrics.futures_price
+        if metrics.futures_price
+        else float("inf")
+    )
 
     return (
         abs(metrics.funding_rate) >= thresholds.get("funding_rate", 0.0)
+        and spread_pct <= thresholds.get("spread", float("inf"))
         and metrics.basis <= thresholds.get("basis", float("inf"))
         and metrics.liquidity >= thresholds.get("liquidity", 0.0)
         and metrics.volume >= thresholds.get("volume", 0.0)
         and metrics.volatility <= thresholds.get("volatility", float("inf"))
-        and metrics.open_interest <= thresholds.get("open_interest", float("inf"))
+        and metrics.open_interest <= metrics.volume * 2
         and metrics.slippage <= thresholds.get("slippage", float("inf"))
         and thresholds.get("min_trade_size", 0.0)
         <= quantity
         <= thresholds.get("max_trade_size", float("inf"))
+        and quantity <= max_deposit_trade
         and symbol in whitelist
         and not risk_control.is_symbol_open(symbol)
     )
@@ -170,8 +179,10 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     if symbol not in bot_cfg.get("whitelist", []):
         raise RuntimeError("Symbol not whitelisted")
     deposit = bot_cfg.get("deposit_size", float("inf"))
-    if quantity > deposit:
-        raise RuntimeError("Trade size exceeds deposit")
+    deposit_pct = CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)
+    max_trade = deposit * deposit_pct
+    if quantity > deposit or quantity > max_trade:
+        raise RuntimeError("Trade size exceeds deposit limits")
     if not risk_control.can_open_position(quantity) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
     entry_metrics = await get_market_metrics(symbol, quantity)

@@ -13,6 +13,9 @@ thresholds:
   open_interest: 0.0
   min_trade_size: 0.0
   max_trade_size: 1000.0
+  spread: 0.005
+  slippage: 0.003
+  deposit_pct: 0.05
 risk:
   max_position_size: 1000
   max_daily_loss: 500
