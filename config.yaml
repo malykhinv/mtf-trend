@@ -2,6 +2,11 @@ api:
   api_key: "YOUR_API_KEY"
   api_secret: "YOUR_API_SECRET"
 
+# Symbols to collect OHLCV data for
+symbols:
+  - "BTC/USDT"
+  - "ETH/USDT"
+
 trading_defaults:
   leverage: 1
   margin_mode: "cross"
