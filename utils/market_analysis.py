@@ -52,12 +52,12 @@ def has_consecutive_move(df: pd.DataFrame, direction: str, minutes: int = 5) -> 
 
     if df is None or df.empty or len(df) < minutes + 1:
         return False
-    closes = df["close"].tail(minutes + 1)
+    closes = df["close"].tail(minutes + 1).astype(float)
     diffs = closes.diff().dropna()
     if direction.lower() == "up":
-        return (diffs > 0).all()
+        return bool((diffs > 0).all())
     if direction.lower() == "down":
-        return (diffs < 0).all()
+        return bool((diffs < 0).all())
     raise ValueError("direction must be 'up' or 'down'")
 
 

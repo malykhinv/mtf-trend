@@ -56,6 +56,8 @@ def scan_and_enter(
         Risk-reward multiples for the first and second take profit levels.
     """
     logging.info("Running scan and entry logic")
+    if screener is None or data_collector is None:
+        return
     symbols = screener.screen()[:10]
     data = data_collector.collect(symbols)
     data = {s: data.get(s) for s in symbols if s in data}
@@ -101,7 +103,9 @@ def scan_and_enter(
             signals_by_symbol[symbol] = signals
 
     # Filter signals based on BTC trend
-    filtered_signals = trend_filter.filter(signals_by_symbol)
+    filtered_signals = (
+        trend_filter.filter(signals_by_symbol) if trend_filter else signals_by_symbol
+    )
     global selected_symbols
     selected_symbols = list(filtered_signals.keys())
 
@@ -114,7 +118,7 @@ def scan_and_enter(
         open_short = False
     if not risk_manager:
         return
-    if trader is None:
+    if trader is None and data_collector is not None:
         trader = FuturesTrader(
             data_collector.api_key,
             data_collector.api_secret,

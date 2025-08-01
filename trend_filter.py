@@ -28,9 +28,9 @@ class TrendFilter:
         btc = candles.get("BTC/USDT")
 
         # Определяем простые характеристики тренда
-        btc_up = has_consecutive_move(btc, "up")
-        btc_down = has_consecutive_move(btc, "down")
-        btc_above = price_above_ema(btc)
+        btc_up = has_consecutive_move(btc, "up") if btc is not None else False
+        btc_down = has_consecutive_move(btc, "down") if btc is not None else False
+        btc_above = price_above_ema(btc) if btc is not None else False
 
         allow_long = not (btc_down or not btc_above)
         allow_short = not btc_up

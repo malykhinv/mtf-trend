@@ -8,8 +8,9 @@ open interest (ΔOI) and volume statistics.  The resulting signals
 describe potential trades with entry, stop and take profit levels.
 """
 
+import math
 from dataclasses import dataclass
-from typing import List
+from typing import List, cast
 
 import pandas as pd
 
@@ -132,11 +133,13 @@ def evaluate_breakout(
     df["ema_long"] = df["close"].ewm(span=ema_long, adjust=False).mean()
     last = df.iloc[-1]
 
-    avg_volume = df["volume"].rolling(window=15, min_periods=1).mean().iloc[-1]
-    vol_change = df["volume"].diff()
-    vol_sigma = vol_change.rolling(window=15, min_periods=1).std().iloc[-1]
-    vol_delta = vol_change.iloc[-1]
-    if pd.isna(avg_volume) or pd.isna(vol_sigma) or pd.isna(vol_delta):
+    avg_volume = float(
+        df["volume"].rolling(window=15, min_periods=1).mean().iloc[-1]
+    )
+    vol_change = df["volume"].astype(float).diff()
+    vol_sigma = float(vol_change.rolling(window=15, min_periods=1).std().iloc[-1])
+    vol_delta = float(vol_change.iloc[-1])
+    if math.isnan(avg_volume) or math.isnan(vol_sigma) or math.isnan(vol_delta):
         return []
     vol_ok = (
         last["volume"] > avg_volume_mult * avg_volume
@@ -154,9 +157,9 @@ def evaluate_breakout(
     oi_ok_short = delta_oi_last > delta_oi_thresh
 
     cvd_smoothed = cvd.ewm(span=3, adjust=False).mean()
-    cvd_delta = cvd_smoothed.diff().iloc[-1]
-    cvd_ok_long = cvd_delta > 0
-    cvd_ok_short = cvd_delta < 0
+    cvd_delta = float(cast(float, cvd_smoothed.diff().iloc[-1]))
+    cvd_ok_long = cvd_delta > 0.0
+    cvd_ok_short = cvd_delta < 0.0
 
     signals: List[Signal] = []
     level = cluster_levels.iloc[-1]

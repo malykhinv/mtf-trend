@@ -61,7 +61,11 @@ class DataCollector:
 
             try:
                 cvd = get_cvd(symbol, "1m")
-                vol_delta = float(df["volume"].diff().iloc[-1]) if not df.empty else 0.0
+                vol_delta = (
+                    float(df["volume"].astype(float).diff().iloc[-1])
+                    if not df.empty
+                    else 0.0
+                )
             except Exception:
                 logging.exception("Failed to compute CVD/volume delta for %s", symbol)
                 cvd = pd.Series(dtype="float64")
@@ -90,7 +94,7 @@ class DataCollector:
                     if oi_col is not None:
                         oi_series = oi_df.set_index("timestamp")[oi_col].astype(float)
                         if not df.empty:
-                            oi_series = oi_series.reindex(df["timestamp"]).fillna(method="ffill")
+                            oi_series = oi_series.reindex(df["timestamp"]).fillna(method="ffill")  # type: ignore[call-overload]
                         delta_oi = oi_series.diff().fillna(0)
                     else:
                         oi_series = pd.Series(dtype="float64")

@@ -86,7 +86,7 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """Compute helper columns used during the backtest."""
 
     df = df.copy()
-    change = df["close"].diff().fillna(0)
+    change = df["close"].astype(float).diff().fillna(0.0)
     direction = np.where(change > 0, 1, np.where(change < 0, -1, 0))
     df["cvd"] = (direction * df["volume"].astype(float)).cumsum()
     df["oi"] = df.get("open_interest", pd.Series(0, index=df.index)).astype(float)
@@ -167,7 +167,8 @@ def run_backtest(
             )
         )
 
-    for i, row in df.iterrows():
+    for i in range(len(df)):
+        row = df.iloc[i]
         # Manage open trade
         if open_trade is not None:
             active_stop = open_trade.trail if open_trade.trail is not None else open_trade.stop
@@ -273,9 +274,9 @@ def run_backtest(
         # Evaluate broader market trend using recent BTC candles
         candles = load_btc_eth_candles()
         btc = candles.get("BTC/USDT")
-        btc_down = has_consecutive_move(btc, "down")
-        btc_up = has_consecutive_move(btc, "up")
-        btc_above = price_above_ema(btc)
+        btc_down = has_consecutive_move(btc, "down") if btc is not None else False
+        btc_up = has_consecutive_move(btc, "up") if btc is not None else False
+        btc_above = price_above_ema(btc) if btc is not None else False
 
         allow_long = not (btc_down or not btc_above)
         allow_short = not btc_up

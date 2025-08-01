@@ -51,6 +51,8 @@ BOUNDS = {
     "cvd_ema": (2, 5),
 }
 
+INT_PARAMS = {"candle_depth", "ema_short", "ema_long", "cvd_ema"}
+
 
 def random_genome() -> Genome:
     """Return a randomly initialized :class:`Genome`."""
@@ -58,14 +60,22 @@ def random_genome() -> Genome:
     while True:
         g = Genome(
             cluster_width=random.uniform(*BOUNDS["cluster_width"]),
-            candle_depth=random.randint(*BOUNDS["candle_depth"]),
+            candle_depth=random.randint(
+                int(BOUNDS["candle_depth"][0]), int(BOUNDS["candle_depth"][1])
+            ),
             sl=random.uniform(*BOUNDS["sl"]),
             tp1_rr=random.uniform(*BOUNDS["tp1_rr"]),
             tp2_rr=random.uniform(*BOUNDS["tp2_rr"]),
-            ema_short=random.randint(*BOUNDS["ema_short"]),
-            ema_long=random.randint(*BOUNDS["ema_long"]),
+            ema_short=random.randint(
+                int(BOUNDS["ema_short"][0]), int(BOUNDS["ema_short"][1])
+            ),
+            ema_long=random.randint(
+                int(BOUNDS["ema_long"][0]), int(BOUNDS["ema_long"][1])
+            ),
             delta_volume_spike=random.uniform(*BOUNDS["delta_volume_spike"]),
-            cvd_ema=random.randint(*BOUNDS["cvd_ema"]),
+            cvd_ema=random.randint(
+                int(BOUNDS["cvd_ema"][0]), int(BOUNDS["cvd_ema"][1])
+            ),
         )
         if g.ema_short < g.ema_long and g.tp1_rr < g.tp2_rr:
             return g
@@ -77,14 +87,15 @@ def mutate(genome: Genome, rate: float = 0.1) -> Genome:
     data = genome.__dict__.copy()
     for key, (low, high) in BOUNDS.items():
         if random.random() < rate:
-            if isinstance(low, int) and isinstance(high, int):
-                data[key] = random.randint(low, high)
+            if key in INT_PARAMS:
+                data[key] = random.randint(int(low), int(high))
             else:
                 data[key] = random.uniform(low, high)
     g = Genome(**data)
     if g.ema_short >= g.ema_long:
-        g.ema_short, g.ema_long = min(g.ema_short, g.ema_long - 1), max(
-            g.ema_short + 1, g.ema_long
+        g.ema_short, g.ema_long = (
+            int(min(g.ema_short, g.ema_long - 1)),
+            int(max(g.ema_short + 1, g.ema_long)),
         )
     if g.tp1_rr >= g.tp2_rr:
         g.tp1_rr, g.tp2_rr = sorted((g.tp1_rr, g.tp2_rr))
@@ -101,7 +112,9 @@ def crossover(a: Genome, b: Genome) -> Genome:
         child_data[key] = getattr(a, key) if i < point else getattr(b, key)
     child = Genome(**child_data)
     if child.ema_short >= child.ema_long:
-        child.ema_short = max(BOUNDS["ema_short"][0], child.ema_long - 1)
+        child.ema_short = int(
+            max(BOUNDS["ema_short"][0], child.ema_long - 1)
+        )
     if child.tp1_rr >= child.tp2_rr:
         child.tp1_rr, child.tp2_rr = sorted((child.tp1_rr, child.tp2_rr))
     return child
@@ -125,7 +138,7 @@ def evaluate(genome: Genome, data: pd.DataFrame) -> float:
     df["avg_volume"] = df["volume"].rolling(genome.candle_depth).mean()
     df["volume_spike"] = df["volume"] > (genome.delta_volume_spike * df["avg_volume"])
 
-    change = df["close"].diff().fillna(0)
+    change = df["close"].astype(float).diff().fillna(0.0)
     direction_arr = np.where(change > 0, 1, np.where(change < 0, -1, 0))
     df["cvd"] = (direction_arr * df["volume"].astype(float)).cumsum()
     df["cvd_ema"] = df["cvd"].ewm(span=genome.cvd_ema).mean()
