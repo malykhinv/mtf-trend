@@ -114,36 +114,12 @@ class FuturesTrader:
                 filled_order.get("average") or filled_order.get("price") or 0.0
             )
             ts = filled_order.get("timestamp")
-            entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
-            exit_events = self.manage_exit_orders(
-                symbol, side, amount, tp, sl, entry_price, trade_id
+            entry_time = (
+                pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
             )
-            if exit_events:
-                direction = "long" if side.lower() == "buy" else "short"
-                risk = abs(entry_price - sl) if sl is not None else 0.0
-                for i, (exit_price, exit_time) in enumerate(exit_events):
-                    pnl = (
-                        exit_price - entry_price
-                        if direction == "long"
-                        else entry_price - exit_price
-                    )
-                    rr = pnl / risk if risk else 0.0
-                    if self.trade_logger:
-                        self.trade_logger(
-                            {
-                                "symbol": symbol,
-                                "direction": direction,
-                                "entry_time": entry_time,
-                                "entry": entry_price,
-                                "stop": sl if sl is not None else 0.0,
-                                "tp": tp if (tp is not None and i == 0) else 0.0,
-                                "exit_time": exit_time,
-                                "exit": exit_price,
-                                "pnl": pnl,
-                                "rr": rr,
-                            }
-                        )
-            return True
+            return self.manage_exit_orders(
+                symbol, side, amount, tp, sl, entry_price, entry_time, trade_id
+            )
         return False
 
     # ------------------------------------------------------------------
@@ -183,36 +159,12 @@ class FuturesTrader:
                 filled_order.get("average") or filled_order.get("price") or price
             )
             ts = filled_order.get("timestamp")
-            entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
-            exit_events = self.manage_exit_orders(
-                symbol, side, amount, tp, sl, entry_price, trade_id
+            entry_time = (
+                pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
             )
-            if exit_events:
-                direction = "long" if side.lower() == "buy" else "short"
-                risk = abs(entry_price - sl) if sl is not None else 0.0
-                for i, (exit_price, exit_time) in enumerate(exit_events):
-                    pnl = (
-                        exit_price - entry_price
-                        if direction == "long"
-                        else entry_price - exit_price
-                    )
-                    rr = pnl / risk if risk else 0.0
-                    if self.trade_logger:
-                        self.trade_logger(
-                            {
-                                "symbol": symbol,
-                                "direction": direction,
-                                "entry_time": entry_time,
-                                "entry": entry_price,
-                                "stop": sl if sl is not None else 0.0,
-                                "tp": tp if (tp is not None and i == 0) else 0.0,
-                                "exit_time": exit_time,
-                                "exit": exit_price,
-                                "pnl": pnl,
-                                "rr": rr,
-                            }
-                        )
-            return True
+            return self.manage_exit_orders(
+                symbol, side, amount, tp, sl, entry_price, entry_time, trade_id
+            )
         return False
 
     # ------------------------------------------------------------------
@@ -241,24 +193,29 @@ class FuturesTrader:
         tp: float | None,
         sl: float | None,
         entry_price: float,
+        entry_time: pd.Timestamp,
         trade_id: str | None = None,
-    ) -> list[tuple[float, pd.Timestamp]]:
-        """Submit TP/SL orders and manage a trailing stop.
+    ) -> bool:
+        """Submit TP/SL orders, manage trailing stop and log the trade.
 
         Two take-profit targets are supported: ``tp`` for 50% of the position
         size and a trailing stop for the remaining half. A fixed ``sl`` can be
         supplied which acts as the initial stop loss before the trailing stop
-        kicks in.  The function returns a list of ``(exit_price, exit_time)``
-        tuples for each filled exit order.
+        kicks in.  Once the trade is closed, :func:`append_trade` is called with
+        aggregated information including ``tp1`` and final exit ``tp2``.
         """
 
         opposite = "sell" if side.lower() == "buy" else "buy"
         tp_id: str | None = None
         sl_id: str | None = None
-        events: list[tuple[float, pd.Timestamp]] = []
         half_amount = amount / 2
         trailing_step = 0.002
         current_stop = sl if sl is not None else 0.0
+        tp1_price: float = 0.0
+        tp1_time: pd.Timestamp | None = None
+        final_price: float = 0.0
+        final_time: pd.Timestamp | None = None
+        result: str = ""
 
         if tp is not None:
             try:
@@ -273,7 +230,7 @@ class FuturesTrader:
                 )
                 tp_id = tp_order.get("id")
             except ccxt.BaseError:
-                return events
+                return False
 
         if sl is not None:
             try:
@@ -288,10 +245,10 @@ class FuturesTrader:
                 )
                 sl_id = sl_order.get("id")
             except ccxt.BaseError:
-                return events
+                return False
 
         if not tp_id and not sl_id:
-            return events
+            return False
 
         tp_filled = False
         highest: float | None = None
@@ -305,18 +262,19 @@ class FuturesTrader:
                         self.exchange.fetch_order, tp_id, symbol
                     ).get("status")
                 except ccxt.BaseError:
-                    return events
+                    return False
             if sl_id:
                 try:
                     sl_status = self._retry(
                         self.exchange.fetch_order, sl_id, symbol
                     ).get("status")
                 except ccxt.BaseError:
-                    return events
+                    return False
 
             if not tp_filled and tp_status == "closed":
                 exit_price = tp if tp is not None else 0.0
-                events.append((exit_price, pd.Timestamp.utcnow()))
+                tp1_price = exit_price
+                tp1_time = pd.Timestamp.utcnow()
                 if self.risk_manager and trade_id is not None:
                     pnl = (
                         exit_price - entry_price
@@ -345,7 +303,7 @@ class FuturesTrader:
                         sl_id = sl_order.get("id")
                         current_stop = sl
                     except ccxt.BaseError:
-                        return events
+                        return False
                 try:
                     ticker = self._retry(self.exchange.fetch_ticker, symbol)
                     price = float(ticker.get("last") or 0.0)
@@ -358,7 +316,8 @@ class FuturesTrader:
                         self._retry(self.exchange.cancel_order, tp_id, symbol)
                     except ccxt.BaseError:
                         pass
-                events.append((current_stop, pd.Timestamp.utcnow()))
+                final_price = current_stop
+                final_time = pd.Timestamp.utcnow()
                 if self.risk_manager and trade_id is not None:
                     pnl = (
                         current_stop - entry_price
@@ -366,7 +325,8 @@ class FuturesTrader:
                         else entry_price - current_stop
                     )
                     self.risk_manager.close_trade(trade_id, pnl)
-                return events
+                result = "sl" if not tp_filled else "tp2"
+                break
 
             if tp_filled and sl_id:
                 try:
@@ -397,7 +357,7 @@ class FuturesTrader:
                             sl_id = sl_order.get("id")
                             current_stop = new_stop
                         except ccxt.BaseError:
-                            return events
+                            return False
                 else:
                     if highest is None or price < highest:
                         highest = price
@@ -420,16 +380,17 @@ class FuturesTrader:
                             sl_id = sl_order.get("id")
                             current_stop = new_stop
                         except ccxt.BaseError:
-                            return events
+                            return False
 
                 try:
                     sl_status = self._retry(
                         self.exchange.fetch_order, sl_id, symbol
                     ).get("status")
                 except ccxt.BaseError:
-                    return events
+                    return False
                 if sl_status == "closed":
-                    events.append((current_stop, pd.Timestamp.utcnow()))
+                    final_price = current_stop
+                    final_time = pd.Timestamp.utcnow()
                     if self.risk_manager and trade_id is not None:
                         pnl = (
                             current_stop - entry_price
@@ -437,7 +398,46 @@ class FuturesTrader:
                             else entry_price - current_stop
                         )
                         self.risk_manager.close_trade(trade_id, pnl)
-                    return events
+                    result = "tp2"
+                    break
 
             time.sleep(0.1)
+
+        # compute and log trade
+        direction = "long" if side.lower() == "buy" else "short"
+        risk = abs(entry_price - sl) if sl is not None else 0.0
+        if tp_filled:
+            pnl1 = (
+                tp1_price - entry_price if direction == "long" else entry_price - tp1_price
+            )
+            pnl2 = (
+                final_price - entry_price
+                if direction == "long"
+                else entry_price - final_price
+            )
+            pnl = (pnl1 + pnl2) / 2
+        else:
+            pnl = (
+                final_price - entry_price
+                if direction == "long"
+                else entry_price - final_price
+            )
+        rr = pnl / risk if risk else 0.0
+        if self.trade_logger:
+            self.trade_logger(
+                {
+                    "symbol": symbol,
+                    "direction": direction,
+                    "entry_time": entry_time,
+                    "entry": entry_price,
+                    "stop": sl if sl is not None else 0.0,
+                    "tp1": tp1_price if tp_filled else 0.0,
+                    "tp2": final_price,
+                    "exit_time": final_time,
+                    "pnl": pnl,
+                    "rr": rr,
+                    "result": result,
+                }
+            )
+        return True
 
