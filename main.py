@@ -2,214 +2,25 @@ from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 import pandas as pd
 import schedule
 import yaml
 from dotenv import load_dotenv
 import ccxt
-from utils.ohlcv_fetcher import fetch_all_from_config
+from utils.market_analysis import load_btc_eth_candles
 from utils.trade_logger import daily_summary, send_telegram_message
-from utils.market_analysis import (
-    load_btc_eth_candles,
-    has_consecutive_move,
-    price_above_ema,
-)
-from utils.cvd import get_cvd
-from utils.futures_screener import screen_futures
 from utils.range_clusters import find_tight_range_clusters
 from utils.breakout_signals import evaluate_breakout, Signal
 from utils.futures_trader import FuturesTrader
-
-
-class DataCollector:
-    """Collect OHLCV data for configured symbols."""
-
-    def __init__(self, api_key: str, api_secret: str, config: dict) -> None:
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.config = config
-        exchange_name = config.get("api", {}).get("futures_exchange", "binanceusdm")
-        exchange_class = getattr(ccxt, exchange_name)
-        self.exchange = exchange_class(
-            {
-                "apiKey": api_key,
-                "secret": api_secret,
-                "enableRateLimit": True,
-            }
-        )
-
-    def collect(self, symbols: Optional[list[str]] = None) -> Any:
-        """Fetch recent OHLCV data and metrics for the given symbols.
-
-        Parameters
-        ----------
-        symbols:
-            Optional list of symbols to collect data for. If not provided,
-            ``config['symbols']`` is used.
-        """
-        logging.info("Collecting market data")
-        end = pd.Timestamp.utcnow()
-        start = end - pd.Timedelta(days=1)
-        symbols = symbols or self.config.get("symbols", [])
-        fetch_all_from_config({**self.config, "symbols": symbols}, start, end, timeframe="1m")
-
-        data_dir = (
-            Path(self.config.get("data_paths", {}).get("data_dir", "data"))
-            / "raw_data"
-        )
-        results: dict[str, dict[str, Any]] = {}
-        for symbol in symbols:
-            ohlcv_file = data_dir / f"{symbol.replace('/', '')}_1m.csv"
-            df = pd.DataFrame()
-            if ohlcv_file.exists():
-                df = pd.read_csv(ohlcv_file, parse_dates=["timestamp"])
-                df.to_csv(data_dir / f"{symbol.replace('/', '')}.csv", index=False)
-
-            db_path = Path(self.config.get("data_paths", {}).get("data_dir", "data")) / "market_data.db"
-            db_path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(db_path)
-            df.to_sql(symbol.replace('/', '_'), conn, if_exists='replace', index=False)
-            conn.close()
-
-            try:
-                cvd = get_cvd(symbol, "1m")
-                vol_delta = float(df["volume"].diff().iloc[-1]) if not df.empty else 0.0
-            except Exception:
-                logging.exception("Failed to compute CVD/volume delta for %s", symbol)
-                cvd = pd.Series(dtype="float64")
-                vol_delta = 0.0
-
-            try:
-                limit = len(df) if not df.empty else 100
-                oi_hist = self.exchange.fetch_open_interest_history(
-                    symbol, timeframe="1m", limit=limit
-                )
-                oi_df = pd.DataFrame(oi_hist)
-                if not oi_df.empty:
-                    oi_df["timestamp"] = pd.to_datetime(oi_df["timestamp"], unit="ms")
-                    oi_col = next(
-                        (
-                            c
-                            for c in [
-                                "openInterest",
-                                "openInterestAmount",
-                                "openInterestValue",
-                            ]
-                            if c in oi_df.columns
-                        ),
-                        None,
-                    )
-                    if oi_col is not None:
-                        oi_series = oi_df.set_index("timestamp")[oi_col].astype(float)
-                        if not df.empty:
-                            oi_series = oi_series.reindex(df["timestamp"]).fillna(method="ffill")
-                        delta_oi = oi_series.diff().fillna(0)
-                    else:
-                        oi_series = pd.Series(dtype="float64")
-                        delta_oi = pd.Series(dtype="float64")
-                else:
-                    oi_series = pd.Series(dtype="float64")
-                    delta_oi = pd.Series(dtype="float64")
-            except Exception:
-                logging.exception(
-                    "Failed to fetch open interest history for %s", symbol
-                )
-                oi_series = pd.Series(dtype="float64")
-                delta_oi = pd.Series(dtype="float64")
-
-            try:
-                fr = self.exchange.fetch_funding_rate(symbol)
-                funding_rate = float(
-                    fr.get("fundingRate")
-                    or fr.get("info", {}).get("fundingRate", 0.0)
-                )
-            except Exception:
-                logging.exception("Failed to fetch funding rate for %s", symbol)
-                funding_rate = 0.0
-
-            results[symbol] = {
-                "ohlcv": df,
-                "cvd": cvd,
-                "volume_delta": vol_delta,
-                "open_interest": oi_series,
-                "delta_oi": delta_oi,
-                "funding_rate": funding_rate,
-            }
-
-        return results
-
-
-class Screener:
-    """Wrapper around :func:`utils.futures_screener.screen_futures`."""
-
-    def __init__(self, exchange_name: str = "binanceusdm") -> None:
-        self.exchange_name = exchange_name
-
-    def screen(self, data: Any | None = None, max_symbols: int = 10) -> list[str]:
-        """Return a list of symbols matching the screener criteria."""
-        logging.info("Screening futures markets")
-        metrics = screen_futures(
-            exchange_name=self.exchange_name, max_positions=max_symbols
-        )
-        return [m.symbol for m in metrics]
-
-
-class TrendFilter:
-    """Filter trading signals based on the broader BTC market trend.
-
-    The filter inspects recent five minute candles for BTC to decide whether
-    long or short signals should be allowed. Long signals are rejected when
-    BTC shows a consecutive down move for at least five minutes or when the
-    latest close is below its 20 period EMA. Short signals are rejected when
-    BTC has moved up for at least five consecutive minutes. Only signals that
-    pass these checks are returned. The decisions are stored on the instance as
-    ``allow_long`` and ``allow_short`` for reuse elsewhere.
-    """
-
-    def filter(self, data: Any) -> Any:
-        logging.info("Applying trend filters")
-
-        # Load recent BTC candles to determine the broader trend
-        candles = load_btc_eth_candles()
-        btc = candles.get("BTC/USDT")
-
-        # Determine simple trend characteristics
-        btc_up = has_consecutive_move(btc, "up")
-        btc_down = has_consecutive_move(btc, "down")
-        btc_above = price_above_ema(btc)
-
-        allow_long = not (btc_down or not btc_above)
-        allow_short = not btc_up
-        self.allow_long = allow_long
-        self.allow_short = allow_short
-
-        filtered: dict[str, Any] = {}
-        for symbol, signals in (data or {}).items():
-            # ``signals`` may be a list of Signal objects or a single Signal.
-            # We normalise to a list to simplify processing.
-            sig_list = signals if isinstance(signals, list) else [signals]
-            passed = []
-            for sig in sig_list:
-                direction = getattr(sig, "direction", None)
-                if direction == "long" and not allow_long:
-                    continue
-                if direction == "short" and not allow_short:
-                    continue
-                passed.append(sig)
-            if passed:
-                # Preserve original structure (list vs single object)
-                filtered[symbol] = passed if isinstance(signals, list) else passed[0]
-
-        return filtered
-
-
 from utils.risk import RiskManager
 
+from data_collector import DataCollector
+from screener import Screener
+from trend_filter import TrendFilter
 
 def load_config(path: str | Path = "config.yaml") -> dict:
     """Load configuration from a YAML file."""
