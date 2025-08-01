@@ -16,8 +16,8 @@ fetcher:
     - "1h"
 
 trading_defaults:
-  leverage: 1
-  margin_mode: "cross"
+  leverage: 3
+  margin_mode: "isolated"
 
 risk_limits:
   max_position_size: 1000
