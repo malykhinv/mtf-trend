@@ -77,6 +77,8 @@ def evaluate_breakout(
     ema_long: int = 30,
     funding_limit: float = 0.01,
     delta_oi_thresh: float = 0.0,
+    tp1_rr: float = 1.5,
+    tp2_rr: float = 3.0,
 ) -> List[Signal]:
     """Evaluate breakout conditions and return trading signals.
 
@@ -110,6 +112,9 @@ def evaluate_breakout(
         Maximum absolute funding rate allowed for signals.
     delta_oi_thresh:
         Minimum absolute change in open interest required.
+    tp1_rr, tp2_rr:
+        Risk-reward multiples used to compute the first and second take profit
+        levels relative to the entry price and calculated risk.
 
     Returns
     -------
@@ -173,8 +178,8 @@ def evaluate_breakout(
                 "long",
                 entry,
                 stop,
-                entry + 1.5 * risk,
-                entry + 3 * risk,
+                entry + tp1_rr * risk,
+                entry + tp2_rr * risk,
             )
         )
 
@@ -196,8 +201,8 @@ def evaluate_breakout(
                 "short",
                 entry,
                 stop,
-                entry - 1.5 * risk,
-                entry - 3 * risk,
+                entry - tp1_rr * risk,
+                entry - tp2_rr * risk,
             )
         )
 

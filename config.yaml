@@ -30,6 +30,8 @@ data_paths:
 strategy:
   avg_volume_mult: 1.5
   delta_volume_mult: 2.0
+  tp1_rr: 1.5
+  tp2_rr: 3.0
 
 feature_toggles:
   enable_notifications: true
