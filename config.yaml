@@ -1,6 +1,3 @@
-api_keys:
-  binance: YOUR_BINANCE_API_KEY
-  secret: YOUR_BINANCE_SECRET
 thresholds:
   buy_signal: 0.8
   sell_signal: 0.2

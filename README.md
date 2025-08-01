@@ -17,6 +17,21 @@ python main.py
 pip install -r requirements.txt
 ```
 
+## Конфигурация
+
+Создайте файл `.env` в корне проекта и укажите API‑ключи:
+
+```bash
+BINANCE_API_KEY=...
+BINANCE_API_SECRET=...
+BYBIT_API_KEY=...
+BYBIT_API_SECRET=...
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+```
+
+Файл `.env` не должен попадать в репозиторий.
+
 ## Условия входа и выхода
 
 | Проверка | Вход | Выход |

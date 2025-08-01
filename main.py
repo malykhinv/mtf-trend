@@ -8,11 +8,15 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 import yaml
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import exchanges
 from exchanges.binance import BinanceExchange
@@ -53,6 +57,15 @@ def load_config(path: str = "config.yaml") -> None:
     CONFIG["thresholds"] = strategy.get_thresholds(
         CONFIG.get("thresholds", {})
     )
+
+    # API-ключи загружаем из переменных окружения
+    api_keys = {
+        "binance": os.getenv("BINANCE_API_KEY"),
+        "secret": os.getenv("BINANCE_API_SECRET"),
+        "bybit": os.getenv("BYBIT_API_KEY"),
+        "bybit_secret": os.getenv("BYBIT_API_SECRET"),
+    }
+    CONFIG["api_keys"] = {k: v for k, v in api_keys.items() if v}
 
 
 def initialize_bot() -> None:

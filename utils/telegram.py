@@ -3,6 +3,9 @@ from typing import Dict, Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
+from dotenv import load_dotenv
+
+load_dotenv()
 
 API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
