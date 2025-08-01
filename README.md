@@ -15,7 +15,7 @@ should be adjusted only after careful consideration:
 | `volume`         | `20000000`  | Minimum 24h trading volume to ensure liquidity |
 | `min_trade_size` | `10`        | Minimum notional value per trade |
 | `spread`         | `0.005`     | Maximum allowable spread percentage |
-| `slippage`       | `0.003`     | Maximum expected slippage per trade |
+| `slippage`       | `0.003`     | Maximum expected combined slippage across spot and futures |
 | `deposit_pct`    | `0.05`      | Max fraction of total deposit allocated per trade |
 
 These settings aim to provide a safety buffer for new users. Increase or relax them only if
