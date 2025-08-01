@@ -33,11 +33,11 @@ class BinanceExchange(BaseExchange):
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws: Optional[Any] = None
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
         # Обработка WebSocket для спота
-        self._spot_ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._spot_ws: Optional[Any] = None
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
@@ -71,7 +71,7 @@ class BinanceExchange(BaseExchange):
         """Получает текущую ставку фондирования для ``symbol``."""
         session = await self._session_get()
         url = f"{self.REST_URL}/fapi/v1/fundingRate"
-        params = {"symbol": symbol, "limit": 1}
+        params: dict[str, str | int] = {"symbol": symbol, "limit": 1}
         async with session.get(url, params=params) as resp:
             data = await resp.json()
         return float(data[0]["fundingRate"])
@@ -84,7 +84,7 @@ class BinanceExchange(BaseExchange):
         url = f"{self.REST_URL}/fapi/v1/fundingRate"
         end_time = int(time.time() * 1000)
         start_time = end_time - hours * 3600 * 1000
-        params = {
+        params: dict[str, int | str] = {
             "symbol": symbol,
             "startTime": start_time,
             "endTime": end_time,
@@ -125,14 +125,13 @@ class BinanceExchange(BaseExchange):
     async def get_stats(self, symbol: str) -> dict:
         """Получает 24‑часовой объём и открытый интерес для ``symbol``."""
         session = await self._session_get()
-        ticker_url = f"{self.REST_URL}/fapi/v1/ticker/24hr"
-        params = {"symbol": symbol}
-        async with session.get(ticker_url, params=params) as resp:
+        ticker_url = f"{self.REST_URL}/fapi/v1/ticker/24hr?symbol={symbol}"
+        async with session.get(ticker_url) as resp:
             ticker = await resp.json()
         # ``volume`` в базовой валюте; используем ``quoteVolume`` для USD
         volume = float(ticker.get("quoteVolume", ticker.get("volume", 0.0)))
-        oi_url = f"{self.REST_URL}/fapi/v1/openInterest"
-        async with session.get(oi_url, params=params) as resp:
+        oi_url = f"{self.REST_URL}/fapi/v1/openInterest?symbol={symbol}"
+        async with session.get(oi_url) as resp:
             oi = await resp.json()
         open_interest = float(oi.get("openInterest", 0.0))
         return {"volume_24h": volume, "open_interest": open_interest}
@@ -143,7 +142,7 @@ class BinanceExchange(BaseExchange):
         """Возвращает свечи OHLC для ``symbol``."""
         session = await self._session_get()
         url = f"{self.REST_URL}/fapi/v1/klines"
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        params: dict[str, str | int] = {"symbol": symbol, "interval": interval, "limit": limit}
         async with session.get(url, params=params) as resp:
             data = await resp.json()
         return [
@@ -194,7 +193,7 @@ class BinanceExchange(BaseExchange):
 
     async def _connect_spot(
         self, symbol: str, depth: int
-    ) -> websockets.WebSocketClientProtocol:
+    ) -> Any:
         """Подключается к спотовому WebSocket и возвращает соединение."""
         while True:
             try:
@@ -239,7 +238,7 @@ class BinanceExchange(BaseExchange):
     # Обработка WebSocket
     # ------------------------------------------------------------------
 
-    async def _connect(self, symbol: str) -> websockets.WebSocketClientProtocol:
+    async def _connect(self, symbol: str) -> Any:
         """Создаёт WebSocket‑соединение для фьючерсного стакана."""
         while True:
             try:

@@ -1,31 +1,33 @@
-import pytest
-import sys
 import pathlib
+import sys
+from typing import Any, Dict
 
 import pytest
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-from exchanges.binance import BinanceExchange
+from exchanges.binance import BinanceExchange  # noqa: E402
 
 
 class DummyResponse:
-    def __init__(self, data):
+    def __init__(self, data: Dict[str, Any]) -> None:
         self.data = data
 
-    async def json(self):
+    async def json(self) -> Dict[str, Any]:
         return self.data
 
-    async def __aenter__(self):
+    async def __aenter__(self) -> "DummyResponse":
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(
+        self, exc_type: Any, exc: Any, tb: Any
+    ) -> None:  # pragma: no cover - no cleanup needed
         pass
 
 
 class DummySession:
     @staticmethod
-    def get(url):
+    def get(url: str) -> DummyResponse:
         if "ticker/24hr" in url:
             return DummyResponse({"quoteVolume": "500", "volume": "5"})
         if "openInterest" in url:
@@ -34,11 +36,13 @@ class DummySession:
 
 
 @pytest.mark.asyncio
-async def test_get_stats_uses_quote_volume(monkeypatch):
+async def test_get_stats_uses_quote_volume(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ex = BinanceExchange("key", "secret")
     dummy = DummySession()
 
-    async def session_get():
+    async def session_get() -> DummySession:
         return dummy
 
     monkeypatch.setattr(ex, "_session_get", session_get)

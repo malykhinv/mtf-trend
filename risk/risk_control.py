@@ -18,8 +18,8 @@ class RiskLimits:
 
     max_position_size: float = float("inf")
     max_daily_loss: float = float("inf")
-    max_consecutive_losses: int = float("inf")
-    max_open_positions: int = float("inf")
+    max_consecutive_losses: float = float("inf")
+    max_open_positions: float = float("inf")
     deposit_cap: float = float("inf")
 
 
