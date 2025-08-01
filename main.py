@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -67,6 +68,12 @@ class DataCollector:
             df = pd.DataFrame()
             if ohlcv_file.exists():
                 df = pd.read_csv(ohlcv_file, parse_dates=["timestamp"])
+
+            db_path = Path(self.config.get("data_paths", {}).get("data_dir", "data")) / "market_data.db"
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(db_path)
+            df.to_sql(symbol.replace('/', '_'), conn, if_exists='replace', index=False)
+            conn.close()
 
             try:
                 cvd = get_cvd(symbol, "5m")
