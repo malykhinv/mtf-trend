@@ -1,6 +1,5 @@
 api:
-  api_key: "YOUR_API_KEY"
-  api_secret: "YOUR_API_SECRET"
+  futures_exchange: "binanceusdm"
 
 # Symbols to collect OHLCV data for
 symbols:
