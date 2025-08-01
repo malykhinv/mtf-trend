@@ -160,36 +160,31 @@ class Screener:
 
 
 class TrendFilter:
-    """Filter trading signals based on broader market trend.
+    """Filter trading signals based on the broader BTC market trend.
 
-    The filter inspects recent 5 minute candles for BTC and ETH to decide
-    whether long or short signals should be allowed.  Long signals are
-    rejected when either coin shows a consecutive down move for at least
-    five minutes or when the latest close is below its 20 period EMA.
-    Short signals are rejected when BTC or ETH has moved up for at least
-    five consecutive minutes.  Only signals that pass these checks are
-    returned.  The decisions are stored on the instance as ``allow_long``
-    and ``allow_short`` for reuse elsewhere.
+    The filter inspects recent five minute candles for BTC to decide whether
+    long or short signals should be allowed. Long signals are rejected when
+    BTC shows a consecutive down move for at least five minutes or when the
+    latest close is below its 20 period EMA. Short signals are rejected when
+    BTC has moved up for at least five consecutive minutes. Only signals that
+    pass these checks are returned. The decisions are stored on the instance as
+    ``allow_long`` and ``allow_short`` for reuse elsewhere.
     """
 
     def filter(self, data: Any) -> Any:
         logging.info("Applying trend filters")
 
-        # Load recent BTC and ETH candles to determine the broader trend
+        # Load recent BTC candles to determine the broader trend
         candles = load_btc_eth_candles()
         btc = candles.get("BTC/USDT")
-        eth = candles.get("ETH/USDT")
 
         # Determine simple trend characteristics
         btc_up = has_consecutive_move(btc, "up")
         btc_down = has_consecutive_move(btc, "down")
-        eth_up = has_consecutive_move(eth, "up")
-        eth_down = has_consecutive_move(eth, "down")
         btc_above = price_above_ema(btc)
-        eth_above = price_above_ema(eth)
 
-        allow_long = not (btc_down or eth_down or not btc_above or not eth_above)
-        allow_short = not (btc_up or eth_up)
+        allow_long = not (btc_down or not btc_above)
+        allow_short = not btc_up
         self.allow_long = allow_long
         self.allow_short = allow_short
 
@@ -294,7 +289,7 @@ def scan_and_enter(
         if signals:
             signals_by_symbol[symbol] = signals
 
-    # Filter signals based on BTC/ETH trend
+    # Filter signals based on BTC trend
     filtered_signals = trend_filter.filter(signals_by_symbol)
     global selected_symbols
     selected_symbols = list(filtered_signals.keys())
