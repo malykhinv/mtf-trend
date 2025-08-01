@@ -70,10 +70,15 @@ class Position:
 
 def load_data(symbol: str, data_dir: str | Path) -> pd.DataFrame:
     """Load OHLCV data for ``symbol`` from ``data_dir``."""
-
     path = Path(data_dir) / f"{symbol}.csv"
     if not path.exists():
-        raise FileNotFoundError(f"No data for {symbol} at {path}")
+        alt = Path(data_dir) / f"{symbol}_1m.csv"
+        if alt.exists():
+            path = alt
+        else:
+            raise FileNotFoundError(
+                f"No data for {symbol} at {path} or {alt}"
+            )
     return pd.read_csv(path, parse_dates=["timestamp"])
 
 
