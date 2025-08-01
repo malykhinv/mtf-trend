@@ -5,3 +5,8 @@ ccxt
 pandas
 matplotlib
 requests
+numpy
+ta
+python-binance
+websocket-client
+scikit-learn
