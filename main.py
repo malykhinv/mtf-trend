@@ -140,6 +140,7 @@ def start_processing_loops() -> None:
             volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
                 "initial_quantity", entry.get("quantity", 0.0)
             )
+            pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
             notify_close(
                 position_id,
                 (
@@ -148,7 +149,7 @@ def start_processing_loops() -> None:
                     f"Basis: {basis_pct:.4f}%\n"
                     f"Volume: ${volume_usd:.2f}\n"
                     f"Time in position: {format_duration(hold)}\n"
-                    f"PnL: {pnl:.4f} Reasons: {reasons}"
+                    f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Reasons: {reasons}"
                 ),
             )
         finally:
@@ -192,7 +193,8 @@ def start_processing_loops() -> None:
                                     f"Funding: {metrics.funding_rate * 100:.4f}%\n"
                                     f"Basis: {metrics.basis:.4f}%\n"
                                     f"Volume: ${volume_usd:.2f}\n"
-                                    f"Time in position: {format_duration(0)}"
+                                    f"Time in position: {format_duration(0)}\n"
+                                    "Strategy: Long Spot / Short Perp"
                                 ),
                             )
                             task = asyncio.create_task(
