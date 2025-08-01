@@ -382,8 +382,13 @@ def main() -> None:
     init_logging(config["data_paths"]["log_dir"])
 
     load_dotenv()
-    api_key = os.getenv("API_KEY", config["api"]["api_key"])
-    api_secret = os.getenv("API_SECRET", config["api"]["api_secret"])
+    try:
+        api_key = os.environ["API_KEY"]
+        api_secret = os.environ["API_SECRET"]
+    except KeyError as err:
+        raise RuntimeError(
+            f"Missing environment variable: {err.args[0]}"
+        ) from err
     logging.info("API credentials loaded")
 
     def fetch_balance() -> float:
