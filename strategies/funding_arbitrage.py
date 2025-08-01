@@ -186,7 +186,8 @@ def check_entry_conditions(
     slippage_limit = thresholds.get("slippage", 0.003)
 
     return (
-        abs(metrics.funding_rate) >= thresholds.get("funding_rate", 0.0)
+        metrics.funding_rate > 0
+        and metrics.funding_rate >= thresholds.get("funding_rate", 0.0)
         and spread_pct <= thresholds.get("spread", float("inf"))
         and metrics.basis <= max_basis_pct
         and metrics.liquidity >= thresholds.get("liquidity", 0.0)
