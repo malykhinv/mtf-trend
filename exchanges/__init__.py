@@ -1,10 +1,10 @@
-"""Unified exchange interface for strategy modules.
+"""Унифицированный интерфейс бирж для модулей стратегии.
 
-This package exposes helper functions :func:`configure`, order placement
-utilities and various helpers which delegate to the configured exchange
-implementation.
+Пакет предоставляет вспомогательные функции :func:`configure`, утилиты для
+размещения ордеров и другие помощники, делегирующие работу выбранной
+реализации биржи.
 
-Example
+Пример
 -------
 >>> import exchanges
 >>> exchanges.configure("binance", api_key="key", api_secret="secret")
@@ -25,98 +25,98 @@ logger = logging.getLogger(__name__)
 _OUTSTANDING: Set[Tuple[str, str]] = set()
 
 # ---------------------------------------------------------------------------
-# Base interface
+# Базовый интерфейс
 # ---------------------------------------------------------------------------
 
 
 class BaseExchange(ABC):
-    """Abstract base class for exchange implementations.
+    """Абстрактный базовый класс для реализаций бирж.
 
-    Only a very small subset of functionality is required by the test suite
-    and thus the concrete implementations found in this repository intentionally
-    keep many operations as stubs.  The additional order management methods
-    defined here provide sensible defaults so that unit tests can exercise the
-    high level logic without performing real network requests.
+    Тестам нужен лишь небольшой поднабор возможностей, поэтому конкретные
+    реализации в репозитории намеренно оставляют множество операций заглушками.
+    Дополнительные методы управления ордерами здесь задают разумные значения
+    по умолчанию, чтобы модульные тесты могли проверять высокоуровневую логику
+    без реальных сетевых запросов.
     """
 
     @abstractmethod
     async def fetch_funding(self, symbol: str) -> float:
-        """Return the current funding rate for ``symbol``."""
+        """Возвращает текущую ставку фондирования для ``symbol``."""
 
     @abstractmethod
     async def place_order(
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
-        """Place an order and return exchange response."""
+        """Размещает ордер и возвращает ответ биржи."""
 
     @abstractmethod
     async def get_orderbook(self, symbol: str, depth: int = 5) -> dict:
-        """Return the latest order book for ``symbol``."""
+        """Возвращает актуальный стакан для ``symbol``."""
 
     @abstractmethod
     async def get_balance(self) -> dict:
-        """Return account balance information."""
+        """Возвращает информацию о балансе аккаунта."""
 
-    # Spot specific interfaces -------------------------------------------------
+    # Интерфейсы спотовой торговли -------------------------------------------------
 
     @abstractmethod
     async def place_spot_order(
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
-        """Place a spot market order and return exchange response."""
+        """Размещает спотовый ордер и возвращает ответ биржи."""
 
     @abstractmethod
     async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
-        """Return the latest spot order book for ``symbol``."""
+        """Возвращает актуальный спотовый стакан для ``symbol``."""
 
     @abstractmethod
     async def get_spot_balance(self) -> dict:
-        """Return spot account balance information."""
+        """Возвращает информацию о спотовом балансе."""
 
     @abstractmethod
     async def fetch_funding_history(
         self, symbol: str, hours: int = 8, limit: int = 3
     ) -> list[float]:
-        """Return recent funding rates for ``symbol`` within ``hours``."""
+        """Возвращает историю ставок фондирования для ``symbol`` за указанные ``hours`` часов."""
 
     @abstractmethod
     async def get_stats(self, symbol: str) -> dict:
-        """Return market stats such as 24h volume and open interest."""
+        """Возвращает рыночную статистику, такую как 24‑часовой объём и открытый интерес."""
 
     async def get_ohlc(
         self, symbol: str, interval: str, limit: int = 1
     ) -> list[Dict[str, float]]:
-        """Return OHLC data for ``symbol``.
+        """Возвращает данные OHLC для ``symbol``.
 
-        Exchanges should override this to provide recent candlestick data.
+        Биржи должны переопределить метод, чтобы предоставить свежие данные свечей.
         """
         raise NotImplementedError
 
     # ------------------------------------------------------------------
-    # Optional order management helpers
+    # Дополнительные помощники управления ордерами
     # ------------------------------------------------------------------
 
     async def get_order_status(self, order_id: str, market: str) -> dict:
-        """Return the status for ``order_id``.
+        """Возвращает статус ордера ``order_id``.
 
-        Exchange implementations can override this with real API calls.  The
-        default implementation assumes the order is immediately filled which is
-        sufficient for unit tests.
+        Реализации бирж могут переопределить метод и выполнять реальные API‑запросы.
+        По умолчанию считается, что ордер исполняется мгновенно, чего достаточно
+        для модульных тестов.
         """
 
         return {"status": "FILLED", "order_id": order_id}
 
     async def cancel_order(self, order_id: str, market: str) -> dict:
-        """Cancel ``order_id`` in ``market``.
+        """Отменяет ``order_id`` на рынке ``market``.
 
-        The default implementation simply reports a cancelled status.
+        Реализация по умолчанию просто возвращает статус отменённого ордера.
         """
 
         return {"status": "CANCELED", "order_id": order_id}
 
 
 # ---------------------------------------------------------------------------
-# Exchange factory and unified functions
+# Фабрика бирж и унифицированные функции
 # ---------------------------------------------------------------------------
 
 _EXCHANGES: Dict[str, Type[BaseExchange]] = {}
@@ -125,25 +125,25 @@ API_TIMEOUT = 30
 
 
 def register(name: str, cls: Type[BaseExchange]) -> None:
-    """Register an exchange implementation."""
+    """Регистрирует реализацию биржи."""
     _EXCHANGES[name.lower()] = cls
 
 
 def configure(name: str, **kwargs) -> None:
-    """Configure the active exchange by name."""
+    """Активирует биржу по её имени."""
     global _current
     try:
         cls = _EXCHANGES[name.lower()]
     except KeyError as exc:  # pragma: no cover - defensive programming
-        raise ValueError(f"Unknown exchange: {name}") from exc
+        raise ValueError(f"Неизвестная биржа: {name}") from exc
     _current = cls(**kwargs)
 
 
 async def _handle_timeout() -> None:
-    """Cancel all orders, close open positions and pause trading."""
+    """Отменяет все ордера, закрывает открытые позиции и ставит торговлю на паузу."""
 
     logger.error(
-        "API call exceeded %s seconds; cancelling outstanding orders", API_TIMEOUT
+        "Вызов API превысил %s секунд; отменяем активные ордера", API_TIMEOUT
     )
     if _current is not None:
         for market, oid in list(_OUTSTANDING):
@@ -152,10 +152,10 @@ async def _handle_timeout() -> None:
                     _current.cancel_order(oid, market), API_TIMEOUT
                 )
             except Exception as exc:  # pragma: no cover - best effort
-                logger.error("Failed to cancel %s %s: %s", market, oid, exc)
+                logger.error("Не удалось отменить %s %s: %s", market, oid, exc)
         _OUTSTANDING.clear()
 
-        # Attempt emergency exit for any tracked open positions.
+        # Пытаемся аварийно закрыть все отслеживаемые открытые позиции.
         try:  # pragma: no cover - best effort
             from main import CLIENTS, POSITION_TASKS
             from strategies import funding_arbitrage as strategy
@@ -163,7 +163,7 @@ async def _handle_timeout() -> None:
             from utils.telegram import notify_close, format_duration
             from datetime import datetime
         except Exception as exc:  # pragma: no cover - defensive
-            logger.error("Emergency exit setup failed: %s", exc)
+            logger.error("Не удалось подготовить аварийное закрытие: %s", exc)
         else:
             for pid, task in list(POSITION_TASKS.items()):
                 exchange_name, symbol = pid.split(":", 1)
@@ -172,7 +172,7 @@ async def _handle_timeout() -> None:
                     continue
                 exchanges_current = _current
                 try:
-                    # Switch context to the client's exchange for this position.
+                    # Переключаем контекст на биржу клиента для этой позиции.
                     globals()["_current"] = client
                     entry = strategy._positions.get(symbol, {})
                     quantity = entry.get("quantity") or entry.get(
@@ -184,7 +184,7 @@ async def _handle_timeout() -> None:
                         )
                     except Exception as exc_close:
                         logger.error(
-                            "Failed to close position %s on %s: %s",
+                            "Не удалось закрыть позицию %s на %s: %s",
                             symbol,
                             exchange_name,
                             exc_close,
@@ -197,11 +197,11 @@ async def _handle_timeout() -> None:
                             notify_close(
                                 pid,
                                 (
-                                    f"Emergency exit failed {symbol} on {exchange_name}: {exc_close}\n"
-                                    f"Funding: {funding_pct:.4f}%\n"
-                                    f"Basis: {basis_pct:.4f}%\n"
-                                    f"Volume: ${volume_usd:.2f}\n"
-                                    f"Time in position: {format_duration(hold_time)}"
+                                    f"Аварийное закрытие не удалось {symbol} на {exchange_name}: {exc_close}\n"
+                                    f"Фандинг: {funding_pct:.4f}%\n"
+                                    f"Базис: {basis_pct:.4f}%\n"
+                                    f"Объём: ${volume_usd:.2f}\n"
+                                    f"Время в позиции: {format_duration(hold_time)}"
                                 ),
                             )
                         )
@@ -261,11 +261,11 @@ async def _handle_timeout() -> None:
                             notify_close(
                                 pid,
                                 (
-                                    f"Emergency exit {symbol} on {exchange_name}\n"
-                                    f"Funding: {funding_pct:.4f}%\n"
-                                    f"Basis: {exit_basis:.4f}%\n"
-                                    f"Volume: ${volume_usd:.2f}\n"
-                                    f"Time in position: {format_duration(hold_time)}\n"
+                                    f"Аварийное закрытие {symbol} на {exchange_name}\n"
+                                    f"Фандинг: {funding_pct:.4f}%\n"
+                                    f"Базис: {exit_basis:.4f}%\n"
+                                    f"Объём: ${volume_usd:.2f}\n"
+                                    f"Время в позиции: {format_duration(hold_time)}\n"
                                     f"PnL: {pnl:.4f}"
                                 ),
                             )
@@ -298,25 +298,24 @@ def _untrack_order(market: str, order_id: str) -> None:
 async def place_order(
     symbol: str, side: str, quantity: float, price: float | None = None
 ) -> dict:
-    """Place an order using the configured exchange."""
+    """Размещает ордер через настроенную биржу."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(
         _current.place_order(symbol, side, quantity, price)
     )
 
 
 async def _poll_fill(order_id: str, market: str) -> None:
-    """Poll ``order_id`` until the exchange reports it as filled.
+    """Ожидает исполнения ордера ``order_id`` до статуса FILLED.
 
-    The function relies on :meth:`BaseExchange.get_order_status` and sleeps for
-    short intervals between requests.  ``BaseExchange`` provides a stub
-    implementation so that tests which do not interact with live exchanges can
-    still run deterministically.
+    Функция опирается на :meth:`BaseExchange.get_order_status` и делает короткие
+    паузы между запросами. ``BaseExchange`` предоставляет заглушку, чтобы тесты,
+    не взаимодействующие с живыми биржами, могли выполняться детерминированно.
     """
 
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
 
     start = time.monotonic()
     while True:
@@ -328,16 +327,16 @@ async def _poll_fill(order_id: str, market: str) -> None:
             return
         if time.monotonic() - start > API_TIMEOUT:
             await _handle_timeout()
-            raise RuntimeError(f"Order {order_id} not filled in time")
+            raise RuntimeError(f"Ордер {order_id} не исполнен вовремя")
         await asyncio.sleep(0.5)
 
 
 async def place_spot_order(
     symbol: str, side: str, quantity: float, price: float | None = None
 ) -> dict:
-    """Place a spot order and wait for full execution."""
+    """Размещает спотовый ордер и ожидает его полного исполнения."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     order = await _await_with_timeout(
         _current.place_spot_order(symbol, side, quantity, price)
     )
@@ -350,7 +349,7 @@ async def place_spot_order(
 async def place_perp_order(
     symbol: str, side: str, quantity: float, price: float | None = None
 ) -> dict:
-    """Place a futures/perpetual order and wait for full execution."""
+    """Размещает фьючерсный/перпетуальный ордер и ожидает его полного исполнения."""
 
     order = await place_order(symbol, side, quantity, price)
     order_id = str(order.get("orderId") or order.get("id") or "")
@@ -360,94 +359,94 @@ async def place_perp_order(
 
 
 async def fetch_funding(symbol: str) -> float:
-    """Fetch the funding rate for ``symbol`` from the configured exchange."""
+    """Получает ставку фондирования для ``symbol`` с настроенной биржи."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(_current.fetch_funding(symbol))
 
 
 async def get_orderbook(symbol: str, depth: int = 5) -> dict:
-    """Retrieve the latest order book from the configured exchange."""
+    """Возвращает актуальный стакан от настроенной биржи."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(_current.get_orderbook(symbol, depth))
 
 
 async def get_spot_orderbook(symbol: str, depth: int = 5) -> dict:
-    """Retrieve the latest spot order book from the configured exchange."""
+    """Возвращает актуальный спотовый стакан от настроенной биржи."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(_current.get_spot_orderbook(symbol, depth))
 
 
 async def get_balance() -> dict:
-    """Return the account balance from the configured exchange."""
+    """Возвращает баланс аккаунта с настроенной биржи."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(_current.get_balance())
 
 
 async def get_spot_balance() -> dict:
-    """Return the spot account balance from the configured exchange."""
+    """Возвращает спотовый баланс с настроенной биржи."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(_current.get_spot_balance())
 
 
 async def fetch_funding_history(
     symbol: str, hours: int = 8, limit: int = 3
 ) -> list[float]:
-    """Return recent funding rates for ``symbol`` from the exchange."""
+    """Возвращает историю ставок фондирования для ``symbol`` с биржи."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(
         _current.fetch_funding_history(symbol, hours, limit)
     )
 
 
 async def get_stats(symbol: str) -> dict:
-    """Return market stats such as 24h volume and open interest."""
+    """Возвращает рыночную статистику, включая 24‑часовой объём и открытый интерес."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(_current.get_stats(symbol))
 
 
 async def get_ohlc(
     symbol: str, interval: str = "15m", limit: int = 1
 ) -> list[Dict[str, float]]:
-    """Return OHLC data for ``symbol`` from the exchange."""
+    """Возвращает данные OHLC для ``symbol`` с биржи."""
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(_current.get_ohlc(symbol, interval, limit))
 
 
 async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
-    """Place offsetting spot and futures orders with rollback on failure."""
+    """Размещает компенсирующие спотовый и фьючерсный ордера с откатом при ошибке."""
 
     if _current is None:  # pragma: no cover - defensive programming
-        raise RuntimeError("Exchange not configured")
+        raise RuntimeError("Биржа не настроена")
 
-    # Spot leg -------------------------------------------------------------
+    # Спот-часть -------------------------------------------------------------
     spot_order: Dict = await place_spot_order(symbol, "BUY", quantity)
     spot_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
 
-    # Futures leg ----------------------------------------------------------
+    # Фьючерсная часть ----------------------------------------------------------
     try:
         perp_order: Dict = await place_perp_order(symbol, "SELL", quantity)
         return {"spot": spot_order, "perp": perp_order}
     except Exception as exc:
-        # Rollback the spot leg if the futures leg fails in any way.
+        # Откатить спотовую часть, если фьючерсная часть завершается ошибкой.
         try:
             cancel_resp = await _await_with_timeout(
                 _current.cancel_order(spot_id, "spot")
             )
-            logger.warning("Rolled back spot order %s: %s", spot_id, cancel_resp)
+            logger.warning("Откатили спотовый ордер %s: %s", spot_id, cancel_resp)
         except Exception as cancel_exc:  # pragma: no cover - best effort
             logger.error(
-                "Failed to rollback spot order %s: %s", spot_id, cancel_exc
+                "Не удалось откатить спотовый ордер %s: %s", spot_id, cancel_exc
             )
-        raise RuntimeError("Hedge placement failed; spot leg rolled back") from exc
+        raise RuntimeError("Не удалось разместить хедж; спотовая часть откатена") from exc
 
-# Import built-in exchanges so they register themselves with the factory.
+# Импорт встроенных бирж для регистрации в фабрике.
 from . import binance as _binance  # noqa: F401
 from . import bybit as _bybit  # noqa: F401

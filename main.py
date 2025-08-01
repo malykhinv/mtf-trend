@@ -22,28 +22,28 @@ from strategies import funding_arbitrage as strategy
 from ai.parameter_optimizer import periodic_optimization
 from utils.telegram import format_duration, notify_close, notify_open
 
-# Global configuration dictionary that other modules can import.
+# Глобальный словарь конфигурации, доступный другим модулям.
 CONFIG: Dict[str, Any] = {}
 
-# Mapping of exchange name to instantiated client.
+# Соответствие имени биржи созданному клиенту.
 CLIENTS: Dict[str, exchanges.BaseExchange] = {}
 
-# Whitelisted symbols per exchange.
+# Белые списки символов для каждой биржи.
 WHITELISTS: Dict[str, List[str]] = {}
 
-# Track monitoring tasks for open positions so they can be cancelled on
-# shutdown if necessary.
+# Отслеживаем задачи мониторинга открытых позиций,
+# чтобы при необходимости отменить их при завершении работы.
 POSITION_TASKS: Dict[str, asyncio.Task] = {}
 
 
 def load_config(path: str = "config.yaml") -> None:
     """Загружает конфигурацию YAML в глобальную переменную ``CONFIG``.
 
-    Parameters
-    ----------
+    Параметры
+    ---------
     path:
-        Путь к файлу конфигурации. По умолчанию ``config.yaml`` в текущей
-        директории.
+        Путь к файлу конфигурации. По умолчанию ``config.yaml``
+        в текущей директории.
     """
     global CONFIG
     config_path = Path(path)
@@ -59,7 +59,7 @@ def initialize_bot() -> None:
     """Настраивает клиентов бирж и управление рисками."""
 
     api_keys = CONFIG.get("api_keys", {})
-    print(f"Initializing bot with API keys: {list(api_keys.keys())}")
+    print(f"Инициализация бота с API-ключами: {list(api_keys.keys())}")
 
     # Создаём клиентов бирж, если заданы ключи
     binance_key = api_keys.get("binance")
@@ -121,11 +121,11 @@ def start_processing_loops() -> None:
                 notify_close(
                     position_id,
                     (
-                        f"Error on {exchange_name} {symbol}: {exc}\n"
-                        f"Funding: {funding_pct:.4f}%\n"
-                        f"Basis: {basis_pct:.4f}%\n"
-                        f"Volume: ${volume_usd:.2f}\n"
-                        f"Time in position: {format_duration(hold)}"
+                        f"Ошибка на {exchange_name} {symbol}: {exc}\n"
+                        f"Фандинг: {funding_pct:.4f}%\n"
+                        f"Базис: {basis_pct:.4f}%\n"
+                        f"Объём: ${volume_usd:.2f}\n"
+                        f"Время в позиции: {format_duration(hold)}"
                     ),
                 )
             )
@@ -146,12 +146,12 @@ def start_processing_loops() -> None:
                 notify_close(
                     position_id,
                     (
-                        f"Closed {symbol} on {exchange_name}\n"
-                        f"Funding: {funding_pct:.4f}%\n"
-                        f"Basis: {basis_pct:.4f}%\n"
-                        f"Volume: ${volume_usd:.2f}\n"
-                        f"Time in position: {format_duration(hold)}\n"
-                        f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Reasons: {reasons}"
+                        f"Закрыта {symbol} на {exchange_name}\n"
+                        f"Фандинг: {funding_pct:.4f}%\n"
+                        f"Базис: {basis_pct:.4f}%\n"
+                        f"Объём: ${volume_usd:.2f}\n"
+                        f"Время в позиции: {format_duration(hold)}\n"
+                        f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Причины: {reasons}"
                     ),
                 )
             )
@@ -181,14 +181,14 @@ def start_processing_loops() -> None:
                     try:
                         base_metrics = await strategy.get_market_metrics(symbol, 1.0)
                     except Exception as exc:
-                        print(f"Metrics error {name} {symbol}: {exc}")
+                        print(f"Ошибка метрик {name} {symbol}: {exc}")
                         continue
                     price = base_metrics.futures_price
                     quantity = trade_value / price if price else 0.0
                     try:
                         metrics = await strategy.get_market_metrics(symbol, quantity)
                     except Exception as exc:
-                        print(f"Metrics error {name} {symbol}: {exc}")
+                        print(f"Ошибка метрик {name} {symbol}: {exc}")
                         continue
 
                     if strategy.check_entry_conditions(
@@ -202,12 +202,12 @@ def start_processing_loops() -> None:
                                 notify_open(
                                     f"{name}:{symbol}",
                                     (
-                                        f"Opened {symbol} on {name}\n"
-                                        f"Funding: {metrics.funding_rate * 100:.4f}%\n"
-                                        f"Basis: {metrics.basis:.4f}%\n"
-                                        f"Volume: ${volume_usd:.2f}\n"
-                                        f"Time in position: {format_duration(0)}\n"
-                                        "Strategy: Long Spot / Short Perp"
+                        f"Открыта {symbol} на {name}\n"
+                        f"Фандинг: {metrics.funding_rate * 100:.4f}%\n"
+                        f"Базис: {metrics.basis:.4f}%\n"
+                        f"Объём: ${volume_usd:.2f}\n"
+                        f"Время в позиции: {format_duration(0)}\n"
+                        "Стратегия: Лонг спот / Шорт перп"
                                     ),
                                 )
                             )
@@ -216,14 +216,14 @@ def start_processing_loops() -> None:
                             )
                             POSITION_TASKS[f"{name}:{symbol}"] = task
                         except Exception as exc:
-                            print(f"Open error {name} {symbol}: {exc}")
+                            print(f"Ошибка открытия {name} {symbol}: {exc}")
             await asyncio.sleep(poll_interval)
 
     async def risk_loop() -> None:
         """Периодически проверяет, нужно ли приостановить торговлю."""
         while True:
             if risk_control.is_paused():
-                print("Trading paused due to risk limits")
+                print("Торговля приостановлена из-за ограничений риска")
             await asyncio.sleep(poll_interval)
 
     async def optimisation_loop() -> None:
@@ -260,4 +260,4 @@ if __name__ == "__main__":  # pragma: no cover - script entry point
     try:
         main()
     except KeyboardInterrupt:
-        print("Bot stopped.")
+        print("Бот остановлен.")

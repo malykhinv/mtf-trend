@@ -1,47 +1,46 @@
 from __future__ import annotations
 
-"""Simple Excel logging utilities for trades.
+"""Простые утилиты для логирования сделок в Excel.
 
-This module provides a small helper to persist trade information to an
-``.xlsx`` file.  Each trade is stored as a single row containing the
-following columns:
+Модуль предоставляет небольшую функцию для сохранения информации о сделках
+в файл ``.xlsx``. Каждая сделка записывается одной строкой со следующими
+колонками:
 
 ``symbol``
-    Trading pair symbol.
+    Символ торговой пары.
 ``entry_time`` / ``exit_time``
-    ISO formatted timestamps for when the position was opened and closed.
+    Временные метки открытия и закрытия позиции в формате ISO.
 ``entry_futures_price`` / ``exit_futures_price``
-    Futures prices at which the position was entered and exited.
+    Цена входа и выхода на фьючерсе.
 ``entry_spot_price`` / ``exit_spot_price``
-    Spot prices at entry and exit.
+    Цена спота при входе и выходе.
 ``entry_basis`` / ``exit_basis``
-    Calculated futures/spot basis in percent at entry and exit.
+    Рассчитанный базис спот/фьючерс в процентах при входе и выходе.
 ``basis_pct``
-    Basis percentage at the time the log entry is created.
+    Базис на момент создания записи.
 ``funding``
-    Funding rate captured for the trade.
+    Ставка фондирования, зафиксированная для сделки.
 ``quantity``
-    Trade size.
+    Размер позиции.
 ``volume_usd``
-    Notional value of the trade in USD.
+    Номинальная стоимость сделки в USD.
 ``pnl`` / ``pnl_pct``
-    Profit and loss of the trade in absolute terms and as percentage of
-    ``volume_usd``.
+    Прибыль и убыток в абсолютном выражении и в процентах от ``volume_usd``.
 ``commissions``
-    Cumulative trading fees incurred for the position.
+    Совокупные комиссионные по позиции.
 ``funding_accrued``
-    Cumulative funding payments (positive for received, negative for paid).
+    Накопленные выплаты по фондированию (положительные — полученные, отрицательные — уплаченные).
 ``slippage``
-    Observed slippage relative to the entry price.
+    Наблюдаемое проскальзывание относительно цены входа.
 ``exit_reasons``
-    Comma separated reasons for closing the position.
+    Список причин закрытия позиции.
 ``notes``
-    Free form text field for additional comments.
+    Произвольные заметки.
 
-The :func:`log_trade` function appends a new row to ``data/funding_bot_log.xlsx``
-creating the file and its parent directory if necessary.  The function guards
-against missing columns and avoids data corruption by using ``openpyxl`` to
-append rows to the workbook instead of rewriting the whole file via pandas.
+Функция :func:`log_trade` добавляет новую строку в ``data/funding_bot_log.xlsx``,
+создавая файл и его родительский каталог при необходимости. Функция следит
+за наличием всех колонок и избегает повреждения данных, используя ``openpyxl``
+для добавления строк без полного переписывания файла через pandas.
 """
 
 from pathlib import Path
@@ -49,10 +48,10 @@ from typing import Any, Dict, Iterable, Mapping
 
 from openpyxl import Workbook, load_workbook
 
-# Default location of the log file used by the bot.
+# Расположение файла журнала по умолчанию.
 LOG_PATH = Path("data") / "funding_bot_log.xlsx"
 
-# Ordered list of columns expected for each trade entry.
+# Упорядоченный список колонок, ожидаемых для каждой сделки.
 LOG_COLUMNS = [
     "symbol",
     "exchange",
@@ -79,18 +78,18 @@ LOG_COLUMNS = [
 
 
 def _ensure_parent(path: Path) -> None:
-    """Create the parent directory for ``path`` if it does not exist."""
+    """Создаёт родительскую директорию для ``path``, если она не существует."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
 def _validate_entry(entry: Mapping[str, Any], columns: Iterable[str]) -> None:
-    """Ensure ``entry`` contains all ``columns``.
+    """Проверяет, что в ``entry`` присутствуют все поля ``columns``.
 
-    Raises
-    ------
+    Исключения
+    ----------
     ValueError
-        If any of the required columns is missing from ``entry``.
+        Если какое-либо из обязательных полей отсутствует в ``entry``.
     """
 
     missing = [col for col in columns if col not in entry]
@@ -99,25 +98,25 @@ def _validate_entry(entry: Mapping[str, Any], columns: Iterable[str]) -> None:
 
 
 def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
-    """Append ``trade`` information to an Excel log file.
+    """Добавляет информацию о сделке в Excel-журнал.
 
-    Parameters
-    ----------
+    Параметры
+    ---------
     trade:
-        Mapping containing all keys listed in :data:`LOG_COLUMNS`.
+        Словарь, содержащий все ключи из :data:`LOG_COLUMNS`.
     path:
-        Optional path to the Excel file.  Defaults to
+        Необязательный путь к файлу Excel. По умолчанию
         ``data/funding_bot_log.xlsx``.
 
-    The function is intentionally small and synchronous; it is expected to be
-    called outside of performance critical sections.
+    Функция намеренно небольшая и синхронная; её предполагается вызывать
+    вне критичных по производительности участков.
     """
 
     path = Path(path)
     _ensure_parent(path)
     _validate_entry(trade, LOG_COLUMNS)
 
-    # Normalize complex types before writing to the workbook
+    # Нормализуем сложные типы перед записью в книгу
     normalized: Dict[str, Any] = {}
     for col in LOG_COLUMNS:
         val = trade.get(col)
@@ -128,7 +127,7 @@ def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
     if path.exists():
         wb = load_workbook(path)
         ws = wb.active
-        # Re-create header if the file was manually modified
+        # Повторно создаём заголовок, если файл был изменён вручную
         if ws.max_row == 0 or [cell.value for cell in ws[1]] != LOG_COLUMNS:
             ws.delete_rows(1, ws.max_row)
             ws.append(LOG_COLUMNS)

@@ -43,8 +43,8 @@ _state = RiskState()
 def configure(config: Dict[str, float], deposit_size: Optional[float] = None) -> None:
     """Настраивает пределы риска из словаря.
 
-    Parameters
-    ----------
+    Параметры
+    ---------
     config:
         Словарь с параметрами контроля риска.
     deposit_size:

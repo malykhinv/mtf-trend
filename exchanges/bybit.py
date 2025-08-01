@@ -24,7 +24,7 @@ class BybitExchange(BaseExchange):
     def __init__(self, api_key: str, api_secret: str) -> None:
         """Инициализация клиента.
 
-        Parameters
+        Параметры
         ----------
         api_key, api_secret:
             Пара ключей API для авторизации.
@@ -35,13 +35,13 @@ class BybitExchange(BaseExchange):
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
-        # Spot websocket management
+        # Управление WebSocket спота
         self._spot_ws: Optional[websockets.WebSocketClientProtocol] = None
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------
-    # REST utilities
+    # Утилиты REST
     # ------------------------------------------------------------------
 
     async def _session_get(self) -> aiohttp.ClientSession:
@@ -65,7 +65,7 @@ class BybitExchange(BaseExchange):
         return params
 
     # ------------------------------------------------------------------
-    # Public methods
+    # Публичные методы
     # ------------------------------------------------------------------
 
     async def fetch_funding(self, symbol: str) -> float:
@@ -163,7 +163,7 @@ class BybitExchange(BaseExchange):
         ]
 
     # ------------------------------------------------------------------
-    # Spot REST methods
+    # REST-методы спота
     # ------------------------------------------------------------------
 
     async def place_spot_order(
@@ -197,7 +197,7 @@ class BybitExchange(BaseExchange):
             return await resp.json()
 
     # ------------------------------------------------------------------
-    # Spot WebSocket handling
+    # Обработка спотового WebSocket
     # ------------------------------------------------------------------
 
     async def _connect_spot(self, symbol: str) -> websockets.WebSocketClientProtocol:
@@ -244,7 +244,7 @@ class BybitExchange(BaseExchange):
         return self._spot_orderbooks.get(symbol, {"bids": [], "asks": []})
 
     # ------------------------------------------------------------------
-    # WebSocket handling
+    # Обработка WebSocket
     # ------------------------------------------------------------------
 
     async def _connect(self, symbol: str) -> websockets.WebSocketClientProtocol:
@@ -301,5 +301,5 @@ class BybitExchange(BaseExchange):
             await self._spot_ws.close()
 
 
-# Register exchange
+# Регистрация биржи
 register("bybit", BybitExchange)
