@@ -12,7 +12,7 @@ should be adjusted only after careful consideration:
 | ---------------- | ----------- | ------- |
 | `funding_rate`   | `0.0003`    | Minimum absolute funding rate required to enter a trade |
 | `basis`          | `0.5`       | Maximum spot–futures basis percentage |
-| `volume`         | `20000000`  | Minimum 24h trading volume to ensure liquidity |
+| `volume`         | `20000000`  | Minimum 24h trading volume (USD) to ensure liquidity |
 | `min_trade_size` | `10`        | Minimum notional value per trade |
 | `spread`         | `0.005`     | Maximum allowable spread percentage |
 | `slippage`       | `0.003`     | Maximum expected combined slippage across spot and futures |
