@@ -121,6 +121,24 @@ class BinanceExchange(BaseExchange):
         open_interest = float(oi.get("openInterest", 0.0))
         return {"volume_24h": volume, "open_interest": open_interest}
 
+    async def get_ohlc(
+        self, symbol: str, interval: str, limit: int = 1
+    ) -> list[Dict[str, float]]:
+        session = await self._session_get()
+        url = f"{self.REST_URL}/fapi/v1/klines"
+        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+        return [
+            {
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+            }
+            for k in data
+        ]
+
     # ------------------------------------------------------------------
     # Spot REST methods
     # ------------------------------------------------------------------

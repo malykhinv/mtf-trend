@@ -18,6 +18,7 @@ from exchanges import (
     get_orderbook,
     get_spot_orderbook,
     get_stats,
+    get_ohlc,
     hedge,
     place_order,
 )
@@ -36,7 +37,7 @@ class MarketMetrics:
     funding_rate: float
     spread: float
     liquidity: float
-    volatility: float
+    volatility: float  # 15-minute price change percentage
     spot_price: float
     futures_price: float
     volume: float
@@ -77,9 +78,7 @@ async def get_market_metrics(
     spot_asks = [(float(p), float(q)) for p, q in spot_book.get("asks", [])]
 
     if bids and asks:
-        book_spread = asks[0][0] - bids[0][0]
         futures_price = (asks[0][0] + bids[0][0]) / 2
-        volatility = book_spread / futures_price if futures_price else float("inf")
         remaining = trade_size
         cost = 0.0
         for price, qty in asks:
@@ -95,7 +94,6 @@ async def get_market_metrics(
             slippage = abs(avg_price - futures_price) / futures_price
     else:
         futures_price = float("nan")
-        volatility = float("inf")
         slippage = float("inf")
 
     if spot_bids and spot_asks:
@@ -115,6 +113,15 @@ async def get_market_metrics(
     basis = (
         (spread / spot_price * 100) if spot_price else float("inf")
     )
+
+    ohlc = await get_ohlc(symbol, interval="15m", limit=1)
+    if ohlc:
+        candle = ohlc[0]
+        o = candle.get("open") or 0.0
+        c = candle.get("close") or 0.0
+        volatility = ((c - o) / o) if o else float("inf")
+    else:
+        volatility = float("nan")
 
     return MarketMetrics(
         funding,
@@ -158,7 +165,8 @@ def check_entry_conditions(
         and metrics.basis <= thresholds.get("basis", float("inf"))
         and metrics.liquidity >= thresholds.get("liquidity", 0.0)
         and metrics.volume >= thresholds.get("volume", 0.0)
-        and metrics.volatility <= thresholds.get("volatility", float("inf"))
+        and abs(metrics.volatility)
+        <= thresholds.get("volatility", float("inf"))
         and metrics.open_interest <= metrics.volume * 2
         and metrics.slippage <= thresholds.get("slippage", float("inf"))
         and thresholds.get("min_trade_size", 0.0)
@@ -176,7 +184,8 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
         abs(metrics.funding_rate) <= thresholds.get("funding_rate", float("inf"))
         or metrics.spread >= thresholds.get("spread", float("-inf"))
         or metrics.liquidity <= thresholds.get("liquidity", float("inf"))
-        or metrics.volatility >= thresholds.get("volatility", float("-inf"))
+        or abs(metrics.volatility)
+        >= thresholds.get("volatility", float("-inf"))
     )
 
 
