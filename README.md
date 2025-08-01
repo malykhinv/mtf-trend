@@ -2,6 +2,17 @@
 
 This repository contains tools for multi-timeframe trend-following and funding arbitrage strategies.
 
+## Installation
+
+Install the project dependencies with [pip](https://pip.pypa.io/):
+
+```bash
+pip install -r requirements.txt
+```
+
+Telegram notifications are implemented using [aiogram](https://docs.aiogram.dev/) for
+asynchronous message delivery.
+
 ## Default Safety Thresholds
 
 The bot ships with conservative defaults in [`config.yaml`](config.yaml) to guard against
