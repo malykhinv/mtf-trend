@@ -71,7 +71,8 @@ def evaluate_breakout(
     volume_stats: pd.Series,
     funding: float,
     *,
-    volume_spike: float = 2.0,
+    avg_volume_mult: float = 1.5,
+    delta_volume_mult: float = 2.0,
     ema_short: int = 15,
     ema_long: int = 30,
     funding_limit: float = 0.01,
@@ -95,12 +96,13 @@ def evaluate_breakout(
         Deprecated.  Retained for backward compatibility but ignored.
     funding:
         Current funding rate.  Positive values indicate longs pay shorts.
-    volume_spike:
-        Multiplier applied to both the average volume and the standard
-        deviation of volume changes.  A volume spike is detected when the
-        latest volume exceeds ``volume_spike`` × the rolling average and the
-        change in volume exceeds ``volume_spike`` × the rolling standard
-        deviation.
+    avg_volume_mult:
+        Multiplier applied to the rolling average of volume.  The latest
+        volume must exceed ``avg_volume_mult`` × the rolling average.
+    delta_volume_mult:
+        Multiplier applied to the rolling standard deviation of volume
+        changes.  The change in volume must exceed ``delta_volume_mult`` ×
+        the rolling standard deviation.
     ema_short, ema_long:
         Spans for the short and long exponential moving averages (typically
         5–15 and 10–30 respectively).
@@ -130,8 +132,9 @@ def evaluate_breakout(
     vol_delta = df["volume"].diff().iloc[-1]
     if pd.isna(avg_volume) or pd.isna(vol_sigma) or pd.isna(vol_delta):
         return []
-    vol_ok = (last["volume"] > volume_spike * avg_volume) and (
-        vol_delta > volume_spike * vol_sigma
+    vol_ok = (
+        last["volume"] > avg_volume_mult * avg_volume
+        and vol_delta > delta_volume_mult * vol_sigma
     )
 
     ema_bull = last["ema_short"] > last["ema_long"]

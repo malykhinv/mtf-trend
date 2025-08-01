@@ -32,7 +32,13 @@ def test_long_breakout_signal():
     funding = 0.005
 
     signals = evaluate_breakout(
-        ohlcv, cluster, cvd, delta_oi, volume_stats, funding, volume_spike=1.5
+        ohlcv,
+        cluster,
+        cvd,
+        delta_oi,
+        volume_stats,
+        funding,
+        avg_volume_mult=1.5,
     )
     assert signals, "Expected a breakout signal"
     sig = signals[0]
@@ -65,7 +71,13 @@ def test_breakout_blocked_by_trend_filter():
 
     # Trend filter should block this potential breakout
     signals = evaluate_breakout(
-        ohlcv, cluster, cvd, delta_oi, volume_stats, funding, volume_spike=1.5
+        ohlcv,
+        cluster,
+        cvd,
+        delta_oi,
+        volume_stats,
+        funding,
+        avg_volume_mult=1.5,
     )
     assert signals == []
 

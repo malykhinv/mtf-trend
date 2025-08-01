@@ -95,14 +95,17 @@ def run_backtest(
     data_dir: str | Path = "data/raw_data",
     trades_path: str | Path = "trades.csv",
     equity_path: str | Path | None = None,
-    volume_spike: float = 2.0,
+    avg_volume_mult: float = 1.5,
+    delta_volume_mult: float = 2.0,
 ) -> dict:
     """Run a simple breakout backtest and return summary statistics.
 
     Parameters
     ----------
-    volume_spike:
-        Multiplier applied to volume statistics when generating signals.
+    avg_volume_mult:
+        Multiplier applied to the rolling average of volume.
+    delta_volume_mult:
+        Multiplier applied to the standard deviation of volume changes.
     """
 
     df = load_data(symbol, data_dir)
@@ -244,7 +247,8 @@ def run_backtest(
             delta_oi_series,
             volume_stats,
             funding,
-            volume_spike=volume_spike,
+            avg_volume_mult=avg_volume_mult,
+            delta_volume_mult=delta_volume_mult,
         )
         if not signals:
             continue
@@ -291,10 +295,16 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing CSV data",
     )
     parser.add_argument(
-        "--volume-spike",
+        "--avg-volume-mult",
+        type=float,
+        default=1.5,
+        help="Average volume multiplier",
+    )
+    parser.add_argument(
+        "--delta-volume-mult",
         type=float,
         default=2.0,
-        help="Volume spike multiplier",
+        help="Volume delta standard deviation multiplier",
     )
     return parser.parse_args()
 
@@ -306,7 +316,8 @@ def main() -> None:
         args.start,
         args.end,
         data_dir=args.data_dir,
-        volume_spike=args.volume_spike,
+        avg_volume_mult=args.avg_volume_mult,
+        delta_volume_mult=args.delta_volume_mult,
     )
     for key, value in stats.items():
         print(f"{key}: {value}")

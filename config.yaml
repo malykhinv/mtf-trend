@@ -28,7 +28,8 @@ data_paths:
   log_dir: "logs/"
 
 strategy:
-  volume_spike: 2.0
+  avg_volume_mult: 1.5
+  delta_volume_mult: 2.0
 
 feature_toggles:
   enable_notifications: true
