@@ -100,9 +100,13 @@ def test_exit_orders_with_trailing_stop_and_logging():
     class DummyRisk:
         def __init__(self):
             self.pnls = []
+            self.reductions = []
 
         def close_trade(self, trade_id, pnl):
             self.pnls.append(pnl)
+
+        def reduce_trade(self, trade_id, fraction):
+            self.reductions.append(fraction)
 
     risk = DummyRisk()
     trader = FuturesTrader(
@@ -136,7 +140,8 @@ def test_exit_orders_with_trailing_stop_and_logging():
     assert logs[0]["tp1"] == 21000
     assert logs[0]["tp2"] > 19000
     assert logs[0]["result"] == "tp2"
-    assert len(risk.pnls) == 2
+    assert len(risk.pnls) == 1
+    assert risk.reductions == [0.5]
 
 
 def test_retry_on_network_error():
