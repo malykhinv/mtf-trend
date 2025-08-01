@@ -83,6 +83,15 @@ class BaseExchange(ABC):
     async def get_stats(self, symbol: str) -> dict:
         """Return market stats such as 24h volume and open interest."""
 
+    async def get_ohlc(
+        self, symbol: str, interval: str, limit: int = 1
+    ) -> list[Dict[str, float]]:
+        """Return OHLC data for ``symbol``.
+
+        Exchanges should override this to provide recent candlestick data.
+        """
+        raise NotImplementedError
+
     # ------------------------------------------------------------------
     # Optional order management helpers
     # ------------------------------------------------------------------
@@ -397,6 +406,15 @@ async def get_stats(symbol: str) -> dict:
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
     return await _await_with_timeout(_current.get_stats(symbol))
+
+
+async def get_ohlc(
+    symbol: str, interval: str = "15m", limit: int = 1
+) -> list[Dict[str, float]]:
+    """Return OHLC data for ``symbol`` from the exchange."""
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+    return await _await_with_timeout(_current.get_ohlc(symbol, interval, limit))
 
 
 async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:

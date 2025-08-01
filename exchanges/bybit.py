@@ -122,6 +122,30 @@ class BybitExchange(BaseExchange):
         open_interest = float(oi_list[0].get("openInterest", 0.0))
         return {"volume_24h": volume, "open_interest": open_interest}
 
+    async def get_ohlc(
+        self, symbol: str, interval: str, limit: int = 1
+    ) -> list[Dict[str, float]]:
+        session = await self._session_get()
+        url = f"{self.REST_URL}/v5/market/kline"
+        params = {
+            "category": "linear",
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+        }
+        async with session.get(url, params=params) as resp:
+            data = await resp.json()
+        klist = data.get("result", {}).get("list", [])
+        return [
+            {
+                "open": float(k[1]),
+                "high": float(k[2]),
+                "low": float(k[3]),
+                "close": float(k[4]),
+            }
+            for k in klist
+        ]
+
     # ------------------------------------------------------------------
     # Spot REST methods
     # ------------------------------------------------------------------
