@@ -461,17 +461,19 @@ async def monitor_neutral_position(
                         if total_volume
                         else 0.0
                     )
-                    notify_partial_close(
-                        position_id,
-                        (
-                            f"Scaled out {symbol}: remaining {quantity:.4f}\n"
-                            f"Funding: {metrics.funding_rate * 100:.4f}%\n"
-                            f"Basis: {exit_basis:.4f}%\n"
-                            f"Volume: ${volume_usd:.2f}\n"
-                            f"Time in position: {format_duration(hold_time)}\n"
-                            f"Funding accrued: {entry.get('funding_accrued', 0.0):.4f} / "
-                            f"PnL: {pnl_total:+.4f} ({pnl_pct_total:+.2f} %)"
-                        ),
+                    asyncio.create_task(
+                        notify_partial_close(
+                            position_id,
+                            (
+                                f"Scaled out {symbol}: remaining {quantity:.4f}\n"
+                                f"Funding: {metrics.funding_rate * 100:.4f}%\n"
+                                f"Basis: {exit_basis:.4f}%\n"
+                                f"Volume: ${volume_usd:.2f}\n"
+                                f"Time in position: {format_duration(hold_time)}\n"
+                                f"Funding accrued: {entry.get('funding_accrued', 0.0):.4f} / "
+                                f"PnL: {pnl_total:+.4f} ({pnl_pct_total:+.2f} %)"
+                            ),
+                        )
                     )
                 continue
             await close_neutral_position(symbol, quantity, pnl, final=True)
