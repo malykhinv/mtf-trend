@@ -144,7 +144,8 @@ def evaluate_breakout(
     funding_ok_short = funding >= -funding_limit
 
     delta_oi_last = delta_oi.iloc[-1] if not delta_oi.empty else 0.0
-    oi_ok = delta_oi_last > delta_oi_thresh
+    oi_ok_long = delta_oi_last > delta_oi_thresh
+    oi_ok_short = delta_oi_last < -delta_oi_thresh
 
     cvd_smoothed = cvd.ewm(span=3, adjust=False).mean()
     cvd_delta = cvd_smoothed.diff().iloc[-1]
@@ -159,7 +160,7 @@ def evaluate_breakout(
         and vol_ok
         and ema_bull
         and funding_ok_long
-        and oi_ok
+        and oi_ok_long
         and cvd_ok_long
         and allow_long(df)
     ):
@@ -182,7 +183,7 @@ def evaluate_breakout(
         and vol_ok
         and ema_bear
         and funding_ok_short
-        and oi_ok
+        and oi_ok_short
         and cvd_ok_short
         and allow_short(df)
     ):
