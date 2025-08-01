@@ -92,6 +92,7 @@ class FuturesTrader:
         amount: float,
         tp: float | None = None,
         sl: float | None = None,
+        trade_id: str | None = None,
     ) -> bool:
         """Place a MARKET order and optional TP/SL exits.
 
@@ -114,7 +115,9 @@ class FuturesTrader:
             )
             ts = filled_order.get("timestamp")
             entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
-            exit_events = self.manage_exit_orders(symbol, side, amount, tp, sl)
+            exit_events = self.manage_exit_orders(
+                symbol, side, amount, tp, sl, entry_price, trade_id
+            )
             if exit_events:
                 direction = "long" if side.lower() == "buy" else "short"
                 risk = abs(entry_price - sl) if sl is not None else 0.0
@@ -140,8 +143,6 @@ class FuturesTrader:
                                 "rr": rr,
                             }
                         )
-                    if self.risk_manager:
-                        self.risk_manager.close_trade(pnl)
             return True
         return False
 
@@ -154,6 +155,7 @@ class FuturesTrader:
         price: float,
         tp: float | None = None,
         sl: float | None = None,
+        trade_id: str | None = None,
     ) -> bool:
         """Place a LIMIT-MAKER order with optional TP/SL.
 
@@ -182,7 +184,9 @@ class FuturesTrader:
             )
             ts = filled_order.get("timestamp")
             entry_time = pd.to_datetime(ts, unit="ms") if ts is not None else pd.Timestamp.utcnow()
-            exit_events = self.manage_exit_orders(symbol, side, amount, tp, sl)
+            exit_events = self.manage_exit_orders(
+                symbol, side, amount, tp, sl, entry_price, trade_id
+            )
             if exit_events:
                 direction = "long" if side.lower() == "buy" else "short"
                 risk = abs(entry_price - sl) if sl is not None else 0.0
@@ -208,8 +212,6 @@ class FuturesTrader:
                                 "rr": rr,
                             }
                         )
-                    if self.risk_manager:
-                        self.risk_manager.close_trade(pnl)
             return True
         return False
 
@@ -238,6 +240,8 @@ class FuturesTrader:
         amount: float,
         tp: float | None,
         sl: float | None,
+        entry_price: float,
+        trade_id: str | None = None,
     ) -> list[tuple[float, pd.Timestamp]]:
         """Submit TP/SL orders and manage a trailing stop.
 
@@ -311,7 +315,15 @@ class FuturesTrader:
                     return events
 
             if not tp_filled and tp_status == "closed":
-                events.append((tp if tp is not None else 0.0, pd.Timestamp.utcnow()))
+                exit_price = tp if tp is not None else 0.0
+                events.append((exit_price, pd.Timestamp.utcnow()))
+                if self.risk_manager and trade_id is not None:
+                    pnl = (
+                        exit_price - entry_price
+                        if side.lower() == "buy"
+                        else entry_price - exit_price
+                    )
+                    self.risk_manager.close_trade(trade_id, pnl)
                 tp_filled = True
                 # replace stop for remaining half
                 if sl_id:
@@ -347,6 +359,13 @@ class FuturesTrader:
                     except ccxt.BaseError:
                         pass
                 events.append((current_stop, pd.Timestamp.utcnow()))
+                if self.risk_manager and trade_id is not None:
+                    pnl = (
+                        current_stop - entry_price
+                        if side.lower() == "buy"
+                        else entry_price - current_stop
+                    )
+                    self.risk_manager.close_trade(trade_id, pnl)
                 return events
 
             if tp_filled and sl_id:
@@ -411,6 +430,13 @@ class FuturesTrader:
                     return events
                 if sl_status == "closed":
                     events.append((current_stop, pd.Timestamp.utcnow()))
+                    if self.risk_manager and trade_id is not None:
+                        pnl = (
+                            current_stop - entry_price
+                            if side.lower() == "buy"
+                            else entry_price - current_stop
+                        )
+                        self.risk_manager.close_trade(trade_id, pnl)
                     return events
 
             time.sleep(0.1)

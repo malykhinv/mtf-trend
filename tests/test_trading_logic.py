@@ -39,9 +39,9 @@ class DummyRisk:
 
     def open_trade(self, entry, stop):
         self.opened = True
-        return 1.0
+        return "id", 1.0
 
-    def close_trade(self, pnl):
+    def close_trade(self, trade_id, pnl):
         self.opened = False
 
 
@@ -49,12 +49,16 @@ class DummyTrader:
     def __init__(self):
         self.calls = []
 
-    def place_limit_maker_order(self, symbol, side, amount, price, tp=None, sl=None):
-        self.calls.append((symbol, side, amount, price, tp, sl))
+    def place_limit_maker_order(
+        self, symbol, side, amount, price, tp=None, sl=None, trade_id=None
+    ):
+        self.calls.append((symbol, side, amount, price, tp, sl, trade_id))
         return True
 
-    def place_market_order(self, symbol, side, amount, tp=None, sl=None):
-        self.calls.append((symbol, side, amount, None, tp, sl))
+    def place_market_order(
+        self, symbol, side, amount, tp=None, sl=None, trade_id=None
+    ):
+        self.calls.append((symbol, side, amount, None, tp, sl, trade_id))
         return True
 
 
