@@ -114,7 +114,9 @@ class BinanceExchange(BaseExchange):
         params = {"symbol": symbol}
         async with session.get(ticker_url, params=params) as resp:
             ticker = await resp.json()
-        volume = float(ticker.get("volume", 0.0))
+        # ``volume`` is denominated in base currency; use ``quoteVolume`` so that
+        # ``volume_24h`` represents notional value in USD.
+        volume = float(ticker.get("quoteVolume", ticker.get("volume", 0.0)))
         oi_url = f"{self.REST_URL}/fapi/v1/openInterest"
         async with session.get(oi_url, params=params) as resp:
             oi = await resp.json()

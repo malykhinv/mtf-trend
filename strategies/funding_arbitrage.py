@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Dict
 import time
 from datetime import datetime
+import math
 
 from exchanges import (
     fetch_funding_history,
@@ -122,6 +123,10 @@ async def get_market_metrics(
     stats = await get_stats(symbol)
     volume = float(stats.get("volume_24h", 0.0))
     open_interest = float(stats.get("open_interest", 0.0))
+    if futures_price and not math.isnan(futures_price):
+        open_interest *= futures_price
+    else:
+        open_interest = 0.0
     liquidity = sum(q for _, q in bids) + sum(q for _, q in asks)
     basis = (
         (spread / spot_price * 100) if spot_price else float("inf")
