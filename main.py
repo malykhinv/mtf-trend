@@ -164,7 +164,13 @@ def start_processing_loops() -> None:
         """Постоянно сканирует рынок в поиске входов."""
         while True:
             thresholds = CONFIG.get("thresholds", {})
-            trade_value = thresholds.get("min_trade_size", 0.0) or 1.0
+            deposit = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
+            deposit_pct = thresholds.get("deposit_pct", 0.05)
+            min_trade_usd = thresholds.get("min_trade_size", float("inf"))
+            # Берём меньшую величину: минимальный порог или 5 % от депозита
+            trade_value = min(min_trade_usd, deposit * deposit_pct)
+            if trade_value in (0.0, float("inf")):
+                trade_value = 1.0
 
             for name, client in CLIENTS.items():
                 exchanges._current = client
