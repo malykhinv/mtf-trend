@@ -37,6 +37,13 @@ def test_backtester_produces_trade(tmp_path, monkeypatch):
 
     monkeypatch.setattr(backtester, "find_tight_range_clusters", fake_clusters)
 
+    def fake_candles(limit=100, exchange=None):
+        ts = pd.date_range("2024-01-01", periods=6, freq="5T")
+        df = pd.DataFrame({"timestamp": ts, "close": [1, 2, 3, 4, 5, 6]})
+        return {"BTC/USDT": df, "ETH/USDT": df}
+
+    monkeypatch.setattr(backtester, "load_btc_eth_candles", fake_candles)
+
     trades_path = tmp_path / "trades.csv"
     equity_path = tmp_path / "equity.png"
     stats = backtester.run_backtest(
@@ -56,3 +63,33 @@ def test_backtester_produces_trade(tmp_path, monkeypatch):
     # reported pnl equals sum of individual trade pnls
     assert abs(trades["pnl"].sum() - stats["pnl"]) < 1e-6
     assert equity_path.exists()
+
+
+def test_backtester_skips_when_trend_disallows(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "raw_data"
+    csv_path = data_dir / "ETHUSDT.csv"
+    create_sample_data(csv_path)
+
+    def fake_clusters(df, atr_multiplier=0.5, min_bars=10, max_bars=30):
+        return pd.DataFrame(
+            [{"start": df["timestamp"].iloc[0], "end": df["timestamp"].iloc[-1], "high": 101, "low": 99, "duration": 10}]
+        )
+
+    monkeypatch.setattr(backtester, "find_tight_range_clusters", fake_clusters)
+
+    def fake_candles(limit=100, exchange=None):
+        ts = pd.date_range("2024-01-01", periods=6, freq="5T")
+        df = pd.DataFrame({"timestamp": ts, "close": [6, 5, 4, 3, 2, 1]})
+        return {"BTC/USDT": df, "ETH/USDT": df}
+
+    monkeypatch.setattr(backtester, "load_btc_eth_candles", fake_candles)
+
+    trades_path = tmp_path / "trades.csv"
+    stats = backtester.run_backtest(
+        "ETHUSDT", data_dir=data_dir, trades_path=trades_path, equity_path=tmp_path / "equity.png"
+    )
+    try:
+        trades = pd.read_csv(trades_path)
+    except pd.errors.EmptyDataError:
+        trades = pd.DataFrame()
+    assert trades.empty
