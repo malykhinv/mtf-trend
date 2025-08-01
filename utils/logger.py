@@ -22,6 +22,10 @@ following columns:
     Trade size.
 ``pnl``
     Profit and loss of the completed trade.
+``funding_fees``
+    Cumulative funding payments (positive for received, negative for paid).
+``trading_fees``
+    Cumulative trading fees incurred for the position.
 ``exit_reasons``
     Comma separated reasons for closing the position.
 
@@ -53,6 +57,8 @@ LOG_COLUMNS = [
     "funding",
     "quantity",
     "pnl",
+    "funding_fees",
+    "trading_fees",
     "exit_reasons",
 ]
 
