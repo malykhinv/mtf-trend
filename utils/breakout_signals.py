@@ -111,7 +111,8 @@ def evaluate_breakout(
     funding_limit:
         Maximum absolute funding rate allowed for signals.
     delta_oi_thresh:
-        Minimum absolute change in open interest required.
+        Minimum change in open interest required.  The absolute value of
+        ``ΔOI`` is compared to this threshold.
     tp1_rr, tp2_rr:
         Risk-reward multiples used to compute the first and second take profit
         levels relative to the entry price and calculated risk.
@@ -150,7 +151,7 @@ def evaluate_breakout(
 
     delta_oi_last = delta_oi.iloc[-1] if not delta_oi.empty else 0.0
     oi_ok_long = delta_oi_last > delta_oi_thresh
-    oi_ok_short = delta_oi_last < -delta_oi_thresh
+    oi_ok_short = delta_oi_last > delta_oi_thresh
 
     cvd_smoothed = cvd.ewm(span=3, adjust=False).mean()
     cvd_delta = cvd_smoothed.diff().iloc[-1]
