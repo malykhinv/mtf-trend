@@ -19,6 +19,8 @@ class BinanceExchange(BaseExchange):
 
     REST_URL = "https://fapi.binance.com"
     WS_URL = "wss://fstream.binance.com/ws"
+    SPOT_REST_URL = "https://api.binance.com"
+    SPOT_WS_URL = "wss://stream.binance.com:9443/ws"
 
     def __init__(self, api_key: str, api_secret: str) -> None:
         self.api_key = api_key
@@ -27,6 +29,10 @@ class BinanceExchange(BaseExchange):
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
+        # Spot specific websocket handling
+        self._spot_ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
+        self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------
     # REST utilities
@@ -116,6 +122,79 @@ class BinanceExchange(BaseExchange):
         return {"volume_24h": volume, "open_interest": open_interest}
 
     # ------------------------------------------------------------------
+    # Spot REST methods
+    # ------------------------------------------------------------------
+
+    async def place_spot_order(
+        self, symbol: str, side: str, quantity: float, price: float | None = None
+    ) -> dict:
+        session = await self._session_get()
+        url = f"{self.SPOT_REST_URL}/api/v3/order"
+        params: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET" if price is None else "LIMIT",
+            "quantity": quantity,
+        }
+        if price is not None:
+            params.update({"price": price, "timeInForce": "GTC"})
+        headers = {"X-MBX-APIKEY": self.api_key}
+        params = self._sign(params)
+        async with session.post(url, params=params, headers=headers) as resp:
+            return await resp.json()
+
+    async def get_spot_balance(self) -> dict:
+        session = await self._session_get()
+        url = f"{self.SPOT_REST_URL}/api/v3/account"
+        params = self._sign({})
+        headers = {"X-MBX-APIKEY": self.api_key}
+        async with session.get(url, params=params, headers=headers) as resp:
+            return await resp.json()
+
+    # ------------------------------------------------------------------
+    # Spot WebSocket handling
+    # ------------------------------------------------------------------
+
+    async def _connect_spot(
+        self, symbol: str, depth: int
+    ) -> websockets.WebSocketClientProtocol:
+        while True:
+            try:
+                return await websockets.connect(
+                    f"{self.SPOT_WS_URL}/{symbol.lower()}@depth{depth}@100ms"
+                )
+            except Exception:
+                await asyncio.sleep(5)
+
+    async def _listen_spot(self, symbol: str, depth: int) -> None:
+        while True:
+            try:
+                if self._spot_ws is None:
+                    self._spot_ws = await self._connect_spot(symbol, depth)
+                msg = await self._spot_ws.recv()
+                data = json.loads(msg)
+                if "bids" in data and "asks" in data:
+                    self._spot_orderbooks[symbol] = {
+                        "bids": data["bids"],
+                        "asks": data["asks"],
+                    }
+            except Exception:
+                await asyncio.sleep(1)
+                if self._spot_ws is not None:
+                    try:
+                        await self._spot_ws.close()
+                    except Exception:
+                        pass
+                self._spot_ws = None
+
+    async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
+        if symbol not in self._spot_ws_tasks:
+            self._spot_ws_tasks[symbol] = asyncio.create_task(
+                self._listen_spot(symbol, depth)
+            )
+        return self._spot_orderbooks.get(symbol, {"bids": [], "asks": []})
+
+    # ------------------------------------------------------------------
     # WebSocket handling
     # ------------------------------------------------------------------
 
@@ -159,6 +238,8 @@ class BinanceExchange(BaseExchange):
             await self._session.close()
         if self._ws is not None:
             await self._ws.close()
+        if self._spot_ws is not None:
+            await self._spot_ws.close()
 
 
 # Register exchange
