@@ -96,7 +96,8 @@ class BaseExchange(ABC):
     # Дополнительные помощники управления ордерами
     # ------------------------------------------------------------------
 
-    async def get_order_status(self, order_id: str, market: str) -> dict:
+    @staticmethod
+    async def get_order_status(order_id: str) -> dict:
         """Возвращает статус ордера ``order_id``.
 
         Реализации бирж могут переопределить метод и выполнять реальные API‑запросы.
@@ -106,7 +107,8 @@ class BaseExchange(ABC):
 
         return {"status": "FILLED", "order_id": order_id}
 
-    async def cancel_order(self, order_id: str, market: str) -> dict:
+    @staticmethod
+    async def cancel_order(order_id: str) -> dict:
         """Отменяет ``order_id`` на рынке ``market``.
 
         Реализация по умолчанию просто возвращает статус отменённого ордера.
@@ -120,7 +122,7 @@ class BaseExchange(ABC):
 # ---------------------------------------------------------------------------
 
 _EXCHANGES: Dict[str, Type[BaseExchange]] = {}
-_current: Optional[BaseExchange] = None
+current: Optional[BaseExchange] = None
 API_TIMEOUT = 30
 
 
@@ -131,12 +133,12 @@ def register(name: str, cls: Type[BaseExchange]) -> None:
 
 def configure(name: str, **kwargs) -> None:
     """Активирует биржу по её имени."""
-    global _current
+    global current
     try:
         cls = _EXCHANGES[name.lower()]
     except KeyError as exc:  # pragma: no cover - defensive programming
         raise ValueError(f"Неизвестная биржа: {name}") from exc
-    _current = cls(**kwargs)
+    current = cls(**kwargs)
 
 
 async def _handle_timeout() -> None:
@@ -145,11 +147,11 @@ async def _handle_timeout() -> None:
     logger.error(
         "Вызов API превысил %s секунд; отменяем активные ордера", API_TIMEOUT
     )
-    if _current is not None:
+    if current is not None:
         for market, oid in list(_OUTSTANDING):
             try:
                 await asyncio.wait_for(
-                    _current.cancel_order(oid, market), API_TIMEOUT
+                    current.cancel_order(oid, market), API_TIMEOUT
                 )
             except Exception as exc:  # pragma: no cover - best effort
                 logger.error("Не удалось отменить %s %s: %s", market, oid, exc)
@@ -170,11 +172,11 @@ async def _handle_timeout() -> None:
                 client = CLIENTS.get(exchange_name)
                 if client is None:
                     continue
-                exchanges_current = _current
+                exchanges_current = current
                 try:
                     # Переключаем контекст на биржу клиента для этой позиции.
                     globals()["_current"] = client
-                    entry = strategy._positions.get(symbol, {})
+                    entry = strategy.positions.get(symbol, {})
                     quantity = entry.get("quantity") or entry.get(
                         "initial_quantity", 0.0
                     )
@@ -274,7 +276,7 @@ async def _handle_timeout() -> None:
                     globals()["_current"] = exchanges_current
                     task.cancel()
                     POSITION_TASKS.pop(pid, None)
-                    strategy._positions.pop(symbol, None)
+                    strategy.positions.pop(symbol, None)
 
     risk_control.pause()
 
@@ -299,10 +301,10 @@ async def place_order(
     symbol: str, side: str, quantity: float, price: float | None = None
 ) -> dict:
     """Размещает ордер через настроенную биржу."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(
-        _current.place_order(symbol, side, quantity, price)
+        current.place_order(symbol, side, quantity, price)
     )
 
 
@@ -314,13 +316,13 @@ async def _poll_fill(order_id: str, market: str) -> None:
     не взаимодействующие с живыми биржами, могли выполняться детерминированно.
     """
 
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
 
     start = time.monotonic()
     while True:
         status = await _await_with_timeout(
-            _current.get_order_status(order_id, market)
+            current.get_order_status(order_id, market)
         )
         if status.get("status") == "FILLED":
             _untrack_order(market, order_id)
@@ -335,10 +337,10 @@ async def place_spot_order(
     symbol: str, side: str, quantity: float, price: float | None = None
 ) -> dict:
     """Размещает спотовый ордер и ожидает его полного исполнения."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
     order = await _await_with_timeout(
-        _current.place_spot_order(symbol, side, quantity, price)
+        current.place_spot_order(symbol, side, quantity, price)
     )
     order_id = str(order.get("orderId") or order.get("id") or "")
     _track_order("spot", order_id)
@@ -360,70 +362,70 @@ async def place_perp_order(
 
 async def fetch_funding(symbol: str) -> float:
     """Получает ставку фондирования для ``symbol`` с настроенной биржи."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(_current.fetch_funding(symbol))
+    return await _await_with_timeout(current.fetch_funding(symbol))
 
 
 async def get_orderbook(symbol: str, depth: int = 5) -> dict:
     """Возвращает актуальный стакан от настроенной биржи."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(_current.get_orderbook(symbol, depth))
+    return await _await_with_timeout(current.get_orderbook(symbol, depth))
 
 
 async def get_spot_orderbook(symbol: str, depth: int = 5) -> dict:
     """Возвращает актуальный спотовый стакан от настроенной биржи."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(_current.get_spot_orderbook(symbol, depth))
+    return await _await_with_timeout(current.get_spot_orderbook(symbol, depth))
 
 
 async def get_balance() -> dict:
     """Возвращает баланс аккаунта с настроенной биржи."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(_current.get_balance())
+    return await _await_with_timeout(current.get_balance())
 
 
 async def get_spot_balance() -> dict:
     """Возвращает спотовый баланс с настроенной биржи."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(_current.get_spot_balance())
+    return await _await_with_timeout(current.get_spot_balance())
 
 
 async def fetch_funding_history(
     symbol: str, hours: int = 8, limit: int = 3
 ) -> list[float]:
     """Возвращает историю ставок фондирования для ``symbol`` с биржи."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
     return await _await_with_timeout(
-        _current.fetch_funding_history(symbol, hours, limit)
+        current.fetch_funding_history(symbol, hours, limit)
     )
 
 
 async def get_stats(symbol: str) -> dict:
     """Возвращает рыночную статистику, включая 24‑часовой объём и открытый интерес."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(_current.get_stats(symbol))
+    return await _await_with_timeout(current.get_stats(symbol))
 
 
 async def get_ohlc(
     symbol: str, interval: str = "15m", limit: int = 1
 ) -> list[Dict[str, float]]:
     """Возвращает данные OHLC для ``symbol`` с биржи."""
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(_current.get_ohlc(symbol, interval, limit))
+    return await _await_with_timeout(current.get_ohlc(symbol, interval, limit))
 
 
 async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
     """Размещает компенсирующие спотовый и фьючерсный ордера с откатом при ошибке."""
 
-    if _current is None:  # pragma: no cover - defensive programming
+    if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
 
     # Спот-часть -------------------------------------------------------------
@@ -438,7 +440,7 @@ async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
         # Откатить спотовую часть, если фьючерсная часть завершается ошибкой.
         try:
             cancel_resp = await _await_with_timeout(
-                _current.cancel_order(spot_id, "spot")
+                current.cancel_order(spot_id, "spot")
             )
             logger.warning("Откатили спотовый ордер %s: %s", spot_id, cancel_resp)
         except Exception as cancel_exc:  # pragma: no cover - best effort

@@ -111,7 +111,7 @@ def start_processing_loops() -> None:
 
     async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> None:
         """Следит за открытой позицией до срабатывания условий выхода."""
-        exchanges._current = CLIENTS[exchange_name]
+        exchanges.current = CLIENTS[exchange_name]
         position_id = f"{exchange_name}:{symbol}"
         try:
             await strategy.monitor_neutral_position(
@@ -123,7 +123,7 @@ def start_processing_loops() -> None:
             )
         except Exception as exc:
             # При ошибке закрываем позицию и уведомляем
-            entry = strategy._positions.get(symbol, {})
+            entry = strategy.positions.get(symbol, {})
             hold = time.time() - entry.get("entry_timestamp", time.time())
             funding_pct = entry.get("entry_funding", 0.0) * 100
             basis_pct = entry.get("entry_basis", 0.0)
@@ -145,7 +145,7 @@ def start_processing_loops() -> None:
             raise
         else:
             # Успешное завершение позиции
-            entry = strategy._positions.get(symbol, {})
+            entry = strategy.positions.get(symbol, {})
             pnl = entry.get("pnl", 0.0)
             reasons = entry.get("exit_reasons")
             hold = entry.get("exit_timestamp", 0) - entry.get("entry_timestamp", 0)
@@ -171,7 +171,7 @@ def start_processing_loops() -> None:
         finally:
             # Удаляем задачу из списка активных
             POSITION_TASKS.pop(position_id, None)
-            strategy._positions.pop(symbol, None)
+            strategy.positions.pop(symbol, None)
 
     async def scan_loop() -> None:
         """Постоянно сканирует рынок в поиске входов."""
@@ -186,7 +186,7 @@ def start_processing_loops() -> None:
                 trade_value = 1.0
 
             for name, client in CLIENTS.items():
-                exchanges._current = client
+                exchanges.current = client
                 # Перебираем символы из белого списка
                 for symbol in WHITELISTS.get(name, []):
                     if risk_control.is_paused() or risk_control.is_symbol_open(symbol):

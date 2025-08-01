@@ -224,7 +224,7 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
 # Управление позициями
 # ---------------------------------------------------------------------------
 
-_positions: Dict[str, Dict[str, Any]] = {}
+positions: Dict[str, Dict[str, Any]] = {}
 
 
 async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
@@ -248,7 +248,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     risk_control.mark_symbol_open(symbol)
     now = time.time()
     commission = sum(float(o.get("fee", 0.0)) for o in orders.values())
-    _positions[symbol] = {
+    positions[symbol] = {
         "entry_timestamp": now,
         "entry_futures_price": entry_metrics.futures_price,
         "entry_spot_price": entry_metrics.spot_price,
@@ -262,7 +262,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         "last_funding_timestamp": now,
     }
     exchange_name = (
-        type(exchanges._current).__name__.replace("Exchange", "").lower()
+        type(exchanges.current).__name__.replace("Exchange", "").lower()
         if getattr(exchanges, "_current", None)
         else "unknown"
     )
@@ -318,7 +318,7 @@ async def close_neutral_position(
         # В случае ошибки возвращаем длинную позицию
         await place_order(symbol, "BUY", quantity)
         raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена") from exc
-    entry = _positions.get(symbol)
+    entry = positions.get(symbol)
     commission = float(close_long.get("fee", 0.0)) + float(
         close_short.get("fee", 0.0)
     )
@@ -346,7 +346,7 @@ async def monitor_neutral_position(
     отправляются через :func:`notify_partial_close`, чтобы редактировать одно
     сообщение вместо отправки новых.
     """
-    entry = _positions.get(symbol, {})
+    entry = positions.get(symbol, {})
     while True:
         try:
             metrics = await get_market_metrics(symbol, quantity)
@@ -427,7 +427,7 @@ async def monitor_neutral_position(
                 pnl_pct = (pnl_part / volume_usd * 100) if volume_usd else 0.0
                 hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
                 exchange_name = (
-                    type(exchanges._current).__name__.replace("Exchange", "").lower()
+                    type(exchanges.current).__name__.replace("Exchange", "").lower()
                     if getattr(exchanges, "_current", None)
                     else "unknown"
                 )
@@ -504,7 +504,7 @@ async def monitor_neutral_position(
                     }
                 )
                 exchange_name = (
-                    type(exchanges._current).__name__.replace("Exchange", "").lower()
+                    type(exchanges.current).__name__.replace("Exchange", "").lower()
                     if getattr(exchanges, "_current", None)
                     else "unknown"
                 )
