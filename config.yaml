@@ -9,13 +9,13 @@ thresholds:
   volatility: 0.025
   open_interest: 0.0
   min_trade_size: 10    # Minimum trade size in USD
-  max_trade_size: 1000.0
+  max_trade_size: 100.0
   spread: 0.005         # Maximum allowed spread percentage
   slippage: 0.003       # Maximum expected slippage per trade
   deposit_pct: 0.05     # Max fraction of total deposit per trade
 risk:
-  max_position_size: 1000
-  max_daily_loss: 500
+  max_position_size: 100
+  max_daily_loss: 50
   max_consecutive_losses: 3
   max_open_positions: 5
   deposit_cap_pct: 0.3
@@ -24,4 +24,4 @@ bot:
   whitelist:
     - BTCUSDT
     - ETHUSDT
-  deposit_size: 1000
+  deposit_size: 100
