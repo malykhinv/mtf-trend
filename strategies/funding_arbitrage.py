@@ -20,6 +20,7 @@ from exchanges import (
     hedge,
     place_order,
 )
+import exchanges
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG
@@ -191,7 +192,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     risk_control.update_position(quantity)
     risk_control.mark_symbol_open(symbol)
     now = time.time()
-    trading_fee = sum(float(o.get("fee", 0.0)) for o in orders.values())
+    commission = sum(float(o.get("fee", 0.0)) for o in orders.values())
     _positions[symbol] = {
         "entry_timestamp": now,
         "entry_futures_price": entry_metrics.futures_price,
@@ -199,14 +200,22 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         "entry_basis": entry_metrics.basis,
         "entry_funding": entry_metrics.funding_rate,
         "quantity": quantity,
+        "initial_quantity": quantity,
         "pnl": 0.0,
-        "funding_fees": 0.0,
-        "trading_fees": trading_fee,
+        "funding_accrued": 0.0,
+        "commissions": commission,
         "last_funding_timestamp": now,
     }
+    exchange_name = (
+        type(exchanges._current).__name__.replace("Exchange", "").lower()
+        if getattr(exchanges, "_current", None)
+        else "unknown"
+    )
+    volume_usd = quantity * entry_metrics.futures_price
     log_trade(
         {
             "symbol": symbol,
+            "exchange": exchange_name,
             "entry_time": datetime.fromtimestamp(now).isoformat(),
             "exit_time": None,
             "entry_futures_price": entry_metrics.futures_price,
@@ -215,12 +224,17 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
             "exit_spot_price": None,
             "entry_basis": entry_metrics.basis,
             "exit_basis": None,
+            "basis_pct": entry_metrics.basis,
             "funding": entry_metrics.funding_rate,
             "quantity": quantity,
+            "volume_usd": volume_usd,
             "pnl": 0.0,
-            "funding_fees": 0.0,
-            "trading_fees": trading_fee,
+            "pnl_pct": 0.0,
+            "commissions": commission,
+            "funding_accrued": 0.0,
+            "slippage": entry_metrics.slippage,
             "exit_reasons": None,
+            "notes": "open",
         }
     )
     return orders
@@ -251,11 +265,11 @@ async def close_neutral_position(
         await place_order(symbol, "BUY", quantity)
         raise RuntimeError("Failed to close hedge; rolled back long leg") from exc
     entry = _positions.get(symbol)
-    trading_fee = float(close_long.get("fee", 0.0)) + float(
+    commission = float(close_long.get("fee", 0.0)) + float(
         close_short.get("fee", 0.0)
     )
     if entry is not None:
-        entry["trading_fees"] = entry.get("trading_fees", 0.0) + trading_fee
+        entry["commissions"] = entry.get("commissions", 0.0) + commission
     risk_control.update_position(-quantity)
     risk_control.record_pnl(pnl)
     if final:
@@ -295,7 +309,7 @@ async def monitor_neutral_position(
                 * (now - last)
                 / (8 * 3600)
             )
-            entry["funding_fees"] = entry.get("funding_fees", 0.0) + funding_fee
+            entry["funding_accrued"] = entry.get("funding_accrued", 0.0) + funding_fee
             entry["last_funding_timestamp"] = now
         reasons: list[str] = []
         if check_exit_conditions(metrics, exit_thresholds):
@@ -320,7 +334,7 @@ async def monitor_neutral_position(
                 (metrics.futures_price - entry.get("entry_futures_price", 0.0))
                 - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
             ) * quantity
-            if pnl + entry.get("funding_fees", 0.0) - entry.get("trading_fees", 0.0) < 0:
+            if pnl + entry.get("funding_accrued", 0.0) - entry.get("commissions", 0.0) < 0:
                 reasons.append("pnl_vs_cost")
         else:
             pnl = 0.0
@@ -332,15 +346,61 @@ async def monitor_neutral_position(
                     (metrics.futures_price - entry.get("entry_futures_price", 0.0))
                     - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
                 ) * partial_qty
-                await close_neutral_position(symbol, partial_qty, pnl_part, final=False)
+                orders = await close_neutral_position(
+                    symbol, partial_qty, pnl_part, final=False
+                )
                 quantity -= partial_qty
                 entry["quantity"] = quantity
                 entry["pnl"] = entry.get("pnl", 0.0) + pnl_part
+                exit_ts = time.time()
+                exit_basis = (
+                    ((metrics.futures_price - metrics.spot_price) / metrics.spot_price)
+                    * 100
+                    if metrics.spot_price
+                    else float("inf")
+                )
+                commission = float(orders["long"].get("fee", 0.0)) + float(
+                    orders["short"].get("fee", 0.0)
+                )
+                volume_usd = partial_qty * entry.get("entry_futures_price", 0.0)
+                pnl_pct = (pnl_part / volume_usd * 100) if volume_usd else 0.0
+                exchange_name = (
+                    type(exchanges._current).__name__.replace("Exchange", "").lower()
+                    if getattr(exchanges, "_current", None)
+                    else "unknown"
+                )
+                log_trade(
+                    {
+                        "symbol": symbol,
+                        "exchange": exchange_name,
+                        "entry_time": datetime.fromtimestamp(
+                            entry.get("entry_timestamp", exit_ts)
+                        ).isoformat(),
+                        "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
+                        "entry_futures_price": entry.get("entry_futures_price"),
+                        "exit_futures_price": metrics.futures_price,
+                        "entry_spot_price": entry.get("entry_spot_price"),
+                        "exit_spot_price": metrics.spot_price,
+                        "entry_basis": entry.get("entry_basis"),
+                        "exit_basis": exit_basis,
+                        "basis_pct": exit_basis,
+                        "funding": entry.get("entry_funding"),
+                        "quantity": partial_qty,
+                        "volume_usd": volume_usd,
+                        "pnl": pnl_part,
+                        "pnl_pct": pnl_pct,
+                        "commissions": commission,
+                        "funding_accrued": entry.get("funding_accrued", 0.0),
+                        "slippage": exit_slippage,
+                        "exit_reasons": ["partial"],
+                        "notes": "scale_out",
+                    }
+                )
                 if position_id:
                     notify_partial_close(
                         position_id,
                         f"Scaled out {symbol}: remaining {quantity:.4f}, "
-                        f"funding {entry.get('funding_fees', 0.0):.4f}, "
+                        f"funding {entry.get('funding_accrued', 0.0):.4f}, "
                         f"pnl {entry.get('pnl', 0.0):.4f}",
                     )
                 continue
@@ -363,9 +423,19 @@ async def monitor_neutral_position(
                         "pnl": total_pnl,
                     }
                 )
+                exchange_name = (
+                    type(exchanges._current).__name__.replace("Exchange", "").lower()
+                    if getattr(exchanges, "_current", None)
+                    else "unknown"
+                )
+                volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
+                    "initial_quantity", entry.get("quantity", 0.0)
+                )
+                pnl_pct = (total_pnl / volume_usd * 100) if volume_usd else 0.0
                 log_trade(
                     {
                         "symbol": symbol,
+                        "exchange": exchange_name,
                         "entry_time": datetime.fromtimestamp(
                             entry.get("entry_timestamp", exit_ts)
                         ).isoformat(),
@@ -376,12 +446,17 @@ async def monitor_neutral_position(
                         "exit_spot_price": metrics.spot_price,
                         "entry_basis": entry.get("entry_basis"),
                         "exit_basis": exit_basis,
+                        "basis_pct": exit_basis,
                         "funding": entry.get("entry_funding"),
-                        "quantity": entry.get("quantity"),
+                        "quantity": entry.get("initial_quantity", entry.get("quantity")),
+                        "volume_usd": volume_usd,
                         "pnl": total_pnl,
-                        "funding_fees": entry.get("funding_fees", 0.0),
-                        "trading_fees": entry.get("trading_fees", 0.0),
+                        "pnl_pct": pnl_pct,
+                        "commissions": entry.get("commissions", 0.0),
+                        "funding_accrued": entry.get("funding_accrued", 0.0),
+                        "slippage": exit_slippage,
                         "exit_reasons": reasons,
+                        "notes": None,
                     }
                 )
             break

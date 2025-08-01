@@ -16,18 +16,27 @@ following columns:
     Spot prices at entry and exit.
 ``entry_basis`` / ``exit_basis``
     Calculated futures/spot basis in percent at entry and exit.
+``basis_pct``
+    Basis percentage at the time the log entry is created.
 ``funding``
     Funding rate captured for the trade.
 ``quantity``
     Trade size.
-``pnl``
-    Profit and loss of the completed trade.
-``funding_fees``
-    Cumulative funding payments (positive for received, negative for paid).
-``trading_fees``
+``volume_usd``
+    Notional value of the trade in USD.
+``pnl`` / ``pnl_pct``
+    Profit and loss of the trade in absolute terms and as percentage of
+    ``volume_usd``.
+``commissions``
     Cumulative trading fees incurred for the position.
+``funding_accrued``
+    Cumulative funding payments (positive for received, negative for paid).
+``slippage``
+    Observed slippage relative to the entry price.
 ``exit_reasons``
     Comma separated reasons for closing the position.
+``notes``
+    Free form text field for additional comments.
 
 The :func:`log_trade` function appends a new row to ``data/funding_bot_log.xlsx``
 creating the file and its parent directory if necessary.  The function guards
@@ -46,6 +55,7 @@ LOG_PATH = Path("data") / "funding_bot_log.xlsx"
 # Ordered list of columns expected for each trade entry.
 LOG_COLUMNS = [
     "symbol",
+    "exchange",
     "entry_time",
     "exit_time",
     "entry_futures_price",
@@ -54,12 +64,17 @@ LOG_COLUMNS = [
     "exit_spot_price",
     "entry_basis",
     "exit_basis",
+    "basis_pct",
     "funding",
     "quantity",
+    "volume_usd",
     "pnl",
-    "funding_fees",
-    "trading_fees",
+    "pnl_pct",
+    "commissions",
+    "funding_accrued",
+    "slippage",
     "exit_reasons",
+    "notes",
 ]
 
 
