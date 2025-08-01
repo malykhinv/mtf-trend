@@ -25,6 +25,11 @@ import numpy as np
 from utils.range_clusters import find_tight_range_clusters
 from utils.breakout_signals import evaluate_breakout, Signal
 from utils.plotting import plot_equity
+from utils.market_analysis import (
+    load_btc_eth_candles,
+    has_consecutive_move,
+    price_above_ema,
+)
 
 
 @dataclass
@@ -259,6 +264,25 @@ def run_backtest(
         if not signals:
             continue
         sig = signals[0]
+
+        # Evaluate broader market trend using recent BTC and ETH candles
+        candles = load_btc_eth_candles()
+        btc = candles.get("BTC/USDT")
+        eth = candles.get("ETH/USDT")
+        btc_down = has_consecutive_move(btc, "down")
+        eth_down = has_consecutive_move(eth, "down")
+        btc_up = has_consecutive_move(btc, "up")
+        eth_up = has_consecutive_move(eth, "up")
+        btc_above = price_above_ema(btc)
+        eth_above = price_above_ema(eth)
+
+        allow_long = not (btc_down or eth_down or not btc_above or not eth_above)
+        allow_short = not (btc_up or eth_up)
+
+        if sig.direction == "long" and not allow_long:
+            continue
+        if sig.direction == "short" and not allow_short:
+            continue
         open_trade = Position(
             symbol=symbol,
             direction=sig.direction,
