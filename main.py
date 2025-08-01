@@ -56,7 +56,7 @@ class DataCollector:
         end = pd.Timestamp.utcnow()
         start = end - pd.Timedelta(days=1)
         symbols = symbols or self.config.get("symbols", [])
-        fetch_all_from_config({**self.config, "symbols": symbols}, start, end, timeframe="5m")
+        fetch_all_from_config({**self.config, "symbols": symbols}, start, end, timeframe="1m")
 
         data_dir = (
             Path(self.config.get("data_paths", {}).get("data_dir", "data"))
@@ -64,7 +64,7 @@ class DataCollector:
         )
         results: dict[str, dict[str, Any]] = {}
         for symbol in symbols:
-            ohlcv_file = data_dir / f"{symbol.replace('/', '')}_5m.csv"
+            ohlcv_file = data_dir / f"{symbol.replace('/', '')}_1m.csv"
             df = pd.DataFrame()
             if ohlcv_file.exists():
                 df = pd.read_csv(ohlcv_file, parse_dates=["timestamp"])
@@ -76,7 +76,7 @@ class DataCollector:
             conn.close()
 
             try:
-                cvd = get_cvd(symbol, "5m")
+                cvd = get_cvd(symbol, "1m")
                 vol_delta = float(df["volume"].diff().iloc[-1]) if not df.empty else 0.0
             except Exception:
                 logging.exception("Failed to compute CVD/volume delta for %s", symbol)
@@ -86,7 +86,7 @@ class DataCollector:
             try:
                 limit = len(df) if not df.empty else 100
                 oi_hist = self.exchange.fetch_open_interest_history(
-                    symbol, timeframe="5m", limit=limit
+                    symbol, timeframe="1m", limit=limit
                 )
                 oi_df = pd.DataFrame(oi_hist)
                 if not oi_df.empty:
