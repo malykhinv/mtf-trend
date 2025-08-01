@@ -131,10 +131,11 @@ def test_exit_orders_with_trailing_stop_and_logging():
     # initial stop should be cancelled after TP1
     assert exchange.cancel_order_calls[0] == ("3", "BTC/USDT")
 
-    # two trade logs: TP1 and trailing exit
-    assert len(logs) == 2
-    assert logs[0]["exit"] == 21000
-    assert logs[1]["exit"] > 19000
+    # single trade log with tp1 and final exit recorded
+    assert len(logs) == 1
+    assert logs[0]["tp1"] == 21000
+    assert logs[0]["tp2"] > 19000
+    assert logs[0]["result"] == "tp2"
     assert len(risk.pnls) == 2
 
 

@@ -18,14 +18,27 @@ def append_trade(trade: Dict[str, Any], trades_path: str | Path = "trades.csv") 
     trade:
         Dictionary containing trade details. Expected keys include
         ``symbol``, ``direction``, ``entry_time``, ``entry``, ``stop``,
-        ``tp``, ``exit_time``, ``exit``, ``pnl`` and ``rr``.
+        ``tp1``, ``tp2``, ``exit_time``, ``pnl``, ``rr`` and ``result``.
     trades_path:
         CSV file to append to. Will be created with headers if it does not
         yet exist.
     """
 
     path = Path(trades_path)
-    df = pd.DataFrame([trade])
+    columns = [
+        "symbol",
+        "direction",
+        "entry_time",
+        "entry",
+        "stop",
+        "tp1",
+        "tp2",
+        "exit_time",
+        "pnl",
+        "rr",
+        "result",
+    ]
+    df = pd.DataFrame([trade], columns=columns)
     header = not path.exists()
     df.to_csv(path, mode="a", header=header, index=False)
 
