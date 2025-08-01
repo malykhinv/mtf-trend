@@ -5,17 +5,17 @@ thresholds:
   buy_signal: 0.8
   sell_signal: 0.2
   funding_rate: 0.0003
-  basis: 0.5
+  basis: 0.005          # Minimum spot–futures basis (0.5%)
+  volume: 20000000      # Minimum 24h trading volume to ensure liquidity
   liquidity: 0.0
-    volume: 0.0
-    holding_time: 172800
-    volatility: 0.025
-    open_interest: 0.0
-  min_trade_size: 0.0
+  holding_time: 172800
+  volatility: 0.025
+  open_interest: 0.0
+  min_trade_size: 10    # Minimum trade size in USD
   max_trade_size: 1000.0
-  spread: 0.005
-  slippage: 0.003
-  deposit_pct: 0.05
+  spread: 0.005         # Maximum allowed spread percentage
+  slippage: 0.003       # Maximum expected slippage per trade
+  deposit_pct: 0.05     # Max fraction of total deposit per trade
 risk:
   max_position_size: 1000
   max_daily_loss: 500
