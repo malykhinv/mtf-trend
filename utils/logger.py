@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """Простые утилиты для логирования сделок в Excel.
 
 Модуль предоставляет небольшую функцию для сохранения информации о сделках
@@ -43,16 +41,18 @@ from __future__ import annotations
 для добавления строк без полного переписывания файла через pandas.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
 
 from openpyxl import Workbook, load_workbook
 
 # Расположение файла журнала по умолчанию.
-LOG_PATH = Path("data") / "funding_bot_log.xlsx"
+LOG_PATH: Path = Path("data") / "funding_bot_log.xlsx"
 
 # Упорядоченный список колонок, ожидаемых для каждой сделки.
-LOG_COLUMNS = [
+LOG_COLUMNS: list[str] = [
     "symbol",
     "exchange",
     "entry_time",

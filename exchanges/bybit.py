@@ -32,11 +32,11 @@ class BybitExchange(BaseExchange):
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
-        self._ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._ws: Optional[Any] = None
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
         # Управление WebSocket спота
-        self._spot_ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._spot_ws: Optional[Any] = None
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
@@ -72,7 +72,7 @@ class BybitExchange(BaseExchange):
         """Получает последнюю ставку фондирования для ``symbol``."""
         session = await self._session_get()
         url = f"{self.REST_URL}/v5/market/funding/history"
-        params = {"symbol": symbol, "limit": 1}
+        params: dict[str, str | int] = {"symbol": symbol, "limit": 1}
         async with session.get(url, params=params) as resp:
             data = await resp.json()
         return float(data["result"]["list"][0]["fundingRate"])
@@ -85,7 +85,7 @@ class BybitExchange(BaseExchange):
         url = f"{self.REST_URL}/v5/market/funding/history"
         end_time = int(time.time() * 1000)
         start_time = end_time - hours * 3600 * 1000
-        params = {"symbol": symbol, "startTime": start_time, "endTime": end_time, "limit": limit}
+        params: dict[str, str | int] = {"symbol": symbol, "startTime": start_time, "endTime": end_time, "limit": limit}
         async with session.get(url, params=params) as resp:
             data = await resp.json()
         records = data.get("result", {}).get("list", [])
@@ -116,7 +116,7 @@ class BybitExchange(BaseExchange):
         session = await self._session_get()
         url_path = "/v5/account/wallet-balance"
         url = f"{self.REST_URL}{url_path}"
-        params = self._sign("GET", url_path, {"accountType": "UNIFIED"})
+        params: Dict[str, Any] = self._sign("GET", url_path, {"accountType": "UNIFIED"})
         async with session.get(url, params=params) as resp:
             return await resp.json()
 
@@ -124,13 +124,13 @@ class BybitExchange(BaseExchange):
         """Получает 24‑часовой объём и открытый интерес."""
         session = await self._session_get()
         ticker_url = f"{self.REST_URL}/v5/market/tickers"
-        t_params = {"category": "linear", "symbol": symbol}
+        t_params: dict[str, str] = {"category": "linear", "symbol": symbol}
         async with session.get(ticker_url, params=t_params) as resp:
             ticker = await resp.json()
         tick = (ticker.get("result", {}).get("list") or [{}])[0]
         volume = float(tick.get("turnover24h", 0.0))
         oi_url = f"{self.REST_URL}/v5/market/open-interest"
-        oi_params = {"category": "linear", "symbol": symbol}
+        oi_params: dict[str, str] = {"category": "linear", "symbol": symbol}
         async with session.get(oi_url, params=oi_params) as resp:
             oi = await resp.json()
         oi_list = oi.get("result", {}).get("list") or [{}]
@@ -143,7 +143,7 @@ class BybitExchange(BaseExchange):
         """Возвращает свечи OHLC."""
         session = await self._session_get()
         url = f"{self.REST_URL}/v5/market/kline"
-        params = {
+        params: dict[str, str | int] = {
             "category": "linear",
             "symbol": symbol,
             "interval": interval,
@@ -192,7 +192,7 @@ class BybitExchange(BaseExchange):
         session = await self._session_get()
         url_path = "/v5/account/wallet-balance"
         url = f"{self.REST_URL}{url_path}"
-        params = self._sign("GET", url_path, {"accountType": "SPOT"})
+        params: Dict[str, Any] = self._sign("GET", url_path, {"accountType": "SPOT"})
         async with session.get(url, params=params) as resp:
             return await resp.json()
 
@@ -200,7 +200,7 @@ class BybitExchange(BaseExchange):
     # Обработка спотового WebSocket
     # ------------------------------------------------------------------
 
-    async def _connect_spot(self, symbol: str) -> websockets.WebSocketClientProtocol:
+    async def _connect_spot(self, symbol: str) -> Any:
         """Подключается к спотовому WebSocket потоку стакана."""
         while True:
             try:
@@ -247,7 +247,7 @@ class BybitExchange(BaseExchange):
     # Обработка WebSocket
     # ------------------------------------------------------------------
 
-    async def _connect(self, symbol: str) -> websockets.WebSocketClientProtocol:
+    async def _connect(self, symbol: str) -> Any:
         """Создаёт WebSocket‑соединение для фьючерсного стакана."""
         while True:
             try:

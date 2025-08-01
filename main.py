@@ -16,8 +16,6 @@ from typing import Any, Dict, List
 import yaml
 from dotenv import load_dotenv
 
-load_dotenv()
-
 import exchanges
 from exchanges.binance import BinanceExchange
 from exchanges.bybit import BybitExchange
@@ -25,6 +23,8 @@ from risk import risk_control
 from strategies import funding_arbitrage as strategy
 from ai.parameter_optimizer import periodic_optimization
 from utils.telegram import format_duration, notify_close, notify_open
+
+load_dotenv()
 
 # Глобальный словарь конфигурации, доступный другим модулям.
 CONFIG: Dict[str, Any] = {}

@@ -7,8 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+API_TOKEN: str | None = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID: str | None = os.getenv("TELEGRAM_CHAT_ID")
 
 _BOT: Optional[Bot] = Bot(API_TOKEN, parse_mode="HTML") if API_TOKEN else None
 

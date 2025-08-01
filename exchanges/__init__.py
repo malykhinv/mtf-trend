@@ -448,5 +448,5 @@ async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
         raise RuntimeError("Не удалось разместить хедж; спотовая часть откатена") from exc
 
 # Импорт встроенных бирж для регистрации в фабрике.
-from . import binance as _binance  # noqa: F401
-from . import bybit as _bybit  # noqa: F401
+from . import binance as _binance  # noqa: E402,F401
+from . import bybit as _bybit  # noqa: E402,F401
