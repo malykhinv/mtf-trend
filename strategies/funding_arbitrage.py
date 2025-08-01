@@ -447,6 +447,15 @@ async def monitor_neutral_position(
                     }
                 )
                 if position_id:
+                    total_volume = entry.get("entry_futures_price", 0.0) * entry.get(
+                        "initial_quantity", entry.get("quantity", 0.0)
+                    )
+                    pnl_total = entry.get("pnl", 0.0)
+                    pnl_pct_total = (
+                        pnl_total / total_volume * 100
+                        if total_volume
+                        else 0.0
+                    )
                     notify_partial_close(
                         position_id,
                         (
@@ -455,8 +464,8 @@ async def monitor_neutral_position(
                             f"Basis: {exit_basis:.4f}%\n"
                             f"Volume: ${volume_usd:.2f}\n"
                             f"Time in position: {format_duration(hold_time)}\n"
-                            f"Funding accrued: {entry.get('funding_accrued', 0.0):.4f}\n"
-                            f"PnL: {entry.get('pnl', 0.0):.4f}"
+                            f"Funding accrued: {entry.get('funding_accrued', 0.0):.4f} / "
+                            f"PnL: {pnl_total:+.4f} ({pnl_pct_total:+.2f} %)"
                         ),
                     )
                 continue
