@@ -1,8 +1,8 @@
-"""Basic risk management helpers.
+"""Простые помощники для управления риском.
 
-This module tracks position sizes, accumulated losses, outstanding
-positions, and consecutive losing trades. Trading can be paused when risk
-limits are violated and automatically resumed after a cooldown period.
+Модуль отслеживает размеры позиций, накопленные убытки и количество
+открытых сделок. При превышении лимитов торговля может быть приостановлена,
+а затем автоматически возобновлена после паузы.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import time
 
 @dataclass
 class RiskLimits:
-    """Configuration for risk checks."""
+    """Конфигурация ограничений риска."""
 
     max_position_size: float = float("inf")
     max_daily_loss: float = float("inf")
@@ -25,7 +25,7 @@ class RiskLimits:
 
 @dataclass
 class RiskState:
-    """Runtime risk state tracked across trades."""
+    """Текущее состояние риска, обновляемое после сделок."""
 
     total_notional: float = 0.0
     daily_loss: float = 0.0
@@ -41,16 +41,15 @@ _state = RiskState()
 
 
 def configure(config: Dict[str, float], deposit_size: Optional[float] = None) -> None:
-    """Configure risk limits from a dictionary.
+    """Настраивает пределы риска из словаря.
 
     Parameters
     ----------
     config:
-        Dictionary containing risk configuration values.
+        Словарь с параметрами контроля риска.
     deposit_size:
-        Size of the trading account's deposit. Used to derive the absolute
-        deposit exposure limit from ``deposit_cap_pct`` if ``deposit_cap`` is
-        not specified directly.
+        Размер депозита. Используется для расчёта абсолютного лимита, если
+        ``deposit_cap`` явно не задан и указан процент ``deposit_cap_pct``.
     """
 
     global _limits
@@ -58,6 +57,7 @@ def configure(config: Dict[str, float], deposit_size: Optional[float] = None) ->
     if deposit_cap is float("inf") and deposit_size is not None:
         pct = config.get("deposit_cap_pct")
         if pct is not None:
+            # Переводим процент от депозита в абсолютное значение
             deposit_cap = pct * deposit_size
 
     _limits = RiskLimits(
@@ -70,7 +70,7 @@ def configure(config: Dict[str, float], deposit_size: Optional[float] = None) ->
 
 
 def can_open_position(notional: float) -> bool:
-    """Return ``True`` if a position of ``notional`` USD is allowed."""
+    """Возвращает ``True``, если позицию на ``notional`` USD можно открыть."""
 
     if _state.paused:
         return False
@@ -86,54 +86,56 @@ def can_open_position(notional: float) -> bool:
 
 
 def update_position(delta_notional: float) -> None:
-    """Update the tracked notional exposure by ``delta_notional`` USD."""
+    """Обновляет учёт текущей нагрузки на депозит на ``delta_notional`` USD."""
 
     _state.total_notional = max(_state.total_notional + delta_notional, 0.0)
 
 
 def is_symbol_open(symbol: str) -> bool:
-    """Return ``True`` if a position for ``symbol`` is currently open."""
+    """Возвращает ``True``, если позиция по ``symbol`` уже открыта."""
 
     return symbol in _state.open_symbols
 
 
 def mark_symbol_open(symbol: str) -> None:
-    """Record ``symbol`` as having an open position."""
+    """Помечает ``symbol`` как открытую позицию."""
 
     _state.open_symbols.add(symbol)
     _state.open_positions = len(_state.open_symbols)
 
 
 def mark_symbol_closed(symbol: str) -> None:
-    """Remove ``symbol`` from the set of open positions."""
+    """Удаляет ``symbol`` из набора открытых позиций."""
 
     _state.open_symbols.discard(symbol)
     _state.open_positions = len(_state.open_symbols)
 
 
 def pause(duration: Optional[float] = None) -> None:
-    """Pause trading for ``duration`` seconds or indefinitely."""
+    """Приостанавливает торговлю на ``duration`` секунд или бессрочно."""
 
     _state.paused = True
     _state.pause_until = time.time() + duration if duration else None
 
 
 def record_pnl(pnl: float) -> None:
-    """Record the profit or loss from a completed trade."""
+    """Фиксирует прибыль или убыток по завершённой сделке."""
 
     if pnl < 0:
         _state.daily_loss += abs(pnl)
         _state.consecutive_losses += 1
         if _state.consecutive_losses >= _limits.max_consecutive_losses:
+            # Слишком много подряд убыточных сделок — делаем суточную паузу
             pause(24 * 3600)
     else:
         _state.consecutive_losses = 0
 
 
 def is_paused() -> bool:
-    """Return ``True`` if trading is currently paused."""
+    """Возвращает ``True``, если торговля сейчас приостановлена."""
 
     if _state.paused and _state.pause_until and time.time() >= _state.pause_until:
+        # Истёк таймер паузы — возобновляем торговлю
         _state.paused = False
         _state.pause_until = None
         _state.consecutive_losses = 0

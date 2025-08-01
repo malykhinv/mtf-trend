@@ -1,8 +1,8 @@
-"""Utilities for a funding-rate arbitrage strategy.
+"""Утилиты для стратегии арбитража по ставке фондирования.
 
-This module contains helpers for evaluating entry and exit conditions based on
-funding rates and simple market microstructure metrics.  It also provides
-helpers to open and monitor neutral long/short positions.
+Модуль содержит функции для оценки условий входа и выхода на основе ставок
+фондирования и простых микроструктурных метрик. Также включает вспомогательные
+функции для открытия и мониторинга нейтральных позиций.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from utils.telegram import format_duration, notify_partial_close
 
 @dataclass
 class MarketMetrics:
-    """Container for market metrics relevant to the strategy."""
+    """Набор рыночных метрик, используемых стратегией."""
 
     funding_rate: float
     spread: float
@@ -52,31 +52,33 @@ class MarketMetrics:
 async def get_market_metrics(
     symbol: str, trade_size: float, depth: int = 5
 ) -> MarketMetrics:
-    """Fetch comprehensive market metrics for ``symbol``.
+    """Получает расширенные рыночные метрики для ``symbol``.
 
     Parameters
     ----------
     symbol:
-        Trading pair symbol understood by the configured exchange.
+        Торговая пара, поддерживаемая текущей биржей.
     trade_size:
-        Quantity to trade when estimating slippage.
+        Объём сделки для оценки проскальзывания.
     depth:
-        Order book depth to request for liquidity calculations.  Defaults to 5.
+        Глубина стакана для расчёта ликвидности. По умолчанию ``5``.
 
     Returns
     -------
     MarketMetrics
-        Includes per-leg slippage estimates and their combined value.
+        Метрики рынка, включая оценку проскальзывания по каждой ноге.
     """
     history = await fetch_funding_history(symbol, hours=8, limit=3)
     if history:
         k = 2 / (len(history) + 1)
         funding = history[0]
         for rate in history[1:]:
+            # Экспоненциальное сглаживание ставок фондирования
             funding = rate * k + funding * (1 - k)
     else:
         funding = 0.0
 
+    # Загружаем стаканы фьючерса и спота
     perp_book = await get_orderbook(symbol, depth=depth)
     spot_book = await get_spot_orderbook(symbol, depth=depth)
 
@@ -86,9 +88,11 @@ async def get_market_metrics(
     spot_asks = [(float(p), float(q)) for p, q in spot_book.get("asks", [])]
 
     def _calc_slippage(orders, size, mid):
+        """Оценивает проскальзывание при выполнении ``size`` по стакану."""
         remaining = size
         cost = 0.0
         for price, qty in orders:
+            # Берём доступный объём из каждой заявки
             take = min(remaining, qty)
             cost += take * price
             remaining -= take
@@ -113,6 +117,7 @@ async def get_market_metrics(
         spot_price = float("nan")
         spot_slippage = float("inf")
 
+    # Суммарное проскальзывание обеих ног
     slippage = futures_slippage + spot_slippage
 
     if bids and asks and spot_bids and spot_asks:
@@ -132,6 +137,7 @@ async def get_market_metrics(
         (spread / spot_price * 100) if spot_price else float("inf")
     )
 
+    # Изменение цены за последние 15 минут для оценки волатильности
     ohlc = await get_ohlc(symbol, interval="15m", limit=1)
     if ohlc:
         candle = ohlc[0]
@@ -167,9 +173,9 @@ def check_entry_conditions(
     metrics: MarketMetrics,
     thresholds: Dict[str, float],
     ) -> bool:
-    """Return ``True`` if all entry thresholds are satisfied.
+    """Возвращает ``True``, если выполнены все условия входа.
 
-    The ``basis`` threshold is specified in percentage points.
+    Порог ``basis`` задаётся в процентных пунктах.
     """
 
     whitelist = CONFIG.get("bot", {}).get("whitelist", [])
@@ -206,7 +212,7 @@ def check_entry_conditions(
 
 
 def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) -> bool:
-    """Return ``True`` if any exit condition is met."""
+    """Возвращает ``True``, если выполнено любое условие выхода."""
     return (
         abs(metrics.funding_rate) <= thresholds.get("funding_rate", float("inf"))
         or metrics.spread >= thresholds.get("spread", float("-inf"))
@@ -224,10 +230,11 @@ _positions: Dict[str, Dict[str, Any]] = {}
 
 
 async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
-    """Open offsetting long and short positions and record entry details."""
+    """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
     bot_cfg = CONFIG.get("bot", {})
     if symbol not in bot_cfg.get("whitelist", []):
         raise RuntimeError("Symbol not whitelisted")
+    # Получаем метрики рынка для оценки сделки
     entry_metrics = await get_market_metrics(symbol, quantity)
     notional = quantity * entry_metrics.futures_price
     deposit = bot_cfg.get("deposit_size", float("inf"))
@@ -237,6 +244,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         raise RuntimeError("Trade size exceeds deposit limits")
     if not risk_control.can_open_position(notional) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
+    # Хеджируем позицию на споте и фьючерсе
     orders = await hedge(symbol, quantity)
     risk_control.update_position(notional)
     risk_control.mark_symbol_open(symbol)
@@ -292,25 +300,24 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
 async def close_neutral_position(
     symbol: str, quantity: float, pnl: float = 0.0, final: bool = True
 ) -> Dict[str, Dict]:
-    """Close an existing neutral position and record PnL.
+    """Закрывает нейтральную позицию и фиксирует результат.
 
     Parameters
     ----------
     symbol:
-        Trading pair symbol.
+        Торговая пара.
     quantity:
-        Size to close.
+        Объём закрытия.
     pnl:
-        Realised profit or loss for the closed size.
+        Полученная прибыль или убыток.
     final:
-        Whether this closes the position entirely.  If ``False`` the position
-        remains open and risk controls are not reset.
+        Если ``True``, позиция закрывается полностью и риски сбрасываются.
     """
     close_long = await place_order(symbol, "SELL", quantity)
     try:
         close_short = await place_order(symbol, "BUY", quantity)
     except Exception as exc:
-        # Rollback long close to restore neutrality
+        # В случае ошибки возвращаем длинную позицию
         await place_order(symbol, "BUY", quantity)
         raise RuntimeError("Failed to close hedge; rolled back long leg") from exc
     entry = _positions.get(symbol)
@@ -334,13 +341,12 @@ async def monitor_neutral_position(
     poll_interval: float = 5.0,
     position_id: str | None = None,
 ) -> None:
-    """Monitor a neutral position and close it when exit criteria are met.
+    """Следит за позицией и закрывает её при срабатывании условий выхода.
 
-    The function supports scaling out of positions.  When exit conditions are
-    met but the remaining size exceeds twice the minimum trade size the
-    position is halved and monitoring continues on the rest.  Telegram updates
-    are sent via :func:`notify_partial_close` so that the original message is
-    edited instead of spammed.
+    Поддерживается частичное закрытие: если размер позиции больше двух
+    минимальных, закрывается половина и отслеживание продолжается. Обновления
+    отправляются через :func:`notify_partial_close`, чтобы редактировать одно
+    сообщение вместо отправки новых.
     """
     entry = _positions.get(symbol, {})
     while True:
@@ -359,6 +365,7 @@ async def monitor_neutral_position(
                 * (now - last)
                 / (8 * 3600)
             )
+            # Накапливаем полученное фондирование
             entry["funding_accrued"] = entry.get("funding_accrued", 0.0) + funding_fee
             entry["last_funding_timestamp"] = now
         reasons: list[str] = []
@@ -404,6 +411,7 @@ async def monitor_neutral_position(
                 orders = await close_neutral_position(
                     symbol, partial_qty, pnl_part, final=False
                 )
+                # Обновляем запись о позиции после частичного выхода
                 quantity -= partial_qty
                 entry["quantity"] = quantity
                 entry["pnl"] = entry.get("pnl", 0.0) + pnl_part
@@ -542,13 +550,13 @@ async def monitor_neutral_position(
 # ---------------------------------------------------------------------------
 
 def get_thresholds(config_thresholds: Dict[str, float]) -> Dict[str, float]:
-    """Return strategy thresholds merged with any optimized values.
+    """Возвращает пороги стратегии с учётом оптимизированных значений.
 
     Parameters
     ----------
     config_thresholds:
-        Thresholds configured in ``config.yaml``.  Values produced by the
-        optimizer take precedence over these defaults.
+        Пороговые значения из ``config.yaml``. Результаты оптимизатора имеют
+        приоритет над этими значениями.
     """
 
     return _load_thresholds(config_thresholds)
