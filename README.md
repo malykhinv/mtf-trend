@@ -7,11 +7,11 @@ pip install -r requirements.txt
 python main.py
 ```
 
-This repository contains tools for multi-timeframe trend-following and funding arbitrage strategies.
+Репозиторий содержит инструменты для многотаймфреймовых трендовых стратегий и арбитража ставки фондирования.
 
-## Installation
+## Установка
 
-Install the project dependencies with [pip](https://pip.pypa.io/):
+Установите зависимости проекта с помощью [pip](https://pip.pypa.io/):
 
 ```bash
 pip install -r requirements.txt
@@ -21,7 +21,7 @@ pip install -r requirements.txt
 
 | Проверка | Вход | Выход |
 | -------- | ---- | ----- |
-| Funding rate | `>= funding_rate` и положительный | `<= funding_rate` |
+| Ставка фондирования | `>= funding_rate` и положительный | `<= funding_rate` |
 | Спред | `<= spread` | `>= spread` |
 | Базис | `<= basis` | — |
 | Ликвидность | `>= liquidity` | `<= liquidity` |
@@ -40,22 +40,22 @@ pip install -r requirements.txt
 
 Модуль `ai/parameter_optimizer.py` периодически анализирует журнал сделок и подбирает новые пороги входа, что позволяет адаптировать стратегию к текущему рынку.
 
-## Default Safety Thresholds
+## Базовые пороги безопасности
 
-The bot ships with conservative defaults in [`config.yaml`](config.yaml) to guard against
-unfavourable market conditions. These values represent **minimum safety thresholds** and
-should be adjusted only after careful consideration:
+Бот поставляется с консервативными значениями по умолчанию в [`config.yaml`](config.yaml),
+которые защищают от неблагоприятных рыночных условий. Эти значения представляют
+**минимальные пороги безопасности** и должны изменяться только после тщательного анализа:
 
-| Threshold        | Default     | Purpose |
-| ---------------- | ----------- | ------- |
-| `funding_rate`   | `0.0003`    | Minimum absolute funding rate required to enter a trade |
-| `basis`          | `0.5`       | Maximum spot–futures basis percentage |
-| `volume`         | `20000000`  | Minimum 24h trading volume (USD) to ensure liquidity |
-| `min_trade_size` | `10`        | Minimum notional value per trade |
-| `spread`         | `0.005`     | Maximum allowable spread percentage |
-| `slippage`       | `0.003`     | Maximum expected combined slippage across spot and futures |
-| `deposit_pct`    | `0.05`      | Max fraction of total deposit allocated per trade |
+| Порог            | Значение по умолчанию | Назначение |
+| ---------------- | --------------------- | ---------- |
+| `funding_rate`   | `0.0003`              | Минимальная абсолютная ставка фондирования для входа в сделку |
+| `basis`          | `0.5`                 | Максимальный процент базиса спот–фьючерс |
+| `volume`         | `20000000`            | Минимальный 24‑часовой торговый объём (USD) для обеспечения ликвидности |
+| `min_trade_size` | `10`                  | Минимальный номинальный размер сделки |
+| `spread`         | `0.005`               | Максимально допустимый процент спреда |
+| `slippage`       | `0.003`               | Максимальное ожидаемое суммарное проскальзывание по споту и фьючерсу |
+| `deposit_pct`    | `0.05`                | Максимальная доля депозита, выделяемая на одну сделку |
 
-These settings aim to provide a safety buffer for new users. Increase or relax them only if
-you fully understand the associated risks.
+Эти настройки предназначены для создания защитного буфера для новых пользователей. Повышайте
+или ослабляйте их только при полном понимании связанных рисков.
 

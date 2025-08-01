@@ -1,1 +1,1 @@
-"""Strategy modules for the trading bot."""
+"""Модули стратегий для торгового бота."""

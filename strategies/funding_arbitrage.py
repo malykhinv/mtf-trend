@@ -54,8 +54,8 @@ async def get_market_metrics(
 ) -> MarketMetrics:
     """Получает расширенные рыночные метрики для ``symbol``.
 
-    Parameters
-    ----------
+    Параметры
+    ---------
     symbol:
         Торговая пара, поддерживаемая текущей биржей.
     trade_size:
@@ -63,8 +63,8 @@ async def get_market_metrics(
     depth:
         Глубина стакана для расчёта ликвидности. По умолчанию ``5``.
 
-    Returns
-    -------
+    Возвращает
+    ----------
     MarketMetrics
         Метрики рынка, включая оценку проскальзывания по каждой ноге.
     """
@@ -164,7 +164,7 @@ async def get_market_metrics(
 
 
 # ---------------------------------------------------------------------------
-# Condition checks
+# Проверка условий
 # ---------------------------------------------------------------------------
 
 def check_entry_conditions(
@@ -221,7 +221,7 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
 
 
 # ---------------------------------------------------------------------------
-# Position management
+# Управление позициями
 # ---------------------------------------------------------------------------
 
 _positions: Dict[str, Dict[str, Any]] = {}
@@ -231,7 +231,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
     bot_cfg = CONFIG.get("bot", {})
     if symbol not in bot_cfg.get("whitelist", []):
-        raise RuntimeError("Symbol not whitelisted")
+        raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки
     entry_metrics = await get_market_metrics(symbol, quantity)
     notional = quantity * entry_metrics.futures_price
@@ -239,9 +239,9 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     deposit_pct = CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)
     max_trade = deposit * deposit_pct
     if notional > deposit or notional > max_trade:
-        raise RuntimeError("Trade size exceeds deposit limits")
+        raise RuntimeError("Размер сделки превышает лимиты депозита")
     if not risk_control.can_open_position(notional) or risk_control.is_symbol_open(symbol):
-        raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
+        raise RuntimeError("Превышены лимиты риска, торговля приостановлена или позиция уже открыта")
     # Хеджируем позицию на споте и фьючерсе
     orders = await hedge(symbol, quantity)
     risk_control.update_position(notional)
@@ -300,8 +300,8 @@ async def close_neutral_position(
 ) -> Dict[str, Dict]:
     """Закрывает нейтральную позицию и фиксирует результат.
 
-    Parameters
-    ----------
+    Параметры
+    ---------
     symbol:
         Торговая пара.
     quantity:
@@ -317,7 +317,7 @@ async def close_neutral_position(
     except Exception as exc:
         # В случае ошибки возвращаем длинную позицию
         await place_order(symbol, "BUY", quantity)
-        raise RuntimeError("Failed to close hedge; rolled back long leg") from exc
+        raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена") from exc
     entry = _positions.get(symbol)
     commission = float(close_long.get("fee", 0.0)) + float(
         close_short.get("fee", 0.0)
@@ -455,7 +455,7 @@ async def monitor_neutral_position(
                         "funding_accrued": entry.get("funding_accrued", 0.0),
                         "slippage": exit_slippage,
                         "exit_reasons": ["partial"],
-                        "notes": "scale_out",
+                        "notes": "частичный выход",
                     }
                 )
                 if position_id:
@@ -472,12 +472,12 @@ async def monitor_neutral_position(
                         notify_partial_close(
                             position_id,
                             (
-                                f"Scaled out {symbol}: remaining {quantity:.4f}\n"
-                                f"Funding: {metrics.funding_rate * 100:.4f}%\n"
-                                f"Basis: {exit_basis:.4f}%\n"
-                                f"Volume: ${volume_usd:.2f}\n"
-                                f"Time in position: {format_duration(hold_time)}\n"
-                                f"Funding accrued: {entry.get('funding_accrued', 0.0):.4f} / "
+                                f"Частичное закрытие {symbol}: осталось {quantity:.4f}\n"
+                                f"Фандинг: {metrics.funding_rate * 100:.4f}%\n"
+                                f"Базис: {exit_basis:.4f}%\n"
+                                f"Объём: ${volume_usd:.2f}\n"
+                                f"Время в позиции: {format_duration(hold_time)}\n"
+                                f"Накопленный фандинг: {entry.get('funding_accrued', 0.0):.4f} / "
                                 f"PnL: {pnl_total:+.4f} ({pnl_pct_total:+.2f} %)"
                             ),
                         )
@@ -544,14 +544,14 @@ async def monitor_neutral_position(
 
 
 # ---------------------------------------------------------------------------
-# Dynamic parameter loading
+# Динамическая загрузка параметров
 # ---------------------------------------------------------------------------
 
 def get_thresholds(config_thresholds: Dict[str, float]) -> Dict[str, float]:
     """Возвращает пороги стратегии с учётом оптимизированных значений.
 
-    Parameters
-    ----------
+    Параметры
+    ---------
     config_thresholds:
         Пороговые значения из ``config.yaml``. Результаты оптимизатора имеют
         приоритет над этими значениями.

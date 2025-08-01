@@ -25,7 +25,7 @@ class BinanceExchange(BaseExchange):
     def __init__(self, api_key: str, api_secret: str) -> None:
         """Инициализация клиента.
 
-        Parameters
+        Параметры
         ----------
         api_key, api_secret:
             Ключ и секрет API для авторизации на бирже.
@@ -36,13 +36,13 @@ class BinanceExchange(BaseExchange):
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
-        # Spot specific websocket handling
+        # Обработка WebSocket для спота
         self._spot_ws: Optional[websockets.WebSocketClientProtocol] = None
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------
-    # REST utilities
+    # Утилиты REST
     # ------------------------------------------------------------------
 
     async def _session_get(self) -> aiohttp.ClientSession:
@@ -64,7 +64,7 @@ class BinanceExchange(BaseExchange):
         return params
 
     # ------------------------------------------------------------------
-    # Public methods
+    # Публичные методы
     # ------------------------------------------------------------------
 
     async def fetch_funding(self, symbol: str) -> float:
@@ -157,7 +157,7 @@ class BinanceExchange(BaseExchange):
         ]
 
     # ------------------------------------------------------------------
-    # Spot REST methods
+    # REST-методы спота
     # ------------------------------------------------------------------
 
     async def place_spot_order(
@@ -189,7 +189,7 @@ class BinanceExchange(BaseExchange):
             return await resp.json()
 
     # ------------------------------------------------------------------
-    # Spot WebSocket handling
+    # Обработка спотового WebSocket
     # ------------------------------------------------------------------
 
     async def _connect_spot(
@@ -236,7 +236,7 @@ class BinanceExchange(BaseExchange):
         return self._spot_orderbooks.get(symbol, {"bids": [], "asks": []})
 
     # ------------------------------------------------------------------
-    # WebSocket handling
+    # Обработка WebSocket
     # ------------------------------------------------------------------
 
     async def _connect(self, symbol: str) -> websockets.WebSocketClientProtocol:
@@ -288,5 +288,5 @@ class BinanceExchange(BaseExchange):
             await self._spot_ws.close()
 
 
-# Register exchange
+# Регистрация биржи
 register("binance", BinanceExchange)

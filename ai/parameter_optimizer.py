@@ -11,7 +11,7 @@ from sklearn.linear_model import LinearRegression
 
 from utils.logger import LOG_PATH
 
-# Default location where optimized thresholds are stored
+# Путь по умолчанию для сохранения оптимизированных порогов
 DEFAULT_OUTPUT = Path("data") / "optimized_thresholds.joblib"
 
 
@@ -102,8 +102,8 @@ async def periodic_optimization(
 ) -> None:
     """Периодически оптимизирует параметры в интервале ``min_hours``–``max_hours``.
 
-    Parameters
-    ----------
+    Параметры
+    ---------
     min_hours, max_hours:
         Диапазон часов ожидания между запусками оптимизации.
     log_path, out_path:

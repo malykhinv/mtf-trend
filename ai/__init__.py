@@ -1,1 +1,1 @@
-"""AI utilities for adaptive trading parameters."""
+"""Модули ИИ для адаптивных торговых параметров."""
