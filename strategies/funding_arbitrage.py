@@ -139,6 +139,7 @@ def check_entry_conditions(
         if metrics.futures_price
         else float("inf")
     )
+    notional = quantity * metrics.futures_price
 
     return (
         abs(metrics.funding_rate) >= thresholds.get("funding_rate", 0.0)
@@ -150,9 +151,9 @@ def check_entry_conditions(
         and metrics.open_interest <= metrics.volume * 2
         and metrics.slippage <= thresholds.get("slippage", float("inf"))
         and thresholds.get("min_trade_size", 0.0)
-        <= quantity
+        <= notional
         <= thresholds.get("max_trade_size", float("inf"))
-        and quantity <= max_deposit_trade
+        and notional <= max_deposit_trade
         and symbol in whitelist
         and not risk_control.is_symbol_open(symbol)
     )
@@ -180,16 +181,17 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     bot_cfg = CONFIG.get("bot", {})
     if symbol not in bot_cfg.get("whitelist", []):
         raise RuntimeError("Symbol not whitelisted")
+    entry_metrics = await get_market_metrics(symbol, quantity)
+    notional = quantity * entry_metrics.futures_price
     deposit = bot_cfg.get("deposit_size", float("inf"))
     deposit_pct = CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)
     max_trade = deposit * deposit_pct
-    if quantity > deposit or quantity > max_trade:
+    if notional > deposit or notional > max_trade:
         raise RuntimeError("Trade size exceeds deposit limits")
-    if not risk_control.can_open_position(quantity) or risk_control.is_symbol_open(symbol):
+    if not risk_control.can_open_position(notional) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Risk limits exceeded, trading paused, or position exists")
-    entry_metrics = await get_market_metrics(symbol, quantity)
     orders = await hedge(symbol, quantity)
-    risk_control.update_position(quantity)
+    risk_control.update_position(notional)
     risk_control.mark_symbol_open(symbol)
     now = time.time()
     commission = sum(float(o.get("fee", 0.0)) for o in orders.values())
@@ -211,7 +213,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         if getattr(exchanges, "_current", None)
         else "unknown"
     )
-    volume_usd = quantity * entry_metrics.futures_price
+    volume_usd = notional
     log_trade(
         {
             "symbol": symbol,
@@ -270,7 +272,8 @@ async def close_neutral_position(
     )
     if entry is not None:
         entry["commissions"] = entry.get("commissions", 0.0) + commission
-    risk_control.update_position(-quantity)
+    ref_price = entry.get("entry_futures_price", 0.0) if entry else 0.0
+    risk_control.update_position(-(quantity * ref_price))
     risk_control.record_pnl(pnl)
     if final:
         risk_control.mark_symbol_closed(symbol)
@@ -339,8 +342,13 @@ async def monitor_neutral_position(
         else:
             pnl = 0.0
         if reasons:
-            min_trade = exit_thresholds.get("min_trade_size", 0.0)
-            if entry and quantity > max(min_trade * 2, 0.0):
+            min_trade_usd = exit_thresholds.get("min_trade_size", 0.0)
+            min_trade_qty = (
+                min_trade_usd / metrics.futures_price
+                if metrics.futures_price
+                else 0.0
+            )
+            if entry and quantity > max(min_trade_qty * 2, 0.0):
                 partial_qty = quantity / 2
                 pnl_part = (
                     (metrics.futures_price - entry.get("entry_futures_price", 0.0))

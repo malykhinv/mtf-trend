@@ -132,13 +132,20 @@ def start_processing_loops() -> None:
         """Continuously scan markets for entry opportunities."""
         while True:
             thresholds = CONFIG.get("thresholds", {})
-            quantity = thresholds.get("min_trade_size", 0.0) or 1.0
+            trade_value = thresholds.get("min_trade_size", 0.0) or 1.0
 
             for name, client in CLIENTS.items():
                 exchanges._current = client
                 for symbol in WHITELISTS.get(name, []):
                     if risk_control.is_paused() or risk_control.is_symbol_open(symbol):
                         continue
+                    try:
+                        base_metrics = await strategy.get_market_metrics(symbol, 1.0)
+                    except Exception as exc:
+                        print(f"Metrics error {name} {symbol}: {exc}")
+                        continue
+                    price = base_metrics.futures_price
+                    quantity = trade_value / price if price else 0.0
                     try:
                         metrics = await strategy.get_market_metrics(symbol, quantity)
                     except Exception as exc:
