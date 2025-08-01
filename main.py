@@ -119,15 +119,17 @@ def start_processing_loops() -> None:
             volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
                 "initial_quantity", entry.get("quantity", 0.0)
             )
-            notify_close(
-                position_id,
-                (
-                    f"Error on {exchange_name} {symbol}: {exc}\n"
-                    f"Funding: {funding_pct:.4f}%\n"
-                    f"Basis: {basis_pct:.4f}%\n"
-                    f"Volume: ${volume_usd:.2f}\n"
-                    f"Time in position: {format_duration(hold)}"
-                ),
+            asyncio.create_task(
+                notify_close(
+                    position_id,
+                    (
+                        f"Error on {exchange_name} {symbol}: {exc}\n"
+                        f"Funding: {funding_pct:.4f}%\n"
+                        f"Basis: {basis_pct:.4f}%\n"
+                        f"Volume: ${volume_usd:.2f}\n"
+                        f"Time in position: {format_duration(hold)}"
+                    ),
+                )
             )
             raise
         else:
@@ -141,16 +143,18 @@ def start_processing_loops() -> None:
                 "initial_quantity", entry.get("quantity", 0.0)
             )
             pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
-            notify_close(
-                position_id,
-                (
-                    f"Closed {symbol} on {exchange_name}\n"
-                    f"Funding: {funding_pct:.4f}%\n"
-                    f"Basis: {basis_pct:.4f}%\n"
-                    f"Volume: ${volume_usd:.2f}\n"
-                    f"Time in position: {format_duration(hold)}\n"
-                    f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Reasons: {reasons}"
-                ),
+            asyncio.create_task(
+                notify_close(
+                    position_id,
+                    (
+                        f"Closed {symbol} on {exchange_name}\n"
+                        f"Funding: {funding_pct:.4f}%\n"
+                        f"Basis: {basis_pct:.4f}%\n"
+                        f"Volume: ${volume_usd:.2f}\n"
+                        f"Time in position: {format_duration(hold)}\n"
+                        f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Reasons: {reasons}"
+                    ),
+                )
             )
         finally:
             POSITION_TASKS.pop(position_id, None)
@@ -186,16 +190,18 @@ def start_processing_loops() -> None:
                         try:
                             await strategy.open_neutral_position(symbol, quantity)
                             volume_usd = quantity * metrics.futures_price
-                            notify_open(
-                                f"{name}:{symbol}",
-                                (
-                                    f"Opened {symbol} on {name}\n"
-                                    f"Funding: {metrics.funding_rate * 100:.4f}%\n"
-                                    f"Basis: {metrics.basis:.4f}%\n"
-                                    f"Volume: ${volume_usd:.2f}\n"
-                                    f"Time in position: {format_duration(0)}\n"
-                                    "Strategy: Long Spot / Short Perp"
-                                ),
+                            asyncio.create_task(
+                                notify_open(
+                                    f"{name}:{symbol}",
+                                    (
+                                        f"Opened {symbol} on {name}\n"
+                                        f"Funding: {metrics.funding_rate * 100:.4f}%\n"
+                                        f"Basis: {metrics.basis:.4f}%\n"
+                                        f"Volume: ${volume_usd:.2f}\n"
+                                        f"Time in position: {format_duration(0)}\n"
+                                        "Strategy: Long Spot / Short Perp"
+                                    ),
+                                )
                             )
                             task = asyncio.create_task(
                                 monitor_position(name, symbol, quantity)

@@ -193,15 +193,17 @@ async def _handle_timeout() -> None:
                         funding_pct = entry.get("entry_funding", 0.0) * 100
                         basis_pct = entry.get("entry_basis", 0.0)
                         volume_usd = quantity * entry.get("entry_futures_price", 0.0)
-                        notify_close(
-                            pid,
-                            (
-                                f"Emergency exit failed {symbol} on {exchange_name}: {exc_close}\n"
-                                f"Funding: {funding_pct:.4f}%\n"
-                                f"Basis: {basis_pct:.4f}%\n"
-                                f"Volume: ${volume_usd:.2f}\n"
-                                f"Time in position: {format_duration(hold_time)}"
-                            ),
+                        asyncio.create_task(
+                            notify_close(
+                                pid,
+                                (
+                                    f"Emergency exit failed {symbol} on {exchange_name}: {exc_close}\n"
+                                    f"Funding: {funding_pct:.4f}%\n"
+                                    f"Basis: {basis_pct:.4f}%\n"
+                                    f"Volume: ${volume_usd:.2f}\n"
+                                    f"Time in position: {format_duration(hold_time)}"
+                                ),
+                            )
                         )
                     else:
                         exit_spot = float(
@@ -255,16 +257,18 @@ async def _handle_timeout() -> None:
                         )
                         hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
                         funding_pct = entry.get("entry_funding", 0.0) * 100
-                        notify_close(
-                            pid,
-                            (
-                                f"Emergency exit {symbol} on {exchange_name}\n"
-                                f"Funding: {funding_pct:.4f}%\n"
-                                f"Basis: {exit_basis:.4f}%\n"
-                                f"Volume: ${volume_usd:.2f}\n"
-                                f"Time in position: {format_duration(hold_time)}\n"
-                                f"PnL: {pnl:.4f}"
-                            ),
+                        asyncio.create_task(
+                            notify_close(
+                                pid,
+                                (
+                                    f"Emergency exit {symbol} on {exchange_name}\n"
+                                    f"Funding: {funding_pct:.4f}%\n"
+                                    f"Basis: {exit_basis:.4f}%\n"
+                                    f"Volume: ${volume_usd:.2f}\n"
+                                    f"Time in position: {format_duration(hold_time)}\n"
+                                    f"PnL: {pnl:.4f}"
+                                ),
+                            )
                         )
                 finally:
                     globals()["_current"] = exchanges_current
