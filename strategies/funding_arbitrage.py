@@ -367,6 +367,7 @@ async def monitor_neutral_position(
             entry["funding_accrued"] = entry.get("funding_accrued", 0.0) + funding_fee
             entry["last_funding_timestamp"] = now
         reasons: list[str] = []
+        exit_slippage = 0.0
         if check_exit_conditions(metrics, exit_thresholds):
             reasons.append("threshold")
         if metrics.funding_rate < 0.0001:

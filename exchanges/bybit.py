@@ -21,7 +21,7 @@ class BybitExchange(BaseExchange):
     WS_URL = "wss://stream.bybit.com/v5/public/linear"
     SPOT_WS_URL = "wss://stream.bybit.com/v5/public/spot"
 
-    def __init__(self, api_key: str, api_secret: str) -> None:
+    def __init__(self, api_key: str, api_secret: str, **_ignored: Any) -> None:
         """Инициализация клиента.
 
         Параметры
@@ -29,6 +29,7 @@ class BybitExchange(BaseExchange):
         api_key, api_secret:
             Пара ключей API для авторизации.
         """
+        super().__init__(**_ignored)
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None

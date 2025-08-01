@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 import aiohttp
 import websockets
+from websockets.exceptions import WebSocketException
 
 from . import BaseExchange, register
 
@@ -22,7 +23,7 @@ class BinanceExchange(BaseExchange):
     SPOT_REST_URL = "https://api.binance.com"
     SPOT_WS_URL = "wss://stream.binance.com:9443/ws"
 
-    def __init__(self, api_key: str, api_secret: str) -> None:
+    def __init__(self, api_key: str, api_secret: str, **_ignored: Any) -> None:
         """Инициализация клиента.
 
         Параметры
@@ -30,6 +31,7 @@ class BinanceExchange(BaseExchange):
         api_key, api_secret:
             Ключ и секрет API для авторизации на бирже.
         """
+        super().__init__(**_ignored)
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
@@ -200,7 +202,7 @@ class BinanceExchange(BaseExchange):
                 return await websockets.connect(
                     f"{self.SPOT_WS_URL}/{symbol.lower()}@depth{depth}@100ms"
                 )
-            except Exception:
+            except (WebSocketException, OSError):
                 await asyncio.sleep(5)
 
     async def _listen_spot(self, symbol: str, depth: int) -> None:
@@ -216,13 +218,13 @@ class BinanceExchange(BaseExchange):
                         "bids": data["bids"],
                         "asks": data["asks"],
                     }
-            except Exception:
+            except (WebSocketException, json.JSONDecodeError, OSError):
                 # При ошибке пересоздаём соединение
                 await asyncio.sleep(1)
                 if self._spot_ws is not None:
                     try:
                         await self._spot_ws.close()
-                    except Exception:
+                    except WebSocketException:
                         pass
                 self._spot_ws = None
 
@@ -245,7 +247,7 @@ class BinanceExchange(BaseExchange):
                 return await websockets.connect(
                     f"{self.WS_URL}/{symbol.lower()}@depth5@100ms"
                 )
-            except Exception:
+            except (WebSocketException, OSError):
                 await asyncio.sleep(5)
 
     async def _listen(self, symbol: str) -> None:
@@ -261,13 +263,13 @@ class BinanceExchange(BaseExchange):
                         "bids": data["bids"],
                         "asks": data["asks"],
                     }
-            except Exception:
+            except (WebSocketException, json.JSONDecodeError, OSError):
                 # При ошибке пробуем подключиться заново
                 await asyncio.sleep(1)
                 if self._ws is not None:
                     try:
                         await self._ws.close()
-                    except Exception:
+                    except WebSocketException:
                         pass
                 self._ws = None
 

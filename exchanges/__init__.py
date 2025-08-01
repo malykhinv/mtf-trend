@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
 import logging
 import time
@@ -38,6 +39,16 @@ class BaseExchange(ABC):
     по умолчанию, чтобы модульные тесты могли проверять высокоуровневую логику
     без реальных сетевых запросов.
     """
+
+    def __init__(self, **_ignored: Any) -> None:
+        """Базовый инициализатор, принимающий произвольные параметры.
+
+        Конкретные биржи могут определять собственные сигнатуры ``__init__``,
+        однако фабрика :func:`configure` передаёт аргументы через ``**kwargs``.
+        Пустая реализация предотвращает предупреждения анализаторов типо о
+        "неожиданных аргументах" при создании экземпляра абстрактного класса.
+        """
+        super().__init__()
 
     @abstractmethod
     async def fetch_funding(self, symbol: str) -> float:
@@ -151,10 +162,10 @@ async def _handle_timeout() -> None:
         for market, oid in list(_OUTSTANDING):
             try:
                 await asyncio.wait_for(
-                    current.cancel_order(oid, market), API_TIMEOUT
+                    current.cancel_order(oid), API_TIMEOUT
                 )
             except Exception as exc:  # pragma: no cover - best effort
-                logger.error("Не удалось отменить %s %s: %s", market, oid, exc)
+                logger.error("Не удалось отменить %s %s: %s", oid, exc)
         _OUTSTANDING.clear()
 
         # Пытаемся аварийно закрыть все отслеживаемые открытые позиции.
@@ -275,6 +286,8 @@ async def _handle_timeout() -> None:
                 finally:
                     globals()["_current"] = exchanges_current
                     task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
                     POSITION_TASKS.pop(pid, None)
                     strategy.positions.pop(symbol, None)
 
@@ -322,7 +335,7 @@ async def _poll_fill(order_id: str, market: str) -> None:
     start = time.monotonic()
     while True:
         status = await _await_with_timeout(
-            current.get_order_status(order_id, market)
+            current.get_order_status(order_id)
         )
         if status.get("status") == "FILLED":
             _untrack_order(market, order_id)
@@ -440,7 +453,7 @@ async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
         # Откатить спотовую часть, если фьючерсная часть завершается ошибкой.
         try:
             cancel_resp = await _await_with_timeout(
-                current.cancel_order(spot_id, "spot")
+                current.cancel_order(spot_id)
             )
             logger.warning("Откатили спотовый ордер %s: %s", spot_id, cancel_resp)
         except Exception as cancel_exc:  # pragma: no cover - best effort
