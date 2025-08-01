@@ -1,5 +1,12 @@
 # MTF Trend Bot
 
+MTF Trend Bot — торговый бот, отслеживающий тренды на нескольких таймфреймах и открывающий нейтральные позиции при выгодной ставке финансирования.  Для запуска установите зависимости и выполните:
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
 This repository contains tools for multi-timeframe trend-following and funding arbitrage strategies.
 
 ## Installation
@@ -10,8 +17,28 @@ Install the project dependencies with [pip](https://pip.pypa.io/):
 pip install -r requirements.txt
 ```
 
-Telegram notifications are implemented using [aiogram](https://docs.aiogram.dev/) for
-asynchronous message delivery.
+## Условия входа и выхода
+
+| Проверка | Вход | Выход |
+| -------- | ---- | ----- |
+| Funding rate | `>= funding_rate` и положительный | `<= funding_rate` |
+| Спред | `<= spread` | `>= spread` |
+| Базис | `<= basis` | — |
+| Ликвидность | `>= liquidity` | `<= liquidity` |
+| Волатильность | `<= volatility` | `>= volatility` |
+| Слиппейдж | `<= slippage` | — |
+
+## Уведомления
+
+Уведомления отправляются через Telegram с помощью [aiogram](https://docs.aiogram.dev/).  Для работы необходимо задать переменные окружения `TELEGRAM_BOT_TOKEN` и `TELEGRAM_CHAT_ID`.
+
+## Логирование
+
+Все сделки записываются в файл Excel `data/funding_bot_log.xlsx`, что позволяет анализировать эффективность стратегии и отслеживать историю операций.
+
+## Автооптимизация
+
+Модуль `ai/parameter_optimizer.py` периодически анализирует журнал сделок и подбирает новые пороги входа, что позволяет адаптировать стратегию к текущему рынку.
 
 ## Default Safety Thresholds
 
