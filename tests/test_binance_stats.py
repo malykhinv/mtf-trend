@@ -24,7 +24,8 @@ class DummyResponse:
 
 
 class DummySession:
-    def get(self, url, params=None):
+    @staticmethod
+    def get(url):
         if "ticker/24hr" in url:
             return DummyResponse({"quoteVolume": "500", "volume": "5"})
         if "openInterest" in url:

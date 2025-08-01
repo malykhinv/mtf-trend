@@ -57,22 +57,22 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
         return {}
 
     # Собираем датафрейм признаков и целевой переменной PnL
-    X = pd.DataFrame(features)
-    X["pnl"] = df["pnl"]
-    X = X.dropna()
-    y = X.pop("pnl")
+    x = pd.DataFrame(features)
+    x["pnl"] = df["pnl"]
+    x = x.dropna()
+    y = x.pop("pnl")
 
-    if X.empty:
+    if x.empty:
         return {}
 
     model = LinearRegression()
-    model.fit(X, y)
-    preds = model.predict(X)
+    model.fit(x, y)
+    preds = model.predict(x)
 
     # Оставляем только сделки, которые модель считает прибыльными
-    profitable = X[preds > 0]
+    profitable = x[preds > 0]
     if profitable.empty:
-        profitable = X
+        profitable = x
 
     thresholds: Dict[str, float] = {
         col: float(profitable[col].median()) for col in profitable.columns

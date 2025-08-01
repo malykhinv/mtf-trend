@@ -371,7 +371,7 @@ async def monitor_neutral_position(
             reasons.append("threshold")
         if metrics.funding_rate < 0.0001:
             reasons.append("low_funding")
-        if entry and metrics.funding_rate < 0 and entry.get("entry_funding", 0) >= 0:
+        if entry and metrics.funding_rate < 0 <= entry.get("entry_funding", 0):
             reasons.append("funding_negative")
         if metrics.basis > 1.0:
             reasons.append("basis")
