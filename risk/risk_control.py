@@ -69,26 +69,26 @@ def configure(config: Dict[str, float], deposit_size: Optional[float] = None) ->
     )
 
 
-def can_open_position(quantity: float) -> bool:
-    """Return ``True`` if a new position of ``quantity`` is allowed."""
+def can_open_position(notional: float) -> bool:
+    """Return ``True`` if a position of ``notional`` USD is allowed."""
 
     if _state.paused:
         return False
     if _state.open_positions >= _limits.max_open_positions:
         return False
-    if _state.total_notional + quantity > _limits.deposit_cap:
+    if _state.total_notional + notional > _limits.deposit_cap:
         return False
-    if _state.total_notional + quantity > _limits.max_position_size:
+    if _state.total_notional + notional > _limits.max_position_size:
         return False
     if _state.daily_loss >= _limits.max_daily_loss:
         return False
     return True
 
 
-def update_position(delta: float) -> None:
-    """Update the tracked notional exposure by ``delta`` units."""
+def update_position(delta_notional: float) -> None:
+    """Update the tracked notional exposure by ``delta_notional`` USD."""
 
-    _state.total_notional = max(_state.total_notional + delta, 0.0)
+    _state.total_notional = max(_state.total_notional + delta_notional, 0.0)
 
 
 def is_symbol_open(symbol: str) -> bool:
