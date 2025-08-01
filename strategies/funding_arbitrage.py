@@ -16,6 +16,7 @@ from datetime import datetime
 from exchanges import (
     fetch_funding_history,
     get_orderbook,
+    get_spot_orderbook,
     get_stats,
     hedge,
     place_order,
@@ -67,14 +68,18 @@ async def get_market_metrics(
     else:
         funding = 0.0
 
-    orderbook = await get_orderbook(symbol, depth=depth)
-    bids = [(float(p), float(q)) for p, q in orderbook.get("bids", [])]
-    asks = [(float(p), float(q)) for p, q in orderbook.get("asks", [])]
+    perp_book = await get_orderbook(symbol, depth=depth)
+    spot_book = await get_spot_orderbook(symbol, depth=depth)
+
+    bids = [(float(p), float(q)) for p, q in perp_book.get("bids", [])]
+    asks = [(float(p), float(q)) for p, q in perp_book.get("asks", [])]
+    spot_bids = [(float(p), float(q)) for p, q in spot_book.get("bids", [])]
+    spot_asks = [(float(p), float(q)) for p, q in spot_book.get("asks", [])]
 
     if bids and asks:
-        spread = asks[0][0] - bids[0][0]
+        book_spread = asks[0][0] - bids[0][0]
         futures_price = (asks[0][0] + bids[0][0]) / 2
-        volatility = spread / futures_price if futures_price else float("inf")
+        volatility = book_spread / futures_price if futures_price else float("inf")
         remaining = trade_size
         cost = 0.0
         for price, qty in asks:
@@ -89,20 +94,26 @@ async def get_market_metrics(
             avg_price = cost / trade_size
             slippage = abs(avg_price - futures_price) / futures_price
     else:
-        spread = float("inf")
         futures_price = float("nan")
         volatility = float("inf")
         slippage = float("inf")
 
+    if spot_bids and spot_asks:
+        spot_price = (spot_asks[0][0] + spot_bids[0][0]) / 2
+    else:
+        spot_price = float("nan")
+
+    if bids and asks and spot_bids and spot_asks:
+        spread = abs(futures_price - spot_price)
+    else:
+        spread = float("inf")
+
     stats = await get_stats(symbol)
-    spot_price = float(orderbook.get("spot_price", futures_price))
     volume = float(stats.get("volume_24h", 0.0))
     open_interest = float(stats.get("open_interest", 0.0))
     liquidity = sum(q for _, q in bids) + sum(q for _, q in asks)
     basis = (
-        ((futures_price - spot_price) / spot_price) * 100
-        if spot_price
-        else float("inf")
+        (spread / spot_price * 100) if spot_price else float("inf")
     )
 
     return MarketMetrics(

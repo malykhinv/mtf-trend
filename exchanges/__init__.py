@@ -57,6 +57,22 @@ class BaseExchange(ABC):
     async def get_balance(self) -> dict:
         """Return account balance information."""
 
+    # Spot specific interfaces -------------------------------------------------
+
+    @abstractmethod
+    async def place_spot_order(
+        self, symbol: str, side: str, quantity: float, price: float | None = None
+    ) -> dict:
+        """Place a spot market order and return exchange response."""
+
+    @abstractmethod
+    async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
+        """Return the latest spot order book for ``symbol``."""
+
+    @abstractmethod
+    async def get_spot_balance(self) -> dict:
+        """Return spot account balance information."""
+
     @abstractmethod
     async def fetch_funding_history(
         self, symbol: str, hours: int = 8, limit: int = 3
@@ -307,8 +323,11 @@ async def place_spot_order(
     symbol: str, side: str, quantity: float, price: float | None = None
 ) -> dict:
     """Place a spot order and wait for full execution."""
-
-    order = await place_order(symbol, side, quantity, price)
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+    order = await _await_with_timeout(
+        _current.place_spot_order(symbol, side, quantity, price)
+    )
     order_id = str(order.get("orderId") or order.get("id") or "")
     _track_order("spot", order_id)
     await _poll_fill(order_id, "spot")
@@ -341,11 +360,25 @@ async def get_orderbook(symbol: str, depth: int = 5) -> dict:
     return await _await_with_timeout(_current.get_orderbook(symbol, depth))
 
 
+async def get_spot_orderbook(symbol: str, depth: int = 5) -> dict:
+    """Retrieve the latest spot order book from the configured exchange."""
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+    return await _await_with_timeout(_current.get_spot_orderbook(symbol, depth))
+
+
 async def get_balance() -> dict:
     """Return the account balance from the configured exchange."""
     if _current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Exchange not configured")
     return await _await_with_timeout(_current.get_balance())
+
+
+async def get_spot_balance() -> dict:
+    """Return the spot account balance from the configured exchange."""
+    if _current is None:  # pragma: no cover - defensive programming
+        raise RuntimeError("Exchange not configured")
+    return await _await_with_timeout(_current.get_spot_balance())
 
 
 async def fetch_funding_history(

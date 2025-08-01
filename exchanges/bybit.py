@@ -19,6 +19,7 @@ class BybitExchange(BaseExchange):
 
     REST_URL = "https://api.bybit.com"
     WS_URL = "wss://stream.bybit.com/v5/public/linear"
+    SPOT_WS_URL = "wss://stream.bybit.com/v5/public/spot"
 
     def __init__(self, api_key: str, api_secret: str) -> None:
         self.api_key = api_key
@@ -27,6 +28,10 @@ class BybitExchange(BaseExchange):
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
+        # Spot websocket management
+        self._spot_ws: Optional[websockets.WebSocketClientProtocol] = None
+        self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
+        self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
     # ------------------------------------------------------------------
     # REST utilities
@@ -118,6 +123,81 @@ class BybitExchange(BaseExchange):
         return {"volume_24h": volume, "open_interest": open_interest}
 
     # ------------------------------------------------------------------
+    # Spot REST methods
+    # ------------------------------------------------------------------
+
+    async def place_spot_order(
+        self, symbol: str, side: str, quantity: float, price: float | None = None
+    ) -> dict:
+        session = await self._session_get()
+        url_path = "/v5/order/create"
+        url = f"{self.REST_URL}{url_path}"
+        body: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": side,
+            "qty": quantity,
+            "orderType": "Market" if price is None else "Limit",
+            "category": "spot",
+        }
+        if price is not None:
+            body["price"] = price
+        headers = {"Content-Type": "application/json"}
+        body = self._sign("POST", url_path, body)
+        async with session.post(url, json=body, headers=headers) as resp:
+            return await resp.json()
+
+    async def get_spot_balance(self) -> dict:
+        session = await self._session_get()
+        url_path = "/v5/account/wallet-balance"
+        url = f"{self.REST_URL}{url_path}"
+        params = self._sign("GET", url_path, {"accountType": "SPOT"})
+        async with session.get(url, params=params) as resp:
+            return await resp.json()
+
+    # ------------------------------------------------------------------
+    # Spot WebSocket handling
+    # ------------------------------------------------------------------
+
+    async def _connect_spot(self, symbol: str) -> websockets.WebSocketClientProtocol:
+        while True:
+            try:
+                ws = await websockets.connect(self.SPOT_WS_URL)
+                sub = {"op": "subscribe", "args": [f"orderbook.1.{symbol}"]}
+                await ws.send(json.dumps(sub))
+                return ws
+            except Exception:
+                await asyncio.sleep(5)
+
+    async def _listen_spot(self, symbol: str) -> None:
+        while True:
+            try:
+                if self._spot_ws is None:
+                    self._spot_ws = await self._connect_spot(symbol)
+                msg = await self._spot_ws.recv()
+                data = json.loads(msg)
+                if data.get("topic", "").startswith("orderbook"):
+                    book = data.get("data") or {}
+                    self._spot_orderbooks[symbol] = {
+                        "bids": book.get("b", []),
+                        "asks": book.get("a", []),
+                    }
+            except Exception:
+                await asyncio.sleep(1)
+                if self._spot_ws is not None:
+                    try:
+                        await self._spot_ws.close()
+                    except Exception:
+                        pass
+                self._spot_ws = None
+
+    async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
+        if symbol not in self._spot_ws_tasks:
+            self._spot_ws_tasks[symbol] = asyncio.create_task(
+                self._listen_spot(symbol)
+            )
+        return self._spot_orderbooks.get(symbol, {"bids": [], "asks": []})
+
+    # ------------------------------------------------------------------
     # WebSocket handling
     # ------------------------------------------------------------------
 
@@ -166,6 +246,8 @@ class BybitExchange(BaseExchange):
             await self._session.close()
         if self._ws is not None:
             await self._ws.close()
+        if self._spot_ws is not None:
+            await self._spot_ws.close()
 
 
 # Register exchange
