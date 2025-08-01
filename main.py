@@ -68,6 +68,7 @@ class DataCollector:
             df = pd.DataFrame()
             if ohlcv_file.exists():
                 df = pd.read_csv(ohlcv_file, parse_dates=["timestamp"])
+                df.to_csv(data_dir / f"{symbol.replace('/', '')}.csv", index=False)
 
             db_path = Path(self.config.get("data_paths", {}).get("data_dir", "data")) / "market_data.db"
             db_path.parent.mkdir(parents=True, exist_ok=True)
