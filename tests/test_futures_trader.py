@@ -101,7 +101,7 @@ def test_exit_orders_with_trailing_stop_and_logging():
         def __init__(self):
             self.pnls = []
 
-        def close_trade(self, pnl):
+        def close_trade(self, trade_id, pnl):
             self.pnls.append(pnl)
 
     risk = DummyRisk()
@@ -113,7 +113,7 @@ def test_exit_orders_with_trailing_stop_and_logging():
         risk_manager=risk,
     )
 
-    trader.place_market_order("BTC/USDT", "buy", 1, tp=21000, sl=19000)
+    trader.place_market_order("BTC/USDT", "buy", 1, tp=21000, sl=19000, trade_id="t1")
 
     # entry + tp + initial sl + trailing stop updates
     assert len(exchange.create_order_calls) >= 5

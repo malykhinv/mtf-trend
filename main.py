@@ -306,19 +306,30 @@ def scan_and_enter(volume_spike: float = 2.0) -> None:
             if not risk_manager.can_open_trade():
                 continue
             try:
-                size = risk_manager.open_trade(sig.entry, sig.stop)
+                trade_id, size = risk_manager.open_trade(sig.entry, sig.stop)
             except ValueError:
                 continue
             side = "buy" if sig.direction == "long" else "sell"
             executed = trader.place_limit_maker_order(
-                symbol, side, size, sig.entry, tp=sig.tp1, sl=sig.stop
+                symbol,
+                side,
+                size,
+                sig.entry,
+                tp=sig.tp1,
+                sl=sig.stop,
+                trade_id=trade_id,
             )
             if not executed:
                 executed = trader.place_market_order(
-                    symbol, side, size, tp=sig.tp1, sl=sig.stop
+                    symbol,
+                    side,
+                    size,
+                    tp=sig.tp1,
+                    sl=sig.stop,
+                    trade_id=trade_id,
                 )
             if not executed:
-                risk_manager.close_trade(0.0)
+                risk_manager.close_trade(trade_id, 0.0)
                 continue
             if sig.direction == "long":
                 open_long = True

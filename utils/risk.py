@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable, List
+from typing import Callable, Dict
 import datetime as dt
 import json
 import sqlite3
 from pathlib import Path
+import uuid
 
 
 @dataclass
@@ -40,7 +41,7 @@ class RiskManager:
     max_open_trades: int | None = None
     db_path: str | Path = "risk_state.db"
 
-    open_positions: List[float] = field(default_factory=list)
+    open_positions: Dict[str, float] = field(default_factory=dict)
     open_trades: int = 0
     consecutive_losses: int = 0
     daily_start_balance: float | None = None
@@ -77,12 +78,21 @@ class RiskManager:
     def _load_state(self) -> None:
         conn = sqlite3.connect(self.db_path)
         try:
-            cur = conn.execute("SELECT open_positions, consecutive_losses, daily_start_balance, trading_halted, last_reset_day FROM state WHERE id=1")
+            cur = conn.execute(
+                "SELECT open_positions, consecutive_losses, daily_start_balance, trading_halted, last_reset_day FROM state WHERE id=1"
+            )
             row = cur.fetchone()
             if row:
                 positions, losses, start_balance, halted, last_day = row
                 if positions:
-                    self.open_positions = json.loads(positions)
+                    loaded = json.loads(positions)
+                    if isinstance(loaded, dict):
+                        self.open_positions = loaded
+                    else:
+                        # fallback for legacy list format
+                        self.open_positions = {
+                            str(i): r for i, r in enumerate(loaded)
+                        }
                 self.consecutive_losses = losses or 0
                 self.daily_start_balance = start_balance
                 self.trading_halted = bool(halted)
@@ -136,7 +146,7 @@ class RiskManager:
 
     @property
     def open_risk(self) -> float:
-        return sum(self.open_positions)
+        return sum(self.open_positions.values())
 
     def can_open_trade(self) -> bool:
         """Return ``True`` if new trades are allowed."""
@@ -148,8 +158,8 @@ class RiskManager:
         balance = self._get_balance()
         return self.open_risk < balance * self.max_open_risk_pct
 
-    def open_trade(self, entry: float, stop: float) -> float:
-        """Register a new trade and return its position size."""
+    def open_trade(self, entry: float, stop: float) -> tuple[str, float]:
+        """Register a new trade and return ``(trade_id, position_size)``."""
         self._ensure_daily_reset()
         if not self.can_open_trade():
             raise ValueError("Risk limits breached; cannot open trade")
@@ -158,19 +168,18 @@ class RiskManager:
         if self.open_risk + risk > balance * self.max_open_risk_pct:
             raise ValueError("Open risk would exceed limit")
         size = self.position_size(entry, stop, risk=risk)
-        self.open_positions.append(risk)
-        self.open_trades += 1
+        trade_id = uuid.uuid4().hex
+        self.open_positions[trade_id] = risk
+        self.open_trades = len(self.open_positions)
         self._save_state()
-        return size
+        return trade_id, size
 
-    def close_trade(self, pnl: float) -> None:
+    def close_trade(self, trade_id: str, pnl: float) -> None:
         """Close an existing trade and update risk metrics."""
         self._ensure_daily_reset()
-        if self.open_positions:
-            # Remove risk for the oldest open position
-            self.open_positions.pop(0)
-            if self.open_trades > 0:
-                self.open_trades -= 1
+        removed = self.open_positions.pop(trade_id, None)
+        if removed is not None and self.open_trades > 0:
+            self.open_trades -= 1
         balance = self._get_balance()
         # Update consecutive losses
         if pnl < 0:

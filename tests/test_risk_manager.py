@@ -44,13 +44,13 @@ def test_consecutive_loss_halt(tmp_path):
         daily_drawdown_pct=1,
         db_path=tmp_path / "state.db",
     )
-    rm.open_trade(100, 90)
+    trade_id, _ = rm.open_trade(100, 90)
     balance = 990.0
-    rm.close_trade(-10)
+    rm.close_trade(trade_id, -10)
     assert rm.can_open_trade()
-    rm.open_trade(100, 90)
+    trade_id, _ = rm.open_trade(100, 90)
     balance = 980.0
-    rm.close_trade(-10)
+    rm.close_trade(trade_id, -10)
     assert not rm.can_open_trade()
 
 
@@ -66,9 +66,9 @@ def test_daily_drawdown_stop(tmp_path):
         max_consecutive_losses=10,
         db_path=tmp_path / "state.db",
     )
-    rm.open_trade(100, 90)
+    trade_id, _ = rm.open_trade(100, 90)
     balance = 949.0  # >5% drawdown
-    rm.close_trade(-51)
+    rm.close_trade(trade_id, -51)
     assert not rm.can_open_trade()
 
 
@@ -80,16 +80,16 @@ def test_state_persistence(tmp_path):
 
     db = tmp_path / "state.db"
     rm = RiskManager(fetch_balance, max_consecutive_losses=2, db_path=db)
-    rm.open_trade(100, 90)
+    trade_id, _ = rm.open_trade(100, 90)
     balance = 990.0
-    rm.close_trade(-10)
+    rm.close_trade(trade_id, -10)
     assert rm.consecutive_losses == 1
 
     rm2 = RiskManager(fetch_balance, max_consecutive_losses=2, db_path=db)
     assert rm2.consecutive_losses == 1
-    rm2.open_trade(100, 90)
+    trade_id, _ = rm2.open_trade(100, 90)
     balance = 980.0
-    rm2.close_trade(-10)
+    rm2.close_trade(trade_id, -10)
     assert rm2.trading_halted
 
     rm3 = RiskManager(fetch_balance, max_consecutive_losses=2, db_path=db)
@@ -103,13 +103,13 @@ def test_max_open_trades_limit(tmp_path):
         return balance
 
     rm = RiskManager(fetch_balance, max_open_trades=2, db_path=tmp_path / "state.db")
-    rm.open_trade(100, 90)
-    rm.open_trade(100, 90)
+    trade_id1, _ = rm.open_trade(100, 90)
+    trade_id2, _ = rm.open_trade(100, 90)
     assert rm.open_trades == 2
     assert not rm.can_open_trade()
     with pytest.raises(ValueError):
         rm.open_trade(100, 90)
-    rm.close_trade(10)
+    rm.close_trade(trade_id1, 10)
     assert rm.open_trades == 1
     assert rm.can_open_trade()
     rm.open_trade(100, 90)
