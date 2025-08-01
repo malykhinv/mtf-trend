@@ -9,12 +9,12 @@ CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 _BOT: Optional[Bot] = Bot(API_TOKEN, parse_mode="HTML") if API_TOKEN else None
 
-# Cache message IDs for each position so that updates edit the same message.
+# Кешируем идентификаторы сообщений для обновления одного и того же поста
 _MESSAGE_CACHE: Dict[str, int] = {}
 
 
 def format_duration(seconds: float) -> str:
-    """Return a human readable duration given ``seconds``."""
+    """Возвращает человекочитаемую длительность по количеству секунд."""
     seconds = max(int(seconds), 0)
     minutes, sec = divmod(seconds, 60)
     hours, minutes = divmod(minutes, 60)
@@ -29,9 +29,9 @@ def format_duration(seconds: float) -> str:
 
 
 async def _send_message(text: str) -> Optional[int]:
-    """Send a new Telegram message and return the message ID."""
+    """Отправляет новое сообщение в Telegram и возвращает его ID."""
     if _BOT is None or CHAT_ID is None:
-        # Fail silently if configuration is missing.
+        # Если нет конфигурации, просто выходим
         return None
     try:
         message = await _BOT.send_message(CHAT_ID, text)
@@ -41,7 +41,7 @@ async def _send_message(text: str) -> Optional[int]:
 
 
 async def _edit_message(message_id: int, text: str) -> None:
-    """Edit an existing Telegram message."""
+    """Редактирует ранее отправленное сообщение."""
     if _BOT is None or CHAT_ID is None:
         return
     try:
@@ -51,7 +51,7 @@ async def _edit_message(message_id: int, text: str) -> None:
 
 
 async def notify_open(position_id: str, text: str) -> None:
-    """Notify that a position has been opened."""
+    """Уведомляет об открытии позиции."""
     message_id = _MESSAGE_CACHE.get(position_id)
     if message_id is None:
         message_id = await _send_message(text)
@@ -62,7 +62,7 @@ async def notify_open(position_id: str, text: str) -> None:
 
 
 async def notify_partial_close(position_id: str, text: str) -> None:
-    """Notify about a partial position closure."""
+    """Уведомляет о частичном закрытии позиции."""
     message_id = _MESSAGE_CACHE.get(position_id)
     if message_id is None:
         message_id = await _send_message(text)
@@ -73,7 +73,7 @@ async def notify_partial_close(position_id: str, text: str) -> None:
 
 
 async def notify_close(position_id: str, text: str) -> None:
-    """Notify that a position has been fully closed and remove it from cache."""
+    """Сообщает о полном закрытии позиции и удаляет запись из кеша."""
     message_id = _MESSAGE_CACHE.get(position_id)
     if message_id is not None:
         await _edit_message(message_id, text)

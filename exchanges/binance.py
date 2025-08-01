@@ -1,4 +1,4 @@
-"""Binance exchange implementation."""
+"""Реализация клиента биржи Binance."""
 from __future__ import annotations
 
 import asyncio
@@ -15,7 +15,7 @@ from . import BaseExchange, register
 
 
 class BinanceExchange(BaseExchange):
-    """Minimal Binance futures client supporting REST and WebSocket."""
+    """Минимальный клиент Binance с поддержкой REST и WebSocket."""
 
     REST_URL = "https://fapi.binance.com"
     WS_URL = "wss://fstream.binance.com/ws"
@@ -23,6 +23,13 @@ class BinanceExchange(BaseExchange):
     SPOT_WS_URL = "wss://stream.binance.com:9443/ws"
 
     def __init__(self, api_key: str, api_secret: str) -> None:
+        """Инициализация клиента.
+
+        Parameters
+        ----------
+        api_key, api_secret:
+            Ключ и секрет API для авторизации на бирже.
+        """
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
@@ -39,14 +46,17 @@ class BinanceExchange(BaseExchange):
     # ------------------------------------------------------------------
 
     async def _session_get(self) -> aiohttp.ClientSession:
+        """Создаёт ``ClientSession`` при первом обращении."""
         if self._session is None:
             self._session = aiohttp.ClientSession()
         return self._session
 
     def _sign(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Подписывает параметры запроса с помощью HMAC SHA256."""
         params = params.copy()
         params["timestamp"] = int(time.time() * 1000)
         query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        # Формируем подпись из строки запроса
         signature = hmac.new(
             self.api_secret.encode(), query.encode(), hashlib.sha256
         ).hexdigest()
@@ -58,6 +68,7 @@ class BinanceExchange(BaseExchange):
     # ------------------------------------------------------------------
 
     async def fetch_funding(self, symbol: str) -> float:
+        """Получает текущую ставку фондирования для ``symbol``."""
         session = await self._session_get()
         url = f"{self.REST_URL}/fapi/v1/fundingRate"
         params = {"symbol": symbol, "limit": 1}
@@ -68,6 +79,7 @@ class BinanceExchange(BaseExchange):
     async def fetch_funding_history(
         self, symbol: str, hours: int = 8, limit: int = 3
     ) -> list[float]:
+        """Возвращает историю ставок фондирования за заданный период."""
         session = await self._session_get()
         url = f"{self.REST_URL}/fapi/v1/fundingRate"
         end_time = int(time.time() * 1000)
@@ -85,6 +97,7 @@ class BinanceExchange(BaseExchange):
     async def place_order(
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
+        """Размещает фьючерсный ордер на бирже."""
         session = await self._session_get()
         url = f"{self.REST_URL}/fapi/v1/order"
         params: Dict[str, Any] = {
@@ -101,6 +114,7 @@ class BinanceExchange(BaseExchange):
             return await resp.json()
 
     async def get_balance(self) -> dict:
+        """Возвращает баланс фьючерсного аккаунта."""
         session = await self._session_get()
         url = f"{self.REST_URL}/fapi/v2/balance"
         params = self._sign({})
@@ -109,13 +123,13 @@ class BinanceExchange(BaseExchange):
             return await resp.json()
 
     async def get_stats(self, symbol: str) -> dict:
+        """Получает 24‑часовой объём и открытый интерес для ``symbol``."""
         session = await self._session_get()
         ticker_url = f"{self.REST_URL}/fapi/v1/ticker/24hr"
         params = {"symbol": symbol}
         async with session.get(ticker_url, params=params) as resp:
             ticker = await resp.json()
-        # ``volume`` is denominated in base currency; use ``quoteVolume`` so that
-        # ``volume_24h`` represents notional value in USD.
+        # ``volume`` в базовой валюте; используем ``quoteVolume`` для USD
         volume = float(ticker.get("quoteVolume", ticker.get("volume", 0.0)))
         oi_url = f"{self.REST_URL}/fapi/v1/openInterest"
         async with session.get(oi_url, params=params) as resp:
@@ -126,6 +140,7 @@ class BinanceExchange(BaseExchange):
     async def get_ohlc(
         self, symbol: str, interval: str, limit: int = 1
     ) -> list[Dict[str, float]]:
+        """Возвращает свечи OHLC для ``symbol``."""
         session = await self._session_get()
         url = f"{self.REST_URL}/fapi/v1/klines"
         params = {"symbol": symbol, "interval": interval, "limit": limit}
@@ -148,6 +163,7 @@ class BinanceExchange(BaseExchange):
     async def place_spot_order(
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
+        """Размещает спотовый ордер."""
         session = await self._session_get()
         url = f"{self.SPOT_REST_URL}/api/v3/order"
         params: Dict[str, Any] = {
@@ -164,6 +180,7 @@ class BinanceExchange(BaseExchange):
             return await resp.json()
 
     async def get_spot_balance(self) -> dict:
+        """Возвращает баланс спотового аккаунта."""
         session = await self._session_get()
         url = f"{self.SPOT_REST_URL}/api/v3/account"
         params = self._sign({})
@@ -178,6 +195,7 @@ class BinanceExchange(BaseExchange):
     async def _connect_spot(
         self, symbol: str, depth: int
     ) -> websockets.WebSocketClientProtocol:
+        """Подключается к спотовому WebSocket и возвращает соединение."""
         while True:
             try:
                 return await websockets.connect(
@@ -187,6 +205,7 @@ class BinanceExchange(BaseExchange):
                 await asyncio.sleep(5)
 
     async def _listen_spot(self, symbol: str, depth: int) -> None:
+        """Слушает поток спотового order book и кэширует данные."""
         while True:
             try:
                 if self._spot_ws is None:
@@ -199,6 +218,7 @@ class BinanceExchange(BaseExchange):
                         "asks": data["asks"],
                     }
             except Exception:
+                # При ошибке пересоздаём соединение
                 await asyncio.sleep(1)
                 if self._spot_ws is not None:
                     try:
@@ -208,6 +228,7 @@ class BinanceExchange(BaseExchange):
                 self._spot_ws = None
 
     async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
+        """Возвращает кэшированный спотовый стакан для ``symbol``."""
         if symbol not in self._spot_ws_tasks:
             self._spot_ws_tasks[symbol] = asyncio.create_task(
                 self._listen_spot(symbol, depth)
@@ -219,6 +240,7 @@ class BinanceExchange(BaseExchange):
     # ------------------------------------------------------------------
 
     async def _connect(self, symbol: str) -> websockets.WebSocketClientProtocol:
+        """Создаёт WebSocket‑соединение для фьючерсного стакана."""
         while True:
             try:
                 return await websockets.connect(
@@ -228,6 +250,7 @@ class BinanceExchange(BaseExchange):
                 await asyncio.sleep(5)
 
     async def _listen(self, symbol: str) -> None:
+        """Слушает поток фьючерсного стакана и сохраняет его в кэше."""
         while True:
             try:
                 if self._ws is None:
@@ -240,6 +263,7 @@ class BinanceExchange(BaseExchange):
                         "asks": data["asks"],
                     }
             except Exception:
+                # При ошибке пробуем подключиться заново
                 await asyncio.sleep(1)
                 if self._ws is not None:
                     try:
@@ -249,11 +273,13 @@ class BinanceExchange(BaseExchange):
                 self._ws = None
 
     async def get_orderbook(self, symbol: str, depth: int = 5) -> dict:
+        """Возвращает кэшированный фьючерсный стакан."""
         if symbol not in self._ws_tasks:
             self._ws_tasks[symbol] = asyncio.create_task(self._listen(symbol))
         return self._orderbooks.get(symbol, {"bids": [], "asks": []})
 
     async def __aexit__(self, *exc_info: Any) -> None:  # pragma: no cover
+        """Закрывает все сетевые соединения при выходе из контекста."""
         if self._session is not None:
             await self._session.close()
         if self._ws is not None:

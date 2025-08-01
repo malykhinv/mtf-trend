@@ -16,13 +16,12 @@ DEFAULT_OUTPUT = Path("data") / "optimized_thresholds.joblib"
 
 
 def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
-    """Analyze trade history using linear regression to derive thresholds.
+    """Анализирует историю сделок и вычисляет пороги через регрессию.
 
-    A lightweight :class:`~sklearn.linear_model.LinearRegression` model is
-    trained on historical trades to evaluate which features contribute most to
-    profitability.  Thresholds for ``funding_rate``, ``basis``,
-    ``holding_time``, ``volume`` and ``liquidity`` are then derived from the
-    median values of trades that the model predicts to be profitable.
+    Линейная регрессия оценивает, какие признаки сильнее влияют на прибыль.
+    Пороговые значения для ``funding_rate``, ``basis``, ``holding_time``,
+    ``volume`` и ``liquidity`` берутся как медианы сделок, которые модель
+    прогнозирует прибыльными.
     """
 
     if not log_path.exists():
@@ -57,6 +56,7 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
     if not features:
         return {}
 
+    # Собираем датафрейм признаков и целевой переменной PnL
     X = pd.DataFrame(features)
     X["pnl"] = df["pnl"]
     X = X.dropna()
@@ -69,6 +69,7 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
     model.fit(X, y)
     preds = model.predict(X)
 
+    # Оставляем только сделки, которые модель считает прибыльными
     profitable = X[preds > 0]
     if profitable.empty:
         profitable = X
@@ -83,7 +84,7 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
 def optimize_and_save(
     log_path: Path = LOG_PATH, out_path: Path = DEFAULT_OUTPUT
 ) -> Dict[str, float]:
-    """Run optimization on trade history and persist the result using joblib."""
+    """Выполняет оптимизацию на истории и сохраняет результат."""
     thresholds = analyze_trade_history(log_path)
     if thresholds:
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,19 +98,18 @@ async def periodic_optimization(
     log_path: Path = LOG_PATH,
     out_path: Path = DEFAULT_OUTPUT,
     on_update: Optional[Callable[[Dict[str, float]], None]] = None,
+
 ) -> None:
-    """Periodically optimize parameters every ``min_hours``–``max_hours``.
+    """Периодически оптимизирует параметры в интервале ``min_hours``–``max_hours``.
 
     Parameters
     ----------
     min_hours, max_hours:
-        Range of hours to wait between optimization runs.
+        Диапазон часов ожидания между запусками оптимизации.
     log_path, out_path:
-        Locations of the trade log and output file.
+        Пути к журналу сделок и файлу с результатами.
     on_update:
-        Optional callback invoked with the newly computed thresholds after
-        each optimization run.  This allows callers to react to refreshed
-        parameters.
+        Необязательный колбэк, вызываемый после каждого пересчёта порогов.
     """
 
     while True:
@@ -117,11 +117,12 @@ async def periodic_optimization(
         if on_update and thresholds:
             on_update(thresholds)
         wait_hours = random.randint(min_hours, max_hours)
+        # Ждём случайный промежуток перед следующей оптимизацией
         await asyncio.sleep(wait_hours * 3600)
 
 
 def load_thresholds(defaults: Dict[str, float], path: Path = DEFAULT_OUTPUT) -> Dict[str, float]:
-    """Load optimized thresholds and merge with ``defaults``."""
+    """Загружает оптимизированные пороги и объединяет их с ``defaults``."""
     try:
         data = load(path)
         if isinstance(data, dict):

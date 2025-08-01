@@ -1,9 +1,8 @@
-"""Main entry point for the trading bot.
+"""Главная точка входа торгового бота.
 
-This module loads configuration from ``config.yaml`` and wires together the
-different building blocks of the project.  It initialises exchange clients,
-starts the strategy loops and exposes the loaded configuration via the
-``CONFIG`` global so that other modules can access the settings.
+Модуль загружает параметры из ``config.yaml``, создаёт клиентов бирж и
+запускает основные циклы стратегии. Загруженная конфигурация сохраняется в
+глобальной переменной ``CONFIG`` для доступа из других модулей.
 """
 
 from __future__ import annotations
@@ -38,32 +37,31 @@ POSITION_TASKS: Dict[str, asyncio.Task] = {}
 
 
 def load_config(path: str = "config.yaml") -> None:
-    """Load YAML configuration into the global ``CONFIG`` variable.
+    """Загружает конфигурацию YAML в глобальную переменную ``CONFIG``.
 
     Parameters
     ----------
     path:
-        Path to the configuration file. Defaults to ``config.yaml`` in the
-        current working directory.
+        Путь к файлу конфигурации. По умолчанию ``config.yaml`` в текущей
+        директории.
     """
     global CONFIG
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as f:
         CONFIG = yaml.safe_load(f) or {}
+    # Подгружаем оптимизированные пороги стратегии
     CONFIG["thresholds"] = strategy.get_thresholds(
         CONFIG.get("thresholds", {})
     )
 
 
 def initialize_bot() -> None:
-    """Configure exchange clients and risk management."""
+    """Настраивает клиентов бирж и управление рисками."""
 
     api_keys = CONFIG.get("api_keys", {})
     print(f"Initializing bot with API keys: {list(api_keys.keys())}")
 
-    # Instantiate exchange clients if credentials are provided.  Missing keys
-    # simply result in the respective client not being created which keeps the
-    # bot operational for the remaining exchanges.
+    # Создаём клиентов бирж, если заданы ключи
     binance_key = api_keys.get("binance")
     binance_secret = api_keys.get("secret") or api_keys.get("binance_secret")
     if binance_key and binance_secret:
@@ -74,9 +72,7 @@ def initialize_bot() -> None:
     if bybit_key and bybit_secret:
         CLIENTS["bybit"] = BybitExchange(bybit_key, bybit_secret)
 
-    # Load whitelists per exchange.  ``bot.whitelist`` can either be a mapping
-    # of exchange names to symbol lists or a simple list applied to all
-    # configured exchanges.
+    # Загружаем белые списки символов для каждой биржи
     bot_cfg = CONFIG.get("bot", {})
     wl_cfg = bot_cfg.get("whitelist", {})
     if isinstance(wl_cfg, dict):
@@ -86,21 +82,22 @@ def initialize_bot() -> None:
         for name in CLIENTS:
             WHITELISTS[name] = symbols
 
-    # Configure risk management based on the loaded configuration.
+    # Конфигурируем контроль рисков
     risk_control.configure(CONFIG.get("risk", {}), bot_cfg.get("deposit_size"))
 
 
 def start_processing_loops() -> None:
-    """Start the strategy, risk and optimisation loops."""
+    """Запускает циклы стратегии, рисков и оптимизации параметров."""
 
     poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
 
     def _update_thresholds(new: Dict[str, float]) -> None:
+        """Обновляет пороги стратегии новыми значениями."""
         if new:
             CONFIG.setdefault("thresholds", {}).update(new)
 
     async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> None:
-        """Monitor an open position until exit conditions trigger."""
+        """Следит за открытой позицией до срабатывания условий выхода."""
         exchanges._current = CLIENTS[exchange_name]
         position_id = f"{exchange_name}:{symbol}"
         try:
@@ -112,6 +109,7 @@ def start_processing_loops() -> None:
                 position_id=position_id,
             )
         except Exception as exc:
+            # При ошибке закрываем позицию и уведомляем
             entry = strategy._positions.get(symbol, {})
             hold = time.time() - entry.get("entry_timestamp", time.time())
             funding_pct = entry.get("entry_funding", 0.0) * 100
@@ -133,6 +131,7 @@ def start_processing_loops() -> None:
             )
             raise
         else:
+            # Успешное завершение позиции
             entry = strategy._positions.get(symbol, {})
             pnl = entry.get("pnl", 0.0)
             reasons = entry.get("exit_reasons")
@@ -157,17 +156,19 @@ def start_processing_loops() -> None:
                 )
             )
         finally:
+            # Удаляем задачу из списка активных
             POSITION_TASKS.pop(position_id, None)
             strategy._positions.pop(symbol, None)
 
     async def scan_loop() -> None:
-        """Continuously scan markets for entry opportunities."""
+        """Постоянно сканирует рынок в поиске входов."""
         while True:
             thresholds = CONFIG.get("thresholds", {})
             trade_value = thresholds.get("min_trade_size", 0.0) or 1.0
 
             for name, client in CLIENTS.items():
                 exchanges._current = client
+                # Перебираем символы из белого списка
                 for symbol in WHITELISTS.get(name, []):
                     if risk_control.is_paused() or risk_control.is_symbol_open(symbol):
                         continue
@@ -187,6 +188,7 @@ def start_processing_loops() -> None:
                     if strategy.check_entry_conditions(
                         symbol, quantity, metrics, thresholds
                     ):
+                        # Условия входа выполнены – открываем позицию
                         try:
                             await strategy.open_neutral_position(symbol, quantity)
                             volume_usd = quantity * metrics.futures_price
@@ -212,16 +214,18 @@ def start_processing_loops() -> None:
             await asyncio.sleep(poll_interval)
 
     async def risk_loop() -> None:
-        """Periodically check whether trading should be paused."""
+        """Периодически проверяет, нужно ли приостановить торговлю."""
         while True:
             if risk_control.is_paused():
                 print("Trading paused due to risk limits")
             await asyncio.sleep(poll_interval)
 
     async def optimisation_loop() -> None:
+        """Запускает оптимизацию параметров в отдельной задаче."""
         await periodic_optimization(on_update=_update_thresholds)
 
     async def runner() -> None:
+        """Создаёт и управляет основными асинхронными задачами."""
         tasks = [
             asyncio.create_task(scan_loop()),
             asyncio.create_task(risk_loop()),
@@ -240,6 +244,7 @@ def start_processing_loops() -> None:
 
 
 def main() -> None:
+    """Запускает загрузку конфигурации и основной цикл работы бота."""
     load_config()
     initialize_bot()
     start_processing_loops()
