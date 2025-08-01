@@ -32,6 +32,19 @@ def test_open_risk_limit(tmp_path):
     assert not rm.can_open_trade()
 
 
+def test_reduce_trade(tmp_path):
+    balance = 1000.0
+
+    def fetch_balance():
+        return balance
+
+    rm = RiskManager(fetch_balance, db_path=tmp_path / "state.db")
+    trade_id, _ = rm.open_trade(100, 90)  # risk 10
+    rm.reduce_trade(trade_id, 0.5)
+    assert rm.open_positions[trade_id] == pytest.approx(5.0)
+    assert rm.open_trades == 1
+
+
 def test_consecutive_loss_halt(tmp_path):
     balance = 1000.0
 

@@ -174,6 +174,26 @@ class RiskManager:
         self._save_state()
         return trade_id, size
 
+    def reduce_trade(self, trade_id: str, fraction: float) -> None:
+        """Reduce open risk for ``trade_id`` without closing the trade.
+
+        Parameters
+        ----------
+        trade_id:
+            Identifier of the trade whose risk should be reduced.
+        fraction:
+            Fraction of the trade's risk to remove. Must be between 0 and 1.
+        """
+
+        self._ensure_daily_reset()
+        if not 0 < fraction < 1:
+            raise ValueError("fraction must be between 0 and 1")
+        risk = self.open_positions.get(trade_id)
+        if risk is None:
+            return
+        self.open_positions[trade_id] = risk * (1 - fraction)
+        self._save_state()
+
     def close_trade(self, trade_id: str, pnl: float) -> None:
         """Close an existing trade and update risk metrics."""
         self._ensure_daily_reset()

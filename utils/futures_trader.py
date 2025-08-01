@@ -276,12 +276,7 @@ class FuturesTrader:
                 tp1_price = exit_price
                 tp1_time = pd.Timestamp.utcnow()
                 if self.risk_manager and trade_id is not None:
-                    pnl = (
-                        exit_price - entry_price
-                        if side.lower() == "buy"
-                        else entry_price - exit_price
-                    )
-                    self.risk_manager.close_trade(trade_id, pnl)
+                    self.risk_manager.reduce_trade(trade_id, 0.5)
                 tp_filled = True
                 # replace stop for remaining half
                 if sl_id:
