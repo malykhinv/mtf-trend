@@ -43,7 +43,7 @@ class MarketMetrics:
     volume: float
     open_interest: float
     slippage: float
-    basis: float
+    basis: float  # spot–futures basis percentage
 
 
 async def get_market_metrics(
@@ -146,8 +146,11 @@ def check_entry_conditions(
     quantity: float,
     metrics: MarketMetrics,
     thresholds: Dict[str, float],
-) -> bool:
-    """Return ``True`` if all entry thresholds are satisfied."""
+    ) -> bool:
+    """Return ``True`` if all entry thresholds are satisfied.
+
+    The ``basis`` threshold is specified in percentage points.
+    """
 
     whitelist = CONFIG.get("bot", {}).get("whitelist", [])
     deposit = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
@@ -158,11 +161,12 @@ def check_entry_conditions(
         else float("inf")
     )
     notional = quantity * metrics.futures_price
+    max_basis_pct = thresholds.get("basis", float("inf"))
 
     return (
         abs(metrics.funding_rate) >= thresholds.get("funding_rate", 0.0)
         and spread_pct <= thresholds.get("spread", float("inf"))
-        and metrics.basis <= thresholds.get("basis", float("inf"))
+        and metrics.basis <= max_basis_pct
         and metrics.liquidity >= thresholds.get("liquidity", 0.0)
         and metrics.volume >= thresholds.get("volume", 0.0)
         and abs(metrics.volatility)

@@ -5,7 +5,7 @@ thresholds:
   buy_signal: 0.8
   sell_signal: 0.2
   funding_rate: 0.0003
-  basis: 0.005          # Minimum spot–futures basis (0.5%)
+  basis: 0.5            # Maximum spot–futures basis percentage
   volume: 20000000      # Minimum 24h trading volume to ensure liquidity
   liquidity: 0.0
   holding_time: 172800
