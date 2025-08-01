@@ -25,7 +25,7 @@ from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG
 from utils.logger import log_trade
-from utils.telegram import notify_partial_close
+from utils.telegram import format_duration, notify_partial_close
 
 
 @dataclass
@@ -372,6 +372,7 @@ async def monitor_neutral_position(
                 )
                 volume_usd = partial_qty * entry.get("entry_futures_price", 0.0)
                 pnl_pct = (pnl_part / volume_usd * 100) if volume_usd else 0.0
+                hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
                 exchange_name = (
                     type(exchanges._current).__name__.replace("Exchange", "").lower()
                     if getattr(exchanges, "_current", None)
@@ -407,9 +408,15 @@ async def monitor_neutral_position(
                 if position_id:
                     notify_partial_close(
                         position_id,
-                        f"Scaled out {symbol}: remaining {quantity:.4f}, "
-                        f"funding {entry.get('funding_accrued', 0.0):.4f}, "
-                        f"pnl {entry.get('pnl', 0.0):.4f}",
+                        (
+                            f"Scaled out {symbol}: remaining {quantity:.4f}\n"
+                            f"Funding: {metrics.funding_rate * 100:.4f}%\n"
+                            f"Basis: {exit_basis:.4f}%\n"
+                            f"Volume: ${volume_usd:.2f}\n"
+                            f"Time in position: {format_duration(hold_time)}\n"
+                            f"Funding accrued: {entry.get('funding_accrued', 0.0):.4f}\n"
+                            f"PnL: {entry.get('pnl', 0.0):.4f}"
+                        ),
                     )
                 continue
             await close_neutral_position(symbol, quantity, pnl, final=True)
@@ -428,6 +435,7 @@ async def monitor_neutral_position(
                         "exit_futures_price": metrics.futures_price,
                         "exit_spot_price": metrics.spot_price,
                         "exit_basis": exit_basis,
+                        "exit_funding": metrics.funding_rate,
                         "pnl": total_pnl,
                     }
                 )

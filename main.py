@@ -9,6 +9,7 @@ starts the strategy loops and exposes the loaded configuration via the
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -20,7 +21,7 @@ from exchanges.bybit import BybitExchange
 from risk import risk_control
 from strategies import funding_arbitrage as strategy
 from ai.parameter_optimizer import periodic_optimization
-from utils.telegram import notify_close, notify_open
+from utils.telegram import format_duration, notify_close, notify_open
 
 # Global configuration dictionary that other modules can import.
 CONFIG: Dict[str, Any] = {}
@@ -111,18 +112,44 @@ def start_processing_loops() -> None:
                 position_id=position_id,
             )
         except Exception as exc:
+            entry = strategy._positions.get(symbol, {})
+            hold = time.time() - entry.get("entry_timestamp", time.time())
+            funding_pct = entry.get("entry_funding", 0.0) * 100
+            basis_pct = entry.get("entry_basis", 0.0)
+            volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
+                "initial_quantity", entry.get("quantity", 0.0)
+            )
             notify_close(
                 position_id,
-                f"Error on {exchange_name} {symbol}: {exc}",
+                (
+                    f"Error on {exchange_name} {symbol}: {exc}\n"
+                    f"Funding: {funding_pct:.4f}%\n"
+                    f"Basis: {basis_pct:.4f}%\n"
+                    f"Volume: ${volume_usd:.2f}\n"
+                    f"Time in position: {format_duration(hold)}"
+                ),
             )
             raise
         else:
             entry = strategy._positions.get(symbol, {})
             pnl = entry.get("pnl", 0.0)
             reasons = entry.get("exit_reasons")
+            hold = entry.get("exit_timestamp", 0) - entry.get("entry_timestamp", 0)
+            funding_pct = entry.get("exit_funding", entry.get("entry_funding", 0.0)) * 100
+            basis_pct = entry.get("exit_basis", 0.0)
+            volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
+                "initial_quantity", entry.get("quantity", 0.0)
+            )
             notify_close(
                 position_id,
-                f"Closed {symbol} on {exchange_name} PnL:{pnl} reasons:{reasons}",
+                (
+                    f"Closed {symbol} on {exchange_name}\n"
+                    f"Funding: {funding_pct:.4f}%\n"
+                    f"Basis: {basis_pct:.4f}%\n"
+                    f"Volume: ${volume_usd:.2f}\n"
+                    f"Time in position: {format_duration(hold)}\n"
+                    f"PnL: {pnl:.4f} Reasons: {reasons}"
+                ),
             )
         finally:
             POSITION_TASKS.pop(position_id, None)
@@ -157,9 +184,16 @@ def start_processing_loops() -> None:
                     ):
                         try:
                             await strategy.open_neutral_position(symbol, quantity)
+                            volume_usd = quantity * metrics.futures_price
                             notify_open(
                                 f"{name}:{symbol}",
-                                f"Opened {symbol} on {name} qty {quantity}",
+                                (
+                                    f"Opened {symbol} on {name}\n"
+                                    f"Funding: {metrics.funding_rate * 100:.4f}%\n"
+                                    f"Basis: {metrics.basis:.4f}%\n"
+                                    f"Volume: ${volume_usd:.2f}\n"
+                                    f"Time in position: {format_duration(0)}"
+                                ),
                             )
                             task = asyncio.create_task(
                                 monitor_position(name, symbol, quantity)
