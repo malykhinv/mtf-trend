@@ -132,10 +132,10 @@ def evaluate_breakout(
     df["ema_long"] = df["close"].ewm(span=ema_long, adjust=False).mean()
     last = df.iloc[-1]
 
-    vol_window = df["volume"].rolling(window=15, min_periods=1)
-    avg_volume = vol_window.mean().iloc[-1]
-    vol_sigma = vol_window.std().iloc[-1]
-    vol_delta = df["volume"].diff().iloc[-1]
+    avg_volume = df["volume"].rolling(window=15, min_periods=1).mean().iloc[-1]
+    vol_change = df["volume"].diff()
+    vol_sigma = vol_change.rolling(window=15, min_periods=1).std().iloc[-1]
+    vol_delta = vol_change.iloc[-1]
     if pd.isna(avg_volume) or pd.isna(vol_sigma) or pd.isna(vol_delta):
         return []
     vol_ok = (
