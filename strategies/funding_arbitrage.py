@@ -42,7 +42,9 @@ class MarketMetrics:
     futures_price: float
     volume: float
     open_interest: float
-    slippage: float
+    spot_slippage: float
+    futures_slippage: float
+    slippage: float  # combined spot–futures slippage
     basis: float  # spot–futures basis percentage
 
 
@@ -59,6 +61,11 @@ async def get_market_metrics(
         Quantity to trade when estimating slippage.
     depth:
         Order book depth to request for liquidity calculations.  Defaults to 5.
+
+    Returns
+    -------
+    MarketMetrics
+        Includes per-leg slippage estimates and their combined value.
     """
     history = await fetch_funding_history(symbol, hours=8, limit=3)
     if history:
@@ -77,29 +84,35 @@ async def get_market_metrics(
     spot_bids = [(float(p), float(q)) for p, q in spot_book.get("bids", [])]
     spot_asks = [(float(p), float(q)) for p, q in spot_book.get("asks", [])]
 
-    if bids and asks:
-        futures_price = (asks[0][0] + bids[0][0]) / 2
-        remaining = trade_size
+    def _calc_slippage(orders, size, mid):
+        remaining = size
         cost = 0.0
-        for price, qty in asks:
+        for price, qty in orders:
             take = min(remaining, qty)
             cost += take * price
             remaining -= take
             if remaining <= 0:
                 break
         if remaining > 0:
-            slippage = float("inf")
-        else:
-            avg_price = cost / trade_size
-            slippage = abs(avg_price - futures_price) / futures_price
+            return float("inf")
+        avg_price = cost / size
+        return abs(avg_price - mid) / mid
+
+    if bids and asks:
+        futures_price = (asks[0][0] + bids[0][0]) / 2
+        futures_slippage = _calc_slippage(asks, trade_size, futures_price)
     else:
         futures_price = float("nan")
-        slippage = float("inf")
+        futures_slippage = float("inf")
 
     if spot_bids and spot_asks:
         spot_price = (spot_asks[0][0] + spot_bids[0][0]) / 2
+        spot_slippage = _calc_slippage(spot_asks, trade_size, spot_price)
     else:
         spot_price = float("nan")
+        spot_slippage = float("inf")
+
+    slippage = futures_slippage + spot_slippage
 
     if bids and asks and spot_bids and spot_asks:
         spread = abs(futures_price - spot_price)
@@ -132,6 +145,8 @@ async def get_market_metrics(
         futures_price,
         volume,
         open_interest,
+        spot_slippage,
+        futures_slippage,
         slippage,
         basis,
     )
@@ -162,6 +177,8 @@ def check_entry_conditions(
     )
     notional = quantity * metrics.futures_price
     max_basis_pct = thresholds.get("basis", float("inf"))
+    combined_slippage = metrics.slippage
+    slippage_limit = thresholds.get("slippage", 0.003)
 
     return (
         abs(metrics.funding_rate) >= thresholds.get("funding_rate", 0.0)
@@ -172,7 +189,7 @@ def check_entry_conditions(
         and abs(metrics.volatility)
         <= thresholds.get("volatility", float("inf"))
         and metrics.open_interest <= metrics.volume * 2
-        and metrics.slippage <= thresholds.get("slippage", float("inf"))
+        and combined_slippage <= slippage_limit
         and thresholds.get("min_trade_size", 0.0)
         <= notional
         <= thresholds.get("max_trade_size", float("inf"))
