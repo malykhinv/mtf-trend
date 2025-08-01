@@ -11,6 +11,21 @@ API_URL = f"https://api.telegram.org/bot{API_TOKEN}"
 _MESSAGE_CACHE: Dict[str, int] = {}
 
 
+def format_duration(seconds: float) -> str:
+    """Return a human readable duration given ``seconds``."""
+    seconds = max(int(seconds), 0)
+    minutes, sec = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    parts = []
+    if hours:
+        parts.append(f"{hours}h")
+    if minutes:
+        parts.append(f"{minutes}m")
+    if not parts:
+        parts.append(f"{sec}s")
+    return " ".join(parts)
+
+
 def _send_message(text: str) -> Optional[int]:
     """Send a new Telegram message and return the message ID."""
     if not API_TOKEN or not CHAT_ID:

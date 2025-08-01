@@ -135,7 +135,7 @@ async def _handle_timeout() -> None:
             from main import CLIENTS, POSITION_TASKS
             from strategies import funding_arbitrage as strategy
             from utils.logger import log_trade
-            from utils.telegram import notify_close
+            from utils.telegram import notify_close, format_duration
             from datetime import datetime
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Emergency exit setup failed: %s", exc)
@@ -164,9 +164,19 @@ async def _handle_timeout() -> None:
                             exchange_name,
                             exc_close,
                         )
+                        hold_time = time.time() - entry.get("entry_timestamp", time.time())
+                        funding_pct = entry.get("entry_funding", 0.0) * 100
+                        basis_pct = entry.get("entry_basis", 0.0)
+                        volume_usd = quantity * entry.get("entry_futures_price", 0.0)
                         notify_close(
                             pid,
-                            f"Emergency exit failed {symbol} on {exchange_name}: {exc_close}",
+                            (
+                                f"Emergency exit failed {symbol} on {exchange_name}: {exc_close}\n"
+                                f"Funding: {funding_pct:.4f}%\n"
+                                f"Basis: {basis_pct:.4f}%\n"
+                                f"Volume: ${volume_usd:.2f}\n"
+                                f"Time in position: {format_duration(hold_time)}"
+                            ),
                         )
                     else:
                         exit_spot = float(
@@ -218,9 +228,18 @@ async def _handle_timeout() -> None:
                                 "notes": "emergency_exit",
                             }
                         )
+                        hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
+                        funding_pct = entry.get("entry_funding", 0.0) * 100
                         notify_close(
                             pid,
-                            f"Emergency exit {symbol} on {exchange_name} PnL:{pnl:.4f}",
+                            (
+                                f"Emergency exit {symbol} on {exchange_name}\n"
+                                f"Funding: {funding_pct:.4f}%\n"
+                                f"Basis: {exit_basis:.4f}%\n"
+                                f"Volume: ${volume_usd:.2f}\n"
+                                f"Time in position: {format_duration(hold_time)}\n"
+                                f"PnL: {pnl:.4f}"
+                            ),
                         )
                 finally:
                     globals()["_current"] = exchanges_current
