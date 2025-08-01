@@ -1,0 +1,5 @@
+aiohttp
+aiogram
+websockets
+pytest
+pytest-asyncio

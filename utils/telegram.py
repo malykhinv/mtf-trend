@@ -1,11 +1,13 @@
 import os
 from typing import Dict, Optional
 
-import aiohttp
+from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
 
 API_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-API_URL = f"https://api.telegram.org/bot{API_TOKEN}"
+
+_BOT: Optional[Bot] = Bot(API_TOKEN, parse_mode="HTML") if API_TOKEN else None
 
 # Cache message IDs for each position so that updates edit the same message.
 _MESSAGE_CACHE: Dict[str, int] = {}
@@ -28,41 +30,23 @@ def format_duration(seconds: float) -> str:
 
 async def _send_message(text: str) -> Optional[int]:
     """Send a new Telegram message and return the message ID."""
-    if not API_TOKEN or not CHAT_ID:
+    if _BOT is None or CHAT_ID is None:
         # Fail silently if configuration is missing.
         return None
     try:
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{API_URL}/sendMessage",
-                json={"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML"},
-            ) as response:
-                response.raise_for_status()
-                payload = await response.json()
-                return payload.get("result", {}).get("message_id")
-    except Exception:
+        message = await _BOT.send_message(CHAT_ID, text)
+        return message.message_id
+    except TelegramAPIError:
         return None
 
 
 async def _edit_message(message_id: int, text: str) -> None:
     """Edit an existing Telegram message."""
-    if not API_TOKEN or not CHAT_ID:
+    if _BOT is None or CHAT_ID is None:
         return
     try:
-        timeout = aiohttp.ClientTimeout(total=10)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{API_URL}/editMessageText",
-                json={
-                    "chat_id": CHAT_ID,
-                    "message_id": message_id,
-                    "text": text,
-                    "parse_mode": "HTML",
-                },
-            ) as response:
-                response.raise_for_status()
-    except Exception:
+        await _BOT.edit_message_text(text, chat_id=CHAT_ID, message_id=message_id)
+    except TelegramAPIError:
         return
 
 
