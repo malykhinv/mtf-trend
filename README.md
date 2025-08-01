@@ -17,8 +17,8 @@ The project implements a multi-timeframe breakout system. OHLCV data is searched
 ## Setup
 1. Clone this repository and create a virtual environment.
 2. Install dependencies: `pip install -r requirements.txt`.
-3. Populate `config.yaml` with exchange credentials and desired symbols, or set the `API_KEY` and `API_SECRET` environment variables【F:config.yaml†L1-L16】.
-4. (Optional) Set `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` for daily summaries.
+3. Fill in API credentials by editing `.env` (or exporting `API_KEY` and `API_SECRET` directly). `config.yaml` should only contain non-sensitive settings such as symbols.
+4. (Optional) Add `TELEGRAM_TOKEN` and `TELEGRAM_CHAT_ID` to `.env` for daily summaries.
 5. Fetch initial data: `python utils/ohlcv_fetcher.py --symbol BTC/USDT --limit 1000`.
 
 ## Module Overview
@@ -37,7 +37,7 @@ The project implements a multi-timeframe breakout system. OHLCV data is searched
 3. Review `trades.csv` and the printed statistics.
 
 ## Live Trading
-1. Confirm `config.yaml` contains symbols and data paths, and environment variables or config provide API keys【F:config.yaml†L1-L28】.
+1. Confirm `config.yaml` contains symbols and data paths, and provide API keys via `.env` or environment variables.
 2. Start the bot: `python main.py`. Data is collected every five minutes and a daily equity/risk summary is sent at midnight【F:main.py†L127-L129】.
 3. The `RiskManager` checks account balance and halts trading if risk limits or drawdown thresholds are exceeded【F:utils/risk.py†L32-L43】【F:utils/risk.py†L111-L118】.
 
