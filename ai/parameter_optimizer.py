@@ -7,6 +7,7 @@ from typing import Callable, Dict, Optional
 
 import pandas as pd
 from joblib import dump, load
+from sklearn.linear_model import LinearRegression
 
 from utils.logger import LOG_PATH
 
@@ -15,56 +16,66 @@ DEFAULT_OUTPUT = Path("data") / "optimized_thresholds.joblib"
 
 
 def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
-    """Analyze trade history and compute optimized parameter thresholds.
+    """Analyze trade history using linear regression to derive thresholds.
 
-    The optimizer inspects the trade log and derives thresholds based on
-    historical behaviour of successful trades.  Currently the following
-    metrics are supported:
-
-    ``funding_rate``
-        75th percentile of the absolute funding rate.
-    ``basis``
-        75th percentile of the absolute entry basis.
-    ``holding_time``
-        75th percentile of holding time in seconds.
-    ``volume``
-        75th percentile of traded quantity or volume column.
-    ``liquidity``
-        75th percentile of recorded liquidity values.
+    A lightweight :class:`~sklearn.linear_model.LinearRegression` model is
+    trained on historical trades to evaluate which features contribute most to
+    profitability.  Thresholds for ``funding_rate``, ``basis``,
+    ``holding_time``, ``volume`` and ``liquidity`` are then derived from the
+    median values of trades that the model predicts to be profitable.
     """
 
     if not log_path.exists():
         return {}
 
     df = pd.read_excel(log_path)
-    if df.empty:
+    if df.empty or "pnl" not in df.columns:
         return {}
 
-    if "pnl" in df.columns:
-        df = df[df["pnl"] > 0]
-
-    thresholds: Dict[str, float] = {}
+    features: Dict[str, pd.Series] = {}
 
     if "funding" in df.columns:
-        thresholds["funding_rate"] = float(df["funding"].abs().quantile(0.75))
+        features["funding_rate"] = df["funding"].abs()
 
     if "entry_basis" in df.columns:
-        thresholds["basis"] = float(df["entry_basis"].abs().quantile(0.75))
+        features["basis"] = df["entry_basis"].abs()
 
     if {"entry_time", "exit_time"}.issubset(df.columns):
         entry_times = pd.to_datetime(df["entry_time"], errors="coerce")
         exit_times = pd.to_datetime(df["exit_time"], errors="coerce")
-        hold_seconds = (exit_times - entry_times).dt.total_seconds().dropna()
-        if not hold_seconds.empty:
-            thresholds["holding_time"] = float(hold_seconds.quantile(0.75))
+        hold_seconds = (exit_times - entry_times).dt.total_seconds()
+        features["holding_time"] = hold_seconds
 
-    if "volume" in df.columns and not df["volume"].dropna().empty:
-        thresholds["volume"] = float(df["volume"].quantile(0.75))
-    elif "quantity" in df.columns and not df["quantity"].dropna().empty:
-        thresholds["volume"] = float(df["quantity"].quantile(0.75))
+    if "volume" in df.columns:
+        features["volume"] = df["volume"]
+    elif "quantity" in df.columns:
+        features["volume"] = df["quantity"]
 
-    if "liquidity" in df.columns and not df["liquidity"].dropna().empty:
-        thresholds["liquidity"] = float(df["liquidity"].quantile(0.75))
+    if "liquidity" in df.columns:
+        features["liquidity"] = df["liquidity"]
+
+    if not features:
+        return {}
+
+    X = pd.DataFrame(features)
+    X["pnl"] = df["pnl"]
+    X = X.dropna()
+    y = X.pop("pnl")
+
+    if X.empty:
+        return {}
+
+    model = LinearRegression()
+    model.fit(X, y)
+    preds = model.predict(X)
+
+    profitable = X[preds > 0]
+    if profitable.empty:
+        profitable = X
+
+    thresholds: Dict[str, float] = {
+        col: float(profitable[col].median()) for col in profitable.columns
+    }
 
     return thresholds
 
