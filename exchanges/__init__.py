@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from abc import ABC, abstractmethod
 import logging
 import time
@@ -38,6 +39,16 @@ class BaseExchange(ABC):
     по умолчанию, чтобы модульные тесты могли проверять высокоуровневую логику
     без реальных сетевых запросов.
     """
+
+    def __init__(self, **_ignored: Any) -> None:
+        """Базовый инициализатор, принимающий произвольные параметры.
+
+        Конкретные биржи могут определять собственные сигнатуры ``__init__``,
+        однако фабрика :func:`configure` передаёт аргументы через ``**kwargs``.
+        Пустая реализация предотвращает предупреждения анализаторов типо о
+        "неожиданных аргументах" при создании экземпляра абстрактного класса.
+        """
+        super().__init__()
 
     @abstractmethod
     async def fetch_funding(self, symbol: str) -> float:
@@ -273,6 +284,8 @@ async def _handle_timeout() -> None:
                 finally:
                     globals()["_current"] = exchanges_current
                     task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
                     POSITION_TASKS.pop(pid, None)
                     strategy._positions.pop(symbol, None)
 
