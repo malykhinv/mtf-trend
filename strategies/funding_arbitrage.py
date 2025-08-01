@@ -190,6 +190,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     risk_control.update_position(quantity)
     risk_control.mark_symbol_open(symbol)
     now = time.time()
+    trading_fee = sum(float(o.get("fee", 0.0)) for o in orders.values())
     _positions[symbol] = {
         "entry_timestamp": now,
         "entry_futures_price": entry_metrics.futures_price,
@@ -197,6 +198,9 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         "entry_basis": entry_metrics.basis,
         "entry_funding": entry_metrics.funding_rate,
         "quantity": quantity,
+        "funding_fees": 0.0,
+        "trading_fees": trading_fee,
+        "last_funding_timestamp": now,
     }
     log_trade(
         {
@@ -212,6 +216,8 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
             "funding": entry_metrics.funding_rate,
             "quantity": quantity,
             "pnl": 0.0,
+            "funding_fees": 0.0,
+            "trading_fees": trading_fee,
             "exit_reasons": None,
         }
     )
@@ -229,6 +235,12 @@ async def close_neutral_position(
         # Rollback long close to restore neutrality
         await place_order(symbol, "BUY", quantity)
         raise RuntimeError("Failed to close hedge; rolled back long leg") from exc
+    entry = _positions.get(symbol)
+    trading_fee = float(close_long.get("fee", 0.0)) + float(
+        close_short.get("fee", 0.0)
+    )
+    if entry is not None:
+        entry["trading_fees"] = entry.get("trading_fees", 0.0) + trading_fee
     risk_control.update_position(-quantity)
     risk_control.record_pnl(pnl)
     risk_control.mark_symbol_closed(symbol)
@@ -249,18 +261,34 @@ async def monitor_neutral_position(
         except asyncio.TimeoutError:
             await close_neutral_position(symbol, quantity)
             break
-        reasons = []
+        now = time.time()
+        if entry:
+            last = entry.get("last_funding_timestamp", now)
+            funding_fee = (
+                quantity
+                * metrics.futures_price
+                * metrics.funding_rate
+                * (now - last)
+                / (8 * 3600)
+            )
+            entry["funding_fees"] = entry.get("funding_fees", 0.0) + funding_fee
+            entry["last_funding_timestamp"] = now
+        reasons: list[str] = []
         if check_exit_conditions(metrics, exit_thresholds):
             reasons.append("threshold")
         if metrics.funding_rate < 0.0001:
-            reasons.append("funding")
+            reasons.append("low_funding")
+        if entry and metrics.funding_rate < 0 and entry.get("entry_funding", 0) >= 0:
+            reasons.append("funding_negative")
         if metrics.basis > 1.0:
             reasons.append("basis")
         if entry:
-            exit_slippage = abs(metrics.futures_price - entry.get("entry_futures_price", 0.0)) / max(entry.get("entry_futures_price", 1.0), 1e-9)
+            exit_slippage = abs(
+                metrics.futures_price - entry.get("entry_futures_price", 0.0)
+            ) / max(entry.get("entry_futures_price", 1.0), 1e-9)
             if exit_slippage > 0.005:
                 reasons.append("slippage")
-            hold_time = time.time() - entry.get("entry_timestamp", time.time())
+            hold_time = now - entry.get("entry_timestamp", now)
             max_hold = exit_thresholds.get("holding_time", 48 * 3600)
             if hold_time > max_hold:
                 reasons.append("time")
@@ -268,8 +296,8 @@ async def monitor_neutral_position(
                 (metrics.futures_price - entry.get("entry_futures_price", 0.0))
                 - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
             ) * quantity
-            if pnl < 0:
-                reasons.append("pnl")
+            if pnl + entry.get("funding_fees", 0.0) - entry.get("trading_fees", 0.0) < 0:
+                reasons.append("pnl_vs_cost")
         else:
             pnl = 0.0
         if reasons:
@@ -294,7 +322,9 @@ async def monitor_neutral_position(
                 log_trade(
                     {
                         "symbol": symbol,
-                        "entry_time": datetime.fromtimestamp(entry.get("entry_timestamp", exit_ts)).isoformat(),
+                        "entry_time": datetime.fromtimestamp(
+                            entry.get("entry_timestamp", exit_ts)
+                        ).isoformat(),
                         "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
                         "entry_futures_price": entry.get("entry_futures_price"),
                         "exit_futures_price": metrics.futures_price,
@@ -305,6 +335,8 @@ async def monitor_neutral_position(
                         "funding": entry.get("entry_funding"),
                         "quantity": entry.get("quantity"),
                         "pnl": pnl,
+                        "funding_fees": entry.get("funding_fees", 0.0),
+                        "trading_fees": entry.get("trading_fees", 0.0),
                         "exit_reasons": reasons,
                     }
                 )
