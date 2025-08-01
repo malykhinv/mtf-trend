@@ -196,9 +196,7 @@ def check_entry_conditions(
         <= thresholds.get("volatility", float("inf"))
         and metrics.open_interest <= metrics.volume * 2
         and combined_slippage <= slippage_limit
-        and thresholds.get("min_trade_size", 0.0)
-        <= notional
-        <= thresholds.get("max_trade_size", float("inf"))
+        and notional <= thresholds.get("max_trade_size", float("inf"))
         and notional <= max_deposit_trade
         and symbol in whitelist
         and not risk_control.is_symbol_open(symbol)
