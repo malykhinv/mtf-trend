@@ -226,7 +226,10 @@ def init_logging(log_dir: str | Path) -> None:
 
 
 def scan_and_enter(
-    avg_volume_mult: float = 1.5, delta_volume_mult: float = 2.0
+    avg_volume_mult: float = 1.5,
+    delta_volume_mult: float = 2.0,
+    tp1_rr: float = 1.5,
+    tp2_rr: float = 3.0,
 ) -> None:
     """Run periodic scanning and entry logic.
 
@@ -235,6 +238,8 @@ def scan_and_enter(
     avg_volume_mult, delta_volume_mult:
         Multipliers applied to average volume and volume change respectively
         when generating breakout signals.
+    tp1_rr, tp2_rr:
+        Risk-reward multiples for the first and second take profit levels.
     """
     logging.info("Running scan and entry logic")
     symbols = screener.screen()[:10]
@@ -275,6 +280,8 @@ def scan_and_enter(
             funding,
             avg_volume_mult=avg_volume_mult,
             delta_volume_mult=delta_volume_mult,
+            tp1_rr=tp1_rr,
+            tp2_rr=tp2_rr,
         )
         if signals:
             signals_by_symbol[symbol] = signals
@@ -396,8 +403,14 @@ def main() -> None:
 
     avg_mult = config.get("strategy", {}).get("avg_volume_mult", 1.5)
     delta_mult = config.get("strategy", {}).get("delta_volume_mult", 2.0)
+    tp1_rr = config.get("strategy", {}).get("tp1_rr", 1.5)
+    tp2_rr = config.get("strategy", {}).get("tp2_rr", 3.0)
     schedule.every(5).minutes.do(
-        scan_and_enter, avg_volume_mult=avg_mult, delta_volume_mult=delta_mult
+        scan_and_enter,
+        avg_volume_mult=avg_mult,
+        delta_volume_mult=delta_mult,
+        tp1_rr=tp1_rr,
+        tp2_rr=tp2_rr,
     )
     schedule.every().day.at("00:00").do(daily_equity_and_risk_check)
     logging.info("Scheduler started")

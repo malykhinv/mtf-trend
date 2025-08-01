@@ -97,6 +97,8 @@ def run_backtest(
     equity_path: str | Path | None = None,
     avg_volume_mult: float = 1.5,
     delta_volume_mult: float = 2.0,
+    tp1_rr: float = 1.5,
+    tp2_rr: float = 3.0,
 ) -> dict:
     """Run a simple breakout backtest and return summary statistics.
 
@@ -106,6 +108,8 @@ def run_backtest(
         Multiplier applied to the rolling average of volume.
     delta_volume_mult:
         Multiplier applied to the standard deviation of volume changes.
+    tp1_rr, tp2_rr:
+        Risk-reward multiples for the first and second take profit levels.
     """
 
     df = load_data(symbol, data_dir)
@@ -249,6 +253,8 @@ def run_backtest(
             funding,
             avg_volume_mult=avg_volume_mult,
             delta_volume_mult=delta_volume_mult,
+            tp1_rr=tp1_rr,
+            tp2_rr=tp2_rr,
         )
         if not signals:
             continue
@@ -306,6 +312,18 @@ def parse_args() -> argparse.Namespace:
         default=2.0,
         help="Volume delta standard deviation multiplier",
     )
+    parser.add_argument(
+        "--tp1-rr",
+        type=float,
+        default=1.5,
+        help="Risk-reward multiple for first take-profit",
+    )
+    parser.add_argument(
+        "--tp2-rr",
+        type=float,
+        default=3.0,
+        help="Risk-reward multiple for second take-profit",
+    )
     return parser.parse_args()
 
 
@@ -318,6 +336,8 @@ def main() -> None:
         data_dir=args.data_dir,
         avg_volume_mult=args.avg_volume_mult,
         delta_volume_mult=args.delta_volume_mult,
+        tp1_rr=args.tp1_rr,
+        tp2_rr=args.tp2_rr,
     )
     for key, value in stats.items():
         print(f"{key}: {value}")
