@@ -3,3 +3,4 @@ aiogram
 websockets
 pytest
 pytest-asyncio
+python-dotenv
