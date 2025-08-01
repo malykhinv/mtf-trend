@@ -24,6 +24,7 @@ from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG
 from utils.logger import log_trade
+from utils.telegram import notify_partial_close
 
 
 @dataclass
@@ -198,6 +199,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         "entry_basis": entry_metrics.basis,
         "entry_funding": entry_metrics.funding_rate,
         "quantity": quantity,
+        "pnl": 0.0,
         "funding_fees": 0.0,
         "trading_fees": trading_fee,
         "last_funding_timestamp": now,
@@ -225,9 +227,22 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
 
 
 async def close_neutral_position(
-    symbol: str, quantity: float, pnl: float = 0.0
+    symbol: str, quantity: float, pnl: float = 0.0, final: bool = True
 ) -> Dict[str, Dict]:
-    """Close an existing neutral position and record PnL."""
+    """Close an existing neutral position and record PnL.
+
+    Parameters
+    ----------
+    symbol:
+        Trading pair symbol.
+    quantity:
+        Size to close.
+    pnl:
+        Realised profit or loss for the closed size.
+    final:
+        Whether this closes the position entirely.  If ``False`` the position
+        remains open and risk controls are not reset.
+    """
     close_long = await place_order(symbol, "SELL", quantity)
     try:
         close_short = await place_order(symbol, "BUY", quantity)
@@ -243,7 +258,8 @@ async def close_neutral_position(
         entry["trading_fees"] = entry.get("trading_fees", 0.0) + trading_fee
     risk_control.update_position(-quantity)
     risk_control.record_pnl(pnl)
-    risk_control.mark_symbol_closed(symbol)
+    if final:
+        risk_control.mark_symbol_closed(symbol)
     return {"long": close_long, "short": close_short}
 
 
@@ -252,14 +268,22 @@ async def monitor_neutral_position(
     quantity: float,
     exit_thresholds: Dict[str, float],
     poll_interval: float = 5.0,
+    position_id: str | None = None,
 ) -> None:
-    """Monitor a neutral position and close it when exit criteria are met."""
+    """Monitor a neutral position and close it when exit criteria are met.
+
+    The function supports scaling out of positions.  When exit conditions are
+    met but the remaining size exceeds twice the minimum trade size the
+    position is halved and monitoring continues on the rest.  Telegram updates
+    are sent via :func:`notify_partial_close` so that the original message is
+    edited instead of spammed.
+    """
     entry = _positions.get(symbol, {})
     while True:
         try:
             metrics = await get_market_metrics(symbol, quantity)
         except asyncio.TimeoutError:
-            await close_neutral_position(symbol, quantity)
+            await close_neutral_position(symbol, quantity, final=True)
             break
         now = time.time()
         if entry:
@@ -301,7 +325,26 @@ async def monitor_neutral_position(
         else:
             pnl = 0.0
         if reasons:
-            await close_neutral_position(symbol, quantity, pnl)
+            min_trade = exit_thresholds.get("min_trade_size", 0.0)
+            if entry and quantity > max(min_trade * 2, 0.0):
+                partial_qty = quantity / 2
+                pnl_part = (
+                    (metrics.futures_price - entry.get("entry_futures_price", 0.0))
+                    - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
+                ) * partial_qty
+                await close_neutral_position(symbol, partial_qty, pnl_part, final=False)
+                quantity -= partial_qty
+                entry["quantity"] = quantity
+                entry["pnl"] = entry.get("pnl", 0.0) + pnl_part
+                if position_id:
+                    notify_partial_close(
+                        position_id,
+                        f"Scaled out {symbol}: remaining {quantity:.4f}, "
+                        f"funding {entry.get('funding_fees', 0.0):.4f}, "
+                        f"pnl {entry.get('pnl', 0.0):.4f}",
+                    )
+                continue
+            await close_neutral_position(symbol, quantity, pnl, final=True)
             if entry:
                 exit_basis = (
                     ((metrics.futures_price - metrics.spot_price) / metrics.spot_price) * 100
@@ -309,6 +352,7 @@ async def monitor_neutral_position(
                     else float("inf")
                 )
                 exit_ts = time.time()
+                total_pnl = entry.get("pnl", 0.0) + pnl
                 entry.update(
                     {
                         "exit_timestamp": exit_ts,
@@ -316,7 +360,7 @@ async def monitor_neutral_position(
                         "exit_futures_price": metrics.futures_price,
                         "exit_spot_price": metrics.spot_price,
                         "exit_basis": exit_basis,
-                        "pnl": pnl,
+                        "pnl": total_pnl,
                     }
                 )
                 log_trade(
@@ -334,7 +378,7 @@ async def monitor_neutral_position(
                         "exit_basis": exit_basis,
                         "funding": entry.get("entry_funding"),
                         "quantity": entry.get("quantity"),
-                        "pnl": pnl,
+                        "pnl": total_pnl,
                         "funding_fees": entry.get("funding_fees", 0.0),
                         "trading_fees": entry.get("trading_fees", 0.0),
                         "exit_reasons": reasons,
