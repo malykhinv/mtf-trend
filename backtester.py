@@ -270,19 +270,15 @@ def run_backtest(
             continue
         sig = signals[0]
 
-        # Evaluate broader market trend using recent BTC and ETH candles
+        # Evaluate broader market trend using recent BTC candles
         candles = load_btc_eth_candles()
         btc = candles.get("BTC/USDT")
-        eth = candles.get("ETH/USDT")
         btc_down = has_consecutive_move(btc, "down")
-        eth_down = has_consecutive_move(eth, "down")
         btc_up = has_consecutive_move(btc, "up")
-        eth_up = has_consecutive_move(eth, "up")
         btc_above = price_above_ema(btc)
-        eth_above = price_above_ema(eth)
 
-        allow_long = not (btc_down or eth_down or not btc_above or not eth_above)
-        allow_short = not (btc_up or eth_up)
+        allow_long = not (btc_down or not btc_above)
+        allow_short = not btc_up
 
         if sig.direction == "long" and not allow_long:
             continue
