@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Command line interface for the genetic algorithm optimizer."""
+"""Командный интерфейс для оптимизатора на генетическом алгоритме."""
 
 import argparse
 from dataclasses import asdict

@@ -13,7 +13,7 @@ from utils.cvd import get_cvd
 
 
 class DataCollector:
-    """Collect OHLCV data for configured symbols."""
+    """Собирает свечные данные OHLCV для инструментов из настроек."""
 
     def __init__(self, api_key: str, api_secret: str, config: dict) -> None:
         self.api_key = api_key
@@ -30,13 +30,10 @@ class DataCollector:
         )
 
     def collect(self, symbols: Optional[list[str]] = None) -> Any:
-        """Fetch recent OHLCV data and metrics for the given symbols.
+        """Получает свежие свечные данные и метрики по указанным инструментам.
 
-        Parameters
-        ----------
-        symbols:
-            Optional list of symbols to collect data for. If not provided,
-            ``config['symbols']`` is used.
+        Можно передать свой список символов. Если ничего не передавать,
+        берём список из настроек.
         """
         logging.info("Collecting market data")
         end = pd.Timestamp.utcnow()
