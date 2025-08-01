@@ -101,13 +101,18 @@ def start_processing_loops() -> None:
     async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> None:
         """Monitor an open position until exit conditions trigger."""
         exchanges._current = CLIENTS[exchange_name]
+        position_id = f"{exchange_name}:{symbol}"
         try:
             await strategy.monitor_neutral_position(
-                symbol, quantity, CONFIG.get("thresholds", {}), poll_interval
+                symbol,
+                quantity,
+                CONFIG.get("thresholds", {}),
+                poll_interval,
+                position_id=position_id,
             )
         except Exception as exc:
             notify_close(
-                f"{exchange_name}:{symbol}",
+                position_id,
                 f"Error on {exchange_name} {symbol}: {exc}",
             )
             raise
@@ -116,11 +121,11 @@ def start_processing_loops() -> None:
             pnl = entry.get("pnl", 0.0)
             reasons = entry.get("exit_reasons")
             notify_close(
-                f"{exchange_name}:{symbol}",
+                position_id,
                 f"Closed {symbol} on {exchange_name} PnL:{pnl} reasons:{reasons}",
             )
         finally:
-            POSITION_TASKS.pop(f"{exchange_name}:{symbol}", None)
+            POSITION_TASKS.pop(position_id, None)
             strategy._positions.pop(symbol, None)
 
     async def scan_loop() -> None:
