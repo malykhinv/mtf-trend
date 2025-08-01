@@ -115,9 +115,11 @@ def configure(name: str, **kwargs) -> None:
 
 
 async def _handle_timeout() -> None:
-    """Cancel all outstanding orders and pause trading."""
+    """Cancel all orders, close open positions and pause trading."""
 
-    logger.error("API call exceeded %s seconds; cancelling outstanding orders", API_TIMEOUT)
+    logger.error(
+        "API call exceeded %s seconds; cancelling outstanding orders", API_TIMEOUT
+    )
     if _current is not None:
         for market, oid in list(_OUTSTANDING):
             try:
@@ -127,6 +129,105 @@ async def _handle_timeout() -> None:
             except Exception as exc:  # pragma: no cover - best effort
                 logger.error("Failed to cancel %s %s: %s", market, oid, exc)
         _OUTSTANDING.clear()
+
+        # Attempt emergency exit for any tracked open positions.
+        try:  # pragma: no cover - best effort
+            from main import CLIENTS, POSITION_TASKS
+            from strategies import funding_arbitrage as strategy
+            from utils.logger import log_trade
+            from utils.telegram import notify_close
+            from datetime import datetime
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.error("Emergency exit setup failed: %s", exc)
+        else:
+            for pid, task in list(POSITION_TASKS.items()):
+                exchange_name, symbol = pid.split(":", 1)
+                client = CLIENTS.get(exchange_name)
+                if client is None:
+                    continue
+                exchanges_current = _current
+                try:
+                    # Switch context to the client's exchange for this position.
+                    globals()["_current"] = client
+                    entry = strategy._positions.get(symbol, {})
+                    quantity = entry.get("quantity") or entry.get(
+                        "initial_quantity", 0.0
+                    )
+                    try:
+                        orders = await strategy.close_neutral_position(
+                            symbol, quantity, final=True
+                        )
+                    except Exception as exc_close:
+                        logger.error(
+                            "Failed to close position %s on %s: %s",
+                            symbol,
+                            exchange_name,
+                            exc_close,
+                        )
+                        notify_close(
+                            pid,
+                            f"Emergency exit failed {symbol} on {exchange_name}: {exc_close}",
+                        )
+                    else:
+                        exit_spot = float(
+                            orders["long"].get("avgPrice")
+                            or orders["long"].get("price")
+                            or 0.0
+                        )
+                        exit_perp = float(
+                            orders["short"].get("avgPrice")
+                            or orders["short"].get("price")
+                            or 0.0
+                        )
+                        exit_ts = time.time()
+                        pnl = (
+                            (exit_perp - entry.get("entry_futures_price", 0.0))
+                            - (exit_spot - entry.get("entry_spot_price", 0.0))
+                        ) * quantity
+                        volume_usd = quantity * entry.get("entry_futures_price", 0.0)
+                        pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
+                        exit_basis = (
+                            ((exit_perp - exit_spot) / exit_spot) * 100
+                            if exit_spot
+                            else float("inf")
+                        )
+                        log_trade(
+                            {
+                                "symbol": symbol,
+                                "exchange": exchange_name,
+                                "entry_time": datetime.fromtimestamp(
+                                    entry.get("entry_timestamp", exit_ts)
+                                ).isoformat(),
+                                "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
+                                "entry_futures_price": entry.get("entry_futures_price"),
+                                "exit_futures_price": exit_perp,
+                                "entry_spot_price": entry.get("entry_spot_price"),
+                                "exit_spot_price": exit_spot,
+                                "entry_basis": entry.get("entry_basis"),
+                                "exit_basis": exit_basis,
+                                "basis_pct": exit_basis,
+                                "funding": entry.get("entry_funding"),
+                                "quantity": quantity,
+                                "volume_usd": volume_usd,
+                                "pnl": pnl,
+                                "pnl_pct": pnl_pct,
+                                "commissions": entry.get("commissions", 0.0),
+                                "funding_accrued": entry.get("funding_accrued", 0.0),
+                                "slippage": entry.get("slippage", 0.0),
+                                "exit_reasons": ["timeout"],
+                                "notes": "emergency_exit",
+                            }
+                        )
+                        notify_close(
+                            pid,
+                            f"Emergency exit {symbol} on {exchange_name} PnL:{pnl:.4f}",
+                        )
+                finally:
+                    globals()["_current"] = exchanges_current
+                    task.cancel()
+                    POSITION_TASKS.pop(pid, None)
+                    strategy._positions.pop(symbol, None)
+
     risk_control.pause()
 
 
