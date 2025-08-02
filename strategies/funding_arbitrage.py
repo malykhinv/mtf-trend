@@ -448,20 +448,20 @@ async def open_neutral_position(
     spot_order = await exchange.place_spot_order(symbol, "BUY", float(quantity))
     spot_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
     if not await _wait_filled(exchange, spot_id):
-        await exchange.cancel_order(spot_id)
+        await exchange.cancel_order(symbol, spot_id)
         raise RuntimeError("Спотовый ордер выполнен частично")
 
     try:
         perp_order = await exchange.place_order(symbol, "SELL", float(quantity))
     except Exception as exc:
-        # В случае ошибки на второй ноге откатываем спотовую часть
-        await exchange.place_spot_order(symbol, "SELL", float(quantity))
+        # При ошибке размещения второй ноги отменяем первую
+        await exchange.cancel_order(symbol, spot_id)
         raise RuntimeError(
-            "Не удалось разместить хедж; спотовая часть откатана"
+            "Не удалось разместить хедж; спотовый ордер отменён"
         ) from exc
     perp_id = str(perp_order.get("orderId") or perp_order.get("id") or "")
     if not await _wait_filled(exchange, perp_id):
-        await exchange.cancel_order(perp_id)
+        await exchange.cancel_order(symbol, perp_id)
         # Откатываем спотовую позицию
         await exchange.place_spot_order(symbol, "SELL", float(quantity))
         raise RuntimeError("Не удалось полностью захеджировать позицию; спот откатан")
@@ -540,16 +540,16 @@ async def close_neutral_position(
     close_long = await exchange.place_order(symbol, "SELL", float(quantity))
     long_id = str(close_long.get("orderId") or close_long.get("id") or "")
     if not await _wait_filled(exchange, long_id):
-        await exchange.cancel_order(long_id)
+        await exchange.cancel_order(symbol, long_id)
         raise RuntimeError("Не удалось закрыть длинную ногу")
 
     try:
         close_short = await exchange.place_order(symbol, "BUY", float(quantity))
         short_id = str(close_short.get("orderId") or close_short.get("id") or "")
         if not await _wait_filled(exchange, short_id):
-            await exchange.cancel_order(short_id)
+            await exchange.cancel_order(symbol, short_id)
             await exchange.place_order(symbol, "BUY", float(quantity))
-            raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена")
+            raise RuntimeError("Не удалось закрыть хедж; длинная нога откатана")
     except Exception as exc:
         # В случае ошибки возвращаем длинную позицию
         await exchange.place_order(symbol, "BUY", float(quantity))
