@@ -34,11 +34,12 @@ class BybitExchange(BaseExchange):
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
-        self._ws: Optional[Any] = None
+        # WebSocket соединения для фьючерсных стаканов по каждому символу
+        self._ws: Dict[str, Any] = {}
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
-        # Управление WebSocket спота
-        self._spot_ws: Optional[Any] = None
+        # Управление WebSocket спота по каждому символу
+        self._spot_ws: Dict[str, Any] = {}
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
@@ -263,9 +264,9 @@ class BybitExchange(BaseExchange):
         """Слушает обновления спотового стакана и кэширует их."""
         while True:
             try:
-                if self._spot_ws is None:
-                    self._spot_ws = await self._connect_spot(symbol)
-                msg = await self._spot_ws.recv()
+                if symbol not in self._spot_ws:
+                    self._spot_ws[symbol] = await self._connect_spot(symbol)
+                msg = await self._spot_ws[symbol].recv()
                 data = json.loads(msg)
                 if data.get("topic", "").startswith("orderbook"):
                     book = data.get("data") or {}
@@ -274,14 +275,14 @@ class BybitExchange(BaseExchange):
                         "asks": book.get("a", []),
                     }
             except Exception:
-                # При ошибке пересоздаём соединение
+                # При ошибке пересоздаём соединение для конкретного символа
                 await asyncio.sleep(1)
-                if self._spot_ws is not None:
+                ws = self._spot_ws.pop(symbol, None)
+                if ws is not None:
                     try:
-                        await self._spot_ws.close()
+                        await ws.close()
                     except Exception:
                         pass
-                self._spot_ws = None
 
     async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
         """Возвращает кэшированный спотовый стакан."""
@@ -313,9 +314,9 @@ class BybitExchange(BaseExchange):
         """Слушает поток фьючерсного стакана и сохраняет его."""
         while True:
             try:
-                if self._ws is None:
-                    self._ws = await self._connect(symbol)
-                msg = await self._ws.recv()
+                if symbol not in self._ws:
+                    self._ws[symbol] = await self._connect(symbol)
+                msg = await self._ws[symbol].recv()
                 data = json.loads(msg)
                 if data.get("topic", "").startswith("orderbook"):
                     book = data.get("data") or {}
@@ -324,14 +325,14 @@ class BybitExchange(BaseExchange):
                         "asks": book.get("a", []),
                     }
             except Exception:
-                # Ошибка — перезапускаем соединение
+                # Ошибка — перезапускаем соединение для конкретного символа
                 await asyncio.sleep(1)
-                if self._ws is not None:
+                ws = self._ws.pop(symbol, None)
+                if ws is not None:
                     try:
-                        await self._ws.close()
+                        await ws.close()
                     except Exception:
                         pass
-                self._ws = None
 
     async def get_orderbook(self, symbol: str, depth: int = 5) -> dict:
         """Возвращает кэшированный фьючерсный стакан."""
@@ -343,10 +344,10 @@ class BybitExchange(BaseExchange):
         """Закрывает все активные соединения при выходе."""
         if self._session is not None:
             await self._session.close()
-        if self._ws is not None:
-            await self._ws.close()
-        if self._spot_ws is not None:
-            await self._spot_ws.close()
+        for ws in self._ws.values():
+            await ws.close()
+        for ws in self._spot_ws.values():
+            await ws.close()
 
 
 # Регистрация биржи

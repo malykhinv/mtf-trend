@@ -36,11 +36,12 @@ class BinanceExchange(BaseExchange):
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
-        self._ws: Optional[Any] = None
+        # WebSocket соединения для фьючерсных стаканов по каждому символу
+        self._ws: Dict[str, Any] = {}
         self._orderbooks: Dict[str, Dict[str, Any]] = {}
         self._ws_tasks: Dict[str, asyncio.Task] = {}
-        # Обработка WebSocket для спота
-        self._spot_ws: Optional[Any] = None
+        # Обработка WebSocket для спота по каждому символу
+        self._spot_ws: Dict[str, Any] = {}
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
 
@@ -249,9 +250,9 @@ class BinanceExchange(BaseExchange):
         """Слушает поток спотового order book и кэширует данные."""
         while True:
             try:
-                if self._spot_ws is None:
-                    self._spot_ws = await self._connect_spot(symbol, depth)
-                msg = await self._spot_ws.recv()
+                if symbol not in self._spot_ws:
+                    self._spot_ws[symbol] = await self._connect_spot(symbol, depth)
+                msg = await self._spot_ws[symbol].recv()
                 data = json.loads(msg)
                 if "bids" in data and "asks" in data:
                     self._spot_orderbooks[symbol] = {
@@ -259,14 +260,14 @@ class BinanceExchange(BaseExchange):
                         "asks": data["asks"],
                     }
             except (WebSocketException, json.JSONDecodeError, OSError):
-                # При ошибке пересоздаём соединение
+                # При ошибке пересоздаём соединение для конкретного символа
                 await asyncio.sleep(1)
-                if self._spot_ws is not None:
+                ws = self._spot_ws.pop(symbol, None)
+                if ws is not None:
                     try:
-                        await self._spot_ws.close()
+                        await ws.close()
                     except WebSocketException:
                         pass
-                self._spot_ws = None
 
     async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
         """Возвращает кэшированный спотовый стакан для ``symbol``."""
@@ -294,9 +295,9 @@ class BinanceExchange(BaseExchange):
         """Слушает поток фьючерсного стакана и сохраняет его в кэше."""
         while True:
             try:
-                if self._ws is None:
-                    self._ws = await self._connect(symbol)
-                msg = await self._ws.recv()
+                if symbol not in self._ws:
+                    self._ws[symbol] = await self._connect(symbol)
+                msg = await self._ws[symbol].recv()
                 data = json.loads(msg)
                 if "bids" in data and "asks" in data:
                     self._orderbooks[symbol] = {
@@ -304,14 +305,14 @@ class BinanceExchange(BaseExchange):
                         "asks": data["asks"],
                     }
             except (WebSocketException, json.JSONDecodeError, OSError):
-                # При ошибке пробуем подключиться заново
+                # При ошибке пробуем подключиться заново для данного символа
                 await asyncio.sleep(1)
-                if self._ws is not None:
+                ws = self._ws.pop(symbol, None)
+                if ws is not None:
                     try:
-                        await self._ws.close()
+                        await ws.close()
                     except WebSocketException:
                         pass
-                self._ws = None
 
     async def get_orderbook(self, symbol: str, depth: int = 5) -> dict:
         """Возвращает кэшированный фьючерсный стакан."""
@@ -323,10 +324,10 @@ class BinanceExchange(BaseExchange):
         """Закрывает все сетевые соединения при выходе из контекста."""
         if self._session is not None:
             await self._session.close()
-        if self._ws is not None:
-            await self._ws.close()
-        if self._spot_ws is not None:
-            await self._spot_ws.close()
+        for ws in self._ws.values():
+            await ws.close()
+        for ws in self._spot_ws.values():
+            await ws.close()
 
 
 # Регистрация биржи
