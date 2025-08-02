@@ -1,13 +1,13 @@
-import pathlib
 import sys
 from decimal import Decimal
 import types
+import pathlib
 
 import pytest
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
-# Подменяем зависимость sklearn, чтобы избежать тяжёлой установки
+# Stub sklearn to avoid heavy dependency
 linear_model_stub = types.SimpleNamespace(LinearRegression=object)
 sklearn_stub = types.SimpleNamespace(linear_model=linear_model_stub)
 sys.modules.setdefault("sklearn", sklearn_stub)
@@ -17,19 +17,18 @@ from strategies import funding_arbitrage as fa
 from exchanges import BaseExchange
 
 
-class PartialFillExchange(BaseExchange):
+class SecondLegFailExchange(BaseExchange):
     name = "stub"
 
     def __init__(self) -> None:
         self.orders: list[tuple[str, str, float]] = []
-        self.cancelled: list[str] = []
+        self.cancelled: list[tuple[str, str]] = []
 
     async def fetch_funding(self, symbol: str) -> float:  # pragma: no cover - unused
         return 0.0
 
     async def place_order(self, symbol: str, side: str, quantity: float, price: float | None = None) -> dict:
-        self.orders.append(("perp", side, quantity))
-        return {"id": "perp1"}
+        raise RuntimeError("failed")
 
     async def get_orderbook(self, symbol: str, depth: int = 5) -> dict:  # pragma: no cover - unused
         return {}
@@ -63,9 +62,7 @@ class PartialFillExchange(BaseExchange):
         return [{"open": 0, "close": 0, "high": 0, "low": 0}]
 
     async def get_order_status(self, order_id: str) -> dict:
-        if order_id == "spot1":
-            return {"status": "FILLED", "order_id": order_id}
-        return {"status": "PARTIALLY_FILLED", "order_id": order_id}
+        return {"status": "FILLED", "order_id": order_id}
 
     async def cancel_order(self, symbol: str, order_id: str) -> dict:
         self.cancelled.append((symbol, order_id))
@@ -73,10 +70,9 @@ class PartialFillExchange(BaseExchange):
 
 
 @pytest.mark.asyncio
-async def test_open_neutral_position_partial_fill(monkeypatch: pytest.MonkeyPatch) -> None:
-    exchange = PartialFillExchange()
+async def test_cancel_first_leg_on_second_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    exchange = SecondLegFailExchange()
 
-    # Настраиваем окружение
     monkeypatch.setattr(fa, "CONFIG", {"bot": {}, "thresholds": {}})
     monkeypatch.setattr(fa, "WHITELISTS", {exchange.name: ["BTCUSDT"]})
     monkeypatch.setattr(fa.risk_control, "can_open_position", lambda *_: True)
@@ -108,10 +104,5 @@ async def test_open_neutral_position_partial_fill(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(RuntimeError):
         await fa.open_neutral_position(exchange, "BTCUSDT", quantity)
 
-    # Первая попытка покупки спота, затем продажа для отката
-    assert exchange.orders == [
-        ("spot", "BUY", 1.0),
-        ("perp", "SELL", 1.0),
-        ("spot", "SELL", 1.0),
-    ]
-    assert exchange.cancelled == [("BTCUSDT", "perp1")]
+    assert exchange.orders == [("spot", "BUY", 1.0)]
+    assert exchange.cancelled == [("BTCUSDT", "spot1")]

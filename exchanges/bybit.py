@@ -150,6 +150,16 @@ class BybitExchange(BaseExchange):
         body = self._sign("POST", url_path, body)
         return await self._request("POST", url, json=body, headers=headers)
 
+    async def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Отменяет ордер ``order_id`` для пары ``symbol``."""
+        url_path = "/v5/order/cancel"
+        url = f"{self.REST_URL}{url_path}"
+        body = self._sign(
+            "POST", url_path, {"symbol": symbol, "orderId": order_id}
+        )
+        headers = {"Content-Type": "application/json"}
+        return await self._request("POST", url, json=body, headers=headers)
+
     async def get_balance(self) -> dict:
         """Возвращает баланс унифицированного аккаунта."""
         url_path = "/v5/account/wallet-balance"

@@ -131,11 +131,12 @@ class BaseExchange(ABC):
 
         return {"status": "FILLED", "order_id": order_id}
 
-    @staticmethod
-    async def cancel_order(order_id: str) -> dict:
-        """Отменяет ``order_id`` на рынке ``market``.
+    async def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Отменяет ордер ``order_id`` для инструмента ``symbol``.
 
-        Реализация по умолчанию просто возвращает статус отменённого ордера.
+        Реализации бирж могут переопределить метод и выполнить реальный запрос
+        к API. Базовая реализация служит заглушкой и сообщает об успешной
+        отмене, что достаточно для модульных тестов.
         """
 
         return {"status": "CANCELED", "order_id": order_id}
@@ -176,7 +177,7 @@ async def _handle_timeout() -> None:
         for market, oid in list(_OUTSTANDING):
             try:
                 await asyncio.wait_for(
-                    current.cancel_order(oid), API_TIMEOUT
+                    current.cancel_order(market, oid), API_TIMEOUT
                 )
             except Exception as exc:  # pragma: no cover - best effort
                 logger.error("Не удалось отменить %s %s: %s", oid, exc)
@@ -481,7 +482,7 @@ async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
         # Откатить спотовую часть, если фьючерсная часть завершается ошибкой.
         try:
             cancel_resp = await _await_with_timeout(
-                current.cancel_order(spot_id)
+                current.cancel_order(symbol, spot_id)
             )
             logger.warning("Откатили спотовый ордер %s: %s", spot_id, cancel_resp)
         except Exception as cancel_exc:  # pragma: no cover - best effort

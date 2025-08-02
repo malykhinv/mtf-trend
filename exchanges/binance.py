@@ -150,6 +150,25 @@ class BinanceExchange(BaseExchange):
         params = self._sign(params)
         return await self._request("POST", url, params=params, headers=headers)
 
+    async def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Отменяет ордер по ``order_id`` для указанного ``symbol``.
+
+        Пытается отменить фьючерсный ордер. При неудаче повторяет попытку для
+        спотового рынка, что позволяет использовать метод для обоих типов
+        ордеров.
+        """
+
+        headers = {"X-MBX-APIKEY": self.api_key}
+        params = self._sign({"symbol": symbol, "orderId": order_id})
+        url = f"{self.REST_URL}/fapi/v1/order"
+        try:
+            return await self._request("DELETE", url, params=params, headers=headers)
+        except aiohttp.ClientError:
+            # Попытка отменить спотовый ордер
+            spot_url = f"{self.SPOT_REST_URL}/api/v3/order"
+            params = self._sign({"symbol": symbol, "orderId": order_id})
+            return await self._request("DELETE", spot_url, params=params, headers=headers)
+
     async def get_balance(self) -> dict:
         """Возвращает баланс фьючерсного аккаунта."""
         url = f"{self.REST_URL}/fapi/v2/balance"
