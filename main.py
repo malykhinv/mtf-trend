@@ -170,7 +170,8 @@ def start_processing_loops() -> None:
             )
         finally:
             # Удаляем задачу из списка активных
-            POSITION_TASKS.pop(position_id, None)
+            if position_id in POSITION_TASKS:
+                del POSITION_TASKS[position_id]
             strategy.positions.pop(symbol, None)
 
     async def scan_loop() -> None:

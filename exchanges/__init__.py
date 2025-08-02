@@ -179,6 +179,7 @@ async def _handle_timeout() -> None:
             logger.error("Не удалось подготовить аварийное закрытие: %s", exc)
         else:
             for pid, task in list(POSITION_TASKS.items()):
+                del POSITION_TASKS[pid]
                 exchange_name, symbol = pid.split(":", 1)
                 client = CLIENTS.get(exchange_name)
                 if client is None:
@@ -288,7 +289,6 @@ async def _handle_timeout() -> None:
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
-                    POSITION_TASKS.pop(pid, None)
                     strategy.positions.pop(symbol, None)
 
     risk_control.pause()
