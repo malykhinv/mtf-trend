@@ -235,7 +235,11 @@ def start_processing_loops() -> None:
             # Торгуем не меньше минимального порога: выбираем большую величину
             trade_value = max(min_trade_usd, deposit * deposit_pct)
             if trade_value in (0.0, float("inf")):
-                trade_value = 1.0
+                logger.error(
+                    "Некорректное значение trade_value: %s", trade_value
+                )
+                await asyncio.sleep(poll_interval)
+                continue
 
             for name, client in CLIENTS.items():
                 # Перебираем символы из белого списка
