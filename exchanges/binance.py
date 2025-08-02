@@ -32,6 +32,7 @@ class BinanceExchange(BaseExchange):
             Ключ и секрет API для авторизации на бирже.
         """
         super().__init__(**_ignored)
+        self.name = "binance"
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
