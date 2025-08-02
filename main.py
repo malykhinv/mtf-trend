@@ -104,6 +104,9 @@ def start_processing_loops() -> None:
 
     poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
 
+    # Восстанавливаем ранее сохранённые позиции
+    strategy.load_positions()
+
     def _update_thresholds(new: Dict[str, float]) -> None:
         """Обновляет пороги стратегии новыми значениями."""
         if new:
@@ -172,7 +175,8 @@ def start_processing_loops() -> None:
             # Удаляем задачу из списка активных
             if position_id in POSITION_TASKS:
                 del POSITION_TASKS[position_id]
-            strategy.positions.pop(symbol, None)
+            if strategy.positions.pop(symbol, None) is not None:
+                strategy.save_positions()
 
     async def scan_loop() -> None:
         """Постоянно сканирует рынок в поиске входов."""
@@ -251,6 +255,16 @@ def start_processing_loops() -> None:
             asyncio.create_task(risk_loop()),
             asyncio.create_task(optimisation_loop()),
         ]
+
+        # Возобновляем мониторинг ранее открытых позиций
+        for symbol, entry in strategy.positions.items():
+            exchange_name = entry.get("exchange")
+            quantity = entry.get("quantity", 0.0)
+            if exchange_name in CLIENTS and quantity:
+                task = asyncio.create_task(
+                    monitor_position(exchange_name, symbol, quantity)
+                )
+                POSITION_TASKS[f"{exchange_name}:{symbol}"] = task
         try:
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:

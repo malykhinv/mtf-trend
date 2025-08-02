@@ -8,11 +8,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any, Dict
-import time
-from datetime import datetime
+import json
 import math
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict
 
 from exchanges import (
     fetch_funding_history,
@@ -29,6 +31,9 @@ from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG
 from utils.logger import log_trade
 from utils.telegram import format_duration, notify_partial_close
+
+
+POSITIONS_FILE = Path("open_positions.json")
 
 
 @dataclass
@@ -227,6 +232,30 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
 positions: Dict[str, Dict[str, Any]] = {}
 
 
+def load_positions(path: Path | str = POSITIONS_FILE) -> None:
+    """Загружает ранее сохранённые позиции из ``path``."""
+
+    try:
+        with Path(path).open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return
+    positions.clear()
+    for symbol, entry in data.items():
+        positions[symbol] = entry
+        notional = entry.get("quantity", 0.0) * entry.get("entry_futures_price", 0.0)
+        if notional:
+            risk_control.update_position(notional)
+        risk_control.mark_symbol_open(symbol)
+
+
+def save_positions(path: Path | str = POSITIONS_FILE) -> None:
+    """Сохраняет текущие открытые позиции в ``path``."""
+
+    with Path(path).open("w", encoding="utf-8") as fh:
+        json.dump(positions, fh)
+
+
 async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
     bot_cfg = CONFIG.get("bot", {})
@@ -248,6 +277,11 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     risk_control.mark_symbol_open(symbol)
     now = time.time()
     commission = sum(float(o.get("fee", 0.0)) for o in orders.values())
+    exchange_name = (
+        type(exchanges.current).__name__.replace("Exchange", "").lower()
+        if getattr(exchanges, "_current", None)
+        else "unknown"
+    )
     positions[symbol] = {
         "entry_timestamp": now,
         "entry_futures_price": entry_metrics.futures_price,
@@ -260,12 +294,9 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         "funding_accrued": 0.0,
         "commissions": commission,
         "last_funding_timestamp": now,
+        "exchange": exchange_name,
     }
-    exchange_name = (
-        type(exchanges.current).__name__.replace("Exchange", "").lower()
-        if getattr(exchanges, "_current", None)
-        else "unknown"
-    )
+    save_positions()
     volume_usd = notional
     log_trade(
         {
@@ -329,6 +360,8 @@ async def close_neutral_position(
     risk_control.record_pnl(pnl)
     if final:
         risk_control.mark_symbol_closed(symbol)
+        positions.pop(symbol, None)
+        save_positions()
     return {"long": close_long, "short": close_short}
 
 
@@ -350,9 +383,10 @@ async def monitor_neutral_position(
     while True:
         try:
             metrics = await get_market_metrics(symbol, quantity)
-        except asyncio.TimeoutError:
-            await close_neutral_position(symbol, quantity, final=True)
-            break
+        except Exception as exc:
+            print(f"Ошибка мониторинга {symbol}: {exc}")
+            await asyncio.sleep(poll_interval)
+            continue
         now = time.time()
         if entry:
             last = entry.get("last_funding_timestamp", now)
@@ -414,6 +448,7 @@ async def monitor_neutral_position(
                 quantity -= partial_qty
                 entry["quantity"] = quantity
                 entry["pnl"] = entry.get("pnl", 0.0) + pnl_part
+                save_positions()
                 exit_ts = time.time()
                 exit_basis = (
                     ((metrics.futures_price - metrics.spot_price) / metrics.spot_price)
