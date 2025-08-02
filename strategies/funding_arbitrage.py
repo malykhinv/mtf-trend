@@ -481,11 +481,14 @@ async def monitor_neutral_position(
             exit_slippage = abs(
                 metrics.futures_price - entry.get("entry_futures_price", 0.0)
             ) / max(entry.get("entry_futures_price", 1.0), 1e-9)
-            if exit_slippage > 0.005:
+            max_exit_slippage = exit_thresholds.get(
+                "exit_slippage", exit_thresholds.get("slippage")
+            )
+            if max_exit_slippage is not None and exit_slippage > max_exit_slippage:
                 reasons.append("slippage")
             hold_time = now - entry.get("entry_timestamp", now)
-            max_hold = exit_thresholds.get("holding_time", 48 * 3600)
-            if hold_time > max_hold:
+            max_hold = exit_thresholds.get("holding_time")
+            if max_hold is not None and hold_time > max_hold:
                 reasons.append("time")
             pnl = (
                 (metrics.futures_price - entry.get("entry_futures_price", 0.0))

@@ -12,6 +12,7 @@ thresholds:
   max_trade_size: 100.0
   spread: 0.005         # Maximum allowed spread percentage
   slippage: 0.003       # Maximum expected slippage per trade
+  exit_slippage: 0.005  # Maximum allowed slippage when closing positions
   deposit_pct: 0.05     # Max fraction of total deposit per trade
 risk:
   max_position_size: 100
