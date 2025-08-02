@@ -131,14 +131,15 @@ class BaseExchange(ABC):
 
         return {"status": "FILLED", "order_id": order_id}
 
-    @staticmethod
-    async def cancel_order(order_id: str) -> dict:
-        """Отменяет ``order_id`` на рынке ``market``.
+    async def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Отменяет ордер ``order_id`` для инструмента ``symbol``.
 
-        Реализация по умолчанию просто возвращает статус отменённого ордера.
+        Реализация по умолчанию возвращает подтверждение отмены без выполнения
+        сетевых запросов. Конкретные биржи должны переопределять метод и
+        выполнять реальные API-вызовы.
         """
 
-        return {"status": "CANCELED", "order_id": order_id}
+        return {"status": "CANCELED", "order_id": order_id, "symbol": symbol}
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +174,10 @@ async def _handle_timeout() -> None:
         "Вызов API превысил %s секунд; отменяем активные ордера", API_TIMEOUT
     )
     if current is not None:
-        for market, oid in list(_OUTSTANDING):
+        for symbol, oid in list(_OUTSTANDING):
             try:
                 await asyncio.wait_for(
-                    current.cancel_order(oid), API_TIMEOUT
+                    current.cancel_order(symbol, oid), API_TIMEOUT
                 )
             except Exception as exc:  # pragma: no cover - best effort
                 logger.error("Не удалось отменить %s %s: %s", oid, exc)
@@ -313,12 +314,12 @@ async def _await_with_timeout(coro: Coroutine[Any, Any, Any]) -> Any:
         raise
 
 
-def _track_order(market: str, order_id: str) -> None:
-    _OUTSTANDING.add((market, order_id))
+def _track_order(symbol: str, order_id: str) -> None:
+    _OUTSTANDING.add((symbol, order_id))
 
 
-def _untrack_order(market: str, order_id: str) -> None:
-    _OUTSTANDING.discard((market, order_id))
+def _untrack_order(symbol: str, order_id: str) -> None:
+    _OUTSTANDING.discard((symbol, order_id))
 
 
 async def place_order(
@@ -340,7 +341,7 @@ async def place_order(
             delay *= 2
 
 
-async def _poll_fill(order_id: str, market: str) -> None:
+async def _poll_fill(order_id: str, symbol: str) -> None:
     """Ожидает исполнения ордера ``order_id`` до статуса FILLED.
 
     Функция опирается на :meth:`BaseExchange.get_order_status` и делает короткие
@@ -357,7 +358,7 @@ async def _poll_fill(order_id: str, market: str) -> None:
             current.get_order_status(order_id)
         )
         if status.get("status") == "FILLED":
-            _untrack_order(market, order_id)
+            _untrack_order(symbol, order_id)
             return
         if time.monotonic() - start > API_TIMEOUT:
             await _handle_timeout()
@@ -384,8 +385,8 @@ async def place_spot_order(
             await asyncio.sleep(delay)
             delay *= 2
     order_id = str(order.get("orderId") or order.get("id") or "")
-    _track_order("spot", order_id)
-    await _poll_fill(order_id, "spot")
+    _track_order(symbol, order_id)
+    await _poll_fill(order_id, symbol)
     return order
 
 
@@ -396,8 +397,8 @@ async def place_perp_order(
 
     order = await place_order(symbol, side, quantity, price)
     order_id = str(order.get("orderId") or order.get("id") or "")
-    _track_order("perp", order_id)
-    await _poll_fill(order_id, "perp")
+    _track_order(symbol, order_id)
+    await _poll_fill(order_id, symbol)
     return order
 
 
@@ -481,7 +482,7 @@ async def hedge(symbol: str, quantity: float) -> Dict[str, Dict]:
         # Откатить спотовую часть, если фьючерсная часть завершается ошибкой.
         try:
             cancel_resp = await _await_with_timeout(
-                current.cancel_order(spot_id)
+                current.cancel_order(symbol, spot_id)
             )
             logger.warning("Откатили спотовый ордер %s: %s", spot_id, cancel_resp)
         except Exception as cancel_exc:  # pragma: no cover - best effort

@@ -150,6 +150,22 @@ class BybitExchange(BaseExchange):
         body = self._sign("POST", url_path, body)
         return await self._request("POST", url, json=body, headers=headers)
 
+    async def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Отменяет ордер как на фьючерсном, так и на спотовом рынке."""
+        url_path = "/v5/order/cancel"
+        url = f"{self.REST_URL}{url_path}"
+        headers = {"Content-Type": "application/json"}
+        last_error: Exception | None = None
+        for category in ("linear", "spot"):
+            body = {"symbol": symbol, "orderId": order_id, "category": category}
+            body = self._sign("POST", url_path, body)
+            try:
+                return await self._request("POST", url, json=body, headers=headers)
+            except aiohttp.ClientResponseError as exc:
+                last_error = exc
+        if last_error is not None:
+            raise last_error
+
     async def get_balance(self) -> dict:
         """Возвращает баланс унифицированного аккаунта."""
         url_path = "/v5/account/wallet-balance"

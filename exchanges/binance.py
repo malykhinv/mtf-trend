@@ -150,6 +150,18 @@ class BinanceExchange(BaseExchange):
         params = self._sign(params)
         return await self._request("POST", url, params=params, headers=headers)
 
+    async def cancel_order(self, symbol: str, order_id: str) -> dict:
+        """Отменяет ордер по его идентификатору."""
+        params = {"symbol": symbol, "orderId": order_id}
+        headers = {"X-MBX-APIKEY": self.api_key}
+        params = self._sign(params)
+        url = f"{self.REST_URL}/fapi/v1/order"
+        try:
+            return await self._request("DELETE", url, params=params, headers=headers)
+        except aiohttp.ClientResponseError:
+            url = f"{self.SPOT_REST_URL}/api/v3/order"
+            return await self._request("DELETE", url, params=params, headers=headers)
+
     async def get_balance(self) -> dict:
         """Возвращает баланс фьючерсного аккаунта."""
         url = f"{self.REST_URL}/fapi/v2/balance"

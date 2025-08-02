@@ -428,7 +428,7 @@ async def open_neutral_position(
     except Exception as exc:
         order_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
         try:
-            await exchange.cancel_order(order_id)
+            await exchange.cancel_order(symbol, order_id)
         except Exception:
             pass
         raise RuntimeError(
