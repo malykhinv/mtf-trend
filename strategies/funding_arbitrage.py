@@ -308,12 +308,10 @@ class Position:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Position":
-        required = ["entry_timestamp", "quantity", "commissions"]
-        for field_name in required:
-            if field_name not in data:
-                raise ValueError(f"missing field {field_name}")
+        if "quantity" not in data:
+            raise ValueError("missing field quantity")
         return cls(
-            entry_timestamp=float(data["entry_timestamp"]),
+            entry_timestamp=float(data.get("entry_timestamp", 0.0)),
             entry_futures_price=float(data.get("entry_futures_price", 0.0)),
             entry_spot_price=float(data.get("entry_spot_price", 0.0)),
             entry_basis=float(data.get("entry_basis", 0.0)),
@@ -322,9 +320,9 @@ class Position:
             initial_quantity=float(data.get("initial_quantity", data["quantity"])),
             pnl=float(data.get("pnl", 0.0)),
             funding_accrued=float(data.get("funding_accrued", 0.0)),
-            commissions=float(data["commissions"]),
+            commissions=float(data.get("commissions", 0.0)),
             last_funding_timestamp=float(
-                data.get("last_funding_timestamp", data["entry_timestamp"])
+                data.get("last_funding_timestamp", data.get("entry_timestamp", 0.0))
             ),
             exchange=str(data.get("exchange", "")),
             exit_timestamp=data.get("exit_timestamp"),
@@ -541,21 +539,24 @@ async def monitor_neutral_position(
         now = time.time()
         if entry:
             last = entry.last_funding_timestamp or now
+            quantity_d = Decimal(str(quantity))
+            price_d = Decimal(str(metrics.futures_price))
+            elapsed = Decimal(str(now - last))
             funding_fee = (
-                quantity
-                * metrics.futures_price
-                * float(metrics.funding_rate)
-                * (now - last)
-                / (8 * 3600)
+                quantity_d
+                * price_d
+                * metrics.funding_rate
+                * elapsed
+                / Decimal(8 * 3600)
             )
             # Накапливаем полученное фондирование
-            entry.funding_accrued += funding_fee
+            entry.funding_accrued = float(Decimal(str(entry.funding_accrued)) + funding_fee)
             entry.last_funding_timestamp = now
         reasons: list[str] = []
         exit_slippage = 0.0
         if check_exit_conditions(metrics, exit_thresholds):
             reasons.append("threshold")
-        if metrics.funding_rate < 0.0001:
+        if metrics.funding_rate < Decimal("0.0001"):
             reasons.append("low_funding")
         if entry and metrics.funding_rate < 0 <= entry.entry_funding:
             reasons.append("funding_negative")
