@@ -44,14 +44,22 @@ _limits = RiskLimits()
 _state = RiskState()
 
 
-def _to_decimal(value: float | int | str | Decimal, default: Decimal) -> Decimal:
+def _to_decimal(
+    value: float | int | str | Decimal | None,
+    default: Decimal,
+) -> Decimal:
     """Преобразует ``value`` в :class:`Decimal` с защитой от бесконечности."""
 
+    if value is None:
+        return default
     if isinstance(value, Decimal):
         return value
     if value in (float("inf"), "inf", "Infinity"):
         return Decimal("inf")
-    return Decimal(str(value))
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return default
 
 
 def configure(config: Dict[str, float], deposit_size: Optional[float] = None) -> None:
