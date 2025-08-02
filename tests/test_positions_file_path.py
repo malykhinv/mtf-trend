@@ -3,6 +3,7 @@ import json
 import pathlib
 import sys
 import types
+import asyncio
 
 import pytest
 
@@ -35,16 +36,16 @@ def test_config_specifies_positions_file(tmp_path, monkeypatch):
     strategy, main = load_strategy(monkeypatch)
     reset_state(strategy)
     cfg_path = tmp_path / "config_positions.json"
-    data = {"BTCUSDT": {"quantity": 1, "entry_futures_price": 100}}
+    data = {"BTCUSDT": {"entry_timestamp": 1.0, "quantity": 1, "commissions": 0.0, "entry_futures_price": 100}}
     cfg_path.write_text(json.dumps(data))
     main.CONFIG.clear()
     main.CONFIG.update({"bot": {"positions_file": str(cfg_path)}})
     monkeypatch.delenv("POSITIONS_FILE_PATH", raising=False)
 
-    strategy.load_positions()
+    asyncio.run(strategy.load_positions())
     assert "BTCUSDT" in strategy.positions
 
-    strategy.save_positions()
+    asyncio.run(strategy.save_positions())
     saved = json.loads(cfg_path.read_text())
     assert "BTCUSDT" in saved
 
@@ -53,7 +54,7 @@ def test_env_var_overrides_config(tmp_path, monkeypatch):
     strategy, main = load_strategy(monkeypatch)
     reset_state(strategy)
     env_path = tmp_path / "env_positions.json"
-    env_data = {"ETHUSDT": {"quantity": 2, "entry_futures_price": 200}}
+    env_data = {"ETHUSDT": {"entry_timestamp": 1.0, "quantity": 2, "commissions": 0.0, "entry_futures_price": 200}}
     env_path.write_text(json.dumps(env_data))
 
     cfg_path = tmp_path / "other.json"
@@ -63,10 +64,10 @@ def test_env_var_overrides_config(tmp_path, monkeypatch):
 
     monkeypatch.setenv("POSITIONS_FILE_PATH", str(env_path))
 
-    strategy.load_positions()
+    asyncio.run(strategy.load_positions())
     assert "ETHUSDT" in strategy.positions
     assert "BTCUSDT" not in strategy.positions
 
-    strategy.save_positions()
+    asyncio.run(strategy.save_positions())
     saved = json.loads(env_path.read_text())
     assert "ETHUSDT" in saved
