@@ -20,7 +20,7 @@ from typing import Any, Dict
 from exchanges import BaseExchange
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
-from main import CONFIG
+from main import CONFIG, WHITELISTS
 from utils.logger import log_trade
 from utils.telegram import format_duration, notify_partial_close
 
@@ -29,6 +29,31 @@ POSITIONS_FILE = Path("open_positions.json")
 
 
 logger = logging.getLogger(__name__)
+
+
+async def fetch_funding_history(symbol: str, hours: int = 8, limit: int = 3) -> list[float]:
+    """Заглушка для истории фондирования."""
+    raise NotImplementedError
+
+
+async def get_orderbook(symbol: str, depth: int = 5) -> dict:
+    """Заглушка для получения стакана."""
+    raise NotImplementedError
+
+
+async def get_spot_orderbook(symbol: str, depth: int = 5) -> dict:
+    """Заглушка для получения спотового стакана."""
+    raise NotImplementedError
+
+
+async def get_stats(symbol: str) -> dict:
+    """Заглушка для рыночной статистики."""
+    raise NotImplementedError
+
+
+async def get_ohlc(symbol: str, interval: str = "15m", limit: int = 1) -> list[Dict[str, float]]:
+    """Заглушка для данных OHLC."""
+    raise NotImplementedError
 
 
 @dataclass
@@ -71,25 +96,21 @@ def calculate_basis(
 
 
 async def get_market_metrics(
-    exchange: BaseExchange, symbol: str, trade_size: float, depth: int = 5
+    symbol: str,
+    trade_size: float,
+    exchange: BaseExchange | None = None,
+    depth: int = 5,
 ) -> MarketMetrics:
     """Получает расширенные рыночные метрики для ``symbol``.
 
-    Параметры
-    ---------
-    symbol:
-        Торговая пара, поддерживаемая текущей биржей.
-    trade_size:
-        Объём сделки для оценки проскальзывания.
-    depth:
-        Глубина стакана для расчёта ликвидности. По умолчанию ``5``.
-
-    Возвращает
-    ----------
-    MarketMetrics
-        Метрики рынка, включая оценку проскальзывания по каждой ноге.
+    ``exchange`` может быть ``None`` – в этом случае используются
+    модульные заглушки, что упрощает тестирование.
     """
-    history = await exchange.fetch_funding_history(symbol, hours=8, limit=3)
+
+    if exchange is not None:
+        history = await exchange.fetch_funding_history(symbol, hours=8, limit=3)
+    else:
+        history = await fetch_funding_history(symbol, hours=8, limit=3)
     if history:
         k = 2 / (len(history) + 1)
         funding = history[0]
@@ -100,8 +121,12 @@ async def get_market_metrics(
         funding = 0.0
 
     # Загружаем стаканы фьючерса и спота
-    perp_book = await exchange.get_orderbook(symbol, depth=depth)
-    spot_book = await exchange.get_spot_orderbook(symbol, depth=depth)
+    if exchange is not None:
+        perp_book = await exchange.get_orderbook(symbol, depth=depth)
+        spot_book = await exchange.get_spot_orderbook(symbol, depth=depth)
+    else:
+        perp_book = await get_orderbook(symbol, depth=depth)
+        spot_book = await get_spot_orderbook(symbol, depth=depth)
 
     bids = [(float(p), float(q)) for p, q in perp_book.get("bids", [])]
     asks = [(float(p), float(q)) for p, q in perp_book.get("asks", [])]
@@ -148,7 +173,10 @@ async def get_market_metrics(
     else:
         spread = float("inf")
 
-    stats = await exchange.get_stats(symbol)
+    if exchange is not None:
+        stats = await exchange.get_stats(symbol)
+    else:
+        stats = await get_stats(symbol)
     volume = float(stats.get("volume_24h", 0.0))
     open_interest = float(stats.get("open_interest", 0.0))
     if futures_price and not math.isnan(futures_price):
@@ -159,7 +187,10 @@ async def get_market_metrics(
     basis = calculate_basis(futures_price, spot_price)
 
     # Изменение цены за последние 15 минут для оценки волатильности
-    ohlc = await exchange.get_ohlc(symbol, interval="15m", limit=1)
+    if exchange is not None:
+        ohlc = await exchange.get_ohlc(symbol, interval="15m", limit=1)
+    else:
+        ohlc = await get_ohlc(symbol, interval="15m", limit=1)
     if ohlc:
         candle = ohlc[0]
         o = candle.get("open") or 0.0
@@ -198,8 +229,6 @@ def check_entry_conditions(
 
     Порог ``basis`` задаётся в процентных пунктах.
     """
-
-    whitelist = CONFIG.get("bot", {}).get("whitelist", [])
     deposit = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
     max_deposit_trade = deposit * thresholds.get("deposit_pct", 1.0)
     spread_pct = (
@@ -226,7 +255,6 @@ def check_entry_conditions(
         and combined_slippage <= slippage_limit
         and notional <= thresholds.get("max_trade_size", float("inf"))
         and notional <= max_deposit_trade
-        and symbol in whitelist
         and not risk_control.is_symbol_open(symbol)
     )
 
@@ -278,10 +306,11 @@ async def open_neutral_position(
 ) -> Dict[str, Dict]:
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
     bot_cfg = CONFIG.get("bot", {})
-    if symbol not in bot_cfg.get("whitelist", []):
+    exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
+    if symbol not in WHITELISTS.get(exchange_name, []):
         raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки
-    entry_metrics = await get_market_metrics(exchange, symbol, quantity)
+    entry_metrics = await get_market_metrics(symbol, quantity, exchange)
     notional = quantity * entry_metrics.futures_price
     deposit = bot_cfg.get("deposit_size", float("inf"))
     deposit_pct = CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)
@@ -308,7 +337,6 @@ async def open_neutral_position(
     risk_control.mark_symbol_open(symbol)
     now = time.time()
     commission = sum(float(o.get("fee", 0.0)) for o in orders.values())
-    exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
     positions[symbol] = {
         "entry_timestamp": now,
         "entry_futures_price": entry_metrics.futures_price,
@@ -415,7 +443,7 @@ async def monitor_neutral_position(
     entry = positions.get(symbol, {})
     while True:
         try:
-            metrics = await get_market_metrics(exchange, symbol, quantity)
+            metrics = await get_market_metrics(symbol, quantity, exchange)
         except Exception as exc:
             logger.error("Ошибка мониторинга %s: %s", symbol, exc)
             await asyncio.sleep(poll_interval)
