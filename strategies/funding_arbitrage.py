@@ -16,16 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
-from exchanges import (
-    fetch_funding_history,
-    get_orderbook,
-    get_spot_orderbook,
-    get_stats,
-    get_ohlc,
-    hedge,
-    place_order,
-)
-import exchanges
+from exchanges import BaseExchange
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG
@@ -76,7 +67,7 @@ def calculate_basis(
 
 
 async def get_market_metrics(
-    symbol: str, trade_size: float, depth: int = 5
+    exchange: BaseExchange, symbol: str, trade_size: float, depth: int = 5
 ) -> MarketMetrics:
     """Получает расширенные рыночные метрики для ``symbol``.
 
@@ -94,7 +85,7 @@ async def get_market_metrics(
     MarketMetrics
         Метрики рынка, включая оценку проскальзывания по каждой ноге.
     """
-    history = await fetch_funding_history(symbol, hours=8, limit=3)
+    history = await exchange.fetch_funding_history(symbol, hours=8, limit=3)
     if history:
         k = 2 / (len(history) + 1)
         funding = history[0]
@@ -105,8 +96,8 @@ async def get_market_metrics(
         funding = 0.0
 
     # Загружаем стаканы фьючерса и спота
-    perp_book = await get_orderbook(symbol, depth=depth)
-    spot_book = await get_spot_orderbook(symbol, depth=depth)
+    perp_book = await exchange.get_orderbook(symbol, depth=depth)
+    spot_book = await exchange.get_spot_orderbook(symbol, depth=depth)
 
     bids = [(float(p), float(q)) for p, q in perp_book.get("bids", [])]
     asks = [(float(p), float(q)) for p, q in perp_book.get("asks", [])]
@@ -153,7 +144,7 @@ async def get_market_metrics(
     else:
         spread = float("inf")
 
-    stats = await get_stats(symbol)
+    stats = await exchange.get_stats(symbol)
     volume = float(stats.get("volume_24h", 0.0))
     open_interest = float(stats.get("open_interest", 0.0))
     if futures_price and not math.isnan(futures_price):
@@ -164,7 +155,7 @@ async def get_market_metrics(
     basis = calculate_basis(futures_price, spot_price)
 
     # Изменение цены за последние 15 минут для оценки волатильности
-    ohlc = await get_ohlc(symbol, interval="15m", limit=1)
+    ohlc = await exchange.get_ohlc(symbol, interval="15m", limit=1)
     if ohlc:
         candle = ohlc[0]
         o = candle.get("open") or 0.0
@@ -278,13 +269,15 @@ def save_positions(path: Path | str = POSITIONS_FILE) -> None:
         json.dump(positions, fh)
 
 
-async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
+async def open_neutral_position(
+    exchange: BaseExchange, symbol: str, quantity: float
+) -> Dict[str, Dict]:
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
     bot_cfg = CONFIG.get("bot", {})
     if symbol not in bot_cfg.get("whitelist", []):
         raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки
-    entry_metrics = await get_market_metrics(symbol, quantity)
+    entry_metrics = await get_market_metrics(exchange, symbol, quantity)
     notional = quantity * entry_metrics.futures_price
     deposit = bot_cfg.get("deposit_size", float("inf"))
     deposit_pct = CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)
@@ -294,16 +287,24 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
     if not risk_control.can_open_position(notional) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Превышены лимиты риска, торговля приостановлена или позиция уже открыта")
     # Хеджируем позицию на споте и фьючерсе
-    orders = await hedge(symbol, quantity)
+    spot_order = await exchange.place_spot_order(symbol, "BUY", quantity)
+    try:
+        perp_order = await exchange.place_order(symbol, "SELL", quantity)
+    except Exception as exc:
+        order_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
+        try:
+            await exchange.cancel_order(order_id)
+        except Exception:
+            pass
+        raise RuntimeError(
+            "Не удалось разместить хедж; спотовая часть откатена"
+        ) from exc
+    orders = {"spot": spot_order, "perp": perp_order}
     risk_control.update_position(notional)
     risk_control.mark_symbol_open(symbol)
     now = time.time()
     commission = sum(float(o.get("fee", 0.0)) for o in orders.values())
-    exchange_name = (
-        type(exchanges.current).__name__.replace("Exchange", "").lower()
-        if getattr(exchanges, "_current", None)
-        else "unknown"
-    )
+    exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
     positions[symbol] = {
         "entry_timestamp": now,
         "entry_futures_price": entry_metrics.futures_price,
@@ -349,7 +350,11 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
 
 
 async def close_neutral_position(
-    symbol: str, quantity: float, pnl: float = 0.0, final: bool = True
+    exchange: BaseExchange,
+    symbol: str,
+    quantity: float,
+    pnl: float = 0.0,
+    final: bool = True,
 ) -> Dict[str, Dict]:
     """Закрывает нейтральную позицию и фиксирует результат.
 
@@ -364,12 +369,12 @@ async def close_neutral_position(
     final:
         Если ``True``, позиция закрывается полностью и риски сбрасываются.
     """
-    close_long = await place_order(symbol, "SELL", quantity)
+    close_long = await exchange.place_order(symbol, "SELL", quantity)
     try:
-        close_short = await place_order(symbol, "BUY", quantity)
+        close_short = await exchange.place_order(symbol, "BUY", quantity)
     except Exception as exc:
         # В случае ошибки возвращаем длинную позицию
-        await place_order(symbol, "BUY", quantity)
+        await exchange.place_order(symbol, "BUY", quantity)
         raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена") from exc
     entry = positions.get(symbol)
     commission = float(close_long.get("fee", 0.0)) + float(
@@ -388,6 +393,7 @@ async def close_neutral_position(
 
 
 async def monitor_neutral_position(
+    exchange: BaseExchange,
     symbol: str,
     quantity: float,
     exit_thresholds: Dict[str, float],
@@ -404,7 +410,7 @@ async def monitor_neutral_position(
     entry = positions.get(symbol, {})
     while True:
         try:
-            metrics = await get_market_metrics(symbol, quantity)
+            metrics = await get_market_metrics(exchange, symbol, quantity)
         except Exception as exc:
             print(f"Ошибка мониторинга {symbol}: {exc}")
             await asyncio.sleep(poll_interval)
@@ -464,7 +470,7 @@ async def monitor_neutral_position(
                     - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
                 ) * partial_qty
                 orders = await close_neutral_position(
-                    symbol, partial_qty, pnl_part, final=False
+                    exchange, symbol, partial_qty, pnl_part, final=False
                 )
                 # Обновляем запись о позиции после частичного выхода
                 quantity -= partial_qty
@@ -481,11 +487,7 @@ async def monitor_neutral_position(
                 volume_usd = partial_qty * entry.get("entry_futures_price", 0.0)
                 pnl_pct = (pnl_part / volume_usd * 100) if volume_usd else 0.0
                 hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
-                exchange_name = (
-                    type(exchanges.current).__name__.replace("Exchange", "").lower()
-                    if getattr(exchanges, "_current", None)
-                    else "unknown"
-                )
+                exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
                 log_trade(
                     {
                         "symbol": symbol,
@@ -538,7 +540,7 @@ async def monitor_neutral_position(
                         )
                     )
                 continue
-            await close_neutral_position(symbol, quantity, pnl, final=True)
+            await close_neutral_position(exchange, symbol, quantity, pnl, final=True)
             if entry:
                 exit_basis = calculate_basis(
                     metrics.futures_price, metrics.spot_price, signed=True
@@ -556,11 +558,7 @@ async def monitor_neutral_position(
                         "pnl": total_pnl,
                     }
                 )
-                exchange_name = (
-                    type(exchanges.current).__name__.replace("Exchange", "").lower()
-                    if getattr(exchanges, "_current", None)
-                    else "unknown"
-                )
+                exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
                 volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
                     "initial_quantity", entry.get("quantity", 0.0)
                 )
