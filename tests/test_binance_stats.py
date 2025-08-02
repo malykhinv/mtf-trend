@@ -10,11 +10,15 @@ from exchanges.binance import BinanceExchange  # noqa: E402
 
 
 class DummyResponse:
-    def __init__(self, data: Dict[str, Any]) -> None:
+    def __init__(self, data: Dict[str, Any], status: int = 200) -> None:
         self.data = data
+        self.status = status
 
     async def json(self) -> Dict[str, Any]:
         return self.data
+
+    async def text(self) -> str:  # pragma: no cover - used for errors
+        return ""
 
     async def __aenter__(self) -> "DummyResponse":
         return self
@@ -27,7 +31,7 @@ class DummyResponse:
 
 class DummySession:
     @staticmethod
-    def get(url: str) -> DummyResponse:
+    def get(url: str, **_: Any) -> DummyResponse:
         if "ticker/24hr" in url:
             return DummyResponse({"quoteVolume": "500", "volume": "5"})
         if "openInterest" in url:
