@@ -188,6 +188,18 @@ class BinanceExchange(BaseExchange):
             for k in data
         ]
 
+    async def get_futures_symbols(self) -> list[str]:
+        """Возвращает список фьючерсных символов Binance."""
+        url = f"{self.REST_URL}/fapi/v1/exchangeInfo"
+        data = await self._request("GET", url)
+        return [s.get("symbol", "") for s in data.get("symbols", [])]
+
+    async def get_spot_symbols(self) -> list[str]:
+        """Возвращает список спотовых символов Binance."""
+        url = f"{self.SPOT_REST_URL}/api/v3/exchangeInfo"
+        data = await self._request("GET", url)
+        return [s.get("symbol", "") for s in data.get("symbols", [])]
+
     # ------------------------------------------------------------------
     # REST-методы спота
     # ------------------------------------------------------------------

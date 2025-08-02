@@ -94,6 +94,14 @@ class BaseExchange(ABC):
     async def get_stats(self, symbol: str) -> dict:
         """Возвращает рыночную статистику, такую как 24‑часовой объём и открытый интерес."""
 
+    @abstractmethod
+    async def get_futures_symbols(self) -> list[str]:
+        """Возвращает список доступных фьючерсных символов."""
+
+    @abstractmethod
+    async def get_spot_symbols(self) -> list[str]:
+        """Возвращает список доступных спотовых символов."""
+
     async def get_ohlc(
         self, symbol: str, interval: str, limit: int = 1
     ) -> list[Dict[str, float]]:

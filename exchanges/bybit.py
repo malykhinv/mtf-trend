@@ -195,6 +195,22 @@ class BybitExchange(BaseExchange):
             for k in klist
         ]
 
+    async def get_futures_symbols(self) -> list[str]:
+        """Возвращает список фьючерсных символов Bybit."""
+        url = f"{self.REST_URL}/v5/market/instruments-info"
+        params = {"category": "linear"}
+        data = await self._request("GET", url, params=params)
+        lst = data.get("result", {}).get("list", [])
+        return [item.get("symbol", "") for item in lst]
+
+    async def get_spot_symbols(self) -> list[str]:
+        """Возвращает список спотовых символов Bybit."""
+        url = f"{self.REST_URL}/v5/market/instruments-info"
+        params = {"category": "spot"}
+        data = await self._request("GET", url, params=params)
+        lst = data.get("result", {}).get("list", [])
+        return [item.get("symbol", "") for item in lst]
+
     # ------------------------------------------------------------------
     # REST-методы спота
     # ------------------------------------------------------------------

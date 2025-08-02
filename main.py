@@ -99,6 +99,29 @@ def initialize_bot() -> None:
         for name in CLIENTS:
             WHITELISTS[name] = symbols
 
+    async def _collect(exchange: BaseExchange) -> set[str]:
+        futures = await exchange.get_futures_symbols()
+        spot = await exchange.get_spot_symbols()
+        return set(futures) & set(spot)
+
+    async def _fetch_all() -> dict[str, set[str]]:
+        result: dict[str, set[str]] = {}
+        for name, client in CLIENTS.items():
+            try:
+                result[name] = await _collect(client)
+            except Exception as exc:  # pragma: no cover - network errors
+                logger.error("Не удалось получить символы %s: %s", name, exc)
+        return result
+
+    available = asyncio.run(_fetch_all()) if CLIENTS else {}
+    for name, allowed in available.items():
+        configured = WHITELISTS.get(name, [])
+        filtered = [s for s in configured if s in allowed]
+        removed = set(configured) - set(filtered)
+        WHITELISTS[name] = filtered
+        for sym in sorted(removed):
+            logger.warning("Исключён символ %s из whitelist %s", sym, name)
+
     # Конфигурируем контроль рисков
     risk_control.configure(CONFIG.get("risk", {}), bot_cfg.get("deposit_size"))
 
@@ -205,14 +228,14 @@ def start_processing_loops() -> None:
                     if risk_control.is_paused() or risk_control.is_symbol_open(symbol):
                         continue
                     try:
-                        base_metrics = await strategy.get_market_metrics(client, symbol, 1.0)
+                        base_metrics = await strategy.get_market_metrics(symbol, 1.0, client)
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
                     price = base_metrics.futures_price
                     quantity = trade_value / price if price else 0.0
                     try:
-                        metrics = await strategy.get_market_metrics(client, symbol, quantity)
+                        metrics = await strategy.get_market_metrics(symbol, quantity, client)
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
