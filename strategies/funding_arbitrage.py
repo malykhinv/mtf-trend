@@ -21,7 +21,7 @@ import os
 
 getcontext().prec = 10
 
-from exchanges import BaseExchange
+from exchanges import BaseExchange, API_TIMEOUT
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG, WHITELISTS
@@ -58,6 +58,26 @@ async def get_stats(symbol: str) -> dict:
 async def get_ohlc(symbol: str, interval: str = "15m", limit: int = 1) -> list[Dict[str, float]]:
     """Заглушка для данных OHLC."""
     raise NotImplementedError
+
+
+async def _wait_filled(exchange: BaseExchange, order_id: str) -> bool:
+    """Ожидает исполнения ордера и возвращает ``True`` при полном исполнении.
+
+    Если ордер получает статус ``PARTIALLY_FILLED``, функция возвращает ``False``.
+    При превышении ``API_TIMEOUT`` возбуждается ``RuntimeError``.
+    """
+
+    start = time.monotonic()
+    while True:
+        status = await exchange.get_order_status(order_id)
+        state = status.get("status")
+        if state == "FILLED":
+            return True
+        if state == "PARTIALLY_FILLED":
+            return False
+        if time.monotonic() - start > API_TIMEOUT:
+            raise RuntimeError(f"Ордер {order_id} не исполнен вовремя")
+        await asyncio.sleep(0.5)
 
 
 @dataclass
@@ -423,17 +443,25 @@ async def open_neutral_position(
         raise RuntimeError("Превышены лимиты риска, торговля приостановлена или позиция уже открыта")
     # Хеджируем позицию на споте и фьючерсе
     spot_order = await exchange.place_spot_order(symbol, "BUY", float(quantity))
+    spot_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
+    if not await _wait_filled(exchange, spot_id):
+        await exchange.cancel_order(spot_id)
+        raise RuntimeError("Спотовый ордер выполнен частично")
+
     try:
         perp_order = await exchange.place_order(symbol, "SELL", float(quantity))
     except Exception as exc:
-        order_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
-        try:
-            await exchange.cancel_order(order_id)
-        except Exception:
-            pass
+        # В случае ошибки на второй ноге откатываем спотовую часть
+        await exchange.place_spot_order(symbol, "SELL", float(quantity))
         raise RuntimeError(
-            "Не удалось разместить хедж; спотовая часть откатена"
+            "Не удалось разместить хедж; спотовая часть откатана"
         ) from exc
+    perp_id = str(perp_order.get("orderId") or perp_order.get("id") or "")
+    if not await _wait_filled(exchange, perp_id):
+        await exchange.cancel_order(perp_id)
+        # Откатываем спотовую позицию
+        await exchange.place_spot_order(symbol, "SELL", float(quantity))
+        raise RuntimeError("Не удалось полностью захеджировать позицию; спот откатан")
     orders = {"spot": spot_order, "perp": perp_order}
     risk_control.update_position(notional)
     risk_control.mark_symbol_open(symbol)
@@ -506,8 +534,18 @@ async def close_neutral_position(
     quantity = Decimal(str(quantity))
     pnl = Decimal(str(pnl))
     close_long = await exchange.place_order(symbol, "SELL", float(quantity))
+    long_id = str(close_long.get("orderId") or close_long.get("id") or "")
+    if not await _wait_filled(exchange, long_id):
+        await exchange.cancel_order(long_id)
+        raise RuntimeError("Не удалось закрыть длинную ногу")
+
     try:
         close_short = await exchange.place_order(symbol, "BUY", float(quantity))
+        short_id = str(close_short.get("orderId") or close_short.get("id") or "")
+        if not await _wait_filled(exchange, short_id):
+            await exchange.cancel_order(short_id)
+            await exchange.place_order(symbol, "BUY", float(quantity))
+            raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена")
     except Exception as exc:
         # В случае ошибки возвращаем длинную позицию
         await exchange.place_order(symbol, "BUY", float(quantity))
