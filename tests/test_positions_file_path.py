@@ -35,7 +35,14 @@ def test_config_specifies_positions_file(tmp_path, monkeypatch):
     strategy, main = load_strategy(monkeypatch)
     reset_state(strategy)
     cfg_path = tmp_path / "config_positions.json"
-    data = {"BTCUSDT": {"quantity": 1, "entry_futures_price": 100}}
+    data = {
+        "BTCUSDT": {
+            "quantity": 1,
+            "entry_futures_price": 100,
+            "entry_timestamp": 0,
+            "commissions": 0,
+        }
+    }
     cfg_path.write_text(json.dumps(data))
     main.CONFIG.clear()
     main.CONFIG.update({"bot": {"positions_file": str(cfg_path)}})
@@ -53,7 +60,14 @@ def test_env_var_overrides_config(tmp_path, monkeypatch):
     strategy, main = load_strategy(monkeypatch)
     reset_state(strategy)
     env_path = tmp_path / "env_positions.json"
-    env_data = {"ETHUSDT": {"quantity": 2, "entry_futures_price": 200}}
+    env_data = {
+        "ETHUSDT": {
+            "quantity": 2,
+            "entry_futures_price": 200,
+            "entry_timestamp": 0,
+            "commissions": 0,
+        }
+    }
     env_path.write_text(json.dumps(env_data))
 
     cfg_path = tmp_path / "other.json"
