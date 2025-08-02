@@ -10,26 +10,28 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 import time
-import math
+from decimal import Decimal, getcontext
+
+getcontext().prec = 10
 
 
 @dataclass
 class RiskLimits:
     """Конфигурация ограничений риска."""
 
-    max_position_size: float = float("inf")
-    max_daily_loss: float = float("inf")
+    max_position_size: Decimal = Decimal("Infinity")
+    max_daily_loss: Decimal = Decimal("Infinity")
     max_consecutive_losses: float = float("inf")
     max_open_positions: float = float("inf")
-    deposit_cap: float = float("inf")
+    deposit_cap: Decimal = Decimal("Infinity")
 
 
 @dataclass
 class RiskState:
     """Текущее состояние риска, обновляемое после сделок."""
 
-    total_notional: float = 0.0
-    daily_loss: float = 0.0
+    total_notional: Decimal = Decimal("0")
+    daily_loss: Decimal = Decimal("0")
     consecutive_losses: int = 0
     paused: bool = False
     open_symbols: Set[str] = field(default_factory=set)
@@ -54,23 +56,22 @@ def configure(config: Dict[str, float], deposit_size: Optional[float] = None) ->
     """
 
     global _limits
-    deposit_cap = config.get("deposit_cap", float("inf"))
-    if math.isinf(deposit_cap) and deposit_size is not None:
+    deposit_cap = Decimal(str(config.get("deposit_cap", "Infinity")))
+    if deposit_cap.is_infinite() and deposit_size is not None:
         pct = config.get("deposit_cap_pct")
         if pct is not None:
-            # Переводим процент от депозита в абсолютное значение
-            deposit_cap = pct * deposit_size
+            deposit_cap = Decimal(str(pct)) * Decimal(str(deposit_size))
 
     _limits = RiskLimits(
-        max_position_size=config.get("max_position_size", float("inf")),
-        max_daily_loss=config.get("max_daily_loss", float("inf")),
+        max_position_size=Decimal(str(config.get("max_position_size", "Infinity"))),
+        max_daily_loss=Decimal(str(config.get("max_daily_loss", "Infinity"))),
         max_consecutive_losses=config.get("max_consecutive_losses", float("inf")),
         max_open_positions=config.get("max_open_positions", float("inf")),
         deposit_cap=deposit_cap,
     )
 
 
-def can_open_position(notional: float) -> bool:
+def can_open_position(notional: Decimal) -> bool:
     """Возвращает ``True``, если позицию на ``notional`` USD можно открыть."""
 
     if _state.paused:
@@ -86,10 +87,10 @@ def can_open_position(notional: float) -> bool:
     return True
 
 
-def update_position(delta_notional: float) -> None:
+def update_position(delta_notional: Decimal) -> None:
     """Обновляет учёт текущей нагрузки на депозит на ``delta_notional`` USD."""
 
-    _state.total_notional = max(_state.total_notional + delta_notional, 0.0)
+    _state.total_notional = max(_state.total_notional + delta_notional, Decimal("0"))
 
 
 def is_symbol_open(symbol: str) -> bool:
@@ -119,14 +120,13 @@ def pause(duration: Optional[float] = None) -> None:
     _state.pause_until = time.time() + duration if duration else None
 
 
-def record_pnl(pnl: float) -> None:
+def record_pnl(pnl: Decimal) -> None:
     """Фиксирует прибыль или убыток по завершённой сделке."""
 
     if pnl < 0:
         _state.daily_loss += abs(pnl)
         _state.consecutive_losses += 1
         if _state.consecutive_losses >= _limits.max_consecutive_losses:
-            # Слишком много подряд убыточных сделок — делаем суточную паузу
             pause(24 * 3600)
     else:
         _state.consecutive_losses = 0
