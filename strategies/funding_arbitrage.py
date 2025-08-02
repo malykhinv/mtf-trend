@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 from decimal import Decimal, getcontext
+import os
 
 getcontext().prec = 10
 
@@ -28,7 +29,7 @@ from utils.logger import log_trade
 from utils.telegram import format_duration, notify_partial_close
 
 
-POSITIONS_FILE = Path("open_positions.json")
+DEFAULT_POSITIONS_FILE = "open_positions.json"
 
 
 logger = logging.getLogger(__name__)
@@ -281,9 +282,23 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
 positions: Dict[str, Dict[str, Any]] = {}
 
 
-def load_positions(path: Path | str = POSITIONS_FILE) -> None:
+def _get_positions_path(path: Path | str | None = None) -> Path:
+    """Возвращает путь к файлу с позициями из env, config или ``DEFAULT_POSITIONS_FILE``."""
+
+    if path is not None:
+        return Path(path)
+    env_path = os.getenv("POSITIONS_FILE_PATH")
+    if env_path:
+        return Path(env_path)
+    bot_cfg = CONFIG.get("bot", {})
+    cfg_path = bot_cfg.get("positions_file")
+    return Path(cfg_path or DEFAULT_POSITIONS_FILE)
+
+
+def load_positions(path: Path | str | None = None) -> None:
     """Загружает ранее сохранённые позиции из ``path``."""
 
+    path = _get_positions_path(path)
     try:
         with Path(path).open("r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -298,9 +313,10 @@ def load_positions(path: Path | str = POSITIONS_FILE) -> None:
         risk_control.mark_symbol_open(symbol)
 
 
-def save_positions(path: Path | str = POSITIONS_FILE) -> None:
+def save_positions(path: Path | str | None = None) -> None:
     """Сохраняет текущие открытые позиции в ``path``."""
 
+    path = _get_positions_path(path)
     with Path(path).open("w", encoding="utf-8") as fh:
         json.dump(positions, fh)
 
