@@ -25,3 +25,4 @@ bot:
     - BTCUSDT
     - ETHUSDT
   deposit_size: 100
+  positions_file: open_positions.json
