@@ -52,7 +52,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
         entry_funding=0.01,
         quantity=3.0,
         initial_quantity=3.0,
-        commissions=0.1,
+        commissions=Decimal("0.1"),
         last_funding_timestamp=1.0,
         exchange="binance",
     )
@@ -64,7 +64,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     loaded = positions["BTCUSDT"]
     assert isinstance(loaded, Position)
     assert loaded.quantity == 3.0
-    assert loaded.commissions == 0.1
+    assert loaded.commissions == Decimal("0.1")
     assert isinstance(loaded.pnl, Decimal)
     assert loaded.pnl == Decimal(0)
 
@@ -81,3 +81,23 @@ def test_load_positions_validation(tmp_path, monkeypatch):
     asyncio.run(load_positions(file_path))
     assert "GOOD" in positions
     assert "BAD" not in positions
+
+
+def test_decimal_accumulation():
+    pos = Position(
+        entry_timestamp=0.0,
+        entry_futures_price=0.0,
+        entry_spot_price=0.0,
+        entry_basis=0.0,
+        entry_funding=0.0,
+        quantity=0.0,
+        initial_quantity=0.0,
+        commissions=Decimal(0),
+        last_funding_timestamp=0.0,
+        exchange="",
+    )
+    for _ in range(10):
+        pos.commissions += Decimal("0.1")
+        pos.funding_accrued += Decimal("0.1")
+    assert pos.commissions == Decimal("1.0")
+    assert pos.funding_accrued == Decimal("1.0")
