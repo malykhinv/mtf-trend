@@ -193,13 +193,21 @@ async def get_market_metrics(
         ohlc = await exchange.get_ohlc(symbol, interval="15m", limit=1)
     else:
         ohlc = await get_ohlc(symbol, interval="15m", limit=1)
-    if ohlc:
-        candle = ohlc[0]
-        o = candle.get("open") or 0.0
-        c = candle.get("close") or 0.0
-        volatility = ((c - o) / o) if o else float("inf")
+    if not ohlc:
+        # Without recent OHLC data we cannot estimate volatility.
+        # Returning ``None`` signals to the caller that metrics are incomplete
+        # so the strategy can skip trading for this symbol.
+        return None
+
+    candle = ohlc[0]
+    o = float(candle.get("open", float("nan")))
+    c = float(candle.get("close", float("nan")))
+    if o == 0.0 or not math.isfinite(o) or not math.isfinite(c):
+        # Treat zero/invalid open or close price as infinite volatility so that
+        # the strategy can trigger protective actions.
+        volatility = float("inf")
     else:
-        volatility = float("nan")
+        volatility = (c - o) / o
 
     return MarketMetrics(
         funding,
@@ -268,6 +276,8 @@ def check_entry_conditions(
 
 def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) -> bool:
     """Возвращает ``True``, если выполнено любое условие выхода."""
+    if not math.isfinite(metrics.volatility):
+        return True
     return (
         abs(metrics.funding_rate) <= thresholds.get("funding_rate", float("inf"))
         or metrics.spread >= thresholds.get("spread", float("-inf"))
