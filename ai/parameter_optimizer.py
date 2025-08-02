@@ -20,8 +20,8 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
 
     Линейная регрессия оценивает, какие признаки сильнее влияют на прибыль.
     Пороговые значения для ``funding_rate``, ``basis``, ``holding_time``,
-    ``volume`` и ``liquidity`` берутся как медианы сделок, которые модель
-    прогнозирует прибыльными.
+    ``volume_usd`` и ``liquidity`` берутся как медианы сделок, которые
+    модель прогнозирует прибыльными.
     """
 
     if not log_path.exists():
@@ -45,10 +45,12 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
         hold_seconds = (exit_times - entry_times).dt.total_seconds()
         features["holding_time"] = hold_seconds
 
-    if "volume" in df.columns:
-        features["volume"] = df["volume"]
+    if "volume_usd" in df.columns:
+        features["volume_usd"] = df["volume_usd"]
+    elif "volume" in df.columns:
+        features["volume_usd"] = df["volume"]
     elif "quantity" in df.columns:
-        features["volume"] = df["quantity"]
+        features["volume_usd"] = df["quantity"]
 
     if "liquidity" in df.columns:
         features["liquidity"] = df["liquidity"]
