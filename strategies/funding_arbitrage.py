@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import math
 import time
 from dataclasses import dataclass
@@ -34,6 +35,9 @@ from utils.telegram import format_duration, notify_partial_close
 
 
 POSITIONS_FILE = Path("open_positions.json")
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -406,7 +410,7 @@ async def monitor_neutral_position(
         try:
             metrics = await get_market_metrics(symbol, quantity)
         except Exception as exc:
-            print(f"Ошибка мониторинга {symbol}: {exc}")
+            logger.error("Ошибка мониторинга %s: %s", symbol, exc)
             await asyncio.sleep(poll_interval)
             continue
         now = time.time()
