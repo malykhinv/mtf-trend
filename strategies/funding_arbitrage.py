@@ -54,6 +54,27 @@ class MarketMetrics:
     basis: float  # spot–futures basis percentage
 
 
+def calculate_basis(
+    futures_price: float, spot_price: float, signed: bool = False
+) -> float:
+    """Расчёт процентного базиса между фьючерсом и спотом.
+
+    Parameters
+    ----------
+    futures_price : float
+        Текущая цена фьючерса.
+    spot_price : float
+        Текущая цена спота.
+    signed : bool, optional
+        Если ``True``, знак сохраняется. Иначе возвращается абсолютное значение.
+    """
+
+    if not spot_price:
+        return float("inf")
+    value = (futures_price - spot_price) / spot_price * 100
+    return value if signed else abs(value)
+
+
 async def get_market_metrics(
     symbol: str, trade_size: float, depth: int = 5
 ) -> MarketMetrics:
@@ -140,9 +161,7 @@ async def get_market_metrics(
     else:
         open_interest = 0.0
     liquidity = sum(q for _, q in bids) + sum(q for _, q in asks)
-    basis = (
-        (spread / spot_price * 100) if spot_price else float("inf")
-    )
+    basis = calculate_basis(futures_price, spot_price)
 
     # Изменение цены за последние 15 минут для оценки волатильности
     ohlc = await get_ohlc(symbol, interval="15m", limit=1)
@@ -195,6 +214,7 @@ def check_entry_conditions(
     )
     notional = quantity * metrics.futures_price
     max_basis_pct = thresholds.get("basis", float("inf"))
+    basis_abs = abs(metrics.basis)
     combined_slippage = metrics.slippage
     slippage_limit = thresholds.get("slippage", 0.003)
 
@@ -202,7 +222,7 @@ def check_entry_conditions(
         metrics.funding_rate > 0
         and metrics.funding_rate >= thresholds.get("funding_rate", 0.0)
         and spread_pct <= thresholds.get("spread", float("inf"))
-        and metrics.basis <= max_basis_pct
+        and basis_abs <= max_basis_pct
         and metrics.liquidity >= thresholds.get("liquidity", 0.0)
         and metrics.volume >= thresholds.get("volume", 0.0)
         and abs(metrics.volatility)
@@ -410,7 +430,7 @@ async def monitor_neutral_position(
             reasons.append("low_funding")
         if entry and metrics.funding_rate < 0 <= entry.get("entry_funding", 0):
             reasons.append("funding_negative")
-        if metrics.basis > 1.0:
+        if abs(metrics.basis) >= exit_thresholds.get("basis", float("inf")):
             reasons.append("basis")
         if entry:
             exit_slippage = abs(
@@ -452,11 +472,8 @@ async def monitor_neutral_position(
                 entry["pnl"] = entry.get("pnl", 0.0) + pnl_part
                 save_positions()
                 exit_ts = time.time()
-                exit_basis = (
-                    ((metrics.futures_price - metrics.spot_price) / metrics.spot_price)
-                    * 100
-                    if metrics.spot_price
-                    else float("inf")
+                exit_basis = calculate_basis(
+                    metrics.futures_price, metrics.spot_price, signed=True
                 )
                 commission = float(orders["long"].get("fee", 0.0)) + float(
                     orders["short"].get("fee", 0.0)
@@ -523,10 +540,8 @@ async def monitor_neutral_position(
                 continue
             await close_neutral_position(symbol, quantity, pnl, final=True)
             if entry:
-                exit_basis = (
-                    ((metrics.futures_price - metrics.spot_price) / metrics.spot_price) * 100
-                    if metrics.spot_price
-                    else float("inf")
+                exit_basis = calculate_basis(
+                    metrics.futures_price, metrics.spot_price, signed=True
                 )
                 exit_ts = time.time()
                 total_pnl = entry.get("pnl", 0.0) + pnl
