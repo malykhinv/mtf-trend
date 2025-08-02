@@ -336,6 +336,9 @@ class Position:
 
 positions: Dict[str, Position] = {}
 
+# Global lock to serialize access to positions file across async tasks
+_positions_lock = asyncio.Lock()
+
 
 def _get_positions_path(path: Path | str | None = None) -> Path:
     """Возвращает путь к файлу с позициями из env, config или ``DEFAULT_POSITIONS_FILE``."""
@@ -350,15 +353,19 @@ def _get_positions_path(path: Path | str | None = None) -> Path:
     return Path(cfg_path or DEFAULT_POSITIONS_FILE)
 
 
-def load_positions(path: Path | str | None = None) -> None:
+async def load_positions(path: Path | str | None = None) -> None:
     """Загружает ранее сохранённые позиции из ``path``."""
 
     path = _get_positions_path(path)
     try:
-        with Path(path).open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
+        async with _positions_lock:
+            with Path(path).open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
     except FileNotFoundError:
         return
+    except json.JSONDecodeError:
+        logger.warning("Некорректный файл позиций %s, начинаем с пустого", path)
+        data = {}
     positions.clear()
     for symbol, entry in data.items():
         try:
@@ -373,12 +380,13 @@ def load_positions(path: Path | str | None = None) -> None:
         risk_control.mark_symbol_open(symbol)
 
 
-def save_positions(path: Path | str | None = None) -> None:
+async def save_positions(path: Path | str | None = None) -> None:
     """Сохраняет текущие открытые позиции в ``path``."""
 
     path = _get_positions_path(path)
-    with Path(path).open("w", encoding="utf-8") as fh:
-        json.dump({s: p.to_dict() for s, p in positions.items()}, fh)
+    async with _positions_lock:
+        with Path(path).open("w", encoding="utf-8") as fh:
+            json.dump({s: p.to_dict() for s, p in positions.items()}, fh)
 
 
 async def open_neutral_position(
@@ -431,7 +439,7 @@ async def open_neutral_position(
         last_funding_timestamp=now,
         exchange=exchange_name,
     )
-    save_positions()
+    await save_positions()
     volume_usd = float(notional)
     log_trade(
         {
@@ -505,7 +513,7 @@ async def close_neutral_position(
     if final:
         risk_control.mark_symbol_closed(symbol)
         positions.pop(symbol, None)
-        save_positions()
+        await save_positions()
     return {"long": close_long, "short": close_short, "commission": float(commission)}
 
 
@@ -603,7 +611,7 @@ async def monitor_neutral_position(
                 quantity -= partial_qty
                 entry.quantity = quantity
                 entry.pnl += pnl_part
-                save_positions()
+                await save_positions()
                 exit_ts = time.time()
                 exit_basis = calculate_basis(
                     metrics.futures_price, metrics.spot_price, signed=True
