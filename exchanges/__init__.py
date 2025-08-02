@@ -20,6 +20,10 @@ import time
 from typing import Any, Coroutine, Dict, Optional, Set, Tuple, Type
 
 from risk import risk_control
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from strategies.funding_arbitrage import Position
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +203,12 @@ async def _handle_timeout() -> None:
                 if client is None:
                     continue
                 try:
-                    entry = strategy.positions.get(symbol, {})
+                    entry_obj = strategy.positions.get(symbol, {})
+                    entry = (
+                        entry_obj.to_dict()
+                        if hasattr(entry_obj, "to_dict")
+                        else entry_obj
+                    )
                     quantity = entry.get("quantity") or entry.get(
                         "initial_quantity", 0.0
                     )

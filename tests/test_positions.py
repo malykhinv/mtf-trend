@@ -31,6 +31,7 @@ from strategies.funding_arbitrage import (
     positions,
     save_positions,
     load_positions,
+    close_neutral_position,
 )
 from risk import risk_control
 
@@ -38,6 +39,8 @@ from risk import risk_control
 def _patch_risk(monkeypatch):
     monkeypatch.setattr(risk_control, "update_position", lambda *_: None)
     monkeypatch.setattr(risk_control, "mark_symbol_open", lambda *_: None)
+    monkeypatch.setattr(risk_control, "record_pnl", lambda *_: None)
+    monkeypatch.setattr(risk_control, "mark_symbol_closed", lambda *_: None)
 
 
 def test_save_and_load_roundtrip(tmp_path, monkeypatch):
@@ -52,7 +55,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
         entry_funding=0.01,
         quantity=3.0,
         initial_quantity=3.0,
-        commissions=0.1,
+        commissions=Decimal("0.1"),
         last_funding_timestamp=1.0,
         exchange="binance",
     )
@@ -64,7 +67,8 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     loaded = positions["BTCUSDT"]
     assert isinstance(loaded, Position)
     assert loaded.quantity == 3.0
-    assert loaded.commissions == 0.1
+    assert isinstance(loaded.commissions, Decimal)
+    assert loaded.commissions == Decimal("0.1")
     assert isinstance(loaded.pnl, Decimal)
     assert loaded.pnl == Decimal(0)
 
@@ -81,3 +85,38 @@ def test_load_positions_validation(tmp_path, monkeypatch):
     asyncio.run(load_positions(file_path))
     assert "GOOD" in positions
     assert "BAD" not in positions
+
+
+def test_commission_and_funding_precision(monkeypatch):
+    _patch_risk(monkeypatch)
+    class DummyExchange:
+        name = "dummy"
+
+        async def place_order(self, symbol, side, quantity, price=None):
+            fee = "0.1" if side == "SELL" else "0.2"
+            return {"fee": fee}
+
+    positions.clear()
+    pos = Position(
+        entry_timestamp=0.0,
+        entry_futures_price=100.0,
+        entry_spot_price=100.0,
+        entry_basis=0.0,
+        entry_funding=0.0,
+        quantity=1.0,
+        initial_quantity=1.0,
+        exchange="dummy",
+    )
+    positions["TST"] = pos
+
+    qty = Decimal("1")
+    price = Decimal("100")
+    rate = Decimal("0.0001")
+    elapsed = Decimal("3600")
+    fee = qty * price * rate * elapsed / Decimal(8 * 3600)
+    pos.funding_accrued += fee
+    pos.funding_accrued += fee
+    assert pos.funding_accrued == fee * 2
+
+    asyncio.run(close_neutral_position(DummyExchange(), "TST", qty, final=False))
+    assert positions["TST"].commissions == Decimal("0.3")
