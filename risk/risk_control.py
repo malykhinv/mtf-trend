@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 import time
+import math
 
 
 @dataclass
@@ -54,7 +55,7 @@ def configure(config: Dict[str, float], deposit_size: Optional[float] = None) ->
 
     global _limits
     deposit_cap = config.get("deposit_cap", float("inf"))
-    if deposit_cap is float("inf") and deposit_size is not None:
+    if math.isinf(deposit_cap) and deposit_size is not None:
         pct = config.get("deposit_cap_pct")
         if pct is not None:
             # Переводим процент от депозита в абсолютное значение
