@@ -280,29 +280,40 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
 
 positions: Dict[str, Dict[str, Any]] = {}
 
+# Lock to serialize access to the positions file across concurrent tasks
+_positions_lock = asyncio.Lock()
 
-def load_positions(path: Path | str = POSITIONS_FILE) -> None:
+
+async def load_positions(path: Path | str = POSITIONS_FILE) -> None:
     """Загружает ранее сохранённые позиции из ``path``."""
 
-    try:
-        with Path(path).open("r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except FileNotFoundError:
-        return
-    positions.clear()
-    for symbol, entry in data.items():
-        positions[symbol] = entry
-        notional = entry.get("quantity", 0.0) * entry.get("entry_futures_price", 0.0)
-        if notional:
-            risk_control.update_position(notional)
-        risk_control.mark_symbol_open(symbol)
+    async with _positions_lock:
+        try:
+            with Path(path).open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except FileNotFoundError:
+            positions.clear()
+            return
+        except json.JSONDecodeError:
+            logger.warning("Не удалось распарсить %s, стартуем без позиций", path)
+            positions.clear()
+            return
+
+        positions.clear()
+        for symbol, entry in data.items():
+            positions[symbol] = entry
+            notional = entry.get("quantity", 0.0) * entry.get("entry_futures_price", 0.0)
+            if notional:
+                risk_control.update_position(notional)
+            risk_control.mark_symbol_open(symbol)
 
 
-def save_positions(path: Path | str = POSITIONS_FILE) -> None:
+async def save_positions(path: Path | str = POSITIONS_FILE) -> None:
     """Сохраняет текущие открытые позиции в ``path``."""
 
-    with Path(path).open("w", encoding="utf-8") as fh:
-        json.dump(positions, fh)
+    async with _positions_lock:
+        with Path(path).open("w", encoding="utf-8") as fh:
+            json.dump(positions, fh)
 
 
 async def open_neutral_position(
@@ -355,7 +366,7 @@ async def open_neutral_position(
         "last_funding_timestamp": now,
         "exchange": exchange_name,
     }
-    save_positions()
+    await save_positions()
     volume_usd = float(notional)
     log_trade(
         {
@@ -427,7 +438,7 @@ async def close_neutral_position(
     if final:
         risk_control.mark_symbol_closed(symbol)
         positions.pop(symbol, None)
-        save_positions()
+        await save_positions()
     return {"long": close_long, "short": close_short, "commission": float(commission)}
 
 
@@ -515,7 +526,7 @@ async def monitor_neutral_position(
                 quantity -= partial_qty
                 entry["quantity"] = quantity
                 entry["pnl"] = entry.get("pnl", 0.0) + pnl_part
-                save_positions()
+                await save_positions()
                 exit_ts = time.time()
                 exit_basis = calculate_basis(
                     metrics.futures_price, metrics.spot_price, signed=True

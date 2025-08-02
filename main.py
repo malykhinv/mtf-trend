@@ -137,9 +137,6 @@ def start_processing_loops() -> None:
 
     poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
 
-    # Восстанавливаем ранее сохранённые позиции
-    strategy.load_positions()
-
     def _update_thresholds(new: Dict[str, float]) -> None:
         """Обновляет пороги стратегии новыми значениями."""
         if new:
@@ -214,7 +211,7 @@ def start_processing_loops() -> None:
             if position_id in POSITION_TASKS:
                 del POSITION_TASKS[position_id]
             if strategy.positions.pop(symbol, None) is not None:
-                strategy.save_positions()
+                await strategy.save_positions()
 
     async def scan_loop() -> None:
         """Постоянно сканирует рынок в поиске входов."""
@@ -287,6 +284,7 @@ def start_processing_loops() -> None:
 
     async def runner() -> None:
         """Создаёт и управляет основными асинхронными задачами."""
+        await strategy.load_positions()
         tasks = [
             asyncio.create_task(scan_loop()),
             asyncio.create_task(risk_loop()),
