@@ -232,8 +232,8 @@ def start_processing_loops() -> None:
                 )
                 await asyncio.sleep(poll_interval)
                 continue
-            # Берём меньшую величину: минимальный порог или долю от депозита
-            trade_value = min(min_trade_usd, deposit * deposit_pct)
+            # Торгуем не меньше минимального порога: выбираем большую величину
+            trade_value = max(min_trade_usd, deposit * deposit_pct)
             if trade_value in (0.0, float("inf")):
                 trade_value = 1.0
 
