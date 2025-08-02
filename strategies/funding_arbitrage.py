@@ -103,7 +103,7 @@ async def get_market_metrics(
     trade_size: float,
     exchange: BaseExchange | None = None,
     depth: int = 5,
-) -> MarketMetrics:
+) -> MarketMetrics | None:
     """Получает расширенные рыночные метрики для ``symbol``.
 
     ``exchange`` может быть ``None`` – в этом случае используются
@@ -136,6 +136,10 @@ async def get_market_metrics(
     spot_bids = [(float(p), float(q)) for p, q in spot_book.get("bids", [])]
     spot_asks = [(float(p), float(q)) for p, q in spot_book.get("asks", [])]
 
+    # If any order book side is empty, market data is incomplete
+    if not (bids and asks and spot_bids and spot_asks):
+        return None
+
     def _calc_slippage(orders, size, mid):
         """Оценивает проскальзывание при выполнении ``size`` по стакану."""
         if size <= 0 or math.isnan(size):
@@ -154,32 +158,24 @@ async def get_market_metrics(
         avg_price = cost / size
         return abs(avg_price - mid) / mid
 
-    if bids and asks:
-        futures_price = (asks[0][0] + bids[0][0]) / 2
-        futures_slippage = _calc_slippage(asks, trade_size, futures_price)
-    else:
-        futures_price = float("nan")
-        futures_slippage = float("inf")
+    futures_price = (asks[0][0] + bids[0][0]) / 2
+    futures_slippage = _calc_slippage(asks, trade_size, futures_price)
 
-    if spot_bids and spot_asks:
-        spot_price = (spot_asks[0][0] + spot_bids[0][0]) / 2
-        spot_slippage = _calc_slippage(spot_asks, trade_size, spot_price)
-    else:
-        spot_price = float("nan")
-        spot_slippage = float("inf")
+    spot_price = (spot_asks[0][0] + spot_bids[0][0]) / 2
+    spot_slippage = _calc_slippage(spot_asks, trade_size, spot_price)
 
     # Суммарное проскальзывание обеих ног
     slippage = futures_slippage + spot_slippage
 
-    if bids and asks and spot_bids and spot_asks:
-        spread = abs(futures_price - spot_price)
-    else:
-        spread = float("inf")
+    spread = abs(futures_price - spot_price)
 
     if exchange is not None:
         stats = await exchange.get_stats(symbol)
     else:
         stats = await get_stats(symbol)
+    if not stats:
+        return None
+
     volume = float(stats.get("volume_24h", 0.0))
     open_interest = float(stats.get("open_interest", 0.0))
     if futures_price and not math.isnan(futures_price):
@@ -225,13 +221,17 @@ async def get_market_metrics(
 def check_entry_conditions(
     symbol: str,
     quantity: Decimal,
-    metrics: MarketMetrics,
+    metrics: MarketMetrics | None,
     thresholds: Dict[str, float],
     ) -> bool:
     """Возвращает ``True``, если выполнены все условия входа.
 
     Порог ``basis`` задаётся в процентных пунктах.
     """
+    if metrics is None:
+        logger.warning("Skipping %s: incomplete market metrics", symbol)
+        return False
+
     quantity = Decimal(str(quantity))
     deposit = Decimal(str(CONFIG.get("bot", {}).get("deposit_size", "Infinity")))
     max_deposit_trade = deposit * Decimal(str(thresholds.get("deposit_pct", 1.0)))
@@ -450,6 +450,10 @@ async def monitor_neutral_position(
     while True:
         try:
             metrics = await get_market_metrics(symbol, quantity, exchange)
+            if metrics is None:
+                logger.warning("Неполные рыночные данные для %s", symbol)
+                await asyncio.sleep(poll_interval)
+                continue
         except Exception as exc:
             logger.error("Ошибка мониторинга %s: %s", symbol, exc)
             await asyncio.sleep(poll_interval)
