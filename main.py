@@ -235,6 +235,11 @@ def start_processing_loops() -> None:
                         continue
                     try:
                         base_metrics = await strategy.get_market_metrics(symbol, 1.0, client)
+                        if base_metrics is None:
+                            logger.warning(
+                                "Пропуск %s:%s из-за неполных метрик", name, symbol
+                            )
+                            continue
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
@@ -242,6 +247,11 @@ def start_processing_loops() -> None:
                     quantity = trade_value / price if price else 0.0
                     try:
                         metrics = await strategy.get_market_metrics(symbol, quantity, client)
+                        if metrics is None:
+                            logger.warning(
+                                "Пропуск %s:%s из-за неполных метрик", name, symbol
+                            )
+                            continue
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue

@@ -1,8 +1,11 @@
+import logging
 import math
 import pathlib
 import sys
 
 import types
+
+from decimal import Decimal
 
 import pytest
 
@@ -24,7 +27,7 @@ ai_module.parameter_optimizer = parameter_optimizer
 sys.modules["ai"] = ai_module
 sys.modules["ai.parameter_optimizer"] = parameter_optimizer
 
-from strategies.funding_arbitrage import get_market_metrics
+from strategies.funding_arbitrage import get_market_metrics, check_entry_conditions
 
 
 @pytest.fixture(autouse=True)
@@ -77,3 +80,35 @@ async def test_slippage_negative_volume() -> None:
     assert math.isinf(metrics.spot_slippage)
     assert math.isinf(metrics.futures_slippage)
     assert math.isinf(metrics.slippage)
+
+
+@pytest.mark.asyncio
+async def test_returns_none_on_empty_orderbook(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def empty_orderbook(symbol, depth=5):
+        return {"bids": [], "asks": []}
+
+    monkeypatch.setattr(
+        "strategies.funding_arbitrage.get_orderbook", empty_orderbook
+    )
+    monkeypatch.setattr(
+        "strategies.funding_arbitrage.get_spot_orderbook", empty_orderbook
+    )
+    metrics = await get_market_metrics("BTCUSDT", trade_size=1)
+    assert metrics is None
+
+
+@pytest.mark.asyncio
+async def test_returns_none_on_missing_stats(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def empty_stats(symbol):
+        return {}
+
+    monkeypatch.setattr("strategies.funding_arbitrage.get_stats", empty_stats)
+    metrics = await get_market_metrics("BTCUSDT", trade_size=1)
+    assert metrics is None
+
+
+def test_check_entry_conditions_none_metrics(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING):
+        result = check_entry_conditions("BTCUSDT", Decimal("1"), None, {})
+    assert not result
+    assert "incomplete" in caplog.text.lower()
