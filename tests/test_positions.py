@@ -3,6 +3,7 @@ import asyncio
 import sys
 import types
 from pathlib import Path
+from decimal import Decimal
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -64,6 +65,8 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     assert isinstance(loaded, Position)
     assert loaded.quantity == 3.0
     assert loaded.commissions == 0.1
+    assert isinstance(loaded.pnl, Decimal)
+    assert loaded.pnl == Decimal(0)
 
 
 def test_load_positions_validation(tmp_path, monkeypatch):

@@ -291,7 +291,7 @@ class Position:
     entry_funding: float
     quantity: float
     initial_quantity: float
-    pnl: float = 0.0
+    pnl: Decimal = Decimal(0)
     funding_accrued: float = 0.0
     commissions: float = 0.0
     last_funding_timestamp: float = 0.0
@@ -304,7 +304,9 @@ class Position:
     exit_funding: float | None = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data["pnl"] = float(self.pnl)
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Position":
@@ -318,7 +320,7 @@ class Position:
             entry_funding=float(data.get("entry_funding", 0.0)),
             quantity=float(data["quantity"]),
             initial_quantity=float(data.get("initial_quantity", data["quantity"])),
-            pnl=float(data.get("pnl", 0.0)),
+            pnl=Decimal(str(data.get("pnl", 0.0))),
             funding_accrued=float(data.get("funding_accrued", 0.0)),
             commissions=float(data.get("commissions", 0.0)),
             last_funding_timestamp=float(
@@ -433,7 +435,7 @@ async def open_neutral_position(
         entry_funding=float(entry_metrics.funding_rate),
         quantity=float(quantity),
         initial_quantity=float(quantity),
-        pnl=0.0,
+        pnl=Decimal(0),
         funding_accrued=0.0,
         commissions=float(commission),
         last_funding_timestamp=now,
@@ -583,14 +585,22 @@ async def monitor_neutral_position(
             max_hold = exit_thresholds.get("holding_time")
             if max_hold is not None and hold_time > max_hold:
                 reasons.append("time")
-            pnl = (
-                (metrics.futures_price - entry.entry_futures_price)
-                - (metrics.spot_price - entry.entry_spot_price)
-            ) * quantity
-            if pnl + entry.funding_accrued - entry.commissions < 0:
+            fut_diff = Decimal(str(metrics.futures_price)) - Decimal(
+                str(entry.entry_futures_price)
+            )
+            spot_diff = Decimal(str(metrics.spot_price)) - Decimal(
+                str(entry.entry_spot_price)
+            )
+            pnl = (fut_diff - spot_diff) * Decimal(str(quantity))
+            if (
+                pnl
+                + Decimal(str(entry.funding_accrued))
+                - Decimal(str(entry.commissions))
+                < Decimal(0)
+            ):
                 reasons.append("pnl_vs_cost")
         else:
-            pnl = 0.0
+            pnl = Decimal(0)
         if reasons:
             min_trade_usd = exit_thresholds.get("min_trade_size", 0.0)
             min_trade_qty = (
@@ -600,12 +610,10 @@ async def monitor_neutral_position(
             )
             if entry and quantity > max(min_trade_qty * 2, 0.0):
                 partial_qty = quantity / 2
-                pnl_part = (
-                    (metrics.futures_price - entry.entry_futures_price)
-                    - (metrics.spot_price - entry.entry_spot_price)
-                ) * partial_qty
+                partial_qty_d = Decimal(str(partial_qty))
+                pnl_part = (fut_diff - spot_diff) * partial_qty_d
                 orders = await close_neutral_position(
-                    exchange, symbol, partial_qty, pnl_part, final=False
+                    exchange, symbol, partial_qty_d, pnl_part, final=False
                 )
                 # Обновляем запись о позиции после частичного выхода
                 quantity -= partial_qty
@@ -616,10 +624,12 @@ async def monitor_neutral_position(
                 exit_basis = calculate_basis(
                     metrics.futures_price, metrics.spot_price, signed=True
                 )
-                commission = float(orders.get("commission", 0.0))
+                commission = Decimal(str(orders.get("commission", 0.0)))
                 pnl_net = pnl_part - commission
-                volume_usd = partial_qty * entry.entry_futures_price
-                pnl_pct = (pnl_net / volume_usd * 100) if volume_usd else 0.0
+                volume_usd = partial_qty_d * Decimal(str(entry.entry_futures_price))
+                pnl_pct = (
+                    pnl_net / volume_usd * 100 if volume_usd != 0 else Decimal(0)
+                )
                 hold_time = exit_ts - entry.entry_timestamp
                 exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
                 log_trade(
@@ -637,10 +647,10 @@ async def monitor_neutral_position(
                         "basis_pct": exit_basis,
                         "funding": entry.entry_funding,
                         "quantity": partial_qty,
-                        "volume_usd": volume_usd,
-                        "pnl": pnl_net,
-                        "pnl_pct": pnl_pct,
-                        "commissions": commission,
+                        "volume_usd": float(volume_usd),
+                        "pnl": float(pnl_net),
+                        "pnl_pct": float(pnl_pct),
+                        "commissions": float(commission),
                         "funding_accrued": entry.funding_accrued,
                         "slippage": exit_slippage,
                         "exit_reasons": ["partial"],
@@ -648,12 +658,16 @@ async def monitor_neutral_position(
                     }
                 )
                 if position_id:
-                    total_volume = entry.entry_futures_price * entry.initial_quantity
+                    total_volume = Decimal(str(entry.entry_futures_price)) * Decimal(
+                        str(entry.initial_quantity)
+                    )
                     pnl_total = (
-                        entry.pnl + entry.funding_accrued - entry.commissions
+                        entry.pnl
+                        + Decimal(str(entry.funding_accrued))
+                        - Decimal(str(entry.commissions))
                     )
                     pnl_pct_total = (
-                        pnl_total / total_volume * 100 if total_volume else 0.0
+                        pnl_total / total_volume * 100 if total_volume != 0 else Decimal(0)
                     )
                     asyncio.create_task(
                         notify_partial_close(
@@ -662,7 +676,7 @@ async def monitor_neutral_position(
                                 f"Частичное закрытие {symbol}: осталось {quantity:.4f}\n"
                                 f"Фандинг: {metrics.funding_rate * 100:.4f}%\n"
                                 f"Базис: {exit_basis:.4f}%\n"
-                                f"Объём: ${volume_usd:.2f}\n"
+                                f"Объём: ${float(volume_usd):.2f}\n"
                                 f"Время в позиции: {format_duration(hold_time)}\n"
                                 f"Накопленный фандинг: {entry.funding_accrued:.4f} / "
                                 f"PnL: {pnl_total:+.4f} ({pnl_pct_total:+.2f} %)"
@@ -670,14 +684,20 @@ async def monitor_neutral_position(
                         )
                     )
                 continue
-            await close_neutral_position(exchange, symbol, quantity, pnl, final=True)
+            await close_neutral_position(
+                exchange, symbol, Decimal(str(quantity)), pnl, final=True
+            )
             if entry:
                 exit_basis = calculate_basis(
                     metrics.futures_price, metrics.spot_price, signed=True
                 )
                 exit_ts = time.time()
                 total_pnl = entry.pnl + pnl
-                net_pnl = total_pnl + entry.funding_accrued - entry.commissions
+                net_pnl = (
+                    total_pnl
+                    + Decimal(str(entry.funding_accrued))
+                    - Decimal(str(entry.commissions))
+                )
                 entry.exit_timestamp = exit_ts
                 entry.exit_reasons = reasons
                 entry.exit_futures_price = metrics.futures_price
@@ -686,8 +706,12 @@ async def monitor_neutral_position(
                 entry.exit_funding = float(metrics.funding_rate)
                 entry.pnl = net_pnl
                 exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
-                volume_usd = entry.entry_futures_price * entry.initial_quantity
-                pnl_pct = (net_pnl / volume_usd * 100) if volume_usd else 0.0
+                volume_usd = Decimal(str(entry.entry_futures_price)) * Decimal(
+                    str(entry.initial_quantity)
+                )
+                pnl_pct = (
+                    net_pnl / volume_usd * 100 if volume_usd != 0 else Decimal(0)
+                )
                 log_trade(
                     {
                         "symbol": symbol,
@@ -703,9 +727,9 @@ async def monitor_neutral_position(
                         "basis_pct": exit_basis,
                         "funding": entry.entry_funding,
                         "quantity": entry.initial_quantity,
-                        "volume_usd": volume_usd,
-                        "pnl": net_pnl,
-                        "pnl_pct": pnl_pct,
+                        "volume_usd": float(volume_usd),
+                        "pnl": float(net_pnl),
+                        "pnl_pct": float(pnl_pct),
                         "commissions": entry.commissions,
                         "funding_accrued": entry.funding_accrued,
                         "slippage": exit_slippage,
