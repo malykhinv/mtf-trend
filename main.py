@@ -16,7 +16,7 @@ from typing import Any, Dict, List
 import yaml
 from dotenv import load_dotenv
 
-import exchanges
+from exchanges import BaseExchange
 from exchanges.binance import BinanceExchange
 from exchanges.bybit import BybitExchange
 from risk import risk_control
@@ -30,7 +30,7 @@ load_dotenv()
 CONFIG: Dict[str, Any] = {}
 
 # Соответствие имени биржи созданному клиенту.
-CLIENTS: Dict[str, exchanges.BaseExchange] = {}
+CLIENTS: Dict[str, BaseExchange] = {}
 
 # Белые списки символов для каждой биржи.
 WHITELISTS: Dict[str, List[str]] = {}
@@ -114,10 +114,11 @@ def start_processing_loops() -> None:
 
     async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> None:
         """Следит за открытой позицией до срабатывания условий выхода."""
-        exchanges.current = CLIENTS[exchange_name]
+        exchange = CLIENTS[exchange_name]
         position_id = f"{exchange_name}:{symbol}"
         try:
             await strategy.monitor_neutral_position(
+                exchange,
                 symbol,
                 quantity,
                 CONFIG.get("thresholds", {}),
@@ -191,20 +192,19 @@ def start_processing_loops() -> None:
                 trade_value = 1.0
 
             for name, client in CLIENTS.items():
-                exchanges.current = client
                 # Перебираем символы из белого списка
                 for symbol in WHITELISTS.get(name, []):
                     if risk_control.is_paused() or risk_control.is_symbol_open(symbol):
                         continue
                     try:
-                        base_metrics = await strategy.get_market_metrics(symbol, 1.0)
+                        base_metrics = await strategy.get_market_metrics(client, symbol, 1.0)
                     except Exception as exc:
                         print(f"Ошибка метрик {name} {symbol}: {exc}")
                         continue
                     price = base_metrics.futures_price
                     quantity = trade_value / price if price else 0.0
                     try:
-                        metrics = await strategy.get_market_metrics(symbol, quantity)
+                        metrics = await strategy.get_market_metrics(client, symbol, quantity)
                     except Exception as exc:
                         print(f"Ошибка метрик {name} {symbol}: {exc}")
                         continue
@@ -214,7 +214,7 @@ def start_processing_loops() -> None:
                     ):
                         # Условия входа выполнены – открываем позицию
                         try:
-                            await strategy.open_neutral_position(symbol, quantity)
+                            await strategy.open_neutral_position(client, symbol, quantity)
                             volume_usd = quantity * metrics.futures_price
                             asyncio.create_task(
                                 notify_open(

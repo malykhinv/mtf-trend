@@ -184,17 +184,14 @@ async def _handle_timeout() -> None:
                 client = CLIENTS.get(exchange_name)
                 if client is None:
                     continue
-                exchanges_current = current
                 try:
-                    # Переключаем контекст на биржу клиента для этой позиции.
-                    globals()["_current"] = client
                     entry = strategy.positions.get(symbol, {})
                     quantity = entry.get("quantity") or entry.get(
                         "initial_quantity", 0.0
                     )
                     try:
                         orders = await strategy.close_neutral_position(
-                            symbol, quantity, final=True
+                            client, symbol, quantity, final=True
                         )
                     except Exception as exc_close:
                         logger.error(
@@ -285,7 +282,7 @@ async def _handle_timeout() -> None:
                             )
                         )
                 finally:
-                    globals()["_current"] = exchanges_current
+                    pass
                     task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await task
