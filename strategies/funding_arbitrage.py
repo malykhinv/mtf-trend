@@ -324,8 +324,8 @@ class Position:
     quantity: float
     initial_quantity: float
     pnl: Decimal = Decimal(0)
-    funding_accrued: float = 0.0
-    commissions: float = 0.0
+    funding_accrued: Decimal = Decimal(0)
+    commissions: Decimal = Decimal(0)
     last_funding_timestamp: float = 0.0
     exchange: str = ""
     exit_timestamp: float | None = None
@@ -338,6 +338,8 @@ class Position:
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
         data["pnl"] = float(self.pnl)
+        data["funding_accrued"] = float(self.funding_accrued)
+        data["commissions"] = float(self.commissions)
         return data
 
     @classmethod
@@ -353,8 +355,8 @@ class Position:
             quantity=float(data["quantity"]),
             initial_quantity=float(data.get("initial_quantity", data["quantity"])),
             pnl=Decimal(str(data.get("pnl", 0.0))),
-            funding_accrued=float(data.get("funding_accrued", 0.0)),
-            commissions=float(data.get("commissions", 0.0)),
+            funding_accrued=Decimal(str(data.get("funding_accrued", 0.0))),
+            commissions=Decimal(str(data.get("commissions", 0.0))),
             last_funding_timestamp=float(
                 data.get("last_funding_timestamp", data.get("entry_timestamp", 0.0))
             ),
@@ -480,8 +482,8 @@ async def open_neutral_position(
             quantity=float(quantity),
             initial_quantity=float(quantity),
             pnl=Decimal(0),
-            funding_accrued=0.0,
-            commissions=float(commission),
+            funding_accrued=Decimal(0),
+            commissions=commission,
             last_funding_timestamp=now,
             exchange=exchange_name,
         )
@@ -560,7 +562,7 @@ async def close_neutral_position(
     async with positions_lock:
         entry = positions.get(symbol)
         if entry is not None:
-            entry.commissions += float(commission)
+            entry.commissions += commission
             ref_price = Decimal(str(entry.entry_futures_price))
         else:
             ref_price = Decimal(0)
@@ -615,7 +617,7 @@ async def monitor_neutral_position(
                 / Decimal(8 * 3600)
             )
             # Накапливаем полученное фондирование
-            entry.funding_accrued = float(Decimal(str(entry.funding_accrued)) + funding_fee)
+            entry.funding_accrued += funding_fee
             entry.last_funding_timestamp = now
         reasons: list[str] = []
         exit_slippage = 0.0
@@ -647,12 +649,7 @@ async def monitor_neutral_position(
                 str(entry.entry_spot_price)
             )
             pnl = (fut_diff - spot_diff) * Decimal(str(quantity))
-            if (
-                pnl
-                + Decimal(str(entry.funding_accrued))
-                - Decimal(str(entry.commissions))
-                < Decimal(0)
-            ):
+            if pnl + entry.funding_accrued - entry.commissions < Decimal(0):
                 reasons.append("pnl_vs_cost")
         else:
             pnl = Decimal(0)
@@ -707,7 +704,7 @@ async def monitor_neutral_position(
                         "pnl": float(pnl_net),
                         "pnl_pct": float(pnl_pct),
                         "commissions": float(commission),
-                        "funding_accrued": entry.funding_accrued,
+                        "funding_accrued": float(entry.funding_accrued),
                         "slippage": exit_slippage,
                         "exit_reasons": ["partial"],
                         "notes": "частичный выход",
@@ -717,11 +714,7 @@ async def monitor_neutral_position(
                     total_volume = Decimal(str(entry.entry_futures_price)) * Decimal(
                         str(entry.initial_quantity)
                     )
-                    pnl_total = (
-                        entry.pnl
-                        + Decimal(str(entry.funding_accrued))
-                        - Decimal(str(entry.commissions))
-                    )
+                    pnl_total = entry.pnl + entry.funding_accrued - entry.commissions
                     pnl_pct_total = (
                         pnl_total / total_volume * 100 if total_volume != 0 else Decimal(0)
                     )
@@ -749,11 +742,7 @@ async def monitor_neutral_position(
                 )
                 exit_ts = time.time()
                 total_pnl = entry.pnl + pnl
-                net_pnl = (
-                    total_pnl
-                    + Decimal(str(entry.funding_accrued))
-                    - Decimal(str(entry.commissions))
-                )
+                net_pnl = total_pnl + entry.funding_accrued - entry.commissions
                 entry.exit_timestamp = exit_ts
                 entry.exit_reasons = reasons
                 entry.exit_futures_price = metrics.futures_price
@@ -786,8 +775,8 @@ async def monitor_neutral_position(
                         "volume_usd": float(volume_usd),
                         "pnl": float(net_pnl),
                         "pnl_pct": float(pnl_pct),
-                        "commissions": entry.commissions,
-                        "funding_accrued": entry.funding_accrued,
+                        "commissions": float(entry.commissions),
+                        "funding_accrued": float(entry.funding_accrued),
                         "slippage": exit_slippage,
                         "exit_reasons": reasons,
                         "notes": None,

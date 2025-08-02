@@ -45,6 +45,10 @@ class DummyExchange:
         await asyncio.sleep(0)
         return {"id": f"{side}_{quantity}", "fee": 0.0}
 
+    async def get_order_status(self, order_id):
+        await asyncio.sleep(0)
+        return {"status": "FILLED"}
+
 
 def test_concurrent_close(monkeypatch):
     _patch_risk(monkeypatch)
