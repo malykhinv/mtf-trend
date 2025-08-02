@@ -143,6 +143,7 @@ class BaseExchange(ABC):
 _EXCHANGES: Dict[str, Type[BaseExchange]] = {}
 current: Optional[BaseExchange] = None
 API_TIMEOUT = 30
+ORDER_RETRIES = 5
 
 
 def register(name: str, cls: Type[BaseExchange]) -> None:
@@ -321,9 +322,17 @@ async def place_order(
     """Размещает ордер через настроенную биржу."""
     if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    return await _await_with_timeout(
-        current.place_order(symbol, side, quantity, price)
-    )
+    delay = 1.0
+    for attempt in range(ORDER_RETRIES):
+        try:
+            return await _await_with_timeout(
+                current.place_order(symbol, side, quantity, price)
+            )
+        except Exception:
+            if attempt == ORDER_RETRIES - 1:
+                raise
+            await asyncio.sleep(delay)
+            delay *= 2
 
 
 async def _poll_fill(order_id: str, market: str) -> None:
@@ -357,9 +366,18 @@ async def place_spot_order(
     """Размещает спотовый ордер и ожидает его полного исполнения."""
     if current is None:  # pragma: no cover - defensive programming
         raise RuntimeError("Биржа не настроена")
-    order = await _await_with_timeout(
-        current.place_spot_order(symbol, side, quantity, price)
-    )
+    delay = 1.0
+    for attempt in range(ORDER_RETRIES):
+        try:
+            order = await _await_with_timeout(
+                current.place_spot_order(symbol, side, quantity, price)
+            )
+            break
+        except Exception:
+            if attempt == ORDER_RETRIES - 1:
+                raise
+            await asyncio.sleep(delay)
+            delay *= 2
     order_id = str(order.get("orderId") or order.get("id") or "")
     _track_order("spot", order_id)
     await _poll_fill(order_id, "spot")
