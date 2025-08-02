@@ -302,7 +302,7 @@ def save_positions(path: Path | str = POSITIONS_FILE) -> None:
     """Сохраняет текущие открытые позиции в ``path``."""
 
     with Path(path).open("w", encoding="utf-8") as fh:
-        json.dump(positions, fh)
+        json.dump(positions, fh, default=lambda o: float(o) if isinstance(o, Decimal) else o)
 
 
 async def open_neutral_position(
@@ -457,15 +457,19 @@ async def monitor_neutral_position(
         now = time.time()
         if entry:
             last = entry.get("last_funding_timestamp", now)
+            quantity_d = Decimal(str(quantity))
+            futures_price_d = Decimal(str(metrics.futures_price))
+            time_delta = Decimal(str(now - last))
             funding_fee = (
-                quantity
-                * metrics.futures_price
+                quantity_d
+                * futures_price_d
                 * metrics.funding_rate
-                * (now - last)
-                / (8 * 3600)
+                * time_delta
+                / Decimal(8 * 3600)
             )
             # Накапливаем полученное фондирование
-            entry["funding_accrued"] = entry.get("funding_accrued", 0.0) + funding_fee
+            entry_funding = Decimal(str(entry.get("funding_accrued", "0")))
+            entry["funding_accrued"] = entry_funding + funding_fee
             entry["last_funding_timestamp"] = now
         reasons: list[str] = []
         exit_slippage = 0.0
@@ -491,7 +495,10 @@ async def monitor_neutral_position(
                 (metrics.futures_price - entry.get("entry_futures_price", 0.0))
                 - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
             ) * quantity
-            if pnl + entry.get("funding_accrued", 0.0) - entry.get("commissions", 0.0) < 0:
+            pnl_d = Decimal(str(pnl))
+            commissions_d = Decimal(str(entry.get("commissions", 0.0)))
+            funding_accrued_d = entry.get("funding_accrued", Decimal(0))
+            if pnl_d + funding_accrued_d - commissions_d < 0:
                 reasons.append("pnl_vs_cost")
         else:
             pnl = 0.0
@@ -547,7 +554,7 @@ async def monitor_neutral_position(
                         "pnl": pnl_net,
                         "pnl_pct": pnl_pct,
                         "commissions": commission,
-                        "funding_accrued": entry.get("funding_accrued", 0.0),
+                        "funding_accrued": float(entry.get("funding_accrued", Decimal(0))),
                         "slippage": exit_slippage,
                         "exit_reasons": ["partial"],
                         "notes": "частичный выход",
@@ -558,12 +565,14 @@ async def monitor_neutral_position(
                         "initial_quantity", entry.get("quantity", 0.0)
                     )
                     pnl_total = (
-                        entry.get("pnl", 0.0)
-                        + entry.get("funding_accrued", 0.0)
-                        - entry.get("commissions", 0.0)
+                        Decimal(str(entry.get("pnl", 0.0)))
+                        + entry.get("funding_accrued", Decimal(0))
+                        - Decimal(str(entry.get("commissions", 0.0)))
                     )
                     pnl_pct_total = (
-                        pnl_total / total_volume * 100 if total_volume else 0.0
+                        pnl_total / Decimal(str(total_volume)) * Decimal(100)
+                        if total_volume
+                        else Decimal(0)
                     )
                     asyncio.create_task(
                         notify_partial_close(
@@ -574,8 +583,8 @@ async def monitor_neutral_position(
                                 f"Базис: {exit_basis:.4f}%\n"
                                 f"Объём: ${volume_usd:.2f}\n"
                                 f"Время в позиции: {format_duration(hold_time)}\n"
-                                f"Накопленный фандинг: {entry.get('funding_accrued', 0.0):.4f} / "
-                                f"PnL: {pnl_total:+.4f} ({pnl_pct_total:+.2f} %)"
+                                f"Накопленный фандинг: {float(entry.get('funding_accrued', Decimal(0))):.4f} / "
+                                f"PnL: {float(pnl_total):+.4f} ({float(pnl_pct_total):+.2f} %)"
                             ),
                         )
                     )
@@ -586,11 +595,11 @@ async def monitor_neutral_position(
                     metrics.futures_price, metrics.spot_price, signed=True
                 )
                 exit_ts = time.time()
-                total_pnl = entry.get("pnl", 0.0) + pnl
+                total_pnl = Decimal(str(entry.get("pnl", 0.0))) + Decimal(str(pnl))
                 net_pnl = (
                     total_pnl
-                    + entry.get("funding_accrued", 0.0)
-                    - entry.get("commissions", 0.0)
+                    + entry.get("funding_accrued", Decimal(0))
+                    - Decimal(str(entry.get("commissions", 0.0)))
                 )
                 entry.update(
                     {
@@ -600,14 +609,18 @@ async def monitor_neutral_position(
                         "exit_spot_price": metrics.spot_price,
                         "exit_basis": exit_basis,
                         "exit_funding": metrics.funding_rate,
-                        "pnl": net_pnl,
+                        "pnl": float(net_pnl),
                     }
                 )
                 exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
                 volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
                     "initial_quantity", entry.get("quantity", 0.0)
                 )
-                pnl_pct = (net_pnl / volume_usd * 100) if volume_usd else 0.0
+                pnl_pct = (
+                    net_pnl / Decimal(str(volume_usd)) * Decimal(100)
+                    if volume_usd
+                    else Decimal(0)
+                )
                 log_trade(
                     {
                         "symbol": symbol,
@@ -626,10 +639,10 @@ async def monitor_neutral_position(
                         "funding": entry.get("entry_funding"),
                         "quantity": entry.get("initial_quantity", entry.get("quantity")),
                         "volume_usd": volume_usd,
-                        "pnl": net_pnl,
-                        "pnl_pct": pnl_pct,
+                        "pnl": float(net_pnl),
+                        "pnl_pct": float(pnl_pct),
                         "commissions": entry.get("commissions", 0.0),
-                        "funding_accrued": entry.get("funding_accrued", 0.0),
+                        "funding_accrued": float(entry.get("funding_accrued", Decimal(0))),
                         "slippage": exit_slippage,
                         "exit_reasons": reasons,
                         "notes": None,
