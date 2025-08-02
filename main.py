@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import time
 from pathlib import Path
@@ -25,6 +26,11 @@ from ai.parameter_optimizer import periodic_optimization
 from utils.telegram import format_duration, notify_close, notify_open
 
 load_dotenv()
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 # Глобальный словарь конфигурации, доступный другим модулям.
 CONFIG: Dict[str, Any] = {}
@@ -70,7 +76,7 @@ def initialize_bot() -> None:
     """Настраивает клиентов бирж и управление рисками."""
 
     api_keys = CONFIG.get("api_keys", {})
-    print(f"Инициализация бота с API-ключами: {list(api_keys.keys())}")
+    logger.info("Инициализация бота с API-ключами: %s", list(api_keys.keys()))
 
     # Создаём клиентов бирж, если заданы ключи
     binance_key = api_keys.get("binance")
@@ -201,14 +207,14 @@ def start_processing_loops() -> None:
                     try:
                         base_metrics = await strategy.get_market_metrics(client, symbol, 1.0)
                     except Exception as exc:
-                        print(f"Ошибка метрик {name} {symbol}: {exc}")
+                        logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
                     price = base_metrics.futures_price
                     quantity = trade_value / price if price else 0.0
                     try:
                         metrics = await strategy.get_market_metrics(client, symbol, quantity)
                     except Exception as exc:
-                        print(f"Ошибка метрик {name} {symbol}: {exc}")
+                        logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
 
                     if strategy.check_entry_conditions(
@@ -236,14 +242,14 @@ def start_processing_loops() -> None:
                             )
                             POSITION_TASKS[f"{name}:{symbol}"] = task
                         except Exception as exc:
-                            print(f"Ошибка открытия {name} {symbol}: {exc}")
+                            logger.error("Ошибка открытия %s %s: %s", name, symbol, exc)
             await asyncio.sleep(poll_interval)
 
     async def risk_loop() -> None:
         """Периодически проверяет, нужно ли приостановить торговлю."""
         while True:
             if risk_control.is_paused():
-                print("Торговля приостановлена из-за ограничений риска")
+                logger.warning("Торговля приостановлена из-за ограничений риска")
             await asyncio.sleep(poll_interval)
 
     async def optimisation_loop() -> None:
@@ -295,4 +301,4 @@ if __name__ == "__main__":  # pragma: no cover - script entry point
     try:
         main()
     except KeyboardInterrupt:
-        print("Бот остановлен.")
+        logger.info("Бот остановлен.")
