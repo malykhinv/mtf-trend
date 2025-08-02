@@ -57,19 +57,36 @@ def configure(config: Dict[str, Optional[float]], deposit_size: Optional[float] 
 
     global _limits
 
+    def _ensure_non_negative(name: str, value: Optional[float]) -> None:
+        if value is not None and value < 0:
+            raise ValueError(f"{name} must be non-negative")
+
+    def _ensure_pct(name: str, value: Optional[float]) -> None:
+        if value is not None and not 0 <= value <= 1:
+            raise ValueError(f"{name} must be between 0 and 1")
+
+    _ensure_non_negative("deposit_size", deposit_size)
+
     dep_cap_value = config.get("deposit_cap")
+    _ensure_non_negative("deposit_cap", dep_cap_value)
     deposit_cap = (
         Decimal("Infinity") if dep_cap_value is None else Decimal(str(dep_cap_value))
     )
-    if deposit_cap.is_infinite() and deposit_size is not None:
-        pct = config.get("deposit_cap_pct")
-        if pct is not None:
-            deposit_cap = Decimal(str(pct)) * Decimal(str(deposit_size))
+
+    pct = config.get("deposit_cap_pct")
+    _ensure_pct("deposit_cap_pct", pct)
+    if deposit_cap.is_infinite() and deposit_size is not None and pct is not None:
+        deposit_cap = Decimal(str(pct)) * Decimal(str(deposit_size))
 
     max_pos_size = config.get("max_position_size")
     max_daily_loss = config.get("max_daily_loss")
     max_consecutive_losses = config.get("max_consecutive_losses")
     max_open_positions = config.get("max_open_positions")
+
+    _ensure_non_negative("max_position_size", max_pos_size)
+    _ensure_non_negative("max_daily_loss", max_daily_loss)
+    _ensure_non_negative("max_consecutive_losses", max_consecutive_losses)
+    _ensure_non_negative("max_open_positions", max_open_positions)
 
     _limits = RiskLimits(
         max_position_size=
