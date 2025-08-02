@@ -51,6 +51,44 @@ class BybitExchange(BaseExchange):
             self._session = aiohttp.ClientSession()
         return self._session
 
+    async def _request(
+        self, method: str, url: str, retries: int = 3, **kwargs: Any
+    ) -> Any:
+        """Выполняет HTTP-запрос с ограниченным числом повторов.
+
+        При статусе ответа вне диапазона ``200-299`` возбуждает
+        ``aiohttp.ClientResponseError``. В случае сетевых ошибок или
+        ответов сервера ``5xx`` выполняет повтор с экспоненциальной задержкой.
+        """
+
+        session = await self._session_get()
+        delay = 1.0
+        for attempt in range(retries):
+            try:
+                request = getattr(session, method.lower())
+                async with request(url, **kwargs) as resp:
+                    if 200 <= resp.status < 300:
+                        return await resp.json()
+
+                    text = await resp.text()
+                    if resp.status >= 500 and attempt < retries - 1:
+                        await asyncio.sleep(delay)
+                        delay *= 2
+                        continue
+
+                    raise aiohttp.ClientResponseError(
+                        resp.request_info,
+                        resp.history,
+                        status=resp.status,
+                        message=text,
+                        headers=resp.headers,
+                    )
+            except aiohttp.ClientError:
+                if attempt >= retries - 1:
+                    raise
+                await asyncio.sleep(delay)
+                delay *= 2
+
     def _sign(self, method: str, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Подписывает параметры запроса для Bybit."""
         params = params.copy()
@@ -71,24 +109,25 @@ class BybitExchange(BaseExchange):
 
     async def fetch_funding(self, symbol: str) -> float:
         """Получает последнюю ставку фондирования для ``symbol``."""
-        session = await self._session_get()
         url = f"{self.REST_URL}/v5/market/funding/history"
         params: dict[str, str | int] = {"symbol": symbol, "limit": 1}
-        async with session.get(url, params=params) as resp:
-            data = await resp.json()
+        data = await self._request("GET", url, params=params)
         return float(data["result"]["list"][0]["fundingRate"])
 
     async def fetch_funding_history(
         self, symbol: str, hours: int = 8, limit: int = 3
     ) -> list[float]:
         """Возвращает историю ставок фондирования."""
-        session = await self._session_get()
         url = f"{self.REST_URL}/v5/market/funding/history"
         end_time = int(time.time() * 1000)
         start_time = end_time - hours * 3600 * 1000
-        params: dict[str, str | int] = {"symbol": symbol, "startTime": start_time, "endTime": end_time, "limit": limit}
-        async with session.get(url, params=params) as resp:
-            data = await resp.json()
+        params: dict[str, str | int] = {
+            "symbol": symbol,
+            "startTime": start_time,
+            "endTime": end_time,
+            "limit": limit,
+        }
+        data = await self._request("GET", url, params=params)
         records = data.get("result", {}).get("list", [])
         return [float(item.get("fundingRate", 0.0)) for item in records]
 
@@ -96,7 +135,6 @@ class BybitExchange(BaseExchange):
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
         """Отправляет фьючерсный ордер на Bybit."""
-        session = await self._session_get()
         url_path = "/v5/order/create"
         url = f"{self.REST_URL}{url_path}"
         body: Dict[str, Any] = {
@@ -109,31 +147,27 @@ class BybitExchange(BaseExchange):
             body["price"] = price
         headers = {"Content-Type": "application/json"}
         body = self._sign("POST", url_path, body)
-        async with session.post(url, json=body, headers=headers) as resp:
-            return await resp.json()
+        return await self._request("POST", url, json=body, headers=headers)
 
     async def get_balance(self) -> dict:
         """Возвращает баланс унифицированного аккаунта."""
-        session = await self._session_get()
         url_path = "/v5/account/wallet-balance"
         url = f"{self.REST_URL}{url_path}"
-        params: Dict[str, Any] = self._sign("GET", url_path, {"accountType": "UNIFIED"})
-        async with session.get(url, params=params) as resp:
-            return await resp.json()
+        params: Dict[str, Any] = self._sign(
+            "GET", url_path, {"accountType": "UNIFIED"}
+        )
+        return await self._request("GET", url, params=params)
 
     async def get_stats(self, symbol: str) -> dict:
         """Получает 24‑часовой объём и открытый интерес."""
-        session = await self._session_get()
         ticker_url = f"{self.REST_URL}/v5/market/tickers"
         t_params: dict[str, str] = {"category": "linear", "symbol": symbol}
-        async with session.get(ticker_url, params=t_params) as resp:
-            ticker = await resp.json()
+        ticker = await self._request("GET", ticker_url, params=t_params)
         tick = (ticker.get("result", {}).get("list") or [{}])[0]
         volume = float(tick.get("turnover24h", 0.0))
         oi_url = f"{self.REST_URL}/v5/market/open-interest"
         oi_params: dict[str, str] = {"category": "linear", "symbol": symbol}
-        async with session.get(oi_url, params=oi_params) as resp:
-            oi = await resp.json()
+        oi = await self._request("GET", oi_url, params=oi_params)
         oi_list = oi.get("result", {}).get("list") or [{}]
         open_interest = float(oi_list[0].get("openInterest", 0.0))
         return {"volume_24h": volume, "open_interest": open_interest}
@@ -142,7 +176,6 @@ class BybitExchange(BaseExchange):
         self, symbol: str, interval: str, limit: int = 1
     ) -> list[Dict[str, float]]:
         """Возвращает свечи OHLC."""
-        session = await self._session_get()
         url = f"{self.REST_URL}/v5/market/kline"
         params: dict[str, str | int] = {
             "category": "linear",
@@ -150,8 +183,7 @@ class BybitExchange(BaseExchange):
             "interval": interval,
             "limit": limit,
         }
-        async with session.get(url, params=params) as resp:
-            data = await resp.json()
+        data = await self._request("GET", url, params=params)
         klist = data.get("result", {}).get("list", [])
         return [
             {
@@ -171,7 +203,6 @@ class BybitExchange(BaseExchange):
         self, symbol: str, side: str, quantity: float, price: float | None = None
     ) -> dict:
         """Отправляет спотовый ордер."""
-        session = await self._session_get()
         url_path = "/v5/order/create"
         url = f"{self.REST_URL}{url_path}"
         body: Dict[str, Any] = {
@@ -185,17 +216,16 @@ class BybitExchange(BaseExchange):
             body["price"] = price
         headers = {"Content-Type": "application/json"}
         body = self._sign("POST", url_path, body)
-        async with session.post(url, json=body, headers=headers) as resp:
-            return await resp.json()
+        return await self._request("POST", url, json=body, headers=headers)
 
     async def get_spot_balance(self) -> dict:
         """Получает баланс спотового аккаунта."""
-        session = await self._session_get()
         url_path = "/v5/account/wallet-balance"
         url = f"{self.REST_URL}{url_path}"
-        params: Dict[str, Any] = self._sign("GET", url_path, {"accountType": "SPOT"})
-        async with session.get(url, params=params) as resp:
-            return await resp.json()
+        params: Dict[str, Any] = self._sign(
+            "GET", url_path, {"accountType": "SPOT"}
+        )
+        return await self._request("GET", url, params=params)
 
     # ------------------------------------------------------------------
     # Обработка спотового WebSocket
