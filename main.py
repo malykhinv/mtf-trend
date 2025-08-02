@@ -54,9 +54,7 @@ def load_config(path: str = "config.yaml") -> None:
     with config_path.open("r", encoding="utf-8") as f:
         CONFIG = yaml.safe_load(f) or {}
     # Подгружаем оптимизированные пороги стратегии
-    CONFIG["thresholds"] = strategy.get_thresholds(
-        CONFIG.get("thresholds", {})
-    )
+    CONFIG["thresholds"] = strategy.get_thresholds(CONFIG.get("thresholds", {}))
 
     # API-ключи загружаем из переменных окружения
     api_keys = {
@@ -112,7 +110,9 @@ def start_processing_loops() -> None:
         if new:
             CONFIG.setdefault("thresholds", {}).update(new)
 
-    async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> None:
+    async def monitor_position(
+        exchange_name: str, symbol: str, quantity: float
+    ) -> None:
         """Следит за открытой позицией до срабатывания условий выхода."""
         exchanges.current = CLIENTS[exchange_name]
         position_id = f"{exchange_name}:{symbol}"
@@ -152,7 +152,9 @@ def start_processing_loops() -> None:
             pnl = entry.get("pnl", 0.0)
             reasons = entry.get("exit_reasons")
             hold = entry.get("exit_timestamp", 0) - entry.get("entry_timestamp", 0)
-            funding_pct = entry.get("exit_funding", entry.get("entry_funding", 0.0)) * 100
+            funding_pct = (
+                entry.get("exit_funding", entry.get("entry_funding", 0.0)) * 100
+            )
             basis_pct = entry.get("exit_basis", 0.0)
             volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
                 "initial_quantity", entry.get("quantity", 0.0)
@@ -220,12 +222,12 @@ def start_processing_loops() -> None:
                                 notify_open(
                                     f"{name}:{symbol}",
                                     (
-                        f"Открыта {symbol} на {name}\n"
-                        f"Фандинг: {metrics.funding_rate * 100:.4f}%\n"
-                        f"Базис: {metrics.basis:.4f}%\n"
-                        f"Объём: ${volume_usd:.2f}\n"
-                        f"Время в позиции: {format_duration(0)}\n"
-                        "Стратегия: Лонг спот / Шорт перп"
+                                        f"Открыта {symbol} на {name}\n"
+                                        f"Фандинг: {metrics.funding_rate * 100:.4f}%\n"
+                                        f"Базис: {metrics.basis:.4f}%\n"
+                                        f"Объём: ${volume_usd:.2f}\n"
+                                        f"Время в позиции: {format_duration(0)}\n"
+                                        "Стратегия: Лонг спот / Шорт перп"
                                     ),
                                 )
                             )
@@ -272,7 +274,12 @@ def start_processing_loops() -> None:
         finally:
             for t in tasks:
                 t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
+            for t in POSITION_TASKS.values():
+                t.cancel()
+            await asyncio.gather(
+                *tasks, *POSITION_TASKS.values(), return_exceptions=True
+            )
+            POSITION_TASKS.clear()
 
     asyncio.run(runner())
 
