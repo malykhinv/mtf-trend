@@ -52,7 +52,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
         entry_funding=0.01,
         quantity=3.0,
         initial_quantity=3.0,
-        commissions=0.1,
+        commissions=Decimal("0.1"),
         last_funding_timestamp=1.0,
         exchange="binance",
     )
@@ -64,7 +64,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     loaded = positions["BTCUSDT"]
     assert isinstance(loaded, Position)
     assert loaded.quantity == 3.0
-    assert loaded.commissions == 0.1
+    assert loaded.commissions == Decimal("0.1")
     assert isinstance(loaded.pnl, Decimal)
     assert loaded.pnl == Decimal(0)
 
