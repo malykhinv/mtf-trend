@@ -19,7 +19,11 @@ def test_initialize_filters_whitelist(monkeypatch, caplog):
 
     strategy_stub = types.ModuleType("strategies.funding_arbitrage")
     strategy_stub.get_thresholds = lambda cfg: cfg
-    strategy_stub.load_positions = lambda: None
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    strategy_stub.load_positions = _noop
     strategy_stub.positions = {}
     strategies_pkg = types.ModuleType("strategies")
     monkeypatch.setitem(sys.modules, "strategies", strategies_pkg)

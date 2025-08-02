@@ -1,4 +1,5 @@
 import json
+import asyncio
 import sys
 import types
 from pathlib import Path
@@ -55,9 +56,9 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
         exchange="binance",
     )
     positions["BTCUSDT"] = pos
-    save_positions(file_path)
+    asyncio.run(save_positions(file_path))
     positions.clear()
-    load_positions(file_path)
+    asyncio.run(load_positions(file_path))
     assert "BTCUSDT" in positions
     loaded = positions["BTCUSDT"]
     assert isinstance(loaded, Position)
@@ -74,6 +75,6 @@ def test_load_positions_validation(tmp_path, monkeypatch):
     file_path = tmp_path / "open_positions.json"
     file_path.write_text(json.dumps(data))
     positions.clear()
-    load_positions(file_path)
+    asyncio.run(load_positions(file_path))
     assert "GOOD" in positions
     assert "BAD" not in positions

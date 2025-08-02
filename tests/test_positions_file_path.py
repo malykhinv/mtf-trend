@@ -3,6 +3,7 @@ import json
 import pathlib
 import sys
 import types
+import asyncio
 
 import pytest
 
@@ -48,10 +49,10 @@ def test_config_specifies_positions_file(tmp_path, monkeypatch):
     main.CONFIG.update({"bot": {"positions_file": str(cfg_path)}})
     monkeypatch.delenv("POSITIONS_FILE_PATH", raising=False)
 
-    strategy.load_positions()
+    asyncio.run(strategy.load_positions())
     assert "BTCUSDT" in strategy.positions
 
-    strategy.save_positions()
+    asyncio.run(strategy.save_positions())
     saved = json.loads(cfg_path.read_text())
     assert "BTCUSDT" in saved
 
@@ -77,10 +78,10 @@ def test_env_var_overrides_config(tmp_path, monkeypatch):
 
     monkeypatch.setenv("POSITIONS_FILE_PATH", str(env_path))
 
-    strategy.load_positions()
+    asyncio.run(strategy.load_positions())
     assert "ETHUSDT" in strategy.positions
     assert "BTCUSDT" not in strategy.positions
 
-    strategy.save_positions()
+    asyncio.run(strategy.save_positions())
     saved = json.loads(env_path.read_text())
     assert "ETHUSDT" in saved
