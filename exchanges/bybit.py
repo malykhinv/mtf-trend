@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional
 
 import aiohttp
 import websockets
+from websockets.exceptions import WebSocketException
 
 from . import BaseExchange, register
 
@@ -257,7 +258,7 @@ class BybitExchange(BaseExchange):
                 sub = {"op": "subscribe", "args": [f"orderbook.1.{symbol}"]}
                 await ws.send(json.dumps(sub))
                 return ws
-            except Exception:
+            except (WebSocketException, OSError):
                 await asyncio.sleep(5)
 
     async def _listen_spot(self, symbol: str) -> None:
@@ -274,14 +275,14 @@ class BybitExchange(BaseExchange):
                         "bids": book.get("b", []),
                         "asks": book.get("a", []),
                     }
-            except Exception:
+            except (WebSocketException, json.JSONDecodeError, OSError):
                 # При ошибке пересоздаём соединение для конкретного символа
                 await asyncio.sleep(1)
                 ws = self._spot_ws.pop(symbol, None)
                 if ws is not None:
                     try:
                         await ws.close()
-                    except Exception:
+                    except WebSocketException:
                         pass
 
     async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
@@ -307,7 +308,7 @@ class BybitExchange(BaseExchange):
                 }
                 await ws.send(json.dumps(sub))
                 return ws
-            except Exception:
+            except (WebSocketException, OSError):
                 await asyncio.sleep(5)
 
     async def _listen(self, symbol: str) -> None:
@@ -324,14 +325,14 @@ class BybitExchange(BaseExchange):
                         "bids": book.get("b", []),
                         "asks": book.get("a", []),
                     }
-            except Exception:
+            except (WebSocketException, json.JSONDecodeError, OSError):
                 # Ошибка — перезапускаем соединение для конкретного символа
                 await asyncio.sleep(1)
                 ws = self._ws.pop(symbol, None)
                 if ws is not None:
                     try:
                         await ws.close()
-                    except Exception:
+                    except WebSocketException:
                         pass
 
     async def get_orderbook(self, symbol: str, depth: int = 5) -> dict:
