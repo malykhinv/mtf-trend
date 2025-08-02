@@ -40,6 +40,8 @@ class BaseExchange(ABC):
     без реальных сетевых запросов.
     """
 
+    name: str
+
     def __init__(self, **_ignored: Any) -> None:
         """Базовый инициализатор, принимающий произвольные параметры.
 
@@ -49,6 +51,9 @@ class BaseExchange(ABC):
         "неожиданных аргументах" при создании экземпляра абстрактного класса.
         """
         super().__init__()
+        self.name = getattr(
+            self, "name", self.__class__.__name__.replace("Exchange", "").lower()
+        )
 
     @abstractmethod
     async def fetch_funding(self, symbol: str) -> float:

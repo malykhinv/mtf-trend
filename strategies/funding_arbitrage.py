@@ -310,7 +310,7 @@ async def open_neutral_position(
 ) -> Dict[str, Dict]:
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
     bot_cfg = CONFIG.get("bot", {})
-    exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
+    exchange_name = exchange.name
     if symbol not in WHITELISTS.get(exchange_name, []):
         raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки

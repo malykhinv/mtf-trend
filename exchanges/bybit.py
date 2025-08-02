@@ -30,6 +30,7 @@ class BybitExchange(BaseExchange):
             Пара ключей API для авторизации.
         """
         super().__init__(**_ignored)
+        self.name = "bybit"
         self.api_key = api_key
         self.api_secret = api_secret
         self._session: Optional[aiohttp.ClientSession] = None
