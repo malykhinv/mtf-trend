@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
 import random
 from pathlib import Path
 from typing import Callable, Dict, Optional
@@ -123,14 +125,33 @@ async def periodic_optimization(
         await asyncio.sleep(wait_hours * 3600)
 
 
+logger = logging.getLogger(__name__)
+
+
 def load_thresholds(defaults: Dict[str, float], path: Path = DEFAULT_OUTPUT) -> Dict[str, float]:
-    """Загружает оптимизированные пороги и объединяет их с ``defaults``."""
+    """Загружает оптимизированные пороги и объединяет их с ``defaults``.
+
+    Загруженные значения проверяются на корректность: принимаются только
+    конечные неотрицательные числа. Неверные пороги игнорируются с
+    предупреждением.
+    """
+
     try:
         data = load(path)
-        if isinstance(data, dict):
-            return {**defaults, **data}
-    except Exception:
-        pass
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("Failed to load thresholds from %s: %s", path, exc)
+        return defaults
+
+    if isinstance(data, dict):
+        valid: Dict[str, float] = {}
+        for key, value in data.items():
+            if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+                valid[key] = float(value)
+            else:
+                logger.warning("Invalid threshold for %s: %r", key, value)
+        if valid:
+            return {**defaults, **valid}
+
     return defaults
 
 
