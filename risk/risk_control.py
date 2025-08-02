@@ -10,25 +10,29 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Set
 import time
+from decimal import Decimal, getcontext
+
+# Используем повышенную точность для финансовых расчётов
+getcontext().prec = 28
 
 
 @dataclass
 class RiskLimits:
     """Конфигурация ограничений риска."""
 
-    max_position_size: float = float("inf")
-    max_daily_loss: float = float("inf")
+    max_position_size: Decimal = Decimal("inf")
+    max_daily_loss: Decimal = Decimal("inf")
     max_consecutive_losses: float = float("inf")
     max_open_positions: float = float("inf")
-    deposit_cap: float = float("inf")
+    deposit_cap: Decimal = Decimal("inf")
 
 
 @dataclass
 class RiskState:
     """Текущее состояние риска, обновляемое после сделок."""
 
-    total_notional: float = 0.0
-    daily_loss: float = 0.0
+    total_notional: Decimal = Decimal("0")
+    daily_loss: Decimal = Decimal("0")
     consecutive_losses: int = 0
     paused: bool = False
     open_symbols: Set[str] = field(default_factory=set)
@@ -38,6 +42,16 @@ class RiskState:
 
 _limits = RiskLimits()
 _state = RiskState()
+
+
+def _to_decimal(value: float | int | str | Decimal, default: Decimal) -> Decimal:
+    """Преобразует ``value`` в :class:`Decimal` с защитой от бесконечности."""
+
+    if isinstance(value, Decimal):
+        return value
+    if value in (float("inf"), "inf", "Infinity"):
+        return Decimal("inf")
+    return Decimal(str(value))
 
 
 def configure(config: Dict[str, float], deposit_size: Optional[float] = None) -> None:
@@ -53,23 +67,31 @@ def configure(config: Dict[str, float], deposit_size: Optional[float] = None) ->
     """
 
     global _limits
-    deposit_cap = config.get("deposit_cap", float("inf"))
-    if deposit_cap is float("inf") and deposit_size is not None:
+    deposit_cap_raw = config.get("deposit_cap", float("inf"))
+    deposit_cap = _to_decimal(deposit_cap_raw, Decimal("inf"))
+    if deposit_cap.is_infinite() and deposit_size is not None:
         pct = config.get("deposit_cap_pct")
         if pct is not None:
-            # Переводим процент от депозита в абсолютное значение
-            deposit_cap = pct * deposit_size
+            deposit_cap = _to_decimal(pct, Decimal("0")) * _to_decimal(
+                deposit_size, Decimal("0")
+            )
 
     _limits = RiskLimits(
-        max_position_size=config.get("max_position_size", float("inf")),
-        max_daily_loss=config.get("max_daily_loss", float("inf")),
-        max_consecutive_losses=config.get("max_consecutive_losses", float("inf")),
+        max_position_size=_to_decimal(
+            config.get("max_position_size", float("inf")), Decimal("inf")
+        ),
+        max_daily_loss=_to_decimal(
+            config.get("max_daily_loss", float("inf")), Decimal("inf")
+        ),
+        max_consecutive_losses=config.get(
+            "max_consecutive_losses", float("inf")
+        ),
         max_open_positions=config.get("max_open_positions", float("inf")),
         deposit_cap=deposit_cap,
     )
 
 
-def can_open_position(notional: float) -> bool:
+def can_open_position(notional: Decimal) -> bool:
     """Возвращает ``True``, если позицию на ``notional`` USD можно открыть."""
 
     if _state.paused:
@@ -85,10 +107,12 @@ def can_open_position(notional: float) -> bool:
     return True
 
 
-def update_position(delta_notional: float) -> None:
+def update_position(delta_notional: Decimal) -> None:
     """Обновляет учёт текущей нагрузки на депозит на ``delta_notional`` USD."""
 
-    _state.total_notional = max(_state.total_notional + delta_notional, 0.0)
+    _state.total_notional = max(
+        _state.total_notional + delta_notional, Decimal("0")
+    )
 
 
 def is_symbol_open(symbol: str) -> bool:
@@ -118,7 +142,7 @@ def pause(duration: Optional[float] = None) -> None:
     _state.pause_until = time.time() + duration if duration else None
 
 
-def record_pnl(pnl: float) -> None:
+def record_pnl(pnl: Decimal) -> None:
     """Фиксирует прибыль или убыток по завершённой сделке."""
 
     if pnl < 0:

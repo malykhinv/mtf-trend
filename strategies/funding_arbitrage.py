@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
+from decimal import Decimal, getcontext
 
 from exchanges import (
     fetch_funding_history,
@@ -32,6 +33,14 @@ from main import CONFIG
 from utils.logger import log_trade
 from utils.telegram import format_duration, notify_partial_close
 
+
+getcontext().prec = 28
+
+
+def _to_decimal(value: float | int | str | Decimal) -> Decimal:
+    """Utility to convert numbers to :class:`Decimal`."""
+
+    return value if isinstance(value, Decimal) else Decimal(str(value))
 
 POSITIONS_FILE = Path("open_positions.json")
 
@@ -174,31 +183,33 @@ async def get_market_metrics(
 
 def check_entry_conditions(
     symbol: str,
-    quantity: float,
+    quantity: Decimal,
     metrics: MarketMetrics,
     thresholds: Dict[str, float],
-    ) -> bool:
+) -> bool:
     """Возвращает ``True``, если выполнены все условия входа.
 
     Порог ``basis`` задаётся в процентных пунктах.
     """
 
+    quantity = _to_decimal(quantity)
     whitelist = CONFIG.get("bot", {}).get("whitelist", [])
-    deposit = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
-    max_deposit_trade = deposit * thresholds.get("deposit_pct", 1.0)
+    deposit = _to_decimal(CONFIG.get("bot", {}).get("deposit_size", float("inf")))
+    max_deposit_trade = deposit * _to_decimal(thresholds.get("deposit_pct", 1.0))
     spread_pct = (
         metrics.spread / metrics.futures_price
         if metrics.futures_price
         else float("inf")
     )
-    notional = quantity * metrics.futures_price
+    notional = quantity * _to_decimal(metrics.futures_price)
     max_basis_pct = thresholds.get("basis", float("inf"))
     combined_slippage = metrics.slippage
     slippage_limit = thresholds.get("slippage", 0.003)
+    funding_rate = _to_decimal(metrics.funding_rate)
 
     return (
-        metrics.funding_rate > 0
-        and metrics.funding_rate >= thresholds.get("funding_rate", 0.0)
+        funding_rate > Decimal("0")
+        and funding_rate >= _to_decimal(thresholds.get("funding_rate", 0.0))
         and spread_pct <= thresholds.get("spread", float("inf"))
         and metrics.basis <= max_basis_pct
         and metrics.liquidity >= thresholds.get("liquidity", 0.0)
@@ -207,7 +218,7 @@ def check_entry_conditions(
         <= thresholds.get("volatility", float("inf"))
         and metrics.open_interest <= metrics.volume * 2
         and combined_slippage <= slippage_limit
-        and notional <= thresholds.get("max_trade_size", float("inf"))
+        and notional <= _to_decimal(thresholds.get("max_trade_size", float("inf")))
         and notional <= max_deposit_trade
         and symbol in whitelist
         and not risk_control.is_symbol_open(symbol)
@@ -243,7 +254,9 @@ def load_positions(path: Path | str = POSITIONS_FILE) -> None:
     positions.clear()
     for symbol, entry in data.items():
         positions[symbol] = entry
-        notional = entry.get("quantity", 0.0) * entry.get("entry_futures_price", 0.0)
+        notional = _to_decimal(entry.get("quantity", 0.0)) * _to_decimal(
+            entry.get("entry_futures_price", 0.0)
+        )
         if notional:
             risk_control.update_position(notional)
         risk_control.mark_symbol_open(symbol)
@@ -256,27 +269,28 @@ def save_positions(path: Path | str = POSITIONS_FILE) -> None:
         json.dump(positions, fh)
 
 
-async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]:
+async def open_neutral_position(symbol: str, quantity: Decimal) -> Dict[str, Dict]:
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
+    quantity = _to_decimal(quantity)
     bot_cfg = CONFIG.get("bot", {})
     if symbol not in bot_cfg.get("whitelist", []):
         raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки
-    entry_metrics = await get_market_metrics(symbol, quantity)
-    notional = quantity * entry_metrics.futures_price
-    deposit = bot_cfg.get("deposit_size", float("inf"))
-    deposit_pct = CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)
+    entry_metrics = await get_market_metrics(symbol, float(quantity))
+    notional = quantity * _to_decimal(entry_metrics.futures_price)
+    deposit = _to_decimal(bot_cfg.get("deposit_size", float("inf")))
+    deposit_pct = _to_decimal(CONFIG.get("thresholds", {}).get("deposit_pct", 1.0))
     max_trade = deposit * deposit_pct
     if notional > deposit or notional > max_trade:
         raise RuntimeError("Размер сделки превышает лимиты депозита")
     if not risk_control.can_open_position(notional) or risk_control.is_symbol_open(symbol):
         raise RuntimeError("Превышены лимиты риска, торговля приостановлена или позиция уже открыта")
     # Хеджируем позицию на споте и фьючерсе
-    orders = await hedge(symbol, quantity)
+    orders = await hedge(symbol, float(quantity))
     risk_control.update_position(notional)
     risk_control.mark_symbol_open(symbol)
     now = time.time()
-    commission = sum(float(o.get("fee", 0.0)) for o in orders.values())
+    commission = sum(_to_decimal(o.get("fee", 0.0)) for o in orders.values())
     exchange_name = (
         type(exchanges.current).__name__.replace("Exchange", "").lower()
         if getattr(exchanges, "_current", None)
@@ -288,16 +302,16 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
         "entry_spot_price": entry_metrics.spot_price,
         "entry_basis": entry_metrics.basis,
         "entry_funding": entry_metrics.funding_rate,
-        "quantity": quantity,
-        "initial_quantity": quantity,
+        "quantity": float(quantity),
+        "initial_quantity": float(quantity),
         "pnl": 0.0,
         "funding_accrued": 0.0,
-        "commissions": commission,
+        "commissions": float(commission),
         "last_funding_timestamp": now,
         "exchange": exchange_name,
     }
     save_positions()
-    volume_usd = notional
+    volume_usd = float(notional)
     log_trade(
         {
             "symbol": symbol,
@@ -312,11 +326,11 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
             "exit_basis": None,
             "basis_pct": entry_metrics.basis,
             "funding": entry_metrics.funding_rate,
-            "quantity": quantity,
+            "quantity": float(quantity),
             "volume_usd": volume_usd,
             "pnl": 0.0,
             "pnl_pct": 0.0,
-            "commissions": commission,
+            "commissions": float(commission),
             "funding_accrued": 0.0,
             "slippage": entry_metrics.slippage,
             "exit_reasons": None,
@@ -327,7 +341,7 @@ async def open_neutral_position(symbol: str, quantity: float) -> Dict[str, Dict]
 
 
 async def close_neutral_position(
-    symbol: str, quantity: float, pnl: float = 0.0, final: bool = True
+    symbol: str, quantity: Decimal, pnl: Decimal = Decimal("0"), final: bool = True
 ) -> Dict[str, Dict]:
     """Закрывает нейтральную позицию и фиксирует результат.
 
@@ -342,20 +356,24 @@ async def close_neutral_position(
     final:
         Если ``True``, позиция закрывается полностью и риски сбрасываются.
     """
-    close_long = await place_order(symbol, "SELL", quantity)
+    quantity = _to_decimal(quantity)
+    pnl = _to_decimal(pnl)
+    close_long = await place_order(symbol, "SELL", float(quantity))
     try:
-        close_short = await place_order(symbol, "BUY", quantity)
+        close_short = await place_order(symbol, "BUY", float(quantity))
     except Exception as exc:
         # В случае ошибки возвращаем длинную позицию
-        await place_order(symbol, "BUY", quantity)
+        await place_order(symbol, "BUY", float(quantity))
         raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена") from exc
     entry = positions.get(symbol)
-    commission = float(close_long.get("fee", 0.0)) + float(
+    commission = _to_decimal(close_long.get("fee", 0.0)) + _to_decimal(
         close_short.get("fee", 0.0)
     )
     if entry is not None:
-        entry["commissions"] = entry.get("commissions", 0.0) + commission
-    ref_price = entry.get("entry_futures_price", 0.0) if entry else 0.0
+        entry["commissions"] = float(
+            _to_decimal(entry.get("commissions", 0.0)) + commission
+        )
+    ref_price = _to_decimal(entry.get("entry_futures_price", 0.0)) if entry else Decimal("0")
     risk_control.update_position(-(quantity * ref_price))
     risk_control.record_pnl(pnl)
     if final:
@@ -367,7 +385,7 @@ async def close_neutral_position(
 
 async def monitor_neutral_position(
     symbol: str,
-    quantity: float,
+    quantity: Decimal,
     exit_thresholds: Dict[str, float],
     poll_interval: float = 5.0,
     position_id: str | None = None,
@@ -379,10 +397,11 @@ async def monitor_neutral_position(
     отправляются через :func:`notify_partial_close`, чтобы редактировать одно
     сообщение вместо отправки новых.
     """
+    quantity = _to_decimal(quantity)
     entry = positions.get(symbol, {})
     while True:
         try:
-            metrics = await get_market_metrics(symbol, quantity)
+            metrics = await get_market_metrics(symbol, float(quantity))
         except Exception as exc:
             print(f"Ошибка мониторинга {symbol}: {exc}")
             await asyncio.sleep(poll_interval)
@@ -392,13 +411,15 @@ async def monitor_neutral_position(
             last = entry.get("last_funding_timestamp", now)
             funding_fee = (
                 quantity
-                * metrics.futures_price
-                * metrics.funding_rate
-                * (now - last)
-                / (8 * 3600)
+                * _to_decimal(metrics.futures_price)
+                * _to_decimal(metrics.funding_rate)
+                * _to_decimal(now - last)
+                / Decimal(8 * 3600)
             )
             # Накапливаем полученное фондирование
-            entry["funding_accrued"] = entry.get("funding_accrued", 0.0) + funding_fee
+            entry["funding_accrued"] = float(
+                _to_decimal(entry.get("funding_accrued", 0.0)) + funding_fee
+            )
             entry["last_funding_timestamp"] = now
         reasons: list[str] = []
         exit_slippage = 0.0
@@ -423,7 +444,7 @@ async def monitor_neutral_position(
             pnl = (
                 (metrics.futures_price - entry.get("entry_futures_price", 0.0))
                 - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
-            ) * quantity
+            ) * float(quantity)
             if pnl + entry.get("funding_accrued", 0.0) - entry.get("commissions", 0.0) < 0:
                 reasons.append("pnl_vs_cost")
         else:
@@ -435,18 +456,18 @@ async def monitor_neutral_position(
                 if metrics.futures_price
                 else 0.0
             )
-            if entry and quantity > max(min_trade_qty * 2, 0.0):
-                partial_qty = quantity / 2
+            if entry and quantity > _to_decimal(max(min_trade_qty * 2, 0.0)):
+                partial_qty = quantity / Decimal(2)
                 pnl_part = (
                     (metrics.futures_price - entry.get("entry_futures_price", 0.0))
                     - (metrics.spot_price - entry.get("entry_spot_price", 0.0))
-                ) * partial_qty
+                ) * float(partial_qty)
                 orders = await close_neutral_position(
-                    symbol, partial_qty, pnl_part, final=False
+                    symbol, partial_qty, Decimal(str(pnl_part)), final=False
                 )
                 # Обновляем запись о позиции после частичного выхода
                 quantity -= partial_qty
-                entry["quantity"] = quantity
+                entry["quantity"] = float(quantity)
                 entry["pnl"] = entry.get("pnl", 0.0) + pnl_part
                 save_positions()
                 exit_ts = time.time()
@@ -456,10 +477,10 @@ async def monitor_neutral_position(
                     if metrics.spot_price
                     else float("inf")
                 )
-                commission = float(orders["long"].get("fee", 0.0)) + float(
+                commission = _to_decimal(orders["long"].get("fee", 0.0)) + _to_decimal(
                     orders["short"].get("fee", 0.0)
                 )
-                volume_usd = partial_qty * entry.get("entry_futures_price", 0.0)
+                volume_usd = float(partial_qty * _to_decimal(entry.get("entry_futures_price", 0.0)))
                 pnl_pct = (pnl_part / volume_usd * 100) if volume_usd else 0.0
                 hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
                 exchange_name = (
@@ -483,11 +504,11 @@ async def monitor_neutral_position(
                         "exit_basis": exit_basis,
                         "basis_pct": exit_basis,
                         "funding": entry.get("entry_funding"),
-                        "quantity": partial_qty,
+                        "quantity": float(partial_qty),
                         "volume_usd": volume_usd,
                         "pnl": pnl_part,
                         "pnl_pct": pnl_pct,
-                        "commissions": commission,
+                        "commissions": float(commission),
                         "funding_accrued": entry.get("funding_accrued", 0.0),
                         "slippage": exit_slippage,
                         "exit_reasons": ["partial"],
@@ -519,7 +540,7 @@ async def monitor_neutral_position(
                         )
                     )
                 continue
-            await close_neutral_position(symbol, quantity, pnl, final=True)
+            await close_neutral_position(symbol, quantity, Decimal(str(pnl)), final=True)
             if entry:
                 exit_basis = (
                     ((metrics.futures_price - metrics.spot_price) / metrics.spot_price) * 100
