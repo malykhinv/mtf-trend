@@ -94,6 +94,8 @@ async def get_market_metrics(
 
     def _calc_slippage(orders, size, mid):
         """Оценивает проскальзывание при выполнении ``size`` по стакану."""
+        if size <= 0 or math.isnan(size):
+            return float("inf")
         remaining = size
         cost = 0.0
         for price, qty in orders:
