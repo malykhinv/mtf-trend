@@ -1,3 +1,4 @@
+import pytest
 from risk import risk_control as rc
 
 
@@ -28,3 +29,30 @@ def test_configure_handles_none_values():
     assert rc._limits.deposit_cap.is_infinite()
     assert rc._limits.max_consecutive_losses == float("inf")
     assert rc._limits.max_open_positions == float("inf")
+
+
+def test_configure_negative_values_raise():
+
+    params = [
+        "max_position_size",
+        "max_daily_loss",
+        "deposit_cap",
+        "max_consecutive_losses",
+        "max_open_positions",
+        "deposit_cap_pct",
+    ]
+    for p in params:
+        with pytest.raises(ValueError):
+            rc.configure({p: -1}, deposit_size=1000)
+
+
+def test_configure_deposit_cap_pct_above_one_raises():
+
+    with pytest.raises(ValueError):
+        rc.configure({"deposit_cap_pct": 1.5}, deposit_size=1000)
+
+
+def test_configure_negative_deposit_size_raises():
+
+    with pytest.raises(ValueError):
+        rc.configure({}, deposit_size=-100)
