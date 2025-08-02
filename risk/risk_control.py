@@ -43,7 +43,7 @@ _limits = RiskLimits()
 _state = RiskState()
 
 
-def configure(config: Dict[str, float], deposit_size: Optional[float] = None) -> None:
+def configure(config: Dict[str, Optional[float]], deposit_size: Optional[float] = None) -> None:
     """Настраивает пределы риска из словаря.
 
     Параметры
@@ -56,17 +56,30 @@ def configure(config: Dict[str, float], deposit_size: Optional[float] = None) ->
     """
 
     global _limits
-    deposit_cap = Decimal(str(config.get("deposit_cap", "Infinity")))
+
+    dep_cap_value = config.get("deposit_cap")
+    deposit_cap = (
+        Decimal("Infinity") if dep_cap_value is None else Decimal(str(dep_cap_value))
+    )
     if deposit_cap.is_infinite() and deposit_size is not None:
         pct = config.get("deposit_cap_pct")
         if pct is not None:
             deposit_cap = Decimal(str(pct)) * Decimal(str(deposit_size))
 
+    max_pos_size = config.get("max_position_size")
+    max_daily_loss = config.get("max_daily_loss")
+    max_consecutive_losses = config.get("max_consecutive_losses")
+    max_open_positions = config.get("max_open_positions")
+
     _limits = RiskLimits(
-        max_position_size=Decimal(str(config.get("max_position_size", "Infinity"))),
-        max_daily_loss=Decimal(str(config.get("max_daily_loss", "Infinity"))),
-        max_consecutive_losses=config.get("max_consecutive_losses", float("inf")),
-        max_open_positions=config.get("max_open_positions", float("inf")),
+        max_position_size=
+            Decimal("Infinity") if max_pos_size is None else Decimal(str(max_pos_size)),
+        max_daily_loss=
+            Decimal("Infinity") if max_daily_loss is None else Decimal(str(max_daily_loss)),
+        max_consecutive_losses=
+            float("inf") if max_consecutive_losses is None else max_consecutive_losses,
+        max_open_positions=
+            float("inf") if max_open_positions is None else max_open_positions,
         deposit_cap=deposit_cap,
     )
 
