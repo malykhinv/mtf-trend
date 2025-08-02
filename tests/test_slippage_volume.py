@@ -83,6 +83,24 @@ async def test_slippage_negative_volume() -> None:
 
 
 @pytest.mark.asyncio
+async def test_slippage_zero_mid(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def zero_price_orderbook(symbol, depth=5):
+        return {"bids": [[0.0, 1.0]], "asks": [[0.0, 1.0]]}
+
+    monkeypatch.setattr(
+        "strategies.funding_arbitrage.get_orderbook", zero_price_orderbook
+    )
+    monkeypatch.setattr(
+        "strategies.funding_arbitrage.get_spot_orderbook", zero_price_orderbook
+    )
+
+    metrics = await get_market_metrics("BTCUSDT", trade_size=1)
+    assert math.isinf(metrics.spot_slippage)
+    assert math.isinf(metrics.futures_slippage)
+    assert math.isinf(metrics.slippage)
+
+
+@pytest.mark.asyncio
 async def test_returns_none_on_empty_orderbook(monkeypatch: pytest.MonkeyPatch) -> None:
     async def empty_orderbook(symbol, depth=5):
         return {"bids": [], "asks": []}

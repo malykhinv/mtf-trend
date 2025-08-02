@@ -145,6 +145,8 @@ async def get_market_metrics(
         """Оценивает проскальзывание при выполнении ``size`` по стакану."""
         if size <= 0 or math.isnan(size):
             return float("inf")
+        if mid <= 0 or not math.isfinite(mid):
+            return float("inf")
         remaining = size
         cost = 0.0
         for price, qty in orders:
