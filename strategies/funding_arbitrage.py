@@ -353,6 +353,9 @@ positions: Dict[str, Position] = {}
 # Global lock to serialize access to positions file across async tasks
 _positions_lock = asyncio.Lock()
 
+# Lock to protect in-memory position modifications
+positions_lock = asyncio.Lock()
+
 
 def _get_positions_path(path: Path | str | None = None) -> Path:
     """Возвращает путь к файлу с позициями из env, config или ``DEFAULT_POSITIONS_FILE``."""
@@ -435,25 +438,26 @@ async def open_neutral_position(
             "Не удалось разместить хедж; спотовая часть откатена"
         ) from exc
     orders = {"spot": spot_order, "perp": perp_order}
-    risk_control.update_position(notional)
-    risk_control.mark_symbol_open(symbol)
-    now = time.time()
     commission = sum(Decimal(str(o.get("fee", 0.0))) for o in orders.values())
-    positions[symbol] = Position(
-        entry_timestamp=now,
-        entry_futures_price=entry_metrics.futures_price,
-        entry_spot_price=entry_metrics.spot_price,
-        entry_basis=entry_metrics.basis,
-        entry_funding=float(entry_metrics.funding_rate),
-        quantity=float(quantity),
-        initial_quantity=float(quantity),
-        pnl=Decimal(0),
-        funding_accrued=0.0,
-        commissions=float(commission),
-        last_funding_timestamp=now,
-        exchange=exchange_name,
-    )
-    await save_positions()
+    now = time.time()
+    async with positions_lock:
+        risk_control.update_position(notional)
+        risk_control.mark_symbol_open(symbol)
+        positions[symbol] = Position(
+            entry_timestamp=now,
+            entry_futures_price=entry_metrics.futures_price,
+            entry_spot_price=entry_metrics.spot_price,
+            entry_basis=entry_metrics.basis,
+            entry_funding=float(entry_metrics.funding_rate),
+            quantity=float(quantity),
+            initial_quantity=float(quantity),
+            pnl=Decimal(0),
+            funding_accrued=0.0,
+            commissions=float(commission),
+            last_funding_timestamp=now,
+            exchange=exchange_name,
+        )
+        await save_positions()
     volume_usd = float(notional)
     log_trade(
         {
@@ -512,22 +516,23 @@ async def close_neutral_position(
         # В случае ошибки возвращаем длинную позицию
         await exchange.place_order(symbol, "BUY", float(quantity))
         raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена") from exc
-    entry = positions.get(symbol)
     commission = Decimal(str(close_long.get("fee", 0.0))) + Decimal(
         str(close_short.get("fee", 0.0))
     )
-    if entry is not None:
-        entry.commissions += float(commission)
-        ref_price = Decimal(str(entry.entry_futures_price))
-    else:
-        ref_price = Decimal(0)
-    risk_control.update_position(-(quantity * ref_price))
-    net_pnl = pnl - commission
-    risk_control.record_pnl(net_pnl)
-    if final:
-        risk_control.mark_symbol_closed(symbol)
-        positions.pop(symbol, None)
-        await save_positions()
+    async with positions_lock:
+        entry = positions.get(symbol)
+        if entry is not None:
+            entry.commissions += float(commission)
+            ref_price = Decimal(str(entry.entry_futures_price))
+        else:
+            ref_price = Decimal(0)
+        risk_control.update_position(-(quantity * ref_price))
+        net_pnl = pnl - commission
+        risk_control.record_pnl(net_pnl)
+        if final:
+            risk_control.mark_symbol_closed(symbol)
+            positions.pop(symbol, None)
+            await save_positions()
     return {"long": close_long, "short": close_short, "commission": float(commission)}
 
 
@@ -628,10 +633,11 @@ async def monitor_neutral_position(
                     exchange, symbol, partial_qty_d, pnl_part, final=False
                 )
                 # Обновляем запись о позиции после частичного выхода
-                quantity -= partial_qty
-                entry.quantity = quantity
-                entry.pnl += pnl_part
-                await save_positions()
+                async with positions_lock:
+                    quantity -= partial_qty
+                    entry.quantity = quantity
+                    entry.pnl += pnl_part
+                    await save_positions()
                 exit_ts = time.time()
                 exit_basis = calculate_basis(
                     metrics.futures_price, metrics.spot_price, signed=True
