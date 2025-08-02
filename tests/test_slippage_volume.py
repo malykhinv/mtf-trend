@@ -27,7 +27,12 @@ ai_module.parameter_optimizer = parameter_optimizer
 sys.modules["ai"] = ai_module
 sys.modules["ai.parameter_optimizer"] = parameter_optimizer
 
-from strategies.funding_arbitrage import get_market_metrics, check_entry_conditions
+from strategies.funding_arbitrage import (
+    MarketMetrics,
+    check_entry_conditions,
+    check_exit_conditions,
+    get_market_metrics,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -107,8 +112,38 @@ async def test_returns_none_on_missing_stats(monkeypatch: pytest.MonkeyPatch) ->
     assert metrics is None
 
 
+@pytest.mark.asyncio
+async def test_returns_none_on_missing_ohlc(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def empty_ohlc(symbol, interval="15m", limit=1):
+        return []
+
+    monkeypatch.setattr("strategies.funding_arbitrage.get_ohlc", empty_ohlc)
+    metrics = await get_market_metrics("BTCUSDT", trade_size=1)
+    assert metrics is None
+
+
 def test_check_entry_conditions_none_metrics(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
         result = check_entry_conditions("BTCUSDT", Decimal("1"), None, {})
     assert not result
     assert "incomplete" in caplog.text.lower()
+
+
+def test_exit_on_non_finite_volatility() -> None:
+    metrics = MarketMetrics(
+        Decimal("0"),
+        0.0,
+        0.0,
+        float("inf"),
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    assert check_exit_conditions(metrics, {})
+    metrics.volatility = float("nan")
+    assert check_exit_conditions(metrics, {})
