@@ -105,13 +105,19 @@ def initialize_bot() -> None:
         return set(futures) & set(spot)
 
     async def _fetch_all() -> dict[str, set[str]]:
-        result: dict[str, set[str]] = {}
-        for name, client in CLIENTS.items():
+        """Получает доступные символы всех бирж параллельно."""
+
+        async def _task(name: str, client: BaseExchange) -> tuple[str, set[str]]:
             try:
-                result[name] = await _collect(client)
+                return name, await _collect(client)
             except Exception as exc:  # pragma: no cover - network errors
                 logger.error("Не удалось получить символы %s: %s", name, exc)
-        return result
+                return name, set()
+
+        pairs = await asyncio.gather(
+            *(_task(n, c) for n, c in CLIENTS.items())
+        )
+        return dict(pairs)
 
     available = asyncio.run(_fetch_all()) if CLIENTS else {}
     for name, allowed in available.items():
