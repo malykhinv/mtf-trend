@@ -1,8 +1,6 @@
 aiohttp~=3.12.13
 aiogram~=3.21.0
 websockets~=15.0.1
-pytest~=8.4.1
-pytest-asyncio
 python-dotenv~=1.1.1
 
 pandas~=2.3.0
