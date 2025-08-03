@@ -140,7 +140,7 @@ def initialize_bot() -> None:
     risk_control.configure(CONFIG.get("risk", {}), bot_cfg.get("deposit_size"))
 
 
-async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> None:
+async def monitor_position(exchange_name: str, symbol: str, quantity: Decimal) -> None:
     """Следит за открытой позицией до срабатывания условий выхода."""
     poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
     exchange = CLIENTS[exchange_name]
@@ -284,7 +284,9 @@ def start_processing_loops() -> None:
                     if await risk_control.is_paused() or await risk_control.is_symbol_open(symbol):
                         continue
                     try:
-                        base_metrics = await strategy.get_market_metrics(symbol, 1.0, client)
+                        base_metrics = await strategy.get_market_metrics(
+                            symbol, Decimal("1"), client
+                        )
                         if base_metrics is None:
                             logger.warning(
                                 "Пропуск %s:%s из-за неполных метрик", name, symbol
@@ -301,7 +303,7 @@ def start_processing_loops() -> None:
                     )
                     try:
                         metrics = await strategy.get_market_metrics(
-                            symbol, float(quantity), client
+                            symbol, quantity, client
                         )
                         if metrics is None:
                             logger.warning(
@@ -338,7 +340,7 @@ def start_processing_loops() -> None:
                                 )
                             )
                             task = asyncio.create_task(
-                                monitor_position(name, symbol, float(quantity))
+                                monitor_position(name, symbol, quantity)
                             )
                             POSITION_TASKS[f"{name}:{symbol}"] = task
                         except Exception as exc:
@@ -367,7 +369,12 @@ def start_processing_loops() -> None:
         # Возобновляем мониторинг ранее открытых позиций
         for symbol, entry in strategy.positions.items():
             exchange_name = entry.get("exchange")
-            quantity = entry.get("quantity", 0.0)
+            quantity_raw = entry.get("quantity", 0.0)
+            quantity = (
+                quantity_raw
+                if isinstance(quantity_raw, Decimal)
+                else Decimal(str(quantity_raw))
+            )
             if exchange_name in CLIENTS and quantity:
                 task = asyncio.create_task(
                     monitor_position(exchange_name, symbol, quantity)
