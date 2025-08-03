@@ -107,7 +107,7 @@ class MarketMetrics:
 
 def calculate_basis(
     futures_price: float, spot_price: float, signed: bool = False
-) -> float:
+) -> Decimal | None:
     """Расчёт процентного базиса между фьючерсом и спотом.
 
     Parameters
@@ -115,14 +115,21 @@ def calculate_basis(
     futures_price : float
         Текущая цена фьючерса.
     spot_price : float
-        Текущая цена спота.
+        Текущая цена спота. При ``spot_price <= 0`` функция возвращает
+        ``None``, что можно трактовать как бесконечный базис.
     signed : bool, optional
         Если ``True``, знак сохраняется. Иначе возвращается абсолютное значение.
+
+    Returns
+    -------
+    Decimal | None
+        Процентный базис. ``None`` при неположительной или некорректной
+        цене спота.
     """
 
-    if not spot_price:
-        return float("inf")
-    value = (futures_price - spot_price) / spot_price * 100
+    if spot_price <= 0 or not math.isfinite(spot_price):
+        return None
+    value = Decimal(str((futures_price - spot_price) / spot_price * 100))
     return value if signed else abs(value)
 
 
@@ -216,6 +223,8 @@ async def get_market_metrics(
         Decimal(str(q)) for _, q in asks
     )
     basis = calculate_basis(float(futures_price), float(spot_price))
+    if basis is None:
+        basis = Decimal("Infinity")
 
     # Изменение цены за последние 15 минут для оценки волатильности
     if exchange is not None:
@@ -831,6 +840,8 @@ async def monitor_neutral_position(
                     float(metrics.spot_price),
                     signed=True,
                 )
+                if exit_basis is None:
+                    exit_basis = Decimal("Infinity")
                 commission = Decimal(str(orders.get("commission", 0.0)))
                 pnl_net = pnl_part - commission
                 volume_usd = partial_qty_d * Decimal(str(entry.entry_futures_price))
@@ -898,6 +909,8 @@ async def monitor_neutral_position(
                     float(metrics.spot_price),
                     signed=True,
                 )
+                if exit_basis is None:
+                    exit_basis = Decimal("Infinity")
                 exit_ts = time.time()
                 total_pnl = entry.pnl + pnl
                 net_pnl = total_pnl + entry.funding_accrued - entry.commissions
