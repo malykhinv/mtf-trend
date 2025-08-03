@@ -438,6 +438,8 @@ async def open_neutral_position(
         raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки
     entry_metrics = await get_market_metrics(symbol, float(quantity), exchange)
+    if entry_metrics is None:
+        raise RuntimeError("Рыночные метрики недоступны, сделка пропущена")
     notional = quantity * Decimal(str(entry_metrics.futures_price))
     deposit = Decimal(str(bot_cfg.get("deposit_size", "Infinity")))
     deposit_pct = Decimal(str(CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)))
