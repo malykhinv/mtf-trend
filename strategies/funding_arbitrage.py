@@ -249,12 +249,12 @@ async def get_market_metrics(
 # Проверка условий
 # ---------------------------------------------------------------------------
 
-def check_entry_conditions(
+async def check_entry_conditions(
     symbol: str,
     quantity: Decimal,
     metrics: MarketMetrics | None,
     thresholds: Dict[str, float],
-    ) -> bool:
+) -> bool:
     """Возвращает ``True``, если выполнены все условия входа.
 
     Порог ``basis`` задаётся в процентных пунктах.
@@ -290,7 +290,7 @@ def check_entry_conditions(
         and combined_slippage <= slippage_limit
         and notional <= Decimal(str(thresholds.get("max_trade_size", float("inf"))))
         and notional <= max_deposit_trade
-        and not risk_control.is_symbol_open(symbol)
+        and not await risk_control.is_symbol_open(symbol)
     )
 
 
@@ -415,8 +415,8 @@ async def load_positions(path: Path | str | None = None) -> None:
         positions[symbol] = pos
         notional = pos.quantity * pos.entry_futures_price
         if notional:
-            risk_control.update_position(Decimal(str(notional)))
-        risk_control.mark_symbol_open(symbol)
+            await risk_control.update_position(Decimal(str(notional)))
+        await risk_control.mark_symbol_open(symbol)
 
 
 async def save_positions(path: Path | str | None = None) -> None:
@@ -444,8 +444,10 @@ async def open_neutral_position(
     max_trade = deposit * deposit_pct
     if notional > deposit or notional > max_trade:
         raise RuntimeError("Размер сделки превышает лимиты депозита")
-    if not risk_control.can_open_position(notional) or risk_control.is_symbol_open(symbol):
-        raise RuntimeError("Превышены лимиты риска, торговля приостановлена или позиция уже открыта")
+    if not await risk_control.can_open_position(notional) or await risk_control.is_symbol_open(symbol):
+        raise RuntimeError(
+            "Превышены лимиты риска, торговля приостановлена или позиция уже открыта"
+        )
     # Хеджируем позицию на споте и фьючерсе
     spot_order = await exchange.place_spot_order(symbol, "BUY", float(quantity))
     spot_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
@@ -471,8 +473,8 @@ async def open_neutral_position(
     commission = sum(Decimal(str(o.get("fee", 0.0))) for o in orders.values())
     now = time.time()
     async with positions_lock:
-        risk_control.update_position(notional)
-        risk_control.mark_symbol_open(symbol)
+        await risk_control.update_position(notional)
+        await risk_control.mark_symbol_open(symbol)
         positions[symbol] = Position(
             entry_timestamp=now,
             entry_futures_price=entry_metrics.futures_price,
@@ -566,11 +568,11 @@ async def close_neutral_position(
             ref_price = Decimal(str(entry.entry_futures_price))
         else:
             ref_price = Decimal(0)
-        risk_control.update_position(-(quantity * ref_price))
+        await risk_control.update_position(-(quantity * ref_price))
         net_pnl = pnl - commission
-        risk_control.record_pnl(net_pnl)
+        await risk_control.record_pnl(net_pnl)
         if final:
-            risk_control.mark_symbol_closed(symbol)
+            await risk_control.mark_symbol_closed(symbol)
             positions.pop(symbol, None)
             await save_positions()
     return {"long": close_long, "short": close_short, "commission": float(commission)}

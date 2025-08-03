@@ -303,7 +303,7 @@ async def _handle_timeout() -> None:
                         await task
                     strategy.positions.pop(symbol, None)
 
-    risk_control.pause()
+    await risk_control.pause()
 
 
 async def _await_with_timeout(coro: Coroutine[Any, Any, Any]) -> Any:

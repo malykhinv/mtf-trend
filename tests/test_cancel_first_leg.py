@@ -75,10 +75,19 @@ async def test_cancel_first_leg_on_second_failure(monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(fa, "CONFIG", {"bot": {}, "thresholds": {}})
     monkeypatch.setattr(fa, "WHITELISTS", {exchange.name: ["BTCUSDT"]})
-    monkeypatch.setattr(fa.risk_control, "can_open_position", lambda *_: True)
-    monkeypatch.setattr(fa.risk_control, "is_symbol_open", lambda *_: False)
-    monkeypatch.setattr(fa.risk_control, "update_position", lambda *_: None)
-    monkeypatch.setattr(fa.risk_control, "mark_symbol_open", lambda *_: None)
+    async def _true(*args, **kwargs):
+        return True
+
+    async def _false(*args, **kwargs):
+        return False
+
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(fa.risk_control, "can_open_position", _true)
+    monkeypatch.setattr(fa.risk_control, "is_symbol_open", _false)
+    monkeypatch.setattr(fa.risk_control, "update_position", _noop)
+    monkeypatch.setattr(fa.risk_control, "mark_symbol_open", _noop)
 
     metrics = fa.MarketMetrics(
         funding_rate=Decimal("0"),
