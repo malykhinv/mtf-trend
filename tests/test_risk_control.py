@@ -1,10 +1,13 @@
 import pytest
 from risk import risk_control as rc
+from decimal import Decimal
+import time
 
 
 def teardown_module(module):
     # Reset configuration after tests
     rc.configure({})
+    rc._state = rc.RiskState()
 
 
 def test_deposit_cap_pct_applied():
@@ -60,3 +63,25 @@ def test_configure_deposit_cap_pct_out_of_range_ignored():
 def test_configure_negative_deposit_size_ignored():
     rc.configure({"deposit_cap_pct": 0.1}, deposit_size=-100)
     assert rc._limits.deposit_cap.is_infinite()
+
+
+@pytest.mark.asyncio
+async def test_daily_loss_resets_after_24h_record_pnl(monkeypatch):
+    rc._state.daily_loss = Decimal("5")
+    now = time.time()
+    rc._state.last_reset_ts = now
+    monkeypatch.setattr(rc.time, "time", lambda: now + 24 * 3600 + 1)
+    await rc.record_pnl(Decimal("0"))
+    assert rc._state.daily_loss == Decimal("0")
+    assert rc._state.last_reset_ts == now + 24 * 3600 + 1
+
+
+@pytest.mark.asyncio
+async def test_daily_loss_resets_after_24h_is_paused(monkeypatch):
+    rc._state.daily_loss = Decimal("5")
+    now = time.time()
+    rc._state.last_reset_ts = now
+    monkeypatch.setattr(rc.time, "time", lambda: now + 24 * 3600 + 1)
+    await rc.is_paused()
+    assert rc._state.daily_loss == Decimal("0")
+    assert rc._state.last_reset_ts == now + 24 * 3600 + 1

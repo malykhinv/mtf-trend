@@ -13,6 +13,7 @@ import asyncio
 import time
 import math
 import logging
+from datetime import datetime
 from decimal import Decimal, getcontext
 
 getcontext().prec = 10
@@ -42,11 +43,23 @@ class RiskState:
     open_symbols: Set[str] = field(default_factory=set)
     open_positions: int = 0
     pause_until: Optional[float] = None
+    last_reset_ts: float = field(default_factory=time.time)
 
 
 _limits = RiskLimits()
 _state = RiskState()
 _lock = asyncio.Lock()
+
+
+def _maybe_reset_daily_loss(now: float) -> None:
+    if now - _state.last_reset_ts >= 24 * 3600:
+        logger.info(
+            "Daily loss reset at %s. Previous loss: %s",
+            datetime.utcfromtimestamp(now).isoformat(),
+            _state.daily_loss,
+        )
+        _state.daily_loss = Decimal("0")
+        _state.last_reset_ts = now
 
 
 def configure(config: Dict[str, Optional[float]], deposit_size: Optional[float] = None) -> None:
@@ -174,6 +187,8 @@ async def record_pnl(pnl: Decimal) -> None:
 
     should_pause = False
     async with _lock:
+        now = time.time()
+        _maybe_reset_daily_loss(now)
         if pnl < 0:
             _state.daily_loss += abs(pnl)
             _state.consecutive_losses += 1
@@ -189,7 +204,9 @@ async def is_paused() -> bool:
     """Возвращает ``True``, если торговля сейчас приостановлена."""
 
     async with _lock:
-        if _state.paused and _state.pause_until and time.time() >= _state.pause_until:
+        now = time.time()
+        _maybe_reset_daily_loss(now)
+        if _state.paused and _state.pause_until and now >= _state.pause_until:
             # Истёк таймер паузы — возобновляем торговлю
             _state.paused = False
             _state.pause_until = None
