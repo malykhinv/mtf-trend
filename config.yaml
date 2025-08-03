@@ -28,3 +28,7 @@ bot:
     - ETHUSDT
   deposit_size: 100
   positions_file: open_positions.json
+
+paths:
+  log: data/funding_bot_log.xlsx
+  thresholds: data/optimized_thresholds.joblib

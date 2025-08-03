@@ -1,7 +1,8 @@
 """Простые утилиты для логирования сделок в Excel.
 
 Модуль предоставляет небольшую функцию для сохранения информации о сделках
-в файл ``.xlsx``. Каждая сделка записывается одной строкой со следующими
+в файл ``.xlsx``. Путь к журналу определяется параметром ``paths.log`` в
+конфигурации. Каждая сделка записывается одной строкой со следующими
 колонками:
 
 ``symbol``
@@ -35,10 +36,10 @@
 ``notes``
     Произвольные заметки.
 
-Функция :func:`log_trade` добавляет новую строку в ``data/funding_bot_log.xlsx``,
-создавая файл и его родительский каталог при необходимости. Функция следит
-за наличием всех колонок и избегает повреждения данных, используя ``openpyxl``
-для добавления строк без полного переписывания файла через pandas.
+Функция :func:`log_trade` добавляет новую строку в журнал, создавая файл и его
+родительский каталог при необходимости. Функция следит за наличием всех колонок
+и избегает повреждения данных, используя ``openpyxl`` для добавления строк без
+полного переписывания файла через pandas.
 """
 
 from __future__ import annotations
@@ -47,10 +48,18 @@ import asyncio
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
 
+import yaml
 from openpyxl import Workbook, load_workbook
 
-# Расположение файла журнала по умолчанию.
-LOG_PATH: Path = Path("data") / "funding_bot_log.xlsx"
+# Загружаем путь к журналу из конфигурации, при отсутствии используем значение по умолчанию.
+_CFG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
+try:
+    with _CFG_PATH.open("r", encoding="utf-8") as _f:
+        _cfg = yaml.safe_load(_f) or {}
+except FileNotFoundError:  # pragma: no cover - defensive
+    _cfg = {}
+
+LOG_PATH: Path = Path(_cfg.get("paths", {}).get("log", "data/funding_bot_log.xlsx"))
 
 # Упорядоченный список колонок, ожидаемых для каждой сделки.
 LOG_COLUMNS: list[str] = [
@@ -101,7 +110,7 @@ def _validate_entry(entry: Mapping[str, Any], columns: Iterable[str]) -> None:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
 
 
-async def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
+async def log_trade(trade: Mapping[str, Any], path: Path | None = None) -> None:
     """Добавляет информацию о сделке в Excel-журнал.
 
     Параметры
@@ -109,14 +118,14 @@ async def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
     trade:
         Словарь, содержащий все ключи из :data:`LOG_COLUMNS`.
     path:
-        Необязательный путь к файлу Excel. По умолчанию
-        ``data/funding_bot_log.xlsx``.
+        Необязательный путь к файлу Excel. По умолчанию используется путь из
+        конфигурации.
 
     Функция асинхронная и использует глобальную блокировку, чтобы
     предотвращать одновременную запись в файл из разных задач.
     """
 
-    path = Path(path)
+    path = Path(path) if path is not None else LOG_PATH
     _ensure_parent(path)
     _validate_entry(trade, LOG_COLUMNS)
 
