@@ -66,7 +66,7 @@ class NoCallExchange(BaseExchange):
 async def test_open_neutral_position_skips_when_no_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
     exchange = NoCallExchange()
 
-    monkeypatch.setattr(fa, "CONFIG", {"bot": {}, "thresholds": {}})
+    monkeypatch.setattr(fa, "CONFIG", {"bot": {"deposit_size": 1000}, "thresholds": {}})
     monkeypatch.setattr(fa, "WHITELISTS", {exchange.name: ["BTCUSDT"]})
     monkeypatch.setattr(fa.risk_control, "try_open_position", lambda *_: True)
     monkeypatch.setattr(fa.risk_control, "update_position", lambda *_: None)

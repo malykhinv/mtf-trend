@@ -64,8 +64,18 @@ class DummyExchange(BaseExchange):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("deposit", [float("inf"), -100])
-async def test_open_neutral_position_rejects_invalid_deposit(monkeypatch, caplog, deposit):
+@pytest.mark.parametrize(
+    "deposit,use_key",
+    [
+        (float("inf"), True),
+        (-100, True),
+        (float("nan"), True),
+        (None, False),
+    ],
+)
+async def test_open_neutral_position_rejects_invalid_deposit(
+    monkeypatch, caplog, deposit, use_key
+):
     exchange = DummyExchange()
 
     metrics = fa.MarketMetrics(
@@ -86,13 +96,14 @@ async def test_open_neutral_position_rejects_invalid_deposit(monkeypatch, caplog
     async def _metrics(symbol: str, trade_size: float, exch: BaseExchange):
         return metrics
 
-    monkeypatch.setattr(fa, "CONFIG", {"bot": {"deposit_size": deposit}, "thresholds": {}})
+    bot_cfg = {"deposit_size": deposit} if use_key else {}
+    monkeypatch.setattr(fa, "CONFIG", {"bot": bot_cfg, "thresholds": {}})
     monkeypatch.setattr(fa, "WHITELISTS", {exchange.name: ["BTCUSDT"]})
     monkeypatch.setattr(fa, "get_market_metrics", _metrics)
 
     caplog.set_level(logging.ERROR)
-    with pytest.raises(RuntimeError):
-        await fa.open_neutral_position(exchange, "BTCUSDT", Decimal("1"))
+    result = await fa.open_neutral_position(exchange, "BTCUSDT", Decimal("1"))
 
+    assert result is False
     assert "Некорректное значение депозита" in caplog.text
     assert exchange.orders == []

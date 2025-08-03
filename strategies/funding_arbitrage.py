@@ -528,9 +528,17 @@ async def save_positions(path: Path | str | None = None) -> None:
 
 async def open_neutral_position(
     exchange: BaseExchange, symbol: str, quantity: Decimal
-) -> Dict[str, Dict]:
-    """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
+) -> Dict[str, Dict] | bool:
+    """Открывает компенсирующие длинную и короткую позиции и сохраняет данные.
+
+    При некорректном значении депозита функция возвращает ``False``.
+    """
     bot_cfg = CONFIG.get("bot", {})
+    deposit_raw = bot_cfg.get("deposit_size", "Infinity")
+    deposit = Decimal(str(deposit_raw))
+    if not deposit.is_finite() or deposit < 0:
+        logger.error("Некорректное значение депозита: %s", deposit_raw)
+        return False
     exchange_name = exchange.name
     if symbol not in WHITELISTS.get(exchange_name, []):
         raise RuntimeError("Символ отсутствует в белом списке")
@@ -539,11 +547,6 @@ async def open_neutral_position(
     if entry_metrics is None:
         raise RuntimeError("Рыночные метрики недоступны, сделка пропущена")
     notional = quantity * Decimal(str(entry_metrics.futures_price))
-    deposit_raw = bot_cfg.get("deposit_size", "Infinity")
-    deposit = Decimal(str(deposit_raw))
-    if not deposit.is_finite() or deposit < 0:
-        logger.error("Некорректное значение депозита: %s", deposit_raw)
-        raise RuntimeError("Некорректное значение депозита")
     deposit_pct = Decimal(str(CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)))
     if deposit_pct < 0:
         logger.warning(
