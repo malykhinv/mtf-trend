@@ -657,17 +657,41 @@ async def close_neutral_position(
     try:
         close_short = await exchange.place_order(symbol, "BUY", float(quantity))
         short_id = str(close_short.get("orderId") or close_short.get("id") or "")
+        short_fee = Decimal(str(close_short.get("fee", 0.0)))
         if not await _wait_filled(exchange, short_id):
+            status = await exchange.get_order_status(short_id)
+            filled = Decimal(str(status.get("executedQty") or status.get("filled") or 0))
             await exchange.cancel_order(symbol, short_id)
-            await exchange.place_order(symbol, "BUY", float(quantity))
-            raise RuntimeError("Не удалось закрыть хедж; длинная нога откатана")
+            remaining = quantity - filled
+            if remaining > 0:
+                retry = await exchange.place_order(symbol, "BUY", float(remaining))
+                retry_id = str(retry.get("orderId") or retry.get("id") or "")
+                if not await _wait_filled(exchange, retry_id):
+                    await exchange.cancel_order(symbol, retry_id)
+                    rollback = await exchange.place_order(symbol, "BUY", float(quantity))
+                    rollback_id = str(rollback.get("orderId") or rollback.get("id") or "")
+                    if not await _wait_filled(exchange, rollback_id):
+                        logger.error("Сбой отката для %s", symbol)
+                    raise RuntimeError("Не удалось закрыть хедж; длинная нога откатана")
+                short_fee += Decimal(str(retry.get("fee", 0.0)))
+                close_short = retry
+            else:
+                rollback = await exchange.place_order(symbol, "BUY", float(quantity))
+                rollback_id = str(rollback.get("orderId") or rollback.get("id") or "")
+                if not await _wait_filled(exchange, rollback_id):
+                    logger.error("Сбой отката для %s", symbol)
+                raise RuntimeError("Не удалось закрыть хедж; длинная нога откатана")
     except Exception as exc:
         # В случае ошибки возвращаем длинную позицию
-        await exchange.place_order(symbol, "BUY", float(quantity))
-        raise RuntimeError("Не удалось закрыть хедж; длинная нога откатена") from exc
-    commission = Decimal(str(close_long.get("fee", 0.0))) + Decimal(
-        str(close_short.get("fee", 0.0))
-    )
+        rollback = await exchange.place_order(symbol, "BUY", float(quantity))
+        rollback_id = str(rollback.get("orderId") or rollback.get("id") or "")
+        try:
+            if not await _wait_filled(exchange, rollback_id):
+                logger.error("Сбой отката для %s", symbol)
+        except Exception:
+            logger.error("Сбой отката для %s", symbol)
+        raise RuntimeError("Не удалось закрыть хедж; длинная нога откатана") from exc
+    commission = Decimal(str(close_long.get("fee", 0.0))) + short_fee
     async with positions_lock:
         entry = positions.get(symbol)
         if entry is not None:
