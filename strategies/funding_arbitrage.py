@@ -265,7 +265,7 @@ def check_entry_conditions(
         if metrics is None:
             logger.warning("Skipping %s: incomplete market metrics", symbol)
             return False
-        quantity_d = Decimal(str(quantity))
+        quantity_d = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
         if not quantity_d.is_finite() or quantity_d <= 0:
             logger.warning("Skipping %s: invalid quantity %s", symbol, quantity_d)
             return False
@@ -618,7 +618,7 @@ async def close_neutral_position(
     final:
         Если ``True``, позиция закрывается полностью и риски сбрасываются.
     """
-    quantity = Decimal(str(quantity))
+    quantity = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
     pnl = Decimal(str(pnl))
     close_long = await exchange.place_order(symbol, "SELL", float(quantity))
     long_id = str(close_long.get("orderId") or close_long.get("id") or "")
@@ -689,7 +689,7 @@ async def monitor_neutral_position(
         now = time.time()
         if entry:
             last = entry.last_funding_timestamp or now
-            quantity_d = Decimal(str(quantity))
+            quantity_d = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
             price_d = Decimal(str(metrics.futures_price))
             elapsed = Decimal(str(now - last))
             funding_fee = (
@@ -731,7 +731,7 @@ async def monitor_neutral_position(
             spot_diff = Decimal(str(metrics.spot_price)) - Decimal(
                 str(entry.entry_spot_price)
             )
-            pnl = (fut_diff - spot_diff) * Decimal(str(quantity))
+            pnl = (fut_diff - spot_diff) * quantity_d
             if (
                 pnl + entry.funding_accrued - entry.commissions < Decimal(0)
             ):
