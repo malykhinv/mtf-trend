@@ -351,14 +351,38 @@ class BybitExchange(BaseExchange):
             self._ws_tasks[symbol] = asyncio.create_task(self._listen(symbol))
         return self._orderbooks.get(symbol, {"bids": [], "asks": []})
 
-    async def __aexit__(self, *exc_info: Any) -> None:  # pragma: no cover
-        """Закрывает все активные соединения при выходе."""
+    async def close(self) -> None:
+        """Закрывает HTTP-сессию и WebSocket соединения."""
         if self._session is not None:
             await self._session.close()
-        for ws in self._ws.values():
-            await ws.close()
-        for ws in self._spot_ws.values():
-            await ws.close()
+            self._session = None
+
+        for task in list(self._ws_tasks.values()) + list(self._spot_ws_tasks.values()):
+            task.cancel()
+        await asyncio.gather(
+            *self._ws_tasks.values(),
+            *self._spot_ws_tasks.values(),
+            return_exceptions=True,
+        )
+        self._ws_tasks.clear()
+        self._spot_ws_tasks.clear()
+
+        for ws in list(self._ws.values()):
+            try:
+                await ws.close()
+            except WebSocketException:
+                pass
+        for ws in list(self._spot_ws.values()):
+            try:
+                await ws.close()
+            except WebSocketException:
+                pass
+        self._ws.clear()
+        self._spot_ws.clear()
+
+    async def __aexit__(self, *exc_info: Any) -> None:  # pragma: no cover
+        """Закрывает все активные соединения при выходе."""
+        await self.close()
 
 
 # Регистрация биржи

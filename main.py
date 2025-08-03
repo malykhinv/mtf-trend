@@ -339,6 +339,12 @@ def start_processing_loops() -> None:
             )
             POSITION_TASKS.clear()
 
+            # Закрываем подключенные биржи
+            await asyncio.gather(
+                *(client.close() for client in CLIENTS.values() if hasattr(client, "close")),
+                return_exceptions=True,
+            )
+
     asyncio.run(runner())
 
 
