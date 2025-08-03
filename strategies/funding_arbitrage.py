@@ -486,18 +486,19 @@ async def load_positions(path: Path | str | None = None) -> None:
     except json.JSONDecodeError:
         logger.warning("Некорректный файл позиций %s, начинаем с пустого", path)
         data = {}
-    positions.clear()
-    for symbol, entry in data.items():
-        try:
-            pos = Position.from_dict(entry)
-        except (ValueError, TypeError) as exc:
-            logger.warning("Invalid position for %s: %s", symbol, exc)
-            continue
-        positions[symbol] = pos
-        notional = pos.quantity * pos.entry_futures_price
-        if notional:
-            await risk_control.update_position(Decimal(str(notional)))
-        await risk_control.mark_symbol_open(symbol)
+    async with positions_lock:
+        positions.clear()
+        for symbol, entry in data.items():
+            try:
+                pos = Position.from_dict(entry)
+            except (ValueError, TypeError) as exc:
+                logger.warning("Invalid position for %s: %s", symbol, exc)
+                continue
+            positions[symbol] = pos
+            notional = pos.quantity * pos.entry_futures_price
+            if notional:
+                await risk_control.update_position(Decimal(str(notional)))
+            await risk_control.mark_symbol_open(symbol)
 
 
 async def save_positions(path: Path | str | None = None) -> None:

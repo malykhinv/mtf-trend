@@ -241,9 +241,6 @@ def start_processing_loops() -> None:
 
     poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
 
-    # Восстанавливаем ранее сохранённые позиции
-    asyncio.run(strategy.load_positions())
-
     def _update_thresholds(new: Dict[str, float]) -> None:
         """Обновляет пороги стратегии новыми значениями."""
         if new:
@@ -402,6 +399,7 @@ def main() -> None:
     """Запускает загрузку конфигурации и основной цикл работы бота."""
     load_config()
     initialize_bot()
+    asyncio.run(strategy.load_positions())
     start_processing_loops()
 
 
