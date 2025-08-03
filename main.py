@@ -25,7 +25,7 @@ from exchanges.bybit import BybitExchange
 from risk import risk_control
 from strategies import funding_arbitrage as strategy
 from ai.parameter_optimizer import periodic_optimization
-from utils.telegram import format_duration, notify_close, notify_open
+from utils.telegram import format_duration, notify_close, notify_open, shutdown
 
 load_dotenv()
 
@@ -370,6 +370,8 @@ def start_processing_loops() -> None:
                 *(client.close() for client in CLIENTS.values() if hasattr(client, "close")),
                 return_exceptions=True,
             )
+
+            await shutdown()
 
     asyncio.run(runner())
 
