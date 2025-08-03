@@ -500,6 +500,7 @@ async def save_positions(path: Path | str | None = None) -> None:
         tmp_name: str | None = None
         try:
             dir_path = Path(path).resolve().parent
+            dir_path.mkdir(parents=True, exist_ok=True)
             with NamedTemporaryFile(
                 "w", dir=dir_path, delete=False, encoding="utf-8"
             ) as fh:
