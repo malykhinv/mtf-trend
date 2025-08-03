@@ -163,12 +163,15 @@ def start_processing_loops() -> None:
             )
         except Exception as exc:
             # При ошибке закрываем позицию и уведомляем
-            entry = strategy.positions.get(symbol, {})
-            hold = time.time() - entry.get("entry_timestamp", time.time())
-            funding_pct = entry.get("entry_funding", 0.0) * 100
-            basis_pct = entry.get("entry_basis", 0.0)
-            volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
-                "initial_quantity", entry.get("quantity", 0.0)
+            entry = strategy.positions.get(symbol)
+            entry_ts = entry.entry_timestamp if entry else time.time()
+            hold = time.time() - entry_ts
+            funding_pct = (entry.entry_funding if entry else 0.0) * 100
+            basis_pct = entry.entry_basis if entry else 0.0
+            volume_usd = (
+                entry.entry_futures_price * entry.initial_quantity
+                if entry
+                else 0.0
             )
             asyncio.create_task(
                 notify_close(
@@ -185,16 +188,22 @@ def start_processing_loops() -> None:
             raise
         else:
             # Успешное завершение позиции
-            entry = strategy.positions.get(symbol, {})
-            pnl = entry.get("pnl", 0.0)
-            reasons = entry.get("exit_reasons")
-            hold = entry.get("exit_timestamp", 0) - entry.get("entry_timestamp", 0)
-            funding_pct = (
-                entry.get("exit_funding", entry.get("entry_funding", 0.0)) * 100
+            entry = strategy.positions.get(symbol)
+            pnl = float(entry.pnl) if entry else 0.0
+            reasons = entry.exit_reasons if entry else []
+            exit_ts = entry.exit_timestamp if entry else 0
+            hold = exit_ts - (entry.entry_timestamp if entry else 0)
+            funding_rate = (
+                entry.exit_funding
+                if entry and entry.exit_funding is not None
+                else (entry.entry_funding if entry else 0.0)
             )
-            basis_pct = entry.get("exit_basis", 0.0)
-            volume_usd = entry.get("entry_futures_price", 0.0) * entry.get(
-                "initial_quantity", entry.get("quantity", 0.0)
+            funding_pct = funding_rate * 100
+            basis_pct = entry.exit_basis if entry else 0.0
+            volume_usd = (
+                entry.entry_futures_price * entry.initial_quantity
+                if entry
+                else 0.0
             )
             pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
             asyncio.create_task(
@@ -212,12 +221,12 @@ def start_processing_loops() -> None:
             )
         finally:
             # Снимаем нагрузку по рискам и удаляем задачу из списка активных
-            entry = strategy.positions.get(symbol, {})
+            entry = strategy.positions.get(symbol)
             notional = (
-                Decimal(str(entry.get("entry_futures_price", 0.0)))
-                * Decimal(
-                    str(entry.get("initial_quantity", entry.get("quantity", 0.0)))
-                )
+                Decimal(str(entry.entry_futures_price))
+                * Decimal(str(entry.initial_quantity))
+                if entry
+                else Decimal("0")
             )
             await risk_control.update_position(-notional)
             await risk_control.mark_symbol_closed(symbol)
