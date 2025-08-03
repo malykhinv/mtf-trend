@@ -134,6 +134,90 @@ def initialize_bot() -> None:
     risk_control.configure(CONFIG.get("risk", {}), bot_cfg.get("deposit_size"))
 
 
+async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> None:
+    """Следит за открытой позицией до срабатывания условий выхода."""
+    poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
+    exchange = CLIENTS[exchange_name]
+    position_id = f"{exchange_name}:{symbol}"
+    entry: strategy.Position | None = None
+    try:
+        entry = await strategy.monitor_neutral_position(
+            exchange,
+            symbol,
+            quantity,
+            CONFIG.get("thresholds", {}),
+            poll_interval,
+            position_id=position_id,
+        )
+    except Exception as exc:
+        entry = entry or strategy.positions.get(symbol)
+        entry_ts = entry.entry_timestamp if entry else time.time()
+        hold = time.time() - entry_ts
+        funding_pct = (entry.entry_funding if entry else 0.0) * 100
+        basis_pct = entry.entry_basis if entry else 0.0
+        volume_usd = (
+            entry.entry_futures_price * entry.initial_quantity if entry else 0.0
+        )
+        asyncio.create_task(
+            notify_close(
+                position_id,
+                (
+                    f"Ошибка на {exchange_name} {symbol}: {exc}\n"
+                    f"Фандинг: {funding_pct:.4f}%\n"
+                    f"Базис: {basis_pct:.4f}%\n"
+                    f"Объём: ${float(volume_usd):.2f}\n"
+                    f"Время в позиции: {format_duration(hold)}"
+                ),
+            )
+        )
+        raise
+    else:
+        if entry is None:
+            entry = strategy.positions.get(symbol)
+        pnl = float(entry.pnl) if entry else 0.0
+        reasons = entry.exit_reasons if entry else []
+        exit_ts = entry.exit_timestamp if entry else 0
+        hold = exit_ts - (entry.entry_timestamp if entry else 0)
+        funding_rate = (
+            entry.exit_funding
+            if entry and entry.exit_funding is not None
+            else (entry.entry_funding if entry else 0.0)
+        )
+        funding_pct = funding_rate * 100
+        basis_pct = entry.exit_basis if entry else 0.0
+        volume_usd = (
+            entry.entry_futures_price * entry.initial_quantity if entry else 0.0
+        )
+        pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
+        asyncio.create_task(
+            notify_close(
+                position_id,
+                (
+                    f"Закрыта {symbol} на {exchange_name}\n"
+                    f"Фандинг: {funding_pct:.4f}%\n"
+                    f"Базис: {basis_pct:.4f}%\n"
+                    f"Объём: ${float(volume_usd):.2f}\n"
+                    f"Время в позиции: {format_duration(hold)}\n"
+                    f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Причины: {reasons}"
+                ),
+            )
+        )
+    finally:
+        entry_final = entry or strategy.positions.get(symbol)
+        notional = (
+            Decimal(str(entry_final.entry_futures_price))
+            * Decimal(str(entry_final.initial_quantity))
+            if entry_final
+            else Decimal("0")
+        )
+        await risk_control.update_position(-notional)
+        await risk_control.mark_symbol_closed(symbol)
+        if position_id in POSITION_TASKS:
+            del POSITION_TASKS[position_id]
+        if strategy.positions.pop(symbol, None) is not None:
+            await strategy.save_positions()
+
+
 def start_processing_loops() -> None:
     """Запускает циклы стратегии, рисков и оптимизации параметров."""
 
@@ -146,96 +230,6 @@ def start_processing_loops() -> None:
         """Обновляет пороги стратегии новыми значениями."""
         if new:
             CONFIG.setdefault("thresholds", {}).update(new)
-
-    async def monitor_position(
-        exchange_name: str, symbol: str, quantity: float
-    ) -> None:
-        """Следит за открытой позицией до срабатывания условий выхода."""
-        exchange = CLIENTS[exchange_name]
-        position_id = f"{exchange_name}:{symbol}"
-        try:
-            await strategy.monitor_neutral_position(
-                exchange,
-                symbol,
-                quantity,
-                CONFIG.get("thresholds", {}),
-                poll_interval,
-                position_id=position_id,
-            )
-        except Exception as exc:
-            # При ошибке закрываем позицию и уведомляем
-            entry = strategy.positions.get(symbol)
-            entry_ts = entry.entry_timestamp if entry else time.time()
-            hold = time.time() - entry_ts
-            funding_pct = (entry.entry_funding if entry else 0.0) * 100
-            basis_pct = entry.entry_basis if entry else 0.0
-            volume_usd = (
-                entry.entry_futures_price * entry.initial_quantity
-                if entry
-                else 0.0
-            )
-            asyncio.create_task(
-                notify_close(
-                    position_id,
-                    (
-                        f"Ошибка на {exchange_name} {symbol}: {exc}\n"
-                        f"Фандинг: {funding_pct:.4f}%\n"
-                        f"Базис: {basis_pct:.4f}%\n"
-                        f"Объём: ${float(volume_usd):.2f}\n"
-                        f"Время в позиции: {format_duration(hold)}"
-                    ),
-                )
-            )
-            raise
-        else:
-            # Успешное завершение позиции
-            entry = strategy.positions.get(symbol)
-            pnl = float(entry.pnl) if entry else 0.0
-            reasons = entry.exit_reasons if entry else []
-            exit_ts = entry.exit_timestamp if entry else 0
-            hold = exit_ts - (entry.entry_timestamp if entry else 0)
-            funding_rate = (
-                entry.exit_funding
-                if entry and entry.exit_funding is not None
-                else (entry.entry_funding if entry else 0.0)
-            )
-            funding_pct = funding_rate * 100
-            basis_pct = entry.exit_basis if entry else 0.0
-            volume_usd = (
-                entry.entry_futures_price * entry.initial_quantity
-                if entry
-                else 0.0
-            )
-            pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
-            asyncio.create_task(
-                notify_close(
-                    position_id,
-                    (
-                        f"Закрыта {symbol} на {exchange_name}\n"
-                        f"Фандинг: {funding_pct:.4f}%\n"
-                        f"Базис: {basis_pct:.4f}%\n"
-                        f"Объём: ${float(volume_usd):.2f}\n"
-                        f"Время в позиции: {format_duration(hold)}\n"
-                        f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Причины: {reasons}"
-                    ),
-                )
-            )
-        finally:
-            # Снимаем нагрузку по рискам и удаляем задачу из списка активных
-            entry = strategy.positions.get(symbol)
-            notional = (
-                Decimal(str(entry.entry_futures_price))
-                * Decimal(str(entry.initial_quantity))
-                if entry
-                else Decimal("0")
-            )
-            await risk_control.update_position(-notional)
-            await risk_control.mark_symbol_closed(symbol)
-            # Удаляем задачу из списка активных
-            if position_id in POSITION_TASKS:
-                del POSITION_TASKS[position_id]
-            if strategy.positions.pop(symbol, None) is not None:
-                await strategy.save_positions()
 
     async def scan_loop() -> None:
         """Постоянно сканирует рынок в поиске входов."""

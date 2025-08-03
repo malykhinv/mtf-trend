@@ -724,7 +724,7 @@ async def monitor_neutral_position(
     exit_thresholds: Dict[str, float],
     poll_interval: float = 5.0,
     position_id: str | None = None,
-) -> None:
+) -> Position | None:
     """Следит за позицией и закрывает её при срабатывании условий выхода.
 
     В качестве одного из критериев используется ``exit_basis`` – предельное
@@ -930,7 +930,7 @@ async def monitor_neutral_position(
                         "notes": None,
                     }
                 )
-            break
+            return entry
         await asyncio.sleep(poll_interval)
 
 
