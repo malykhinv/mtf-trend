@@ -49,12 +49,12 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     positions.clear()
     pos = Position(
         entry_timestamp=1.0,
-        entry_futures_price=2.0,
-        entry_spot_price=1.5,
-        entry_basis=0.5,
-        entry_funding=0.01,
-        quantity=3.0,
-        initial_quantity=3.0,
+        entry_futures_price=Decimal("2.0"),
+        entry_spot_price=Decimal("1.5"),
+        entry_basis=Decimal("0.5"),
+        entry_funding=Decimal("0.01"),
+        quantity=Decimal("3.0"),
+        initial_quantity=Decimal("3.0"),
         commissions=Decimal("0.1"),
         last_funding_timestamp=1.0,
         exchange="binance",
@@ -66,7 +66,7 @@ def test_save_and_load_roundtrip(tmp_path, monkeypatch):
     assert "BTCUSDT" in positions
     loaded = positions["BTCUSDT"]
     assert isinstance(loaded, Position)
-    assert loaded.quantity == 3.0
+    assert loaded.quantity == Decimal("3.0")
     assert loaded.commissions == Decimal("0.1")
     assert isinstance(loaded.pnl, Decimal)
     assert loaded.pnl == Decimal(0)

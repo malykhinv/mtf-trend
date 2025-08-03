@@ -108,12 +108,12 @@ async def test_monitor_neutral_position_decimal(monkeypatch: pytest.MonkeyPatch)
 
     entry = fa.Position(
         entry_timestamp=0.0,
-        entry_futures_price=100.0,
-        entry_spot_price=100.0,
-        entry_basis=0.0,
-        entry_funding=0.01,
-        quantity=1.0,
-        initial_quantity=1.0,
+        entry_futures_price=Decimal("100.0"),
+        entry_spot_price=Decimal("100.0"),
+        entry_basis=Decimal("0.0"),
+        entry_funding=Decimal("0.01"),
+        quantity=Decimal("1.0"),
+        initial_quantity=Decimal("1.0"),
     )
     fa.positions["BTCUSDT"] = entry
 
