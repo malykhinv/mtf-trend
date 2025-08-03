@@ -13,6 +13,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List
+from decimal import Decimal
 
 import yaml
 from dotenv import load_dotenv
@@ -210,6 +211,16 @@ def start_processing_loops() -> None:
                 )
             )
         finally:
+            # Снимаем нагрузку по рискам и удаляем задачу из списка активных
+            entry = strategy.positions.get(symbol, {})
+            notional = (
+                Decimal(str(entry.get("entry_futures_price", 0.0)))
+                * Decimal(
+                    str(entry.get("initial_quantity", entry.get("quantity", 0.0)))
+                )
+            )
+            await risk_control.update_position(-notional)
+            await risk_control.mark_symbol_closed(symbol)
             # Удаляем задачу из списка активных
             if position_id in POSITION_TASKS:
                 del POSITION_TASKS[position_id]
