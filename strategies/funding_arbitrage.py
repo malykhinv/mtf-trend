@@ -398,12 +398,12 @@ class Position:
     """Модель открытой позиции."""
 
     entry_timestamp: float
-    entry_futures_price: float
-    entry_spot_price: float
-    entry_basis: float
-    entry_funding: float
-    quantity: float
-    initial_quantity: float
+    entry_futures_price: Decimal
+    entry_spot_price: Decimal
+    entry_basis: Decimal
+    entry_funding: Decimal
+    quantity: Decimal
+    initial_quantity: Decimal
     pnl: Decimal = Decimal(0)
     funding_accrued: Decimal = Decimal(0)
     commissions: Decimal = Decimal(0)
@@ -418,9 +418,19 @@ class Position:
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
-        data["pnl"] = float(self.pnl)
-        data["funding_accrued"] = float(self.funding_accrued)
-        data["commissions"] = float(self.commissions)
+        for key in (
+            "entry_futures_price",
+            "entry_spot_price",
+            "entry_basis",
+            "entry_funding",
+            "quantity",
+            "initial_quantity",
+            "pnl",
+            "funding_accrued",
+            "commissions",
+        ):
+            if key in data:
+                data[key] = float(data[key])
         return data
 
     @classmethod
@@ -429,12 +439,14 @@ class Position:
             raise ValueError("missing field quantity")
         return cls(
             entry_timestamp=float(data.get("entry_timestamp", 0.0)),
-            entry_futures_price=float(data.get("entry_futures_price", 0.0)),
-            entry_spot_price=float(data.get("entry_spot_price", 0.0)),
-            entry_basis=float(data.get("entry_basis", 0.0)),
-            entry_funding=float(data.get("entry_funding", 0.0)),
-            quantity=float(data["quantity"]),
-            initial_quantity=float(data.get("initial_quantity", data["quantity"])),
+            entry_futures_price=Decimal(str(data.get("entry_futures_price", 0.0))),
+            entry_spot_price=Decimal(str(data.get("entry_spot_price", 0.0))),
+            entry_basis=Decimal(str(data.get("entry_basis", 0.0))),
+            entry_funding=Decimal(str(data.get("entry_funding", 0.0))),
+            quantity=Decimal(str(data["quantity"])),
+            initial_quantity=Decimal(
+                str(data.get("initial_quantity", data["quantity"]))
+            ),
             pnl=Decimal(str(data.get("pnl", 0.0))),
             funding_accrued=Decimal(str(data.get("funding_accrued", 0.0))),
             commissions=Decimal(str(data.get("commissions", 0.0))),
@@ -496,7 +508,7 @@ async def load_positions(path: Path | str | None = None) -> None:
         positions[symbol] = pos
         notional = pos.quantity * pos.entry_futures_price
         if notional:
-            await risk_control.update_position(Decimal(str(notional)))
+            await risk_control.update_position(notional)
         await risk_control.mark_symbol_open(symbol)
 
 
@@ -538,7 +550,7 @@ async def open_neutral_position(
     entry_metrics = await get_market_metrics(symbol, quantity, exchange)
     if entry_metrics is None:
         raise RuntimeError("Рыночные метрики недоступны, сделка пропущена")
-    notional = quantity * Decimal(str(entry_metrics.futures_price))
+    notional = quantity * entry_metrics.futures_price
     deposit_raw = bot_cfg.get("deposit_size", "Infinity")
     deposit = Decimal(str(deposit_raw))
     if not deposit.is_finite() or deposit < 0:
@@ -620,9 +632,9 @@ async def open_neutral_position(
                 entry_futures_price=entry_metrics.futures_price,
                 entry_spot_price=entry_metrics.spot_price,
                 entry_basis=entry_metrics.basis,
-                entry_funding=float(entry_metrics.funding_rate),
-                quantity=float(quantity),
-                initial_quantity=float(quantity),
+                entry_funding=entry_metrics.funding_rate,
+                quantity=quantity,
+                initial_quantity=quantity,
                 pnl=Decimal(0),
                 funding_accrued=Decimal(0),
                 commissions=commission,
@@ -740,7 +752,7 @@ async def close_neutral_position(
         entry = positions.get(symbol)
         if entry is not None:
             entry.commissions += commission
-            ref_price = Decimal(str(entry.entry_futures_price))
+            ref_price = entry.entry_futures_price
         else:
             ref_price = Decimal(0)
         await risk_control.update_position(-(quantity * ref_price))
@@ -812,7 +824,7 @@ async def monitor_neutral_position(
         if abs(metrics.basis) >= exit_basis_limit:
             reasons.append("basis")
         if entry:
-            entry_price_d = Decimal(str(entry.entry_futures_price))
+            entry_price_d = entry.entry_futures_price
             exit_slippage = abs(
                 metrics.futures_price - entry_price_d
             ) / max(entry_price_d, Decimal("1e-9"))
@@ -830,8 +842,8 @@ async def monitor_neutral_position(
             max_hold = exit_thresholds.get("holding_time")
             if max_hold is not None and hold_time > max_hold:
                 reasons.append("time")
-            fut_diff = metrics.futures_price - Decimal(str(entry.entry_futures_price))
-            spot_diff = metrics.spot_price - Decimal(str(entry.entry_spot_price))
+            fut_diff = metrics.futures_price - entry.entry_futures_price
+            spot_diff = metrics.spot_price - entry.entry_spot_price
             pnl = (fut_diff - spot_diff) * quantity_d
             if (
                 pnl + entry.funding_accrued - entry.commissions < Decimal(0)
@@ -856,7 +868,7 @@ async def monitor_neutral_position(
                 async with positions_lock:
                     quantity_d -= partial_qty_d
                     quantity = float(quantity_d)
-                    entry.quantity = quantity
+                    entry.quantity = quantity_d
                     entry.pnl += pnl_part
                     await save_positions()
                 exit_ts = time.time()
@@ -869,7 +881,7 @@ async def monitor_neutral_position(
                     exit_basis = Decimal("Infinity")
                 commission = Decimal(str(orders.get("commission", 0.0)))
                 pnl_net = pnl_part - commission
-                volume_usd = partial_qty_d * Decimal(str(entry.entry_futures_price))
+                volume_usd = partial_qty_d * entry.entry_futures_price
                 pnl_pct = (
                     pnl_net / volume_usd * Decimal(100) if volume_usd != 0 else Decimal(0)
                 )
@@ -906,9 +918,7 @@ async def monitor_neutral_position(
                     }
                 )
                 if position_id:
-                    total_volume = Decimal(str(entry.entry_futures_price)) * Decimal(
-                        str(entry.initial_quantity)
-                    )
+                    total_volume = entry.entry_futures_price * entry.initial_quantity
                     pnl_total = (
                         entry.pnl + entry.funding_accrued - entry.commissions
                     )
@@ -961,9 +971,7 @@ async def monitor_neutral_position(
                 entry.exit_funding = float(metrics.funding_rate)
                 entry.pnl = net_pnl
                 exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
-                volume_usd = Decimal(str(entry.entry_futures_price)) * Decimal(
-                    str(entry.initial_quantity)
-                )
+                volume_usd = entry.entry_futures_price * entry.initial_quantity
                 pnl_pct = (
                     net_pnl / volume_usd * Decimal(100) if volume_usd != 0 else Decimal(0)
                 )

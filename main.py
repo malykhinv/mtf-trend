@@ -164,8 +164,7 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
         )
         basis_pct = format_decimal(entry.entry_basis if entry else 0.0, 4)
         volume_usd = (
-            Decimal(str(entry.entry_futures_price))
-            * Decimal(str(entry.initial_quantity))
+            entry.entry_futures_price * entry.initial_quantity
             if entry
             else Decimal("0")
         )
@@ -198,8 +197,7 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
         funding_pct = format_decimal(funding_rate * 100, 4)
         basis_pct = format_decimal(entry.exit_basis if entry else 0.0, 4)
         volume_usd = (
-            Decimal(str(entry.entry_futures_price))
-            * Decimal(str(entry.initial_quantity))
+            entry.entry_futures_price * entry.initial_quantity
             if entry
             else Decimal("0")
         )
@@ -223,8 +221,7 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
     finally:
         entry_final = entry or strategy.positions.get(symbol)
         notional = (
-            Decimal(str(entry_final.entry_futures_price))
-            * Decimal(str(entry_final.initial_quantity))
+            entry_final.entry_futures_price * entry_final.initial_quantity
             if entry_final
             else Decimal("0")
         )

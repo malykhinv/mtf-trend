@@ -23,12 +23,12 @@ async def test_monitor_position_final_message(monkeypatch: pytest.MonkeyPatch) -
     @dataclass
     class Position:
         entry_timestamp: float
-        entry_futures_price: float
-        entry_spot_price: float
-        entry_basis: float
-        entry_funding: float
-        quantity: float
-        initial_quantity: float
+        entry_futures_price: Decimal
+        entry_spot_price: Decimal
+        entry_basis: Decimal
+        entry_funding: Decimal
+        quantity: Decimal
+        initial_quantity: Decimal
         pnl: Decimal = Decimal(0)
         exit_reasons: list[str] = field(default_factory=list)
         exit_timestamp: float = 0.0
@@ -37,12 +37,12 @@ async def test_monitor_position_final_message(monkeypatch: pytest.MonkeyPatch) -
 
     prepared = Position(
         entry_timestamp=0.0,
-        entry_futures_price=100.0,
-        entry_spot_price=100.0,
-        entry_basis=0.0,
-        entry_funding=0.001,
-        quantity=1.0,
-        initial_quantity=1.0,
+        entry_futures_price=Decimal("100.0"),
+        entry_spot_price=Decimal("100.0"),
+        entry_basis=Decimal("0.0"),
+        entry_funding=Decimal("0.001"),
+        quantity=Decimal("1.0"),
+        initial_quantity=Decimal("1.0"),
         pnl=Decimal("2"),
         exit_reasons=["threshold"],
         exit_timestamp=10.0,
