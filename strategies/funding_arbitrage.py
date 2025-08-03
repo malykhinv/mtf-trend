@@ -535,6 +535,8 @@ async def open_neutral_position(
         raise RuntimeError(
             "Превышены лимиты риска, торговля приостановлена или позиция уже открыта"
         )
+    updated = False
+    error: Exception | None = None
     try:
         # Хеджируем позицию на споте и фьючерсе
         spot_order = await exchange.place_spot_order(symbol, "BUY", float(quantity))
@@ -583,6 +585,7 @@ async def open_neutral_position(
         now = time.time()
         async with positions_lock:
             await risk_control.update_position(notional)
+            updated = True
             positions[symbol] = Position(
                 entry_timestamp=now,
                 entry_futures_price=entry_metrics.futures_price,
@@ -625,9 +628,16 @@ async def open_neutral_position(
             }
         )
         return orders
-    except Exception:
+    except Exception as exc:
+        error = exc
         await risk_control.mark_symbol_closed(symbol)
         raise
+    finally:
+        if updated and error is not None:
+            try:
+                await risk_control.update_position(-notional)
+            except Exception:  # pragma: no cover - best effort cleanup
+                pass
 
 
 async def close_neutral_position(
