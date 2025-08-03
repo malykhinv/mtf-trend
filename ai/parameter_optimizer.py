@@ -26,6 +26,8 @@ DEFAULT_OUTPUT = Path(
     _cfg.get("paths", {}).get("thresholds", "data/optimized_thresholds.joblib")
 )
 
+RETRY_DELAY = 60  # seconds
+
 
 def analyze_trade_history(log_path: Path | None = None) -> Dict[str, float]:
     """Анализирует историю сделок и вычисляет пороги через регрессию.
@@ -139,9 +141,19 @@ async def periodic_optimization(
         out_path = DEFAULT_OUTPUT
 
     while True:
-        thresholds = optimize_and_save(log_path, out_path)
+        try:
+            thresholds = optimize_and_save(log_path, out_path)
+        except Exception as exc:
+            logger.exception("Failed to optimize thresholds: %s", exc)
+            await asyncio.sleep(RETRY_DELAY)
+            continue
         if on_update and thresholds:
-            on_update(thresholds)
+            try:
+                on_update(thresholds)
+            except Exception as exc:
+                logger.exception("on_update callback failed: %s", exc)
+                await asyncio.sleep(RETRY_DELAY)
+                continue
         wait_hours = random.randint(min_hours, max_hours)
         # Ждём случайный промежуток перед следующей оптимизацией
         await asyncio.sleep(wait_hours * 3600)
