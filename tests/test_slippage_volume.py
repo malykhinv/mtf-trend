@@ -151,13 +151,13 @@ async def test_check_entry_conditions_none_metrics(caplog: pytest.LogCaptureFixt
 def test_exit_on_non_finite_volatility() -> None:
     metrics = MarketMetrics(
         Decimal("0"),
-        0.0,
-        0.0,
+        Decimal("0"),
+        Decimal("0"),
         float("inf"),
-        0.0,
-        0.0,
-        0.0,
-        0.0,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
         0.0,
         0.0,
         0.0,
@@ -171,13 +171,13 @@ def test_exit_on_non_finite_volatility() -> None:
 def _sample_metrics() -> MarketMetrics:
     return MarketMetrics(
         Decimal("0.1"),
+        Decimal("0"),
+        Decimal("1"),
         0.0,
-        1.0,
-        0.0,
-        100.0,
-        100.0,
-        100.0,
-        0.0,
+        Decimal("100"),
+        Decimal("100"),
+        Decimal("100"),
+        Decimal("0"),
         0.0,
         0.0,
         0.0,
@@ -196,7 +196,7 @@ def test_check_entry_conditions_invalid_thresholds(caplog: pytest.LogCaptureFixt
 
 def test_check_entry_conditions_non_finite_metrics(caplog: pytest.LogCaptureFixture) -> None:
     metrics = _sample_metrics()
-    metrics.spread = float("nan")
+    metrics.spread = Decimal("NaN")
     with caplog.at_level(logging.WARNING):
         result = check_entry_conditions("BTCUSDT", Decimal("1"), metrics, {})
     assert not result
@@ -210,3 +210,19 @@ def test_check_entry_conditions_invalid_quantity(caplog: pytest.LogCaptureFixtur
         result = check_entry_conditions("BTCUSDT", quantity, metrics, {})
     assert not result
     assert "invalid quantity" in caplog.text
+
+
+def test_check_entry_conditions_valid_decimals() -> None:
+    metrics = _sample_metrics()
+    assert check_entry_conditions("BTCUSDT", Decimal("1"), metrics, {})
+
+
+@pytest.mark.asyncio
+async def test_get_market_metrics_returns_decimals() -> None:
+    metrics = await get_market_metrics("BTCUSDT", trade_size=1)
+    assert isinstance(metrics.spread, Decimal)
+    assert isinstance(metrics.liquidity, Decimal)
+    assert isinstance(metrics.spot_price, Decimal)
+    assert isinstance(metrics.futures_price, Decimal)
+    assert isinstance(metrics.volume, Decimal)
+    assert isinstance(metrics.open_interest, Decimal)
