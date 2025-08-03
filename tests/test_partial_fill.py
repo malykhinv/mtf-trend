@@ -77,7 +77,7 @@ async def test_open_neutral_position_partial_fill(monkeypatch: pytest.MonkeyPatc
     exchange = PartialFillExchange()
 
     # Настраиваем окружение
-    monkeypatch.setattr(fa, "CONFIG", {"bot": {}, "thresholds": {}})
+    monkeypatch.setattr(fa, "CONFIG", {"bot": {"deposit_size": 1000}, "thresholds": {}})
     monkeypatch.setattr(fa, "WHITELISTS", {exchange.name: ["BTCUSDT"]})
     async def _true(*args, **kwargs):
         return True
