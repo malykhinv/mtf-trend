@@ -92,13 +92,13 @@ class MarketMetrics:
     """Набор рыночных метрик, используемых стратегией."""
 
     funding_rate: Decimal
-    spread: float
-    liquidity: float
+    spread: Decimal
+    liquidity: Decimal
     volatility: float  # 15-minute price change percentage
-    spot_price: float
-    futures_price: float
-    volume: float
-    open_interest: float
+    spot_price: Decimal
+    futures_price: Decimal
+    volume: Decimal
+    open_interest: Decimal
     spot_slippage: float
     futures_slippage: float
     slippage: float  # combined spot–futures slippage
@@ -188,11 +188,11 @@ async def get_market_metrics(
         avg_price = cost / size
         return abs(avg_price - mid) / mid
 
-    futures_price = (asks[0][0] + bids[0][0]) / 2
-    futures_slippage = _calc_slippage(asks, trade_size, futures_price)
+    futures_price = Decimal(str((asks[0][0] + bids[0][0]) / 2))
+    futures_slippage = _calc_slippage(asks, trade_size, float(futures_price))
 
-    spot_price = (spot_asks[0][0] + spot_bids[0][0]) / 2
-    spot_slippage = _calc_slippage(spot_asks, trade_size, spot_price)
+    spot_price = Decimal(str((spot_asks[0][0] + spot_bids[0][0]) / 2))
+    spot_slippage = _calc_slippage(spot_asks, trade_size, float(spot_price))
 
     # Суммарное проскальзывание обеих ног
     slippage = futures_slippage + spot_slippage
@@ -206,14 +206,16 @@ async def get_market_metrics(
     if not stats:
         return None
 
-    volume = float(stats.get("volume_24h", 0.0))
-    open_interest = float(stats.get("open_interest", 0.0))
-    if futures_price and not math.isnan(futures_price):
+    volume = Decimal(str(stats.get("volume_24h", 0.0)))
+    open_interest = Decimal(str(stats.get("open_interest", 0.0)))
+    if futures_price and math.isfinite(float(futures_price)):
         open_interest *= futures_price
     else:
-        open_interest = 0.0
-    liquidity = sum(q for _, q in bids) + sum(q for _, q in asks)
-    basis = calculate_basis(futures_price, spot_price)
+        open_interest = Decimal(0)
+    liquidity = sum(Decimal(str(q)) for _, q in bids) + sum(
+        Decimal(str(q)) for _, q in asks
+    )
+    basis = calculate_basis(float(futures_price), float(spot_price))
 
     # Изменение цены за последние 15 минут для оценки волатильности
     if exchange is not None:
@@ -319,11 +321,11 @@ def check_entry_conditions(
 
         max_deposit_trade = deposit * Decimal(str(deposit_pct))
         spread_pct = (
-            Decimal(str(metrics.spread)) / Decimal(str(metrics.futures_price))
+            metrics.spread / metrics.futures_price
             if metrics.futures_price
             else Decimal("Infinity")
         )
-        notional = quantity_d * Decimal(str(metrics.futures_price))
+        notional = quantity_d * metrics.futures_price
         max_basis_pct = Decimal(str(basis_limit))
         basis_abs = abs(Decimal(str(metrics.basis)))
         combined_slippage = Decimal(str(metrics.slippage))
@@ -334,11 +336,10 @@ def check_entry_conditions(
             and metrics.funding_rate >= Decimal(str(funding_rate_limit))
             and spread_pct <= Decimal(str(spread_limit))
             and basis_abs <= max_basis_pct
-            and Decimal(str(metrics.liquidity)) >= Decimal(str(liquidity_limit))
-            and Decimal(str(metrics.volume)) >= Decimal(str(volume_limit))
+            and metrics.liquidity >= Decimal(str(liquidity_limit))
+            and metrics.volume >= Decimal(str(volume_limit))
             and abs(Decimal(str(metrics.volatility))) <= Decimal(str(volatility_limit))
-            and Decimal(str(metrics.open_interest))
-            <= Decimal(str(metrics.volume)) * Decimal(2)
+            and metrics.open_interest <= metrics.volume * Decimal(2)
             and combined_slippage <= slippage_limit_d
             and notional <= Decimal(str(max_trade_size_limit))
             and notional <= max_deposit_trade
@@ -745,7 +746,7 @@ async def monitor_neutral_position(
         if entry:
             last = entry.last_funding_timestamp or now
             quantity_d = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
-            price_d = Decimal(str(metrics.futures_price))
+            price_d = metrics.futures_price
             elapsed = Decimal(str(now - last))
             funding_fee = (
                 quantity_d
@@ -768,9 +769,10 @@ async def monitor_neutral_position(
         if abs(metrics.basis) >= exit_thresholds.get("exit_basis", float("inf")):
             reasons.append("basis")
         if entry:
+            entry_price_d = Decimal(str(entry.entry_futures_price))
             exit_slippage = abs(
-                metrics.futures_price - entry.entry_futures_price
-            ) / max(entry.entry_futures_price, 1e-9)
+                metrics.futures_price - entry_price_d
+            ) / max(entry_price_d, Decimal("1e-9"))
             slippage_limit = exit_thresholds.get(
                 "exit_slippage", exit_thresholds.get("slippage")
             )
@@ -780,12 +782,8 @@ async def monitor_neutral_position(
             max_hold = exit_thresholds.get("holding_time")
             if max_hold is not None and hold_time > max_hold:
                 reasons.append("time")
-            fut_diff = Decimal(str(metrics.futures_price)) - Decimal(
-                str(entry.entry_futures_price)
-            )
-            spot_diff = Decimal(str(metrics.spot_price)) - Decimal(
-                str(entry.entry_spot_price)
-            )
+            fut_diff = metrics.futures_price - Decimal(str(entry.entry_futures_price))
+            spot_diff = metrics.spot_price - Decimal(str(entry.entry_spot_price))
             pnl = (fut_diff - spot_diff) * quantity_d
             if (
                 pnl + entry.funding_accrued - entry.commissions < Decimal(0)
@@ -796,7 +794,7 @@ async def monitor_neutral_position(
         if reasons:
             min_trade_usd = exit_thresholds.get("min_trade_size", 0.0)
             min_trade_qty = (
-                min_trade_usd / metrics.futures_price
+                min_trade_usd / float(metrics.futures_price)
                 if metrics.futures_price
                 else 0.0
             )
@@ -815,7 +813,9 @@ async def monitor_neutral_position(
                     await save_positions()
                 exit_ts = time.time()
                 exit_basis = calculate_basis(
-                    metrics.futures_price, metrics.spot_price, signed=True
+                    float(metrics.futures_price),
+                    float(metrics.spot_price),
+                    signed=True,
                 )
                 commission = Decimal(str(orders.get("commission", 0.0)))
                 pnl_net = pnl_part - commission
@@ -880,7 +880,9 @@ async def monitor_neutral_position(
             )
             if entry:
                 exit_basis = calculate_basis(
-                    metrics.futures_price, metrics.spot_price, signed=True
+                    float(metrics.futures_price),
+                    float(metrics.spot_price),
+                    signed=True,
                 )
                 exit_ts = time.time()
                 total_pnl = entry.pnl + pnl
