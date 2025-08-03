@@ -361,10 +361,10 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
         return True
     return (
         abs(metrics.funding_rate) <= thresholds.get("funding_rate", float("inf"))
-        or metrics.spread >= thresholds.get("spread", float("-inf"))
+        or metrics.spread >= thresholds.get("spread", float("inf"))
         or metrics.liquidity <= thresholds.get("liquidity", float("inf"))
         or abs(metrics.volatility)
-        >= thresholds.get("volatility", float("-inf"))
+        >= thresholds.get("volatility", float("inf"))
         or abs(metrics.basis) >= thresholds.get("exit_basis", float("inf"))
     )
 
