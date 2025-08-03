@@ -249,94 +249,107 @@ async def get_market_metrics(
 # Проверка условий
 # ---------------------------------------------------------------------------
 
-async def check_entry_conditions(
+def check_entry_conditions(
     symbol: str,
     quantity: Decimal,
     metrics: MarketMetrics | None,
     thresholds: Dict[str, float],
-) -> bool:
-    """Возвращает ``True``, если выполнены все условия входа.
+) -> bool | asyncio.Future:
+    """Возвращает ``True`` при выполнении всех условий входа.
 
-    Порог ``basis`` задаётся в процентных пунктах.
+    Порог ``basis`` для входа задаётся в процентных пунктах. Функцию можно
+    вызывать синхронно или с ``await``.
     """
-    if metrics is None:
-        logger.warning("Skipping %s: incomplete market metrics", symbol)
-        return False
-    quantity = Decimal(str(quantity))
-    if not quantity.is_finite() or quantity <= 0:
-        logger.warning("Skipping %s: invalid quantity %s", symbol, quantity)
-        return False
 
-    metrics_map = {
-        "funding_rate": metrics.funding_rate,
-        "spread": metrics.spread,
-        "liquidity": metrics.liquidity,
-        "volatility": metrics.volatility,
-        "spot_price": metrics.spot_price,
-        "futures_price": metrics.futures_price,
-        "volume": metrics.volume,
-        "open_interest": metrics.open_interest,
-        "spot_slippage": metrics.spot_slippage,
-        "futures_slippage": metrics.futures_slippage,
-        "slippage": metrics.slippage,
-        "basis": metrics.basis,
-    }
-    for name, value in metrics_map.items():
-        finite = value.is_finite() if isinstance(value, Decimal) else math.isfinite(value)
-        if not finite:
-            logger.warning("Skipping %s: non-finite %s=%s", symbol, name, value)
+    async def _inner() -> bool:
+        if metrics is None:
+            logger.warning("Skipping %s: incomplete market metrics", symbol)
+            return False
+        quantity_d = Decimal(str(quantity))
+        if not quantity_d.is_finite() or quantity_d <= 0:
+            logger.warning("Skipping %s: invalid quantity %s", symbol, quantity_d)
             return False
 
-    def _threshold(name: str, default: float) -> float:
-        val = thresholds.get(name, default)
-        if val is None or not math.isfinite(val):
-            logger.warning(
-                "Invalid threshold %s=%s; using default %s", name, val, default
-            )
-            return default
-        return val
+        metrics_map = {
+            "funding_rate": metrics.funding_rate,
+            "spread": metrics.spread,
+            "liquidity": metrics.liquidity,
+            "volatility": metrics.volatility,
+            "spot_price": metrics.spot_price,
+            "futures_price": metrics.futures_price,
+            "volume": metrics.volume,
+            "open_interest": metrics.open_interest,
+            "spot_slippage": metrics.spot_slippage,
+            "futures_slippage": metrics.futures_slippage,
+            "slippage": metrics.slippage,
+            "basis": metrics.basis,
+        }
+        for name, value in metrics_map.items():
+            finite = value.is_finite() if isinstance(value, Decimal) else math.isfinite(value)
+            if not finite:
+                logger.warning("Skipping %s: non-finite %s=%s", symbol, name, value)
+                return False
 
-    deposit = Decimal(str(CONFIG.get("bot", {}).get("deposit_size", "Infinity")))
-    deposit_pct = _threshold("deposit_pct", 1.0)
-    spread_limit = _threshold("spread", float("inf"))
-    basis_limit = _threshold("basis", float("inf"))
-    liquidity_limit = _threshold("liquidity", 0.0)
-    volume_limit = _threshold("volume", 0.0)
-    volatility_limit = _threshold("volatility", float("inf"))
-    slippage_limit = _threshold("slippage", 0.003)
-    funding_rate_limit = _threshold("funding_rate", 0.0)
-    max_trade_size_limit = _threshold("max_trade_size", float("inf"))
+        def _threshold(name: str, default: float) -> float:
+            val = thresholds.get(name, default)
+            if val is None or not math.isfinite(val):
+                logger.warning(
+                    "Invalid threshold %s=%s; using default %s", name, val, default
+                )
+                return default
+            return val
 
-    max_deposit_trade = deposit * Decimal(str(deposit_pct))
-    spread_pct = (
-        Decimal(str(metrics.spread)) / Decimal(str(metrics.futures_price))
-        if metrics.futures_price
-        else Decimal("Infinity")
-    )
-    notional = quantity * Decimal(str(metrics.futures_price))
-    max_basis_pct = Decimal(str(basis_limit))
-    basis_abs = abs(Decimal(str(metrics.basis)))
-    combined_slippage = Decimal(str(metrics.slippage))
-    slippage_limit = Decimal(str(slippage_limit))
+        deposit = Decimal(str(CONFIG.get("bot", {}).get("deposit_size", "Infinity")))
+        deposit_pct = _threshold("deposit_pct", 1.0)
+        spread_limit = _threshold("spread", float("inf"))
+        basis_limit = _threshold("basis", float("inf"))
+        liquidity_limit = _threshold("liquidity", 0.0)
+        volume_limit = _threshold("volume", 0.0)
+        volatility_limit = _threshold("volatility", float("inf"))
+        slippage_limit = _threshold("slippage", 0.003)
+        funding_rate_limit = _threshold("funding_rate", 0.0)
+        max_trade_size_limit = _threshold("max_trade_size", float("inf"))
 
-    return (
-        metrics.funding_rate > Decimal(0)
-        and metrics.funding_rate >= Decimal(str(funding_rate_limit))
-        and spread_pct <= Decimal(str(spread_limit))
-        and basis_abs <= max_basis_pct
-        and Decimal(str(metrics.liquidity)) >= Decimal(str(liquidity_limit))
-        and Decimal(str(metrics.volume)) >= Decimal(str(volume_limit))
-        and abs(Decimal(str(metrics.volatility))) <= Decimal(str(volatility_limit))
-        and Decimal(str(metrics.open_interest)) <= Decimal(str(metrics.volume)) * Decimal(2)
-        and combined_slippage <= slippage_limit
-        and notional <= Decimal(str(max_trade_size_limit))
-        and notional <= max_deposit_trade
-        and not await risk_control.is_symbol_open(symbol)
-    )
+        max_deposit_trade = deposit * Decimal(str(deposit_pct))
+        spread_pct = (
+            Decimal(str(metrics.spread)) / Decimal(str(metrics.futures_price))
+            if metrics.futures_price
+            else Decimal("Infinity")
+        )
+        notional = quantity_d * Decimal(str(metrics.futures_price))
+        max_basis_pct = Decimal(str(basis_limit))
+        basis_abs = abs(Decimal(str(metrics.basis)))
+        combined_slippage = Decimal(str(metrics.slippage))
+        slippage_limit_d = Decimal(str(slippage_limit))
+
+        return (
+            metrics.funding_rate > Decimal(0)
+            and metrics.funding_rate >= Decimal(str(funding_rate_limit))
+            and spread_pct <= Decimal(str(spread_limit))
+            and basis_abs <= max_basis_pct
+            and Decimal(str(metrics.liquidity)) >= Decimal(str(liquidity_limit))
+            and Decimal(str(metrics.volume)) >= Decimal(str(volume_limit))
+            and abs(Decimal(str(metrics.volatility))) <= Decimal(str(volatility_limit))
+            and Decimal(str(metrics.open_interest))
+            <= Decimal(str(metrics.volume)) * Decimal(2)
+            and combined_slippage <= slippage_limit_d
+            and notional <= Decimal(str(max_trade_size_limit))
+            and notional <= max_deposit_trade
+            and not await risk_control.is_symbol_open(symbol)
+        )
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(_inner())
+    return loop.create_task(_inner())
 
 
 def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) -> bool:
-    """Возвращает ``True``, если выполнено любое условие выхода."""
+    """Возвращает ``True``, если выполнено любое условие выхода.
+
+    Включает проверку порога ``exit_basis`` (в процентных пунктах).
+    """
     if not math.isfinite(metrics.volatility):
         return True
     return (
@@ -345,6 +358,7 @@ def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) 
         or metrics.liquidity <= thresholds.get("liquidity", float("inf"))
         or abs(metrics.volatility)
         >= thresholds.get("volatility", float("-inf"))
+        or abs(metrics.basis) >= thresholds.get("exit_basis", float("inf"))
     )
 
 
@@ -631,10 +645,12 @@ async def monitor_neutral_position(
 ) -> None:
     """Следит за позицией и закрывает её при срабатывании условий выхода.
 
-    Поддерживается частичное закрытие: если размер позиции больше двух
-    минимальных, закрывается половина и отслеживание продолжается. Обновления
-    отправляются через :func:`notify_partial_close`, чтобы редактировать одно
-    сообщение вместо отправки новых.
+    В качестве одного из критериев используется ``exit_basis`` – предельное
+    значение базиса между спотом и фьючерсом. Поддерживается частичное
+    закрытие: если размер позиции больше двух минимальных, закрывается
+    половина и отслеживание продолжается. Обновления отправляются через
+    :func:`notify_partial_close`, чтобы редактировать одно сообщение вместо
+    отправки новых.
     """
     entry = positions.get(symbol)
     while True:
@@ -672,7 +688,7 @@ async def monitor_neutral_position(
             reasons.append("low_funding")
         if entry and metrics.funding_rate < 0 <= entry.entry_funding:
             reasons.append("funding_negative")
-        if abs(metrics.basis) >= exit_thresholds.get("basis", float("inf")):
+        if abs(metrics.basis) >= exit_thresholds.get("exit_basis", float("inf")):
             reasons.append("basis")
         if entry:
             exit_slippage = abs(
@@ -846,7 +862,9 @@ def get_thresholds(config_thresholds: Dict[str, float]) -> Dict[str, float]:
     ---------
     config_thresholds:
         Пороговые значения из ``config.yaml``. Результаты оптимизатора имеют
-        приоритет над этими значениями.
+        приоритет над этими значениями. Если ``exit_basis`` не указан, берётся
+        значение ``1.0``.
     """
 
-    return _load_thresholds(config_thresholds)
+    defaults = {"exit_basis": 1.0, **config_thresholds}
+    return _load_thresholds(defaults)
