@@ -78,16 +78,12 @@ async def test_cancel_first_leg_on_second_failure(monkeypatch: pytest.MonkeyPatc
     async def _true(*args, **kwargs):
         return True
 
-    async def _false(*args, **kwargs):
-        return False
-
     async def _noop(*args, **kwargs):
         return None
 
-    monkeypatch.setattr(fa.risk_control, "can_open_position", _true)
-    monkeypatch.setattr(fa.risk_control, "is_symbol_open", _false)
+    monkeypatch.setattr(fa.risk_control, "try_open_position", _true)
     monkeypatch.setattr(fa.risk_control, "update_position", _noop)
-    monkeypatch.setattr(fa.risk_control, "mark_symbol_open", _noop)
+    monkeypatch.setattr(fa.risk_control, "mark_symbol_closed", _noop)
 
     metrics = fa.MarketMetrics(
         funding_rate=Decimal("0"),
