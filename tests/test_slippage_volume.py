@@ -1,5 +1,4 @@
 import logging
-import math
 import pathlib
 import sys
 
@@ -74,17 +73,17 @@ def _patch_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 async def test_slippage_zero_volume() -> None:
     metrics = await get_market_metrics("BTCUSDT", trade_size=0)
-    assert math.isinf(metrics.spot_slippage)
-    assert math.isinf(metrics.futures_slippage)
-    assert math.isinf(metrics.slippage)
+    assert metrics.spot_slippage.is_infinite()
+    assert metrics.futures_slippage.is_infinite()
+    assert metrics.slippage.is_infinite()
 
 
 @pytest.mark.asyncio
 async def test_slippage_negative_volume() -> None:
     metrics = await get_market_metrics("BTCUSDT", trade_size=-1)
-    assert math.isinf(metrics.spot_slippage)
-    assert math.isinf(metrics.futures_slippage)
-    assert math.isinf(metrics.slippage)
+    assert metrics.spot_slippage.is_infinite()
+    assert metrics.futures_slippage.is_infinite()
+    assert metrics.slippage.is_infinite()
 
 
 @pytest.mark.asyncio
@@ -100,9 +99,9 @@ async def test_slippage_zero_mid(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     metrics = await get_market_metrics("BTCUSDT", trade_size=1)
-    assert math.isinf(metrics.spot_slippage)
-    assert math.isinf(metrics.futures_slippage)
-    assert math.isinf(metrics.slippage)
+    assert metrics.spot_slippage.is_infinite()
+    assert metrics.futures_slippage.is_infinite()
+    assert metrics.slippage.is_infinite()
 
 
 @pytest.mark.asyncio

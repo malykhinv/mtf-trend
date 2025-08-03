@@ -111,10 +111,10 @@ async def test_open_neutral_position_log_failure(monkeypatch: pytest.MonkeyPatch
         futures_price=Decimal("100"),
         volume=Decimal("0"),
         open_interest=Decimal("0"),
-        spot_slippage=0.0,
-        futures_slippage=0.0,
-        slippage=0.0,
-        basis=0.0,
+        spot_slippage=Decimal("0"),
+        futures_slippage=Decimal("0"),
+        slippage=Decimal("0"),
+        basis=Decimal("0"),
     )
 
     async def _fake_metrics(symbol: str, trade_size: float, exchange: BaseExchange) -> fa.MarketMetrics:
@@ -126,6 +126,7 @@ async def test_open_neutral_position_log_failure(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(fa, "save_positions", _save)
     monkeypatch.setattr(fa, "log_trade", _log)
     monkeypatch.setattr(fa, "get_market_metrics", _fake_metrics)
+    monkeypatch.setattr(fa, "CONFIG", {"bot": {"deposit_size": 1000}, "thresholds": {}})
 
     quantity = Decimal("1")
     with pytest.raises(RuntimeError):

@@ -26,10 +26,10 @@ def _sample_metrics() -> MarketMetrics:
         futures_price=Decimal("100"),
         volume=Decimal("10000"),
         open_interest=Decimal("5000"),
-        spot_slippage=0.0001,
-        futures_slippage=0.0001,
-        slippage=0.0002,
-        basis=0.1,
+        spot_slippage=Decimal("0.0001"),
+        futures_slippage=Decimal("0.0001"),
+        slippage=Decimal("0.0002"),
+        basis=Decimal("0.1"),
     )
 
 

@@ -77,10 +77,10 @@ async def test_open_neutral_position_rejects_invalid_deposit(monkeypatch, caplog
         futures_price=Decimal("100"),
         volume=Decimal("0"),
         open_interest=Decimal("0"),
-        spot_slippage=0.0,
-        futures_slippage=0.0,
-        slippage=0.0,
-        basis=0.0,
+        spot_slippage=Decimal("0"),
+        futures_slippage=Decimal("0"),
+        slippage=Decimal("0"),
+        basis=Decimal("0"),
     )
 
     async def _metrics(symbol: str, trade_size: float, exch: BaseExchange):

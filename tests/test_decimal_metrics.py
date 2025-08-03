@@ -95,10 +95,10 @@ async def test_monitor_neutral_position_decimal(monkeypatch: pytest.MonkeyPatch)
         futures_price=Decimal("101"),
         volume=Decimal("1000"),
         open_interest=Decimal("500"),
-        spot_slippage=0.0,
-        futures_slippage=0.0,
-        slippage=0.0,
-        basis=0.0,
+        spot_slippage=Decimal("0"),
+        futures_slippage=Decimal("0"),
+        slippage=Decimal("0"),
+        basis=Decimal("0"),
     )
 
     async def fake_get_market_metrics(symbol, qty, exchange):
