@@ -101,13 +101,15 @@ async def test_open_neutral_position_partial_fill(monkeypatch: pytest.MonkeyPatc
         futures_price=Decimal("100"),
         volume=Decimal("0"),
         open_interest=Decimal("0"),
-        spot_slippage=0.0,
-        futures_slippage=0.0,
-        slippage=0.0,
+        spot_slippage=Decimal("0"),
+        futures_slippage=Decimal("0"),
+        slippage=Decimal("0"),
         basis=0.0,
     )
 
-    async def _fake_metrics(symbol: str, trade_size: float, exchange: BaseExchange) -> fa.MarketMetrics:
+    async def _fake_metrics(
+        symbol: str, trade_size: Decimal, exchange: BaseExchange
+    ) -> fa.MarketMetrics:
         return metrics
 
     monkeypatch.setattr(fa, "get_market_metrics", _fake_metrics)

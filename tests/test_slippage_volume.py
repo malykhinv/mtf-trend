@@ -1,5 +1,4 @@
 import logging
-import math
 import pathlib
 import sys
 
@@ -69,22 +68,27 @@ def _patch_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "strategies.funding_arbitrage.get_ohlc", dummy_get_ohlc
     )
+    async def _is_open(symbol):
+        return False
+    monkeypatch.setattr(
+        "strategies.funding_arbitrage.risk_control.is_symbol_open", _is_open
+    )
 
 
 @pytest.mark.asyncio
 async def test_slippage_zero_volume() -> None:
     metrics = await get_market_metrics("BTCUSDT", trade_size=0)
-    assert math.isinf(metrics.spot_slippage)
-    assert math.isinf(metrics.futures_slippage)
-    assert math.isinf(metrics.slippage)
+    assert metrics.spot_slippage.is_infinite()
+    assert metrics.futures_slippage.is_infinite()
+    assert metrics.slippage.is_infinite()
 
 
 @pytest.mark.asyncio
 async def test_slippage_negative_volume() -> None:
     metrics = await get_market_metrics("BTCUSDT", trade_size=-1)
-    assert math.isinf(metrics.spot_slippage)
-    assert math.isinf(metrics.futures_slippage)
-    assert math.isinf(metrics.slippage)
+    assert metrics.spot_slippage.is_infinite()
+    assert metrics.futures_slippage.is_infinite()
+    assert metrics.slippage.is_infinite()
 
 
 @pytest.mark.asyncio
@@ -100,9 +104,9 @@ async def test_slippage_zero_mid(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     metrics = await get_market_metrics("BTCUSDT", trade_size=1)
-    assert math.isinf(metrics.spot_slippage)
-    assert math.isinf(metrics.futures_slippage)
-    assert math.isinf(metrics.slippage)
+    assert metrics.spot_slippage.is_infinite()
+    assert metrics.futures_slippage.is_infinite()
+    assert metrics.slippage.is_infinite()
 
 
 @pytest.mark.asyncio
@@ -178,9 +182,9 @@ def _sample_metrics() -> MarketMetrics:
         Decimal("100"),
         Decimal("100"),
         Decimal("0"),
-        0.0,
-        0.0,
-        0.0,
+        Decimal("0"),
+        Decimal("0"),
+        Decimal("0"),
         0.0,
     )
 
@@ -196,7 +200,7 @@ def test_check_entry_conditions_invalid_thresholds(caplog: pytest.LogCaptureFixt
 
 def test_check_entry_conditions_non_finite_metrics(caplog: pytest.LogCaptureFixture) -> None:
     metrics = _sample_metrics()
-    metrics.spread = float("nan")
+    metrics.spread = Decimal("NaN")
     with caplog.at_level(logging.WARNING):
         result = check_entry_conditions("BTCUSDT", Decimal("1"), metrics, {})
     assert not result

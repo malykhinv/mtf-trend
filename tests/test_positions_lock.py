@@ -64,12 +64,12 @@ def test_concurrent_close(monkeypatch):
     monkeypatch.setattr(fa, "positions", test_positions)
     test_positions["BTCUSDT"] = Position(
         entry_timestamp=0.0,
-        entry_futures_price=1.0,
-        entry_spot_price=1.0,
+        entry_futures_price=Decimal("1"),
+        entry_spot_price=Decimal("1"),
         entry_basis=0.0,
         entry_funding=0.0,
-        quantity=1.0,
-        initial_quantity=1.0,
+        quantity=Decimal("1"),
+        initial_quantity=Decimal("1"),
         exchange="dummy",
     )
     exchange = DummyExchange()

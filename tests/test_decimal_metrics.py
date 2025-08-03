@@ -95,9 +95,9 @@ async def test_monitor_neutral_position_decimal(monkeypatch: pytest.MonkeyPatch)
         futures_price=Decimal("101"),
         volume=Decimal("1000"),
         open_interest=Decimal("500"),
-        spot_slippage=0.0,
-        futures_slippage=0.0,
-        slippage=0.0,
+        spot_slippage=Decimal("0"),
+        futures_slippage=Decimal("0"),
+        slippage=Decimal("0"),
         basis=0.0,
     )
 
@@ -108,19 +108,19 @@ async def test_monitor_neutral_position_decimal(monkeypatch: pytest.MonkeyPatch)
 
     entry = fa.Position(
         entry_timestamp=0.0,
-        entry_futures_price=100.0,
-        entry_spot_price=100.0,
+        entry_futures_price=Decimal("100"),
+        entry_spot_price=Decimal("100"),
         entry_basis=0.0,
         entry_funding=0.01,
-        quantity=1.0,
-        initial_quantity=1.0,
+        quantity=Decimal("1"),
+        initial_quantity=Decimal("1"),
     )
     fa.positions["BTCUSDT"] = entry
 
     await fa.monitor_neutral_position(
         types.SimpleNamespace(),
         "BTCUSDT",
-        1.0,
+        Decimal("1"),
         {"funding_rate": 0.02},
         poll_interval=0,
     )
