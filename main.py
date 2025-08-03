@@ -11,6 +11,7 @@ import asyncio
 import logging
 import os
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List
 from decimal import Decimal
@@ -268,9 +269,15 @@ def start_processing_loops() -> None:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
                     price = base_metrics.futures_price
-                    quantity = trade_value / price if price else 0.0
+                    quantity = (
+                        Decimal(str(trade_value)) / Decimal(str(price))
+                        if price
+                        else Decimal(0)
+                    )
                     try:
-                        metrics = await strategy.get_market_metrics(symbol, quantity, client)
+                        metrics = await strategy.get_market_metrics(
+                            symbol, float(quantity), client
+                        )
                         if metrics is None:
                             logger.warning(
                                 "Пропуск %s:%s из-за неполных метрик", name, symbol
@@ -285,8 +292,12 @@ def start_processing_loops() -> None:
                     ):
                         # Условия входа выполнены – открываем позицию
                         try:
-                            await strategy.open_neutral_position(client, symbol, quantity)
-                            volume_usd = quantity * metrics.futures_price
+                            await strategy.open_neutral_position(
+                                client, symbol, quantity
+                            )
+                            volume_usd = float(
+                                quantity * Decimal(str(metrics.futures_price))
+                            )
                             asyncio.create_task(
                                 notify_open(
                                     f"{name}:{symbol}",
@@ -301,7 +312,7 @@ def start_processing_loops() -> None:
                                 )
                             )
                             task = asyncio.create_task(
-                                monitor_position(name, symbol, quantity)
+                                monitor_position(name, symbol, float(quantity))
                             )
                             POSITION_TASKS[f"{name}:{symbol}"] = task
                         except Exception as exc:

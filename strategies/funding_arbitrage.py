@@ -249,7 +249,7 @@ async def get_market_metrics(
 # Проверка условий
 # ---------------------------------------------------------------------------
 
-async def check_entry_conditions(
+async def _check_entry_conditions(
     symbol: str,
     quantity: Decimal,
     metrics: MarketMetrics | None,
@@ -333,6 +333,22 @@ async def check_entry_conditions(
         and notional <= max_deposit_trade
         and not await risk_control.is_symbol_open(symbol)
     )
+
+
+def check_entry_conditions(
+    symbol: str,
+    quantity: Decimal,
+    metrics: MarketMetrics | None,
+    thresholds: Dict[str, float],
+) -> bool:
+    """Wrapper allowing sync or async usage of ``_check_entry_conditions``."""
+    coro = _check_entry_conditions(symbol, quantity, metrics, thresholds)
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    else:
+        return coro
 
 
 def check_exit_conditions(metrics: MarketMetrics, thresholds: Dict[str, float]) -> bool:
@@ -473,6 +489,7 @@ async def open_neutral_position(
     exchange: BaseExchange, symbol: str, quantity: Decimal
 ) -> Dict[str, Dict]:
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
+    quantity = Decimal(str(quantity))
     bot_cfg = CONFIG.get("bot", {})
     exchange_name = exchange.name
     if symbol not in WHITELISTS.get(exchange_name, []):
