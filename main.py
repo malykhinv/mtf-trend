@@ -152,6 +152,7 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
             symbol,
             quantity,
             CONFIG.get("thresholds", {}),
+            CONFIG,
             poll_interval,
             position_id=position_id,
         )
@@ -230,7 +231,7 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
         if position_id in POSITION_TASKS:
             del POSITION_TASKS[position_id]
         if strategy.positions.pop(symbol, None) is not None:
-            await strategy.save_positions()
+            await strategy.save_positions(CONFIG)
 
 
 def start_processing_loops() -> None:
@@ -239,7 +240,7 @@ def start_processing_loops() -> None:
     poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
 
     # Восстанавливаем ранее сохранённые позиции
-    asyncio.run(strategy.load_positions())
+    asyncio.run(strategy.load_positions(CONFIG))
 
     def _update_thresholds(new: Dict[str, float]) -> None:
         """Обновляет пороги стратегии новыми значениями."""
@@ -312,11 +313,13 @@ def start_processing_loops() -> None:
                         continue
 
                     if await strategy.check_entry_conditions(
-                        symbol, quantity, metrics, thresholds
+                        symbol, quantity, metrics, thresholds, CONFIG
                     ):
                         # Условия входа выполнены – открываем позицию
                         try:
-                            await strategy.open_neutral_position(client, symbol, quantity)
+                            await strategy.open_neutral_position(
+                                client, symbol, quantity, CONFIG, WHITELISTS
+                            )
                             volume_usd = quantity * Decimal(str(metrics.futures_price))
                             funding_pct = format_decimal(metrics.funding_rate * 100, 4)
                             basis_pct = format_decimal(metrics.basis, 4)

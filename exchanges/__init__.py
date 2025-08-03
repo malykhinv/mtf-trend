@@ -179,7 +179,7 @@ async def _handle_timeout() -> None:
 
         # Пытаемся аварийно закрыть все отслеживаемые открытые позиции.
         try:  # pragma: no cover - best effort
-            from main import CLIENTS, POSITION_TASKS
+            from main import CLIENTS, POSITION_TASKS, CONFIG
             from strategies import funding_arbitrage as strategy
             from utils.logger import log_trade
             from utils.telegram import notify_close, format_duration
@@ -200,7 +200,7 @@ async def _handle_timeout() -> None:
                     )
                     try:
                         orders = await strategy.close_neutral_position(
-                            client, symbol, quantity, final=True
+                            client, symbol, quantity, CONFIG, final=True
                         )
                     except Exception as exc_close:
                         logger.error(

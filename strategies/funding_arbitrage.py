@@ -25,7 +25,6 @@ getcontext().prec = 10
 from exchanges import BaseExchange, API_TIMEOUT
 from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
-from main import CONFIG, WHITELISTS
 from utils.logger import log_trade
 from utils.telegram import format_decimal, format_duration, notify_partial_close
 
@@ -275,6 +274,7 @@ def check_entry_conditions(
     quantity: Decimal,
     metrics: MarketMetrics | None,
     thresholds: Dict[str, float],
+    config: Dict[str, Any],
 ) -> bool | asyncio.Future:
     """Возвращает ``True`` при выполнении всех условий входа.
 
@@ -320,7 +320,7 @@ def check_entry_conditions(
                 return default
             return val
 
-        deposit = Decimal(str(CONFIG.get("bot", {}).get("deposit_size", "Infinity")))
+        deposit = Decimal(str(config.get("bot", {}).get("deposit_size", "Infinity")))
         deposit_pct = _threshold("deposit_pct", 1.0)
         spread_limit = _threshold("spread", float("inf"))
         basis_limit = _threshold("basis", float("inf"))
@@ -472,23 +472,23 @@ _positions_lock = asyncio.Lock()
 positions_lock = asyncio.Lock()
 
 
-def _get_positions_path(path: Path | str | None = None) -> Path:
-    """Возвращает путь к файлу с позициями из env, config или ``DEFAULT_POSITIONS_FILE``."""
+def _get_positions_path(config: Dict[str, Any], path: Path | str | None = None) -> Path:
+    """Возвращает путь к файлу с позициями из ``env``, ``config`` или ``DEFAULT_POSITIONS_FILE``."""
 
     if path is not None:
         return Path(path)
     env_path = os.getenv("POSITIONS_FILE_PATH")
     if env_path:
         return Path(env_path)
-    bot_cfg = CONFIG.get("bot", {})
+    bot_cfg = config.get("bot", {})
     cfg_path = bot_cfg.get("positions_file")
     return Path(cfg_path or DEFAULT_POSITIONS_FILE)
 
 
-async def load_positions(path: Path | str | None = None) -> None:
+async def load_positions(config: Dict[str, Any], path: Path | str | None = None) -> None:
     """Загружает ранее сохранённые позиции из ``path``."""
 
-    path = _get_positions_path(path)
+    path = _get_positions_path(config, path)
     try:
         async with _positions_lock:
             with Path(path).open("r", encoding="utf-8") as fh:
@@ -512,10 +512,10 @@ async def load_positions(path: Path | str | None = None) -> None:
         await risk_control.mark_symbol_open(symbol)
 
 
-async def save_positions(path: Path | str | None = None) -> None:
+async def save_positions(config: Dict[str, Any], path: Path | str | None = None) -> None:
     """Сохраняет текущие открытые позиции в ``path``."""
 
-    path = _get_positions_path(path)
+    path = _get_positions_path(config, path)
     async with _positions_lock:
         data = {s: p.to_dict() for s, p in positions.items()}
         tmp_name: str | None = None
@@ -539,12 +539,16 @@ async def save_positions(path: Path | str | None = None) -> None:
 
 
 async def open_neutral_position(
-    exchange: BaseExchange, symbol: str, quantity: Decimal
+    exchange: BaseExchange,
+    symbol: str,
+    quantity: Decimal,
+    config: Dict[str, Any],
+    whitelists: Dict[str, list[str]],
 ) -> Dict[str, Dict]:
     """Открывает компенсирующие длинную и короткую позиции и сохраняет данные."""
-    bot_cfg = CONFIG.get("bot", {})
+    bot_cfg = config.get("bot", {})
     exchange_name = exchange.name
-    if symbol not in WHITELISTS.get(exchange_name, []):
+    if symbol not in whitelists.get(exchange_name, []):
         raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки
     entry_metrics = await get_market_metrics(symbol, quantity, exchange)
@@ -556,7 +560,7 @@ async def open_neutral_position(
     if not deposit.is_finite() or deposit < 0:
         logger.error("Некорректное значение депозита: %s", deposit_raw)
         raise RuntimeError("Некорректное значение депозита")
-    deposit_pct = Decimal(str(CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)))
+    deposit_pct = Decimal(str(config.get("thresholds", {}).get("deposit_pct", 1.0)))
     if deposit_pct < 0:
         logger.warning(
             "Некорректное значение deposit_pct=%s; устанавливаем 0",
@@ -641,7 +645,7 @@ async def open_neutral_position(
                 last_funding_timestamp=now,
                 exchange=exchange_name,
             )
-            await save_positions()
+            await save_positions(config)
         volume_usd_q = notional.quantize(Decimal("0.01"))
         commission_q = commission.quantize(Decimal("0.0001"))
         await log_trade(
@@ -686,6 +690,7 @@ async def close_neutral_position(
     exchange: BaseExchange,
     symbol: str,
     quantity: Decimal,
+    config: Dict[str, Any],
     pnl: Decimal = Decimal(0),
     final: bool = True,
 ) -> Dict[str, Dict]:
@@ -761,7 +766,7 @@ async def close_neutral_position(
         if final:
             await risk_control.mark_symbol_closed(symbol)
             positions.pop(symbol, None)
-            await save_positions()
+            await save_positions(config)
     return {"long": close_long, "short": close_short, "commission": float(commission)}
 
 
@@ -770,6 +775,7 @@ async def monitor_neutral_position(
     symbol: str,
     quantity: float,
     exit_thresholds: Dict[str, float],
+    config: Dict[str, Any],
     poll_interval: float = 5.0,
     position_id: str | None = None,
 ) -> Position | None:
@@ -783,9 +789,9 @@ async def monitor_neutral_position(
     отправки новых.
     """
     entry = positions.get(symbol)
-    save_interval = float(CONFIG.get("bot", {}).get("funding_save_interval", 300))
+    save_interval = float(config.get("bot", {}).get("funding_save_interval", 300))
     funding_threshold = Decimal(
-        str(CONFIG.get("bot", {}).get("funding_save_threshold", 0))
+        str(config.get("bot", {}).get("funding_save_threshold", 0))
     )
     last_save = time.time()
     last_saved_funding = entry.funding_accrued if entry else Decimal(0)
@@ -818,10 +824,11 @@ async def monitor_neutral_position(
             entry.last_funding_timestamp = now
             if (
                 now - last_save >= save_interval
-                or 0 < funding_threshold <= abs(entry.funding_accrued - last_saved_funding
-            )
+                or 0 < funding_threshold <= abs(
+                    entry.funding_accrued - last_saved_funding
+                )
             ):
-                await save_positions()
+                await save_positions(config)
                 last_save = now
                 last_saved_funding = entry.funding_accrued
         reasons: list[str] = []
@@ -876,7 +883,7 @@ async def monitor_neutral_position(
                 partial_qty_d = quantity_d / Decimal(2)
                 pnl_part = (fut_diff - spot_diff) * partial_qty_d
                 orders = await close_neutral_position(
-                    exchange, symbol, partial_qty_d, pnl_part, final=False
+                    exchange, symbol, partial_qty_d, config, pnl_part, final=False
                 )
                 # Обновляем запись о позиции после частичного выхода
                 async with positions_lock:
@@ -884,7 +891,7 @@ async def monitor_neutral_position(
                     quantity = float(quantity_d)
                     entry.quantity = quantity_d
                     entry.pnl += pnl_part
-                    await save_positions()
+                    await save_positions(config)
                 exit_ts = time.time()
                 exit_basis = calculate_basis(
                     metrics.futures_price,
@@ -964,7 +971,7 @@ async def monitor_neutral_position(
                     )
                 continue
             await close_neutral_position(
-                exchange, symbol, Decimal(str(quantity)), pnl, final=True
+                exchange, symbol, Decimal(str(quantity)), config, pnl, final=True
             )
             if entry:
                 exit_basis = calculate_basis(
