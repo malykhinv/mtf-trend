@@ -489,7 +489,7 @@ async def open_neutral_position(
         )
         await save_positions()
     volume_usd = float(notional)
-    log_trade(
+    await log_trade(
         {
             "symbol": symbol,
             "exchange": exchange_name,
@@ -687,7 +687,7 @@ async def monitor_neutral_position(
                 )
                 hold_time = exit_ts - entry.entry_timestamp
                 exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
-                log_trade(
+                await log_trade(
                     {
                         "symbol": symbol,
                         "exchange": exchange_name,
@@ -761,7 +761,7 @@ async def monitor_neutral_position(
                 pnl_pct = (
                     net_pnl / volume_usd * 100 if volume_usd != 0 else Decimal(0)
                 )
-                log_trade(
+                await log_trade(
                     {
                         "symbol": symbol,
                         "exchange": exchange_name,
