@@ -71,10 +71,16 @@ async def _wait_filled(exchange: BaseExchange, order_id: str) -> bool:
     start = time.monotonic()
     while True:
         status = await exchange.get_order_status(order_id)
-        state = status.get("status")
-        if state == "FILLED":
+        state = (
+            status.get("status")
+            or status.get("orderStatus")
+            or status.get("result", {}).get("status")
+            or status.get("result", {}).get("orderStatus")
+        )
+        normalized = str(state or "").replace(" ", "_").upper()
+        if normalized == "FILLED":
             return True
-        if state == "PARTIALLY_FILLED":
+        if normalized in {"PARTIALLY_FILLED", "PARTIALLYFILLED"}:
             return False
         if time.monotonic() - start > API_TIMEOUT:
             raise RuntimeError(f"Ордер {order_id} не исполнен вовремя")

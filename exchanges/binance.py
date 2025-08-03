@@ -44,6 +44,8 @@ class BinanceExchange(BaseExchange):
         self._spot_ws: Dict[str, Any] = {}
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
+        # Соответствие ``orderId`` -> ``symbol`` для запросов статуса ордера
+        self._order_symbols: Dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Утилиты REST
@@ -149,7 +151,39 @@ class BinanceExchange(BaseExchange):
             params.update({"price": price, "timeInForce": "GTC"})
         headers = {"X-MBX-APIKEY": self.api_key}
         params = self._sign(params)
-        return await self._request("POST", url, params=params, headers=headers)
+        data = await self._request("POST", url, params=params, headers=headers)
+        order_id = str(data.get("orderId") or data.get("id") or "")
+        if order_id:
+            self._order_symbols[order_id] = symbol
+        return data
+
+    async def get_order_status(self, order_id: str) -> dict:
+        """Возвращает статус ордера ``order_id``.
+
+        Сначала выполняет запрос к фьючерсному API. Если ордер не найден или
+        запрос завершился ошибкой, повторяет попытку для спотового API.
+        Повторные попытки сетевых обращений обрабатываются методом
+        :meth:`_request`.
+        """
+
+        headers = {"X-MBX-APIKEY": self.api_key}
+        symbol = self._order_symbols.get(order_id)
+        params: Dict[str, Any] = {"orderId": order_id}
+        if symbol:
+            params["symbol"] = symbol
+        params = self._sign(params)
+        url = f"{self.REST_URL}/fapi/v1/order"
+        try:
+            return await self._request("GET", url, params=params, headers=headers)
+        except aiohttp.ClientError:
+            spot_url = f"{self.SPOT_REST_URL}/api/v3/order"
+            params = {"orderId": order_id}
+            if symbol:
+                params["symbol"] = symbol
+            params = self._sign(params)
+            return await self._request(
+                "GET", spot_url, params=params, headers=headers
+            )
 
     async def cancel_order(self, symbol: str, order_id: str) -> dict:
         """Отменяет ордер по ``order_id`` для указанного ``symbol``.
@@ -240,7 +274,11 @@ class BinanceExchange(BaseExchange):
             params.update({"price": price, "timeInForce": "GTC"})
         headers = {"X-MBX-APIKEY": self.api_key}
         params = self._sign(params)
-        return await self._request("POST", url, params=params, headers=headers)
+        data = await self._request("POST", url, params=params, headers=headers)
+        order_id = str(data.get("orderId") or data.get("id") or "")
+        if order_id:
+            self._order_symbols[order_id] = symbol
+        return data
 
     async def get_spot_balance(self) -> dict:
         """Возвращает баланс спотового аккаунта."""

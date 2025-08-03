@@ -43,6 +43,8 @@ class BybitExchange(BaseExchange):
         self._spot_ws: Dict[str, Any] = {}
         self._spot_orderbooks: Dict[str, Dict[str, Any]] = {}
         self._spot_ws_tasks: Dict[str, asyncio.Task] = {}
+        # Кэш соответствия ``orderId`` -> сведения о заказе
+        self._order_info: Dict[str, Dict[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Утилиты REST
@@ -150,7 +152,40 @@ class BybitExchange(BaseExchange):
             body["price"] = price
         headers = {"Content-Type": "application/json"}
         body = self._sign("POST", url_path, body)
-        return await self._request("POST", url, json=body, headers=headers)
+        data = await self._request("POST", url, json=body, headers=headers)
+        order_id = str(
+            data.get("result", {}).get("orderId")
+            or data.get("orderId")
+            or data.get("id")
+            or ""
+        )
+        if order_id:
+            self._order_info[order_id] = {"symbol": symbol, "category": "linear"}
+        return data
+
+    async def get_order_status(self, order_id: str) -> dict:
+        """Возвращает статус ордера ``order_id``."""
+
+        url_path = "/v5/order/realtime"
+        url = f"{self.REST_URL}{url_path}"
+        info = self._order_info.get(order_id, {})
+        categories = [info.get("category", "linear")]
+        if "category" not in info:
+            categories = ["linear", "spot"]
+        symbol = info.get("symbol")
+        for category in categories:
+            params: Dict[str, Any] = {"orderId": order_id, "category": category}
+            if symbol:
+                params["symbol"] = symbol
+            params = self._sign("GET", url_path, params)
+            try:
+                data = await self._request("GET", url, params=params)
+            except aiohttp.ClientError:
+                continue
+            result = data.get("result", {}).get("list", [])
+            if result:
+                return result[0]
+        return {}
 
     async def cancel_order(self, symbol: str, order_id: str) -> dict:
         """Отменяет ордер ``order_id`` для пары ``symbol``."""
@@ -245,7 +280,16 @@ class BybitExchange(BaseExchange):
             body["price"] = price
         headers = {"Content-Type": "application/json"}
         body = self._sign("POST", url_path, body)
-        return await self._request("POST", url, json=body, headers=headers)
+        data = await self._request("POST", url, json=body, headers=headers)
+        order_id = str(
+            data.get("result", {}).get("orderId")
+            or data.get("orderId")
+            or data.get("id")
+            or ""
+        )
+        if order_id:
+            self._order_info[order_id] = {"symbol": symbol, "category": "spot"}
+        return data
 
     async def get_spot_balance(self) -> dict:
         """Получает баланс спотового аккаунта."""
