@@ -3,12 +3,6 @@
 Пакет предоставляет вспомогательные функции :func:`configure`, утилиты для
 размещения ордеров и другие помощники, делегирующие работу выбранной
 реализации биржи.
-
-Пример
--------
->>> import exchanges
->>> exchanges.configure("binance", api_key="key", api_secret="secret")
->>> await exchanges.fetch_funding("BTCUSDT")
 """
 from __future__ import annotations
 
@@ -339,6 +333,7 @@ async def place_order(
                 raise
             await asyncio.sleep(delay)
             delay *= 2
+    return {}
 
 
 async def _poll_fill(order_id: str, market: str) -> None:
@@ -378,16 +373,16 @@ async def place_spot_order(
             order = await _await_with_timeout(
                 current.place_spot_order(symbol, side, quantity, price)
             )
-            break
+            order_id = str(order.get("orderId") or order.get("id") or "")
+            _track_order("spot", order_id)
+            await _poll_fill(order_id, "spot")
+            return order
         except Exception:
             if attempt == ORDER_RETRIES - 1:
                 raise
             await asyncio.sleep(delay)
             delay *= 2
-    order_id = str(order.get("orderId") or order.get("id") or "")
-    _track_order("spot", order_id)
-    await _poll_fill(order_id, "spot")
-    return order
+    return {}
 
 
 async def place_perp_order(

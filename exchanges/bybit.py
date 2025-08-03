@@ -93,6 +93,7 @@ class BybitExchange(BaseExchange):
                     raise
                 await asyncio.sleep(delay)
                 delay *= 2
+        return None
 
     def _sign(self, method: str, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """Подписывает параметры запроса для Bybit."""

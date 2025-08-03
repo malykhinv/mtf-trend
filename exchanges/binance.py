@@ -96,6 +96,7 @@ class BinanceExchange(BaseExchange):
                     raise
                 await asyncio.sleep(delay)
                 delay *= 2
+        return None
 
     def _sign(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Подписывает параметры запроса с помощью HMAC SHA256."""

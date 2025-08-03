@@ -139,7 +139,7 @@ def calculate_basis(
 
 async def get_market_metrics(
     symbol: str,
-    trade_size: float,
+    trade_size: Decimal,
     exchange: BaseExchange | None = None,
     depth: int = 5,
 ) -> MarketMetrics | None:
@@ -411,10 +411,10 @@ class Position:
     exchange: str = ""
     exit_timestamp: float | None = None
     exit_reasons: list[str] = field(default_factory=list)
-    exit_futures_price: float | None = None
-    exit_spot_price: float | None = None
-    exit_basis: float | None = None
-    exit_funding: float | None = None
+    exit_futures_price: Decimal | None = None
+    exit_spot_price: Decimal | None = None
+    exit_basis: Decimal | None = None
+    exit_funding: Decimal | None = None
 
     def to_dict(self) -> Dict[str, Any]:
         data = asdict(self)
@@ -622,7 +622,7 @@ async def open_neutral_position(
                 "Не удалось полностью захеджировать позицию; спот откатан"
             )
         orders = {"spot": spot_order, "perp": perp_order}
-        commission = sum(Decimal(str(o.get("fee", 0.0))) for o in orders.values())
+        commission = Decimal(sum(Decimal(str(o.get("fee", 0.0))) for o in orders.values()))
         now = time.time()
         async with positions_lock:
             await risk_control.update_position(notional)
@@ -818,11 +818,8 @@ async def monitor_neutral_position(
             entry.last_funding_timestamp = now
             if (
                 now - last_save >= save_interval
-                or (
-                    funding_threshold > 0
-                    and abs(entry.funding_accrued - last_saved_funding)
-                    >= funding_threshold
-                )
+                or 0 < funding_threshold <= abs(entry.funding_accrued - last_saved_funding
+            )
             ):
                 await save_positions()
                 last_save = now
@@ -961,7 +958,7 @@ async def monitor_neutral_position(
                                 f"Объём: ${volume_fmt}\n"
                                 f"Время в позиции: {format_duration(hold_time)}\n"
                                 f"Накопленный фандинг: {funding_accrued_fmt} / "
-                                f"PnL: {pnl_total_fmt} ({pnl_pct_total_fmt} %)",
+                                f"PnL: {pnl_total_fmt} ({pnl_pct_total_fmt} %)"
                             ),
                         )
                     )
@@ -985,7 +982,7 @@ async def monitor_neutral_position(
                 entry.exit_futures_price = metrics.futures_price
                 entry.exit_spot_price = metrics.spot_price
                 entry.exit_basis = exit_basis
-                entry.exit_funding = float(metrics.funding_rate)
+                entry.exit_funding = Decimal(metrics.funding_rate)
                 entry.pnl = net_pnl
                 exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
                 volume_usd = entry.entry_futures_price * entry.initial_quantity
