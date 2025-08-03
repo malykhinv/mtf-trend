@@ -783,6 +783,12 @@ async def monitor_neutral_position(
     отправки новых.
     """
     entry = positions.get(symbol)
+    save_interval = float(CONFIG.get("bot", {}).get("funding_save_interval", 300))
+    funding_threshold = Decimal(
+        str(CONFIG.get("bot", {}).get("funding_save_threshold", 0))
+    )
+    last_save = time.time()
+    last_saved_funding = entry.funding_accrued if entry else Decimal(0)
     while True:
         try:
             metrics = await get_market_metrics(symbol, quantity, exchange)
@@ -810,6 +816,17 @@ async def monitor_neutral_position(
             # Накапливаем полученное фондирование
             entry.funding_accrued += funding_fee
             entry.last_funding_timestamp = now
+            if (
+                now - last_save >= save_interval
+                or (
+                    funding_threshold > 0
+                    and abs(entry.funding_accrued - last_saved_funding)
+                    >= funding_threshold
+                )
+            ):
+                await save_positions()
+                last_save = now
+                last_saved_funding = entry.funding_accrued
         reasons: list[str] = []
         exit_slippage = Decimal(0)
         if check_exit_conditions(metrics, exit_thresholds):
