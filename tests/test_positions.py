@@ -36,8 +36,11 @@ from risk import risk_control
 
 
 def _patch_risk(monkeypatch):
-    monkeypatch.setattr(risk_control, "update_position", lambda *_: None)
-    monkeypatch.setattr(risk_control, "mark_symbol_open", lambda *_: None)
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(risk_control, "update_position", _noop)
+    monkeypatch.setattr(risk_control, "mark_symbol_open", _noop)
 
 
 def test_save_and_load_roundtrip(tmp_path, monkeypatch):

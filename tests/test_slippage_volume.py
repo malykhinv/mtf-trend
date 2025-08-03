@@ -140,9 +140,10 @@ async def test_returns_none_on_missing_ohlc(monkeypatch: pytest.MonkeyPatch) -> 
     assert metrics is None
 
 
-def test_check_entry_conditions_none_metrics(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.asyncio
+async def test_check_entry_conditions_none_metrics(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
-        result = check_entry_conditions("BTCUSDT", Decimal("1"), None, {})
+        result = await check_entry_conditions("BTCUSDT", Decimal("1"), None, {})
     assert not result
     assert "incomplete" in caplog.text.lower()
 

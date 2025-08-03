@@ -48,14 +48,19 @@ def test_no_trade_on_invalid_config(monkeypatch, caplog):
     main.CLIENTS = {"x": object()}
     main.WHITELISTS = {"x": ["BTCUSDT"]}
 
-    monkeypatch.setattr(main.risk_control, "is_paused", lambda: False)
-    monkeypatch.setattr(main.risk_control, "is_symbol_open", lambda symbol: False)
+    async def _false(*args, **kwargs):
+        return False
+
+    monkeypatch.setattr(main.risk_control, "is_paused", _false)
+    monkeypatch.setattr(main.risk_control, "is_symbol_open", _false)
 
     captured = {}
 
     def fake_create_task(coro, *args, **kwargs):
         if "scan_loop" in getattr(coro, "__qualname__", ""):
             captured["scan_loop"] = coro
+        else:
+            coro.close()
         loop = asyncio.get_event_loop()
         fut = loop.create_future()
         return fut

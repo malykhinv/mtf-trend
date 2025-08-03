@@ -244,7 +244,7 @@ def start_processing_loops() -> None:
             for name, client in CLIENTS.items():
                 # Перебираем символы из белого списка
                 for symbol in WHITELISTS.get(name, []):
-                    if risk_control.is_paused() or risk_control.is_symbol_open(symbol):
+                    if await risk_control.is_paused() or await risk_control.is_symbol_open(symbol):
                         continue
                     try:
                         base_metrics = await strategy.get_market_metrics(symbol, 1.0, client)
@@ -269,7 +269,7 @@ def start_processing_loops() -> None:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
 
-                    if strategy.check_entry_conditions(
+                    if await strategy.check_entry_conditions(
                         symbol, quantity, metrics, thresholds
                     ):
                         # Условия входа выполнены – открываем позицию
@@ -300,7 +300,7 @@ def start_processing_loops() -> None:
     async def risk_loop() -> None:
         """Периодически проверяет, нужно ли приостановить торговлю."""
         while True:
-            if risk_control.is_paused():
+            if await risk_control.is_paused():
                 logger.warning("Торговля приостановлена из-за ограничений риска")
             await asyncio.sleep(poll_interval)
 

@@ -33,9 +33,12 @@ async def _async_noop(*args, **kwargs):
 
 
 def _patch_risk(monkeypatch):
-    monkeypatch.setattr(risk_control, "update_position", lambda *_: None)
-    monkeypatch.setattr(risk_control, "record_pnl", lambda *_: None)
-    monkeypatch.setattr(risk_control, "mark_symbol_closed", lambda *_: None)
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(risk_control, "update_position", _noop)
+    monkeypatch.setattr(risk_control, "record_pnl", _noop)
+    monkeypatch.setattr(risk_control, "mark_symbol_closed", _noop)
 
 
 class DummyExchange:
