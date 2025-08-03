@@ -510,8 +510,30 @@ async def open_neutral_position(
     if not await _wait_filled(exchange, perp_id):
         await exchange.cancel_order(symbol, perp_id)
         # Откатываем спотовую позицию
-        await exchange.place_spot_order(symbol, "SELL", float(quantity))
-        raise RuntimeError("Не удалось полностью захеджировать позицию; спот откатан")
+        try:
+            rollback_order = await exchange.place_spot_order(
+                symbol, "SELL", float(quantity)
+            )
+            rollback_id = str(
+                rollback_order.get("orderId")
+                or rollback_order.get("id")
+                or ""
+            )
+            if not await _wait_filled(exchange, rollback_id):
+                logger.error(
+                    "Откат спотовой позиции %s исполнен частично", rollback_id
+                )
+                raise RuntimeError(
+                    "Не удалось полностью откатить спотовую позицию"
+                )
+        except Exception as exc:
+            logger.error("Ошибка отката спотовой позиции: %s", exc)
+            raise RuntimeError(
+                "Не удалось откатить спотовую позицию"
+            ) from exc
+        raise RuntimeError(
+            "Не удалось полностью захеджировать позицию; спот откатан"
+        )
     orders = {"spot": spot_order, "perp": perp_order}
     commission = sum(Decimal(str(o.get("fee", 0.0))) for o in orders.values())
     now = time.time()
