@@ -174,16 +174,18 @@ class BinanceExchange(BaseExchange):
         params = self._sign(params)
         url = f"{self.REST_URL}/fapi/v1/order"
         try:
-            return await self._request("GET", url, params=params, headers=headers)
+            data = await self._request("GET", url, params=params, headers=headers)
         except aiohttp.ClientError:
             spot_url = f"{self.SPOT_REST_URL}/api/v3/order"
             params = {"orderId": order_id}
             if symbol:
                 params["symbol"] = symbol
             params = self._sign(params)
-            return await self._request(
+            data = await self._request(
                 "GET", spot_url, params=params, headers=headers
             )
+        self._order_symbols.pop(order_id, None)
+        return data
 
     async def cancel_order(self, symbol: str, order_id: str) -> dict:
         """Отменяет ордер по ``order_id`` для указанного ``symbol``.
@@ -197,12 +199,14 @@ class BinanceExchange(BaseExchange):
         params = self._sign({"symbol": symbol, "orderId": order_id})
         url = f"{self.REST_URL}/fapi/v1/order"
         try:
-            return await self._request("DELETE", url, params=params, headers=headers)
+            data = await self._request("DELETE", url, params=params, headers=headers)
         except aiohttp.ClientError:
             # Попытка отменить спотовый ордер
             spot_url = f"{self.SPOT_REST_URL}/api/v3/order"
             params = self._sign({"symbol": symbol, "orderId": order_id})
-            return await self._request("DELETE", spot_url, params=params, headers=headers)
+            data = await self._request("DELETE", spot_url, params=params, headers=headers)
+        self._order_symbols.pop(order_id, None)
+        return data
 
     async def get_balance(self) -> dict:
         """Возвращает баланс фьючерсного аккаунта."""
