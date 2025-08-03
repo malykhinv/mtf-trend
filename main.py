@@ -25,7 +25,13 @@ from exchanges.bybit import BybitExchange
 from risk import risk_control
 from strategies import funding_arbitrage as strategy
 from ai.parameter_optimizer import periodic_optimization
-from utils.telegram import format_duration, notify_close, notify_open, shutdown
+from utils.telegram import (
+    format_decimal,
+    format_duration,
+    notify_close,
+    notify_open,
+    shutdown,
+)
 
 load_dotenv()
 
@@ -153,19 +159,25 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
         entry = entry or strategy.positions.get(symbol)
         entry_ts = entry.entry_timestamp if entry else time.time()
         hold = time.time() - entry_ts
-        funding_pct = (entry.entry_funding if entry else 0.0) * 100
-        basis_pct = entry.entry_basis if entry else 0.0
-        volume_usd = (
-            entry.entry_futures_price * entry.initial_quantity if entry else 0.0
+        funding_pct = format_decimal(
+            (entry.entry_funding if entry else 0.0) * 100, 4
         )
+        basis_pct = format_decimal(entry.entry_basis if entry else 0.0, 4)
+        volume_usd = (
+            Decimal(str(entry.entry_futures_price))
+            * Decimal(str(entry.initial_quantity))
+            if entry
+            else Decimal("0")
+        )
+        volume_fmt = format_decimal(volume_usd, 2)
         asyncio.create_task(
             notify_close(
                 position_id,
                 (
                     f"Ошибка на {exchange_name} {symbol}: {exc}\n"
-                    f"Фандинг: {funding_pct:.4f}%\n"
-                    f"Базис: {basis_pct:.4f}%\n"
-                    f"Объём: ${float(volume_usd):.2f}\n"
+                    f"Фандинг: {funding_pct}%\n"
+                    f"Базис: {basis_pct}%\n"
+                    f"Объём: ${volume_fmt}\n"
                     f"Время в позиции: {format_duration(hold)}"
                 ),
             )
@@ -174,7 +186,7 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
     else:
         if entry is None:
             entry = strategy.positions.get(symbol)
-        pnl = float(entry.pnl) if entry else 0.0
+        pnl = entry.pnl if entry else Decimal("0")
         reasons = entry.exit_reasons if entry else []
         exit_ts = entry.exit_timestamp if entry else 0
         hold = exit_ts - (entry.entry_timestamp if entry else 0)
@@ -183,22 +195,28 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: float) -> 
             if entry and entry.exit_funding is not None
             else (entry.entry_funding if entry else 0.0)
         )
-        funding_pct = funding_rate * 100
-        basis_pct = entry.exit_basis if entry else 0.0
+        funding_pct = format_decimal(funding_rate * 100, 4)
+        basis_pct = format_decimal(entry.exit_basis if entry else 0.0, 4)
         volume_usd = (
-            entry.entry_futures_price * entry.initial_quantity if entry else 0.0
+            Decimal(str(entry.entry_futures_price))
+            * Decimal(str(entry.initial_quantity))
+            if entry
+            else Decimal("0")
         )
-        pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
+        volume_fmt = format_decimal(volume_usd, 2)
+        pnl_pct = (pnl / volume_usd * 100) if volume_usd else Decimal("0")
+        pnl_fmt = format_decimal(pnl, 4)
+        pnl_pct_fmt = format_decimal(pnl_pct, 4)
         asyncio.create_task(
             notify_close(
                 position_id,
                 (
                     f"Закрыта {symbol} на {exchange_name}\n"
-                    f"Фандинг: {funding_pct:.4f}%\n"
-                    f"Базис: {basis_pct:.4f}%\n"
-                    f"Объём: ${float(volume_usd):.2f}\n"
+                    f"Фандинг: {funding_pct}%\n"
+                    f"Базис: {basis_pct}%\n"
+                    f"Объём: ${volume_fmt}\n"
                     f"Время в позиции: {format_duration(hold)}\n"
-                    f"PnL: {pnl:.4f} ({pnl_pct:.4f}%) Причины: {reasons}"
+                    f"PnL: {pnl_fmt} ({pnl_pct_fmt}%) Причины: {reasons}"
                 ),
             )
         )
@@ -247,8 +265,8 @@ def start_processing_loops() -> None:
             if deposit_pct_raw != deposit_pct or min_trade_usd <= 0:
                 logger.warning(
                     "Некорректные параметры торговли: deposit_pct=%s, min_trade_size=%s",
-                    deposit_pct_raw,
-                    min_trade_usd,
+                    format_decimal(deposit_pct_raw, 4),
+                    format_decimal(min_trade_usd, 2),
                 )
                 await asyncio.sleep(poll_interval)
                 continue
@@ -256,7 +274,8 @@ def start_processing_loops() -> None:
             trade_value = max(min_trade_usd, deposit * deposit_pct)
             if not math.isfinite(trade_value) or trade_value <= 0:
                 logger.error(
-                    "Некорректное значение trade_value: %s", trade_value
+                    "Некорректное значение trade_value: %s",
+                    format_decimal(trade_value, 2),
                 )
                 await asyncio.sleep(poll_interval)
                 continue
@@ -302,14 +321,17 @@ def start_processing_loops() -> None:
                         try:
                             await strategy.open_neutral_position(client, symbol, quantity)
                             volume_usd = quantity * Decimal(str(metrics.futures_price))
+                            funding_pct = format_decimal(metrics.funding_rate * 100, 4)
+                            basis_pct = format_decimal(metrics.basis, 4)
+                            volume_fmt = format_decimal(volume_usd, 2)
                             asyncio.create_task(
                                 notify_open(
                                     f"{name}:{symbol}",
                                     (
                                         f"Открыта {symbol} на {name}\n"
-                                        f"Фандинг: {metrics.funding_rate * 100:.4f}%\n"
-                                        f"Базис: {metrics.basis:.4f}%\n"
-                                        f"Объём: ${float(volume_usd):.2f}\n"
+                                        f"Фандинг: {funding_pct}%\n"
+                                        f"Базис: {basis_pct}%\n"
+                                        f"Объём: ${volume_fmt}\n"
                                         f"Время в позиции: {format_duration(0)}\n"
                                         "Стратегия: Лонг спот / Шорт перп"
                                     ),

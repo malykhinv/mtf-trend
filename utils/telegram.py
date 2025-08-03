@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Optional
 
 from aiogram import Bot
@@ -62,6 +63,20 @@ def format_duration(seconds: float) -> str:
     if not parts:
         parts.append(f"{sec}s")
     return " ".join(parts)
+
+
+def format_decimal(value: float | Decimal, precision: int = 4, signed: bool = False) -> str:
+    """Возвращает строку с числом, округлённым до ``precision`` знаков.
+
+    Параметр ``signed`` добавляет ``+`` для положительных чисел, что удобно
+    при отображении прибыли и процентов.
+    """
+    quant = Decimal("1").scaleb(-precision)
+    number = Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP)
+    result = f"{number:.{precision}f}"
+    if signed and not result.startswith("-"):
+        result = "+" + result
+    return result
 
 
 async def _send_message(text: str) -> Optional[int]:
