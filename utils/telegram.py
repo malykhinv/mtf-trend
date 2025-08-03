@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from typing import Dict, Optional
+from typing import Any, Awaitable, Dict, Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -18,6 +18,21 @@ logger = logging.getLogger(__name__)
 
 # Кешируем идентификаторы сообщений для обновления одного и того же поста
 _MESSAGE_CACHE: Dict[str, int] = {}
+
+
+def run_background(coro: Awaitable[Any]) -> asyncio.Task[Any]:
+    """Run *coro* in the background and log unhandled exceptions."""
+
+    task: asyncio.Task[Any] = asyncio.create_task(coro)
+
+    def _handle(task: asyncio.Task[Any]) -> None:
+        try:
+            task.result()
+        except Exception:  # pragma: no cover - best effort logging
+            logger.exception("Background task failed")
+
+    task.add_done_callback(_handle)
+    return task
 
 
 def get_bot() -> Optional[Bot]:

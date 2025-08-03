@@ -188,7 +188,7 @@ async def _handle_timeout() -> None:
             from main import CLIENTS, POSITION_TASKS
             from strategies import funding_arbitrage as strategy
             from utils.logger import log_trade
-            from utils.telegram import notify_close, format_duration
+            from utils.telegram import notify_close, format_duration, run_background
             from datetime import datetime
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Не удалось подготовить аварийное закрытие: %s", exc)
@@ -219,7 +219,7 @@ async def _handle_timeout() -> None:
                         funding_pct = entry.get("entry_funding", 0.0) * 100
                         basis_pct = entry.get("entry_basis", 0.0)
                         volume_usd = quantity * entry.get("entry_futures_price", 0.0)
-                        asyncio.create_task(
+                        run_background(
                             notify_close(
                                 pid,
                                 (
@@ -283,7 +283,7 @@ async def _handle_timeout() -> None:
                         )
                         hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
                         funding_pct = entry.get("entry_funding", 0.0) * 100
-                        asyncio.create_task(
+                        run_background(
                             notify_close(
                                 pid,
                                 (

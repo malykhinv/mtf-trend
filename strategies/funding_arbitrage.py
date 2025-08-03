@@ -27,7 +27,7 @@ from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG, WHITELISTS
 from utils.logger import log_trade
-from utils.telegram import format_duration, notify_partial_close
+from utils.telegram import format_duration, notify_partial_close, run_background
 
 
 DEFAULT_POSITIONS_FILE = "open_positions.json"
@@ -860,7 +860,7 @@ async def monitor_neutral_position(
                     pnl_pct_total = (
                         pnl_total / total_volume * 100 if total_volume != 0 else Decimal(0)
                     )
-                    asyncio.create_task(
+                    run_background(
                         notify_partial_close(
                             position_id,
                             (

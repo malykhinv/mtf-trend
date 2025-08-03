@@ -24,7 +24,12 @@ from exchanges.bybit import BybitExchange
 from risk import risk_control
 from strategies import funding_arbitrage as strategy
 from ai.parameter_optimizer import periodic_optimization
-from utils.telegram import format_duration, notify_close, notify_open
+from utils.telegram import (
+    format_duration,
+    notify_close,
+    notify_open,
+    run_background,
+)
 
 load_dotenv()
 
@@ -173,7 +178,7 @@ def start_processing_loops() -> None:
                 if entry
                 else 0.0
             )
-            asyncio.create_task(
+            run_background(
                 notify_close(
                     position_id,
                     (
@@ -206,7 +211,7 @@ def start_processing_loops() -> None:
                 else 0.0
             )
             pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
-            asyncio.create_task(
+            run_background(
                 notify_close(
                     position_id,
                     (
@@ -302,7 +307,7 @@ def start_processing_loops() -> None:
                         try:
                             await strategy.open_neutral_position(client, symbol, quantity)
                             volume_usd = quantity * Decimal(str(metrics.futures_price))
-                            asyncio.create_task(
+                            run_background(
                                 notify_open(
                                     f"{name}:{symbol}",
                                     (
