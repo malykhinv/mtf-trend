@@ -7,17 +7,27 @@ import random
 from pathlib import Path
 from typing import Callable, Dict, Optional
 
+import yaml
 import pandas as pd
 from joblib import dump, load
 from sklearn.linear_model import LinearRegression
 
 from utils.logger import LOG_PATH
 
-# Путь по умолчанию для сохранения оптимизированных порогов
-DEFAULT_OUTPUT = Path("data") / "optimized_thresholds.joblib"
+# Путь по умолчанию для сохранения оптимизированных порогов читается из конфигурации.
+_CFG_PATH = Path(__file__).resolve().parents[1] / "config.yaml"
+try:
+    with _CFG_PATH.open("r", encoding="utf-8") as _f:
+        _cfg = yaml.safe_load(_f) or {}
+except FileNotFoundError:  # pragma: no cover - defensive
+    _cfg = {}
+
+DEFAULT_OUTPUT = Path(
+    _cfg.get("paths", {}).get("thresholds", "data/optimized_thresholds.joblib")
+)
 
 
-def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
+def analyze_trade_history(log_path: Path | None = None) -> Dict[str, float]:
     """Анализирует историю сделок и вычисляет пороги через регрессию.
 
     Линейная регрессия оценивает, какие признаки сильнее влияют на прибыль.
@@ -25,6 +35,9 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
     ``volume_usd`` и ``liquidity`` берутся как медианы сделок, которые
     модель прогнозирует прибыльными.
     """
+
+    if log_path is None:
+        log_path = LOG_PATH
 
     if not log_path.exists():
         return {}
@@ -86,9 +99,13 @@ def analyze_trade_history(log_path: Path = LOG_PATH) -> Dict[str, float]:
 
 
 def optimize_and_save(
-    log_path: Path = LOG_PATH, out_path: Path = DEFAULT_OUTPUT
+    log_path: Path | None = None, out_path: Path | None = None
 ) -> Dict[str, float]:
     """Выполняет оптимизацию на истории и сохраняет результат."""
+    if log_path is None:
+        log_path = LOG_PATH
+    if out_path is None:
+        out_path = DEFAULT_OUTPUT
     thresholds = analyze_trade_history(log_path)
     if thresholds:
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -99,8 +116,8 @@ def optimize_and_save(
 async def periodic_optimization(
     min_hours: int = 24,
     max_hours: int = 48,
-    log_path: Path = LOG_PATH,
-    out_path: Path = DEFAULT_OUTPUT,
+    log_path: Path | None = None,
+    out_path: Path | None = None,
     on_update: Optional[Callable[[Dict[str, float]], None]] = None,
 
 ) -> None:
@@ -116,6 +133,11 @@ async def periodic_optimization(
         Необязательный колбэк, вызываемый после каждого пересчёта порогов.
     """
 
+    if log_path is None:
+        log_path = LOG_PATH
+    if out_path is None:
+        out_path = DEFAULT_OUTPUT
+
     while True:
         thresholds = optimize_and_save(log_path, out_path)
         if on_update and thresholds:
@@ -128,13 +150,16 @@ async def periodic_optimization(
 logger = logging.getLogger(__name__)
 
 
-def load_thresholds(defaults: Dict[str, float], path: Path = DEFAULT_OUTPUT) -> Dict[str, float]:
+def load_thresholds(defaults: Dict[str, float], path: Path | None = None) -> Dict[str, float]:
     """Загружает оптимизированные пороги и объединяет их с ``defaults``.
 
     Загруженные значения проверяются на корректность: принимаются только
     конечные неотрицательные числа. Неверные пороги игнорируются с
     предупреждением.
     """
+
+    if path is None:
+        path = DEFAULT_OUTPUT
 
     try:
         data = load(path)
