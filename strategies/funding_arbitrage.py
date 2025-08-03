@@ -27,7 +27,7 @@ from risk import risk_control
 from ai.parameter_optimizer import load_thresholds as _load_thresholds
 from main import CONFIG, WHITELISTS
 from utils.logger import log_trade
-from utils.telegram import format_duration, notify_partial_close
+from utils.telegram import format_decimal, format_duration, notify_partial_close
 
 
 DEFAULT_POSITIONS_FILE = "open_positions.json"
@@ -536,10 +536,16 @@ async def open_neutral_position(
         raise RuntimeError("Некорректное значение депозита")
     deposit_pct = Decimal(str(CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)))
     if deposit_pct < 0:
-        logger.warning("Некорректное значение deposit_pct=%s; устанавливаем 0", deposit_pct)
+        logger.warning(
+            "Некорректное значение deposit_pct=%s; устанавливаем 0",
+            format_decimal(deposit_pct, 4),
+        )
         deposit_pct = Decimal("0")
     elif deposit_pct > 1:
-        logger.warning("Некорректное значение deposit_pct=%s; устанавливаем 1", deposit_pct)
+        logger.warning(
+            "Некорректное значение deposit_pct=%s; устанавливаем 1",
+            format_decimal(deposit_pct, 4),
+        )
         deposit_pct = Decimal("1")
     max_trade = deposit * deposit_pct
     if notional > deposit or notional > max_trade:
@@ -614,7 +620,8 @@ async def open_neutral_position(
                 exchange=exchange_name,
             )
             await save_positions()
-        volume_usd = float(notional)
+        volume_usd_q = notional.quantize(Decimal("0.01"))
+        commission_q = commission.quantize(Decimal("0.0001"))
         await log_trade(
             {
                 "symbol": symbol,
@@ -630,10 +637,10 @@ async def open_neutral_position(
                 "basis_pct": entry_metrics.basis,
                 "funding": entry_metrics.funding_rate,
                 "quantity": float(quantity),
-                "volume_usd": volume_usd,
+                "volume_usd": float(volume_usd_q),
                 "pnl": 0.0,
                 "pnl_pct": 0.0,
-                "commissions": float(commission),
+                "commissions": float(commission_q),
                 "funding_accrued": 0.0,
                 "slippage": entry_metrics.slippage,
                 "exit_reasons": None,
@@ -850,6 +857,11 @@ async def monitor_neutral_position(
                 )
                 hold_time = exit_ts - entry.entry_timestamp
                 exchange_name = type(exchange).__name__.replace("Exchange", "").lower()
+                volume_usd_q = volume_usd.quantize(Decimal("0.01"))
+                pnl_net_q = pnl_net.quantize(Decimal("0.0001"))
+                pnl_pct_q = pnl_pct.quantize(Decimal("0.01"))
+                commission_q = commission.quantize(Decimal("0.0001"))
+                funding_accrued_q = entry.funding_accrued.quantize(Decimal("0.0001"))
                 await log_trade(
                     {
                         "symbol": symbol,
@@ -865,11 +877,11 @@ async def monitor_neutral_position(
                         "basis_pct": exit_basis,
                         "funding": entry.entry_funding,
                         "quantity": partial_qty,
-                        "volume_usd": float(volume_usd),
-                        "pnl": float(pnl_net),
-                        "pnl_pct": float(pnl_pct),
-                        "commissions": float(commission),
-                        "funding_accrued": float(entry.funding_accrued),
+                        "volume_usd": float(volume_usd_q),
+                        "pnl": float(pnl_net_q),
+                        "pnl_pct": float(pnl_pct_q),
+                        "commissions": float(commission_q),
+                        "funding_accrued": float(funding_accrued_q),
                         "slippage": exit_slippage,
                         "exit_reasons": ["partial"],
                         "notes": "частичный выход",
@@ -885,17 +897,24 @@ async def monitor_neutral_position(
                     pnl_pct_total = (
                         pnl_total / total_volume * 100 if total_volume != 0 else Decimal(0)
                     )
+                    quantity_fmt = format_decimal(quantity, 4)
+                    funding_pct = format_decimal(metrics.funding_rate * 100, 4)
+                    basis_pct = format_decimal(exit_basis, 4)
+                    volume_fmt = format_decimal(volume_usd_q, 2)
+                    funding_accrued_fmt = format_decimal(entry.funding_accrued, 4)
+                    pnl_total_fmt = format_decimal(pnl_total, 4, signed=True)
+                    pnl_pct_total_fmt = format_decimal(pnl_pct_total, 2, signed=True)
                     asyncio.create_task(
                         notify_partial_close(
                             position_id,
                             (
-                                f"Частичное закрытие {symbol}: осталось {quantity:.4f}\n"
-                                f"Фандинг: {metrics.funding_rate * 100:.4f}%\n"
-                                f"Базис: {exit_basis:.4f}%\n"
-                                f"Объём: ${float(volume_usd):.2f}\n"
+                                f"Частичное закрытие {symbol}: осталось {quantity_fmt}\n"
+                                f"Фандинг: {funding_pct}%\n"
+                                f"Базис: {basis_pct}%\n"
+                                f"Объём: ${volume_fmt}\n"
                                 f"Время в позиции: {format_duration(hold_time)}\n"
-                                f"Накопленный фандинг: {entry.funding_accrued:.4f} / "
-                                f"PnL: {pnl_total:+.4f} ({pnl_pct_total:+.2f} %)"
+                                f"Накопленный фандинг: {funding_accrued_fmt} / "
+                                f"PnL: {pnl_total_fmt} ({pnl_pct_total_fmt} %)",
                             ),
                         )
                     )
@@ -928,32 +947,37 @@ async def monitor_neutral_position(
                 pnl_pct = (
                     net_pnl / volume_usd * 100 if volume_usd != 0 else Decimal(0)
                 )
+                volume_usd_q = volume_usd.quantize(Decimal("0.01"))
+                net_pnl_q = net_pnl.quantize(Decimal("0.0001"))
+                pnl_pct_q = pnl_pct.quantize(Decimal("0.01"))
+                commissions_q = entry.commissions.quantize(Decimal("0.0001"))
+                funding_accrued_q = entry.funding_accrued.quantize(Decimal("0.0001"))
                 await log_trade(
                     {
-                        "symbol": symbol,
-                        "exchange": exchange_name,
-                        "entry_time": datetime.fromtimestamp(entry.entry_timestamp).isoformat(),
-                        "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
-                        "entry_futures_price": entry.entry_futures_price,
-                        "exit_futures_price": metrics.futures_price,
-                        "entry_spot_price": entry.entry_spot_price,
-                        "exit_spot_price": metrics.spot_price,
-                        "entry_basis": entry.entry_basis,
-                        "exit_basis": exit_basis,
-                        "basis_pct": exit_basis,
-                        "funding": entry.entry_funding,
-                        "quantity": entry.initial_quantity,
-                        "volume_usd": float(volume_usd),
-                        "pnl": float(net_pnl),
-                        "pnl_pct": float(pnl_pct),
-                        "commissions": float(entry.commissions),
-                        "funding_accrued": float(entry.funding_accrued),
-                        "slippage": exit_slippage,
-                        "exit_reasons": reasons,
-                        "notes": None,
-                    }
-                )
-            return entry
+                          "symbol": symbol,
+                          "exchange": exchange_name,
+                          "entry_time": datetime.fromtimestamp(entry.entry_timestamp).isoformat(),
+                          "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
+                          "entry_futures_price": entry.entry_futures_price,
+                          "exit_futures_price": metrics.futures_price,
+                          "entry_spot_price": entry.entry_spot_price,
+                          "exit_spot_price": metrics.spot_price,
+                          "entry_basis": entry.entry_basis,
+                          "exit_basis": exit_basis,
+                          "basis_pct": exit_basis,
+                          "funding": entry.entry_funding,
+                          "quantity": entry.initial_quantity,
+                          "volume_usd": float(volume_usd_q),
+                          "pnl": float(net_pnl_q),
+                          "pnl_pct": float(pnl_pct_q),
+                          "commissions": float(commissions_q),
+                          "funding_accrued": float(funding_accrued_q),
+                          "slippage": exit_slippage,
+                          "exit_reasons": reasons,
+                          "notes": None,
+                        }
+                    )
+                return entry
         await asyncio.sleep(poll_interval)
 
 
