@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Dict
 from decimal import Decimal, getcontext
 import os
+from tempfile import NamedTemporaryFile
 
 getcontext().prec = 10
 
@@ -479,8 +480,23 @@ async def save_positions(path: Path | str | None = None) -> None:
 
     path = _get_positions_path(path)
     async with _positions_lock:
-        with Path(path).open("w", encoding="utf-8") as fh:
-            json.dump({s: p.to_dict() for s, p in positions.items()}, fh)
+        data = {s: p.to_dict() for s, p in positions.items()}
+        tmp_name: str | None = None
+        try:
+            dir_path = Path(path).resolve().parent
+            with NamedTemporaryFile(
+                "w", dir=dir_path, delete=False, encoding="utf-8"
+            ) as fh:
+                json.dump(data, fh)
+                tmp_name = fh.name
+            os.replace(tmp_name, path)
+        except Exception as exc:  # pragma: no cover - log errors
+            logger.error("Ошибка сохранения позиций %s: %s", path, exc)
+            if tmp_name:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
 
 
 async def open_neutral_position(
