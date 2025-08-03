@@ -43,6 +43,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping
 
@@ -76,6 +77,9 @@ LOG_COLUMNS: list[str] = [
     "notes",
 ]
 
+# Глобальная блокировка для сериализации доступа к файлу журнала.
+_log_lock = asyncio.Lock()
+
 
 def _ensure_parent(path: Path) -> None:
     """Создаёт родительскую директорию для ``path``, если она не существует."""
@@ -97,7 +101,7 @@ def _validate_entry(entry: Mapping[str, Any], columns: Iterable[str]) -> None:
         raise ValueError(f"Missing required columns: {', '.join(missing)}")
 
 
-def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
+async def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
     """Добавляет информацию о сделке в Excel-журнал.
 
     Параметры
@@ -108,8 +112,8 @@ def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
         Необязательный путь к файлу Excel. По умолчанию
         ``data/funding_bot_log.xlsx``.
 
-    Функция намеренно небольшая и синхронная; её предполагается вызывать
-    вне критичных по производительности участков.
+    Функция асинхронная и использует глобальную блокировку, чтобы
+    предотвращать одновременную запись в файл из разных задач.
     """
 
     path = Path(path)
@@ -124,18 +128,19 @@ def log_trade(trade: Mapping[str, Any], path: Path = LOG_PATH) -> None:
             val = ",".join(map(str, val))
         normalized[col] = val
 
-    if path.exists():
-        wb = load_workbook(path)
-        ws = wb.active
-        # Повторно создаём заголовок, если файл был изменён вручную
-        if ws.max_row == 0 or [cell.value for cell in ws[1]] != LOG_COLUMNS:
-            ws.delete_rows(1, ws.max_row)
+    async with _log_lock:
+        if path.exists():
+            wb = load_workbook(path)
+            ws = wb.active
+            # Повторно создаём заголовок, если файл был изменён вручную
+            if ws.max_row == 0 or [cell.value for cell in ws[1]] != LOG_COLUMNS:
+                ws.delete_rows(1, ws.max_row)
+                ws.append(LOG_COLUMNS)
+        else:
+            wb = Workbook()
+            ws = wb.active
             ws.append(LOG_COLUMNS)
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.append(LOG_COLUMNS)
 
-    ws.append([normalized[col] for col in LOG_COLUMNS])
-    wb.save(path)
-    wb.close()
+        ws.append([normalized[col] for col in LOG_COLUMNS])
+        wb.save(path)
+        wb.close()

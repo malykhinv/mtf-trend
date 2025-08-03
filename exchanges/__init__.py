@@ -254,7 +254,7 @@ async def _handle_timeout() -> None:
                             if exit_spot
                             else float("inf")
                         )
-                        log_trade(
+                        await log_trade(
                             {
                                 "symbol": symbol,
                                 "exchange": exchange_name,
