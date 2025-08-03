@@ -142,6 +142,27 @@ async def can_open_position(notional: Decimal) -> bool:
         return True
 
 
+async def try_open_position(symbol: str, notional: Decimal) -> bool:
+    """Атомарно проверяет лимиты и помечает ``symbol`` как открытую позицию."""
+
+    async with _lock:
+        if _state.paused:
+            return False
+        if _state.open_positions >= _limits.max_open_positions:
+            return False
+        if _state.total_notional + notional > _limits.deposit_cap:
+            return False
+        if _state.total_notional + notional > _limits.max_position_size:
+            return False
+        if _state.daily_loss >= _limits.max_daily_loss:
+            return False
+        if symbol in _state.open_symbols:
+            return False
+        _state.open_symbols.add(symbol)
+        _state.open_positions = len(_state.open_symbols)
+        return True
+
+
 async def update_position(delta_notional: Decimal) -> None:
     """Обновляет учёт текущей нагрузки на депозит на ``delta_notional`` USD."""
 

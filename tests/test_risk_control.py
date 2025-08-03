@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from risk import risk_control as rc
 from decimal import Decimal
@@ -85,3 +86,14 @@ async def test_daily_loss_resets_after_24h_is_paused(monkeypatch):
     await rc.is_paused()
     assert rc._state.daily_loss == Decimal("0")
     assert rc._state.last_reset_ts == now + 24 * 3600 + 1
+
+
+@pytest.mark.asyncio
+async def test_try_open_position_atomic():
+    rc._state = rc.RiskState()
+    async def attempt():
+        return await rc.try_open_position("BTCUSDT", Decimal("1"))
+    results = await asyncio.gather(attempt(), attempt())
+    assert sum(results) == 1
+    assert await rc.is_symbol_open("BTCUSDT")
+    await rc.mark_symbol_closed("BTCUSDT")

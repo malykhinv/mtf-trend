@@ -505,6 +505,7 @@ async def save_positions(path: Path | str | None = None) -> None:
                     pass
 
 
+
 async def open_neutral_position(
     exchange: BaseExchange, symbol: str, quantity: Decimal
 ) -> Dict[str, Dict]:
@@ -529,101 +530,103 @@ async def open_neutral_position(
     max_trade = deposit * deposit_pct
     if notional > deposit or notional > max_trade:
         raise RuntimeError("Размер сделки превышает лимиты депозита")
-    if not await risk_control.can_open_position(notional) or await risk_control.is_symbol_open(symbol):
+    if not await risk_control.try_open_position(symbol, notional):
         raise RuntimeError(
             "Превышены лимиты риска, торговля приостановлена или позиция уже открыта"
         )
-    # Хеджируем позицию на споте и фьючерсе
-    spot_order = await exchange.place_spot_order(symbol, "BUY", float(quantity))
-    spot_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
-    if not await _wait_filled(exchange, spot_id):
-        await exchange.cancel_order(symbol, spot_id)
-        raise RuntimeError("Спотовый ордер выполнен частично")
-
     try:
-        perp_order = await exchange.place_order(symbol, "SELL", float(quantity))
-    except Exception as exc:
-        # При ошибке размещения второй ноги отменяем первую
-        await exchange.cancel_order(symbol, spot_id)
-        raise RuntimeError(
-            "Не удалось разместить хедж; спотовый ордер отменён"
-        ) from exc
-    perp_id = str(perp_order.get("orderId") or perp_order.get("id") or "")
-    if not await _wait_filled(exchange, perp_id):
-        await exchange.cancel_order(symbol, perp_id)
-        # Откатываем спотовую позицию
+        # Хеджируем позицию на споте и фьючерсе
+        spot_order = await exchange.place_spot_order(symbol, "BUY", float(quantity))
+        spot_id = str(spot_order.get("orderId") or spot_order.get("id") or "")
+        if not await _wait_filled(exchange, spot_id):
+            await exchange.cancel_order(symbol, spot_id)
+            raise RuntimeError("Спотовый ордер выполнен частично")
         try:
-            rollback_order = await exchange.place_spot_order(
-                symbol, "SELL", float(quantity)
-            )
-            rollback_id = str(
-                rollback_order.get("orderId")
-                or rollback_order.get("id")
-                or ""
-            )
-            if not await _wait_filled(exchange, rollback_id):
-                logger.error(
-                    "Откат спотовой позиции %s исполнен частично", rollback_id
-                )
-                raise RuntimeError(
-                    "Не удалось полностью откатить спотовую позицию"
-                )
+            perp_order = await exchange.place_order(symbol, "SELL", float(quantity))
         except Exception as exc:
-            logger.error("Ошибка отката спотовой позиции: %s", exc)
+            # При ошибке размещения второй ноги отменяем первую
+            await exchange.cancel_order(symbol, spot_id)
             raise RuntimeError(
-                "Не удалось откатить спотовую позицию"
+                "Не удалось разместить хедж; спотовый ордер отменён"
             ) from exc
-        raise RuntimeError(
-            "Не удалось полностью захеджировать позицию; спот откатан"
+        perp_id = str(perp_order.get("orderId") or perp_order.get("id") or "")
+        if not await _wait_filled(exchange, perp_id):
+            await exchange.cancel_order(symbol, perp_id)
+            # Откатываем спотовую позицию
+            try:
+                rollback_order = await exchange.place_spot_order(
+                    symbol, "SELL", float(quantity)
+                )
+                rollback_id = str(
+                    rollback_order.get("orderId")
+                    or rollback_order.get("id")
+                    or ""
+                )
+                if not await _wait_filled(exchange, rollback_id):
+                    logger.error(
+                        "Откат спотовой позиции %s исполнен частично", rollback_id
+                    )
+                    raise RuntimeError(
+                        "Не удалось полностью откатить спотовую позицию"
+                    )
+            except Exception as exc:
+                logger.error("Ошибка отката спотовой позиции: %s", exc)
+                raise RuntimeError(
+                    "Не удалось откатить спотовую позицию"
+                ) from exc
+            raise RuntimeError(
+                "Не удалось полностью захеджировать позицию; спот откатан"
+            )
+        orders = {"spot": spot_order, "perp": perp_order}
+        commission = sum(Decimal(str(o.get("fee", 0.0))) for o in orders.values())
+        now = time.time()
+        async with positions_lock:
+            await risk_control.update_position(notional)
+            positions[symbol] = Position(
+                entry_timestamp=now,
+                entry_futures_price=entry_metrics.futures_price,
+                entry_spot_price=entry_metrics.spot_price,
+                entry_basis=entry_metrics.basis,
+                entry_funding=float(entry_metrics.funding_rate),
+                quantity=float(quantity),
+                initial_quantity=float(quantity),
+                pnl=Decimal(0),
+                funding_accrued=Decimal(0),
+                commissions=commission,
+                last_funding_timestamp=now,
+                exchange=exchange_name,
+            )
+            await save_positions()
+        volume_usd = float(notional)
+        await log_trade(
+            {
+                "symbol": symbol,
+                "exchange": exchange_name,
+                "entry_time": datetime.fromtimestamp(now).isoformat(),
+                "exit_time": None,
+                "entry_futures_price": entry_metrics.futures_price,
+                "exit_futures_price": None,
+                "entry_spot_price": entry_metrics.spot_price,
+                "exit_spot_price": None,
+                "entry_basis": entry_metrics.basis,
+                "exit_basis": None,
+                "basis_pct": entry_metrics.basis,
+                "funding": entry_metrics.funding_rate,
+                "quantity": float(quantity),
+                "volume_usd": volume_usd,
+                "pnl": 0.0,
+                "pnl_pct": 0.0,
+                "commissions": float(commission),
+                "funding_accrued": 0.0,
+                "slippage": entry_metrics.slippage,
+                "exit_reasons": None,
+                "notes": "open",
+            }
         )
-    orders = {"spot": spot_order, "perp": perp_order}
-    commission = sum(Decimal(str(o.get("fee", 0.0))) for o in orders.values())
-    now = time.time()
-    async with positions_lock:
-        await risk_control.update_position(notional)
-        await risk_control.mark_symbol_open(symbol)
-        positions[symbol] = Position(
-            entry_timestamp=now,
-            entry_futures_price=entry_metrics.futures_price,
-            entry_spot_price=entry_metrics.spot_price,
-            entry_basis=entry_metrics.basis,
-            entry_funding=float(entry_metrics.funding_rate),
-            quantity=float(quantity),
-            initial_quantity=float(quantity),
-            pnl=Decimal(0),
-            funding_accrued=Decimal(0),
-            commissions=commission,
-            last_funding_timestamp=now,
-            exchange=exchange_name,
-        )
-        await save_positions()
-    volume_usd = float(notional)
-    await log_trade(
-        {
-            "symbol": symbol,
-            "exchange": exchange_name,
-            "entry_time": datetime.fromtimestamp(now).isoformat(),
-            "exit_time": None,
-            "entry_futures_price": entry_metrics.futures_price,
-            "exit_futures_price": None,
-            "entry_spot_price": entry_metrics.spot_price,
-            "exit_spot_price": None,
-            "entry_basis": entry_metrics.basis,
-            "exit_basis": None,
-            "basis_pct": entry_metrics.basis,
-            "funding": entry_metrics.funding_rate,
-            "quantity": float(quantity),
-            "volume_usd": volume_usd,
-            "pnl": 0.0,
-            "pnl_pct": 0.0,
-            "commissions": float(commission),
-            "funding_accrued": 0.0,
-            "slippage": entry_metrics.slippage,
-            "exit_reasons": None,
-            "notes": "open",
-        }
-    )
-    return orders
+        return orders
+    except Exception:
+        await risk_control.mark_symbol_closed(symbol)
+        raise
 
 
 async def close_neutral_position(

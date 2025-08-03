@@ -68,10 +68,9 @@ async def test_open_neutral_position_skips_when_no_metrics(monkeypatch: pytest.M
 
     monkeypatch.setattr(fa, "CONFIG", {"bot": {}, "thresholds": {}})
     monkeypatch.setattr(fa, "WHITELISTS", {exchange.name: ["BTCUSDT"]})
-    monkeypatch.setattr(fa.risk_control, "can_open_position", lambda *_: True)
-    monkeypatch.setattr(fa.risk_control, "is_symbol_open", lambda *_: False)
+    monkeypatch.setattr(fa.risk_control, "try_open_position", lambda *_: True)
     monkeypatch.setattr(fa.risk_control, "update_position", lambda *_: None)
-    monkeypatch.setattr(fa.risk_control, "mark_symbol_open", lambda *_: None)
+    monkeypatch.setattr(fa.risk_control, "mark_symbol_closed", lambda *_: None)
 
     async def _metrics_none(symbol: str, trade_size: float, exchange: BaseExchange) -> fa.MarketMetrics | None:
         return None
