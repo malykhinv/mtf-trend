@@ -73,7 +73,7 @@ class SecondLegFailExchange(BaseExchange):
 async def test_cancel_first_leg_on_second_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     exchange = SecondLegFailExchange()
 
-    monkeypatch.setattr(fa, "CONFIG", {"bot": {}, "thresholds": {}})
+    monkeypatch.setattr(fa, "CONFIG", {"bot": {"deposit_size": 1000}, "thresholds": {}})
     monkeypatch.setattr(fa, "WHITELISTS", {exchange.name: ["BTCUSDT"]})
     async def _true(*args, **kwargs):
         return True

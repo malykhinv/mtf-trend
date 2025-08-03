@@ -520,7 +520,11 @@ async def open_neutral_position(
     if entry_metrics is None:
         raise RuntimeError("Рыночные метрики недоступны, сделка пропущена")
     notional = quantity * Decimal(str(entry_metrics.futures_price))
-    deposit = Decimal(str(bot_cfg.get("deposit_size", "Infinity")))
+    deposit_raw = bot_cfg.get("deposit_size", "Infinity")
+    deposit = Decimal(str(deposit_raw))
+    if not deposit.is_finite() or deposit < 0:
+        logger.error("Некорректное значение депозита: %s", deposit_raw)
+        raise RuntimeError("Некорректное значение депозита")
     deposit_pct = Decimal(str(CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)))
     if deposit_pct < 0:
         logger.warning("Некорректное значение deposit_pct=%s; устанавливаем 0", deposit_pct)

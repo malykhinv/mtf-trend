@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List
 from decimal import Decimal
+import math
 
 import yaml
 from dotenv import load_dotenv
@@ -240,7 +241,12 @@ def start_processing_loops() -> None:
         """Постоянно сканирует рынок в поиске входов."""
         while True:
             thresholds = CONFIG.get("thresholds", {})
-            deposit = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
+            deposit_raw = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
+            deposit = float(deposit_raw)
+            if not math.isfinite(deposit) or deposit < 0:
+                logger.error("Некорректное значение депозита: %s", deposit_raw)
+                await asyncio.sleep(poll_interval)
+                continue
             deposit_pct_raw = thresholds.get("deposit_pct", 0.05)
             deposit_pct = max(0.0, min(1.0, deposit_pct_raw))
             min_trade_usd = thresholds.get("min_trade_size", float("inf"))
@@ -254,7 +260,7 @@ def start_processing_loops() -> None:
                 continue
             # Торгуем не меньше минимального порога: выбираем большую величину
             trade_value = max(min_trade_usd, deposit * deposit_pct)
-            if trade_value in (0.0, float("inf")):
+            if not math.isfinite(trade_value) or trade_value <= 0:
                 logger.error(
                     "Некорректное значение trade_value: %s", trade_value
                 )

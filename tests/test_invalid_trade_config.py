@@ -84,5 +84,5 @@ def test_no_trade_on_invalid_config(monkeypatch, caplog):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(scan_coro)
 
-    assert "Некорректное значение trade_value" in caplog.text
+    assert "Некорректное значение депозита" in caplog.text
     strategy_stub.get_market_metrics.assert_not_called()
