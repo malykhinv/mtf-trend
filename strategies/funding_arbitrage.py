@@ -262,33 +262,74 @@ def check_entry_conditions(
     if metrics is None:
         logger.warning("Skipping %s: incomplete market metrics", symbol)
         return False
-
     quantity = Decimal(str(quantity))
+    if not quantity.is_finite() or quantity <= 0:
+        logger.warning("Skipping %s: invalid quantity %s", symbol, quantity)
+        return False
+
+    metrics_map = {
+        "funding_rate": metrics.funding_rate,
+        "spread": metrics.spread,
+        "liquidity": metrics.liquidity,
+        "volatility": metrics.volatility,
+        "spot_price": metrics.spot_price,
+        "futures_price": metrics.futures_price,
+        "volume": metrics.volume,
+        "open_interest": metrics.open_interest,
+        "spot_slippage": metrics.spot_slippage,
+        "futures_slippage": metrics.futures_slippage,
+        "slippage": metrics.slippage,
+        "basis": metrics.basis,
+    }
+    for name, value in metrics_map.items():
+        finite = value.is_finite() if isinstance(value, Decimal) else math.isfinite(value)
+        if not finite:
+            logger.warning("Skipping %s: non-finite %s=%s", symbol, name, value)
+            return False
+
+    def _threshold(name: str, default: float) -> float:
+        val = thresholds.get(name, default)
+        if val is None or not math.isfinite(val):
+            logger.warning(
+                "Invalid threshold %s=%s; using default %s", name, val, default
+            )
+            return default
+        return val
+
     deposit = Decimal(str(CONFIG.get("bot", {}).get("deposit_size", "Infinity")))
-    max_deposit_trade = deposit * Decimal(str(thresholds.get("deposit_pct", 1.0)))
+    deposit_pct = _threshold("deposit_pct", 1.0)
+    spread_limit = _threshold("spread", float("inf"))
+    basis_limit = _threshold("basis", float("inf"))
+    liquidity_limit = _threshold("liquidity", 0.0)
+    volume_limit = _threshold("volume", 0.0)
+    volatility_limit = _threshold("volatility", float("inf"))
+    slippage_limit = _threshold("slippage", 0.003)
+    funding_rate_limit = _threshold("funding_rate", 0.0)
+    max_trade_size_limit = _threshold("max_trade_size", float("inf"))
+
+    max_deposit_trade = deposit * Decimal(str(deposit_pct))
     spread_pct = (
         Decimal(str(metrics.spread)) / Decimal(str(metrics.futures_price))
         if metrics.futures_price
         else Decimal("Infinity")
     )
     notional = quantity * Decimal(str(metrics.futures_price))
-    max_basis_pct = Decimal(str(thresholds.get("basis", float("inf"))))
+    max_basis_pct = Decimal(str(basis_limit))
     basis_abs = abs(Decimal(str(metrics.basis)))
     combined_slippage = Decimal(str(metrics.slippage))
-    slippage_limit = Decimal(str(thresholds.get("slippage", 0.003)))
+    slippage_limit = Decimal(str(slippage_limit))
 
     return (
         metrics.funding_rate > Decimal(0)
-        and metrics.funding_rate >= Decimal(str(thresholds.get("funding_rate", 0.0)))
-        and spread_pct <= Decimal(str(thresholds.get("spread", float("inf"))))
+        and metrics.funding_rate >= Decimal(str(funding_rate_limit))
+        and spread_pct <= Decimal(str(spread_limit))
         and basis_abs <= max_basis_pct
-        and Decimal(str(metrics.liquidity)) >= Decimal(str(thresholds.get("liquidity", 0.0)))
-        and Decimal(str(metrics.volume)) >= Decimal(str(thresholds.get("volume", 0.0)))
-        and abs(Decimal(str(metrics.volatility)))
-        <= Decimal(str(thresholds.get("volatility", float("inf"))))
+        and Decimal(str(metrics.liquidity)) >= Decimal(str(liquidity_limit))
+        and Decimal(str(metrics.volume)) >= Decimal(str(volume_limit))
+        and abs(Decimal(str(metrics.volatility))) <= Decimal(str(volatility_limit))
         and Decimal(str(metrics.open_interest)) <= Decimal(str(metrics.volume)) * Decimal(2)
         and combined_slippage <= slippage_limit
-        and notional <= Decimal(str(thresholds.get("max_trade_size", float("inf"))))
+        and notional <= Decimal(str(max_trade_size_limit))
         and notional <= max_deposit_trade
         and not risk_control.is_symbol_open(symbol)
     )

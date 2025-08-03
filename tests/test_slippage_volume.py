@@ -165,3 +165,47 @@ def test_exit_on_non_finite_volatility() -> None:
     assert check_exit_conditions(metrics, {})
     metrics.volatility = float("nan")
     assert check_exit_conditions(metrics, {})
+
+
+def _sample_metrics() -> MarketMetrics:
+    return MarketMetrics(
+        Decimal("0.1"),
+        0.0,
+        1.0,
+        0.0,
+        100.0,
+        100.0,
+        100.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+
+
+def test_check_entry_conditions_invalid_thresholds(caplog: pytest.LogCaptureFixture) -> None:
+    metrics = _sample_metrics()
+    thresholds = {"funding_rate": float("nan"), "liquidity": float("nan")}
+    with caplog.at_level(logging.WARNING):
+        result = check_entry_conditions("BTCUSDT", Decimal("1"), metrics, thresholds)
+    assert result
+    assert "Invalid threshold" in caplog.text
+
+
+def test_check_entry_conditions_non_finite_metrics(caplog: pytest.LogCaptureFixture) -> None:
+    metrics = _sample_metrics()
+    metrics.spread = float("nan")
+    with caplog.at_level(logging.WARNING):
+        result = check_entry_conditions("BTCUSDT", Decimal("1"), metrics, {})
+    assert not result
+    assert "non-finite spread" in caplog.text
+
+
+def test_check_entry_conditions_invalid_quantity(caplog: pytest.LogCaptureFixture) -> None:
+    metrics = _sample_metrics()
+    quantity = Decimal("NaN")
+    with caplog.at_level(logging.WARNING):
+        result = check_entry_conditions("BTCUSDT", quantity, metrics, {})
+    assert not result
+    assert "invalid quantity" in caplog.text
