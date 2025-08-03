@@ -498,6 +498,12 @@ async def open_neutral_position(
     notional = quantity * Decimal(str(entry_metrics.futures_price))
     deposit = Decimal(str(bot_cfg.get("deposit_size", "Infinity")))
     deposit_pct = Decimal(str(CONFIG.get("thresholds", {}).get("deposit_pct", 1.0)))
+    if deposit_pct < 0:
+        logger.warning("Некорректное значение deposit_pct=%s; устанавливаем 0", deposit_pct)
+        deposit_pct = Decimal("0")
+    elif deposit_pct > 1:
+        logger.warning("Некорректное значение deposit_pct=%s; устанавливаем 1", deposit_pct)
+        deposit_pct = Decimal("1")
     max_trade = deposit * deposit_pct
     if notional > deposit or notional > max_trade:
         raise RuntimeError("Размер сделки превышает лимиты депозита")
