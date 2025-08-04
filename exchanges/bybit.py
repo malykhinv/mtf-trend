@@ -436,6 +436,7 @@ class BybitExchange(BaseExchange):
 
     async def close(self) -> None:
         """Закрывает HTTP-сессию и WebSocket соединения."""
+        await super().close()
         if self._session is not None:
             await self._session.close()
             self._session = None

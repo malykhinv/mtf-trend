@@ -158,11 +158,13 @@ async def initialize_bot() -> None:
     if isinstance(wl_cfg, dict):
         for name in CLIENTS:
             cfg = wl_cfg.get(name)
-            if not cfg or cfg == "*":
+            if cfg is None or cfg == "*":
                 WHITELISTS[name] = sorted(available.get(name, []))
-            else:
+            elif isinstance(cfg, (list, tuple, set)):
                 WHITELISTS[name] = list(cfg)
-    elif not wl_cfg or wl_cfg == "*":
+            else:
+                WHITELISTS[name] = [cfg]
+    elif wl_cfg is None or wl_cfg == "*":
         for name in CLIENTS:
             WHITELISTS[name] = sorted(available.get(name, []))
     else:
@@ -424,13 +426,8 @@ async def start_processing_loops() -> None:
 
         # Возобновляем мониторинг ранее открытых позиций
         for symbol, entry in strategy.positions.items():
-            exchange_name = entry.get("exchange")
-            quantity_raw = entry.get("quantity", 0.0)
-            quantity = (
-                quantity_raw
-                if isinstance(quantity_raw, Decimal)
-                else Decimal(str(quantity_raw))
-            )
+            exchange_name = entry.exchange
+            quantity = entry.quantity
             if exchange_name in CLIENTS and quantity:
                 task = asyncio.create_task(
                     monitor_position(exchange_name, symbol, quantity)
