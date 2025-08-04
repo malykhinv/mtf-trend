@@ -313,13 +313,16 @@ async def start_processing_loops() -> None:
                         continue
                     try:
                         base_metrics = await strategy.get_market_metrics(
-                            symbol, Decimal('1'), client
+                            symbol, Decimal("1"), client
                         )
-                        if base_metrics is None:
-                            logger.warning(
-                                "Пропуск %s:%s из-за неполных метрик", name, symbol
-                            )
-                            continue
+                    except strategy.MissingMetricsError as err:
+                        logger.warning(
+                            "Пропуск %s:%s из-за неполных метрик (%s)",
+                            name,
+                            symbol,
+                            ", ".join(err.missing_fields),
+                        )
+                        continue
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
@@ -333,11 +336,14 @@ async def start_processing_loops() -> None:
                         metrics = await strategy.get_market_metrics(
                             symbol, quantity, client
                         )
-                        if metrics is None:
-                            logger.warning(
-                                "Пропуск %s:%s из-за неполных метрик", name, symbol
-                            )
-                            continue
+                    except strategy.MissingMetricsError as err:
+                        logger.warning(
+                            "Пропуск %s:%s из-за неполных метрик (%s)",
+                            name,
+                            symbol,
+                            ", ".join(err.missing_fields),
+                        )
+                        continue
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue

@@ -136,12 +136,21 @@ def calculate_basis(
     return value if signed else abs(value)
 
 
+class MissingMetricsError(Exception):
+    """Raised when required market data fields are missing."""
+
+    def __init__(self, missing_fields: list[str]):
+        self.missing_fields = missing_fields
+        message = ", ".join(missing_fields)
+        super().__init__(f"Missing metrics: {message}")
+
+
 async def get_market_metrics(
     symbol: str,
     trade_size: Decimal,
     exchange: BaseExchange | None = None,
     depth: int = 5,
-) -> MarketMetrics | None:
+) -> MarketMetrics:
     """Получает расширенные рыночные метрики для ``symbol``.
 
     ``exchange`` может быть ``None`` – в этом случае используются
@@ -176,9 +185,17 @@ async def get_market_metrics(
     spot_bids = [(Decimal(str(p)), Decimal(str(q))) for p, q in spot_book.get("bids", [])]
     spot_asks = [(Decimal(str(p)), Decimal(str(q))) for p, q in spot_book.get("asks", [])]
 
-    # If any order book side is empty, market data is incomplete
-    if not (bids and asks and spot_bids and spot_asks):
-        return None
+    missing = []
+    if not bids:
+        missing.append("perp_bids")
+    if not asks:
+        missing.append("perp_asks")
+    if not spot_bids:
+        missing.append("spot_bids")
+    if not spot_asks:
+        missing.append("spot_asks")
+    if missing:
+        raise MissingMetricsError(missing)
 
     def _calc_slippage(orders: list[tuple[Decimal, Decimal]], size: Decimal, mid: Decimal) -> Decimal:
         """Оценивает проскальзывание при выполнении ``size`` по стакану."""
@@ -215,7 +232,7 @@ async def get_market_metrics(
     else:
         stats = await get_stats(symbol)
     if not stats:
-        return None
+        raise MissingMetricsError(["stats"])
 
     volume = Decimal(str(stats.get("volume_24h", 0.0)))
     open_interest = Decimal(str(stats.get("open_interest", 0.0)))
@@ -236,10 +253,7 @@ async def get_market_metrics(
     else:
         ohlc = await get_ohlc(symbol, interval="15m", limit=1)
     if not ohlc:
-        # Without recent OHLC data we cannot estimate volatility.
-        # Returning ``None`` signals to the caller that metrics are incomplete
-        # so the strategy can skip trading for this symbol.
-        return None
+        raise MissingMetricsError(["ohlc"])
 
     candle = ohlc[0]
     o = Decimal(str(candle.get("open", "NaN")))
@@ -553,9 +567,13 @@ async def open_neutral_position(
     if symbol not in whitelists.get(exchange_name, []):
         raise RuntimeError("Символ отсутствует в белом списке")
     # Получаем метрики рынка для оценки сделки
-    entry_metrics = await get_market_metrics(symbol, quantity, exchange)
-    if entry_metrics is None:
-        raise RuntimeError("Рыночные метрики недоступны, сделка пропущена")
+    try:
+        entry_metrics = await get_market_metrics(symbol, quantity, exchange)
+    except MissingMetricsError as err:
+        raise RuntimeError(
+            "Рыночные метрики недоступны, отсутствуют поля: "
+            + ", ".join(err.missing_fields)
+        ) from err
     notional = quantity * entry_metrics.futures_price
     deposit_raw = bot_cfg.get("deposit_size", "Infinity")
     try:
@@ -805,10 +823,14 @@ async def monitor_neutral_position(
     while True:
         try:
             metrics = await get_market_metrics(symbol, quantity, exchange)
-            if metrics is None:
-                logger.warning("Неполные рыночные данные для %s", symbol)
-                await asyncio.sleep(poll_interval)
-                continue
+        except MissingMetricsError as err:
+            logger.warning(
+                "Неполные рыночные данные для %s: %s",
+                symbol,
+                ", ".join(err.missing_fields),
+            )
+            await asyncio.sleep(poll_interval)
+            continue
         except Exception as exc:
             logger.error("Ошибка мониторинга %s: %s", symbol, exc)
             await asyncio.sleep(poll_interval)
