@@ -54,6 +54,22 @@ WHITELISTS: Dict[str, List[str]] = {}
 POSITION_TASKS: Dict[str, asyncio.Task] = {}
 
 
+def _parse_deposit_value(deposit_raw: Any) -> float | None:
+    """Преобразует значение депозита в ``float``.
+
+    При некорректном значении логирует ошибку и возвращает ``None``.
+    """
+    try:
+        deposit = float(deposit_raw)
+    except (TypeError, ValueError):
+        logger.error("Некорректное значение депозита: %s", deposit_raw)
+        return None
+    if not math.isfinite(deposit) or deposit < 0:
+        logger.error("Некорректное значение депозита: %s", deposit_raw)
+        return None
+    return deposit
+
+
 def load_config(path: str = "config.yaml") -> None:
     """Загружает конфигурацию YAML в глобальную переменную ``CONFIG``.
 
@@ -252,9 +268,8 @@ def start_processing_loops() -> None:
         while True:
             thresholds = CONFIG.get("thresholds", {})
             deposit_raw = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
-            deposit = float(deposit_raw)
-            if not math.isfinite(deposit) or deposit < 0:
-                logger.error("Некорректное значение депозита: %s", deposit_raw)
+            deposit = _parse_deposit_value(deposit_raw)
+            if deposit is None:
                 await asyncio.sleep(poll_interval)
                 continue
             deposit_pct_raw = thresholds.get("deposit_pct", 0.05)
