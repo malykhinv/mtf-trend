@@ -165,18 +165,6 @@ async def initialize_bot() -> None:
         CLIENTS["bybit"] = BybitExchange(bybit_key, bybit_secret)
         logger.info("Создан клиент биржи Bybit")
 
-    # Загружаем белые списки символов для каждой биржи
-    bot_cfg = CONFIG.get("bot", {})
-    wl_cfg = bot_cfg.get("whitelist", {})
-    if isinstance(wl_cfg, dict):
-        WHITELISTS.update({k: list(v) for k, v in wl_cfg.items()})
-    else:
-        symbols = list(wl_cfg) if isinstance(wl_cfg, list) else []
-        for name in CLIENTS:
-            WHITELISTS[name] = symbols
-    for name, symbols in WHITELISTS.items():
-        logger.info("Белый список %s: %s", name, symbols)
-
     async def _collect(exchange: BaseExchange) -> set[str]:
         futures = await exchange.get_futures_symbols()
         spot = await exchange.get_spot_symbols()
@@ -198,6 +186,27 @@ async def initialize_bot() -> None:
         return dict(pairs)
 
     available = await _fetch_all() if CLIENTS else {}
+
+    # Загружаем белые списки символов для каждой биржи
+    bot_cfg = CONFIG.get("bot", {})
+    wl_cfg = bot_cfg.get("whitelist")
+    if isinstance(wl_cfg, dict):
+        for name in CLIENTS:
+            cfg = wl_cfg.get(name)
+            if not cfg or cfg == "*":
+                WHITELISTS[name] = sorted(available.get(name, []))
+            else:
+                WHITELISTS[name] = list(cfg)
+    elif not wl_cfg or wl_cfg == "*":
+        for name in CLIENTS:
+            WHITELISTS[name] = sorted(available.get(name, []))
+    else:
+        symbols = list(wl_cfg) if isinstance(wl_cfg, list) else []
+        for name in CLIENTS:
+            WHITELISTS[name] = symbols
+    for name, symbols in WHITELISTS.items():
+        logger.info("Белый список %s: %s", name, symbols)
+
     for name, allowed in available.items():
         configured = WHITELISTS.get(name, [])
         filtered = [s for s in configured if s in allowed]
