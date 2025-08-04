@@ -360,15 +360,8 @@ def check_entry_conditions(
         slippage_limit_d = Decimal(str(slippage_limit))
 
         if metrics.funding_rate <= Decimal(0):
-            logger.info("Skipping %s: non-positive funding_rate %s", symbol, metrics.funding_rate)
             return False
         if metrics.funding_rate < Decimal(str(funding_rate_limit)):
-            logger.info(
-                "Skipping %s: funding_rate %s below threshold %s",
-                symbol,
-                metrics.funding_rate,
-                funding_rate_limit,
-            )
             return False
         if spread_pct > Decimal(str(spread_limit)):
             logger.info(
