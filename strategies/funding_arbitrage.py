@@ -489,6 +489,7 @@ class Position:
     pnl: Decimal = Decimal(0)
     funding_accrued: Decimal = Decimal(0)
     commissions: Decimal = Decimal(0)
+    slippage: Decimal = Decimal(0)
     last_funding_timestamp: float = 0.0
     exchange: str = ""
     exit_timestamp: float | None = None
@@ -510,6 +511,7 @@ class Position:
             "pnl",
             "funding_accrued",
             "commissions",
+            "slippage",
         ):
             if key in data:
                 data[key] = float(data[key])
@@ -532,6 +534,7 @@ class Position:
             pnl=Decimal(str(data.get("pnl", 0.0))),
             funding_accrued=Decimal(str(data.get("funding_accrued", 0.0))),
             commissions=Decimal(str(data.get("commissions", 0.0))),
+            slippage=Decimal(str(data.get("slippage", 0.0))),
             last_funding_timestamp=float(
                 data.get("last_funding_timestamp", data.get("entry_timestamp", 0.0))
             ),

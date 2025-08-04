@@ -101,6 +101,15 @@ class BaseExchange(ABC):
     async def get_spot_symbols(self) -> list[str]:
         """Возвращает список доступных спотовых символов."""
 
+    async def close(self) -> None:
+        """Освобождает ресурсы, связанные с биржей.
+
+        Конкретные реализации могут переопределять метод для закрытия сетевых
+        соединений или очистки внутренних пулов.  Базовая реализация служит
+        заглушкой, чтобы вызовы ``client.close()`` не приводили к ошибкам.
+        """
+        return None
+
     async def get_ohlc(
         self, symbol: str, interval: str, limit: int = 1
     ) -> list[Dict[str, float]]:
@@ -194,10 +203,10 @@ async def _handle_timeout() -> None:
                 if client is None:
                     continue
                 try:
-                    entry = strategy.positions.get(symbol, {})
-                    quantity = entry.get("quantity") or entry.get(
-                        "initial_quantity", 0.0
-                    )
+                    entry = strategy.positions.get(symbol)
+                    if entry is None:
+                        continue
+                    quantity = entry.quantity or entry.initial_quantity
                     try:
                         orders = await strategy.close_neutral_position(
                             client, symbol, quantity, CONFIG, final=True
@@ -209,10 +218,10 @@ async def _handle_timeout() -> None:
                             exchange_name,
                             exc_close,
                         )
-                        hold_time = time.time() - entry.get("entry_timestamp", time.time())
-                        funding_pct = entry.get("entry_funding", 0.0) * 100
-                        basis_pct = entry.get("entry_basis", 0.0)
-                        volume_usd = quantity * entry.get("entry_futures_price", 0.0)
+                        hold_time = time.time() - (entry.entry_timestamp or time.time())
+                        funding_pct = float(entry.entry_funding) * 100
+                        basis_pct = float(entry.entry_basis)
+                        volume_usd = float(quantity * entry.entry_futures_price)
                         asyncio.create_task(
                             notify_close(
                                 pid,
@@ -237,11 +246,12 @@ async def _handle_timeout() -> None:
                             or 0.0
                         )
                         exit_ts = time.time()
-                        pnl = (
-                            (exit_perp - entry.get("entry_futures_price", 0.0))
-                            - (exit_spot - entry.get("entry_spot_price", 0.0))
-                        ) * quantity
-                        volume_usd = quantity * entry.get("entry_futures_price", 0.0)
+                        entry_futures_price = float(entry.entry_futures_price)
+                        entry_spot_price = float(entry.entry_spot_price)
+                        quantity_f = float(quantity)
+                        pnl = ((exit_perp - entry_futures_price)
+                            - (exit_spot - entry_spot_price)) * quantity_f
+                        volume_usd = quantity_f * entry_futures_price
                         pnl_pct = (pnl / volume_usd * 100) if volume_usd else 0.0
                         exit_basis = (
                             ((exit_perp - exit_spot) / exit_spot) * 100
@@ -253,30 +263,30 @@ async def _handle_timeout() -> None:
                                 "symbol": symbol,
                                 "exchange": exchange_name,
                                 "entry_time": datetime.fromtimestamp(
-                                    entry.get("entry_timestamp", exit_ts), tz=UTC
+                                    entry.entry_timestamp or exit_ts, tz=UTC
                                 ).isoformat(),
                                 "exit_time": datetime.fromtimestamp(exit_ts, tz=UTC).isoformat(),
-                                "entry_futures_price": entry.get("entry_futures_price"),
+                                "entry_futures_price": entry_futures_price,
                                 "exit_futures_price": exit_perp,
-                                "entry_spot_price": entry.get("entry_spot_price"),
+                                "entry_spot_price": entry_spot_price,
                                 "exit_spot_price": exit_spot,
-                                "entry_basis": entry.get("entry_basis"),
+                                "entry_basis": float(entry.entry_basis),
                                 "exit_basis": exit_basis,
                                 "basis_pct": exit_basis,
-                                "funding": entry.get("entry_funding"),
-                                "quantity": quantity,
+                                "funding": float(entry.entry_funding),
+                                "quantity": quantity_f,
                                 "volume_usd": volume_usd,
                                 "pnl": pnl,
                                 "pnl_pct": pnl_pct,
-                                "commissions": entry.get("commissions", 0.0),
-                                "funding_accrued": entry.get("funding_accrued", 0.0),
-                                "slippage": entry.get("slippage", 0.0),
+                                "commissions": float(entry.commissions),
+                                "funding_accrued": float(entry.funding_accrued),
+                                "slippage": float(entry.slippage),
                                 "exit_reasons": ["timeout"],
                                 "notes": "emergency_exit",
                             }
                         )
-                        hold_time = exit_ts - entry.get("entry_timestamp", exit_ts)
-                        funding_pct = entry.get("entry_funding", 0.0) * 100
+                        hold_time = exit_ts - (entry.entry_timestamp or exit_ts)
+                        funding_pct = float(entry.entry_funding) * 100
                         asyncio.create_task(
                             notify_close(
                                 pid,

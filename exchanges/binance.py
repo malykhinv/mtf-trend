@@ -419,6 +419,7 @@ class BinanceExchange(BaseExchange):
 
     async def close(self) -> None:
         """Закрывает HTTP-сессию и все WebSocket соединения."""
+        await super().close()
         if self._session is not None:
             await self._session.close()
             self._session = None
