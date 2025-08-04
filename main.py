@@ -96,8 +96,14 @@ def load_config(path: str = "config.yaml") -> None:
     CONFIG["api_keys"] = {k: v for k, v in api_keys.items() if v}
 
 
-def initialize_bot() -> None:
-    """Настраивает клиентов бирж и управление рисками."""
+async def initialize_bot() -> None:
+    """Настраивает клиентов бирж и управление рисками.
+
+    Выполняет асинхронные запросы внутри основного цикла события, чтобы
+    клиенты бирж создавали ``ClientSession`` уже после запуска ``asyncio``
+    loop. Временные сессии, открытые при первичном сборе данных, закрываются
+    перед началом основной работы.
+    """
 
     api_keys = CONFIG.get("api_keys", {})
     logger.info("Инициализация бота с API-ключами: %s", list(api_keys.keys()))
@@ -143,7 +149,7 @@ def initialize_bot() -> None:
         )
         return dict(pairs)
 
-    available = asyncio.run(_fetch_all()) if CLIENTS else {}
+    available = await _fetch_all() if CLIENTS else {}
     for name, allowed in available.items():
         configured = WHITELISTS.get(name, [])
         filtered = [s for s in configured if s in allowed]
@@ -151,6 +157,13 @@ def initialize_bot() -> None:
         WHITELISTS[name] = filtered
         for sym in sorted(removed):
             logger.warning("Исключён символ %s из whitelist %s", sym, name)
+
+    # Закрываем временные HTTP-сессии, созданные при инициализации, чтобы
+    # последующие запросы открывали их уже внутри основного цикла.
+    await asyncio.gather(
+        *(client.close() for client in CLIENTS.values() if hasattr(client, "close")),
+        return_exceptions=True,
+    )
 
     # Конфигурируем контроль рисков
     risk_control.configure(CONFIG.get("risk", {}), bot_cfg.get("deposit_size"))
@@ -250,13 +263,13 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: Decimal) -
             await strategy.save_positions(CONFIG)
 
 
-def start_processing_loops() -> None:
+async def start_processing_loops() -> None:
     """Запускает циклы стратегии, рисков и оптимизации параметров."""
 
     poll_interval = CONFIG.get("bot", {}).get("poll_interval", 5)
 
     # Восстанавливаем ранее сохранённые позиции
-    asyncio.run(strategy.load_positions(CONFIG))
+    await strategy.load_positions(CONFIG)
 
     def _update_thresholds(new: Dict[str, float]) -> None:
         """Обновляет пороги стратегии новыми значениями."""
@@ -417,18 +430,18 @@ def start_processing_loops() -> None:
 
             await shutdown()
 
-    asyncio.run(runner())
+    await runner()
 
 
-def main() -> None:
+async def main() -> None:
     """Запускает загрузку конфигурации и основной цикл работы бота."""
     load_config()
-    initialize_bot()
-    start_processing_loops()
+    await initialize_bot()
+    await start_processing_loops()
 
 
 if __name__ == "__main__":  # pragma: no cover - script entry point
     try:
-        main()
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Бот остановлен.")
