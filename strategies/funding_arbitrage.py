@@ -13,7 +13,7 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Dict
 from decimal import Decimal, getcontext
@@ -652,7 +652,7 @@ async def open_neutral_position(
             {
                 "symbol": symbol,
                 "exchange": exchange_name,
-                "entry_time": datetime.fromtimestamp(now).isoformat(),
+                "entry_time": datetime.fromtimestamp(now, tz=UTC).isoformat(),
                 "exit_time": None,
                 "entry_futures_price": entry_metrics.futures_price,
                 "exit_futures_price": None,
@@ -917,8 +917,8 @@ async def monitor_neutral_position(
                     {
                         "symbol": symbol,
                         "exchange": exchange_name,
-                        "entry_time": datetime.fromtimestamp(entry.entry_timestamp).isoformat(),
-                        "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
+                        "entry_time": datetime.fromtimestamp(entry.entry_timestamp, tz=UTC).isoformat(),
+                        "exit_time": datetime.fromtimestamp(exit_ts, tz=UTC).isoformat(),
                         "entry_futures_price": entry.entry_futures_price,
                         "exit_futures_price": metrics.futures_price,
                         "entry_spot_price": entry.entry_spot_price,
@@ -1005,8 +1005,8 @@ async def monitor_neutral_position(
                     {
                           "symbol": symbol,
                           "exchange": exchange_name,
-                          "entry_time": datetime.fromtimestamp(entry.entry_timestamp).isoformat(),
-                          "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
+                          "entry_time": datetime.fromtimestamp(entry.entry_timestamp, tz=UTC).isoformat(),
+                          "exit_time": datetime.fromtimestamp(exit_ts, tz=UTC).isoformat(),
                           "entry_futures_price": entry.entry_futures_price,
                           "exit_futures_price": metrics.futures_price,
                           "entry_spot_price": entry.entry_spot_price,
