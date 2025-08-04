@@ -13,7 +13,7 @@ import asyncio
 import time
 import math
 import logging
-import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, getcontext
 
 getcontext().prec = 10
@@ -55,7 +55,7 @@ def _maybe_reset_daily_loss(now: float) -> None:
     if now - _state.last_reset_ts >= 24 * 3600:
         logger.info(
             "Daily loss reset at %s. Previous loss: %s",
-            datetime.datetime.fromtimestamp(now, tz=datetime.UTC).isoformat(),
+            datetime.fromtimestamp(now, tz=UTC).isoformat(),
             _state.daily_loss,
         )
         _state.daily_loss = Decimal("0")

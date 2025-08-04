@@ -183,7 +183,7 @@ async def _handle_timeout() -> None:
             from strategies import funding_arbitrage as strategy
             from utils.logger import log_trade
             from utils.telegram import notify_close, format_duration
-            from datetime import datetime
+            from datetime import UTC, datetime
         except Exception as exc:  # pragma: no cover - defensive
             logger.error("Не удалось подготовить аварийное закрытие: %s", exc)
         else:
@@ -253,9 +253,9 @@ async def _handle_timeout() -> None:
                                 "symbol": symbol,
                                 "exchange": exchange_name,
                                 "entry_time": datetime.fromtimestamp(
-                                    entry.get("entry_timestamp", exit_ts)
+                                    entry.get("entry_timestamp", exit_ts), tz=UTC
                                 ).isoformat(),
-                                "exit_time": datetime.fromtimestamp(exit_ts).isoformat(),
+                                "exit_time": datetime.fromtimestamp(exit_ts, tz=UTC).isoformat(),
                                 "entry_futures_price": entry.get("entry_futures_price"),
                                 "exit_futures_price": exit_perp,
                                 "entry_spot_price": entry.get("entry_spot_price"),
