@@ -300,7 +300,7 @@ def start_processing_loops() -> None:
                         continue
                     try:
                         base_metrics = await strategy.get_market_metrics(
-                            symbol, Decimal("1"), client
+                            symbol, Decimal('1'), client
                         )
                         if base_metrics is None:
                             logger.warning(

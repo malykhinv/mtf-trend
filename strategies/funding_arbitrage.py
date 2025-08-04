@@ -778,7 +778,7 @@ async def close_neutral_position(
 async def monitor_neutral_position(
     exchange: BaseExchange,
     symbol: str,
-    quantity: float,
+    quantity: Decimal,
     exit_thresholds: Dict[str, float],
     config: Dict[str, Any],
     poll_interval: float = 5.0,
@@ -814,7 +814,7 @@ async def monitor_neutral_position(
         now = time.time()
         if entry:
             last = entry.last_funding_timestamp or now
-            quantity_d = quantity if isinstance(quantity, Decimal) else Decimal(str(quantity))
+            quantity_d = quantity
             price_d = metrics.futures_price
             elapsed = Decimal(str(now - last))
             funding_fee = (
@@ -893,7 +893,7 @@ async def monitor_neutral_position(
                 # Обновляем запись о позиции после частичного выхода
                 async with positions_lock:
                     quantity_d -= partial_qty_d
-                    quantity = float(quantity_d)
+                    quantity = quantity_d
                     entry.quantity = quantity_d
                     entry.pnl += pnl_part
                     await save_positions(config)
@@ -976,7 +976,7 @@ async def monitor_neutral_position(
                     )
                 continue
             await close_neutral_position(
-                exchange, symbol, Decimal(str(quantity)), config, pnl, final=True
+                exchange, symbol, quantity, config, pnl, final=True
             )
             if entry:
                 exit_basis = calculate_basis(
