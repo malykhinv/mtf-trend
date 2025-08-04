@@ -101,17 +101,29 @@ def analyze_trade_history(log_path: Path | None = None) -> Dict[str, float]:
 
 
 def optimize_and_save(
-    log_path: Path | None = None, out_path: Path | None = None
+    log_path: Path | None = None,
+    out_path: Path | None = None,
+    thresholds: Optional[Dict[str, float]] = None,
 ) -> Dict[str, float]:
-    """Выполняет оптимизацию на истории и сохраняет результат."""
-    if log_path is None:
-        log_path = LOG_PATH
+    """Выполняет оптимизацию или сохраняет предоставленные пороги.
+
+    Если ``thresholds`` не переданы, они вычисляются на основе истории
+    сделок по пути ``log_path``. В любом случае, если словарь порогов
+    непустой, результат сохраняется в ``out_path`` и возвращается.
+    """
+
+    if thresholds is None:
+        if log_path is None:
+            log_path = LOG_PATH
+        thresholds = analyze_trade_history(log_path)
+
     if out_path is None:
         out_path = DEFAULT_OUTPUT
-    thresholds = analyze_trade_history(log_path)
+
     if thresholds:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         dump(thresholds, out_path)
+
     return thresholds
 
 
@@ -175,6 +187,12 @@ def load_thresholds(defaults: Dict[str, float], path: Path | None = None) -> Dic
 
     try:
         data = load(path)
+    except FileNotFoundError:
+        optimize_and_save(out_path=path, thresholds=defaults)
+        logger.info(
+            "Threshold file %s not found. Generated defaults and saved.", path
+        )
+        return defaults
     except Exception as exc:  # pragma: no cover - defensive
         logger.warning("Failed to load thresholds from %s: %s", path, exc)
         return defaults
