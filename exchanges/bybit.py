@@ -413,15 +413,17 @@ class BybitExchange(BaseExchange):
         self._spot_ws_tasks.clear()
 
         for ws in list(self._ws.values()):
-            try:
-                await ws.close()
-            except WebSocketException:
-                pass
+            if ws is not None:
+                try:
+                    await ws.close()
+                except WebSocketException:
+                    pass
         for ws in list(self._spot_ws.values()):
-            try:
-                await ws.close()
-            except WebSocketException:
-                pass
+            if ws is not None:
+                try:
+                    await ws.close()
+                except WebSocketException:
+                    pass
         self._ws.clear()
         self._spot_ws.clear()
 

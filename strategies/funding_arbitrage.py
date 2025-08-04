@@ -223,7 +223,9 @@ async def get_market_metrics(
         open_interest *= futures_price
     else:
         open_interest = Decimal(0)
-    liquidity = sum(q for _, q in bids) + sum(q for _, q in asks)
+    liquidity = sum((q for _, q in bids), Decimal(0)) + sum(
+        (q for _, q in asks), Decimal(0)
+    )
     basis = calculate_basis(futures_price, spot_price)
     if basis is None:
         basis = Decimal("Infinity")
@@ -812,9 +814,14 @@ async def monitor_neutral_position(
             await asyncio.sleep(poll_interval)
             continue
         now = time.time()
+        quantity_d = quantity if isinstance(quantity, Decimal) else Decimal(
+            str(quantity)
+        )
+        fut_diff = Decimal(0)
+        spot_diff = Decimal(0)
+        pnl = Decimal(0)
         if entry:
             last = entry.last_funding_timestamp or now
-            quantity_d = quantity
             price_d = metrics.futures_price
             elapsed = Decimal(str(now - last))
             funding_fee = (
@@ -875,8 +882,6 @@ async def monitor_neutral_position(
                 pnl + entry.funding_accrued - entry.commissions < Decimal(0)
             ):
                 reasons.append("pnl_vs_cost")
-        else:
-            pnl = Decimal(0)
         if reasons:
             min_trade_usd = Decimal(str(exit_thresholds.get("min_trade_size", 0.0)))
             min_trade_qty = (
