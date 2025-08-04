@@ -274,6 +274,7 @@ def check_entry_conditions(
     quantity: Decimal,
     metrics: MarketMetrics | None,
     thresholds: Dict[str, float],
+    *,
     config: Dict[str, Any],
 ) -> bool | asyncio.Future:
     """Возвращает ``True`` при выполнении всех условий входа.
@@ -542,6 +543,7 @@ async def open_neutral_position(
     exchange: BaseExchange,
     symbol: str,
     quantity: Decimal,
+    *,
     config: Dict[str, Any],
     whitelists: Dict[str, list[str]],
 ) -> Dict[str, Dict]:
@@ -690,6 +692,7 @@ async def close_neutral_position(
     exchange: BaseExchange,
     symbol: str,
     quantity: Decimal,
+    *,
     config: Dict[str, Any],
     pnl: Decimal = Decimal(0),
     final: bool = True,
@@ -775,6 +778,7 @@ async def monitor_neutral_position(
     symbol: str,
     quantity: float,
     exit_thresholds: Dict[str, float],
+    *,
     config: Dict[str, Any],
     poll_interval: float = 5.0,
     position_id: str | None = None,
@@ -883,7 +887,12 @@ async def monitor_neutral_position(
                 partial_qty_d = quantity_d / Decimal(2)
                 pnl_part = (fut_diff - spot_diff) * partial_qty_d
                 orders = await close_neutral_position(
-                    exchange, symbol, partial_qty_d, config, pnl_part, final=False
+                    exchange,
+                    symbol,
+                    partial_qty_d,
+                    config=config,
+                    pnl=pnl_part,
+                    final=False,
                 )
                 # Обновляем запись о позиции после частичного выхода
                 async with positions_lock:
@@ -971,7 +980,12 @@ async def monitor_neutral_position(
                     )
                 continue
             await close_neutral_position(
-                exchange, symbol, Decimal(str(quantity)), config, pnl, final=True
+                exchange,
+                symbol,
+                Decimal(str(quantity)),
+                config=config,
+                pnl=pnl,
+                final=True,
             )
             if entry:
                 exit_basis = calculate_basis(

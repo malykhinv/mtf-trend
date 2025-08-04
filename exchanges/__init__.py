@@ -200,7 +200,11 @@ async def _handle_timeout() -> None:
                     )
                     try:
                         orders = await strategy.close_neutral_position(
-                            client, symbol, quantity, CONFIG, final=True
+                            client,
+                            symbol,
+                            quantity,
+                            config=CONFIG,
+                            final=True,
                         )
                     except Exception as exc_close:
                         logger.error(

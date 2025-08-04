@@ -152,8 +152,8 @@ async def monitor_position(exchange_name: str, symbol: str, quantity: Decimal) -
             symbol,
             quantity,
             CONFIG.get("thresholds", {}),
-            CONFIG,
-            poll_interval,
+            config=CONFIG,
+            poll_interval=poll_interval,
             position_id=position_id,
         )
     except Exception as exc:
@@ -315,12 +315,20 @@ def start_processing_loops() -> None:
                         continue
 
                     if await strategy.check_entry_conditions(
-                        symbol, quantity, metrics, thresholds, CONFIG
+                        symbol,
+                        quantity,
+                        metrics,
+                        thresholds,
+                        config=CONFIG,
                     ):
                         # Условия входа выполнены – открываем позицию
                         try:
                             await strategy.open_neutral_position(
-                                client, symbol, quantity, CONFIG, WHITELISTS
+                                client,
+                                symbol,
+                                quantity,
+                                config=CONFIG,
+                                whitelists=WHITELISTS,
                             )
                             volume_usd = quantity * Decimal(str(metrics.futures_price))
                             funding_pct = format_decimal(metrics.funding_rate * 100, 4)
