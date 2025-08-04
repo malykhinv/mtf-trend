@@ -23,9 +23,13 @@ risk:
   deposit_cap_pct: 0.3
 bot:
   poll_interval: 5
-  whitelist:
-    - BTCUSDT
-    - ETHUSDT
+  whitelist: "*"          # "*" — включить все доступные символы
+  # whitelist:
+  #   binance:              # Пример задания списка отдельно для биржи
+  #     - BTCUSDT
+  #     - ETHUSDT
+  #   bybit:
+  #     - XRPUSDT
   deposit_size: 100
   positions_file: open_positions.json
 
