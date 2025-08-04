@@ -359,20 +359,93 @@ def check_entry_conditions(
         combined_slippage = Decimal(str(metrics.slippage))
         slippage_limit_d = Decimal(str(slippage_limit))
 
-        return (
-            metrics.funding_rate > Decimal(0)
-            and metrics.funding_rate >= Decimal(str(funding_rate_limit))
-            and spread_pct <= Decimal(str(spread_limit))
-            and basis_abs <= max_basis_pct
-            and metrics.liquidity >= Decimal(str(liquidity_limit))
-            and metrics.volume >= Decimal(str(volume_limit))
-            and abs(Decimal(str(metrics.volatility))) <= Decimal(str(volatility_limit))
-            and metrics.open_interest <= metrics.volume * Decimal(2)
-            and combined_slippage <= slippage_limit_d
-            and notional <= Decimal(str(max_trade_size_limit))
-            and notional <= max_deposit_trade
-            and not await risk_control.is_symbol_open(symbol)
-        )
+        if metrics.funding_rate <= Decimal(0):
+            logger.info("Skipping %s: non-positive funding_rate %s", symbol, metrics.funding_rate)
+            return False
+        if metrics.funding_rate < Decimal(str(funding_rate_limit)):
+            logger.info(
+                "Skipping %s: funding_rate %s below threshold %s",
+                symbol,
+                metrics.funding_rate,
+                funding_rate_limit,
+            )
+            return False
+        if spread_pct > Decimal(str(spread_limit)):
+            logger.info(
+                "Skipping %s: spread %s above limit %s",
+                symbol,
+                spread_pct,
+                spread_limit,
+            )
+            return False
+        if basis_abs > max_basis_pct:
+            logger.info(
+                "Skipping %s: basis %s above limit %s",
+                symbol,
+                basis_abs,
+                max_basis_pct,
+            )
+            return False
+        if metrics.liquidity < Decimal(str(liquidity_limit)):
+            logger.info(
+                "Skipping %s: liquidity %s below limit %s",
+                symbol,
+                metrics.liquidity,
+                liquidity_limit,
+            )
+            return False
+        if metrics.volume < Decimal(str(volume_limit)):
+            logger.info(
+                "Skipping %s: volume %s below limit %s",
+                symbol,
+                metrics.volume,
+                volume_limit,
+            )
+            return False
+        if abs(Decimal(str(metrics.volatility))) > Decimal(str(volatility_limit)):
+            logger.info(
+                "Skipping %s: volatility %s above limit %s",
+                symbol,
+                metrics.volatility,
+                volatility_limit,
+            )
+            return False
+        if metrics.open_interest > metrics.volume * Decimal(2):
+            logger.info(
+                "Skipping %s: open_interest %s above 2x volume %s",
+                symbol,
+                metrics.open_interest,
+                metrics.volume * Decimal(2),
+            )
+            return False
+        if combined_slippage > slippage_limit_d:
+            logger.info(
+                "Skipping %s: slippage %s above limit %s",
+                symbol,
+                combined_slippage,
+                slippage_limit_d,
+            )
+            return False
+        if notional > Decimal(str(max_trade_size_limit)):
+            logger.info(
+                "Skipping %s: notional %s above max_trade_size %s",
+                symbol,
+                notional,
+                max_trade_size_limit,
+            )
+            return False
+        if notional > max_deposit_trade:
+            logger.info(
+                "Skipping %s: notional %s above deposit limit %s",
+                symbol,
+                notional,
+                max_deposit_trade,
+            )
+            return False
+        if await risk_control.is_symbol_open(symbol):
+            logger.info("Skipping %s: position already open", symbol)
+            return False
+        return True
 
     try:
         loop = asyncio.get_running_loop()

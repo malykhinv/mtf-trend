@@ -12,7 +12,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple, Sequence
+from typing import Any, Dict, List
 from decimal import Decimal
 import math
 
@@ -53,42 +53,7 @@ WHITELISTS: Dict[str, List[str]] = {}
 # чтобы при необходимости отменить их при завершении работы.
 POSITION_TASKS: Dict[str, asyncio.Task] = {}
 
-# Отслеживаем последние предупреждения о неполных метриках
-# для каждого символа, чтобы подавлять повторяющиеся сообщения.
-_METRIC_WARNINGS: Dict[str, Tuple[float, int]] = {}
-# Минимальный интервал между предупреждениями по одному символу.
-_WARN_COOLDOWN = 60.0
 
-
-def _log_incomplete_metrics(exchange: str, symbol: str, missing: Sequence[str]) -> None:
-    """Логирует предупреждение о неполных метриках с учётом кулдауна."""
-    key = f"{exchange}:{symbol}"
-    now = time.time()
-    last_ts, count = _METRIC_WARNINGS.get(key, (0.0, 0))
-    if now - last_ts < _WARN_COOLDOWN:
-        _METRIC_WARNINGS[key] = (last_ts, count + 1)
-        return
-    if count:
-        logger.warning(
-            "Пропуск %s:%s из-за неполных метрик (%s) (ещё %d раз)",
-            exchange,
-            symbol,
-            ", ".join(missing),
-            count,
-        )
-    else:
-        logger.warning(
-            "Пропуск %s:%s из-за неполных метрик (%s)",
-            exchange,
-            symbol,
-            ", ".join(missing),
-        )
-    _METRIC_WARNINGS[key] = (now, 0)
-
-
-def _reset_metric_warning(exchange: str, symbol: str) -> None:
-    """Сбрасывает счётчик предупреждений для символа."""
-    _METRIC_WARNINGS.pop(f"{exchange}:{symbol}", None)
 
 
 def _parse_deposit_value(deposit_raw: Any) -> float | None:
@@ -375,8 +340,7 @@ async def start_processing_loops() -> None:
                         base_metrics = await strategy.get_market_metrics(
                             symbol, Decimal("1"), client
                         )
-                    except strategy.MissingMetricsError as err:
-                        _log_incomplete_metrics(name, symbol, err.missing_fields)
+                    except strategy.MissingMetricsError:
                         continue
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
@@ -391,14 +355,11 @@ async def start_processing_loops() -> None:
                         metrics = await strategy.get_market_metrics(
                             symbol, quantity, client
                         )
-                    except strategy.MissingMetricsError as err:
-                        _log_incomplete_metrics(name, symbol, err.missing_fields)
+                    except strategy.MissingMetricsError:
                         continue
                     except Exception as exc:
                         logger.error("Ошибка метрик %s %s: %s", name, symbol, exc)
                         continue
-
-                    _reset_metric_warning(name, symbol)
 
                     if await strategy.check_entry_conditions(
                         symbol, quantity, metrics, thresholds, CONFIG
