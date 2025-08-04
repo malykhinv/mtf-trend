@@ -117,11 +117,14 @@ def load_config(path: str = "config.yaml") -> None:
         в текущей директории.
     """
     global CONFIG
+    logger.info("Загрузка конфигурации из %s", path)
     config_path = Path(path)
     with config_path.open("r", encoding="utf-8") as f:
         CONFIG = yaml.safe_load(f) or {}
+    logger.info("Конфигурация загружена, разделы: %s", list(CONFIG.keys()))
     # Подгружаем оптимизированные пороги стратегии
     CONFIG["thresholds"] = strategy.get_thresholds(CONFIG.get("thresholds", {}))
+    logger.info("Пороги стратегии загружены")
 
     # API-ключи загружаем из переменных окружения
     api_keys = {
@@ -131,6 +134,10 @@ def load_config(path: str = "config.yaml") -> None:
         "bybit_secret": os.getenv("BYBIT_API_SECRET"),
     }
     CONFIG["api_keys"] = {k: v for k, v in api_keys.items() if v}
+    if CONFIG["api_keys"]:
+        logger.info("Найдены API-ключи для: %s", list(CONFIG["api_keys"].keys()))
+    else:
+        logger.info("API-ключи не найдены")
 
 
 async def initialize_bot() -> None:
@@ -150,11 +157,13 @@ async def initialize_bot() -> None:
     binance_secret = api_keys.get("binance_secret")
     if binance_key and binance_secret:
         CLIENTS["binance"] = BinanceExchange(binance_key, binance_secret)
+        logger.info("Создан клиент биржи Binance")
 
     bybit_key = api_keys.get("bybit")
     bybit_secret = api_keys.get("bybit_secret")
     if bybit_key and bybit_secret:
         CLIENTS["bybit"] = BybitExchange(bybit_key, bybit_secret)
+        logger.info("Создан клиент биржи Bybit")
 
     # Загружаем белые списки символов для каждой биржи
     bot_cfg = CONFIG.get("bot", {})
@@ -165,6 +174,8 @@ async def initialize_bot() -> None:
         symbols = list(wl_cfg) if isinstance(wl_cfg, list) else []
         for name in CLIENTS:
             WHITELISTS[name] = symbols
+    for name, symbols in WHITELISTS.items():
+        logger.info("Белый список %s: %s", name, symbols)
 
     async def _collect(exchange: BaseExchange) -> set[str]:
         futures = await exchange.get_futures_symbols()
@@ -194,6 +205,8 @@ async def initialize_bot() -> None:
         WHITELISTS[name] = filtered
         for sym in sorted(removed):
             logger.warning("Исключён символ %s из whitelist %s", sym, name)
+        logger.info("Доступные символы %s: %s", name, sorted(allowed))
+        logger.info("Итоговый whitelist %s: %s", name, filtered)
 
     # Закрываем временные HTTP-сессии, созданные при инициализации, чтобы
     # последующие запросы открывали их уже внутри основного цикла.
@@ -204,6 +217,7 @@ async def initialize_bot() -> None:
 
     # Конфигурируем контроль рисков
     risk_control.configure(CONFIG.get("risk", {}), bot_cfg.get("deposit_size"))
+    logger.info("Настройка бота завершена")
 
 
 async def monitor_position(exchange_name: str, symbol: str, quantity: Decimal) -> None:
