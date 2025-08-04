@@ -331,12 +331,46 @@ class BinanceExchange(BaseExchange):
                     except WebSocketException:
                         pass
 
+    async def _ensure_orderbook(self, symbol: str, depth: int, spot: bool = False) -> None:
+        """Гарантирует наличие снимка стакана в кэше.
+
+        Если для ``symbol`` ещё нет данных, выполняет REST‑запрос ``/depth``
+        (для фьючерсов) или ``/api/v3/depth`` (для спота) и сохраняет результат
+        в соответствующий кэш. При неудаче создаёт пустую запись, чтобы
+        последующие вызовы возвращали пустой стакан.
+        """
+
+        cache = self._spot_orderbooks if spot else self._orderbooks
+        book = cache.get(symbol)
+        if book and book.get("bids") and book.get("asks"):
+            return
+
+        url = (
+            f"{self.SPOT_REST_URL}/api/v3/depth"
+            if spot
+            else f"{self.REST_URL}/fapi/v1/depth"
+        )
+        params = {"symbol": symbol, "limit": depth}
+        try:
+            data = await asyncio.wait_for(
+                self._request("GET", url, params=params), timeout=5
+            )
+        except Exception:
+            cache.setdefault(symbol, {"bids": [], "asks": []})
+            return
+
+        if data and "bids" in data and "asks" in data:
+            cache[symbol] = {"bids": data["bids"], "asks": data["asks"]}
+        else:
+            cache.setdefault(symbol, {"bids": [], "asks": []})
+
     async def get_spot_orderbook(self, symbol: str, depth: int = 5) -> dict:
         """Возвращает кэшированный спотовый стакан для ``symbol``."""
         if symbol not in self._spot_ws_tasks:
             self._spot_ws_tasks[symbol] = asyncio.create_task(
                 self._listen_spot(symbol, depth)
             )
+        await self._ensure_orderbook(symbol, depth, spot=True)
         return self._spot_orderbooks.get(symbol, {"bids": [], "asks": []})
 
     # ------------------------------------------------------------------
@@ -380,6 +414,7 @@ class BinanceExchange(BaseExchange):
         """Возвращает кэшированный фьючерсный стакан."""
         if symbol not in self._ws_tasks:
             self._ws_tasks[symbol] = asyncio.create_task(self._listen(symbol))
+        await self._ensure_orderbook(symbol, depth)
         return self._orderbooks.get(symbol, {"bids": [], "asks": []})
 
     async def close(self) -> None:
