@@ -72,7 +72,15 @@ def format_decimal(value: float | Decimal, precision: int = 4, signed: bool = Fa
     при отображении прибыли и процентов.
     """
     quant = Decimal("1").scaleb(-precision)
-    number = Decimal(str(value)).quantize(quant, rounding=ROUND_HALF_UP)
+    try:
+        number = Decimal(str(value))
+    except Exception:
+        logger.exception("Invalid decimal value: %s", value)
+        return "NaN"
+    if not number.is_finite():
+        logger.error("Non-finite decimal value: %s", value)
+        return "NaN"
+    number = number.quantize(quant, rounding=ROUND_HALF_UP)
     result = f"{number:.{precision}f}"
     if signed and not result.startswith("-"):
         result = "+" + result
