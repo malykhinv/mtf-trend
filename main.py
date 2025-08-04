@@ -89,7 +89,7 @@ def load_config(path: str = "config.yaml") -> None:
     # API-ключи загружаем из переменных окружения
     api_keys = {
         "binance": os.getenv("BINANCE_API_KEY"),
-        "secret": os.getenv("BINANCE_API_SECRET"),
+        "binance_secret": os.getenv("BINANCE_API_SECRET"),
         "bybit": os.getenv("BYBIT_API_KEY"),
         "bybit_secret": os.getenv("BYBIT_API_SECRET"),
     }
@@ -110,7 +110,7 @@ async def initialize_bot() -> None:
 
     # Создаём клиентов бирж, если заданы ключи
     binance_key = api_keys.get("binance")
-    binance_secret = api_keys.get("secret") or api_keys.get("binance_secret")
+    binance_secret = api_keys.get("binance_secret")
     if binance_key and binance_secret:
         CLIENTS["binance"] = BinanceExchange(binance_key, binance_secret)
 
