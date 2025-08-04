@@ -304,6 +304,8 @@ async def start_processing_loops() -> None:
     async def scan_loop() -> None:
         """Постоянно сканирует рынок в поиске входов."""
         while True:
+            cycle_start = time.perf_counter()
+            passed_symbols: list[str] = []
             thresholds = CONFIG.get("thresholds", {})
             deposit_raw = CONFIG.get("bot", {}).get("deposit_size", float("inf"))
             deposit = _parse_deposit_value(deposit_raw)
@@ -364,6 +366,7 @@ async def start_processing_loops() -> None:
                     if await strategy.check_entry_conditions(
                         symbol, quantity, metrics, thresholds, CONFIG
                     ):
+                        passed_symbols.append(f"{name}:{symbol}")
                         # Условия входа выполнены – открываем позицию
                         try:
                             await strategy.open_neutral_position(
@@ -392,6 +395,12 @@ async def start_processing_loops() -> None:
                             POSITION_TASKS[f"{name}:{symbol}"] = task
                         except Exception as exc:
                             logger.error("Ошибка открытия %s %s: %s", name, symbol, exc)
+            elapsed = time.perf_counter() - cycle_start
+            logger.info("Время цикла: %s c", format_decimal(elapsed, 2))
+            if passed_symbols:
+                logger.info("Порог пройден: %s", ", ".join(passed_symbols))
+            else:
+                logger.info("Порогов не найдено")
             await asyncio.sleep(poll_interval)
 
     async def risk_loop() -> None:
