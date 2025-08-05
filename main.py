@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from config.constants import ANALYSIS_TIMEFRAME, ATR_PERIOD, MIN_MARKET_CAP
+from config.constants import MIN_MARKET_CAP
 from data.coin_info_provider import filter_by_market_cap
 from data.memory_client import MemoryExchangeClient
 from domain.detection import detect_extremums
 from domain.extremum_tracker import ExtremumTracker
+from domain.timeframe import Timeframe
 from services.plotter import Plotter
 from services.telegram import TelegramSender
 from utils.atr import atr
@@ -31,13 +32,14 @@ async def analysis_worker(
 ) -> None:
     while True:
         symbol = await symbols.get()
-        bars = await client.fetch_bars(symbol, ANALYSIS_TIMEFRAME, 100)
-        tracker = ExtremumTracker()
-        exts = detect_extremums(bars)
-        tracker.update(exts)
-        if tracker.last():
-            signal_price = tracker.last().price  # type: ignore[union-attr]
-            signals.put_nowait((symbol, signal_price))
+        for timeframe in Timeframe:
+            bars = await client.fetch_bars(symbol, timeframe, 100)
+            tracker = ExtremumTracker()
+            exts = detect_extremums(bars)
+            tracker.update(exts)
+            if tracker.last():
+                signal_price = tracker.last().price  # type: ignore[union-attr]
+                signals.put_nowait((symbol, signal_price))
         symbols.task_done()
 
 

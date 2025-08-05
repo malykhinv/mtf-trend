@@ -16,6 +16,7 @@ from data.memory_client import MemoryExchangeClient
 from domain.bar import Bar
 from domain.detection import detect_extremums
 from domain.extremum import ExtremumType
+from domain.timeframe import Timeframe
 from utils.atr import atr
 
 
@@ -43,7 +44,7 @@ def test_single_coin() -> None:
         Bar(base + timedelta(hours=4), 14.0, 14.0, 12.0, 13.0, 140),
     ]
     client = MemoryExchangeClient({"TEST": bars}, {"TEST": 2_000_000_000})
-    fetched = asyncio.run(client.fetch_bars("TEST", "1h", 10))
+    fetched = asyncio.run(client.fetch_bars("TEST", Timeframe.H1, 10))
     assert fetched == bars
 
     extremums = detect_extremums(bars)

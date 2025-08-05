@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Sequence
 
 from domain.bar import Bar
+from domain.timeframe import Timeframe
 
-from .base import ExchangeClient
+from .exchange_client import ExchangeClient
 
 
 class MemoryExchangeClient(ExchangeClient):
@@ -14,7 +15,7 @@ class MemoryExchangeClient(ExchangeClient):
         self._bars = bars
         self._market_caps = market_caps
 
-    async def fetch_bars(self, symbol: str, timeframe: str, limit: int) -> Sequence[Bar]:
+    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int) -> Sequence[Bar]:
         return self._bars.get(symbol, [])[-limit:]
 
     async def fetch_market_caps(self) -> dict[str, float]:
