@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Iterable, Sequence
+from typing import Sequence
 
 from domain.bar import Bar
+from domain.timeframe import Timeframe
 
 
 class ExchangeClient(ABC):
     """Абстрактный клиент биржи."""
 
     @abstractmethod
-    async def fetch_bars(self, symbol: str, timeframe: str, limit: int) -> Sequence[Bar]:
+    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int) -> Sequence[Bar]:
         """Получить свечи для символа."""
 
     @abstractmethod
