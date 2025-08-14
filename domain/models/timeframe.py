@@ -1,11 +1,8 @@
-from __future__ import annotations
-
+from datetime import timedelta
 from enum import Enum
 
 
 class Timeframe(str, Enum):
-    """Enumerates supported timeframes."""
-
     M1 = "1m"
     M5 = "5m"
     M15 = "15m"
@@ -25,3 +22,6 @@ class Timeframe(str, Enum):
         }
         return mapping[self]
 
+    @property
+    def timedelta(self) -> timedelta:
+        return timedelta(minutes=self.minutes)

@@ -1,19 +1,24 @@
-from __future__ import annotations
-
 import logging
+import sys
 
+class FixedWidthFormatter(logging.Formatter):
+    def format(self, record):
+        record.threadName = f"{record.threadName:<24}"
+        return super().format(record)
 
-def configure_logging() -> logging.Logger:
-    logger = logging.getLogger("mtf-trend")
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    logger.info("Логирование настроено")
-    return logger
+handler = logging.StreamHandler(sys.stdout)
+formatter = FixedWidthFormatter(
+    fmt="%(asctime)s %(threadName)s %(message)s",
+    datefmt="%H:%M:%S"
+)
+handler.setFormatter(formatter)
 
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 
-logger = configure_logging()
+def log(message: str) -> None:
+    """Печатает информационное сообщение."""
+    logging.info(f"  {message}")
 
+def logw(message: str) -> None:
+    """Печатает предупреждение."""
+    logging.info(f"✕ {message}")

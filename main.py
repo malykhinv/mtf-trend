@@ -1,80 +1,107 @@
-from __future__ import annotations
-
 import asyncio
-from pathlib import Path
+import os
+from typing import Set, Tuple
 
-from config.constants import MIN_MARKET_CAP
-from data.coin_info_provider import filter_by_market_cap
-from data.memory_client import MemoryExchangeClient
-from domain.detection import detect_extremums
-from domain.extremum_tracker import ExtremumTracker
-from domain.timeframe import Timeframe
+from config.constants import TIMEFRAMES
+from data.binance_client import BinanceClient
+from data.database import Database
+from domain.exchange_client import ExchangeClient
+from domain.models.signal import Signal
+from domain.models.timeframe import Timeframe
+from domain.workers.analysis_worker import create_analysis_worker
+from domain.workers.signal_worker import create_signal_worker
+from domain.workers.scheduler import scheduler
 from services.plotter import Plotter
-from services.telegram import TelegramSender
-from utils.atr import atr
-from utils.logger import logger
+from services.telegram_notifier import TelegramNotifier
+
+ANALYZERS_PER_CLIENT = 10
 
 
-class DummyPlotter:
-    def plot(self, bars, extremums, path: str) -> None:  # type: ignore[override]
-        logger.info("Сохранение графика в %s", path)
-
-
-class DummySender:
-    async def send_message(self, text: str) -> None:  # type: ignore[override]
-        logger.info("Отправка сообщения: %s", text)
-
-
-async def analysis_worker(
-    symbols: asyncio.Queue[str],
-    signals: asyncio.Queue[tuple[str, float]],
-    client: MemoryExchangeClient,
+async def run_for_client(
+    client: ExchangeClient,
+    telegram_notifier: TelegramNotifier,
+    plotter: Plotter,
+    db: Database,
 ) -> None:
-    while True:
-        symbol = await symbols.get()
-        for timeframe in Timeframe:
-            bars = await client.fetch_bars(symbol, timeframe, 100)
-            tracker = ExtremumTracker()
-            exts = detect_extremums(bars)
-            tracker.update(exts)
-            if tracker.last():
-                signal_price = tracker.last().price  # type: ignore[union-attr]
-                signals.put_nowait((symbol, signal_price))
-        symbols.task_done()
+    # Загружаем список инструментов
+    symbols = await client.fetch_symbols()
 
+    # Ограниченные очереди: естественный бэкпрешер при перегрузе
+    jobs_queue: asyncio.Queue[tuple[str, Timeframe]] = asyncio.Queue(
+        maxsize=max(1, len(symbols) * len(TIMEFRAMES))
+    )
+    signals_queue: asyncio.Queue[Signal] = asyncio.Queue(maxsize=1000)
 
-async def signal_worker(signals: asyncio.Queue[tuple[str, float]], sender: TelegramSender) -> None:
-    while True:
-        symbol, price = await signals.get()
-        await sender.send_message(f"Сигнал по {symbol}: {price:.2f}")
-        signals.task_done()
+    # Набор активных ключей (symbol, timeframe), чтобы не ставить дубликаты
+    inflight: Set[Tuple[str, Timeframe]] = set()
 
+    # Событие остановки для планировщика
+    stop_event = asyncio.Event()
 
-async def main() -> None:
-    bars = {}
-    market_caps = {"BTCUSDT": 1_000_000_000}
-    client = MemoryExchangeClient(bars, market_caps)
-    symbols = asyncio.Queue[str]()
-    signals = asyncio.Queue[tuple[str, float]]()
-    sender = DummySender()
-    _plotter = DummyPlotter()
+    # Фабрики воркеров → корутины
+    analysis_fn = create_analysis_worker()
+    signal_fn = create_signal_worker()
 
-    caps = await client.fetch_market_caps()
-    symbols_list = filter_by_market_cap(caps, MIN_MARKET_CAP)
-    for sym in symbols_list:
-        await symbols.put(sym)
-
-    workers = [
-        asyncio.create_task(analysis_worker(symbols, signals, client)),
-        asyncio.create_task(signal_worker(signals, sender)),
+    # Задачи: планировщик, пул анализаторов, отправка сигналов
+    scheduler_task = asyncio.create_task(
+        scheduler(symbols, jobs_queue, inflight, stop_event), name="scheduler"
+    )
+    analyzer_tasks = [
+        asyncio.create_task(
+            analysis_fn(jobs_queue, signals_queue, client, plotter, db, inflight),
+            name=f"analyzer:{i}",
+        )
+        for i in range(ANALYZERS_PER_CLIENT)
     ]
+    sender_task = asyncio.create_task(
+        signal_fn(signals_queue, telegram_notifier), name="signal_sender"
+    )
 
-    await symbols.join()
-    await asyncio.sleep(0)
-    for w in workers:
-        w.cancel()
+    try:
+        # Работаем до внешней отмены/CTRL+C
+        await asyncio.Future()
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        # Переходим к аккуратной остановке
+        pass
+    finally:
+        # 1) Останавливаем планировщик и дожидаемся его завершения
+        stop_event.set()
+        await asyncio.gather(scheduler_task, return_exceptions=True)
+
+        # 2) Дожидаемся, пока анализаторы закончат все работы
+        await jobs_queue.join()
+        for t in analyzer_tasks:
+            t.cancel()
+        await asyncio.gather(*analyzer_tasks, return_exceptions=True)
+
+        # 3) Дожидаемся отправки всех сигналов, затем останавливаем отправщика
+        await signals_queue.join()
+        sender_task.cancel()
+        await asyncio.gather(sender_task, return_exceptions=True)
+
+
+async def main(
+    exchange_clients: list[ExchangeClient],
+    telegram_notifier: TelegramNotifier,
+    plotter: Plotter,
+    db: Database,
+) -> None:
+    await asyncio.gather(*(run_for_client(client, telegram_notifier, plotter, db) for client in exchange_clients))
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Инициализация зависимостей окружением
+    clients: list[ExchangeClient] = [
+        BinanceClient(
+            api_key=os.getenv("BINANCE_API_KEY"),
+            api_secret=os.getenv("BINANCE_API_SECRET"),
+        )
+    ]
+    notifier = TelegramNotifier(
+        token=os.getenv("TELEGRAM_TOKEN"),
+        chat_id=os.getenv("TELEGRAM_CHAT_ID"),
+    )
+    plotter = Plotter()
+    database = Database()
 
+    asyncio.run(main(clients, notifier, plotter, database))

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Deque, Iterable
 
-from .extremum import Extremum, ExtremumType
+from domain.models.extremum import Extremum, ExtremumType
 
 
 class ExtremumTracker:

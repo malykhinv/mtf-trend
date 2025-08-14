@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Sequence, List
 
-from domain.bar import Bar
+from domain.models.bar import Bar
 
 
 def atr(bars: Sequence[Bar], period: int) -> List[float]:
