@@ -34,7 +34,7 @@ def create_analysis_worker() -> Callable[
                 if await db.check_if_recent(symbol, timeframe, minutes=throttle_minutes):
                     continue
 
-                bars = await client.fetch_bars(symbol, timeframe)
+                bars = await client.fetch_bars(symbol, timeframe, limit=500)
                 if not bars:
                     continue
 
@@ -42,11 +42,11 @@ def create_analysis_worker() -> Callable[
                 if signal:
                     await signals_queue.put(signal)
                     await db.save_signal(symbol, timeframe)
-                    log(f"📈 {symbol} ({timeframe.value})")
+                    log(f"📈 Найден сигнал: {symbol} @ {timeframe.value} — отправляю в канал.")
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                logw(f"analysis error for {symbol} ({timeframe.value}): {error}")
+                logw(f"Ошибка анализа {symbol} ({timeframe.value}): {error}")
             finally:
                 inflight.discard(key)
                 jobs_queue.task_done()

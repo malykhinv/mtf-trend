@@ -13,6 +13,7 @@ from domain.workers.signal_worker import create_signal_worker
 from domain.workers.scheduler import scheduler
 from services.plotter import Plotter
 from services.telegram_notifier import TelegramNotifier
+from utils.logger import log
 
 ANALYZERS_PER_CLIENT = 10
 
@@ -77,6 +78,8 @@ async def run_for_client(
         await signals_queue.join()
         sender_task.cancel()
         await asyncio.gather(sender_task, return_exceptions=True)
+        log("main: отправщик сигналов остановлен.")
+        log("main: остановка завершена.")
 
 
 async def main(

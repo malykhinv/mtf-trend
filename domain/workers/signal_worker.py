@@ -5,7 +5,7 @@ from typing import Callable, Coroutine, Any
 
 from domain.models.signal import Signal
 from services.telegram_notifier import TelegramNotifier
-from utils.logger import logw
+from utils.logger import logw, log
 from utils.message_formatter import format_message
 
 
@@ -22,11 +22,13 @@ def create_signal_worker() -> Callable[
                 signal = await signals_queue.get()
                 try:
                     message = format_message(signal)
+                    log(f"Готовлю отправку: {signal.symbol} @ {signal.timeframe.value}")
                     await notifier.send_message(message, signal.chart_path)
+                    log(f"✉️ Отправил сигнал: {signal.symbol} @ {signal.timeframe.value}")
                 except asyncio.CancelledError:
                     raise
                 except Exception as error:
-                    logw(f"Ошибка обработки сигнала {signal.symbol}: {error}")
+                    logw(f"Ошибка отправки сигнала {signal.symbol}: {error}")
                 finally:
                     signals_queue.task_done()
         except asyncio.CancelledError:
