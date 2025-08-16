@@ -1,6 +1,3 @@
-from __future__ import annotations
-
-from dataclasses import dataclass
 from datetime import datetime
 from typing import List
 
@@ -10,14 +7,15 @@ from config.constants import TIMEZONE
 from domain.exchange_client import ExchangeClient
 from domain.models.bar import Bar
 from domain.models.timeframe import Timeframe
+from utils.logger import log
 
 
-@dataclass(slots=True)
 class BinanceClient(ExchangeClient):
     """Клиент Binance на ccxt."""
 
     def __init__(self, api_key: str, api_secret: str, default_type: str = "future") -> None:
-        super().__init__(api_key, api_secret)
+        super(BinanceClient, self).__init__(api_key, api_secret)
+        log("BinanceClient: создаю асинхронный клиент ccxt…")
         self._client = ccxt.binance({
             "apiKey": self.api_key,
             "secret": self.api_secret,
@@ -27,6 +25,7 @@ class BinanceClient(ExchangeClient):
                 "defaultType": default_type,
             },
         })
+        log("BinanceClient: клиент готов.")
 
     async def close(self) -> None:
         """Закрыть http‑сессию ccxt."""
@@ -39,6 +38,7 @@ class BinanceClient(ExchangeClient):
         Получить список символов.
         """
         markets = await self._client.load_markets()
+        log("BinanceClient: загружены рынки, фильтрую символы…")
         symbols: List[str] = []
         for market in markets.values():
             if not market.get("active", True):

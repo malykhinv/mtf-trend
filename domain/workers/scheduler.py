@@ -7,7 +7,7 @@ from typing import List, Set, Tuple
 
 from config.constants import TIMEFRAMES
 from domain.models.timeframe import Timeframe
-from utils.logger import log, logd
+from utils.logger import log
 
 async def scheduler(
     symbols: List[str],
@@ -54,7 +54,7 @@ async def scheduler(
     # Построение расписания: (due_ts, symbol, timeframe, interval_seconds)
     heap: list[tuple[float, str, Timeframe, float]] = []
     for symbol in symbols:
-        logd(f"scheduler: готовлю ключи для {symbol}…")
+        log(f"scheduler: готовлю ключи для {symbol}…")
         for timeframe in TIMEFRAMES:
             interval = period_seconds(timeframe)
             spread = interval * initial_spread
@@ -87,7 +87,6 @@ async def scheduler(
                 # Ставим в работу; при полной очереди ждём
                 await jobs_queue.put(key)
                 inflight.add(key)
-                logd(f"Поставлено в очередь: {symbol} @ {timeframe.value} (inflight={len(inflight)}, qsize={jobs_queue.qsize()})")
 
             # Стабильная каденция: перепланируем от предыдущего due, с небольшим джиттером
             jitter = interval * fire_jitter_fraction
