@@ -25,5 +25,5 @@ class ExchangeClient(ABC):
         """Получить символы."""
 
     @abstractmethod
-    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int = 500) -> list[Bar]:
+    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Bar]:
         """Получить свечи для символа."""

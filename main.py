@@ -26,10 +26,8 @@ async def run_for_client(
     # Загружаем список инструментов
     symbols = await client.fetch_symbols()
 
-    # Ограниченные очереди: естественный бэкпрешер при перегрузе
-    jobs_queue: asyncio.Queue[tuple[str, Timeframe]] = asyncio.Queue(
-        maxsize=max(1, len(symbols) * len(TIMEFRAMES))
-    )
+    # Ограниченные очереди
+    jobs_queue: asyncio.Queue[tuple[str, Timeframe]] = asyncio.Queue(maxsize=max(1, len(symbols) * len(TIMEFRAMES)))
     signals_queue: asyncio.Queue[Signal] = asyncio.Queue(maxsize=1000)
 
     # Набор активных ключей (symbol, timeframe), чтобы не ставить дубликаты
@@ -39,22 +37,23 @@ async def run_for_client(
     stop_event = asyncio.Event()
 
     # Фабрики воркеров → корутины
-    analysis_fn = create_analysis_worker()
-    signal_fn = create_signal_worker()
+    analysis_worker = create_analysis_worker()
+    signal_worker = create_signal_worker()
 
     # Задачи: планировщик, пул анализаторов, отправка сигналов
     scheduler_task = asyncio.create_task(
-        scheduler(symbols, jobs_queue, inflight, stop_event), name="scheduler"
+        scheduler(symbols, jobs_queue, inflight, stop_event),
+        name="scheduler"
     )
     analyzer_tasks = [
         asyncio.create_task(
-            analysis_fn(jobs_queue, signals_queue, client, plotter, db, inflight),
+            analysis_worker(jobs_queue, signals_queue, client, plotter, db, inflight),
             name=f"analyzer:{i}",
         )
         for i in range(ANALYZERS_PER_CLIENT)
     ]
     sender_task = asyncio.create_task(
-        signal_fn(signals_queue, telegram_notifier), name="signal_sender"
+        signal_worker(signals_queue, telegram_notifier), name="signal_sender"
     )
 
     try:
@@ -90,7 +89,6 @@ async def main(
 
 
 if __name__ == "__main__":
-    # Инициализация зависимостей окружением
     clients: list[ExchangeClient] = [
         BinanceClient(
             api_key=os.getenv("BINANCE_API_KEY"),
@@ -104,4 +102,7 @@ if __name__ == "__main__":
     plotter = Plotter()
     database = Database()
 
-    asyncio.run(main(clients, notifier, plotter, database))
+    try:
+        asyncio.run(main(clients, notifier, plotter, database))
+    finally:
+        database.close()

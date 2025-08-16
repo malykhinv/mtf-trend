@@ -52,12 +52,12 @@ async def scheduler(
 
     # Построение расписания: (due_ts, symbol, timeframe, interval_seconds)
     heap: list[tuple[float, str, Timeframe, float]] = []
-    for s in symbols:
-        for tf in TIMEFRAMES:
-            interval = period_seconds(tf)
+    for symbol in symbols:
+        for timeframe in TIMEFRAMES:
+            interval = period_seconds(timeframe)
             spread = interval * initial_spread
             first_due = now + (random.uniform(0.0, spread) if spread > 0 else 0.0)
-            heap.append((first_due, s, tf, interval))
+            heap.append((first_due, symbol, timeframe, interval))
     heapq.heapify(heap)
 
     # Нечего планировать — ждём остановку

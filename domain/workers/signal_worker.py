@@ -6,6 +6,7 @@ from typing import Callable, Coroutine, Any
 from domain.models.signal import Signal
 from services.telegram_notifier import TelegramNotifier
 from utils.logger import logw
+from utils.message_formatter import format_message
 
 
 def create_signal_worker() -> Callable[
@@ -20,7 +21,7 @@ def create_signal_worker() -> Callable[
             while True:
                 signal = await signals_queue.get()
                 try:
-                    message = format(signal)
+                    message = format_message(signal)
                     await notifier.send_message(message, signal.chart_path)
                 except asyncio.CancelledError:
                     raise

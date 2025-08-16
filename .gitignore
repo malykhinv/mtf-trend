@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
 .output/*.png
+config/.env

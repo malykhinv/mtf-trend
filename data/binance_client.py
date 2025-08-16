@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import List
 
 import ccxt.async_support as ccxt  # важно: асинхронная версия ccxt
 
+from config.constants import TIMEZONE
 from domain.exchange_client import ExchangeClient
 from domain.models.bar import Bar
 from domain.models.timeframe import Timeframe
@@ -48,7 +50,7 @@ class BinanceClient(ExchangeClient):
                 symbols.append(market["symbol"])
         return sorted(set(symbols))
 
-    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Bar]:
+    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int = 500) -> list[Bar]:
         """
         Получить свечи OHLCV.
         CCXT возвращает список [timestamp, open, high, low, close, volume].
@@ -65,7 +67,7 @@ class BinanceClient(ExchangeClient):
         """
         ts, o, h, l, c, v = row
         return Bar(
-            time=ts,
+            time=datetime.fromtimestamp(ts / 1000, tz=TIMEZONE),
             open=o,
             high=h,
             low=l,
