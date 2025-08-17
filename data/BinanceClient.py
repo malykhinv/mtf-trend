@@ -5,8 +5,9 @@ import ccxt.async_support as ccxt  # важно: асинхронная верс
 
 from config.constants import TIMEZONE
 from domain.exchange_client import ExchangeClient
-from domain.models.bar import Bar
-from domain.models.timeframe import Timeframe
+from domain.models.Bar import Bar
+from domain.models.Exchange import Exchange
+from domain.models.Timeframe import Timeframe
 from utils.logger import log
 
 
@@ -74,3 +75,7 @@ class BinanceClient(ExchangeClient):
             close=c,
             volume=v,
         )
+
+    @property
+    def exchange(self) -> Exchange:
+        return Exchange.BINANCE

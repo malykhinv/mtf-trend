@@ -1,4 +1,4 @@
-from domain.models.signal import Signal
+from domain.models.Signal import Signal
 from utils.tradingview import tradingview_link
 
 

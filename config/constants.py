@@ -1,6 +1,6 @@
 from zoneinfo import ZoneInfo
 
-from domain.models.timeframe import Timeframe
+from domain.models.Timeframe import Timeframe
 
 # 🌍 Часовой пояс
 TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
@@ -36,3 +36,7 @@ PLOT_DPI: int = 100
 ATR_PERIOD: int = 14
 ATR_BREAKOUT_MULTIPLIER: float = 5.0
 MIN_MARKET_CAP: int = 200_000_000
+
+TREND_ITERATIONS: int = 2
+FRESH_MAX_AGE: int = max(14, round(1.5 * TREND_ITERATIONS))
+WINDOW_TAIL: int = max(500, 3 * TREND_ITERATIONS + 100)

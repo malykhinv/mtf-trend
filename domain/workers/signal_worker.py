@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, Coroutine, Any
 
-from domain.models.signal import Signal
-from services.telegram_notifier import TelegramNotifier
+from domain.models.Signal import Signal
+from services.TelegramNotifier import TelegramNotifier
 from utils.logger import logw, log
 from utils.message_formatter import format_message
 

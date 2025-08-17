@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
-from domain.models.bar import Bar
-from domain.models.extremum_type import ExtremumType
+from domain.models.Bar import Bar
+from domain.models.ExtremumType import ExtremumType
 
 
 @dataclass(slots=True)

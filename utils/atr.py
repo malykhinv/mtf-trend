@@ -1,15 +1,11 @@
-from __future__ import annotations
-
-from typing import Sequence, List
-
-from domain.models.bar import Bar
+from domain.models.Bar import Bar
 
 
-def atr(bars: Sequence[Bar], period: int) -> List[float]:
+def atr(bars: list[Bar], period: int) -> list[float]:
     """Расчёт среднего истинного диапазона (ATR)."""
     if period <= 0:
         raise ValueError("period must be > 0")
-    trs: List[float] = []
+    trs: list[float] = []
     for i, bar in enumerate(bars):
         if i == 0:
             tr = bar.high - bar.low
@@ -17,7 +13,7 @@ def atr(bars: Sequence[Bar], period: int) -> List[float]:
             prev_close = bars[i - 1].close
             tr = max(bar.high - bar.low, abs(bar.high - prev_close), abs(prev_close - bar.low))
         trs.append(tr)
-    atrs: List[float] = []
+    atrs: list[float] = []
     for i in range(len(trs)):
         if i + 1 < period:
             atrs.append(sum(trs[: i + 1]) / (i + 1))

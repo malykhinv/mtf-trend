@@ -1,8 +1,8 @@
 from dataclasses import dataclass
 
-from domain.models.bar import Bar
-from domain.models.exchange import Exchange
-from domain.models.timeframe import Timeframe
+from domain.models.Bar import Bar
+from domain.models.Exchange import Exchange
+from domain.models.Timeframe import Timeframe
 
 
 @dataclass(frozen=True, slots=True)

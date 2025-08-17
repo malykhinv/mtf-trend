@@ -7,7 +7,7 @@ from typing import Optional
 import aiosqlite
 
 from config.constants import TIMEZONE
-from domain.models.timeframe import Timeframe
+from domain.models.Timeframe import Timeframe
 
 @dataclass
 class Database:

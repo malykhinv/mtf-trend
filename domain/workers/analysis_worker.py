@@ -4,12 +4,12 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, Coroutine, Any, Set
 
-from data.database import Database
+from data.Database import Database
 from domain.detection import detect
 from domain.exchange_client import ExchangeClient
-from domain.models.signal import Signal
-from domain.models.timeframe import Timeframe
-from services.plotter import Plotter
+from domain.models.Signal import Signal
+from domain.models.Timeframe import Timeframe
+from services.Plotter import Plotter
 from utils.logger import log, logw
 
 
@@ -38,7 +38,7 @@ def create_analysis_worker() -> Callable[
                 if not bars:
                     continue
 
-                signal = detect(bars, timeframe, plotter)
+                signal = detect(symbol, client.exchange, bars, timeframe, plotter)
                 if signal:
                     await signals_queue.put(signal)
                     await db.save_signal(symbol, timeframe)

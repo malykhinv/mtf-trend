@@ -8,9 +8,9 @@ import matplotlib.dates as mdates
 from matplotlib.ticker import FuncFormatter
 import numpy as np
 
-from domain.models.bar import Bar
-from domain.models.extremum import Extremum
-from domain.models.extremum_type import ExtremumType
+from domain.models.Bar import Bar
+from domain.models.Extremum import Extremum
+from domain.models.ExtremumType import ExtremumType
 from config.constants import (
     COLOR_UP, COLOR_DOWN,
     COLOR_BACKGROUND,

@@ -3,16 +3,16 @@ import os
 from typing import Set, Tuple
 
 from config.constants import TIMEFRAMES
-from data.binance_client import BinanceClient
-from data.database import Database
+from data.BinanceClient import BinanceClient
+from data.Database import Database
 from domain.exchange_client import ExchangeClient
-from domain.models.signal import Signal
-from domain.models.timeframe import Timeframe
+from domain.models.Signal import Signal
+from domain.models.Timeframe import Timeframe
 from domain.workers.analysis_worker import create_analysis_worker
 from domain.workers.signal_worker import create_signal_worker
 from domain.workers.scheduler import scheduler
-from services.plotter import Plotter
-from services.telegram_notifier import TelegramNotifier
+from services.Plotter import Plotter
+from services.TelegramNotifier import TelegramNotifier
 from utils.logger import log
 
 ANALYZERS_PER_CLIENT = 10
