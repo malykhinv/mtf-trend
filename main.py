@@ -105,7 +105,4 @@ if __name__ == "__main__":
     plotter = Plotter()
     database = Database()
 
-    try:
-        asyncio.run(main(clients, notifier, plotter, database))
-    finally:
-        database.close()
+    asyncio.run(main(clients, notifier, plotter, database))

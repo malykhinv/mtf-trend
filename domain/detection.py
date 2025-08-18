@@ -172,97 +172,107 @@ def _find_bar2_on_range_max_high(bars: list[Bar], left: int, right: int) -> int:
 def _has_downtrend(
         bars: list[Bar],
         atrs: list[float],
-        s: int,             # начало окна (включительно)
-        e: int,             # конец окна (включительно)
-        iterations: int,    # сколько «складок» даун-тренда надо подтвердить
+        start: int,
+        end: int,
+        iterations: int,
 ) -> DowntrendResult:
     """
-    Ищем нисходящую структуру в окне [s..e].
-    Возвращаем самую «свежую» (правее) эпоху, если в окне нашлось несколько.
-    Алгоритм: d2..d5 — одна складка; повторяем, пока не наберём iterations.
-    После первой найденной валидной эпохи продолжаем искать правее (перезапуск с 1 итерацией),
-    чтобы вернуть максимально свежую.
+    Ищем нисходящую структуру d2..d5 в окне [s..e].
+    Возвращаем САМУЮ СВЕЖУЮ валидную эпоху (если внутри окна их несколько).
+    После фиксации валидной эпохи сдвигаем baseline на её bar3 и полностью
+    ПЕРЕЗАПУСКАЕМ набор итераций (folds_found = 0), как и просили.
     """
-    window_start = s
-    window_end = e
-
-    if window_end - window_start < 3:
+    if end - start < 3:
+        log("  [_has_downtrend] Окно слишком короткое (< 3 бара). Возврат has_downtrend=False.")
         return DowntrendResult(has_downtrend=False)
 
-    # С какого индекса начинаем искать очередную «складку» (baseline)
-    scan_start = window_start
+    freshest: DowntrendResult | None = None  # лучшая (самая правая) найденная эпоха
+    baseline = start                         # откуда начинаем искать очередную эпоху
 
-    # Самая свежая найденная эпоха в этом окне (если появится)
-    freshest_epoch: DowntrendResult | None = None
+    log(f"  [_has_downtrend] Старт окна: [{start}..{end}], требуемых складок={iterations}")
 
-    # Сколько складок подтверждено подряд от текущего baseline
-    folds_found = 0
+    # оставляем минимум места для d2..d5
+    while baseline < end - 2:
+        folds_found = 0
+        current_start = baseline
+        log(f"  [_has_downtrend] Новый baseline={current_start} — начинаем попытку собрать эпоху.")
 
-    # Немного «запаса» справа, чтобы хватило места на d2..d5
-    while scan_start < window_end - 2:
-        # ---- d2: ищем первый допустимый перелой (LL) относительно текущего baseline ----
-        initial_low = bars[scan_start].low
-        ll_candidate_idx: int | None = None
-        for idx in range(scan_start + 1, window_end + 1):
-            if _is_ll(initial_low, bars[idx].low, atrs[idx]):
-                ll_candidate_idx = idx
+        # Пытаемся последовательно собрать до `iterations` складок
+        while current_start < end - 1:
+            # d2: первый кандидат на перелой (LL) относительно initial_low
+            initial_low = bars[current_start].low
+            j = None
+            for idx in range(current_start + 1, end + 1):
+                if _is_ll(initial_low, bars[idx].low, atrs[idx]):
+                    j = idx
+                    break
+            if j is None:
+                log(f"  [_has_downtrend] d2: не найден LL относительно initial_low={initial_low:.6f} в [{current_start+1}..{end}].")
                 break
-        if ll_candidate_idx is None:
-            # С этим baseline перелоя не нашлось — сдвигаем baseline вправо и пробуем снова
-            scan_start += 1
-            folds_found = 0  # новая попытка — складки заново
-            continue
 
-        # ---- d3: выбираем bar1 — минимальный i ≥ ll_candidate_idx с подъёмом ≥ 5×ATR без перелоя ----
-        bar1_idx: int | None = None
-        upmove_confirm_idx: int | None = None  # индекс k, где подъём подтвердился
-        for candidate_idx in range(ll_candidate_idx, window_end + 1):
-            k = _exists_upmove_without_ll(bars, atrs, candidate_idx)
-            if k is not None:
-                bar1_idx = candidate_idx
-                upmove_confirm_idx = k
+            log(f"  [_has_downtrend] d2: LL-кандидат j={j}, L[j]={bars[j].low:.6f}, ATR[j]={atrs[j]:.6f}.")
+
+            # d3: bar1 — минимальный i≥j, для которого есть подъём ≥K*ATR без перелоя
+            bar1_idx = None
+            for cand in range(j, end + 1):
+                k_idx = _exists_upmove_without_ll(bars, atrs, cand)
+                if k_idx is not None:
+                    bar1_idx = cand
+                    log(f"  [_has_downtrend] d3: bar1=i={bar1_idx} (L={bars[bar1_idx].low:.6f}); подъём без перелоя подтверждён → k={k_idx}.")
+                    break
+            if bar1_idx is None:
+                log(f"  [_has_downtrend] d3: подъём ≥ {ATR_BREAKOUT_MULTIPLIER}×ATR без перелоя не найден после j={j}.")
                 break
-        if bar1_idx is None:
-            # Подъём без перелоя не подтвердился — меняем baseline и пробуем снова
-            scan_start += 1
-            folds_found = 0
+
+            last_ll_idx = bar1_idx
+
+            # d4: bar3 — первая свеча с закрытием ниже L[bar1]
+            bar3_idx = _find_bar3(bars, bar1_idx)
+            if bar3_idx is None or bar3_idx > end:
+                log(f"  [_has_downtrend] d4: bar3 не найден (нет C < L[bar1]={bars[bar1_idx].low:.6f}).")
+                break
+            log(f"  [_has_downtrend] d4: bar3={bar3_idx} (C={bars[bar3_idx].close:.6f} < L[bar1]={bars[bar1_idx].low:.6f}).")
+
+            # d5: bar2/sh_last — максимум high на [bar1..bar3] (ранний при равенстве)
+            sh_last_idx = _find_bar2_on_range_max_high(bars, bar1_idx, bar3_idx)
+            log(f"  [_has_downtrend] d5: sh_last=bar2={sh_last_idx} (H={bars[sh_last_idx].high:.6f}) на диапазоне [{bar1_idx}..{bar3_idx}].")
+
+            # складка подтверждена
+            folds_found += 1
+            log(f"  [_has_downtrend] d6: складка {folds_found}/{iterations} подтверждена.")
+
+            if folds_found >= iterations:
+                # эпоха валидна — запоминаем как «самую свежую» и будем искать ещё свежее
+                freshest = DowntrendResult(has_downtrend=True, bar1_idx=bar1_idx, sh_last_idx=sh_last_idx, last_ll_idx=last_ll_idx)
+                log(f"  [_has_downtrend] ✔ Эпоха подтверждена: bar1={bar1_idx}, sh_last={sh_last_idx}, last_ll={last_ll_idx}. "
+                    f"Пробуем найти ещё более свежую правее bar3={bar3_idx} с ПОЛНЫМ перезапуском итераций.")
+                # Сдвигаем внешний baseline на bar3 данной эпохи и ВЫХОДИМ из внутреннего цикла.
+                baseline = bar3_idx
+                break
+
+            # Иначе — продолжаем собирать следующую складку от bar3
+            current_start = bar3_idx
+
+        else:
+            # теоретически сюда почти не попадём; страховка от бесконечного цикла
+            baseline += 1
             continue
 
-        last_ll_idx = bar1_idx
-
-        # ---- d4: bar3 — первая свеча, закрывшаяся ниже L[bar1] ----
-        bar3_idx = _find_bar3(bars, bar1_idx)
-        if bar3_idx is None or bar3_idx > window_end:
-            # Нет подтверждения вниз — baseline смещаем чуть правее bar1 и продолжаем
-            scan_start = bar1_idx + 1
-            folds_found = 0
+        # Если не набрали нужное число складок — эта попытка baseline неудачна, двигаем baseline на 1 вправо
+        if folds_found < iterations:
+            baseline += 1
             continue
 
-        # ---- d5: bar2/sh_last — максимум high на [bar1..bar3] (ранний при равенстве) ----
-        sh_last_idx = _find_bar2_on_range_max_high(bars, bar1_idx, bar3_idx)
+        # Если эпоха валидна — baseline уже передвинут на её bar3 и цикл пойдёт дальше для «ещё более свежей»
+        # (folds_found будет пересчитан заново с нуля при входе в новую попытку)
+        continue
 
-        # ---- d6: складка подтверждена ----
-        folds_found += 1
+    if freshest is None:
+        log(f"  [_has_downtrend] В окне [{start}..{end}] валидных эпох не найдено — ok=False.")
+        return DowntrendResult(has_downtrend=False)
 
-        if folds_found >= iterations:
-            # Набрали нужное количество складок — эпоха валидна.
-            # Запомним её как «кандидата» и продолжим поиск правее,
-            # чтобы (в этом же окне) вернуть максимально свежую эпоху.
-            freshest_epoch = DowntrendResult(
-                has_downtrend=True,
-                bar1_idx=bar1_idx,
-                sh_last_idx=sh_last_idx,
-                last_ll_idx=last_ll_idx,
-            )
-            # Для дальнейшего поиска смещаем baseline на bar3 данной эпохи
-            # и считаем, что уже нашли 1 складку (перезапуск внутри эпохи).
-            scan_start = bar3_idx
-            folds_found = 1
-            continue
+    log(f"  [_has_downtrend] Итог: возвращаю самую свежую эпоху: "
+        f"bar1={freshest.bar1_idx}, sh_last={freshest.sh_last_idx}, last_ll={freshest.last_ll_idx}.")
+    return freshest
 
-        # Иначе складка есть, но нужно ещё — двигаем baseline на bar3 и ищем следующую
-        scan_start = bar3_idx
-
-    # Если в окне что-то нашли — вернём самую свежую эпоху; иначе ok=False
-    return freshest_epoch if freshest_epoch is not None else DowntrendResult(has_downtrend=False)
 
