@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from typing import Optional
-
 import os
 
 from config.constants import (
@@ -28,16 +27,26 @@ def detect(
         bars: list[Bar],
         timeframe: Timeframe,
         plotter: Plotter,
+        *,
+        test_mode: bool = False,   # в тесте рисуем график всегда
 ) -> Optional[Signal]:
     """
     Главная функция детекции разворота даун-тренда в лонг.
     Возвращает Signal только на закрытии бара i=N-1 при выполнении всех условий.
+    В тестовом режиме (test_mode=True) сохраняет график в любом случае.
     """
+    # Внешний переключатель через ENV (удобно для запуска без правки кода)
+    force_plot_env = os.getenv("DETECT_FORCE_PLOT", "").strip().lower() in ("1", "true", "yes", "y")
+    force_plot = test_mode or force_plot_env
+
     n = len(bars)
     log(f"[{exchange.name} {symbol} {timeframe.value}] Старт детекции. Баров={n}")
     min_needed = max(ATR_PERIOD + 20, 200)
     if n < min_needed:
         log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно баров для анализа (нужно ≥ {min_needed}). Пропускаю.")
+        # В тестовом режиме всё равно сохраним «чистый» график без меток
+        if force_plot:
+            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
         return None
 
     atrs = atr(bars, ATR_PERIOD)
@@ -52,21 +61,36 @@ def detect(
     r = _has_downtrend(bars, atrs, s, e, TREND_ITERATIONS)
     if not r.has_downtrend:
         log(f"[{exchange.name} {symbol} {timeframe.value}] Нисходящая структура в окне не найдена. Сигнал не формируется.")
+        if force_plot:
+            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
         return None
 
     bar1_idx, sh_last_idx, last_ll_idx = r.bar1_idx, r.sh_last_idx, r.last_ll_idx
+
+    # Подготовка экстремумов (они пригодятся и для тестового рисунка при любых исходах)
+    exts: list[Extremum] = [
+        Extremum(bar=bars[bar1_idx], type=ExtremumType.LOW),
+        Extremum(bar=bars[sh_last_idx], type=ExtremumType.HIGH),
+    ]
+    if last_ll_idx != bar1_idx:
+        exts.append(Extremum(bar=bars[last_ll_idx], type=ExtremumType.LOW))
 
     # Свежесть эпохи
     age = e - last_ll_idx
     if age > FRESH_MAX_AGE:
         log(f"[{exchange.name} {symbol} {timeframe.value}] Эпоха устарела: прошло {age} баров > FRESH_MAX_AGE={FRESH_MAX_AGE}. Сбрасываю.")
+        if force_plot:
+            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
 
     # Подтверждение разворота: две закрытые свечи телом выше level
     level = max(bars[sh_last_idx].open, bars[sh_last_idx].close)
     if e < 1:
         log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно закрытых свечей для подтверждения (e < 1). Пропускаю.")
+        if force_plot:
+            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
+
     prev_ok = min(bars[e - 1].open, bars[e - 1].close) > level
     curr_ok = min(bars[e].open, bars[e].close) > level
     log(
@@ -76,17 +100,41 @@ def detect(
     )
     if not (prev_ok and curr_ok):
         log(f"[{exchange.name} {symbol} {timeframe.value}] Нет двух подряд закрытых свечей выше уровня. Сигнал не формируется.")
+        if force_plot:
+            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
 
-    # Подготовка экстремумов для графика
-    exts: list[Extremum] = [
-        Extremum(bar=bars[bar1_idx], type=ExtremumType.LOW),
-        Extremum(bar=bars[sh_last_idx], type=ExtremumType.HIGH),
-    ]
-    if last_ll_idx != bar1_idx:
-        exts.append(Extremum(bar=bars[last_ll_idx], type=ExtremumType.LOW))
+    # Если дошли сюда — сигнал подтверждён. Рисуем и возвращаем Signal.
+    chart_path = _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
 
-    # Генерация графика
+    log(
+        f"[{exchange.name} {symbol} {timeframe.value}] Сигнал подтверждён. "
+        f"bar1={bar1_idx} (L={bars[bar1_idx].low:.6f}), "
+        f"bar2/sh_last={sh_last_idx} (H={bars[sh_last_idx].high:.6f}), "
+        f"last_ll={last_ll_idx}, level={level:.6f}."
+    )
+    # Добавляем bar3 среди значимых экстремумов
+    bar3_idx = _find_bar3(bars, bar1_idx)
+    if bar3_idx is not None and bar3_idx > e:
+        bar3_idx = None  # страховка от выхода за правый край окна
+
+    extremum_bars: list[Bar] = [bars[bar1_idx], bars[sh_last_idx]]
+    if bar3_idx is not None:
+        extremum_bars.append(bars[bar3_idx])
+    if last_ll_idx not in (bar1_idx, sh_last_idx, (bar3_idx if bar3_idx is not None else -1)):
+        extremum_bars.append(bars[last_ll_idx])
+
+    return Signal(
+        symbol=symbol,
+        exchange=exchange,
+        timeframe=timeframe,
+        extremums=extremum_bars,
+        chart_path=chart_path,
+    )
+
+
+def _save_chart(exchange: Exchange, symbol: str, timeframe: Timeframe, plotter: Plotter,
+                bars: list[Bar], exts: list[Extremum]) -> str:
     os.makedirs(OUTPUT_PLOT_PATH, exist_ok=True)
     chart_path = os.path.join(
         OUTPUT_PLOT_PATH,
@@ -96,27 +144,9 @@ def detect(
         plotter.plot(bars, exts, path=chart_path)
         log(f"[{exchange.name} {symbol} {timeframe.value}] График сохранён: {chart_path}")
     except Exception as e_plot:
-        # даже если отрисовка не удалась — лучше всё равно отдать сигнал
+        # даже если отрисовка не удалась — не валим детект
         logw(f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}). Продолжаю без изображения.")
-
-    # Сигнал (extremums: список ключевых баров — как в твоём Signal)
-    extremum_bars: list[Bar] = [bars[bar1_idx], bars[sh_last_idx]]
-    if last_ll_idx not in (bar1_idx, sh_last_idx):
-        extremum_bars.append(bars[last_ll_idx])
-
-    log(
-        f"[{exchange.name} {symbol} {timeframe.value}] Сигнал подтверждён. "
-        f"bar1={bar1_idx} (L={bars[bar1_idx].low:.6f}), "
-        f"bar2/sh_last={sh_last_idx} (H={bars[sh_last_idx].high:.6f}), "
-        f"last_ll={last_ll_idx}, level={level:.6f}."
-    )
-    return Signal(
-        symbol=symbol,
-        exchange=exchange,
-        timeframe=timeframe,
-        extremums=extremum_bars,
-        chart_path=chart_path,
-    )
+    return chart_path
 
 
 def _is_ll(ref_low: float, low_j: float, atr_j: float) -> bool:
@@ -186,8 +216,8 @@ def _has_downtrend(
         log("  [_has_downtrend] Окно слишком короткое (< 3 бара). Возврат has_downtrend=False.")
         return DowntrendResult(has_downtrend=False)
 
-    freshest: DowntrendResult | None = None  # лучшая (самая правая) найденная эпоха
-    baseline = start                         # откуда начинаем искать очередную эпоху
+    freshest: DowntrendResult | None = None
+    baseline = start
 
     log(f"  [_has_downtrend] Старт окна: [{start}..{end}], требуемых складок={iterations}")
 
@@ -233,7 +263,7 @@ def _has_downtrend(
                 break
             log(f"  [_has_downtrend] d4: bar3={bar3_idx} (C={bars[bar3_idx].close:.6f} < L[bar1]={bars[bar1_idx].low:.6f}).")
 
-            # d5: bar2/sh_last — максимум high на [bar1..bar3] (ранний при равенстве)
+            # d5: bar2/sh_last — максимум high на [bar1-bar3] (ранний при равенстве)
             sh_last_idx = _find_bar2_on_range_max_high(bars, bar1_idx, bar3_idx)
             log(f"  [_has_downtrend] d5: sh_last=bar2={sh_last_idx} (H={bars[sh_last_idx].high:.6f}) на диапазоне [{bar1_idx}..{bar3_idx}].")
 
@@ -274,5 +304,3 @@ def _has_downtrend(
     log(f"  [_has_downtrend] Итог: возвращаю самую свежую эпоху: "
         f"bar1={freshest.bar1_idx}, sh_last={freshest.sh_last_idx}, last_ll={freshest.last_ll_idx}.")
     return freshest
-
-

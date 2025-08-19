@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Optional
+
 from domain.models.Bar import Bar
 from domain.models.Timeframe import Timeframe
 from domain.models.Exchange import Exchange
@@ -26,7 +29,14 @@ class ExchangeClient(ABC):
         """Получить символы."""
 
     @abstractmethod
-    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int = 500) -> list[Bar]:
+    @abstractmethod
+    async def fetch_bars(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int = 500,
+        end_dt: Optional[datetime] = None,
+    ) -> list[Bar]:
         """Получить свечи для символа."""
 
     @property

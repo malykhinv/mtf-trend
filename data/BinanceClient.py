@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 import ccxt.async_support as ccxt  # важно: асинхронная версия ccxt
 
@@ -51,12 +51,30 @@ class BinanceClient(ExchangeClient):
                 symbols.append(market["symbol"])
         return sorted(set(symbols))
 
-    async def fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int = 500) -> list[Bar]:
-        """
-        Получить свечи OHLCV.
-        CCXT возвращает список [timestamp, open, high, low, close, volume].
-        """
-        raw = await self._client.fetch_ohlcv(symbol, timeframe.value, limit=limit)
+    async def fetch_bars(
+            self,
+            symbol: str,
+            timeframe: Timeframe,
+            limit: int = 500,
+            end_dt: Optional[datetime] = None,
+    ) -> list[Bar]:
+        params = {}
+        if end_dt is not None:
+            end_ms = int(end_dt.timestamp() * 1000)
+            tf_ms = int(self._client.parse_timeframe(timeframe.value) * 1000)
+            since = max(0, end_ms - limit * tf_ms)
+            params["endTime"] = end_ms  # поддерживается Binance
+
+            raw = await self._client.fetch_ohlcv(
+                symbol, timeframe.value, since=since, limit=limit, params=params
+            )
+            # Гарантируем правый край и лимит
+            raw = [row for row in raw if row and row[0] <= end_ms]
+            if len(raw) > limit:
+                raw = raw[-limit:]
+        else:
+            raw = await self._client.fetch_ohlcv(symbol, timeframe.value, limit=limit)
+
         return [self._to_bar(row) for row in raw]
 
     # === Внутреннее ===
