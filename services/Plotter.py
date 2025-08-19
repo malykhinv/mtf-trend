@@ -1,18 +1,25 @@
 # services/Plotter.py
+from __future__ import annotations
+
 import os
 import random
 from itertools import chain, tee
 from typing import Sequence
 
 import matplotlib
+from domain.models.Timeframe import Timeframe
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib.ticker import FuncFormatter
+from matplotlib.patches import Rectangle
 import numpy as np
+
 from domain.models.Bar import Bar
 from domain.models.Extremum import Extremum
 from domain.models.ExtremumType import ExtremumType
+
 from config.constants import (
     TIMEZONE,
     COLOR_BACKGROUND,
@@ -23,7 +30,12 @@ from config.constants import (
     SWING_COLOR_LOW,
     CANDLESTICK_WIDTH_MULTIPLIER,
     OUTPUT_PLOT_PATH,
+    # X_AXIS_TIME_FORMAT  # больше не нужен, оставлен в конфиге на будущее
+    PLOT_WIDTH_INCHES,
+    PLOT_HEIGHT_INCHES,
+    PLOT_DPI,
 )
+
 
 class Plotter:
     """
@@ -42,7 +54,9 @@ class Plotter:
         extremums: Sequence[Extremum] | Sequence[Sequence[Extremum]],
         path: str = OUTPUT_PLOT_PATH,
         *,
-        highlight_epoch_index: int | None = None,  # можно подсветить конкретную эпоху (например, ту, где найден разворот)
+        symbol: str | None = None,
+        timeframe: Timeframe | str | None = None,
+        highlight_epoch_index: int | None = None,
         show_legend: bool = False,
     ) -> None:
         if not bars:
@@ -51,10 +65,13 @@ class Plotter:
         # --- Нормализуем вход: превращаем в список эпох ---
         epochs: list[list[Extremum]] = self._normalize_epochs(extremums)
 
-        # --- Фигура/оси ---
-        fig, ax = plt.subplots(figsize=(14, 6), facecolor=COLOR_BACKGROUND)
-        ax.set_facecolor(COLOR_BACKGROUND)
-        ax.grid(True, linestyle=":", color="gray", alpha=0.3)
+        # --- Фигура/ось ---
+        fig, ax = plt.subplots(
+            figsize=(PLOT_WIDTH_INCHES, PLOT_HEIGHT_INCHES),
+            facecolor=COLOR_BACKGROUND,
+            dpi=PLOT_DPI,
+        )
+        self._style_axis_base(fig, ax)
 
         # --- Время / ширина свечи ---
         times = self._bars_to_times(bars)
@@ -65,15 +82,15 @@ class Plotter:
 
         # --- Подготовка геометрии для маркеров ---
         ylim = ax.get_ylim()
-        y_range = ylim[1] - ylim[0]
+        y_range = max(1e-12, ylim[1] - ylim[0])
         pixel_height = ax.get_window_extent().height or 800
-        marker_size_pts = SWING_MARKER_SIZE ** 0.5
+        marker_size_pts = SWING_MARKER_SIZE ** 0.5  # так как s — это площадь в pt²
         marker_height_data = y_range * (marker_size_pts / pixel_height)
 
         # --- Палитра эпох (для маркеров) ---
         epoch_colors = self._epoch_palette(len(epochs)) if len(epochs) > 1 else [SWING_COLOR_HIGH]
 
-        # --- Цвета горизонтальных линий (High/Low общие для всех эпох) ---
+        # --- Цвета горизонтальных линий ---
         line_color_high = SWING_COLOR_HIGH
         line_color_low = SWING_COLOR_LOW
         line_alpha = 0.55
@@ -84,12 +101,10 @@ class Plotter:
             if not epoch_exts:
                 continue
 
-            # Цвет маркеров для эпохи
             marker_color = epoch_colors[e_idx]
             marker_alpha = 1.0 if (highlight_epoch_index is None or highlight_epoch_index == e_idx) else 0.35
             marker_size = SWING_MARKER_SIZE if marker_alpha == 1.0 else max(10, int(SWING_MARKER_SIZE * 0.7))
 
-            # Маркеры + горизонтальные линии
             for ext in epoch_exts:
                 bar = ext.bar
                 price = bar.high if ext.type == ExtremumType.HIGH else bar.low
@@ -97,10 +112,9 @@ class Plotter:
                 try:
                     start_idx = bars.index(bar)
                 except ValueError:
-                    # Если пришёл другой объект Bar (не тот же инстанс), ищем по времени/цене
                     start_idx = self._find_bar_index_heuristic(bars, bar)
 
-                # --- горизонтальная линия до пересечения/конца ---
+                # горизонтальная линия
                 end_idx = self._find_right_intersection_index(bars, start_idx, price)
                 x0 = times[start_idx]
                 x1 = times[end_idx]
@@ -115,13 +129,9 @@ class Plotter:
                     zorder=3,
                 )
 
-                # --- маркер экстремума ---
+                # маркер экстремума
                 t = times[start_idx]
-                marker_y = (
-                    price + marker_height_data / 2
-                    if ext.type == ExtremumType.HIGH
-                    else price - marker_height_data / 2
-                )
+                marker_y = price + marker_height_data / 2 if ext.type == ExtremumType.HIGH else price - marker_height_data / 2
                 marker = "v" if ext.type == ExtremumType.HIGH else "^"
                 ax.scatter(
                     t,
@@ -134,58 +144,82 @@ class Plotter:
                     label=f"Epoch {e_idx+1}" if show_legend else None,
                 )
 
-        # --- Оформление осей ---
+        # --- Оформление осей, лимитов и заголовка ---
         left = float(times[0] - width)
         right = float(times[-1] + width)
         ax.set_xlim(left, right)
-        ax.tick_params(colors="gray", labelsize=8)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter("%d-%m %H:%M", tz=TIMEZONE))
-        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.6f}"))
+
+        # X — автолокация + "умные" подписи без поворота (аналог TradingView)
+        locator = mdates.AutoDateLocator()
+        formatter = mdates.ConciseDateFormatter(locator, tz=TIMEZONE)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(formatter)
+        ax.tick_params(axis="x", colors="gray", labelsize=9, rotation=0)
+        for lbl in ax.get_xticklabels():
+            lbl.set_rotation(0)
+            lbl.set_horizontalalignment("center")
+
+        # Y — аккуратное форматирование без фиксированных 6 знаков
+        def _fmt_price(y: float, _):
+            ay = abs(y)
+            if ay >= 100:
+                return f"{y:,.2f}"
+            if ay >= 1:
+                return f"{y:,.4f}"
+            return f"{y:,.6f}"
+        ax.yaxis.set_major_formatter(FuncFormatter(_fmt_price))
+        ax.tick_params(axis="y", colors="gray", labelsize=9)
+
+        # Заголовок: "SYMBOL TF"
+        tf_label = self._tf_label(timeframe)
+        title_parts = [p for p in [symbol, tf_label] if p]
+        if title_parts:
+            ax.set_title(" ".join(title_parts), color="white", pad=8)
 
         if show_legend and len(epochs) > 1:
-            # Легенда по эпохам (если много эпох). Дубликаты лейблов уберём.
             handles, labels = ax.get_legend_handles_labels()
             uniq = {}
             for h, l in zip(handles, labels):
-                uniq.setdefault(l, h)
+                if l not in uniq:
+                    uniq[l] = h
             ax.legend(uniq.values(), uniq.keys(), loc="upper left", fontsize=8)
 
-        fig.autofmt_xdate()
+        # Без автоповорота дат; чутка места под заголовок
+        fig.tight_layout(rect=(0, 0, 1, 0.97))
 
         # --- Сохранение ---
-        os.makedirs(os.path.dirname(path) or OUTPUT_PLOT_PATH, exist_ok=True)
-        plt.savefig(path, facecolor=fig.get_facecolor(), bbox_inches="tight")
+        full_path = self._resolve_output_path(path, bars, symbol, timeframe)
+        os.makedirs(os.path.dirname(full_path) or OUTPUT_PLOT_PATH, exist_ok=True)
+        plt.savefig(full_path, facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=PLOT_DPI)
         plt.close(fig)
 
     # ----------------- ВСПОМОГАТЕЛЬНЫЕ -----------------
 
     @staticmethod
+    def _style_axis_base(fig: plt.Figure, ax: plt.Axes) -> None:
+        fig.patch.set_facecolor(COLOR_BACKGROUND)
+        ax.set_facecolor(COLOR_BACKGROUND)
+        ax.grid(True, color="gray", linestyle=":", linewidth=0.5, alpha=0.25)
+        ax.tick_params(colors="gray", which="both", length=0)
+
+    @staticmethod
     def _normalize_epochs(extremums) -> list[list[Extremum]]:
-        # Пусто / None
         if extremums is None:
             return []
-
-        # Поддержка генераторов: делаем «peek» без потери данных
         try:
             it1, _ = tee(extremums)
         except TypeError:
             return []
-
         try:
             first = next(it1)
         except StopIteration:
             return []
-
-        # Случай 1: пришёл плоский список экстремумов -> одна эпоха
         if isinstance(first, Extremum):
             rest = list(it1)
             return [[first, *rest]]
-
-        # Случай 2: пришёл список эпох (каждая эпоха — Iterable экстремумов)
         epochs: list[list[Extremum]] = []
         for maybe_epoch in chain([first], it1):
             if isinstance(maybe_epoch, Extremum):
-                # На случай странного входа: элемент — одиночный экстремум, а не последовательность
                 epochs.append([maybe_epoch])
             else:
                 epochs.append(list(maybe_epoch))
@@ -193,57 +227,50 @@ class Plotter:
 
     @staticmethod
     def _find_bar_index_heuristic(bars: Sequence[Bar], sample: Bar) -> int:
-        """
-        На случай, когда Extremum.bar не тот же экземпляр, что в массиве bars:
-        ищем по времени (приоритет), затем по (open, high, low, close).
-        """
         for i, b in enumerate(bars):
             if b.time == sample.time:
                 return i
         for i, b in enumerate(bars):
             if (b.open, b.high, b.low, b.close) == (sample.open, sample.high, sample.low, sample.close):
                 return i
-        # fallback — лучше вернуть самый правый индекс, чтобы линия точно попала в диапазон
         return len(bars) - 1
 
     @staticmethod
     def _bars_to_times(bars: Sequence[Bar]) -> np.ndarray:
-        """Вектор времени в формате matplotlib date."""
-        vals = [float(mdates.date2num(bar.time.astimezone(TIMEZONE))) for bar in bars]
-        return np.asarray(vals, dtype=np.float64).reshape(-1, )
+        vals: list[float] = []
+        for bar in bars:
+            dt = bar.time
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=TIMEZONE)
+            else:
+                dt = dt.astimezone(TIMEZONE)
+            vals.append(float(mdates.date2num(dt)))
+        return np.asarray(vals, dtype=np.float64).reshape(-1,)
 
     @staticmethod
     def _calc_candle_width(times: np.ndarray) -> float:
-        """Ширина свечи как доля среднего шага времени."""
         if times.size <= 1:
             return 0.0007
         return float(np.mean(np.diff(times))) * float(CANDLESTICK_WIDTH_MULTIPLIER)
 
     @staticmethod
     def _draw_candles(ax: plt.Axes, bars: Sequence[Bar], times: np.ndarray, width: float) -> None:
-        """Рисуем свечи с тенями."""
         for bar, t in zip(bars, times):
             color = COLOR_UP if bar.close >= bar.open else COLOR_DOWN
-            # тени
             ax.plot([t, t], [bar.low, bar.high], color=color, linewidth=1, zorder=2)
-            # тела
             ax.add_patch(
-                plt.Rectangle(
+                Rectangle(
                     (t - width / 2, min(bar.open, bar.close)),
                     width,
-                    abs(bar.close - bar.open),
-                    color=color,
+                    max(1e-12, abs(bar.close - bar.open)),
+                    facecolor=color,
+                    edgecolor=color,
                     zorder=2,
                 )
             )
 
     @staticmethod
     def _find_right_intersection_index(bars: Sequence[Bar], start_idx: int, price: float) -> int:
-        """
-        Ищем индекс первой свечи справа от start_idx, которая «пересекает» горизонтальный уровень.
-        Пересечение трактуем как попадание уровня в диапазон [low, high] свечи.
-        Если не нашли — тянем линию до последней свечи.
-        """
         n = len(bars)
         for i in range(start_idx + 1, n):
             if bars[i].low <= price <= bars[i].high:
@@ -252,10 +279,6 @@ class Plotter:
 
     @staticmethod
     def _epoch_palette(n: int) -> list[str]:
-        """
-        Палитра для окраски эпох (маркеры). Случайная выборка из табличной палитры,
-        чтобы цвета были приятные / контрастные.
-        """
         base = [
             "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
             "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
@@ -265,8 +288,45 @@ class Plotter:
         random.shuffle(base)
         if n <= len(base):
             return base[:n]
-        # если эпох больше — просто повторим с небольшим шумом альфы
-        out = []
+        out: list[str] = []
         for i in range(n):
             out.append(base[i % len(base)])
         return out
+
+    @staticmethod
+    def _tf_label(timeframe: Timeframe | str | None) -> str | None:
+        if timeframe is None:
+            return None
+        # Enum Timeframe с .value
+        if isinstance(timeframe, Timeframe):
+            return str(timeframe.value)
+        return str(timeframe)
+
+    def _resolve_output_path(
+        self,
+        path: str,
+        bars: Sequence[Bar],
+        symbol: str | None,
+        timeframe: Timeframe | str | None,
+    ) -> str:
+        """
+        Если передана директория/путь без расширения — сгенерировать имя файла.
+        """
+        is_dir = os.path.isdir(path)
+        has_ext = os.path.splitext(path)[1] != ""
+        if is_dir or not has_ext:
+            last_dt = bars[-1].time
+            if last_dt.tzinfo is None:
+                last_dt = last_dt.replace(tzinfo=TIMEZONE)
+            else:
+                last_dt = last_dt.astimezone(TIMEZONE)
+
+            base_dir = path if is_dir else (path or OUTPUT_PLOT_PATH)
+            os.makedirs(base_dir, exist_ok=True)
+
+            sym = (symbol or "unknown").replace("/", "_")
+            tf_str = self._tf_label(timeframe) or "TF"
+            tf_clean = tf_str.replace(":", "_")
+            fname = f"{sym}_{tf_clean}_{last_dt:%Y%m%d_%H%M%S}.png"
+            return os.path.join(base_dir, fname)
+        return path
