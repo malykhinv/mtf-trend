@@ -30,7 +30,6 @@ from config.constants import (
     SWING_COLOR_LOW,
     CANDLESTICK_WIDTH_MULTIPLIER,
     OUTPUT_PLOT_PATH,
-    # X_AXIS_TIME_FORMAT  # больше не нужен, оставлен в конфиге на будущее
     PLOT_WIDTH_INCHES,
     PLOT_HEIGHT_INCHES,
     PLOT_DPI,
@@ -70,6 +69,7 @@ class Plotter:
             figsize=(PLOT_WIDTH_INCHES, PLOT_HEIGHT_INCHES),
             facecolor=COLOR_BACKGROUND,
             dpi=PLOT_DPI,
+            constrained_layout=True,
         )
         self._style_axis_base(fig, ax)
 
@@ -171,10 +171,8 @@ class Plotter:
         ax.tick_params(axis="y", colors="gray", labelsize=9)
 
         # Заголовок: "SYMBOL TF"
-        tf_label = self._tf_label(timeframe)
-        title_parts = [p for p in [symbol, tf_label] if p]
-        if title_parts:
-            ax.set_title(" ".join(title_parts), color="white", pad=8)
+        if symbol and timeframe:
+            ax.set_title(f"{symbol} {timeframe.value}", color="white", pad=8)
 
         if show_legend and len(epochs) > 1:
             handles, labels = ax.get_legend_handles_labels()
@@ -183,9 +181,6 @@ class Plotter:
                 if l not in uniq:
                     uniq[l] = h
             ax.legend(uniq.values(), uniq.keys(), loc="upper left", fontsize=8)
-
-        # Без автоповорота дат; чутка места под заголовок
-        fig.tight_layout(rect=(0, 0, 1, 0.97))
 
         # --- Сохранение ---
         full_path = self._resolve_output_path(path, bars, symbol, timeframe)
@@ -292,15 +287,6 @@ class Plotter:
         for i in range(n):
             out.append(base[i % len(base)])
         return out
-
-    @staticmethod
-    def _tf_label(timeframe: Timeframe | str | None) -> str | None:
-        if timeframe is None:
-            return None
-        # Enum Timeframe с .value
-        if isinstance(timeframe, Timeframe):
-            return str(timeframe.value)
-        return str(timeframe)
 
     def _resolve_output_path(
         self,

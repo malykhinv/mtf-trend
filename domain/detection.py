@@ -141,7 +141,7 @@ def _save_chart(exchange: Exchange, symbol: str, timeframe: Timeframe, plotter: 
         f"{exchange.name.lower()}__{symbol.replace('/', '-')}__{timeframe.value}.png",
     )
     try:
-        plotter.plot(bars, exts, path=chart_path)
+        plotter.plot(bars, exts, path=chart_path, symbol=symbol, timeframe=timeframe)
         log(f"[{exchange.name} {symbol} {timeframe.value}] График сохранён: {chart_path}")
     except Exception as e_plot:
         # даже если отрисовка не удалась — не валим детект
