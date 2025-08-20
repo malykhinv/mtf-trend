@@ -7,7 +7,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from config.constants import (
-    TIMEFRAMES,
     OUTPUT_PLOT_PATH,
     WINDOW_TAIL,   # сколько баров тянем в «хвост»
     TIMEZONE,      # ZoneInfo, например ZoneInfo("Europe/Belgrade")
@@ -25,6 +24,14 @@ from utils.logger import log, logw
 SYMBOL: str = "AIOT/USDT"
 TARGET_DT: datetime = datetime(2025, 8, 12, 18, 0, tzinfo=TIMEZONE)
 MICROSTEP: timedelta = timedelta(milliseconds=1)
+TIMEFRAMES: list[Timeframe] = [
+    # Timeframe.M1,
+    # Timeframe.M5,
+    Timeframe.M15,
+    # Timeframe.H1,
+    # Timeframe.H4,
+    # Timeframe.D1
+]
 
 
 def to_local(dt: datetime, tz: ZoneInfo) -> datetime:
