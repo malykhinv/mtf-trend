@@ -1,7 +1,7 @@
 # domain/detection.py
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Sequence
 import os
 
 from config.constants import (
@@ -78,13 +78,27 @@ def detect(
 
     bar1_idx, sh_last_idx, last_ll_idx = r.bar1_idx, r.sh_last_idx, r.last_ll_idx
 
-    # Подготовка экстремумов (они пригодятся и для тестового рисунка при любых исходах)
-    exts: list[Extremum] = [
-        Extremum(bar=bars[bar1_idx], type=ExtremumType.LOW),
-        Extremum(bar=bars[sh_last_idx], type=ExtremumType.HIGH),
-    ]
-    if last_ll_idx != bar1_idx:
-        exts.append(Extremum(bar=bars[last_ll_idx], type=ExtremumType.LOW))
+    # Подготовка экстремумов для графика: все складки эпохи, если они есть
+    exts: list[Extremum] = []
+    if r.folds:
+        seen: set[tuple[int, int]] = set()
+        for (b1, sh, _b3, ll) in r.folds:
+            for idx, typ in ((b1, ExtremumType.LOW),
+                             (sh, ExtremumType.HIGH),
+                             (ll, ExtremumType.LOW)):
+                key = (idx, typ.value)
+                if key in seen:
+                    continue
+                seen.add(key)
+                exts.append(Extremum(bar=bars[idx], type=typ))
+    else:
+        # обратная совместимость — прежнее поведение
+        exts = [
+            Extremum(bar=bars[bar1_idx], type=ExtremumType.LOW),
+            Extremum(bar=bars[sh_last_idx], type=ExtremumType.HIGH),
+        ]
+        if last_ll_idx != bar1_idx:
+            exts.append(Extremum(bar=bars[last_ll_idx], type=ExtremumType.LOW))
 
     # Подтверждение разворота: две закрытые свечи телом выше level
     level = max(bars[sh_last_idx].open, bars[sh_last_idx].close)
@@ -159,7 +173,7 @@ def detect(
     )
 
 def _save_chart(exchange: Exchange, symbol: str, timeframe: Timeframe, plotter: Plotter,
-                bars: list[Bar], exts: list[Extremum]) -> str:
+                bars: list[Bar], exts: Sequence[Extremum] | Sequence[Sequence[Extremum]]) -> str:
     os.makedirs(OUTPUT_PLOT_PATH, exist_ok=True)
     chart_path = os.path.join(
         OUTPUT_PLOT_PATH,
@@ -249,6 +263,7 @@ def _has_downtrend(
     while baseline < end - 2:
         folds_found = 0
         current_start = baseline
+        current_folds: list[tuple[int, int, int, int]] = []  # (bar1, sh_last, bar3, last_ll)
         log(f"  [_has_downtrend] Новый baseline={current_start} — начинаем попытку собрать эпоху.")
 
         # Пытаемся последовательно собрать до `iterations` складок
@@ -301,6 +316,7 @@ def _has_downtrend(
             # складка подтверждена
             folds_found += 1
             last_bar3_attempt = bar3_idx
+            current_folds.append((bar1_idx, sh_last_idx, bar3_idx, last_ll_idx))
             log(f"  [_has_downtrend] d6: складка {folds_found}/{iterations} подтверждена "
                 f"(bar3={bar3_idx}, time={bars[bar3_idx].time.isoformat()}).")
 
@@ -310,7 +326,8 @@ def _has_downtrend(
                     has_downtrend=True,
                     bar1_idx=bar1_idx,
                     sh_last_idx=sh_last_idx,
-                    last_ll_idx=last_ll_idx
+                    last_ll_idx=last_ll_idx,
+                    folds=current_folds.copy(),
                 )
                 log(f"  [_has_downtrend] ✔ Эпоха подтверждена: bar1={bar1_idx}, sh_last={sh_last_idx}, "
                     f"last_ll={last_ll_idx}. Ищем ещё более свежую правее bar3={bar3_idx} "
