@@ -8,6 +8,7 @@ from typing import Sequence
 
 import matplotlib
 from domain.models.Timeframe import Timeframe
+from utils.logger import logw
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -174,21 +175,21 @@ class Plotter:
         if symbol and timeframe:
             ax.set_title(f"{symbol} {timeframe.value}", color="white", pad=8)
 
-        if show_legend and len(epochs) > 1:
-            handles, labels = ax.get_legend_handles_labels()
-            uniq = {}
-            for h, l in zip(handles, labels):
-                if l not in uniq:
-                    uniq[l] = h
-            ax.legend(uniq.values(), uniq.keys(), loc="upper left", fontsize=8)
+            if show_legend and len(epochs) > 1:
+                handles, labels = ax.get_legend_handles_labels()
+                uniq = {}
+                for h, l in zip(handles, labels):
+                    if l not in uniq:
+                        uniq[l] = h
+                ax.legend(uniq.values(), uniq.keys(), loc="upper left", fontsize=8)
 
-        # --- Сохранение ---
-        full_path = self._resolve_output_path(path, bars, symbol, timeframe)
-        os.makedirs(os.path.dirname(full_path) or OUTPUT_PLOT_PATH, exist_ok=True)
-        plt.savefig(full_path, facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=PLOT_DPI)
-        plt.close(fig)
-
-    # ----------------- ВСПОМОГАТЕЛЬНЫЕ -----------------
+            # --- Сохранение ---
+            full_path = self._resolve_output_path(path, bars, symbol, timeframe)
+            os.makedirs(os.path.dirname(full_path) or OUTPUT_PLOT_PATH, exist_ok=True)
+            plt.savefig(full_path, facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=PLOT_DPI)
+            plt.close(fig)
+        else:
+            logw(f"Не хватает данных для построения графика: symbol={symbol}, timeframe={timeframe}")
 
     @staticmethod
     def _style_axis_base(fig: plt.Figure, ax: plt.Axes) -> None:
@@ -265,13 +266,18 @@ class Plotter:
             )
 
     @staticmethod
-    def _find_right_intersection_index(bars: Sequence[Bar], start_idx: int, price: float, type: ExtremumType) -> int:
+    def _find_right_intersection_index(
+            bars: Sequence[Bar],
+            start_idx: int,
+            price: float,
+            ext_type: ExtremumType
+    ) -> int:
         n = len(bars)
         for i in range(start_idx + 1, n):
-            if type == ExtremumType.LOW:
+            if ext_type == ExtremumType.LOW:
                 if bars[i].close < price:
                     return i
-            elif type == ExtremumType.HIGH:
+            elif ext_type == ExtremumType.HIGH:
                 if bars[i].close > price:
                     return i
         return n - 1
@@ -292,12 +298,12 @@ class Plotter:
             out.append(base[i % len(base)])
         return out
 
+    @staticmethod
     def _resolve_output_path(
-        self,
         path: str,
         bars: Sequence[Bar],
-        symbol: str | None,
-        timeframe: Timeframe | str | None,
+        symbol: str,
+        timeframe: Timeframe,
     ) -> str:
         """
         Если передана директория/путь без расширения — сгенерировать имя файла.
@@ -314,9 +320,7 @@ class Plotter:
             base_dir = path if is_dir else (path or OUTPUT_PLOT_PATH)
             os.makedirs(base_dir, exist_ok=True)
 
-            sym = (symbol or "unknown").replace("/", "_")
-            tf_str = self._tf_label(timeframe) or "TF"
-            tf_clean = tf_str.replace(":", "_")
-            fname = f"{sym}_{tf_clean}_{last_dt:%Y%m%d_%H%M%S}.png"
+            sym = symbol.replace("/", "")
+            fname = f"{sym}_{timeframe.value}_{last_dt:%Y%m%d_%H%M%S}.png"
             return os.path.join(base_dir, fname)
         return path
