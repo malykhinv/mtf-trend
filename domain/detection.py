@@ -220,7 +220,7 @@ def _find_bar3(bars: list[Bar], bar1_idx: int) -> Optional[int]:
     low_bar1 = bars[bar1_idx].low
     for x in range(bar1_idx + 1, len(bars)):
         if bars[x].close < low_bar1:
-            return x if x - bar1_idx >= MIN_PULLBACK_BARS else None
+            return x
     return None
 
 
@@ -266,6 +266,7 @@ def _has_downtrend(
         folds_found = 0
         current_start = baseline
         current_folds: list[tuple[int, int, int, int]] = []  # (bar1, sh_last, bar3, last_ll)
+        best_after_threshold: DowntrendResult | None = None
         log(f"  [_has_downtrend] Новый baseline={current_start} — начинаем попытку собрать эпоху.")
 
         # Пытаемся последовательно собрать до `iterations` складок
@@ -307,6 +308,9 @@ def _has_downtrend(
             if bar3_idx is None or bar3_idx > end:
                 log(f"  [_has_downtrend] d4: bar3 не найден (нет C < L[bar1]={bars[bar1_idx].low:.6f}).")
                 break
+            if bar3_idx - bar1_idx < MIN_PULLBACK_BARS:
+                current_start = bar3_idx
+                continue
             log(f"  [_has_downtrend] d4: bar3={bar3_idx} (C={bars[bar3_idx].close:.6f} < "
                 f"L[bar1]={bars[bar1_idx].low:.6f}).")
 
@@ -341,23 +345,19 @@ def _has_downtrend(
                 f"(bar3={bar3_idx}, time={bars[bar3_idx].time.isoformat()}).")
 
             if folds_found >= iterations:
-                # эпоха валидна — запоминаем как «самую свежую»
-                freshest = DowntrendResult(
+                # достигнут порог — обновляем «лучшего» кандидата,
+                # но НЕ прерываем цикл: продолжаем собирать складки правее
+                best_after_threshold = DowntrendResult(
                     has_downtrend=True,
                     bar1_idx=bar1_idx,
                     sh_last_idx=sh_last_idx,
                     last_ll_idx=last_ll_idx,
                     folds=current_folds.copy(),
                 )
-                log(f"  [_has_downtrend] ✔ Эпоха подтверждена: bar1={bar1_idx}, sh_last={sh_last_idx}, "
-                    f"last_ll={last_ll_idx}. Ищем ещё более свежую правее bar3={bar3_idx} "
-                    f"с ПОЛНЫМ перезапуском итераций.")
+                log(f"  [_has_downtrend] ✔ Порог достигнут: обновлён последний значимый хай (sh_last={sh_last_idx})."
+                    f" Продолжаю искать новые складки правее bar3={bar3_idx}.")
 
-                # КЛЮЧЕВОЕ: сдвигаем внешний baseline НА bar3 и полностью перезапускаем сбор
-                baseline = bar3_idx
-                break  # выходим во внешний while, folds_found будет сброшен
-
-            # Иначе — продолжаем собирать следующую складку от bar3
+            # Продолжаем собирать следующую складку от bar3
             current_start = bar3_idx
 
         else:
@@ -365,7 +365,13 @@ def _has_downtrend(
             baseline += 1
             continue
 
-        # Если текущая попытка не добрала нужное число складок — baseline++ и новая попытка
+        # Если дальше складок нет: отдаем лучшую эпоху после достижения порога
+        if best_after_threshold is not None:
+            freshest = best_after_threshold
+            log("  [_has_downtrend] ▶ Складки закончились после достижения порога — беру последний sh_last текущей эпохи и завершаю поиск.")
+            break  # выходим из внешнего while: эпоха полностью расширена вправо
+
+        # Иначе (порог не набран) — baseline++ и новая попытка
         if folds_found < iterations:
             if folds_found > 0 and last_bar3_attempt is not None:
                 log(f"  [_has_downtrend] ⏭ ускоренный сдвиг baseline на bar3={last_bar3_attempt} "
@@ -374,9 +380,6 @@ def _has_downtrend(
             else:
                 baseline += 1
             continue
-
-        # Если эпоха валидна — baseline уже переставлен НА bar3, начнём новый цикл поиска «с нуля»
-        continue
 
     if freshest is None:
         log(f"  [_has_downtrend] В окне [{start}..{end}] валидных эпох не найдено — ok=False.")
