@@ -86,18 +86,33 @@ def detect(
     if last_ll_idx != bar1_idx:
         exts.append(Extremum(bar=bars[last_ll_idx], type=ExtremumType.LOW))
 
-    # Свежесть эпохи
-    age = e - last_ll_idx
-    if age > FRESH_MAX_AGE:
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Эпоха устарела: прошло {age} баров > FRESH_MAX_AGE={FRESH_MAX_AGE}. Сбрасываю.")
-        if force_plot:
-            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
-        return None
-
     # Подтверждение разворота: две закрытые свечи телом выше level
     level = max(bars[sh_last_idx].open, bars[sh_last_idx].close)
     if e < 1:
         log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно закрытых свечей для подтверждения (e < 1). Пропускаю.")
+        if force_plot:
+            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
+        return None
+
+    # найти первый бар с закрытием выше level
+    t_break = None
+    for idx in range(sh_last_idx + 1, e + 1):
+        if bars[idx].close > level:
+            t_break = idx
+            break
+
+    if not t_break:
+        for idx in range(sh_last_idx + 1, e + 1):
+            if bars[idx].high > level:
+                t_break = idx
+                break
+
+    # пересчёт возраста: до пересечения считаем от last_ll, после — от первого пересечения
+    age_anchor = t_break if t_break is not None else last_ll_idx
+    age = e - age_anchor
+    if age > FRESH_MAX_AGE:
+        log(f"[{exchange.name} {symbol} {timeframe.value}] Эпоха устарела после "
+            f"{'пересечения' if t_break is not None else 'LL'}: прошло {age} баров > {FRESH_MAX_AGE}.")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None

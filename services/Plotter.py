@@ -115,7 +115,7 @@ class Plotter:
                     start_idx = self._find_bar_index_heuristic(bars, bar)
 
                 # горизонтальная линия
-                end_idx = self._find_right_intersection_index(bars, start_idx, price)
+                end_idx = self._find_right_intersection_index(bars, start_idx, price, ext.type)
                 x0 = times[start_idx]
                 x1 = times[end_idx]
                 ax.hlines(
@@ -265,11 +265,15 @@ class Plotter:
             )
 
     @staticmethod
-    def _find_right_intersection_index(bars: Sequence[Bar], start_idx: int, price: float) -> int:
+    def _find_right_intersection_index(bars: Sequence[Bar], start_idx: int, price: float, type: ExtremumType) -> int:
         n = len(bars)
         for i in range(start_idx + 1, n):
-            if bars[i].low <= price <= bars[i].high:
-                return i
+            if type == ExtremumType.LOW:
+                if bars[i].close < price:
+                    return i
+            elif type == ExtremumType.HIGH:
+                if bars[i].close > price:
+                    return i
         return n - 1
 
     @staticmethod
