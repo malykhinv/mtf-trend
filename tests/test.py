@@ -21,16 +21,16 @@ from utils.logger import log, logw
 
 
 # ====== НАСТРОЙКИ ТЕСТА ======
-SYMBOL: str = "AIOT/USDT"
-TARGET_DT: datetime = datetime(2025, 8, 12, 18, 0, tzinfo=TIMEZONE)
+SYMBOL: str = "VINE/USDT"
+TARGET_DT: datetime = datetime(2025, 6, 30, 12, 0, tzinfo=TIMEZONE)
 MICROSTEP: timedelta = timedelta(milliseconds=1)
 TIMEFRAMES: list[Timeframe] = [
-    Timeframe.M1,
-    Timeframe.M5,
-    Timeframe.M15,
+    # Timeframe.M1,
+    # Timeframe.M5,
+    # Timeframe.M15,
     Timeframe.H1,
-    Timeframe.H4,
-    Timeframe.D1
+    # Timeframe.H4,
+    # Timeframe.D1
 ]
 
 

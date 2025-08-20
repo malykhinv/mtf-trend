@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Optional
 
+from config.constants import BARS_LIMIT
 from domain.models.Bar import Bar
 from domain.models.Timeframe import Timeframe
 from domain.models.Exchange import Exchange
@@ -34,7 +35,7 @@ class ExchangeClient(ABC):
         self,
         symbol: str,
         timeframe: Timeframe,
-        limit: int = 500,
+        limit: int = BARS_LIMIT,
         end_dt: Optional[datetime] = None,
     ) -> list[Bar]:
         """Получить свечи для символа."""

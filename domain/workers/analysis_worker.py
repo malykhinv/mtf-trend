@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Callable, Coroutine, Any, Set
 
+from config.constants import BARS_LIMIT
 from data.Database import Database
 from domain.detection import detect
 from domain.exchange_client import ExchangeClient
@@ -34,7 +35,7 @@ def create_analysis_worker() -> Callable[
                 if await db.check_if_recent(symbol, timeframe, minutes=throttle_minutes):
                     continue
 
-                bars = await client.fetch_bars(symbol, timeframe, limit=500)
+                bars = await client.fetch_bars(symbol, timeframe, limit=BARS_LIMIT)
                 if not bars:
                     continue
 

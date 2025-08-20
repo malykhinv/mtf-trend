@@ -3,7 +3,7 @@ from typing import List, Optional
 
 import ccxt.async_support as ccxt  # важно: асинхронная версия ccxt
 
-from config.constants import TIMEZONE
+from config.constants import TIMEZONE, BARS_LIMIT
 from domain.exchange_client import ExchangeClient
 from domain.models.Bar import Bar
 from domain.models.Exchange import Exchange
@@ -55,7 +55,7 @@ class BinanceClient(ExchangeClient):
             self,
             symbol: str,
             timeframe: Timeframe,
-            limit: int = 500,
+            limit: int = BARS_LIMIT,
             end_dt: Optional[datetime] = None,
     ) -> list[Bar]:
         params = {}

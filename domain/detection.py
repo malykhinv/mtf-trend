@@ -317,6 +317,24 @@ def _has_downtrend(
             folds_found += 1
             last_bar3_attempt = bar3_idx
             current_folds.append((bar1_idx, sh_last_idx, bar3_idx, last_ll_idx))
+
+            # === УТОЧНЕНИЕ ПРЕДЫДУЩИХ ЭКСТРЕМУМОВ ПОСЛЕ НОВОГО l1 ===
+            if len(current_folds) >= 2:
+                l1, _, _, _ = current_folds[-1]
+                l0, h0, b3prev, llprev = current_folds[-2]
+
+                # 1) новый, более высокий хай на [h0..l1]?
+                left, right = min(h0, l1), max(h0, l1)
+                h0_new = _find_bar2_on_range_max_high(bars, left, right)
+                moved_h0 = bars[h0_new].high > bars[h0].high
+                if moved_h0:
+                    h0 = h0_new
+                    # 2) обновляем лой на [l0..h0]
+                    l0 = _find_on_range_min_low(bars, min(l0, h0), max(l0, h0))
+                    # 3) ВАЖНО: вместе с b1 «переезжает» и last_ll
+                    current_folds[-2] = (l0, h0, b3prev, l0)  # ll = l0
+            # === конец уточнения ===
+
             log(f"  [_has_downtrend] d6: складка {folds_found}/{iterations} подтверждена "
                 f"(bar3={bar3_idx}, time={bars[bar3_idx].time.isoformat()}).")
 
@@ -366,3 +384,12 @@ def _has_downtrend(
         f"bar1={freshest.bar1_idx}, sh_last={freshest.sh_last_idx}, last_ll={freshest.last_ll_idx}.")
     return freshest
 
+def _find_on_range_min_low(bars: list[Bar], left: int, right: int) -> int:
+    m = left
+    min_l = bars[left].low
+    for idx in range(left + 1, right + 1):
+        l = bars[idx].low
+        if l < min_l:
+            min_l = l
+            m = idx
+    return m
