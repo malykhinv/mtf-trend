@@ -7,7 +7,7 @@ import os
 from config.constants import (
     ATR_PERIOD,
     ATR_BREAKOUT_MULTIPLIER,
-    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL,
+    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS,
 )
 from domain.models.DowntrendResult import DowntrendResult
 from domain.models.Bar import Bar
@@ -28,7 +28,7 @@ def detect(
         timeframe: Timeframe,
         plotter: Plotter,
         *,
-        test_mode: bool = False,   # в тесте рисуем график всегда
+        test_mode: bool = False,  # в тесте рисуем график всегда
 ) -> Optional[Signal]:
     """
     Главная функция детекции разворота даун-тренда в лонг.
@@ -172,6 +172,7 @@ def detect(
         chart_path=chart_path,
     )
 
+
 def _save_chart(exchange: Exchange, symbol: str, timeframe: Timeframe, plotter: Plotter,
                 bars: list[Bar], exts: Sequence[Extremum] | Sequence[Sequence[Extremum]]) -> str:
     os.makedirs(OUTPUT_PLOT_PATH, exist_ok=True)
@@ -184,7 +185,8 @@ def _save_chart(exchange: Exchange, symbol: str, timeframe: Timeframe, plotter: 
         log(f"[{exchange.name} {symbol} {timeframe.value}] График сохранён: {chart_path}")
     except Exception as e_plot:
         # даже если отрисовка не удалась — не валим детект
-        logw(f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}). Продолжаю без изображения.")
+        logw(
+            f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}). Продолжаю без изображения.")
     return chart_path
 
 
@@ -218,7 +220,7 @@ def _find_bar3(bars: list[Bar], bar1_idx: int) -> Optional[int]:
     low_bar1 = bars[bar1_idx].low
     for x in range(bar1_idx + 1, len(bars)):
         if bars[x].close < low_bar1:
-            return x
+            return x if x - bar1_idx >= MIN_PULLBACK_BARS else None
     return None
 
 
@@ -278,7 +280,7 @@ def _has_downtrend(
                     break
             if j is None:
                 log(f"  [_has_downtrend] d2: не найден LL относительно initial_low={initial_low:.6f} "
-                    f"в [{current_start+1}..{end}].")
+                    f"в [{current_start + 1}..{end}].")
                 break
 
             log(f"  [_has_downtrend] d2: LL-кандидат j={j}, L[j]={bars[j].low:.6f}, ATR[j]={atrs[j]:.6f}.")
@@ -383,6 +385,7 @@ def _has_downtrend(
     log(f"  [_has_downtrend] Итог: возвращаю самую свежую эпоху: "
         f"bar1={freshest.bar1_idx}, sh_last={freshest.sh_last_idx}, last_ll={freshest.last_ll_idx}.")
     return freshest
+
 
 def _find_on_range_min_low(bars: list[Bar], left: int, right: int) -> int:
     m = left
