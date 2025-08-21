@@ -7,7 +7,7 @@ import os
 from config.constants import (
     ATR_PERIOD,
     ATR_BREAKOUT_MULTIPLIER,
-    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS,
+    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS, HIGH_SHIFT,
 )
 from domain.models.DowntrendResult import DowntrendResult
 from domain.models.Bar import Bar
@@ -36,6 +36,7 @@ def detect(
     В тестовом режиме (test_mode=True) сохраняет график в любом случае.
     """
     # Внешний переключатель через ENV (удобно для запуска без правки кода)
+    bars = _cut_bars_from_high(bars)
     force_plot_env = os.getenv("DETECT_FORCE_PLOT", "").strip().lower() in ("1", "true", "yes", "y")
     force_plot = test_mode or force_plot_env
 
@@ -175,6 +176,17 @@ def detect(
         extremums=extremum_bars,
         chart_path=chart_path,
     )
+
+def _cut_bars_from_high(bars: list[Bar]) -> list[Bar]:
+    if not bars:
+        return []
+
+    # Находим индекс бара с максимальным high (при равенстве берём первый)
+    max_idx = max(range(len(bars)), key=lambda i: bars[i].high)
+    # Левая граница со сдвигом влево, но не меньше нуля
+    start_idx = max(0, max_idx - HIGH_SHIFT)
+
+    return bars[start_idx:]
 
 
 def _save_chart(exchange: Exchange, symbol: str, timeframe: Timeframe, plotter: Plotter,
