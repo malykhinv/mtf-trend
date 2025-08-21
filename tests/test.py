@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -115,7 +116,7 @@ async def main() -> None:
                 logw(f"[{tf.name}] Сигнал не найден")
 
         except Exception as exc:
-            logw(f"[{tf.name}] Ошибка теста: {exc}")
+            logw(f"[{tf.name}] Ошибка теста: {exc}\n{traceback.format_exc()}")
 
     log("Готово.")
 

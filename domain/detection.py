@@ -293,7 +293,8 @@ def _has_downtrend(
             initial_low = bars[current_start].low
             j = None
             for idx in range(current_start + 1, end + 1):
-                if _is_ll(initial_low, bars[idx].low, median(atrs[idx-ATR_PERIOD//2: idx+1])):
+                window_start = idx-ATR_PERIOD if idx > ATR_PERIOD else 0
+                if _is_ll(initial_low, bars[idx].low, median(atrs[window_start: idx+1])):
                     j = idx
                     break
             if j is None:
