@@ -144,6 +144,17 @@ def detect(
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
 
+    # Новый значимый экстремум: лой между sh_last и первым пересечением уровня sh_last (t_break)
+    pivot_low_idx = None
+    if t_break is not None and t_break > sh_last_idx:
+        left = sh_last_idx + 1
+        right = min(t_break, e)  # страховка
+        if left <= right:
+            pivot_low_idx = _find_on_range_min_low(bars, left, right)
+            exts.append(Extremum(bar=bars[pivot_low_idx], type=ExtremumType.LOW))
+            log(f"[{exchange.name} {symbol} {timeframe.value}] Добавлен pivot-low между sh_last={sh_last_idx} "
+                f"и t_break={t_break}: idx={pivot_low_idx}, L={bars[pivot_low_idx].low:.6f}.")
+
     # Если дошли сюда — сигнал подтверждён. Рисуем и возвращаем Signal.
     chart_path = _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
 
@@ -163,6 +174,10 @@ def detect(
         extremum_bars.append(bars[bar3_idx])
     if last_ll_idx not in (bar1_idx, sh_last_idx, (bar3_idx if bar3_idx is not None else -1)):
         extremum_bars.append(bars[last_ll_idx])
+    if pivot_low_idx and pivot_low_idx not in (
+            bar1_idx, sh_last_idx, last_ll_idx, (bar3_idx if bar3_idx is not None else -1)
+    ):
+        extremum_bars.append(bars[pivot_low_idx])
 
     return Signal(
         symbol=symbol,

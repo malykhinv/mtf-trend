@@ -94,7 +94,7 @@ class Plotter:
         # --- Цвета горизонтальных линий ---
         line_color_high = SWING_COLOR_HIGH
         line_color_low = SWING_COLOR_LOW
-        line_alpha = 0.55
+        line_alpha = 0.25
         line_width = 1.2
 
         # --- Рисуем эпохи ---
