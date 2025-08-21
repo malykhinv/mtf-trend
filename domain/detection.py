@@ -79,20 +79,9 @@ def detect(
     bar1_idx, sh_last_idx, last_ll_idx = r.bar1_idx, r.sh_last_idx, r.last_ll_idx
 
     # Подготовка экстремумов для графика: все складки эпохи, если они есть
-    exts: list[Extremum] = []
     if r.folds:
-        seen: set[tuple[int, int]] = set()
-        for (b1, sh, _b3, ll) in r.folds:
-            for idx, typ in ((b1, ExtremumType.LOW),
-                             (sh, ExtremumType.HIGH),
-                             (ll, ExtremumType.LOW)):
-                key = (idx, typ.value)
-                if key in seen:
-                    continue
-                seen.add(key)
-                exts.append(Extremum(bar=bars[idx], type=typ))
+        exts = _compress_significant_exts(r.folds, bars)
     else:
-        # обратная совместимость — прежнее поведение
         exts = [
             Extremum(bar=bars[bar1_idx], type=ExtremumType.LOW),
             Extremum(bar=bars[sh_last_idx], type=ExtremumType.HIGH),
@@ -356,6 +345,21 @@ def _has_downtrend(
                     current_folds[-2] = (l0, h0, b3prev, l0)  # ll = l0
             # === конец уточнения ===
 
+            # === УТОЧНЕНИЕ ПРЕДЫДУЩЕЙ СКЛАДКИ ПРИ ПОГЛОЩЕНИИ (новые l и h расширяют старые) ===
+            if len(current_folds) >= 2:
+                l1, _, _, _ = current_folds[-1]
+                l0, h0, b3prev, _ = current_folds[-2]
+
+                left, right = (l0, l1) if l0 <= l1 else (l1, l0)
+                h_new = _find_bar2_on_range_max_high(bars, left, right)
+                l_new = _find_on_range_min_low(bars, left, right)
+
+                # Поглощение: новый хай выше старого И новый лой ниже старого
+                if bars[h_new].high > bars[h0].high and bars[l_new].low < bars[l0].low:
+                    # Расширяем предыдущую складку: b1= l_new, sh_last= h_new, ll = l_new
+                    current_folds[-2] = (l_new, h_new, b3prev, l_new)
+            # === конец уточнения ===
+
             log(f"  [_has_downtrend] d6: складка {folds_found}/{iterations} подтверждена "
                 f"(bar3={bar3_idx}, time={bars[bar3_idx].time.isoformat()}).")
 
@@ -414,3 +418,28 @@ def _find_on_range_min_low(bars: list[Bar], left: int, right: int) -> int:
             min_l = l
             m = idx
     return m
+
+def _compress_significant_exts(
+    folds: list[tuple[int, int, int, int]],
+    bars: list[Bar],
+) -> list[Extremum]:
+    """
+    Оставляет только «несжатые» пары l/h: если новая пара (l,h) поглощает предыдущую,
+    то заменяем предыдущую на (l,h), не добавляя новый элемент.
+    """
+    pairs: list[tuple[int, int]] = []
+    for (l, h, _b3, _ll) in folds:
+        if not pairs:
+            pairs.append((l, h))
+            continue
+        prev_l, prev_h = pairs[-1]
+        if bars[l].low < bars[prev_l].low and bars[h].high > bars[prev_h].high:
+            pairs[-1] = (l, h)  # расширяем предыдущую
+        else:
+            pairs.append((l, h))
+
+    exts: list[Extremum] = []
+    for l, h in pairs:
+        exts.append(Extremum(bar=bars[l], type=ExtremumType.LOW))
+        exts.append(Extremum(bar=bars[h], type=ExtremumType.HIGH))
+    return exts

@@ -22,14 +22,14 @@ from utils.logger import log, logw
 
 # ====== НАСТРОЙКИ ТЕСТА ======
 SYMBOL: str = "VINE/USDT"
-TARGET_DT: datetime = datetime(2025, 6, 30, 12, 0, tzinfo=TIMEZONE)
+TARGET_DT: datetime = datetime(2025, 7, 5, 12, 0, tzinfo=TIMEZONE)
 MICROSTEP: timedelta = timedelta(milliseconds=1)
 TIMEFRAMES: list[Timeframe] = [
     # Timeframe.M1,
     # Timeframe.M5,
     # Timeframe.M15,
-    Timeframe.H1,
-    # Timeframe.H4,
+    # Timeframe.H1,
+    Timeframe.H4,
     # Timeframe.D1
 ]
 
