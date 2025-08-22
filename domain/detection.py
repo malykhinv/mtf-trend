@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from statistics import median
-from typing import Optional, Sequence
+from typing import Optional
 import os
 
 from config.constants import (
@@ -18,7 +18,6 @@ from domain.models.Signal import Signal
 from domain.models.Extremum import Extremum
 from domain.models.ExtremumType import ExtremumType
 from services.Plotter import Plotter
-from utils.atr import atr
 from utils.logger import log, logw
 
 
@@ -51,9 +50,6 @@ def detect(
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
         return None
 
-    atrs = atr(bars, ATR_PERIOD)
-    log(f"[{exchange.name} {symbol} {timeframe.value}] ATR рассчитан (period={ATR_PERIOD}).")
-
     # базовый хвост по времени (как в спецификации)
     e = n - 1
     base_s = max(0, n - WINDOW_TAIL)
@@ -71,7 +67,7 @@ def detect(
         f"WINDOW_TAIL={WINDOW_TAIL}→{tail_len} (якорь по high: {max_idx}, base_s={base_s}).")
 
     # Строим структуру на хвосте
-    r = _has_downtrend(bars, atrs, s, e, TREND_ITERATIONS)
+    r = _has_downtrend(bars, s, e, TREND_ITERATIONS)
     if not r.has_downtrend:
         log(f"[{exchange.name} {symbol} {timeframe.value}] Нисходящая структура в окне не найдена. Сигнал не формируется.")
         if force_plot:
@@ -211,7 +207,7 @@ def _is_ll(ref_low: float, low_j: float, atr_j: float) -> bool:
     return (ref_low - low_j) >= ATR_BREAKOUT_MULTIPLIER * atr_j
 
 
-def _exists_upmove_without_ll(bars: list[Bar], atrs: list[float], i: int) -> Optional[int]:
+def _exists_upmove_without_ll(bars: list[Bar], i: int) -> Optional[int]:
     """
     Для кандидата bar1=i: существует минимальный k>i:
       (C[k] - L[i]) ≥ ATR_BREAKOUT_MULTIPLIER*ATR[k] и для всех t∈(i,k): L[t] ≥ L[i]
@@ -220,7 +216,7 @@ def _exists_upmove_without_ll(bars: list[Bar], atrs: list[float], i: int) -> Opt
     base_low = bars[i].low
     n = len(bars)
     for k in range(i + 1, n):
-        if bars[k].close - base_low >= ATR_BREAKOUT_MULTIPLIER * atrs[k]:
+        if bars[k].close - base_low >= ATR_BREAKOUT_MULTIPLIER * bars[k].atr:
             ok = True
             for t in range(i + 1, k):
                 if bars[t].low < base_low:
@@ -258,7 +254,6 @@ def _find_bar2_on_range_max_high(bars: list[Bar], left: int, right: int) -> int:
 
 def _has_downtrend(
         bars: list[Bar],
-        atrs: list[float],
         start: int,
         end: int,
         iterations: int,
@@ -293,7 +288,7 @@ def _has_downtrend(
             j = None
             for idx in range(current_start + 1, end + 1):
                 window_start = idx-ATR_PERIOD if idx > ATR_PERIOD else 0
-                if _is_ll(initial_low, bars[idx].low, median(atrs[window_start: idx+1])):
+                if _is_ll(initial_low, bars[idx].low, median(bar.atr for bar in bars[window_start: idx+1])):
                     j = idx
                     break
             if j is None:
@@ -301,12 +296,12 @@ def _has_downtrend(
                     f"в [{current_start + 1}..{end}].")
                 break
 
-            log(f"  [_has_downtrend] d2: LL-кандидат j={j}, L[j]={bars[j].low:.6f}, ATR[j]={atrs[j]:.6f}.")
+            log(f"  [_has_downtrend] d2: LL-кандидат j={j}, L[j]={bars[j].low:.6f}, ATR[j]={bars[j].atr:.6f}.")
 
             # d3: bar1 — минимальный i ≥ j с ап-движением ≥K*ATR без перелоя
             bar1_idx = None
             for cand in range(j, end + 1):
-                k_try = _exists_upmove_without_ll(bars, atrs, cand)
+                k_try = _exists_upmove_without_ll(bars, cand)
                 if k_try is not None:
                     bar1_idx = cand
                     k_idx = k_try

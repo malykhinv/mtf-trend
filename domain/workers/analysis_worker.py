@@ -1,17 +1,16 @@
-# domain/workers/analysis_worker.py
 from __future__ import annotations
 
 import asyncio
 from typing import Callable, Coroutine, Any, Set
 
-from config.constants import BARS_LIMIT
+from config.constants import BARS_LIMIT, ATR_PERIOD
 from data.Database import Database
 from domain.detection import detect
 from domain.exchange_client import ExchangeClient
-from domain.models.Signal import Signal
 from domain.models.Timeframe import Timeframe
 from services.Plotter import Plotter
 from services.TelegramNotifier import TelegramNotifier
+from utils.atr import atr
 from utils.logger import log, logw
 from utils.message_formatter import format_message
 
@@ -48,11 +47,33 @@ def create_analysis_worker() -> Callable[
                 if not bars:
                     continue
 
-                signal = detect(symbol, client.exchange, bars, timeframe, plotter)
+                # 1) ATR по всем барам и прокидываем в модель Bar
+                atrs = atr(bars, ATR_PERIOD)
+                for bar, a in zip(bars, atrs):
+                    bar.atr = a
+
+                step = 50
+                n = len(bars)
+                min_needed = max(ATR_PERIOD + 20, 200)
+
+                # стартовые индексы: 0, 50, 100, ... пока в слайсе хватает баров
+                starts = [s for s in range(0, n, step) if n - s >= min_needed]
+                signal = None
+                used_start = None
+
+                for s in starts:
+                    candidate = detect(symbol, client.exchange, bars[s:], timeframe, plotter)
+                    if candidate:
+                        signal = candidate
+                        used_start = s
+                        break
+
                 if signal:
+                    # отправка/сохранение — как у тебя сейчас
                     await notifier.send_message(format_message(signal), signal.chart_path)
                     await db.save_signal(symbol, timeframe)
-                    log(f"📈 Найден сигнал: {symbol} @ {timeframe.value} — отправляю в канал.")
+                    log(f"📈 Найден и отправлен сигнал: {symbol} @ {timeframe.value} (offset={used_start})")
+
             except asyncio.CancelledError:
                 raise
             except Exception as error:
