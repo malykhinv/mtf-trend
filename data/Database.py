@@ -51,8 +51,6 @@ class Database:
     async def check_if_recent(self, symbol: str, timeframe: Timeframe, minutes: int) -> bool:
         await self.connect()
         assert self._conn is not None
-        if not isinstance(minutes, int):
-            raise TypeError("period must be int (minutes)")
 
         now_sec = datetime.now(TIMEZONE).timestamp()
         delta_sec = minutes * 60

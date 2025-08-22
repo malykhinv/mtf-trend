@@ -8,7 +8,6 @@ from domain.exchange_client import ExchangeClient
 from domain.models.Bar import Bar
 from domain.models.Exchange import Exchange
 from domain.models.Timeframe import Timeframe
-from utils.logger import log
 
 
 class BinanceClient(ExchangeClient):

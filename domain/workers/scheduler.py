@@ -7,7 +7,6 @@ from typing import List, Set, Tuple
 
 from config.constants import TIMEFRAMES
 from domain.models.Timeframe import Timeframe
-from utils.logger import log
 
 async def scheduler(
     symbols: List[str],
