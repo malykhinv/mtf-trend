@@ -9,6 +9,7 @@ from typing import Sequence
 import matplotlib
 from domain.models.Timeframe import Timeframe
 from utils.logger import logw
+from utils.safe_name import safe_name
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -186,8 +187,14 @@ class Plotter:
             # --- Сохранение ---
             full_path = self._resolve_output_path(path, bars, symbol, timeframe)
             os.makedirs(os.path.dirname(full_path) or OUTPUT_PLOT_PATH, exist_ok=True)
-            tmp_path = f"{full_path}.png"
-            plt.savefig(tmp_path, facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=PLOT_DPI)
+            tmp_path = f"{full_path}.part"
+            plt.savefig(
+                tmp_path,
+                format="png",
+                facecolor=fig.get_facecolor(),
+                bbox_inches="tight",
+                dpi=PLOT_DPI
+            )
             os.replace(tmp_path, full_path)
             plt.close(fig)
         else:
@@ -322,7 +329,7 @@ class Plotter:
             base_dir = path if is_dir else (path or OUTPUT_PLOT_PATH)
             os.makedirs(base_dir, exist_ok=True)
 
-            sym = symbol.replace("/", "")
-            fname = f"{sym}_{timeframe.value}_{last_dt:%Y%m%d_%H%M%S}.png"
+            fname = f"{safe_name(symbol)}_{timeframe.value}_{last_dt}.png"
             return os.path.join(base_dir, fname)
+
         return path

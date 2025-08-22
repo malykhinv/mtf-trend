@@ -18,6 +18,7 @@ from domain.models.Extremum import Extremum
 from domain.models.ExtremumType import ExtremumType
 from services.Plotter import Plotter
 from utils.logger import log, logw
+from utils.safe_name import safe_name
 
 
 def detect(
@@ -64,7 +65,6 @@ def detect(
     atr_med = _rolling_median_atr(bars, ATR_PERIOD)
     r = _has_downtrend(bars, s, e, TREND_ITERATIONS, atr_med)
     if not r.has_downtrend:
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Нисходящая структура в окне не найдена.")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
         return None
@@ -168,7 +168,7 @@ def _save_chart(exchange, symbol, timeframe, plotter, bars, exts):
     ts = bars[-1].time.strftime("%Y%m%d_%H%M%S") if bars else "na"
     chart_path = os.path.join(
         OUTPUT_PLOT_PATH,
-        f"{exchange.name.lower()}__{symbol.replace('/', '-')}__{timeframe.value}__{ts}.png",
+        f"{exchange.name.lower()}_{safe_name(symbol)}_{timeframe.value}_{ts}.png",
     )
     try:
         plotter.plot(bars, exts, path=chart_path, symbol=symbol, timeframe=timeframe)
@@ -269,10 +269,7 @@ def _has_downtrend(
                     j = idx
                     break
             if j is None:
-                log(f"  [_has_downtrend] d2: не найден LL относительно initial_low={initial_low:.6f} "
-                    f"в [{current_start + 1}..{end}].")
                 break
-
 
             # d3: bar1 — минимальный i ≥ j с ап-движением ≥K*ATR без перелоя
             bar1_idx = None
@@ -281,12 +278,8 @@ def _has_downtrend(
                 if k_try is not None:
                     bar1_idx = cand
                     k_idx = k_try
-                    log(f"  [_has_downtrend] d3: bar1=i={bar1_idx} (L={bars[bar1_idx].low:.6f}); "
-                        f"подъём без перелоя подтверждён → k={k_idx}.")
                     break
             if bar1_idx is None:
-                log(f"  [_has_downtrend] d3: подъём ≥ {ATR_BREAKOUT_MULTIPLIER}×ATR без перелоя "
-                    f"не найден.")
                 break
 
             last_ll_idx = bar1_idx
@@ -294,7 +287,6 @@ def _has_downtrend(
             # d4: bar3 — первая свеча с закрытием ниже L[bar1]
             bar3_idx = _find_bar3(bars, bar1_idx)
             if bar3_idx is None or bar3_idx > end:
-                log(f"  [_has_downtrend] d4: bar3 не найден (нет C < L[bar1]={bars[bar1_idx].low:.6f}).")
                 break
             if bar3_idx - bar1_idx < MIN_PULLBACK_BARS:
                 current_start = bar3_idx
@@ -340,9 +332,6 @@ def _has_downtrend(
                     current_folds[-2] = (l_new, h_new, b3prev, l_new)
             # === конец уточнения ===
 
-            log(f"  [_has_downtrend] d6: складка {folds_found}/{iterations} подтверждена "
-                f"(bar3={bar3_idx}, time={bars[bar3_idx].time.isoformat()}).")
-
             if folds_found >= iterations:
                 # достигнут порог — обновляем «лучшего» кандидата,
                 # но НЕ прерываем цикл: продолжаем собирать складки правее
@@ -367,14 +356,11 @@ def _has_downtrend(
         # Если дальше складок нет: отдаем лучшую эпоху после достижения порога
         if best_after_threshold is not None:
             freshest = best_after_threshold
-            log("  [_has_downtrend] ▶ Складки закончились после достижения порога — беру последний sh_last текущей эпохи и завершаю поиск.")
             break  # выходим из внешнего while: эпоха полностью расширена вправо
 
         # Иначе (порог не набран) — baseline++ и новая попытка
         if folds_found < iterations:
             if folds_found > 0 and last_bar3_attempt is not None:
-                log(f"  [_has_downtrend] ⏭ ускоренный сдвиг baseline на bar3={last_bar3_attempt} "
-                    f"т.к. собрали только {folds_found}/{iterations}.")
                 baseline = max(baseline + 1, last_bar3_attempt)
             else:
                 baseline += 1

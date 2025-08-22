@@ -1,6 +1,9 @@
 import asyncio
 import os
+from pathlib import Path
 from typing import Set, Tuple
+
+from dotenv import load_dotenv
 
 from config.constants import TIMEFRAMES
 from data.BinanceClient import BinanceClient
@@ -13,7 +16,8 @@ from services.Plotter import Plotter
 from services.TelegramNotifier import TelegramNotifier
 
 ANALYZERS_PER_CLIENT = 8
-
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / "config" / ".env")
 
 async def run_for_client(
     client: ExchangeClient,
