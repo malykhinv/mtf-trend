@@ -12,7 +12,7 @@ from domain.workers.scheduler import scheduler
 from services.Plotter import Plotter
 from services.TelegramNotifier import TelegramNotifier
 
-ANALYZERS_PER_CLIENT = 10
+ANALYZERS_PER_CLIENT = 8
 
 
 async def run_for_client(

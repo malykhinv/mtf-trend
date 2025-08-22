@@ -54,7 +54,6 @@ async def scheduler(
     # Построение расписания: (due_ts, symbol, timeframe, interval_seconds)
     heap: list[tuple[float, str, Timeframe, float]] = []
     for symbol in symbols:
-        log(f"scheduler: готовлю ключи для {symbol}…")
         for timeframe in TIMEFRAMES:
             interval = period_seconds(timeframe)
             spread = interval * initial_spread

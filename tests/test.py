@@ -19,6 +19,7 @@ from domain.models.Bar import Bar
 from domain.models.Timeframe import Timeframe
 from services.Plotter import Plotter
 from utils.atr import atr
+from utils.bars import cut_bars_from_high
 from utils.logger import log, logw
 
 
@@ -105,6 +106,7 @@ async def main() -> None:
     for tf in TIMEFRAMES:
         try:
             bars = await fetch_bars_until(client, SYMBOL, tf, WINDOW_TAIL, TARGET_DT)
+            bars = cut_bars_from_high(bars)
             n = len(bars)
             if n < 10:
                 logw(f"[{tf.name}] Недостаточно баров: {n}")
@@ -129,13 +131,12 @@ async def main() -> None:
                 sliced = bars[s:]
                 signal = detect(label, client.exchange, sliced, tf, plotter, test_mode=True)
                 if signal:
-                    log(f"[{tf.name}] СИГНАЛ найден (offset={s}): {signal}")
+                    log(f"[{tf.name}] Сигнал найден (offset={s}): {signal}")
                 else:
                     logw(f"[{tf.name}] Сигнал не найден (offset={s})")
 
         except Exception as exc:
             logw(f"[{tf.name}] Ошибка теста: {exc}\n{traceback.format_exc()}")
-    log("Готово.")
 
 
 if __name__ == "__main__":

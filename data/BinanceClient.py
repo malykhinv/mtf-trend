@@ -16,7 +16,6 @@ class BinanceClient(ExchangeClient):
 
     def __init__(self, api_key: str, api_secret: str, default_type: str = "future") -> None:
         super(BinanceClient, self).__init__(api_key, api_secret)
-        log("BinanceClient: создаю асинхронный клиент ccxt…")
         self._client = ccxt.binance({
             "apiKey": self.api_key,
             "secret": self.api_secret,
@@ -26,7 +25,6 @@ class BinanceClient(ExchangeClient):
                 "defaultType": default_type,
             },
         })
-        log("BinanceClient: клиент готов.")
 
     async def close(self) -> None:
         """Закрыть http‑сессию ccxt."""
@@ -39,7 +37,6 @@ class BinanceClient(ExchangeClient):
         Получить список символов.
         """
         markets = await self._client.load_markets()
-        log("BinanceClient: загружены рынки, фильтрую символы…")
         symbols: List[str] = []
         for market in markets.values():
             if not market.get("active", True):

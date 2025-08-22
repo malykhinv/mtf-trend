@@ -11,6 +11,7 @@ from domain.models.Timeframe import Timeframe
 from services.Plotter import Plotter
 from services.TelegramNotifier import TelegramNotifier
 from utils.atr import atr
+from utils.bars import cut_bars_from_high
 from utils.logger import log, logw
 from utils.message_formatter import format_message
 
@@ -44,6 +45,7 @@ def create_analysis_worker() -> Callable[
                     continue
 
                 bars = await client.fetch_bars(symbol, timeframe, limit=BARS_LIMIT)
+                bars = cut_bars_from_high(bars)
                 if not bars:
                     continue
 

@@ -1,14 +1,13 @@
 # domain/detection.py
 from __future__ import annotations
 
-from statistics import median
 from typing import Optional
 import os
 
 from config.constants import (
     ATR_PERIOD,
     ATR_BREAKOUT_MULTIPLIER,
-    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS, HIGH_SHIFT,
+    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS,
 )
 from domain.models.DowntrendResult import DowntrendResult
 from domain.models.Bar import Bar
@@ -36,16 +35,13 @@ def detect(
     В тестовом режиме (test_mode=True) сохраняет график в любом случае.
     """
     # Внешний переключатель через ENV (удобно для запуска без правки кода)
-    bars = _cut_bars_from_high(bars)
     force_plot_env = os.getenv("DETECT_FORCE_PLOT", "").strip().lower() in ("1", "true", "yes", "y")
     force_plot = test_mode or force_plot_env
 
     n = len(bars)
-    log(f"[{exchange.name} {symbol} {timeframe.value}] Старт детекции. Баров={n}")
     min_needed = max(ATR_PERIOD + 20, 200)
     if n < min_needed:
         log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно баров для анализа (нужно ≥ {min_needed}). Пропускаю.")
-        # В тестовом режиме всё равно сохраним «чистый» график без меток
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
         return None
@@ -63,13 +59,12 @@ def detect(
     tail_len = min(tail_len, e - base_s + 1)  # не выходить левее базового хвоста
 
     s = e - tail_len + 1
-    log(f"[{exchange.name} {symbol} {timeframe.value}] Окно анализа: s={s}, e={e}, длина={e - s + 1}, "
-        f"WINDOW_TAIL={WINDOW_TAIL}→{tail_len} (якорь по high: {max_idx}, base_s={base_s}).")
 
     # Строим структуру на хвосте
-    r = _has_downtrend(bars, s, e, TREND_ITERATIONS)
+    atr_med = _rolling_median_atr(bars, ATR_PERIOD)
+    r = _has_downtrend(bars, s, e, TREND_ITERATIONS, atr_med)
     if not r.has_downtrend:
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Нисходящая структура в окне не найдена. Сигнал не формируется.")
+        log(f"[{exchange.name} {symbol} {timeframe.value}] Нисходящая структура в окне не найдена.")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
         return None
@@ -90,7 +85,7 @@ def detect(
     # Подтверждение разворота: две закрытые свечи телом выше level
     level = max(bars[sh_last_idx].open, bars[sh_last_idx].close)
     if e < 1:
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно закрытых свечей для подтверждения (e < 1). Пропускаю.")
+        log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно закрытых свечей для подтверждения (e < 1).")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
@@ -120,11 +115,6 @@ def detect(
 
     prev_ok = min(bars[e - 1].open, bars[e - 1].close) > level
     curr_ok = min(bars[e].open, bars[e].close) > level
-    log(
-        f"[{exchange.name} {symbol} {timeframe.value}] Проверка закрепления над уровнем {level:.6f}: "
-        f"prev_ok={prev_ok} (min(O,C)={min(bars[e - 1].open, bars[e - 1].close):.6f}), "
-        f"curr_ok={curr_ok} (min(O,C)={min(bars[e].open, bars[e].close):.6f})."
-    )
     if not (prev_ok and curr_ok):
         log(f"[{exchange.name} {symbol} {timeframe.value}] Нет двух подряд закрытых свечей выше уровня. Сигнал не формируется.")
         if force_plot:
@@ -139,8 +129,6 @@ def detect(
         if left <= right:
             pivot_low_idx = _find_on_range_min_low(bars, left, right)
             exts.append(Extremum(bar=bars[pivot_low_idx], type=ExtremumType.LOW))
-            log(f"[{exchange.name} {symbol} {timeframe.value}] Добавлен pivot-low между sh_last={sh_last_idx} "
-                f"и t_break={t_break}: idx={pivot_low_idx}, L={bars[pivot_low_idx].low:.6f}.")
 
     # Если дошли сюда — сигнал подтверждён. Рисуем и возвращаем Signal.
     chart_path = _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
@@ -174,17 +162,6 @@ def detect(
         chart_path=chart_path,
     )
 
-def _cut_bars_from_high(bars: list[Bar]) -> list[Bar]:
-    if not bars:
-        return []
-
-    # Находим индекс бара с максимальным high (при равенстве берём первый)
-    max_idx = max(range(len(bars)), key=lambda i: bars[i].high)
-    # Левая граница со сдвигом влево, но не меньше нуля
-    start_idx = max(0, max_idx - HIGH_SHIFT)
-
-    return bars[start_idx:]
-
 
 def _save_chart(exchange, symbol, timeframe, plotter, bars, exts):
     os.makedirs(OUTPUT_PLOT_PATH, exist_ok=True)
@@ -197,9 +174,9 @@ def _save_chart(exchange, symbol, timeframe, plotter, bars, exts):
         plotter.plot(bars, exts, path=chart_path, symbol=symbol, timeframe=timeframe)
         log(f"[{exchange.name} {symbol} {timeframe.value}] График сохранён: {chart_path}")
     except Exception as e_plot:
-        logw(f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}). Продолжаю без изображения.")
+        logw(
+            f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}).")
     return chart_path
-
 
 
 def _is_ll(ref_low: float, low_j: float, atr_j: float) -> bool:
@@ -215,15 +192,17 @@ def _exists_upmove_without_ll(bars: list[Bar], i: int) -> Optional[int]:
     """
     base_low = bars[i].low
     n = len(bars)
-    for k in range(i + 1, n):
-        if bars[k].close - base_low >= ATR_BREAKOUT_MULTIPLIER * bars[k].atr:
-            ok = True
-            for t in range(i + 1, k):
-                if bars[t].low < base_low:
-                    ok = False
-                    break
-            if ok:
-                return k
+    if i + 2 >= n:
+        return None
+    # минимум low на (i, k) — поддерживаем на лету
+    running_min = bars[i + 1].low
+    for k in range(i + 2, n):
+        # сначала проверка условия подъёма без перелоя
+        if running_min >= base_low and (bars[k].close - base_low) >= ATR_BREAKOUT_MULTIPLIER * bars[k].atr:
+            return k
+        # затем расширяем окно и обновляем минимум
+        if bars[k].low < running_min:
+            running_min = bars[k].low
     return None
 
 
@@ -257,6 +236,7 @@ def _has_downtrend(
         start: int,
         end: int,
         iterations: int,
+        atr_med: list[float]
 ) -> DowntrendResult:
     """
     Ищем нисходящую структуру d2..d5 в окне [start..end].
@@ -265,12 +245,11 @@ def _has_downtrend(
     и ПОЛНОСТЬЮ ПЕРЕЗАПУСКАЕМ набор итераций (folds_found = 0).
     """
     if end - start < 3:
-        log("  [_has_downtrend] Окно слишком короткое (< 3 бара). Возврат has_downtrend=False.")
+        log("  [_has_downtrend] Окно слишком короткое (< 3 бара).")
         return DowntrendResult(has_downtrend=False)
 
     freshest: DowntrendResult | None = None
     baseline = start
-    log(f"  [_has_downtrend] Старт окна: [{start}..{end}], требуемых складок={iterations}")
 
     # Оставляем минимум места для d2..d5
     while baseline < end - 2:
@@ -278,7 +257,6 @@ def _has_downtrend(
         current_start = baseline
         current_folds: list[tuple[int, int, int, int]] = []  # (bar1, sh_last, bar3, last_ll)
         best_after_threshold: DowntrendResult | None = None
-        log(f"  [_has_downtrend] Новый baseline={current_start} — начинаем попытку собрать эпоху.")
 
         # Пытаемся последовательно собрать до `iterations` складок
         last_bar3_attempt = None
@@ -287,8 +265,7 @@ def _has_downtrend(
             initial_low = bars[current_start].low
             j = None
             for idx in range(current_start + 1, end + 1):
-                window_start = idx-ATR_PERIOD if idx > ATR_PERIOD else 0
-                if _is_ll(initial_low, bars[idx].low, median(bar.atr for bar in bars[window_start: idx+1])):
+                if _is_ll(initial_low, bars[idx].low, atr_med[idx]):
                     j = idx
                     break
             if j is None:
@@ -296,7 +273,6 @@ def _has_downtrend(
                     f"в [{current_start + 1}..{end}].")
                 break
 
-            log(f"  [_has_downtrend] d2: LL-кандидат j={j}, L[j]={bars[j].low:.6f}, ATR[j]={bars[j].atr:.6f}.")
 
             # d3: bar1 — минимальный i ≥ j с ап-движением ≥K*ATR без перелоя
             bar1_idx = None
@@ -310,7 +286,7 @@ def _has_downtrend(
                     break
             if bar1_idx is None:
                 log(f"  [_has_downtrend] d3: подъём ≥ {ATR_BREAKOUT_MULTIPLIER}×ATR без перелоя "
-                    f"не найден после j={j}.")
+                    f"не найден.")
                 break
 
             last_ll_idx = bar1_idx
@@ -323,13 +299,9 @@ def _has_downtrend(
             if bar3_idx - bar1_idx < MIN_PULLBACK_BARS:
                 current_start = bar3_idx
                 continue
-            log(f"  [_has_downtrend] d4: bar3={bar3_idx} (C={bars[bar3_idx].close:.6f} < "
-                f"L[bar1]={bars[bar1_idx].low:.6f}).")
 
             # d5: bar2/sh_last — максимум high на [bar1..bar3] (при равенстве — ранний индекс)
             sh_last_idx = _find_bar2_on_range_max_high(bars, bar1_idx + 1, bar3_idx - 1)
-            log(f"  [_has_downtrend] d5: sh_last=bar2={sh_last_idx} (H={bars[sh_last_idx].high:.6f}) "
-                f"на диапазоне [{bar1_idx + 1}..{bar3_idx - 1}].")
 
             # складка подтверждена
             folds_found += 1
@@ -409,11 +381,8 @@ def _has_downtrend(
             continue
 
     if freshest is None:
-        log(f"  [_has_downtrend] В окне [{start}..{end}] валидных эпох не найдено — ok=False.")
         return DowntrendResult(has_downtrend=False)
 
-    log(f"  [_has_downtrend] Итог: возвращаю самую свежую эпоху: "
-        f"bar1={freshest.bar1_idx}, sh_last={freshest.sh_last_idx}, last_ll={freshest.last_ll_idx}.")
     return freshest
 
 
@@ -427,9 +396,10 @@ def _find_on_range_min_low(bars: list[Bar], left: int, right: int) -> int:
             m = idx
     return m
 
+
 def _compress_significant_exts(
-    folds: list[tuple[int, int, int, int]],
-    bars: list[Bar],
+        folds: list[tuple[int, int, int, int]],
+        bars: list[Bar],
 ) -> list[Extremum]:
     """
     Оставляет только «несжатые» пары l/h: если новая пара (l,h) поглощает предыдущую,
@@ -451,3 +421,13 @@ def _compress_significant_exts(
         exts.append(Extremum(bar=bars[l], type=ExtremumType.LOW))
         exts.append(Extremum(bar=bars[h], type=ExtremumType.HIGH))
     return exts
+
+
+def _rolling_median_atr(bars: list[Bar], period: int) -> list[float]:
+    from statistics import median
+    n = len(bars)
+    out = [0.0] * n
+    for i in range(n):
+        left = 0 if i <= period else i - period
+        out[i] = median(b.atr for b in bars[left:i + 1])
+    return out
