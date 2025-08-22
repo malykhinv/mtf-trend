@@ -190,21 +190,20 @@ def _cut_bars_from_high(bars: list[Bar]) -> list[Bar]:
     return bars[start_idx:]
 
 
-def _save_chart(exchange: Exchange, symbol: str, timeframe: Timeframe, plotter: Plotter,
-                bars: list[Bar], exts: Sequence[Extremum] | Sequence[Sequence[Extremum]]) -> str:
+def _save_chart(exchange, symbol, timeframe, plotter, bars, exts):
     os.makedirs(OUTPUT_PLOT_PATH, exist_ok=True)
+    ts = bars[-1].time.strftime("%Y%m%d_%H%M%S") if bars else "na"
     chart_path = os.path.join(
         OUTPUT_PLOT_PATH,
-        f"{exchange.name.lower()}__{symbol.replace('/', '-')}__{timeframe.value}.png",
+        f"{exchange.name.lower()}__{symbol.replace('/', '-')}__{timeframe.value}__{ts}.png",
     )
     try:
         plotter.plot(bars, exts, path=chart_path, symbol=symbol, timeframe=timeframe)
         log(f"[{exchange.name} {symbol} {timeframe.value}] График сохранён: {chart_path}")
     except Exception as e_plot:
-        # даже если отрисовка не удалась — не валим детект
-        logw(
-            f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}). Продолжаю без изображения.")
+        logw(f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}). Продолжаю без изображения.")
     return chart_path
+
 
 
 def _is_ll(ref_low: float, low_j: float, atr_j: float) -> bool:

@@ -186,7 +186,9 @@ class Plotter:
             # --- Сохранение ---
             full_path = self._resolve_output_path(path, bars, symbol, timeframe)
             os.makedirs(os.path.dirname(full_path) or OUTPUT_PLOT_PATH, exist_ok=True)
-            plt.savefig(full_path, facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=PLOT_DPI)
+            tmp_path = f"{full_path}.part"
+            plt.savefig(tmp_path, facecolor=fig.get_facecolor(), bbox_inches="tight", dpi=PLOT_DPI)
+            os.replace(tmp_path, full_path)
             plt.close(fig)
         else:
             logw(f"Не хватает данных для построения графика: symbol={symbol}, timeframe={timeframe}")

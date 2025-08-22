@@ -11,20 +11,29 @@ from domain.exchange_client import ExchangeClient
 from domain.models.Signal import Signal
 from domain.models.Timeframe import Timeframe
 from services.Plotter import Plotter
+from services.TelegramNotifier import TelegramNotifier
 from utils.logger import log, logw
+from utils.message_formatter import format_message
 
 
 def create_analysis_worker() -> Callable[
-    [asyncio.Queue[tuple[str, Timeframe]], asyncio.Queue[Signal], ExchangeClient, Plotter, Database, Set[tuple[str, Timeframe]]],
+    [
+        asyncio.Queue[tuple[str, Timeframe]],
+        ExchangeClient,
+        Plotter,
+        Database,
+        Set[tuple[str, Timeframe]],
+        TelegramNotifier
+    ],
     Coroutine[Any, Any, None]
 ]:
     async def analysis_worker(
         jobs_queue: asyncio.Queue[tuple[str, Timeframe]],
-        signals_queue: asyncio.Queue[Signal],
         client: ExchangeClient,
         plotter: Plotter,
         db: Database,
         inflight: Set[tuple[str, Timeframe]],
+        notifier: TelegramNotifier
     ) -> None:
         while True:
             symbol, timeframe = await jobs_queue.get()
@@ -41,7 +50,7 @@ def create_analysis_worker() -> Callable[
 
                 signal = detect(symbol, client.exchange, bars, timeframe, plotter)
                 if signal:
-                    await signals_queue.put(signal)
+                    await notifier.send_message(format_message(signal), signal.chart_path)
                     await db.save_signal(symbol, timeframe)
                     log(f"📈 Найден сигнал: {symbol} @ {timeframe.value} — отправляю в канал.")
             except asyncio.CancelledError:

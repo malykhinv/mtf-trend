@@ -6,21 +6,18 @@ from config.constants import TIMEFRAMES
 from data.BinanceClient import BinanceClient
 from data.Database import Database
 from domain.exchange_client import ExchangeClient
-from domain.models.Signal import Signal
 from domain.models.Timeframe import Timeframe
 from domain.workers.analysis_worker import create_analysis_worker
-from domain.workers.signal_worker import create_signal_worker
 from domain.workers.scheduler import scheduler
 from services.Plotter import Plotter
 from services.TelegramNotifier import TelegramNotifier
-from utils.logger import log
 
 ANALYZERS_PER_CLIENT = 10
 
 
 async def run_for_client(
     client: ExchangeClient,
-    telegram_notifier: TelegramNotifier,
+    notifier: TelegramNotifier,
     plotter: Plotter,
     db: Database,
 ) -> None:
@@ -29,7 +26,6 @@ async def run_for_client(
 
     # Ограниченные очереди
     jobs_queue: asyncio.Queue[tuple[str, Timeframe]] = asyncio.Queue(maxsize=max(1, len(symbols) * len(TIMEFRAMES)))
-    signals_queue: asyncio.Queue[Signal] = asyncio.Queue(maxsize=1000)
 
     # Набор активных ключей (symbol, timeframe), чтобы не ставить дубликаты
     inflight: Set[Tuple[str, Timeframe]] = set()
@@ -39,7 +35,6 @@ async def run_for_client(
 
     # Фабрики воркеров → корутины
     analysis_worker = create_analysis_worker()
-    signal_worker = create_signal_worker()
 
     # Задачи: планировщик, пул анализаторов, отправка сигналов
     scheduler_task = asyncio.create_task(
@@ -48,14 +43,11 @@ async def run_for_client(
     )
     analyzer_tasks = [
         asyncio.create_task(
-            analysis_worker(jobs_queue, signals_queue, client, plotter, db, inflight),
+            analysis_worker(jobs_queue, client, plotter, db, inflight, notifier),
             name=f"analyzer:{i}",
         )
         for i in range(ANALYZERS_PER_CLIENT)
     ]
-    sender_task = asyncio.create_task(
-        signal_worker(signals_queue, telegram_notifier), name="signal_sender"
-    )
 
     try:
         # Работаем до внешней отмены/CTRL+C
@@ -74,21 +66,14 @@ async def run_for_client(
             t.cancel()
         await asyncio.gather(*analyzer_tasks, return_exceptions=True)
 
-        # 3) Дожидаемся отправки всех сигналов, затем останавливаем отправщика
-        await signals_queue.join()
-        sender_task.cancel()
-        await asyncio.gather(sender_task, return_exceptions=True)
-        log("main: отправщик сигналов остановлен.")
-        log("main: остановка завершена.")
-
 
 async def main(
     exchange_clients: list[ExchangeClient],
-    telegram_notifier: TelegramNotifier,
+    notifier: TelegramNotifier,
     plotter: Plotter,
     db: Database,
 ) -> None:
-    await asyncio.gather(*(run_for_client(client, telegram_notifier, plotter, db) for client in exchange_clients))
+    await asyncio.gather(*(run_for_client(client, notifier, plotter, db) for client in exchange_clients))
 
 
 if __name__ == "__main__":
