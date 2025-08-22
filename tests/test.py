@@ -9,8 +9,8 @@ from zoneinfo import ZoneInfo
 
 from config.constants import (
     OUTPUT_PLOT_PATH,
-    WINDOW_TAIL,   # сколько баров тянем в «хвост»
-    TIMEZONE,      # ZoneInfo, например ZoneInfo("Europe/Belgrade")
+    WINDOW_TAIL,  # сколько баров тянем в «хвост»
+    TIMEZONE, ATR_PERIOD,  # ZoneInfo, например ZoneInfo("Europe/Belgrade")
 )
 
 from data.BinanceClient import BinanceClient
@@ -18,6 +18,7 @@ from domain.detection import detect
 from domain.models.Bar import Bar
 from domain.models.Timeframe import Timeframe
 from services.Plotter import Plotter
+from utils.atr import atr
 from utils.logger import log, logw
 
 
@@ -29,7 +30,7 @@ TIMEFRAMES: list[Timeframe] = [
     # Timeframe.M1,
     # Timeframe.M5,
     # Timeframe.M15,
-    Timeframe.H1,
+    # Timeframe.H1,
     Timeframe.H4,
     # Timeframe.D1
 ]
@@ -104,20 +105,36 @@ async def main() -> None:
     for tf in TIMEFRAMES:
         try:
             bars = await fetch_bars_until(client, SYMBOL, tf, WINDOW_TAIL, TARGET_DT)
-            if len(bars) < 10:
-                logw(f"[{tf.name}] Недостаточно баров: {len(bars)}")
-                # даже если мало баров, detect сам решит — в тестовом режиме он все равно попытается сохранить график
-                # (при < min_needed он нарисует «чистый» график без меток)
-            # detect сам рисует и сохраняет график в OUTPUT_PLOT_PATH (в тесте — всегда)
-            signal = detect(SYMBOL, client.exchange, bars, tf, plotter, test_mode=True)
-            if signal:
-                log(f"[{tf.name}] СИГНАЛ найден: {signal}")
-            else:
-                logw(f"[{tf.name}] Сигнал не найден")
+            n = len(bars)
+            if n < 10:
+                logw(f"[{tf.name}] Недостаточно баров: {n}")
+
+            atrs = atr(bars, ATR_PERIOD)
+            for bar, a in zip(bars, atrs):
+                bar.atr = a
+
+            step = 50
+            min_needed = max(ATR_PERIOD + 20, 200)
+            starts = [s for s in range(0, n, step) if n - s >= min_needed]
+
+            if not starts:
+                # даже если мало баров, всё равно один раз построим «чистый» график
+                detect(SYMBOL, client.exchange, bars, tf, plotter, test_mode=True)
+                continue
+
+            for s in starts:
+                # ВАЖНО: добавляем смещение в имя инструмента, чтобы файлы НЕ перезаписывались
+                # (в detect имя файла формируется из symbol+tf+времени последнего бара) :contentReference[oaicite:1]{index=1}
+                label = f"{SYMBOL}__off{s}"
+                sliced = bars[s:]
+                signal = detect(label, client.exchange, sliced, tf, plotter, test_mode=True)
+                if signal:
+                    log(f"[{tf.name}] СИГНАЛ найден (offset={s}): {signal}")
+                else:
+                    logw(f"[{tf.name}] Сигнал не найден (offset={s})")
 
         except Exception as exc:
             logw(f"[{tf.name}] Ошибка теста: {exc}\n{traceback.format_exc()}")
-
     log("Готово.")
 
 
