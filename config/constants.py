@@ -5,7 +5,7 @@ from domain.models.Timeframe import Timeframe
 # 🌍 Часовой пояс
 TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
-TIMEFRAMES: list[Timeframe] = [Timeframe.M1, Timeframe.M5, Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1]
+TIMEFRAMES: list[Timeframe] = [Timeframe.M5, Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1]
 
 OUTPUT_PLOT_PATH: str = '.generated/plot'
 

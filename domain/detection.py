@@ -30,6 +30,8 @@ def detect(
         *,
         test_mode: bool = False,  # в тесте рисуем график всегда
 ) -> Optional[Signal]:
+    def log_symbol(text: str):
+        log(f"{symbol.split('/', 1)[0]:<12}{exchange.name.capitalize():<12}{timeframe.value:<6}{text}")
     """
     Главная функция детекции разворота даун-тренда в лонг.
     Возвращает Signal только на закрытии бара i=N-1 при выполнении всех условий.
@@ -42,7 +44,7 @@ def detect(
     n = len(bars)
     min_needed = max(ATR_PERIOD + 20, 200)
     if n < min_needed:
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно баров для анализа (нужно ≥ {min_needed}). Пропускаю.")
+        log_symbol(f"Недостаточно баров для анализа (нужно ≥ {min_needed}).")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
         return None
@@ -85,7 +87,7 @@ def detect(
     # Подтверждение разворота: две закрытые свечи телом выше level
     level = max(bars[sh_last_idx].open, bars[sh_last_idx].close)
     if e < 1:
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Недостаточно закрытых свечей для подтверждения (e < 1).")
+        log_symbol(f"Недостаточно закрытых свечей для подтверждения (e < 1).")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
@@ -107,8 +109,7 @@ def detect(
     age_anchor = t_break if t_break is not None else last_ll_idx
     age = e - age_anchor
     if age > FRESH_MAX_AGE:
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Эпоха устарела после "
-            f"{'пересечения' if t_break is not None else 'LL'}: прошло {age} баров > {FRESH_MAX_AGE}.")
+        log_symbol(f"Эпоха устарела: прошло {age} баров > {FRESH_MAX_AGE}.")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
@@ -116,7 +117,7 @@ def detect(
     prev_ok = min(bars[e - 1].open, bars[e - 1].close) > level
     curr_ok = min(bars[e].open, bars[e].close) > level
     if not (prev_ok and curr_ok):
-        log(f"[{exchange.name} {symbol} {timeframe.value}] Нет двух подряд закрытых свечей выше уровня. Сигнал не формируется.")
+        log_symbol(f"Нет двух подряд закрытых свечей выше уровня.")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
@@ -133,8 +134,8 @@ def detect(
     # Если дошли сюда — сигнал подтверждён. Рисуем и возвращаем Signal.
     chart_path = _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
 
-    log(
-        f"[{exchange.name} {symbol} {timeframe.value}] Сигнал подтверждён. "
+    log_symbol(
+        f"Сигнал подтверждён. "
         f"bar1={bar1_idx} (L={bars[bar1_idx].low:.6f}), "
         f"bar2/sh_last={sh_last_idx} (H={bars[sh_last_idx].high:.6f}), "
         f"last_ll={last_ll_idx}, level={level:.6f}."
@@ -172,10 +173,10 @@ def _save_chart(exchange, symbol, timeframe, plotter, bars, exts):
     )
     try:
         plotter.plot(bars, exts, path=chart_path, symbol=symbol, timeframe=timeframe)
-        log(f"[{exchange.name} {symbol} {timeframe.value}] График сохранён: {chart_path}")
+        log(f"График сохранён: {chart_path}")
     except Exception as e_plot:
         logw(
-            f"[{exchange.name} {symbol} {timeframe.value}] Не удалось построить график ({e_plot}).")
+            f"Не удалось построить график ({e_plot}).")
     return chart_path
 
 
@@ -245,7 +246,7 @@ def _has_downtrend(
     и ПОЛНОСТЬЮ ПЕРЕЗАПУСКАЕМ набор итераций (folds_found = 0).
     """
     if end - start < 3:
-        log("  [_has_downtrend] Окно слишком короткое (< 3 бара).")
+        log("Окно слишком короткое (< 3 бара).")
         return DowntrendResult(has_downtrend=False)
 
     freshest: DowntrendResult | None = None
