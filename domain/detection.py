@@ -19,6 +19,7 @@ from domain.models.Extremum import Extremum
 from domain.models.ExtremumType import ExtremumType
 from services.Plotter import Plotter
 from utils.logger import log, logw
+from utils.postmortem import log_postmortem_from_confirm
 from utils.safe_name import safe_name
 
 def detect(
@@ -105,12 +106,45 @@ def detect(
             if bars[idx].high > level:
                 t_break = idx
                 break
+    # --- Постмортем-подготовка: bars_after_confirm и sl ---
+    # Уровень закрепления (как в спецификации) — телом выше level = max(open, close) на sh_last
+    # 1) Находим индекс подтверждающей свечи: первая пара подряд, где обе свечи закрыты телом выше level.
+    confirm_idx = None
+    for i in range(sh_last_idx + 2, e + 1):
+        prev_ok_i = min(bars[i - 1].open, bars[i - 1].close) > level
+        curr_ok_i = min(bars[i].open, bars[i].close) > level
+        if prev_ok_i and curr_ok_i:
+            confirm_idx = i
+            break
+
+    # 2) bars_after_confirm — начиная с подтверждающей свечи (если нашли)
+    bars_after_confirm = bars[confirm_idx:] if confirm_idx is not None else []
+
+    # 3) SL — лой на участке (sh_last..t_break], если t_break найден; иначе — (sh_last..confirm_idx], если подтверждение нашли
+    sl = None
+    _left = sh_last_idx + 1
+    _right = None
+    if 't_break' in locals() and t_break is not None and t_break > sh_last_idx:
+        _right = min(t_break, e)
+    elif confirm_idx is not None:
+        _right = confirm_idx
+    if _right is not None and _left <= _right:
+        sl_idx = _find_on_range_min_low(bars, _left, _right)
+        sl = bars[sl_idx].low
+
 
     # пересчёт возраста: до пересечения считаем от last_ll, после — от первого пересечения
     age_anchor = t_break if t_break is not None else last_ll_idx
     age = e - age_anchor
     if age > FRESH_MAX_AGE:
         log_symbol(f"Эпоха устарела: прошло {age} баров > {FRESH_MAX_AGE}.")
+
+        # Вызов постмортема только если есть подтверждение и валидный SL
+        if confirm_idx is not None and sl is not None and bars_after_confirm:
+            try:
+                log_postmortem_from_confirm(symbol, exchange, timeframe, bars_after_confirm, sl)
+            except Exception as _exc:
+                log_symbol(f"Постмортем не выполнен: {_exc}")
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
