@@ -35,7 +35,9 @@ PLOT_DPI: int = 100
 
 ATR_PERIOD: int = 14
 ATR_BREAKOUT_MULTIPLIER: float = 3
-MIN_MARKET_CAP: int = 200_000_000
+# Фильтр значимости пары (l/h)
+SWING_FILTER_AMP_ATR_MULTIPLIER: float = 4
+MIN_SWING_WIDTH_BARS: int = max(6, ATR_PERIOD//2)
 
 TREND_ITERATIONS: int = 3
 FRESH_MAX_AGE: int = max(14, round(1.5 * TREND_ITERATIONS))

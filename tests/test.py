@@ -30,7 +30,7 @@ MICROSTEP: timedelta = timedelta(milliseconds=1)
 TIMEFRAMES: list[Timeframe] = [
     # Timeframe.M1,
     Timeframe.M5,
-    Timeframe.M15,
+    # Timeframe.M15,
     # Timeframe.H1,
     # Timeframe.H4,
     # Timeframe.D1

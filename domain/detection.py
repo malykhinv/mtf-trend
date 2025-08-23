@@ -7,7 +7,8 @@ import os
 from config.constants import (
     ATR_PERIOD,
     ATR_BREAKOUT_MULTIPLIER,
-    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS,
+    OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS, MIN_SWING_WIDTH_BARS,
+    SWING_FILTER_AMP_ATR_MULTIPLIER,
 )
 from domain.models.DowntrendResult import DowntrendResult
 from domain.models.Bar import Bar
@@ -20,7 +21,6 @@ from services.Plotter import Plotter
 from utils.logger import log, logw
 from utils.safe_name import safe_name
 
-
 def detect(
         symbol: str,
         exchange: Exchange,
@@ -32,6 +32,7 @@ def detect(
 ) -> Optional[Signal]:
     def log_symbol(text: str):
         log(f"{symbol.split('/', 1)[0]:<12}{exchange.name.capitalize():<12}{timeframe.value:<6}{text}")
+
     """
     Главная функция детекции разворота даун-тренда в лонг.
     Возвращает Signal только на закрытии бара i=N-1 при выполнении всех условий.
@@ -150,7 +151,7 @@ def detect(
         extremum_bars.append(bars[bar3_idx])
     if last_ll_idx not in (bar1_idx, sh_last_idx, (bar3_idx if bar3_idx is not None else -1)):
         extremum_bars.append(bars[last_ll_idx])
-    if pivot_low_idx and pivot_low_idx not in (
+    if pivot_low_idx is not None and pivot_low_idx not in (
             bar1_idx, sh_last_idx, last_ll_idx, (bar3_idx if bar3_idx is not None else -1)
     ):
         extremum_bars.append(bars[pivot_low_idx])
@@ -261,11 +262,13 @@ def _has_downtrend(
 
         # Пытаемся последовательно собрать до `iterations` складок
         last_bar3_attempt = None
+        ll_search_from = current_start + 1  # будем сдвигать при отклонённых парах (j)
         while current_start < end - 1:
             # d2: поиск LL-кандидата j относительно initial_low = L[current_start]
             initial_low = bars[current_start].low
             j = None
-            for idx in range(current_start + 1, end + 1):
+            start_j = max(current_start + 1, ll_search_from)  # не искать левее текущего старта
+            for idx in range(start_j, end + 1):
                 if _is_ll(initial_low, bars[idx].low, atr_med[idx]):
                     j = idx
                     break
@@ -290,10 +293,37 @@ def _has_downtrend(
                 break
             if bar3_idx - bar1_idx < MIN_PULLBACK_BARS:
                 current_start = bar3_idx
+                ll_search_from = current_start + 1  # сбрасываем позицию поиска нового j
                 continue
+
+            # === УТОЧНЕНИЕ: l1 -> минимум на [b3(prev)+1 .. l1], затем пересчёт h1 ===
+            if current_folds:
+                _l0_prev, _h0_prev, b3prev, _llprev = current_folds[-1]
+                if b3prev < bar1_idx:
+                    left, right = b3prev + 1, bar1_idx
+                    if left <= right:
+                        l1_new = _find_on_range_min_low(bars, left, right)
+                        if l1_new != bar1_idx:
+                            bar1_idx = l1_new
+                        last_ll_idx = bar1_idx
 
             # d5: bar2/sh_last — максимум high на [bar1..bar3] (при равенстве — ранний индекс)
             sh_last_idx = _find_bar2_on_range_max_high(bars, bar1_idx + 1, bar3_idx - 1)
+
+            # --- ФИЛЬТР ЗНАЧИМОСТИ ПАРЫ (l/h) ДО подтверждения складки ---
+            from statistics import median
+            left = bar1_idx
+            right = sh_last_idx
+            swing_amp = bars[sh_last_idx].high - bars[bar1_idx].low  # High-Low
+            swing_len = sh_last_idx - bar1_idx                       # число баров между l и h
+            atr_loc = median(atr_med[left:right + 1]) if left <= right else atr_med[bar1_idx]
+
+            if swing_len < MIN_SWING_WIDTH_BARS or swing_amp < SWING_FILTER_AMP_ATR_MULTIPLIER * atr_loc:
+                # Пара слабая: не подтверждаем складку.
+                # Ищем следующий LL относительно того же initial_low, пропуская текущий j.
+                ll_search_from = j + 1
+                continue
+            # --- конец фильтра ---
 
             # складка подтверждена
             folds_found += 1
@@ -345,6 +375,7 @@ def _has_downtrend(
 
             # Продолжаем собирать следующую складку от bar3
             current_start = bar3_idx
+            ll_search_from = current_start + 1  # сброс для нового цикла поиска j
 
         else:
             # Страховка от зависаний: если внутренний цикл не break'нулся, двигаем baseline на 1
