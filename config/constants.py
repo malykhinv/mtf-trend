@@ -28,7 +28,7 @@ X_AXIS_TIME_FORMAT: str = '%H:%M'
 CANDLESTICK_WIDTH_MULTIPLIER: float = 0.5
 
 # 📐 Размер графика
-PLOT_WIDTH_INCHES: float = 8
+PLOT_WIDTH_INCHES: float = 12
 PLOT_HEIGHT_INCHES: float = 6
 PLOT_DPI: int = 100
 # endregion

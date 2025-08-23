@@ -103,7 +103,7 @@ class Plotter:
         ax_atr.plot(times, atr_norm, linewidth=1.0, color=SWING_COLOR_LOW, zorder=2)
         ax_atr.fill_between(times, [0] * len(atr_norm), atr_norm, color=SWING_COLOR_LOW, alpha=0.15, zorder=1)
         ax_atr.set_ylim(0, 100)
-        ax_atr.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y:.0f}%"))
+        ax_atr.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f"{y/100:.2f}"))
         ax_atr.tick_params(axis="y", colors="gray", labelsize=8)
 
         # --- Подготовка геометрии для маркеров ---
