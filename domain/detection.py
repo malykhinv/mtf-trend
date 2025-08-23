@@ -277,7 +277,6 @@ def _has_downtrend(
                 k_try = _exists_upmove_without_ll(bars, cand)
                 if k_try is not None:
                     bar1_idx = cand
-                    k_idx = k_try
                     break
             if bar1_idx is None:
                 break
@@ -342,8 +341,6 @@ def _has_downtrend(
                     last_ll_idx=last_ll_idx,
                     folds=current_folds.copy(),
                 )
-                log(f"  [_has_downtrend] ✔ Порог достигнут: обновлён последний значимый хай (sh_last={sh_last_idx})."
-                    f" Продолжаю искать новые складки правее bar3={bar3_idx}.")
 
             # Продолжаем собирать следующую складку от bar3
             current_start = bar3_idx

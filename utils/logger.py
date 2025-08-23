@@ -8,7 +8,7 @@ class FixedWidthFormatter(logging.Formatter):
 
 handler = logging.StreamHandler(sys.stdout)
 formatter = FixedWidthFormatter(
-    fmt="%(asctime)s %(threadName)s %(message)s",
+    fmt="%(asctime)s %(message)s",
     datefmt="%H:%M:%S"
 )
 handler.setFormatter(formatter)
