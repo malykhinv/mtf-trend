@@ -54,9 +54,9 @@ def create_analysis_worker() -> Callable[
                 for bar, a in zip(bars, atrs):
                     bar.atr = a
 
-                step = 50
+                step = 100
                 n = len(bars)
-                min_needed = max(ATR_PERIOD + 20, 200)
+                min_needed = 500
 
                 # стартовые индексы: 0, 50, 100, ... пока в слайсе хватает баров
                 starts = [s for s in range(0, n, step) if n - s >= min_needed]
