@@ -24,8 +24,8 @@ from utils.logger import log, logw
 
 
 # ====== НАСТРОЙКИ ТЕСТА ======
-SYMBOL: str = "TAO/USDT"
-TARGET_DT: datetime = datetime(2025, 8, 23, 17, 11, tzinfo=TIMEZONE)
+SYMBOL: str = "SYN/USDT"
+TARGET_DT: datetime = datetime(2025, 8, 23, 20, 23, tzinfo=TIMEZONE)
 MICROSTEP: timedelta = timedelta(milliseconds=1)
 TIMEFRAMES: list[Timeframe] = [
     # Timeframe.M1,

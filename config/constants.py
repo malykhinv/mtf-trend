@@ -5,7 +5,7 @@ from domain.models.Timeframe import Timeframe
 # 🌍 Часовой пояс
 TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
-TIMEFRAMES: list[Timeframe] = [Timeframe.M5, Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1]
+TIMEFRAMES: list[Timeframe] = [Timeframe.M15, Timeframe.H1, Timeframe.H4, Timeframe.D1]
 
 OUTPUT_PLOT_PATH: str = '.generated/plot'
 
@@ -45,3 +45,5 @@ BARS_LIMIT: int = 1500
 WINDOW_TAIL: int = max(BARS_LIMIT, 3 * TREND_ITERATIONS + 100)
 MIN_PULLBACK_BARS = ATR_PERIOD
 HIGH_SHIFT = 3 * MIN_PULLBACK_BARS
+
+MIN_RR = 1.05

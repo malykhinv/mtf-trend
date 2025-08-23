@@ -29,7 +29,7 @@ def detect(
         timeframe: Timeframe,
         plotter: Plotter,
         *,
-        test_mode: bool = False,  # в тесте рисуем график всегда
+        test_mode: bool = False,
 ) -> Optional[Signal]:
     def log_symbol(text: str):
         log(f"{symbol.split('/', 1)[0]:<12}{exchange.name.capitalize():<12}{timeframe.value:<6}{text}")
@@ -56,7 +56,7 @@ def detect(
     base_s = max(0, n - WINDOW_TAIL)
 
     # якорь = локальный максимум внутри базового хвоста
-    max_idx = max(range(base_s, e + 1), key=lambda i: bars[i].high)
+    max_idx = max(range(base_s, e + 1), key=lambda index: bars[index].high)
 
     # динамическая длина хвоста: от якоря до правого края, но с минимальной длиной
     min_tail = max(ATR_PERIOD + 6, 20)  # безопасный минимум под ATR и d2..d5
@@ -111,9 +111,7 @@ def detect(
     # 1) Находим индекс подтверждающей свечи: первая пара подряд, где обе свечи закрыты телом выше level.
     confirm_idx = None
     for i in range(sh_last_idx + 2, e + 1):
-        prev_ok_i = min(bars[i - 1].open, bars[i - 1].close) > level
-        curr_ok_i = min(bars[i].open, bars[i].close) > level
-        if prev_ok_i and curr_ok_i:
+        if min(bars[i - 1].open, bars[i - 1].close) > level and min(bars[i].open, bars[i].close) > level:
             confirm_idx = i
             break
 
@@ -124,7 +122,7 @@ def detect(
     sl = None
     _left = sh_last_idx + 1
     _right = None
-    if 't_break' in locals() and t_break is not None and t_break > sh_last_idx:
+    if t_break is not None and t_break > sh_last_idx:
         _right = min(t_break, e)
     elif confirm_idx is not None:
         _right = confirm_idx
@@ -137,8 +135,6 @@ def detect(
     age_anchor = t_break if t_break is not None else last_ll_idx
     age = e - age_anchor
     if age > FRESH_MAX_AGE:
-        log_symbol(f"Эпоха устарела: прошло {age} баров > {FRESH_MAX_AGE}.")
-
         # Вызов постмортема только если есть подтверждение и валидный SL
         if confirm_idx is not None and sl is not None and bars_after_confirm:
             try:
@@ -359,46 +355,45 @@ def _has_downtrend(
                 continue
             # --- конец фильтра ---
 
+            # === УТОЧНЕНИЕ ПРЕДЫДУЩЕЙ СКЛАДКИ ПРИ ПОГЛОЩЕНИИ (выполняем ДО подтверждения новой) ===
+            # Используем кандидата (l1=bar1_idx, h1=sh_last_idx) против предыдущей складки.
+            if len(current_folds) >= 1:
+                l0, h0, b3prev, _ = current_folds[-1]
+                l1 = bar1_idx
+                left, right = (l0, l1) if l0 <= l1 else (l1, l0)
+                h_new = _find_bar2_on_range_max_high(bars, left, right)
+                l_new = _find_on_range_min_low(bars, left, right)
+                # Поглощение: новый хай выше старого И новый лой ниже старого — расширяем предыдущую складку,
+                # новую не добавляем.
+                if bars[h_new].high > bars[h0].high and bars[l_new].low < bars[l0].low:
+                    current_folds[-1] = (l_new, h_new, b3prev, l_new)  # ll = l_new
+                    # Перезапускаем поиск правее текущего bar3
+                    current_start = bar3_idx
+                    ll_search_from = current_start + 1
+                    continue
+            # === конец уточнения (поглощение) ===
+
             # складка подтверждена
             folds_found += 1
             last_bar3_attempt = bar3_idx
             current_folds.append((bar1_idx, sh_last_idx, bar3_idx, last_ll_idx))
 
-            # === УТОЧНЕНИЕ ПРЕДЫДУЩИХ ЭКСТРЕМУМОВ ПОСЛЕ НОВОГО l1 ===
-            if len(current_folds) >= 2:
-                l1, _, _, _ = current_folds[-1]
-                l0, h0, b3prev, llprev = current_folds[-2]
+            # --- порог по СЖАТЫМ парам (как на графике) ---
+            # строим сжатую последовательность l/h из current_folds
+            pairs: list[tuple[int, int]] = []
+            for (l, h, _b3, _ll) in current_folds:
+                if not pairs:
+                    pairs.append((l, h))
+                else:
+                    prev_l, prev_h = pairs[-1]
+                    if bars[l].low < bars[prev_l].low and bars[h].high > bars[prev_h].high:
+                        pairs[-1] = (l, h)
+                    else:
+                        pairs.append((l, h))
+            compressed_count = len(pairs)
+            # ------------------------------------------------
 
-                # 1) новый, более высокий хай на [h0..l1]?
-                left, right = min(h0, l1), max(h0, l1)
-                h0_new = _find_bar2_on_range_max_high(bars, left, right)
-                moved_h0 = bars[h0_new].high > bars[h0].high
-                if moved_h0:
-                    h0 = h0_new
-                    # 2) обновляем лой на [l0..h0]
-                    l0 = _find_on_range_min_low(bars, min(l0, h0), max(l0, h0))
-                    # 3) ВАЖНО: вместе с b1 «переезжает» и last_ll
-                    current_folds[-2] = (l0, h0, b3prev, l0)  # ll = l0
-            # === конец уточнения ===
-
-            # === УТОЧНЕНИЕ ПРЕДЫДУЩЕЙ СКЛАДКИ ПРИ ПОГЛОЩЕНИИ (новые l и h расширяют старые) ===
-            if len(current_folds) >= 2:
-                l1, _, _, _ = current_folds[-1]
-                l0, h0, b3prev, _ = current_folds[-2]
-
-                left, right = (l0, l1) if l0 <= l1 else (l1, l0)
-                h_new = _find_bar2_on_range_max_high(bars, left, right)
-                l_new = _find_on_range_min_low(bars, left, right)
-
-                # Поглощение: новый хай выше старого И новый лой ниже старого
-                if bars[h_new].high > bars[h0].high and bars[l_new].low < bars[l0].low:
-                    # Расширяем предыдущую складку: b1= l_new, sh_last= h_new, ll = l_new
-                    current_folds[-2] = (l_new, h_new, b3prev, l_new)
-            # === конец уточнения ===
-
-            if folds_found >= iterations:
-                # достигнут порог — обновляем «лучшего» кандидата,
-                # но НЕ прерываем цикл: продолжаем собирать складки правее
+            if compressed_count >= iterations:
                 best_after_threshold = DowntrendResult(
                     has_downtrend=True,
                     bar1_idx=bar1_idx,
@@ -421,8 +416,20 @@ def _has_downtrend(
             freshest = best_after_threshold
             break  # выходим из внешнего while: эпоха полностью расширена вправо
 
-        # Иначе (порог не набран) — baseline++ и новая попытка
-        if folds_found < iterations:
+        # если порог не набран в этом проходе — проверяем его по сжатым парам
+        pairs: list[tuple[int, int]] = []
+        for (l, h, _b3, _ll) in current_folds:
+            if not pairs:
+                pairs.append((l, h))
+            else:
+                prev_l, prev_h = pairs[-1]
+                if bars[l].low < bars[prev_l].low and bars[h].high > bars[prev_h].high:
+                    pairs[-1] = (l, h)
+                else:
+                    pairs.append((l, h))
+        compressed_count_end = len(pairs)
+
+        if compressed_count_end < iterations:
             if folds_found > 0 and last_bar3_attempt is not None:
                 baseline = max(baseline + 1, last_bar3_attempt)
             else:
