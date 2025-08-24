@@ -13,6 +13,7 @@ from services.TelegramNotifier import TelegramNotifier
 from utils.atr import atr
 from utils.bars import cut_bars_from_high
 from utils.logger import log, logw
+from utils.logscale import to_log_scale
 from utils.message_formatter import format_message
 
 
@@ -45,6 +46,7 @@ def create_analysis_worker() -> Callable[
                     continue
 
                 bars = await client.fetch_bars(symbol, timeframe, limit=BARS_LIMIT)
+                bars = to_log_scale(bars)
                 bars = cut_bars_from_high(bars)
                 if not bars:
                     continue

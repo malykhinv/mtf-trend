@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 
 from config.constants import TIMEFRAMES
 from data.BinanceClient import BinanceClient
+from data.BybitClient import BybitClient
 from data.Database import Database
 from domain.exchange_client import ExchangeClient
 from domain.models.Timeframe import Timeframe
@@ -85,7 +86,11 @@ if __name__ == "__main__":
         BinanceClient(
             api_key=os.getenv("BINANCE_API_KEY"),
             api_secret=os.getenv("BINANCE_API_SECRET"),
-        )
+        ),
+        BybitClient(
+            api_key=os.getenv("BYBIT_API_KEY"),
+            api_secret=os.getenv("BYBIT_API_SECRET"),
+        ),
     ]
     notifier = TelegramNotifier(
         token=os.getenv("TELEGRAM_TOKEN"),
