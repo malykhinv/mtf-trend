@@ -14,7 +14,9 @@ from config.constants import (
 )
 
 from data.BinanceClient import BinanceClient
+from data.BybitClient import BybitClient
 from domain.detection import detect
+from domain.exchange_client import ExchangeClient
 from domain.models.Bar import Bar
 from domain.models.Timeframe import Timeframe
 from services.Plotter import Plotter
@@ -24,14 +26,14 @@ from utils.logger import log, logw
 
 
 # ====== НАСТРОЙКИ ТЕСТА ======
-SYMBOL: str = "SYN/USDT"
-TARGET_DT: datetime = datetime(2025, 8, 23, 20, 23, tzinfo=TIMEZONE)
+SYMBOL: str = "XTER/USDT"
+TARGET_DT: datetime = datetime(2025, 8, 24, 19, 0, tzinfo=TIMEZONE)
 MICROSTEP: timedelta = timedelta(milliseconds=1)
 TIMEFRAMES: list[Timeframe] = [
     # Timeframe.M1,
     # Timeframe.M5,
-    Timeframe.M15,
-    # Timeframe.H1,
+    # Timeframe.M15,
+    Timeframe.H1,
     # Timeframe.H4,
     # Timeframe.D1
 ]
@@ -52,7 +54,7 @@ def bar_time(bar: Bar) -> datetime:
 
 
 async def fetch_bars_until(
-    client: BinanceClient,
+    client: ExchangeClient,
     symbol: str,
     timeframe: Timeframe,
     tail: int,
@@ -95,6 +97,10 @@ async def main() -> None:
     client = BinanceClient(
         api_key=os.getenv("BINANCE_API_KEY", ""),
         api_secret=os.getenv("BINANCE_API_SECRET", ""),
+    )
+    client = BybitClient(
+        api_key=os.getenv("BYBIT_API_KEY", ""),
+        api_secret=os.getenv("BYBIT_API_SECRET", ""),
     )
     plotter = Plotter()
 

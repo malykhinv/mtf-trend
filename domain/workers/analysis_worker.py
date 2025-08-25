@@ -46,7 +46,7 @@ def create_analysis_worker() -> Callable[
                     continue
 
                 bars = await client.fetch_bars(symbol, timeframe, limit=BARS_LIMIT)
-                bars = to_log_scale(bars)
+                # bars = to_log_scale(bars)
                 bars = cut_bars_from_high(bars)
                 if not bars:
                     continue
@@ -60,7 +60,6 @@ def create_analysis_worker() -> Callable[
                 n = len(bars)
                 min_needed = 500
 
-                # стартовые индексы: 0, 50, 100, ... пока в слайсе хватает баров
                 starts = [s for s in range(0, n, step) if n - s >= min_needed]
                 signal = None
                 used_start = None

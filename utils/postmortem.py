@@ -36,7 +36,7 @@ def log_postmortem_from_confirm(
 
     entry = bars_after_confirm[0].close
     risk = entry - sl
-    sl_pct = (entry - sl) / entry * 100.0  # может быть <= 0 при невалидном SL
+    sl_pct = (entry - sl) / entry * 100.0
 
     # Поиск первого касания SL и максимум до касания
     stop_hit_idx = None

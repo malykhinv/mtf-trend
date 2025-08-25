@@ -122,10 +122,8 @@ def detect(
     sl = None
     _left = sh_last_idx + 1
     _right = None
-    if t_break is not None and t_break > sh_last_idx:
-        _right = min(t_break, e)
-    elif confirm_idx is not None:
-        _right = confirm_idx
+    if confirm_idx is not None:
+        _right = min(confirm_idx, e)
     if _right is not None and _left <= _right:
         sl_idx = _find_on_range_min_low(bars, _left, _right)
         sl = bars[sl_idx].low
