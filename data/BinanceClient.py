@@ -40,11 +40,13 @@ class BinanceClient(ExchangeClient):
         for market in markets.values():
             if not market.get("active", True):
                 continue
+            quote = market.get("quote")
             if (market.get("contract") and
                     market.get("linear") and
-                    market.get("quote") == "USDT" and
+                    quote == "USDT" and
                     market.get("type") in {"swap", "future"}):
-                symbols.append(market["symbol"])
+                base = market.get("base")
+                symbols.append(f"{base}{quote}")
         return sorted(set(symbols))
 
     async def fetch_bars(

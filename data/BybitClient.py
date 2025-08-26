@@ -17,7 +17,7 @@ class BybitClient(ExchangeClient):
     def __init__(self, api_key: str, api_secret: str, default_type: str = "linear") -> None:
         """
         default_type:
-            - "linear"  — USDT/USDC-перпетуалы (рекомендуется)
+            - "linear"  — USDT-перпетуалы ()
             - "inverse" — инверсные контракты (BTC/USD и т.п.)
             - "spot"    — спот (если понадобится)
         """
@@ -40,22 +40,21 @@ class BybitClient(ExchangeClient):
 
     async def fetch_symbols(self) -> list[str]:
         """
-        Получить список символов для линейных (USDT/USDC) деривативов.
-        Возвращает ccxt-символы вида 'BTC/USDT' или 'BTC/USDT:USDT' в зависимости от версии ccxt.
+        Получить список символов для линейных (USDT) деривативов.
+        Возвращает ccxt-символы вида 'BTC/USDT'.
         """
         markets = await self._client.load_markets()
         symbols: List[str] = []
-        for m in markets.values():
-            if not m.get("active", True):
+        for market in markets.values():
+            if not market.get("active", True):
                 continue
-            # Берём только деривативы на USDT/USDC (linear), чтобы совпадало с логикой детектора
-            if (
-                m.get("contract")
-                and m.get("linear")
-                and m.get("quote") in {"USDT", "USDC"}
-                and m.get("type") in {"swap", "future"}
-            ):
-                symbols.append(m["symbol"])
+            quote = market.get("quote")
+            if (market.get("contract") and
+                    market.get("linear") and
+                    quote == "USDT" and
+                    market.get("type") in {"swap", "future"}):
+                base = market.get("base")
+                symbols.append(f"{base}{quote}")
         return sorted(set(symbols))
 
     async def fetch_bars(
