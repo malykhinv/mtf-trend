@@ -59,6 +59,7 @@ class Plotter:
         timeframe: Timeframe | str | None = None,
         highlight_epoch_index: int | None = None,
         show_legend: bool = False,
+        extra_hlines: Sequence[tuple[float, str]] | None = None,
     ) -> None:
         if not bars:
             raise ValueError("Нет данных для построения")
@@ -173,6 +174,40 @@ class Plotter:
         left = float(times[0] - width)
         right = float(times[-1] + width)
         ax.set_xlim(left, right)
+        # --- Дополнительные горизонтальные линии (постмортем) ---
+        if extra_hlines:
+            x0 = float(times[0])
+            x1 = float(times[-1])
+            for y, label in extra_hlines:
+                lab = (label or "").upper()
+                # Цвета по умолчанию: SL = свечной даун, TP = свечной ап, LEVEL = серый
+                if lab == "SL":
+                    color = COLOR_DOWN
+                elif lab == "TP":
+                    color = COLOR_UP
+                else:
+                    color = "gray"
+                ax.hlines(
+                    y=float(y),
+                    xmin=x0,
+                    xmax=x1,
+                    colors=color,
+                    linestyles="-",
+                    linewidth=1.6,
+                    alpha=0.9,
+                    zorder=5,
+                )
+                # Подпись у правого края
+                ax.text(
+                    x1,
+                    float(y),
+                    f" {lab}",
+                    va="center",
+                    ha="left",
+                    color=color,
+                    fontsize=8,
+                    zorder=6,
+                )
 
         # --- Ось X: подписи только внизу (на ATR), стиль TV ---
         ax.tick_params(axis="x", labelbottom=False)

@@ -36,7 +36,7 @@ PLOT_DPI: int = 100
 ATR_PERIOD: int = 14
 ATR_BREAKOUT_MULTIPLIER: float = 3
 # Фильтр значимости пары (l/h)
-SWING_FILTER_AMP_ATR_MULTIPLIER: float = 5
+SWING_FILTER_AMP_ATR_MULTIPLIER: float = 3.5
 MIN_SWING_WIDTH_BARS: int = max(6, ATR_PERIOD//2)
 
 TREND_ITERATIONS: int = 3
@@ -49,3 +49,10 @@ HIGH_SHIFT = 3 * MIN_PULLBACK_BARS
 MIN_RR = 1.05
 
 HAS_LOGARITHMIC_SCALE = False
+
+# Максимум баров на поиск первого ретеста после подтверждения
+RETEST_MAX_BARS: int = 60
+# Допуск к уровню при поиске ретеста (в ATR текущего бара)
+RETEST_ATR_TOL_MULT: float = 1
+# Сколько баров отводим на подтверждение «реакции» после ретеста
+REACTION_CONFIRM_BARS: int = 2

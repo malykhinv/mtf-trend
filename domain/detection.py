@@ -9,6 +9,7 @@ from config.constants import (
     ATR_BREAKOUT_MULTIPLIER,
     OUTPUT_PLOT_PATH, FRESH_MAX_AGE, TREND_ITERATIONS, WINDOW_TAIL, MIN_PULLBACK_BARS, MIN_SWING_WIDTH_BARS,
     SWING_FILTER_AMP_ATR_MULTIPLIER,
+    RETEST_MAX_BARS, RETEST_ATR_TOL_MULT, REACTION_CONFIRM_BARS
 )
 from domain.models.DowntrendResult import DowntrendResult
 from domain.models.Bar import Bar
@@ -19,7 +20,12 @@ from domain.models.Extremum import Extremum
 from domain.models.ExtremumType import ExtremumType
 from services.Plotter import Plotter
 from utils.logger import log, logw
-from utils.postmortem import log_postmortem_from_confirm
+from utils.postmortem import (
+    PostmortemLongRetestInput,
+    PostmortemShortInput,
+    log_postmortem_short_from_sh_last,
+    log_postmortem_long_retest,
+)
 from utils.safe_name import safe_name
 
 def detect(
@@ -47,9 +53,6 @@ def detect(
     min_needed = max(ATR_PERIOD + 20, 200)
     if n < min_needed:
         log_symbol(f"Недостаточно баров для анализа (нужно ≥ {min_needed}).")
-        if force_plot:
-            _save_chart(exchange, symbol, timeframe, plotter, bars, exts=[])
-        return None
 
     # базовый хвост по времени (как в спецификации)
     e = n - 1
@@ -106,7 +109,7 @@ def detect(
             if bars[idx].high > level:
                 t_break = idx
                 break
-    # --- Постмортем-подготовка: bars_after_confirm и sl ---
+    # --- Постмортем-подготовка ---
     # Уровень закрепления (как в спецификации) — телом выше level = max(open, close) на sh_last
     # 1) Находим индекс подтверждающей свечи: первая пара подряд, где обе свечи закрыты телом выше level.
     confirm_idx = None
@@ -118,27 +121,46 @@ def detect(
     # 2) bars_after_confirm — начиная с подтверждающей свечи (если нашли)
     bars_after_confirm = bars[confirm_idx:] if confirm_idx is not None else []
 
-    # 3) SL — лой на участке (sh_last..t_break], если t_break найден; иначе — (sh_last..confirm_idx], если подтверждение нашли
-    sl = None
-    _left = sh_last_idx + 1
-    _right = None
-    if confirm_idx is not None:
-        _right = min(confirm_idx, e)
-    if _right is not None and _left <= _right:
-        sl_idx = _find_on_range_min_low(bars, _left, _right)
-        sl = bars[sl_idx].low
-
-
     # пересчёт возраста: до пересечения считаем от last_ll, после — от первого пересечения
     age_anchor = t_break if t_break is not None else last_ll_idx
     age = e - age_anchor
-    if age > FRESH_MAX_AGE:
-        # Вызов постмортема только если есть подтверждение и валидный SL
-        if confirm_idx is not None and sl is not None and bars_after_confirm:
+    run_pm = os.getenv("POSTMORTEM_ALWAYS", "").strip().lower() in ("1","true","yes","y") or (age > FRESH_MAX_AGE)
+    if run_pm:
+        # Вызов постмортема только если есть подтверждение и есть бары справа
+        if confirm_idx is not None and bars_after_confirm:
             try:
-                log_postmortem_from_confirm(symbol, exchange, timeframe, bars_after_confirm, sl)
+                log_postmortem_long_retest(
+                    PostmortemLongRetestInput(
+                        symbol=symbol,
+                        exchange=exchange,
+                        timeframe=timeframe,
+                        bars_after_confirm=bars_after_confirm,
+                        level=level,
+                        ret_i=_find_retest_index(bars_after_confirm, level, RETEST_MAX_BARS, RETEST_ATR_TOL_MULT) or 0,
+                        reaction_confirm_bars=REACTION_CONFIRM_BARS,
+                        atr_tol_mult=RETEST_ATR_TOL_MULT,
+                    )
+                )
             except Exception as _exc:
-                log_symbol(f"Постмортем не выполнен: {_exc}")
+                log_symbol(f"Постмортем (лонг) не выполнен: {_exc}")
+            try:
+                log_postmortem_short_from_sh_last(
+                    PostmortemShortInput(
+                        symbol=symbol,
+                        exchange=exchange,
+                        timeframe=timeframe,
+                        bars_after_confirm=bars_after_confirm,
+                        level=level,
+                        entry_idx=_find_first_two_closes_below(bars_after_confirm, level) or 0,
+                        spike_high=float(bars[sh_last_idx].high),
+                        reaction_confirm_bars=REACTION_CONFIRM_BARS,
+                        sh_last_high=float(bars[sh_last_idx].high),
+                    )
+                )
+            except Exception as _exc:
+                log_symbol(f"Постмортем (шорт) не выполнен: {_exc}")
+
+    if age > FRESH_MAX_AGE:
         if force_plot:
             _save_chart(exchange, symbol, timeframe, plotter, bars, exts=exts)
         return None
@@ -485,3 +507,29 @@ def _rolling_median_atr(bars: list[Bar], period: int) -> list[float]:
         left = 0 if i <= period else i - period
         out[i] = median(b.atr for b in bars[left:i + 1])
     return out
+
+def _atr_local(b: Bar) -> float:
+    return float(b.atr) if b.atr is not None else max(0.0, float(b.high) - float(b.low))
+
+
+def _find_retest_index(bars_after_confirm: list[Bar], level: float, max_bars: int, tol_mult: float) -> int | None:
+    if not bars_after_confirm:
+        return None
+    m = min(len(bars_after_confirm), max_bars if isinstance(max_bars, int) and max_bars > 0 else len(bars_after_confirm))
+    for i in range(m):
+        tol = tol_mult * _atr_local(bars_after_confirm[i])
+        if float(bars_after_confirm[i].low) <= float(level) + tol:
+            return i
+    return None
+
+
+def _find_first_two_closes_below(bars_after_confirm: list[Bar], level: float) -> int | None:
+    # returns the index of the SECOND close-below bar (entry index)
+    if len(bars_after_confirm) < 2:
+        return None
+    for i in range(1, len(bars_after_confirm)):
+        prev = bars_after_confirm[i - 1]
+        curr = bars_after_confirm[i]
+        if min(prev.open, prev.close) < level and min(curr.open, curr.close) < level:
+            return i
+    return None
