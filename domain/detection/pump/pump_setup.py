@@ -27,7 +27,7 @@ from config.constants import (
     MIN_ATR_GROWTH_PERCENT,
     MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
     IS_CAPTURING_ENABLED,
-    MAX_BIG_BODY_SHARE, TBQ_HOLD_BARS, TBQ_EMA_PERIOD, TBQ_THRUST, ANTI_SPIKE_ATR_MULT,
+    MAX_BIG_BODY_SHARE, TBQ_HOLD_BARS, TBQ_EMA_PERIOD, TBQ_THRUST, ANTI_SPIKE_ATR_MULT, IS_BACKTEST_MODE_ENABLED,
 )
 from utils.decorator import inject_method_name, log_duration_ms
 from concurrent.futures import ThreadPoolExecutor
@@ -100,7 +100,7 @@ class PumpSetup(Setup):
     @log_duration_ms
     def has_weak_conditions(self) -> bool:
         """Проверяет выполнение слабых фильтров."""
-        if not self._check_oi():
+        if not IS_BACKTEST_MODE_ENABLED and not self._check_oi():
             return False
         if not self._check_consolidation():
             return False
