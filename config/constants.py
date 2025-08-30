@@ -96,3 +96,8 @@ FILL_OUTDATED_ENTRY: PatternFill = PatternFill(
 # Количество баров, используемых для мониторинга пересечения цен
 CROSS_MONITOR_HISTORY_BARS: int = 500
 # endregion
+
+TBQ_EMA_PERIOD: int = 5          # сглаживание индекса тейкеров
+TBQ_THRUST: float = 0.58         # доля покупок в котируемой валюте для «доминирования»
+TBQ_HOLD_BARS: int = 2           # сколько последних баров подряд держать доминирование
+ANTI_SPIKE_ATR_MULT: float = 1.8 # анти-памп одной свечой (high-low < k*ATR)

@@ -11,6 +11,7 @@ class Bar:
     timestamp: момент времени бара
     open, high, low, close: цены открытия, максимума, минимума, закрытия
     volume: объём
+    tbq: taker buy quote
     oi: open interest (может отсутствовать)
     atr: индекс ATR данного бара
     """
@@ -20,5 +21,6 @@ class Bar:
     low: float
     close: float
     volume: float
+    tbq: float = FLOAT_UNDEFINED
     oi: float = FLOAT_UNDEFINED
     atr: float = FLOAT_UNDEFINED

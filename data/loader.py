@@ -89,7 +89,8 @@ class Loader:
         target_ts = [to_local_dt(entry[0]) for entry in raw]
         oi_values = self._get_oi_values(symbol, timeframe, limit, since, end_time, to_time, has_oi, target_ts)
 
-        bars = self._build_bars(raw, oi_values, to_time)
+        tbq_values = self._get_tbq_values(symbol, timeframe, limit, since, end_time, target_ts)
+        bars = self._build_bars(raw, oi_values, tbq_values, to_time)
 
         atrs = calculate_atr(bars)
         for i in range(len(atrs)):
@@ -159,6 +160,7 @@ class Loader:
             self,
             raw: List[Any],
             oi_values: List[float],
+            tbq_values: List[float],
             to_time: Optional[datetime]
     ) -> List[Bar]:
         bars = []
@@ -167,6 +169,7 @@ class Loader:
             if to_time and ts > to_time:
                 continue
             oi_value = oi_values[i] if i < len(oi_values) else FLOAT_UNDEFINED
+            tbq_value = tbq_values[i] if i < len(tbq_values) else FLOAT_UNDEFINED
             bar = Bar(
                 timestamp=ts,
                 open=entry[1],
@@ -174,6 +177,7 @@ class Loader:
                 low=entry[3],
                 close=entry[4],
                 volume=entry[5],
+                tbq=tbq_value,
                 oi=oi_value
             )
             bars.append(bar)
@@ -243,3 +247,49 @@ class Loader:
             idx = bisect_right(sorted_ts, ts) - 1
             result.append(sorted_oi[idx] if idx >= 0 else FLOAT_UNDEFINED)
         return result
+
+    @log_duration_ms
+    def _get_tbq_values(
+            self,
+            symbol: str,
+            timeframe: Timeframe,
+            limit: int,
+            since: Optional[int],
+            end_time: Optional[int],
+            target_ts: List[datetime],
+    ) -> List[float]:
+        """
+        Возвращает массив TBQ (takerBuyQuoteVolume / quoteAssetVolume) в диапазоне target_ts.
+        """
+        klines = self._fetch_klines_raw(symbol, timeframe, limit, since, end_time)
+        if not klines:
+            return [FLOAT_UNDEFINED for _ in target_ts]
+
+        # Binance raw kline: [ openTime, o, h, l, c, baseVol, closeTime, quoteVol, trades, takerBuyBaseVol, takerBuyQuoteVol, ignore ]
+        tbq_map = {}
+        for k in klines:
+            try:
+                open_ts = to_local_dt(int(k[0]))
+                quote_vol = float(k[7])
+                tbq_vol = float(k[10])
+                tbq = tbq_vol / quote_vol if quote_vol > 0 else FLOAT_UNDEFINED
+                tbq_map[open_ts] = tbq
+            except Exception:
+                continue
+
+        return [tbq_map.get(ts, FLOAT_UNDEFINED) for ts in target_ts]
+
+    @log_duration_ms
+    def _fetch_klines_raw(self, symbol: str, timeframe: Timeframe, limit: int,
+                          since: Optional[int], end_time: Optional[int]) -> List[List]:
+        params: Dict[str, Any] = {
+            'symbol': symbol,
+            'interval': timeframe.value,
+            'limit': limit
+        }
+        if since:
+            params['startTime'] = since
+        if end_time:
+            params['endTime'] = end_time
+        with self.client_lock:
+            return self.binance.fapipublic_get_klines(params)

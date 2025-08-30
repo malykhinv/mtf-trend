@@ -27,7 +27,7 @@ from config.constants import (
     MIN_ATR_GROWTH_PERCENT,
     MIN_VOLUME_RATIO, MIN_VOLUME_GROWTH, ATR_PERIOD, PUMP_MAX_DURATION_MINUTES, BIG_BODY_ATR_MULTIPLIER,
     IS_CAPTURING_ENABLED,
-    MAX_BIG_BODY_SHARE,
+    MAX_BIG_BODY_SHARE, TBQ_HOLD_BARS, TBQ_EMA_PERIOD, TBQ_THRUST, ANTI_SPIKE_ATR_MULT,
 )
 from utils.decorator import inject_method_name, log_duration_ms
 from concurrent.futures import ThreadPoolExecutor
@@ -73,18 +73,14 @@ class PumpSetup(Setup):
 
     @log_duration_ms
     def has_strong_conditions(self) -> bool:
-        """Проверяет выполнение фильтров сильного уровня."""
-        self._define_trendline()
-        if not self._check_trendline_validity():
-            return False
-        if not self._check_trendline_touches():
-            return False
-        if not self._check_trendline_breakout():
+        """Сильный: конец коррекции подтверждён доминированием тейкер-покупателей + валидный RR."""
+        if not self._check_takers_end_of_correction():
             return False
         if not self._check_rr():
             return False
         self.confidence = Confidence.STRONG
         self.log_setup()
+
         return True
 
     @log_duration_ms
@@ -409,6 +405,56 @@ class PumpSetup(Setup):
             self.bars_before_breakout = bars[:idx]
             self.bars_after_breakout = bars[idx + 1:]
         log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
+        return True
+
+    @inject_method_name
+    @log_duration_ms
+    def _check_takers_end_of_correction(self) -> bool:
+        """
+        Считаем индекс тейкеров I = 2*TBQ - 1, сглаживаем EMA(TBQ_EMA_PERIOD).
+        Требуем:
+          1) последние TBQ_HOLD_BARS баров: TBQ >= TBQ_THRUST и EMA(I) > 0;
+          2) предыдущие TBQ_HOLD_BARS баров – отсутствовало доминирование (средняя TBQ <= 0.5);
+          3) последняя свеча не «шпилька» (anti-spike по ATR), чтобы не входить на одиночный памп.
+        """
+        bars = self.correction_bars
+        if not bars or len(bars) < TBQ_HOLD_BARS * 2 + 1:
+            self._capture_pump("Недостаточно баров коррекции для TBQ.", Confidence.STRONG, self._name)
+            return False
+
+        tbq = np.array([b.tbq for b in bars], dtype=float)
+        if not np.isfinite(tbq).any():
+            self._capture_pump("Нет TBQ данных на сетап ТФ.", Confidence.STRONG, self._name)
+            return False
+
+        # Индекс тейкеров I в [-1..+1]
+        index = 2.0 * tbq - 1.0
+
+        # EMA по I
+        k = 2.0 / (TBQ_EMA_PERIOD + 1.0)
+        ema = np.zeros_like(index)
+        ema[0] = index[:TBQ_EMA_PERIOD].mean() if len(index) >= TBQ_EMA_PERIOD else index[0]
+        for i in range(1, len(index)):
+            ema[i] = index[i] * k + ema[i - 1] * (1.0 - k)
+
+        w = TBQ_HOLD_BARS
+        last_ok = np.all(tbq[-w:] >= TBQ_THRUST) and np.all(ema[-w:] > 0.0)
+        prev_slice = tbq[-2*w:-w] if len(tbq) >= 2*w else tbq[:-w]
+        prev_ok = prev_slice.size > 0 and float(np.nanmean(prev_slice)) <= 0.5
+
+        last_bar = bars[-1]
+        anti_spike_ok = (last_bar.high - last_bar.low) <= ANTI_SPIKE_ATR_MULT * (last_bar.atr if last_bar.atr else 0.0)
+
+        if not last_ok:
+            self._capture_pump("TBQ не держит доминирование в конце коррекции.", Confidence.STRONG, self._name)
+            return False
+        if not prev_ok:
+            self._capture_pump("Не зафиксирован переход режима продавцы→покупатели.", Confidence.STRONG, self._name)
+            return False
+        if not anti_spike_ok:
+            self._capture_pump("Анти-шпилька: последняя свеча слишком большая.", Confidence.STRONG, self._name)
+            return False
+        log("Конец коррекции: тейкеры-покупатели доминируют, переход подтверждён.")
         return True
 
     @inject_method_name
