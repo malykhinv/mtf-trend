@@ -43,7 +43,6 @@ def main():
         plot = Plot(
             symbol=symbol,
             bars=setup_bars,
-            correction_swings=signal.correction_swings if signal else [],
             tf=tfs.setup,
             save_dir='test'
         )

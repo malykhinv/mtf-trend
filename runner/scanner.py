@@ -148,7 +148,6 @@ class Scanner:
         plot = Plot(
             symbol=signal.symbol,
             bars=setup_bars,
-            correction_swings=signal.correction_swings,
             tf=tfs.setup,
             save_dir='confirmed'
         )
@@ -169,23 +168,7 @@ class Scanner:
             msg_id, with_photo = self._send_signal(signal, message, image_path)
             if msg_id:
                 log(f"Сообщение отправлено, message_id={msg_id}")
-                highs = [s.price for s in signal.correction_swings if s.type.is_high]
-                lows = [s.price for s in signal.correction_swings if s.type.is_low]
-                if highs and lows and current_price:
-                    high = max(highs)
-                    low = min(lows)
-                    with self._lock:
-                        self._pending_signals[signal.symbol] = UpdateDetails(
-                            message_id=msg_id,
-                            notifier=self.orders_notifier if signal.is_order_signal else self.events_notifier,
-                            with_photo=bool(image_path),
-                            text=message,
-                            high=high,
-                            low=low,
-                            entry_price=current_price,
-                            max_price=current_price,
-                            min_price=current_price,
-                        )
+
         with self._lock:
             if signal.symbol not in self._sent_signals:
                 self._sent_signals[signal.symbol] = set()

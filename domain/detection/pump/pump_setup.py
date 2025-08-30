@@ -73,7 +73,8 @@ class PumpSetup(Setup):
 
     @log_duration_ms
     def has_strong_conditions(self) -> bool:
-        """Сильный: конец коррекции подтверждён доминированием тейкер-покупателей + валидный RR."""
+        """Проверяет выполнение фильтров сильного уровня (без свингов и наклонки)."""
+        # 1) завершение коррекции через ре-акселерацию цены vs EMA (без трендлайна)
         if not self._check_takers_end_of_correction():
             return False
         if not self._check_rr():
@@ -89,9 +90,6 @@ class PumpSetup(Setup):
         self._define_correction_bars()
         self._define_correction_atr()
         if not self._check_red_bars_size():
-            return False
-        self._define_correction_swings()
-        if not self._check_correction_structure(self.correction_swings):
             return False
         if not self._check_correction_depth():
             return False
@@ -331,33 +329,6 @@ class PumpSetup(Setup):
 
     @inject_method_name
     @log_duration_ms
-    def _check_correction_structure(self, swings: List[SwingPoint]) -> bool:
-        """Проверяет структуру коррекции по свинг-поинтам."""
-        if not swings or len(swings) < 5:
-            self._capture_pump(
-                "Недостаточно swing-поинтов для анализа коррекции.",
-                Confidence.MODERATE,
-                self._name
-            )
-            return False
-        lh_count = 0
-        highs = [s for s in swings if s.type.is_high]
-        for i in range(1, len(highs)):
-            if highs[i].price < highs[i - 1].price:
-                lh_count += 1
-        ll_count = 0
-        lows = [s for s in swings if s.type.is_low]
-        for i in range(1, len(lows)):
-            if lows[i].price < lows[i - 1].price:
-                ll_count += 1
-        if lh_count < 1 or ll_count < 1:
-            self._capture_pump(f"Недостаточно LH/LL: LH={lh_count}, LL={ll_count}", Confidence.MODERATE, self._name)
-            return False
-        log("Структура коррекции подтверждена: есть LH и LL.")
-        return True
-
-    @inject_method_name
-    @log_duration_ms
     def _check_correction_depth(self) -> bool:
         """Проверяет, что глубина коррекции не слишком велика."""
         correction_low = min(bar.low for bar in self.correction_bars)
@@ -374,112 +345,79 @@ class PumpSetup(Setup):
 
     @inject_method_name
     @log_duration_ms
-    def _check_trendline_validity(self) -> bool:
-        """Проверяет валидность найденной наклонки."""
-        if not self.trendline or not self.trendline.valid:
-            self._capture_pump("Наклонка невалидна.", Confidence.STRONG, self._name)
-            return False
-        return True
-
-    @inject_method_name
-    @log_duration_ms
-    def _check_trendline_touches(self) -> bool:
-        """Проверяет, что наклонка имеет минимум два касания."""
-        touches = self.trendline_builder.count_touches(self.trendline, self.correction_bars)
-        if touches < 2:
-            self._capture_pump(f"Недостаточно касаний наклонки: {touches} < 2.", Confidence.STRONG, self._name)
-            return False
-        log(f"{self.symbol} Подтверждено касаний наклонки: {touches}.")
-        return True
-
-    @inject_method_name
-    @log_duration_ms
-    def _check_trendline_breakout(self) -> bool:
-        """Проверяет пробой и закрепление цены выше наклонки."""
-        bars = self.correction_bars
-        last_two_indices = [len(bars) - 2, len(bars) - 1]
-        for idx in last_two_indices:
-            if not self.trendline_builder.has_breakout(self.trendline, bars, idx):
-                self._capture_pump(f"Бар {idx} не закрепился выше наклонки.", Confidence.STRONG, self._name)
-                return False
-            self.bars_before_breakout = bars[:idx]
-            self.bars_after_breakout = bars[idx + 1:]
-        log("Пробой и закрепление выше наклонки подтверждены последними двумя свечами.")
-        return True
-
-    @inject_method_name
-    @log_duration_ms
     def _check_takers_end_of_correction(self) -> bool:
         """
-        Считаем индекс тейкеров I = 2*TBQ - 1, сглаживаем EMA(TBQ_EMA_PERIOD).
-        Требуем:
-          1) последние TBQ_HOLD_BARS баров: TBQ >= TBQ_THRUST и EMA(I) > 0;
-          2) предыдущие TBQ_HOLD_BARS баров – отсутствовало доминирование (средняя TBQ <= 0.5);
-          3) последняя свеча не «шпилька» (anti-spike по ATR), чтобы не входить на одиночный памп.
+        TBQ-логика конца коррекции:
+        1) последние TBQ_HOLD_BARS баров: TBQ ≥ TBQ_THRUST и EMA(I)>0, где I = 2*TBQ-1;
+        2) до этого доминирования не было (средний TBQ в предыдущем окне ≤ 0.5);
+        3) анти-шпилька: (High-Low) ≤ ANTI_SPIKE_ATR_MULT * ATR последнего бара.
         """
+
         bars = self.correction_bars
         if not bars or len(bars) < TBQ_HOLD_BARS * 2 + 1:
             self._capture_pump("Недостаточно баров коррекции для TBQ.", Confidence.STRONG, self._name)
             return False
-
         tbq = np.array([b.tbq for b in bars], dtype=float)
         if not np.isfinite(tbq).any():
             self._capture_pump("Нет TBQ данных на сетап ТФ.", Confidence.STRONG, self._name)
             return False
-
-        # Индекс тейкеров I в [-1..+1]
-        index = 2.0 * tbq - 1.0
-
-        # EMA по I
+        # Индекс тейкеров I в [-1..+1] и его EMA
+        I = 2.0 * tbq - 1.0
         k = 2.0 / (TBQ_EMA_PERIOD + 1.0)
-        ema = np.zeros_like(index)
-        ema[0] = index[:TBQ_EMA_PERIOD].mean() if len(index) >= TBQ_EMA_PERIOD else index[0]
-        for i in range(1, len(index)):
-            ema[i] = index[i] * k + ema[i - 1] * (1.0 - k)
+        ema = np.empty_like(I)
+        ema[0] = np.nanmean(I[:TBQ_EMA_PERIOD]) if len(I) >= TBQ_EMA_PERIOD else I[0]
+
+        for i in range(1, len(I)):
+            ema[i] = I[i] * k + ema[i - 1] * (1.0 - k)
 
         w = TBQ_HOLD_BARS
         last_ok = np.all(tbq[-w:] >= TBQ_THRUST) and np.all(ema[-w:] > 0.0)
-        prev_slice = tbq[-2*w:-w] if len(tbq) >= 2*w else tbq[:-w]
-        prev_ok = prev_slice.size > 0 and float(np.nanmean(prev_slice)) <= 0.5
+        prev = tbq[-2 * w:-w] if len(tbq) >= 2 * w else tbq[:-w]
+        prev_ok = prev.size > 0 and float(np.nanmean(prev)) <= 0.5
 
         last_bar = bars[-1]
-        anti_spike_ok = (last_bar.high - last_bar.low) <= ANTI_SPIKE_ATR_MULT * (last_bar.atr if last_bar.atr else 0.0)
+        atr_last = last_bar.atr if is_defined(last_bar.atr) else 0.0
+        anti_spike_ok = (last_bar.high - last_bar.low) <= ANTI_SPIKE_ATR_MULT * atr_last if atr_last > 0 else True
 
         if not last_ok:
-            self._capture_pump("TBQ не держит доминирование в конце коррекции.", Confidence.STRONG, self._name)
+            self._capture_pump("TBQ: нет удержания доминирования покупателей.", Confidence.STRONG, self._name)
             return False
+
         if not prev_ok:
-            self._capture_pump("Не зафиксирован переход режима продавцы→покупатели.", Confidence.STRONG, self._name)
+            self._capture_pump("TBQ: не видно перехода продавцы→покупатели.", Confidence.STRONG, self._name)
             return False
+
         if not anti_spike_ok:
-            self._capture_pump("Анти-шпилька: последняя свеча слишком большая.", Confidence.STRONG, self._name)
+            self._capture_pump("TBQ: анти-шпилька — одиночный всплеск.", Confidence.STRONG, self._name)
             return False
-        log("Конец коррекции: тейкеры-покупатели доминируют, переход подтверждён.")
         return True
 
     @inject_method_name
     @log_duration_ms
     def _check_rr(self) -> bool:
         """Оценивает RR на соответствие минимальным требованиям."""
+        if not self.correction_bars:
+            self._capture_pump("Нет correction bars для RR.", Confidence.STRONG, self._name)
+            return False
+
         entry = self.last.close
-        sl_candidates = [s.price for s in reversed(self.correction_swings) if s.type.is_low and s.price < entry]
-        if not sl_candidates:
-            self._capture_pump("Нет swing low для SL.", Confidence.STRONG, self._name)
-            return False
-        sl = sl_candidates[0]
+        # SL — минимум последних N баров коррекции (локально-консервативно без свингов)
+        N = 8
+        window = self.correction_bars[-min(N, len(self.correction_bars)):]
+        sl = min(b.low for b in window)
+
         tp = self.main_high.price
-        if tp is None or tp <= entry:
-            self._capture_pump("Нет подходящего TP.", Confidence.STRONG, self._name)
+        if not is_defined(entry, sl, tp) or tp <= entry or sl >= entry:
+            self._capture_pump("Некорректные уровни Entry/SL/TP.", Confidence.STRONG, self._name)
             return False
+
         sl_distance_pct = abs(entry - sl) / entry * 100
         tp_distance_pct = abs(tp - entry) / entry * 100
         if sl_distance_pct < MIN_STOP_LOSS_PERCENT:
-            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_STOP_LOSS_PERCENT}%", Confidence.STRONG,
-                               self._name)
+            self._capture_pump(f"SL слишком близко: {sl_distance_pct:.2f}% < {MIN_STOP_LOSS_PERCENT}%", Confidence.STRONG, self._name)
             return False
         if tp_distance_pct < MIN_TAKE_PROFIT_PERCENT:
-            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TAKE_PROFIT_PERCENT}%", Confidence.STRONG,
-                               self._name)
+            self._capture_pump(f"TP слишком близко: {tp_distance_pct:.2f}% < {MIN_TAKE_PROFIT_PERCENT}%", Confidence.STRONG, self._name)
             return False
         rr = abs(tp - entry) / abs(entry - sl)
         if rr < MIN_RISK_REWARD:
@@ -531,20 +469,6 @@ class PumpSetup(Setup):
         Определяет ATR для коррекции.
         """
         self.correction_atrs = calculate_atr(self.correction_bars) if self.correction_bars else []
-
-    @log_duration_ms
-    def _define_correction_swings(self) -> None:
-        """
-        Определяет свинг-поинты коррекции.
-        """
-        self.correction_swings = self.structure_detector.detect_swing_points(self.correction_bars, self.correction_atrs)
-
-    @log_duration_ms
-    def _define_trendline(self) -> None:
-        """
-        Определяет наклонку по свинг-поинтам коррекции.
-        """
-        self.trendline = self.trendline_builder.build(self.correction_swings, self.correction_bars)
 
     # endregion
 
@@ -693,7 +617,6 @@ class PumpSetup(Setup):
         """Строит и сохраняет изображение пампа."""
         plot = Plot(symbol=self.symbol,
                     bars=self.bars_setup,
-                    correction_swings=self.correction_swings,
                     tf=self.tfs.setup,
                     message=message,
                     save_dir="skipped")

@@ -25,7 +25,6 @@ class Setup(ABC):
         """Сохраняет исходные данные и профиль таймфреймов."""
         self.symbol: str = symbol
         self.bars_setup: List[Bar] = bars_by_tf[tfs.setup]
-        self.correction_swings: List = []
         self.confidence: Optional = None
         self.tfs: MTFProfile = tfs
         self.trendline = None
@@ -87,7 +86,6 @@ class Setup(ABC):
             symbol=self.symbol,
             side=Side.LONG,
             confidence=self.confidence,
-            correction_swings=self.correction_swings,
             timestamp=self.setup_timestamp,
             trendline=self.trendline,
             entry=self.entry,

@@ -15,7 +15,6 @@ from datetime import datetime
 from typing import List, Optional
 
 from domain.models.bar import Bar
-from domain.models.swing_point import SwingPoint
 from domain.models.timeframe import Timeframe
 from domain.models.trendline import Trendline
 from utils.logger import log
@@ -44,9 +43,8 @@ from config.constants import (
     COLOR_BACKGROUND,
     TIMEZONE,
     ATR_COLOR,
-    SWING_COLOR_HIGH,
-    SWING_COLOR_LOW,
-    SWING_MARKER_SIZE, COLOR_OI, COLOR_BACKGROUND_NA,
+    COLOR_OI,
+    COLOR_BACKGROUND_NA,
 )
 
 
@@ -58,7 +56,6 @@ class Plot:
     def __init__(self,
                  symbol: str,
                  bars: List[Bar],
-                 correction_swings: List[SwingPoint],
                  tf: Timeframe,
                  message: Optional[str] = None,
                  save_dir: str = 'unknown'):
@@ -66,7 +63,6 @@ class Plot:
         self.symbol = symbol
         self.tf = tf
         self.bars = bars
-        self.correction_swings = correction_swings
         self.save_dir = '.generated/plot/' + save_dir
         with MATPLOTLIB_LOCK:
             self.fig, (self.ax_price, self.ax_vol, self.ax_oi, self.ax_atr) = plt.subplots(
@@ -119,8 +115,6 @@ class Plot:
         width = float(np.mean(np.diff(time_nums))) * CANDLESTICK_WIDTH_MULTIPLIER if len(time_nums) >= 2 else 0.0007
 
         candlestick_ohlc(self.ax_price, ohlc, width=width, colorup=COLOR_UP, colordown=COLOR_DOWN)
-
-        self.plot_swings()
 
         vol_values = np.array([v[1] for v in volumes])
         vol_min, vol_max = vol_values.min(), vol_values.max()
@@ -194,31 +188,6 @@ class Plot:
                               linewidth=LINE_WIDTH)
         ymax = max(bar.high for bar in self.bars)
         self.ax_price.text(pump_start_num, ymax, '', color=COLOR_PUMP_START, fontsize=PUMP_START_TEXT_SIZE)
-
-    @log_duration_ms
-    def plot_swings(self):
-        """Рисует swing-точки на графике."""
-        if not self.bars:
-            return
-
-        ylim = self.ax_price.get_ylim()
-        y_range = ylim[1] - ylim[0]
-        pixel_height = self.ax_price.get_window_extent().height
-        marker_size_pts = SWING_MARKER_SIZE ** 0.5  # так как s — это площадь в pt²
-        marker_height_data = y_range * (marker_size_pts / pixel_height)
-
-        for sp in self.correction_swings:
-            if sp.is_undefined or sp.timestamp is None:
-                continue
-
-            bar_time = mdates.date2num(sp.timestamp.astimezone(TIMEZONE))
-
-            if sp.type.is_high:
-                marker_y = sp.price + marker_height_data / 2  # нижняя вершина на цене
-                self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_HIGH, marker='v', s=SWING_MARKER_SIZE)
-            elif sp.type.is_low:
-                marker_y = sp.price - marker_height_data / 2  # верхняя вершина на цене
-                self.ax_price.scatter(bar_time, marker_y, color=SWING_COLOR_LOW, marker='^', s=SWING_MARKER_SIZE)
 
     @log_duration_ms
     def plot_trendline(self, trendline: Trendline):

@@ -101,3 +101,7 @@ TBQ_EMA_PERIOD: int = 5          # сглаживание индекса тей�
 TBQ_THRUST: float = 0.58         # доля покупок в котируемой валюте для «доминирования»
 TBQ_HOLD_BARS: int = 2           # сколько последних баров подряд держать доминирование
 ANTI_SPIKE_ATR_MULT: float = 1.8 # анти-памп одной свечой (high-low < k*ATR)
+CORR_MIN_BARS=4
+CORR_MAX_BARS=48
+MOD_ATR_CONTRACTION_K=0.8
+MOD_TBQ_P75_MAX=0.56
