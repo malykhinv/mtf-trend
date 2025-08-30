@@ -224,21 +224,11 @@ def backtest_symbol(
                 i += 1
                 continue
 
-            # Быстрый предфильтр (дешёвый моментум + шаг по сетапу)
-            if (i % 3) != 0:
-                i += 1
-                continue
-            if i >= 3:
-                w0, w1, w2, w3 = bars_setup[i - 3:i + 1]
-                if not (w3.close > w3.open and w3.close > max(w.high for w in (w0, w1, w2))):
-                    i += 1
-                    continue
-
             setup = PumpSetup(symbol, bars_by_tf, tfs)
             signal = setup.validated_or_none()
 
             if signal is None:
-                i += 10
+                i += 1
                 continue
 
             if not signal.confidence.is_strong:

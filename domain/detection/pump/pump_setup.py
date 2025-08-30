@@ -160,7 +160,15 @@ class PumpSetup(Setup):
         period2_start_index = period1_end_index + 1
         self.consolidation_bars = bars[:period1_end_index]
         self.pump_bars = bars[period2_start_index:]
+
+        # ограничиваем окно пампа в бэктесте
+        if IS_BACKTEST_MODE_ENABLED:
+            max_pump_bars = max(1, int(PUMP_MAX_DURATION_MINUTES / self.tfs.setup.minutes))
+            if len(self.pump_bars) > max_pump_bars:
+                self.pump_bars = self.pump_bars[:max_pump_bars]
+
         self.setup_timestamp = self.pump_bars[0].timestamp
+
         if not self.consolidation_bars or not self.pump_bars:
             self._capture_pump("Недостаточно данных после разделения на периоды.", Confidence.WEAK, self._name)
             return False
@@ -247,22 +255,37 @@ class PumpSetup(Setup):
     @inject_method_name
     @log_duration_ms
     def _check_volume_growth(self) -> bool:
-        """Проверяет, что объём во время пампа значительно выше среднего."""
-        avg_vol_p1 = sum(b.volume for b in self.consolidation_bars) / len(self.consolidation_bars)
-        avg_vol_p2 = sum(b.volume for b in self.pump_bars) / len(self.pump_bars)
-        timeframe_factor = self.tfs.setup.minutes
-        min_volume_growth = MIN_VOLUME_GROWTH * timeframe_factor / mean(bar.close for bar in self.pump_bars)
-        volume_threshold = max(avg_vol_p1 * MIN_VOLUME_RATIO, min_volume_growth)
-        if avg_vol_p2 < volume_threshold:
+        """Проверяет, что объём во время пампа значительно выше среднего (в USDT и по отношению к консолидации)."""
+        if not self.consolidation_bars or not self.pump_bars:
+            self._capture_pump("Нет периодов для оценки объёма.", Confidence.WEAK, self._name)
+            return False
+
+        # Нотационный (денежный) объём в USDT: volume * close — устойчив к «дешёвым/дорогим» монетам
+        avg_notional_p1 = sum(b.volume * b.close for b in self.consolidation_bars) / len(self.consolidation_bars)
+        avg_notional_p2 = sum(b.volume * b.close for b in self.pump_bars) / len(self.pump_bars)
+
+        # Абсолютный «пол» в USDT на окно пампа: интерпретируем MIN_VOLUME_GROWTH как базу «в USDT за минуту»
+        # и масштабируем на длительность бара.
+        abs_floor_usdt = float(MIN_VOLUME_GROWTH) * float(self.tfs.setup.minutes)
+
+        # Относительное требование: не хуже MIN_VOLUME_RATIO к консолидации (в USDT)
+        rel_floor_usdt = avg_notional_p1 * float(MIN_VOLUME_RATIO)
+
+        volume_threshold_usdt = max(rel_floor_usdt, abs_floor_usdt)
+
+        if avg_notional_p2 < volume_threshold_usdt:
             self._capture_pump(
-                f"Объём пампа недостаточный: {mf(avg_vol_p2)} < {mf(volume_threshold)}",
+                f"Объём пампа недостаточный: {mf(avg_notional_p2)} < {mf(volume_threshold_usdt)} (USDT)",
                 Confidence.WEAK,
                 self._name
             )
             return False
-        self.volume_growth_x = abs(avg_vol_p2 - avg_vol_p1) / avg_vol_p1
-        log(f"{self.symbol} Объём пампа подтверждён: в {avg_vol_p2 / avg_vol_p1:.1f}x")
+
+        # Для отчётности сохраняем «рост» как отношение нотационных объёмов
+        self.volume_growth_x = avg_notional_p2 / max(1e-12, avg_notional_p1)
+        log(f"{self.symbol} Объём пампа подтверждён: в {self.volume_growth_x:.1f}x (USDT)")
         return True
+
 
     @inject_method_name
     @log_duration_ms
@@ -452,16 +475,26 @@ class PumpSetup(Setup):
     @log_duration_ms
     def _define_correction_bars(self) -> None:
         """
-        Возвращает бары коррекции — все бары после главного high.
+        Возвращает бары коррекции — бары после главного high,
+        но не длиннее окна, соответствующего PUMP_MAX_DURATION_MINUTES.
         """
         if self.main_high.is_undefined:
             self._capture_pump("main_high не задан, не можем выделить correction bars.", Confidence.MODERATE,
                                self._name)
             self.correction_bars = []
-        correction_bars = self.bars_setup[self.main_high.index + 1:]
-        if not correction_bars:
+            return
+
+        start_idx = self.main_high.index + 1
+        if start_idx >= len(self.bars_setup):
             self._capture_pump("После main_high нет баров для коррекции.", Confidence.MODERATE, self._name)
-        self.correction_bars = correction_bars
+            self.correction_bars = []
+            return
+
+        # Длина окна коррекции — не более длительности пампа в минутах, приведённой к барам сетап-ТФ
+        max_corr_bars = max(1, (PUMP_MAX_DURATION_MINUTES + self.tfs.setup.minutes - 1) // self.tfs.setup.minutes)
+        end_idx = min(len(self.bars_setup), start_idx + max_corr_bars)
+        self.correction_bars = self.bars_setup[start_idx:end_idx]
+
 
     @log_duration_ms
     def _define_correction_atr(self) -> None:
