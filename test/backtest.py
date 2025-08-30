@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 
 """
-Backtest Pump (STRONG) -> XLSX с файловым локом (openpyxl)
+Backtest Pump (STRONG) -> XLSX с файловым локом (openpyxl) + инкрементальные сохранения
 - Единый файл: .generated/backtest/pump_backtest.xlsx
 - Файл создаётся и сохраняется СРАЗУ (шапка видна всегда)
 - Каждая STRONG-сделка — отдельная строка (append в конец)
+- Периодический save: каждые N строк и после каждого символа
 """
 
 from __future__ import annotations
@@ -43,6 +44,9 @@ COOLDOWN_MIN = 15
 LOCK_TIMEOUT_SEC = int(os.getenv("BACKTEST_LOCK_TIMEOUT_SEC", "60"))
 LOCK_STALE_SEC   = int(os.getenv("BACKTEST_LOCK_STALE_SEC", "3600"))
 
+# Инкрементальные сохранения
+FLUSH_EVERY = int(os.getenv("BACKTEST_FLUSH_EVERY", "50"))
+
 HEADERS = [
     "symbol", "profile", "strong_ts", "setup_tf",
     "entry_ts", "exit_ts",
@@ -72,6 +76,14 @@ def _excel_lock_present(xlsx_path: str) -> bool:
     # Excel/LibreOffice создают временный "~$<name>.xlsx" рядом с файлом
     d, name = os.path.split(xlsx_path)
     return os.path.exists(os.path.join(d, f"~${name}"))
+
+def _col_letter_1based(n: int) -> str:
+    # 1 -> A, 26 -> Z, 27 -> AA, ...
+    s = ""
+    while n > 0:
+        n, rem = divmod(n - 1, 26)
+        s = chr(65 + rem) + s
+    return s
 
 class FileLock:
     """Кроссплатформенный лок через атомарный .lock-файл."""
@@ -145,8 +157,9 @@ def _open_or_create_book(path: str) -> tuple[Workbook, Worksheet]:
             13:12, 14:14, 15:12, 16:12, 17:12, 18:12, 19:10
         }
         for col, w in widths.items():
-            ws.column_dimensions[chr(64+col)].width = w
-        ws.auto_filter.ref = f"A1:{chr(64+len(HEADERS))}1"
+            ws.column_dimensions[_col_letter_1based(col)].width = w
+        # автофильтр пока только на шапку; диапазон обновим в конце
+        ws.auto_filter.ref = f"A1:{_col_letter_1based(len(HEADERS))}1"
         wb.save(path)  # <— файл появляется СРАЗУ
         return wb, ws
 
@@ -346,9 +359,21 @@ def main():
         # создаём/открываем XLSX и сохраняем сразу (файл гарантированно существует)
         wb, ws = _open_or_create_book(out_path)
 
-        # writerow-адаптер (append в конец)
+        # writerow-адаптер (append в конец) + инкрементальный save
+        rows_since_save = 0
+
+        def flush():
+            nonlocal rows_since_save
+            if rows_since_save > 0:
+                wb.save(out_path)
+                rows_since_save = 0
+
         def writerow(values: list):
+            nonlocal rows_since_save
             ws.append(values)
+            rows_since_save += 1
+            if rows_since_save >= FLUSH_EVERY:
+                flush()
 
         # прогон
         for sym in symbols:
@@ -368,10 +393,13 @@ def main():
                 )
             except Exception as e:
                 logw(f"{sym}: {e}")
+            finally:
+                # сейвим хотя бы по завершении каждого символа
+                flush()
 
         # автофильтр на фактический диапазон
         last_row = ws.max_row
-        ws.auto_filter.ref = f"A1:{chr(64+len(HEADERS))}{last_row}"
+        ws.auto_filter.ref = f"A1:{_col_letter_1based(len(HEADERS))}{last_row}"
         wb.save(out_path)
 
     log(f"[OK] Saved XLSX to: {out_path}")

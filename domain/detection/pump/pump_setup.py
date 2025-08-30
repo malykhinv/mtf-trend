@@ -111,7 +111,7 @@ class PumpSetup(Setup):
             return False
         if not self._check_volume_growth():
             return False
-        if not self._check_pump_duration():
+        if not IS_BACKTEST_MODE_ENABLED and not self._check_pump_duration():
             return False
         if not self._check_pump_bars_size():
             return False
