@@ -5,12 +5,17 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
-from config.constants import IS_TRADING_ENABLED, ACTIVE_SETUP_TIMEOUT_MINUTES, TIMEZONE
+from config.constants import (
+    IS_TRADING_ENABLED, ACTIVE_SETUP_TIMEOUT_MINUTES, TIMEZONE,
+    WATCH_RECHECK_SEC, WATCH_TIMEOUT_MIN, WATCH_TIMEOUT_ON_WEAK_MIN, WATCH_TIMEOUT_ON_MODERATE_MIN
+)
 from config.credentials import TELEGRAM_ORDERS_BOT_TOKEN, TELEGRAM_EVENTS_BOT_TOKEN
 from data.loader import Loader
 from domain.detection.setup_detector import SetupDetector
 from domain.models.bar import Bar
+from domain.models.confidence import Confidence
 from domain.models.mtf_profile import MTFProfile
+from domain.models.radar_event import RadarEvent
 from domain.models.setup_signal import SetupSignal
 from domain.models.timeframe import Timeframe
 from domain.risk_filters import is_calm, has_repeating_ohlc, has_gaps
@@ -77,6 +82,100 @@ class Scanner:
         log(f"Цикл сканирования занял {hours:02d}:{minutes:02d}:{seconds:02d}.")
         print()
 
+    def process_symbol(self, symbol: str, tfss: List[MTFProfile]) -> None:
+        for tfs in tfss:
+            try:
+                self._process_symbol(symbol, tfs)
+            except Exception as error:
+                logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
+
+    def process_radar_event(self, evt: RadarEvent, tfss: list[MTFProfile]) -> None:
+        """Обработка события радара ema_fan_zero: первичный анализ и постановка в watch-режим через ActiveSetup."""
+        from datetime import datetime, timedelta
+        symbol = evt.symbol
+        t0 = evt.t0
+
+        # 1) Разовый анализ по всем профилям
+        signal, chosen_tfs, setup_bars = self._analyze_symbol_once(symbol, tfss, pump_start_time=t0)
+
+        # 2) Если STRONG — сразу алерт/торговля и выходим
+        if signal and signal.confidence == Confidence.STRONG:
+            self._handle_signal(signal, setup_bars, chosen_tfs, setup_bars[-1].close if setup_bars else None)
+            return
+
+        # Выберем tfs: если был выбранный при анализе — используем; иначе возьмём первый из tfss
+        chosen = chosen_tfs or (tfss[0] if tfss else None)
+        if chosen is None:
+            raise RuntimeError("Не переданы профили TF (tfss) для постановки в watch.")
+
+        # Опорный low первого 1m бара после t0
+        base_low = self._get_first_1m_low_after(symbol, t0) if t0 else None
+        expire_at = datetime.now(tz=TIMEZONE) + timedelta(minutes=WATCH_TIMEOUT_MIN)
+        nowdt = datetime.now(tz=TIMEZONE)
+        watch_setup = ActiveSetup(
+            symbol=symbol,
+            tfs=chosen,
+            pump_start_time=t0,
+            last_checked=nowdt,
+            is_watch=True,
+            watch_expire_at=expire_at,
+            watch_base_low=base_low,
+        )
+        with self._lock:
+            self._active_setups[symbol] = watch_setup
+
+    def _analyze_symbol_once(self, symbol: str, tfss: list[MTFProfile], pump_start_time=None):
+        """Возвращает (лучший_signal | None, соответствующий_tfs, setup_bars) без отправки уведомлений."""
+        best = None
+        best_rank = -1
+        best_tfs = None
+        best_setup_bars = None
+
+        # Ранжирование confidence
+        rank = {Confidence.WEAK: 1, Confidence.MODERATE: 2, Confidence.STRONG: 3}
+
+        for tfs in tfss:
+            # повторяем логику _process_symbol, но без _handle_signal, с pump_start_time
+            bars_by_tf = {
+                tfs.macro: self.loader.fetch_ohlcvi(symbol, tfs.macro, limit=30, use_cache=True, ttl_minutes=tfs.macro.minutes)
+            }
+            if not self._check_if_passes_macro_filters(bars_by_tf[tfs.macro]):
+                continue
+            bars_by_tf[tfs.context] = self.loader.fetch_ohlcvi(
+                symbol, tfs.context, limit=50, use_cache=True, ttl_minutes=tfs.context.minutes
+            )
+            if not self._check_if_passes_context_filters(bars_by_tf[tfs.context]):
+                # прогреть OI на setup tf, но сигнал не ищем
+                self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
+                continue
+            setup_bars = self.loader.fetch_ohlcvi(symbol, tfs.setup, has_oi=True)
+            if pump_start_time:
+                setup_bars = [b for b in setup_bars if b.timestamp >= pump_start_time]
+                if not setup_bars:
+                    continue
+            bars_by_tf[tfs.setup] = setup_bars
+
+            signal = self.setup_detector.detect(symbol=symbol, tfs=tfs, bars_by_tf=bars_by_tf, pump_start_time=pump_start_time)
+            if signal:
+                r = rank.get(signal.confidence, 0)
+                if r > best_rank:
+                    best = signal
+                    best_rank = r
+                    best_tfs = tfs
+                    best_setup_bars = setup_bars
+
+        return best, best_tfs, best_setup_bars
+
+    def _get_first_1m_low_after(self, symbol: str, t0: datetime):
+        """Найти low первого 1m-бара после t0; возвращает float | None."""
+        bars = self.loader.fetch_ohlcvi(symbol, Timeframe.M1, limit=120, use_cache=True, ttl_minutes=1)
+        if not bars:
+            return None
+
+        for b in bars:
+            if b.timestamp >= t0:
+                return b.low
+        return None
 
     def _process_symbol(self, symbol: str, tfs: MTFProfile) -> None:
         """Обрабатывает один символ по заданному профилю таймфреймов."""
@@ -225,13 +324,61 @@ class Scanner:
                 del self._pending_signals[symbol]
 
     def _monitor_active_setups(self) -> None:
-        """Фоновый цикл повторной проверки активных сетапов."""
+        """Фоновый цикл: проход по ActiveSetup каждые WATCH_RECHECK_SEC.
+        Watch-режим обслуживается прежде всего: STRONG/продление/перелой/таймаут."""
+        from time import sleep
         while True:
-            time.sleep(60)
+            sleep(WATCH_RECHECK_SEC)
             with self._lock:
                 items = list(self._active_setups.items())
+
             for symbol, active in items:
-                self._recheck_setup(symbol, active)
+                if active.is_watch:
+                    try:
+                        self._recheck_watch(symbol, active)
+                    except Exception as e:
+                        logw(f"Ошибка в recheck_watch {symbol}: {e}")
+                else:
+                    self._recheck_setup(symbol, active)
+
+    def _recheck_watch(self, symbol: str, active: ActiveSetup) -> None:
+        """Переоценка watch ActiveSetup: STRONG завершает; WEAK/MODERATE продлевают; перелой/таймаут снимают."""
+        now = datetime.now(tz=TIMEZONE)
+        t0 = active.pump_start_time
+        base_low = active.watch_base_low
+        expire_at = active.watch_expire_at
+        tfs = active.tfs
+
+        if expire_at and now >= expire_at:
+            with self._lock:
+                self._active_setups.pop(symbol, None)
+            return
+
+        # Переоценка только выбранного профиля tfs (экономия REST)
+        signal, chosen_tfs, setup_bars = self._analyze_symbol_once(symbol, [tfs], pump_start_time=t0)
+
+        if signal:
+            conf = signal.confidence.name.upper()
+            if conf == "STRONG":
+                self._handle_signal(signal, setup_bars, chosen_tfs or tfs, setup_bars[-1].close if setup_bars else None)
+                with self._lock:
+                    self._active_setups.pop(symbol, None)
+                return
+            if conf == "WEAK":
+                active.watch_expire_at = now + timedelta(minutes=WATCH_TIMEOUT_ON_WEAK_MIN)
+            elif conf == "MODERATE":
+                active.watch_expire_at = now + timedelta(minutes=WATCH_TIMEOUT_ON_MODERATE_MIN)
+
+            with self._lock:
+                self._active_setups[symbol] = active
+
+        # Перелой: если low с момента t0 пробит ниже базового low — снять
+        m1_bars = self.loader.fetch_ohlcvi(symbol, Timeframe.M1, limit=120, use_cache=True, ttl_minutes=1)
+        lows = [b.low for b in m1_bars if b.timestamp >= t0]
+        if lows and min(lows) < (base_low if base_low is not None else min(lows)):  # если base_low нет — не снимаем
+            with self._lock:
+                self._active_setups.pop(symbol, None)
+            return
 
     def _recheck_setup(self, symbol: str, active_setup: ActiveSetup) -> None:
         if datetime.now(tz=TIMEZONE) - active_setup.pump_start_time > timedelta(minutes=ACTIVE_SETUP_TIMEOUT_MINUTES):
@@ -277,6 +424,3 @@ class Scanner:
                 self._active_setups.pop(symbol, None)
         else:
             active_setup.last_checked = datetime.now(tz=TIMEZONE)
-
-
-

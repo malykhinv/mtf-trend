@@ -106,3 +106,25 @@ CORR_MAX_BARS=48
 MOD_ATR_CONTRACTION_K=0.8
 MOD_TBQ_P75_MAX=0.56
 IS_BACKTEST_MODE_ENABLED = True
+
+# Stream radar
+RADAR_RET_WIN_SEC = 20        # окно доходности
+RADAR_RET_TRIG = 0.010        # 1.0% за окно
+RADAR_QUEUE_MAX = 500
+RADAR_WATCH_ONLY_USDT = True  # фильтр по *USDT
+RADAR_USE_FUTURES = True      # fstream (фьючерсы) vs stream (спот)
+
+# Радар EMA-фан
+RADAR_USE_EMA_FAN = True
+RADAR_EMA_PERIODS = (20, 50, 100, 200)   # «порядок» для веера
+RADAR_CROSS_WINDOW_SEC = 300             # окно учета пересечений (5 минут)
+RADAR_CROSS_MIN_BEFORE = 3               # было ≥3 пересечений в окне, стало 0
+RADAR_ZERO_HOLD_SEC = 15                 # держим 0-пересечений ≥15с перед сигналом
+RADAR_REARM_SEC = 180                    # повторный сигнал по символу не чаще 3 мин
+
+# Мониторинг «наблюдаемых» символов (watch)
+WATCH_RECHECK_SEC = 15                   # переоценка каждые 15с
+WATCH_TIMEOUT_MIN = 20                   # базовый таймаут
+WATCH_TIMEOUT_ON_WEAK_MIN = 20           # сброс при WEAK
+WATCH_TIMEOUT_ON_MODERATE_MIN = 30       # сброс при MODERATE
+# STRONG — завершает и выходим
