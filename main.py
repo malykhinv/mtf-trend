@@ -33,7 +33,6 @@ if __name__ == "__main__":
                 event = None
 
             if event is not None:
-                log(f"Радар обнаружил событие: {event.symbol}")
                 scanner.process_radar_event(event, tfss)
 
             # 2) Периодический полный проход (надёжность/страховка)

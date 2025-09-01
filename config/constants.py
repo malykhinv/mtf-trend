@@ -117,8 +117,8 @@ RADAR_USE_FUTURES = True      # fstream (фьючерсы) vs stream (спот)
 # Радар EMA-фан
 RADAR_USE_EMA_FAN = True
 RADAR_EMA_PERIODS = (20, 50, 100, 200)   # «порядок» для веера
-RADAR_CROSS_WINDOW_SEC = 300             # окно учета пересечений (5 минут)
-RADAR_CROSS_MIN_BEFORE = 3               # было ≥3 пересечений в окне, стало 0
+RADAR_CROSS_WINDOW_SEC = 60 * 60         # окно учета пересечений
+RADAR_CROSS_MIN_BEFORE = 3
 RADAR_ZERO_HOLD_SEC = 15                 # держим 0-пересечений ≥15с перед сигналом
 RADAR_REARM_SEC = 180                    # повторный сигнал по символу не чаще 3 мин
 

@@ -90,8 +90,6 @@ class Scanner:
                 logw(f"Ошибка при обработке {symbol}: {error}\n{traceback.format_exc()}")
 
     def process_radar_event(self, evt: RadarEvent, tfss: list[MTFProfile]) -> None:
-        """Обработка события радара ema_fan_zero: первичный анализ и постановка в watch-режим через ActiveSetup."""
-        from datetime import datetime, timedelta
         symbol = evt.symbol
         t0 = evt.t0
 
