@@ -228,7 +228,7 @@ def backtest_symbol(
             signal = setup.validated_or_none()
 
             if signal is None:
-                i += 1
+                i += 10
                 continue
 
             if not signal.confidence.is_strong:
