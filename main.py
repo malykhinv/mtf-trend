@@ -77,20 +77,31 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             z_vol = _zscore(trade.quantity, vol_win)
 
             # ----------------------- candle construction ----------------------
+            prev_low = metrics.low
             start_ts = metrics.start_ts
             if trade.timestamp - start_ts >= 60_000 or start_ts == 0:
                 start_ts = trade.timestamp
                 metrics.high = trade.price
                 metrics.low = trade.price
+                low_break = False
             else:
                 metrics.high = max(metrics.high, trade.price)
                 metrics.low = min(metrics.low, trade.price)
+                low_break = prev_low > 0 and trade.price < prev_low
             metrics.start_ts = start_ts
             metrics.end_ts = trade.timestamp
 
             high = metrics.high
             low = metrics.low
             rng = high - low
+
+            total_vol = sum(vol_win)
+            avwap = (
+                sum(p * v for p, v in zip(price_win, vol_win)) / total_vol
+                if total_vol > 0
+                else 0.0
+            )
+            avwap_loss = total_vol > 0 and trade.price < avwap
 
             mean_price = sum(price_win) / len(price_win)
             var_price = sum((p - mean_price) ** 2 for p in price_win) / len(price_win)
@@ -105,6 +116,8 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             metrics.delta_price_abs_pct = delta_abs
             metrics.close_pos = close_pos
             metrics.last_price = trade.price
+            metrics.low_break = low_break
+            metrics.avwap_loss = avwap_loss
 
             registry.update(trade.symbol, state)
 
