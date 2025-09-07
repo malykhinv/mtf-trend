@@ -3,8 +3,7 @@ from app.orchestrator import run
 
 
 def main() -> None:
-    cfg = make_profile_config_balanced()
-    run(cfg)
+    run(make_profile_config_balanced())
 
 
 if __name__ == "__main__":

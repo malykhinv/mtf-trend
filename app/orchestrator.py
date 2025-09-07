@@ -16,6 +16,7 @@ from .ws import ws_stream
 from .metrics import bar_maker
 from .rest_pollers import rest_pollers
 from .state_machine import fsm_loop
+from .universe import UniverseBuilder
 
 
 def run(cfg: ProfileConfig) -> None:
@@ -23,40 +24,15 @@ def run(cfg: ProfileConfig) -> None:
 
     registry = SymbolRegistry()
     rest = RestClient()
-    ws = WsClient()
-    trader = Trader()
 
-    symbols: list[str] = []
-    r = rest._client.get("/fapi/v1/ticker/24hr")
-    r.raise_for_status()
-    for info in r.json():
-        sym = info["symbol"]
-        if not sym.endswith("USDT"):
-            continue
-
-        quote_vol, _ = rest.get_24h_stats(sym)
-        if quote_vol < constants.UNIVERSE_MIN_24H_USDT:
-            continue
-
-        bid = float(info["bidPrice"])
-        ask = float(info["askPrice"])
-        if bid <= 0:
-            continue
-        spread_bps = (ask - bid) / bid * 10_000.0
-        if spread_bps > constants.UNIVERSE_MAX_SPREAD_BPS:
-            continue
-
-        depth = rest._client.get("/fapi/v1/depth", params={"symbol": sym, "limit": 10})
-        depth.raise_for_status()
-        bids = depth.json().get("bids", [])
-        top10_bid_usdt = sum(float(p) * float(q) for p, q in bids)
-        if top10_bid_usdt < constants.UNIVERSE_MIN_TOP10_BID_USDT:
-            continue
-
+    builder = UniverseBuilder(rest)
+    symbols = builder.build()
+    for sym in symbols:
         registry.put(SymbolState(symbol=sym, state=BotState.IDLE))
-        symbols.append(sym)
 
+    ws = WsClient()
     ws.subscribe_symbols(tuple(symbols))
+    trader = Trader()
 
     signal_engine = SignalEngine(cfg, registry)
     risk_manager = RiskManager(cfg)
