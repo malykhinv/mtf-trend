@@ -14,6 +14,7 @@ functions.
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 
 from domain.models.enums import BotState, OrderType, Profile
 from domain.models.state import GlobalState, SymbolState
@@ -46,26 +47,113 @@ async def ws_stream(ws: WsClient) -> None:
 async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
     """Build per-symbol metrics from websocket events.
 
-    This coroutine represents the **input → metrics** stage.  It consumes raw
-    market data from the websocket client and stores the intermediate metrics in
-    the :class:`SymbolRegistry`.  The exact calculation is delegated to the
-    provided services; here we only route events.
+    The coroutine consumes raw market data from :class:`WsClient` and derives a
+    number of lightweight aggregates which are then stored in the
+    :class:`SymbolRegistry`.  ``SignalEngine`` later inspects these metrics when
+    making decisions.
     """
+
+    # Rolling windows used for z-score calculations are kept per symbol inside
+    # the ``metrics`` object stored in ``SymbolState``.  The helper below
+    # retrieves such a window or creates a new one when necessary.
+    def _window(metrics: dict, name: str) -> deque:
+        win = metrics.get(name)
+        if win is None:
+            win = deque(maxlen=constants.Z_BASE_WINDOW_MIN)
+            metrics[name] = win
+        return win
+
+    def _zscore(value: float, window: deque) -> float:
+        """Return z-score of ``value`` within ``window`` values."""
+        if len(window) < 2:
+            return 0.0
+        mean = sum(window) / len(window)
+        var = sum((x - mean) ** 2 for x in window) / len(window)
+        std = var ** 0.5
+        return 0.0 if std == 0 else (value - mean) / std
 
     while True:
         trade = ws.next_agg_trade()
         if trade:
             state = registry.get(trade.symbol)
+            metrics = getattr(state, "metrics", {})
+
+            # ------------------------ price & volume z-scores -----------------
+            price_win = _window(metrics, "price_win")
+            vol_win = _window(metrics, "vol_win")
+            price_win.append(trade.price)
+            vol_win.append(trade.quantity)
+            z_px = _zscore(trade.price, price_win)
+            z_vol = _zscore(trade.quantity, vol_win)
+
+            # ----------------------- candle construction ----------------------
+            start_ts = metrics.get("start_ts", trade.timestamp)
+            # Reset the candle every minute
+            if trade.timestamp - start_ts >= 60_000:
+                start_ts = trade.timestamp
+                metrics["high"] = trade.price
+                metrics["low"] = trade.price
+            else:
+                metrics["high"] = max(metrics.get("high", trade.price), trade.price)
+                metrics["low"] = min(metrics.get("low", trade.price), trade.price)
+            metrics["start_ts"] = start_ts
+            metrics["end_ts"] = trade.timestamp
+
+            high = metrics["high"]
+            low = metrics["low"]
+            rng = high - low
+
+            mean_price = sum(price_win) / len(price_win)
+            var_price = sum((p - mean_price) ** 2 for p in price_win) / len(price_win)
+            std_price = var_price ** 0.5
+            delta_sigma = rng / std_price if std_price > 0 else 0.0
+            delta_abs = (high / low - 1.0) * 100 if low > 0 else 0.0
+            close_pos = (trade.price - low) / rng if rng > 0 else 0.0
+
+            metrics.update(
+                {
+                    "z_px": z_px,
+                    "z_vol": z_vol,
+                    "delta_price_sigma_mult": delta_sigma,
+                    "delta_price_abs_pct": delta_abs,
+                    "close_pos": close_pos,
+                    "last_price": trade.price,
+                }
+            )
+            state.metrics = metrics
             registry.update(trade.symbol, state)
 
         depth = ws.next_depth()
         if depth:
             state = registry.get(depth.symbol)
+            metrics = getattr(state, "metrics", {})
+            if depth.bids and depth.asks:
+                best_bid = depth.bids[0][0]
+                best_ask = depth.asks[0][0]
+                mid = (best_bid + best_ask) / 2.0
+                last_price = metrics.get("last_price", mid)
+                premium_pct = (
+                    (mid - last_price) / last_price * 100.0 if last_price > 0 else 0.0
+                )
+                metrics.update(
+                    {
+                        "best_bid": best_bid,
+                        "best_ask": best_ask,
+                        "premium_pct": premium_pct,
+                    }
+                )
+            state.metrics = metrics
             registry.update(depth.symbol, state)
 
         liq = ws.next_liquidation()
         if liq:
             state = registry.get(liq.symbol)
+            metrics = getattr(state, "metrics", {})
+            liq_win = _window(metrics, "liq_win")
+            liq_win.append(liq.quantity)
+            liqs_z = _zscore(liq.quantity, liq_win) if len(liq_win) > 1 else 0.0
+            metrics.update({"liqs_z": liqs_z, "last_liq_side": liq.side.value})
+            state.metrics = metrics
             registry.update(liq.symbol, state)
 
         await asyncio.sleep(0)
