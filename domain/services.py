@@ -251,13 +251,6 @@ class SignalEngine:
         # the latest metrics for every symbol.
         self._registry = registry
 
-    def _get_metric(self, metrics: object, name: str, default: float = 0.0) -> float:
-        """Helper to read metric ``name`` from either an object or a dict."""
-
-        if isinstance(metrics, dict):
-            return float(metrics.get(name, default))
-        return float(getattr(metrics, name, default))
-
     def on_minute_close(self, symbol: str) -> S.PumpSignal | None:
         """Evaluate minute metrics and possibly emit a pump signal.
 
@@ -268,38 +261,27 @@ class SignalEngine:
         """
 
         state = self._registry.get(symbol)
-        metrics = getattr(state, "metrics", None)
-        if metrics is None:
-            return None
+        metrics = state.metrics
 
         trig = self._config.trigger
 
-        z_px = self._get_metric(metrics, "z_px")
-        z_vol = self._get_metric(metrics, "z_vol")
-        d_sigma = self._get_metric(metrics, "delta_price_sigma_mult")
-        d_abs = self._get_metric(metrics, "delta_price_abs_pct")
-        close_pos = self._get_metric(metrics, "close_pos")
-        liqs_z = self._get_metric(metrics, "liqs_z")
-
         conditions_met = (
-            z_px >= trig.z_px
-            and z_vol >= trig.z_vol
-            and d_sigma >= trig.delta_price_sigma_mult
-            and d_abs >= trig.delta_price_abs_pct
-            and close_pos >= trig.close_pos
-            and liqs_z >= trig.liqs_z
+            metrics.z_px >= trig.z_px
+            and metrics.z_vol >= trig.z_vol
+            and metrics.delta_price_sigma_mult >= trig.delta_price_sigma_mult
+            and metrics.delta_price_abs_pct >= trig.delta_price_abs_pct
+            and metrics.close_pos >= trig.close_pos
+            and metrics.liqs_z >= trig.liqs_z
         )
         if not conditions_met:
             return None
 
-        # Construct the pump window from metrics.  The exact names of the
-        # stored attributes may vary so we try a few common alternatives.
-        high = self._get_metric(metrics, "high", self._get_metric(metrics, "high_price"))
-        low = self._get_metric(metrics, "low", self._get_metric(metrics, "low_price"))
-        start_ts = int(self._get_metric(metrics, "start_ts", self._get_metric(metrics, "start_ts_ms")))
-        end_ts = int(self._get_metric(metrics, "end_ts", self._get_metric(metrics, "end_ts_ms")))
-
-        window = M.PumpWindow(high=high, low=low, start_ts=start_ts, end_ts=end_ts)
+        window = M.PumpWindow(
+            high=metrics.high,
+            low=metrics.low,
+            start_ts=int(metrics.start_ts),
+            end_ts=int(metrics.end_ts),
+        )
         return S.PumpSignal(symbol=symbol, window=window)
 
     def confirm_failure(self, symbol: str, window: M.PumpWindow) -> bool:
@@ -312,20 +294,15 @@ class SignalEngine:
         """
 
         state = self._registry.get(symbol)
-        metrics = getattr(state, "metrics", None)
-        if metrics is None:
-            return False
+        metrics = state.metrics
 
         confirm = self._config.confirmation
 
-        # Change in open interest expressed as percentage.
-        delta_oi_pct = self._get_metric(metrics, "delta_oi_pct")
-        if delta_oi_pct > confirm.delta_oi_max_pct:
+        if metrics.delta_oi_pct > confirm.delta_oi_max_pct:
             return True
 
-        # Taker buy/sell ratio derived from respective volumes.
-        taker_buy = self._get_metric(metrics, "taker_buy_volume")
-        taker_sell = self._get_metric(metrics, "taker_sell_volume")
+        taker_buy = metrics.taker_buy_volume
+        taker_sell = metrics.taker_sell_volume
         if taker_sell > 0:
             taker_ratio = taker_buy / taker_sell
         else:
@@ -333,9 +310,7 @@ class SignalEngine:
         if taker_ratio > confirm.taker_ratio_max:
             return True
 
-        # Premium index percentage relative to mark price.
-        premium = self._get_metric(metrics, "premium_pct")
-        if premium > confirm.premium_max_pct:
+        if metrics.premium_pct > confirm.premium_max_pct:
             return True
 
         return False
@@ -351,26 +326,18 @@ class SignalEngine:
         """
 
         state = self._registry.get(symbol)
-        metrics = getattr(state, "metrics", None)
-        if metrics is None:
-            return None
+        metrics = state.metrics
 
-        # Basic sanity: window must have a positive height.
         if window.high <= window.low:
             return None
 
-        # ------------------------------------------------------------------
-        # Check premium against confirmation limits.  ``_get_metric`` gracefully
-        # handles both dicts and objects with missing attributes.
-        premium = self._get_metric(metrics, "premium_pct")
-        if premium > self._config.confirmation.premium_max_pct:
+        if metrics.premium_pct > self._config.confirmation.premium_max_pct:
             return None
 
         entry_cfg = self._config.entry
-        low_break = bool(self._get_metric(metrics, "low_break"))
-        avwap_loss = bool(self._get_metric(metrics, "avwap_loss"))
+        low_break = metrics.low_break
+        avwap_loss = metrics.avwap_loss
 
-        allow = False
         if entry_cfg.require_both:
             allow = low_break and avwap_loss
         else:
@@ -380,10 +347,9 @@ class SignalEngine:
         if not allow:
             return None
 
-        price = self._get_metric(metrics, "entry_price", window.low)
+        price = metrics.entry_price or window.low
 
-        # Determine side/direction; default to SHORT if unspecified.
-        direction = getattr(metrics, "direction", None)
+        direction = metrics.direction
         side = Side.SHORT
         if direction:
             try:
