@@ -22,3 +22,6 @@ class PositionPlan:
     trail_start: float
     trail_distance: float
     quantity: float
+    tp1_qty: float
+    tp2_qty: float
+    tail_qty: float

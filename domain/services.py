@@ -18,7 +18,7 @@ import hmac
 import json
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Deque, Dict, List, Tuple
 
@@ -385,6 +385,10 @@ class RiskManager:
             risk.trail_abs_pct / 100.0, range_pct * risk.trail_sigma_mult
         )
         quantity = RISK_PER_TRADE_USDT / entry_price
+        total = risk.tp1_pct + risk.tp2_pct + risk.tail_pct
+        tp1_qty = quantity * (risk.tp1_pct / total)
+        tp2_qty = quantity * (risk.tp2_pct / total)
+        tail_qty = quantity - tp1_qty - tp2_qty
         return PositionPlan(
             symbol=symbol,
             entry_price=entry_price,
@@ -394,6 +398,9 @@ class RiskManager:
             trail_start=trail_start,
             trail_distance=trail_distance,
             quantity=quantity,
+            tp1_qty=tp1_qty,
+            tp2_qty=tp2_qty,
+            tail_qty=tail_qty,
         )
 
     def allow_trade(self, plan: T.PositionPlan) -> bool:
@@ -461,23 +468,71 @@ class TradeManager:
 
         # ------------------------------------------------------------------
         # Take profit levels
-        tp1_hit = plan.take_profit1 > 0.0 and (
+        tp1_hit = plan.tp1_qty > 0.0 and (
             (side is Side.SHORT and current_price <= plan.take_profit1)
             or (side is Side.LONG and current_price >= plan.take_profit1)
         )
         if tp1_hit:
             exits.append(S.ExitSignal(symbol=symbol, reason="TP1"))
-            self._close_position(symbol, side, plan)
-            return exits, None
+            exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
+            order = OrderSpec(
+                symbol=plan.symbol,
+                side=exit_side,
+                type=OrderType.MARKET,
+                quantity=plan.tp1_qty,
+            )
+            self._trader.place(order)
+            self._risk_manager.release(replace(plan, quantity=plan.tp1_qty))
+            plan = T.PositionPlan(
+                symbol=plan.symbol,
+                entry_price=plan.entry_price,
+                stop_loss=plan.stop_loss,
+                take_profit1=0.0,
+                take_profit2=plan.take_profit2,
+                trail_start=plan.trail_start,
+                trail_distance=plan.trail_distance,
+                quantity=plan.quantity - plan.tp1_qty,
+                tp1_qty=0.0,
+                tp2_qty=plan.tp2_qty,
+                tail_qty=plan.tail_qty,
+            )
+            self._positions[symbol] = (side, plan)
+            return exits, plan
 
-        tp2_hit = plan.take_profit2 > 0.0 and (
+        tp2_hit = plan.tp2_qty > 0.0 and (
             (side is Side.SHORT and current_price <= plan.take_profit2)
             or (side is Side.LONG and current_price >= plan.take_profit2)
         )
         if tp2_hit:
             exits.append(S.ExitSignal(symbol=symbol, reason="TP2"))
-            self._close_position(symbol, side, plan)
-            return exits, None
+            exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
+            order = OrderSpec(
+                symbol=plan.symbol,
+                side=exit_side,
+                type=OrderType.MARKET,
+                quantity=plan.tp2_qty,
+            )
+            self._trader.place(order)
+            self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
+            remaining_qty = plan.quantity - plan.tp2_qty
+            if remaining_qty <= 0.0:
+                del self._positions[symbol]
+                return exits, None
+            plan = T.PositionPlan(
+                symbol=plan.symbol,
+                entry_price=plan.entry_price,
+                stop_loss=plan.stop_loss,
+                take_profit1=plan.take_profit1,
+                take_profit2=0.0,
+                trail_start=plan.trail_start,
+                trail_distance=plan.trail_distance,
+                quantity=remaining_qty,
+                tp1_qty=plan.tp1_qty,
+                tp2_qty=0.0,
+                tail_qty=plan.tail_qty,
+            )
+            self._positions[symbol] = (side, plan)
+            return exits, plan
 
         # ------------------------------------------------------------------
         # Trailing stop management after take profits
@@ -501,6 +556,9 @@ class TradeManager:
                 trail_start=current_price,
                 trail_distance=plan.trail_distance,
                 quantity=plan.quantity,
+                tp1_qty=plan.tp1_qty,
+                tp2_qty=plan.tp2_qty,
+                tail_qty=plan.tail_qty,
             )
             self._positions[symbol] = (side, plan)
 
