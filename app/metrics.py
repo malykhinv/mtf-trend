@@ -8,7 +8,7 @@ import constants
 from domain.models.enums import Side
 from domain.models.market_data import AggTrade, DepthSnapshot, LiquidationEvent
 from domain.services.symbol_registry import SymbolRegistry
-from domain.services.ws_client import WsClient
+from domain.ports.ws_client import WsClient
 from .metric_utils import update_ewma, zscore, zscore_window
 
 

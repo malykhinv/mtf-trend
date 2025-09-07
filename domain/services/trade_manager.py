@@ -8,7 +8,7 @@ from domain.models.enums import OrderType, Side
 from domain.models.trading import OrderSpec, PositionPlan
 
 from .risk_manager import RiskManager
-from .trader import Trader
+from domain.ports.trader import Trader
 
 
 class TradeManager:

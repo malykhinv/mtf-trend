@@ -1,4 +1,4 @@
-from domain.services.ws_client import WsClient
+from domain.ports.ws_client import WsClient
 
 
 async def ws_stream(ws: WsClient) -> None:

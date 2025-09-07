@@ -6,7 +6,7 @@ import asyncio
 import random
 
 from domain.models.enums import BotState
-from domain.services.rest_client import RestClient
+from domain.ports.rest_client import RestClient
 from domain.services.symbol_registry import SymbolRegistry
 
 
