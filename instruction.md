@@ -525,7 +525,9 @@ class RiskManager:
 
 class TradeManager:
     def open_position(self, plan: T.PositionPlan, side: Side) -> None: ...
-    def on_tick_manage(self, symbol: str) -> tuple[list[S.ExitSignal], T.PositionPlan | None]: ...
+    def on_tick_manage(
+        self, symbol: str, price: float | None = None
+    ) -> tuple[list[S.ExitSignal], T.PositionPlan | None]: ...
 ```
 
 ---
