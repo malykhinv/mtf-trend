@@ -260,7 +260,10 @@ async def fsm_loop(
 
             # -------------------------------------------------- in position
             if state.state is BotState.ENTERED:
-                exits, new_plan = trade_manager.on_tick_manage(symbol)
+                price = state.metrics.last_price
+                if price <= 0.0:
+                    continue
+                exits, new_plan = trade_manager.on_tick_manage(symbol, price=price)
                 for _exit in exits:
                     trader.cancel(symbol, order_id=None)
                 if new_plan is None:
