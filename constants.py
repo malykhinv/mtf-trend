@@ -14,6 +14,9 @@ REST_POLL_SEC_OI: Final[int] = 20
 REST_POLL_SEC_TAKER: Final[int] = 20
 REST_POLL_SEC_PREMIUM: Final[int] = 20
 
+TAKER_RATIO_PERIOD: Final[str] = "5m"
+TAKER_RATIO_LIMIT: Final[int] = 1
+
 COOLDOWN_AFTER_TRADE_SEC: Final[int] = 900
 GLOBAL_BTC_PAUSE_Z: Final[float] = 3.0
 GLOBAL_BTC_PAUSE_SEC: Final[int] = 180

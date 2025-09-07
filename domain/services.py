@@ -26,7 +26,13 @@ import httpx
 import websockets
 
 from config.credentials import BINANCE
-from constants import BINANCE_FAPI_REST, BINANCE_FAPI_WS, RISK_PER_TRADE_USDT
+from constants import (
+    BINANCE_FAPI_REST,
+    BINANCE_FAPI_WS,
+    RISK_PER_TRADE_USDT,
+    TAKER_RATIO_LIMIT,
+    TAKER_RATIO_PERIOD,
+)
 from domain.models.trading import OrderSpec, PositionPlan
 from domain.models.state import SymbolState
 from domain.models.market_data import AggTrade, DepthSnapshot, LiquidationEvent
@@ -124,7 +130,11 @@ class RestClient:
         return float(data["openInterest"])
 
     def get_taker_ratio(self, symbol: str) -> tuple[float, float]:
-        params = {"symbol": symbol, "period": "5m", "limit": 1}
+        params = {
+            "symbol": symbol,
+            "period": TAKER_RATIO_PERIOD,
+            "limit": TAKER_RATIO_LIMIT,
+        }
         r = self._client.get(self._TAKER_RATIO_EP, params=params)
         r.raise_for_status()
         data = r.json()
