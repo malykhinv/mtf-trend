@@ -165,9 +165,9 @@ def main() -> None:
     # Placeholder services for the FSM; in real deployment these would be
     # properly implemented classes.  They are included here to expose the
     # expected interfaces for :func:`fsm_loop`.
-    signal_engine = SignalEngine()  # type: ignore[call-arg]
-    risk_manager = RiskManager()  # type: ignore[call-arg]
-    trade_manager = TradeManager()  # type: ignore[call-arg]
+    signal_engine = SignalEngine(cfg)
+    risk_manager = RiskManager(cfg)
+    trade_manager = TradeManager(trader)
 
     # 3) coroutines: ws_stream, bar_maker, rest_pollers, fsm_loop
     #    - strict separation: input→metrics→signals→trading
