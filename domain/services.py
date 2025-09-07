@@ -437,12 +437,17 @@ class RiskManager:
         self._open_risk_usdt += required_margin
         return True
 
+    def release(self, plan: T.PositionPlan) -> None:
+        margin = plan.entry_price * plan.quantity
+        self._open_risk_usdt = max(0.0, self._open_risk_usdt - margin)
+
 
 class TradeManager:
     """High level wrapper around :class:`Trader` handling position state."""
 
-    def __init__(self, trader: Trader) -> None:
+    def __init__(self, trader: Trader, risk_manager: RiskManager) -> None:
         self._trader = trader
+        self._risk_manager = risk_manager
         self._positions: Dict[str, PositionPlan] = {}
 
     def open_position(self, plan: T.PositionPlan, side: Side) -> None:
@@ -496,6 +501,7 @@ class TradeManager:
         if current_price >= plan.stop_loss:
             reason = "TRAIL" if trailing_active else "STOP"
             exits.append(S.ExitSignal(symbol=symbol, reason=reason))
+            self._risk_manager.release(plan)
             del self._positions[symbol]
             return exits, None
 
