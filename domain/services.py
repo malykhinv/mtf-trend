@@ -303,7 +303,41 @@ class SignalEngine:
         return S.PumpSignal(symbol=symbol, window=window)
 
     def confirm_failure(self, symbol: str, window: M.PumpWindow) -> bool:
-        # Placeholder – assume confirmation never fails.
+        """Determine whether the pump window should be rejected.
+
+        A number of lightweight confirmation checks are applied using metrics
+        stored in the :class:`SymbolRegistry`.  If any of the conditions fail
+        the window is considered invalid and ``True`` is returned.  Missing
+        metrics are treated as a successful confirmation (``False``).
+        """
+
+        state = self._registry.get(symbol)
+        metrics = getattr(state, "metrics", None)
+        if metrics is None:
+            return False
+
+        confirm = self._config.confirmation
+
+        # Change in open interest expressed as percentage.
+        delta_oi_pct = self._get_metric(metrics, "delta_oi_pct")
+        if delta_oi_pct > confirm.delta_oi_max_pct:
+            return True
+
+        # Taker buy/sell ratio derived from respective volumes.
+        taker_buy = self._get_metric(metrics, "taker_buy_volume")
+        taker_sell = self._get_metric(metrics, "taker_sell_volume")
+        if taker_sell > 0:
+            taker_ratio = taker_buy / taker_sell
+        else:
+            taker_ratio = float("inf") if taker_buy > 0 else 0.0
+        if taker_ratio > confirm.taker_ratio_max:
+            return True
+
+        # Premium index percentage relative to mark price.
+        premium = self._get_metric(metrics, "premium_pct")
+        if premium > confirm.premium_max_pct:
+            return True
+
         return False
 
     def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:
