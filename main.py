@@ -14,7 +14,7 @@ functions.
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+from typing import Deque
 
 from domain.models.enums import BotState, Profile
 from domain.models.state import GlobalState, SymbolState
@@ -52,17 +52,7 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
     making decisions.
     """
 
-    # Rolling windows used for z-score calculations are kept per symbol inside
-    # the ``metrics`` object stored in ``SymbolState``.  The helper below
-    # retrieves such a window or creates a new one when necessary.
-    def _window(metrics: dict, name: str) -> deque:
-        win = metrics.get(name)
-        if win is None:
-            win = deque(maxlen=constants.Z_BASE_WINDOW_MIN)
-            metrics[name] = win
-        return win
-
-    def _zscore(value: float, window: deque) -> float:
+    def _zscore(value: float, window: Deque[float]) -> float:
         """Return z-score of ``value`` within ``window`` values."""
         if len(window) < 2:
             return 0.0
@@ -75,31 +65,30 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
         trade = ws.next_agg_trade()
         if trade:
             state = registry.get(trade.symbol)
-            metrics = getattr(state, "metrics", {})
+            metrics = state.metrics
 
             # ------------------------ price & volume z-scores -----------------
-            price_win = _window(metrics, "price_win")
-            vol_win = _window(metrics, "vol_win")
+            price_win = metrics.price_win
+            vol_win = metrics.vol_win
             price_win.append(trade.price)
             vol_win.append(trade.quantity)
             z_px = _zscore(trade.price, price_win)
             z_vol = _zscore(trade.quantity, vol_win)
 
             # ----------------------- candle construction ----------------------
-            start_ts = metrics.get("start_ts", trade.timestamp)
-            # Reset the candle every minute
-            if trade.timestamp - start_ts >= 60_000:
+            start_ts = metrics.start_ts
+            if trade.timestamp - start_ts >= 60_000 or start_ts == 0:
                 start_ts = trade.timestamp
-                metrics["high"] = trade.price
-                metrics["low"] = trade.price
+                metrics.high = trade.price
+                metrics.low = trade.price
             else:
-                metrics["high"] = max(metrics.get("high", trade.price), trade.price)
-                metrics["low"] = min(metrics.get("low", trade.price), trade.price)
-            metrics["start_ts"] = start_ts
-            metrics["end_ts"] = trade.timestamp
+                metrics.high = max(metrics.high, trade.price)
+                metrics.low = min(metrics.low, trade.price)
+            metrics.start_ts = start_ts
+            metrics.end_ts = trade.timestamp
 
-            high = metrics["high"]
-            low = metrics["low"]
+            high = metrics.high
+            low = metrics.low
             rng = high - low
 
             mean_price = sum(price_win) / len(price_win)
@@ -109,50 +98,41 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             delta_abs = (high / low - 1.0) * 100 if low > 0 else 0.0
             close_pos = (trade.price - low) / rng if rng > 0 else 0.0
 
-            metrics.update(
-                {
-                    "z_px": z_px,
-                    "z_vol": z_vol,
-                    "delta_price_sigma_mult": delta_sigma,
-                    "delta_price_abs_pct": delta_abs,
-                    "close_pos": close_pos,
-                    "last_price": trade.price,
-                }
-            )
-            state.metrics = metrics
+            metrics.z_px = z_px
+            metrics.z_vol = z_vol
+            metrics.delta_price_sigma_mult = delta_sigma
+            metrics.delta_price_abs_pct = delta_abs
+            metrics.close_pos = close_pos
+            metrics.last_price = trade.price
+
             registry.update(trade.symbol, state)
 
         depth = ws.next_depth()
         if depth:
             state = registry.get(depth.symbol)
-            metrics = getattr(state, "metrics", {})
+            metrics = state.metrics
             if depth.bids and depth.asks:
                 best_bid = depth.bids[0][0]
                 best_ask = depth.asks[0][0]
                 mid = (best_bid + best_ask) / 2.0
-                last_price = metrics.get("last_price", mid)
+                last_price = metrics.last_price if metrics.last_price > 0 else mid
                 premium_pct = (
                     (mid - last_price) / last_price * 100.0 if last_price > 0 else 0.0
                 )
-                metrics.update(
-                    {
-                        "best_bid": best_bid,
-                        "best_ask": best_ask,
-                        "premium_pct": premium_pct,
-                    }
-                )
-            state.metrics = metrics
+                metrics.best_bid = best_bid
+                metrics.best_ask = best_ask
+                metrics.premium_pct = premium_pct
             registry.update(depth.symbol, state)
 
         liq = ws.next_liquidation()
         if liq:
             state = registry.get(liq.symbol)
-            metrics = getattr(state, "metrics", {})
-            liq_win = _window(metrics, "liq_win")
+            metrics = state.metrics
+            liq_win = metrics.liq_win
             liq_win.append(liq.quantity)
             liqs_z = _zscore(liq.quantity, liq_win) if len(liq_win) > 1 else 0.0
-            metrics.update({"liqs_z": liqs_z, "last_liq_side": liq.side.value})
-            state.metrics = metrics
+            metrics.liqs_z = liqs_z
+            metrics.last_liq_side = liq.side.value
             registry.update(liq.symbol, state)
 
         await asyncio.sleep(0)
@@ -178,9 +158,8 @@ async def rest_pollers(rest: RestClient, registry: SymbolRegistry) -> None:
                 last_oi[symbol] = oi
 
                 state = registry.get(symbol)
-                metrics = getattr(state, "metrics", {}) or {}
-                metrics["delta_oi_pct"] = delta_pct
-                state.metrics = metrics
+                metrics = state.metrics
+                metrics.delta_oi_pct = delta_pct
                 registry.update(symbol, state)
             await asyncio.sleep(constants.REST_POLL_SEC_OI)
 
@@ -191,10 +170,9 @@ async def rest_pollers(rest: RestClient, registry: SymbolRegistry) -> None:
             for symbol in registry.all_symbols():
                 buy, sell = rest.get_taker_ratio(symbol)
                 state = registry.get(symbol)
-                metrics = getattr(state, "metrics", {}) or {}
-                metrics["taker_buy_volume"] = buy
-                metrics["taker_sell_volume"] = sell
-                state.metrics = metrics
+                metrics = state.metrics
+                metrics.taker_buy_volume = buy
+                metrics.taker_sell_volume = sell
                 registry.update(symbol, state)
             await asyncio.sleep(constants.REST_POLL_SEC_TAKER)
 
@@ -205,9 +183,8 @@ async def rest_pollers(rest: RestClient, registry: SymbolRegistry) -> None:
             for symbol in registry.all_symbols():
                 premium = rest.get_premium_pct(symbol)
                 state = registry.get(symbol)
-                metrics = getattr(state, "metrics", {}) or {}
-                metrics["premium_pct"] = premium
-                state.metrics = metrics
+                metrics = state.metrics
+                metrics.premium_pct = premium
                 registry.update(symbol, state)
             await asyncio.sleep(constants.REST_POLL_SEC_PREMIUM)
 
