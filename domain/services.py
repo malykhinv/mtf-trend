@@ -369,8 +369,11 @@ class RiskManager:
 
     def build_plan(self, symbol: str, entry_price: float, window: M.PumpWindow) -> T.PositionPlan | None:
         risk = self._cfg.risk
-        # Stop loss is placed above the recent high by ``stop_abs_pct``.
-        stop_loss = window.high * (1.0 + risk.stop_abs_pct / 100.0)
+        # Stop loss uses the greater of absolute percent and a range based sigma.
+        range_pct = (window.high - window.low) / window.low
+        stop_abs = window.high * (risk.stop_abs_pct / 100.0)
+        sigma_stop = window.high * (risk.stop_sigma_mult * range_pct)
+        stop_loss = window.high + max(stop_abs, sigma_stop)
         # Take profit levels are computed cumulatively using configuration percentages.
         take_profit1 = entry_price * (1.0 - risk.tp1_pct / 100.0)
         tp2_total_pct = risk.tp1_pct + risk.tp2_pct
@@ -380,8 +383,9 @@ class RiskManager:
         trail_start = entry_price * (1.0 - trail_start_pct / 100.0)
         # Trailing distance is defined by the larger of absolute percent and
         # a multiple of the recent price range.
-        range_pct = (window.high - window.low) / entry_price
-        trail_distance = entry_price * max(risk.trail_abs_pct / 100.0, range_pct * risk.trail_sigma_mult)
+        trail_distance = entry_price * max(
+            risk.trail_abs_pct / 100.0, range_pct * risk.trail_sigma_mult
+        )
         quantity = RISK_PER_TRADE_USDT / entry_price
         return PositionPlan(
             symbol=symbol,
