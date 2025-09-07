@@ -37,6 +37,12 @@ class SymbolMetrics:
         default_factory=lambda: deque(maxlen=constants.Z_BASE_WINDOW_MIN)
     )
 
+    # --- EWMA statistics -------------------------------------------------
+    price_ewma_mean: float = 0.0
+    price_ewma_std: float = 0.0
+    vol_ewma_mean: float = 0.0
+    vol_ewma_std: float = 0.0
+
     # --- minute candle stats --------------------------------------------
     start_ts: int = 0
     end_ts: int = 0

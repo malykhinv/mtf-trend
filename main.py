@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+import math
 from typing import Deque
 
 from domain.models.enums import BotState, Profile
@@ -54,9 +55,21 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
     making decisions.
     """
 
+    alpha = 1 - math.exp(-math.log(2) / constants.EWMA_HALF_LIFE_MIN)
+
+    def _update_ewma(value: float, mean: float, std: float) -> tuple[float, float]:
+        """Return updated EWMA mean and std for ``value``."""
+        if mean == 0.0 and std == 0.0:
+            return value, 0.0
+        var = std ** 2
+        delta = value - mean
+        mean += alpha * delta
+        var = (1 - alpha) * (var + alpha * delta * delta)
+        return mean, var ** 0.5
+
     def _zscore(value: float, window: Deque[float]) -> float:
         """Return z-score of ``value`` within ``window`` values."""
-        if len(window) < 2:
+        if len(window) < constants.Z_BASE_WINDOW_MIN:
             return 0.0
         mean = sum(window) / len(window)
         var = sum((x - mean) ** 2 for x in window) / len(window)
@@ -74,6 +87,12 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             vol_win = metrics.vol_win
             price_win.append(trade.price)
             vol_win.append(trade.quantity)
+            metrics.price_ewma_mean, metrics.price_ewma_std = _update_ewma(
+                trade.price, metrics.price_ewma_mean, metrics.price_ewma_std
+            )
+            metrics.vol_ewma_mean, metrics.vol_ewma_std = _update_ewma(
+                trade.quantity, metrics.vol_ewma_mean, metrics.vol_ewma_std
+            )
             z_px = _zscore(trade.price, price_win)
             z_vol = _zscore(trade.quantity, vol_win)
 
@@ -104,9 +123,7 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             )
             avwap_loss = total_vol > 0 and trade.price < avwap
 
-            mean_price = sum(price_win) / len(price_win)
-            var_price = sum((p - mean_price) ** 2 for p in price_win) / len(price_win)
-            std_price = var_price ** 0.5
+            std_price = metrics.price_ewma_std
             delta_sigma = rng / std_price if std_price > 0 else 0.0
             delta_abs = (high / low - 1.0) * 100 if low > 0 else 0.0
             close_pos = (trade.price - low) / rng if rng > 0 else 0.0
