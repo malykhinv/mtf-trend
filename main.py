@@ -198,7 +198,7 @@ def main() -> None:
     # Placeholder services for the FSM; in real deployment these would be
     # properly implemented classes.  They are included here to expose the
     # expected interfaces for :func:`fsm_loop`.
-    signal_engine = SignalEngine(cfg)
+    signal_engine = SignalEngine(cfg, registry)
     risk_manager = RiskManager(cfg)
     trade_manager = TradeManager(trader)
 

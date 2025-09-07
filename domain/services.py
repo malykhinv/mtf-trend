@@ -235,21 +235,72 @@ class WsClient:
 
 
 class SignalEngine:
-    """Extremely small placeholder signal engine.
+    """Very small placeholder signal engine.
 
-    In the real project this component would analyse a large amount of
-    market data and produce trading signals.  For the purposes of the
-    exercises we implement very small deterministic stubs that still use
-    the strongly typed models and configuration objects.
+    The actual project uses a rather involved set of metrics to decide
+    whether an aggressive upward move (a *pump*) is in progress.  For the
+    exercises we keep the implementation intentionally tiny but still rely
+    on the strongly typed models.  ``SymbolRegistry`` acts as an in-memory
+    store for all per-symbol metrics produced by the data ingest pipeline
+    (see :func:`bar_maker` in :mod:`main`).
     """
 
-    def __init__(self, config: ProfileConfig) -> None:
+    def __init__(self, config: ProfileConfig, registry: SymbolRegistry) -> None:
         self._config = config
+        # ``SignalEngine`` needs access to the registry in order to retrieve
+        # the latest metrics for every symbol.
+        self._registry = registry
+
+    def _get_metric(self, metrics: object, name: str, default: float = 0.0) -> float:
+        """Helper to read metric ``name`` from either an object or a dict."""
+
+        if isinstance(metrics, dict):
+            return float(metrics.get(name, default))
+        return float(getattr(metrics, name, default))
 
     def on_minute_close(self, symbol: str) -> S.PumpSignal | None:
-        # Real logic would check z-scores and other metrics.  Here we do a
-        # minimalistic placeholder returning ``None`` meaning no signal.
-        return None
+        """Evaluate minute metrics and possibly emit a pump signal.
+
+        The function inspects metrics saved in the :class:`SymbolRegistry` for
+        ``symbol``.  If all trigger conditions from the profile configuration
+        are satisfied a :class:`~domain.models.signals.PumpSignal` is returned
+        describing the price window of the detected pump.
+        """
+
+        state = self._registry.get(symbol)
+        metrics = getattr(state, "metrics", None)
+        if metrics is None:
+            return None
+
+        trig = self._config.trigger
+
+        z_px = self._get_metric(metrics, "z_px")
+        z_vol = self._get_metric(metrics, "z_vol")
+        d_sigma = self._get_metric(metrics, "delta_price_sigma_mult")
+        d_abs = self._get_metric(metrics, "delta_price_abs_pct")
+        close_pos = self._get_metric(metrics, "close_pos")
+        liqs_z = self._get_metric(metrics, "liqs_z")
+
+        conditions_met = (
+            z_px >= trig.z_px
+            and z_vol >= trig.z_vol
+            and d_sigma >= trig.delta_price_sigma_mult
+            and d_abs >= trig.delta_price_abs_pct
+            and close_pos >= trig.close_pos
+            and liqs_z >= trig.liqs_z
+        )
+        if not conditions_met:
+            return None
+
+        # Construct the pump window from metrics.  The exact names of the
+        # stored attributes may vary so we try a few common alternatives.
+        high = self._get_metric(metrics, "high", self._get_metric(metrics, "high_price"))
+        low = self._get_metric(metrics, "low", self._get_metric(metrics, "low_price"))
+        start_ts = int(self._get_metric(metrics, "start_ts", self._get_metric(metrics, "start_ts_ms")))
+        end_ts = int(self._get_metric(metrics, "end_ts", self._get_metric(metrics, "end_ts_ms")))
+
+        window = M.PumpWindow(high=high, low=low, start_ts=start_ts, end_ts=end_ts)
+        return S.PumpSignal(symbol=symbol, window=window)
 
     def confirm_failure(self, symbol: str, window: M.PumpWindow) -> bool:
         # Placeholder – assume confirmation never fails.
