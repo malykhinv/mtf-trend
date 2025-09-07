@@ -133,7 +133,7 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             liq_win.append(liq.quantity)
             liqs_z = _zscore(liq.quantity, liq_win) if len(liq_win) > 1 else 0.0
             metrics.liqs_z = liqs_z
-            metrics.last_liq_side = liq.side.value
+            metrics.last_liq_side = liq.side
             registry.update(liq.symbol, state)
 
         await asyncio.sleep(0)
