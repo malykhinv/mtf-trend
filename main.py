@@ -67,7 +67,15 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
         var = (1 - alpha) * (var + alpha * delta * delta)
         return mean, var ** 0.5
 
-    def _zscore(value: float, window: Deque[float]) -> float:
+    def _zscore(
+        value: float, ewma_mean: float, ewma_std: float, window: Deque[float]
+    ) -> float:
+        """Return z-score of ``value`` using precomputed EWMA statistics."""
+        if len(window) < constants.Z_BASE_WINDOW_MIN or ewma_std <= 0:
+            return 0.0
+        return (value - ewma_mean) / ewma_std
+
+    def _zscore_window(value: float, window: Deque[float]) -> float:
         """Return z-score of ``value`` within ``window`` values."""
         if len(window) < constants.Z_BASE_WINDOW_MIN:
             return 0.0
@@ -93,8 +101,18 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             metrics.vol_ewma_mean, metrics.vol_ewma_std = _update_ewma(
                 trade.quantity, metrics.vol_ewma_mean, metrics.vol_ewma_std
             )
-            z_px = _zscore(trade.price, price_win)
-            z_vol = _zscore(trade.quantity, vol_win)
+            z_px = _zscore(
+                trade.price,
+                metrics.price_ewma_mean,
+                metrics.price_ewma_std,
+                price_win,
+            )
+            z_vol = _zscore(
+                trade.quantity,
+                metrics.vol_ewma_mean,
+                metrics.vol_ewma_std,
+                vol_win,
+            )
 
             # ----------------------- candle construction ----------------------
             prev_low = metrics.low
@@ -162,7 +180,7 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             metrics = state.metrics
             liq_win = metrics.liq_win
             liq_win.append(liq.quantity)
-            liqs_z = _zscore(liq.quantity, liq_win) if len(liq_win) > 1 else 0.0
+            liqs_z = _zscore_window(liq.quantity, liq_win)
             metrics.liqs_z = liqs_z
             metrics.last_liq_side = liq.side
             registry.update(liq.symbol, state)
