@@ -10,7 +10,6 @@ from domain.services.symbol_registry import SymbolRegistry
 from domain.services.trade_manager import TradeManager
 from domain.services.trader import Trader
 from domain.services.ws_client import WsClient
-import constants
 
 from .ws import ws_stream
 from .metrics import bar_maker
@@ -19,7 +18,7 @@ from .rest_pollers import (
     TakerRatioPoller,
     PremiumIndexPoller,
 )
-from .state_machine import fsm_loop
+from .state_machine import BotStateMachine
 from .universe import UniverseBuilder
 
 
@@ -47,21 +46,22 @@ def run(cfg: ProfileConfig) -> None:
         TakerRatioPoller(rest, registry),
         PremiumIndexPoller(rest, registry),
     ]
+    state_machine = BotStateMachine(
+        cfg,
+        gstate,
+        registry,
+        signal_engine,
+        risk_manager,
+        trade_manager,
+        trader,
+    )
 
     async def _run() -> None:
         await asyncio.gather(
             ws_stream(ws),
             bar_maker(ws, registry),
             *(p.run() for p in pollers),
-            fsm_loop(
-                cfg,
-                gstate,
-                registry,
-                signal_engine,
-                risk_manager,
-                trade_manager,
-                trader,
-            ),
+            state_machine.run(),
         )
 
     asyncio.run(_run())
