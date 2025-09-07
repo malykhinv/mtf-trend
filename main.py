@@ -14,6 +14,7 @@ functions.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Deque
 
 from domain.models.enums import BotState, Profile
@@ -209,11 +210,68 @@ async def fsm_loop(
     """
 
     while True:
+        now_ms = int(time.time() * 1000)
+
+        # --------------------------------------------------------------
+        # Global BTC pause – skip processing when active or trigger pause
+        pause_until = gstate.btc_pause_until_ms
+        if pause_until is not None:
+            if now_ms < pause_until:
+                await asyncio.sleep(0)
+                continue
+            gstate.btc_pause_until_ms = None
+
+        try:
+            btc_state = registry.get("BTCUSDT")
+            if btc_state.metrics.z_px > constants.GLOBAL_BTC_PAUSE_Z:
+                gstate.btc_pause_until_ms = (
+                    now_ms + constants.GLOBAL_BTC_PAUSE_SEC * 1000
+                )
+                await asyncio.sleep(0)
+                continue
+        except KeyError:
+            pass
+
         for symbol in registry.all_symbols():
+            state = registry.get(symbol)
+            now = time.time()
+
+            # -------------------------------------------------- cooldown
+            if state.state is BotState.COOLDOWN:
+                if (
+                    state.last_signal_ts is not None
+                    and now - state.last_signal_ts >= constants.COOLDOWN_AFTER_TRADE_SEC
+                ):
+                    state.state = BotState.IDLE
+                    state.last_signal_ts = None
+                    registry.update(symbol, state)
+                continue
+
+            # -------------------------------------------------- in position
+            if state.state is BotState.ENTERED:
+                exits, new_plan = trade_manager.on_tick_manage(symbol)
+                for _exit in exits:
+                    trader.cancel(symbol, all_for_symbol=False)
+                if new_plan is None:
+                    state.state = BotState.COOLDOWN
+                    state.last_signal_ts = now
+                    registry.update(symbol, state)
+                continue
+
+            # -------------------------------------------------- idle/watching
             pump = signal_engine.on_minute_close(symbol)
             if pump is None:
+                if state.state is BotState.WATCHING:
+                    state.state = BotState.IDLE
+                    registry.update(symbol, state)
                 continue
+
+            state.state = BotState.WATCHING
+            registry.update(symbol, state)
+
             if signal_engine.confirm_failure(symbol, pump.window):
+                state.state = BotState.IDLE
+                registry.update(symbol, state)
                 continue
 
             entry = signal_engine.make_entry(symbol, pump.window)
@@ -226,9 +284,8 @@ async def fsm_loop(
 
             trade_manager.open_position(plan, entry.side)
 
-            exits, new_plan = trade_manager.on_tick_manage(symbol)
-            for _exit in exits:
-                trader.cancel(symbol, all_for_symbol=False)
+            state.state = BotState.ENTERED
+            registry.update(symbol, state)
 
         await asyncio.sleep(0)
 
