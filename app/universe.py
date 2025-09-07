@@ -11,9 +11,8 @@ class UniverseBuilder:
     def build(self) -> list[str]:
         symbols: list[str] = []
 
-        r = self._rest._client.get("/fapi/v1/ticker/24hr")
-        r.raise_for_status()
-        for info in r.json():
+        tickers = self._rest.fetch_all_tickers()
+        for info in tickers:
             sym = info["symbol"]
             if not sym.endswith("USDT"):
                 continue
@@ -30,12 +29,8 @@ class UniverseBuilder:
             if spread_bps > constants.UNIVERSE_MAX_SPREAD_BPS:
                 continue
 
-            depth = self._rest._client.get(
-                "/fapi/v1/depth", params={"symbol": sym, "limit": 10}
-            )
-            depth.raise_for_status()
-            bids = depth.json().get("bids", [])
-            top10_bid_usdt = sum(float(p) * float(q) for p, q in bids)
+            bids = self._rest.get_depth(sym)
+            top10_bid_usdt = sum(p * q for p, q in bids)
             if top10_bid_usdt < constants.UNIVERSE_MIN_TOP10_BID_USDT:
                 continue
 
