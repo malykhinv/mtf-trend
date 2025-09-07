@@ -338,6 +338,51 @@ class SignalEngine:
         if premium > confirm.premium_max_pct:
             return True
 
+        # Latency since last high update.
+        latency = (
+            metrics.get("latency_sec")
+            if isinstance(metrics, dict)
+            else getattr(metrics, "latency_sec", None)
+        )
+        if latency is not None and latency < confirm.latency_min_sec:
+            return True
+
+        # Order book imbalance metrics.
+        ask_imb = (
+            metrics.get("ask_imb") if isinstance(metrics, dict) else getattr(metrics, "ask_imb", None)
+        )
+        if ask_imb is not None and ask_imb < confirm.ask_imb_min:
+            return True
+
+        top5ask_vs_base = (
+            metrics.get("top5ask_vs_base")
+            if isinstance(metrics, dict)
+            else getattr(metrics, "top5ask_vs_base", None)
+        )
+        if top5ask_vs_base is not None and top5ask_vs_base < confirm.top5ask_vs_base_min:
+            return True
+
+        # Cumulative delta divergence.
+        cvd_gap_pct = (
+            metrics.get("cvd_gap_pct")
+            if isinstance(metrics, dict)
+            else getattr(metrics, "cvd_gap_pct", None)
+        )
+        cvd_gap_sec = (
+            metrics.get("cvd_gap_sec")
+            if isinstance(metrics, dict)
+            else getattr(metrics, "cvd_gap_sec", None)
+        )
+        if (
+            cvd_gap_pct is not None
+            and cvd_gap_sec is not None
+            and (
+                cvd_gap_pct < confirm.cvd_gap_pct_min
+                or cvd_gap_sec < confirm.cvd_gap_sec_min
+            )
+        ):
+            return True
+
         return False
 
     def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:

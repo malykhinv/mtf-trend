@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from statistics import median
 
 from domain.models.enums import BotState, Profile
 from domain.models.state import GlobalState, SymbolState
@@ -87,17 +88,35 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
 
             # ----------------------- candle construction ----------------------
             start_ts = metrics.get("start_ts", trade.timestamp)
-            # Reset the candle every minute
             if trade.timestamp - start_ts >= 60_000:
+                # reset per-minute metrics
                 start_ts = trade.timestamp
                 metrics["high"] = trade.price
                 metrics["low"] = trade.price
+                metrics["last_high_ts"] = trade.timestamp
+                metrics["low_break"] = 0
+                metrics["avwap_loss"] = 0
+                metrics.pop("entry_price", None)
+                metrics["avwap_pxq"] = trade.price * trade.quantity
+                metrics["avwap_q"] = trade.quantity
+                metrics["cvd"] = 0.0
+                metrics["cvd_start"] = 0.0
+                metrics["price_start"] = trade.price
+                metrics.pop("cvd_gap_start_ts", None)
+                metrics["cvd_gap_sec"] = 0.0
             else:
-                metrics["high"] = max(metrics.get("high", trade.price), trade.price)
-                metrics["low"] = min(metrics.get("low", trade.price), trade.price)
+                if trade.price > metrics.get("high", trade.price):
+                    metrics["high"] = trade.price
+                    metrics["last_high_ts"] = trade.timestamp
+                if trade.price < metrics.get("low", trade.price):
+                    metrics["low"] = trade.price
+                    metrics["low_break"] = 1
+                    metrics.setdefault("entry_price", trade.price)
+
             metrics["start_ts"] = start_ts
             metrics["end_ts"] = trade.timestamp
 
+            # ----------------------- derived metrics -------------------------
             high = metrics["high"]
             low = metrics["low"]
             rng = high - low
@@ -108,6 +127,51 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             delta_sigma = rng / std_price if std_price > 0 else 0.0
             delta_abs = (high / low - 1.0) * 100 if low > 0 else 0.0
             close_pos = (trade.price - low) / rng if rng > 0 else 0.0
+
+            # ------------------------- anchored VWAP -------------------------
+            pxq = metrics.get("avwap_pxq", 0.0) + trade.price * trade.quantity
+            qty = metrics.get("avwap_q", 0.0) + trade.quantity
+            metrics["avwap_pxq"] = pxq
+            metrics["avwap_q"] = qty
+            avwap = pxq / qty if qty > 0 else trade.price
+            metrics["avwap"] = avwap
+            if trade.price < avwap:
+                metrics["avwap_loss"] = 1
+                metrics.setdefault("entry_price", trade.price)
+
+            # ----------------------- cumulative delta -----------------------
+            prev_price = metrics.get("prev_price")
+            delta = trade.quantity if prev_price is None or trade.price >= prev_price else -trade.quantity
+            cvd = metrics.get("cvd", 0.0) + delta
+            metrics["cvd"] = cvd
+            metrics["prev_price"] = trade.price
+            price_start = metrics.get("price_start", trade.price)
+            cvd_start = metrics.get("cvd_start", cvd)
+            metrics.setdefault("price_start", price_start)
+            metrics.setdefault("cvd_start", cvd_start)
+            cvd_change = cvd - cvd_start
+            price_change_pct = (
+                (trade.price - price_start) / price_start * 100.0 if price_start > 0 else 0.0
+            )
+            cvd_gap_pct = abs(price_change_pct) - abs(cvd_change)
+            if cvd_gap_pct < 0:
+                cvd_gap_pct = 0.0
+            metrics["cvd_gap_pct"] = cvd_gap_pct
+            if cvd_gap_pct > 0:
+                gap_start = metrics.get("cvd_gap_start_ts")
+                if gap_start is None:
+                    metrics["cvd_gap_start_ts"] = trade.timestamp
+                    gap_sec = 0.0
+                else:
+                    gap_sec = (trade.timestamp - gap_start) / 1000.0
+                metrics["cvd_gap_sec"] = gap_sec
+            else:
+                metrics.pop("cvd_gap_start_ts", None)
+                metrics["cvd_gap_sec"] = 0.0
+
+            # ----------------------- latency tracking -----------------------
+            last_high_ts = metrics.get("last_high_ts", trade.timestamp)
+            metrics["latency_sec"] = (trade.timestamp - last_high_ts) / 1000.0
 
             metrics.update(
                 {
@@ -134,11 +198,25 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
                 premium_pct = (
                     (mid - last_price) / last_price * 100.0 if last_price > 0 else 0.0
                 )
+
+                total_bid = sum(q for _, q in depth.bids[:10])
+                total_ask = sum(q for _, q in depth.asks[:10])
+                denom = total_bid + total_ask
+                ask_imb = total_ask / denom if denom > 0 else 0.0
+
+                top5_ask = sum(q for _, q in depth.asks[:5])
+                base_win = _window(metrics, "top5_ask_base")
+                base_win.append(top5_ask)
+                base_level = median(base_win) if base_win else 0.0
+                top5ask_vs_base = top5_ask / base_level if base_level > 0 else 0.0
+
                 metrics.update(
                     {
                         "best_bid": best_bid,
                         "best_ask": best_ask,
                         "premium_pct": premium_pct,
+                        "ask_imb": ask_imb,
+                        "top5ask_vs_base": top5ask_vs_base,
                     }
                 )
             state.metrics = metrics
