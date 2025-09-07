@@ -416,7 +416,7 @@ class TradeManager:
     def __init__(self, trader: Trader, risk_manager: RiskManager) -> None:
         self._trader = trader
         self._risk_manager = risk_manager
-        self._positions: Dict[str, PositionPlan] = {}
+        self._positions: Dict[str, tuple[Side, PositionPlan]] = {}
 
     def open_position(self, plan: T.PositionPlan, side: Side) -> None:
         order = OrderSpec(
@@ -426,7 +426,19 @@ class TradeManager:
             quantity=plan.quantity,
         )
         self._trader.place(order)
-        self._positions[plan.symbol] = plan
+        self._positions[plan.symbol] = (side, plan)
+
+    def _close_position(self, symbol: str, side: Side, plan: T.PositionPlan) -> None:
+        exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
+        order = OrderSpec(
+            symbol=plan.symbol,
+            side=exit_side,
+            type=OrderType.MARKET,
+            quantity=plan.quantity,
+        )
+        self._trader.place(order)
+        self._risk_manager.release(plan)
+        del self._positions[symbol]
 
     def on_tick_manage(
         self, symbol: str, price: float | None = None
@@ -439,48 +451,47 @@ class TradeManager:
         closed, ``None`` is returned for the plan.
         """
 
-        plan = self._positions.get(symbol)
+        record = self._positions.get(symbol)
         exits: List[S.ExitSignal] = []
-        if plan is None:
+        if record is None:
             return exits, None
 
+        side, plan = record
         current_price = plan.entry_price if price is None else price
 
         # ------------------------------------------------------------------
         # Take profit levels
-        if plan.take_profit1 > 0.0 and current_price <= plan.take_profit1:
+        tp1_hit = plan.take_profit1 > 0.0 and (
+            (side is Side.SHORT and current_price <= plan.take_profit1)
+            or (side is Side.LONG and current_price >= plan.take_profit1)
+        )
+        if tp1_hit:
             exits.append(S.ExitSignal(symbol=symbol, reason="TP1"))
-            plan = T.PositionPlan(
-                symbol=plan.symbol,
-                entry_price=plan.entry_price,
-                stop_loss=plan.entry_price,  # move to break-even
-                take_profit1=0.0,
-                take_profit2=plan.take_profit2,
-                trail_start=plan.trail_start,
-                trail_distance=plan.trail_distance,
-                quantity=plan.quantity,
-            )
-            self._positions[symbol] = plan
+            self._close_position(symbol, side, plan)
+            return exits, None
 
-        if plan.take_profit2 > 0.0 and current_price <= plan.take_profit2:
+        tp2_hit = plan.take_profit2 > 0.0 and (
+            (side is Side.SHORT and current_price <= plan.take_profit2)
+            or (side is Side.LONG and current_price >= plan.take_profit2)
+        )
+        if tp2_hit:
             exits.append(S.ExitSignal(symbol=symbol, reason="TP2"))
-            plan = T.PositionPlan(
-                symbol=plan.symbol,
-                entry_price=plan.entry_price,
-                stop_loss=plan.stop_loss,
-                take_profit1=plan.take_profit1,
-                take_profit2=0.0,
-                trail_start=plan.trail_start,
-                trail_distance=plan.trail_distance,
-                quantity=plan.quantity,
-            )
-            self._positions[symbol] = plan
+            self._close_position(symbol, side, plan)
+            return exits, None
 
         # ------------------------------------------------------------------
         # Trailing stop management after take profits
         trailing_active = plan.take_profit1 <= 0.0 and plan.take_profit2 <= 0.0
-        if trailing_active and current_price <= plan.trail_start:
-            new_stop = min(plan.stop_loss, current_price + plan.trail_distance)
+        trail_cond = (
+            (side is Side.SHORT and current_price <= plan.trail_start)
+            or (side is Side.LONG and current_price >= plan.trail_start)
+        )
+        if trailing_active and trail_cond:
+            new_stop = (
+                min(plan.stop_loss, current_price + plan.trail_distance)
+                if side is Side.SHORT
+                else max(plan.stop_loss, current_price - plan.trail_distance)
+            )
             plan = T.PositionPlan(
                 symbol=plan.symbol,
                 entry_price=plan.entry_price,
@@ -491,15 +502,18 @@ class TradeManager:
                 trail_distance=plan.trail_distance,
                 quantity=plan.quantity,
             )
-            self._positions[symbol] = plan
+            self._positions[symbol] = (side, plan)
 
         # ------------------------------------------------------------------
         # Stop loss or trailing stop hit
-        if current_price >= plan.stop_loss:
+        stop_hit = (
+            (side is Side.SHORT and current_price >= plan.stop_loss)
+            or (side is Side.LONG and current_price <= plan.stop_loss)
+        )
+        if stop_hit:
             reason = "TRAIL" if trailing_active else "STOP"
             exits.append(S.ExitSignal(symbol=symbol, reason=reason))
-            self._risk_manager.release(plan)
-            del self._positions[symbol]
+            self._close_position(symbol, side, plan)
             return exits, None
 
         return exits, plan
