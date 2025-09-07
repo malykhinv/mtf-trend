@@ -350,12 +350,7 @@ class SignalEngine:
         price = metrics.entry_price or window.low
 
         direction = metrics.direction
-        side = Side.SHORT
-        if direction:
-            try:
-                side = Side(direction)
-            except Exception:
-                side = Side.SHORT if str(direction).lower() == "short" else Side.LONG
+        side = direction if direction is not None else Side.SHORT
 
         return S.EntrySignal(symbol=symbol, side=side, price=price)
 

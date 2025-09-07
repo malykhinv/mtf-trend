@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Optional
+from typing import Deque
 
 import constants
+from .enums import Side
 
 
 @dataclass(frozen=True)
@@ -57,7 +58,7 @@ class SymbolMetrics:
 
     # --- liquidation and open interest metrics -------------------------
     liqs_z: float = 0.0
-    last_liq_side: Optional[str] = None
+    last_liq_side: Side | None = None
     delta_oi_pct: float = 0.0
 
     # --- taker volume metrics ------------------------------------------
@@ -68,4 +69,4 @@ class SymbolMetrics:
     low_break: bool = False
     avwap_loss: bool = False
     entry_price: float = 0.0
-    direction: Optional[str] = None
+    direction: Side | None = None
