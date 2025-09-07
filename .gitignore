@@ -1,3 +1,10 @@
 __pycache__/
 *.pyc
 
+data/cache/*
+!data/cache/.gitkeep
+data/logs/*
+!data/logs/.gitkeep
+data/runtime/*
+!data/runtime/.gitkeep
+
