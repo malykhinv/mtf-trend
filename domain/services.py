@@ -307,9 +307,57 @@ class SignalEngine:
         return False
 
     def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:
-        # A real implementation would check additional criteria from the
-        # profile configuration.  We simply do not emit entry signals here.
-        return None
+        """Evaluate entry conditions and possibly emit an entry signal.
+
+        The simplified engine inspects metrics stored in the ``SymbolRegistry``
+        for ``symbol`` and applies a couple of basic checks derived from the
+        profile configuration.  If the conditions are satisfied an
+        :class:`~domain.models.signals.EntrySignal` describing a SHORT entry at
+        the desired price is returned.
+        """
+
+        state = self._registry.get(symbol)
+        metrics = getattr(state, "metrics", None)
+        if metrics is None:
+            return None
+
+        # Basic sanity: window must have a positive height.
+        if window.high <= window.low:
+            return None
+
+        # ------------------------------------------------------------------
+        # Check premium against confirmation limits.  ``_get_metric`` gracefully
+        # handles both dicts and objects with missing attributes.
+        premium = self._get_metric(metrics, "premium_pct")
+        if premium > self._config.confirmation.premium_max_pct:
+            return None
+
+        entry_cfg = self._config.entry
+        low_break = bool(self._get_metric(metrics, "low_break"))
+        avwap_loss = bool(self._get_metric(metrics, "avwap_loss"))
+
+        allow = False
+        if entry_cfg.require_both:
+            allow = low_break and avwap_loss
+        else:
+            allow = (entry_cfg.allow_low_break and low_break) or (
+                entry_cfg.allow_avwap_loss and avwap_loss
+            )
+        if not allow:
+            return None
+
+        price = self._get_metric(metrics, "entry_price", window.low)
+
+        # Determine side/direction; default to SHORT if unspecified.
+        direction = getattr(metrics, "direction", None)
+        side = Side.SHORT
+        if direction:
+            try:
+                side = Side(direction)
+            except Exception:
+                side = Side.SHORT if str(direction).lower() == "short" else Side.LONG
+
+        return S.EntrySignal(symbol=symbol, side=side, price=price)
 
 
 class RiskManager:
