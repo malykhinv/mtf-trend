@@ -19,6 +19,10 @@ class TradeManager:
         self._risk_manager = risk_manager
         self._positions: Dict[str, tuple[Side, PositionPlan]] = {}
 
+    @staticmethod
+    def _plan(plan: PositionPlan, **changes: float) -> PositionPlan:
+        return replace(plan, **changes)
+
     def open_position(self, plan: PositionPlan, side: Side) -> None:
         order = OrderSpec(
             symbol=plan.symbol,
@@ -54,112 +58,122 @@ class TradeManager:
         side, plan = record
         current_price = plan.entry_price if price is None else price
 
-        # ------------------------------------------------------------------
-        # Take profit levels
+        exits, plan = self._handle_tp1(plan, side, current_price)
+        if exits:
+            return exits, plan
+
+        exits, plan = self._handle_tp2(plan, side, current_price)
+        if exits:
+            return exits, plan
+
+        _, plan = self._apply_trailing_stop(plan, side, current_price)
+
+        exits, plan = self._check_stop(plan, side, current_price)
+        if exits:
+            return exits, plan
+
+        return exits, plan
+
+    # ------------------------------------------------------------------
+    def _handle_tp1(
+        self, plan: PositionPlan, side: Side, price: float
+    ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
+        exits: List[S.ExitSignal] = []
         tp1_hit = plan.tp1_qty > 0.0 and (
-            (side is Side.SHORT and current_price <= plan.take_profit1)
-            or (side is Side.LONG and current_price >= plan.take_profit1)
+            (side is Side.SHORT and price <= plan.take_profit1)
+            or (side is Side.LONG and price >= plan.take_profit1)
         )
-        if tp1_hit:
-            exits.append(S.ExitSignal(symbol=symbol, reason="TP1"))
-            exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
-            order = OrderSpec(
-                symbol=plan.symbol,
-                side=exit_side,
-                type=OrderType.MARKET,
-                quantity=plan.tp1_qty,
-            )
-            self._trader.place(order)
-            self._risk_manager.release(replace(plan, quantity=plan.tp1_qty))
-            plan = PositionPlan(
-                symbol=plan.symbol,
-                entry_price=plan.entry_price,
-                stop_loss=plan.stop_loss,
-                take_profit1=0.0,
-                take_profit2=plan.take_profit2,
-                trail_start=plan.trail_start,
-                trail_distance=plan.trail_distance,
-                quantity=plan.quantity - plan.tp1_qty,
-                tp1_qty=0.0,
-                tp2_qty=plan.tp2_qty,
-                tail_qty=plan.tail_qty,
-            )
-            self._positions[symbol] = (side, plan)
+        if not tp1_hit:
             return exits, plan
 
+        exits.append(S.ExitSignal(symbol=plan.symbol, reason="TP1"))
+        exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
+        order = OrderSpec(
+            symbol=plan.symbol,
+            side=exit_side,
+            type=OrderType.MARKET,
+            quantity=plan.tp1_qty,
+        )
+        self._trader.place(order)
+        self._risk_manager.release(replace(plan, quantity=plan.tp1_qty))
+        new_plan = self._plan(
+            plan,
+            take_profit1=0.0,
+            quantity=plan.quantity - plan.tp1_qty,
+            tp1_qty=0.0,
+        )
+        self._positions[plan.symbol] = (side, new_plan)
+        return exits, new_plan
+
+    def _handle_tp2(
+        self, plan: PositionPlan, side: Side, price: float
+    ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
+        exits: List[S.ExitSignal] = []
         tp2_hit = plan.tp2_qty > 0.0 and (
-            (side is Side.SHORT and current_price <= plan.take_profit2)
-            or (side is Side.LONG and current_price >= plan.take_profit2)
+            (side is Side.SHORT and price <= plan.take_profit2)
+            or (side is Side.LONG and price >= plan.take_profit2)
         )
-        if tp2_hit:
-            exits.append(S.ExitSignal(symbol=symbol, reason="TP2"))
-            exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
-            order = OrderSpec(
-                symbol=plan.symbol,
-                side=exit_side,
-                type=OrderType.MARKET,
-                quantity=plan.tp2_qty,
-            )
-            self._trader.place(order)
-            self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
-            remaining_qty = plan.quantity - plan.tp2_qty
-            if remaining_qty <= 0.0:
-                del self._positions[symbol]
-                return exits, None
-            plan = PositionPlan(
-                symbol=plan.symbol,
-                entry_price=plan.entry_price,
-                stop_loss=plan.stop_loss,
-                take_profit1=plan.take_profit1,
-                take_profit2=0.0,
-                trail_start=plan.trail_start,
-                trail_distance=plan.trail_distance,
-                quantity=remaining_qty,
-                tp1_qty=plan.tp1_qty,
-                tp2_qty=0.0,
-                tail_qty=plan.tail_qty,
-            )
-            self._positions[symbol] = (side, plan)
+        if not tp2_hit:
             return exits, plan
 
-        # ------------------------------------------------------------------
-        # Trailing stop management after take profits
+        exits.append(S.ExitSignal(symbol=plan.symbol, reason="TP2"))
+        exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
+        order = OrderSpec(
+            symbol=plan.symbol,
+            side=exit_side,
+            type=OrderType.MARKET,
+            quantity=plan.tp2_qty,
+        )
+        self._trader.place(order)
+        self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
+        remaining_qty = plan.quantity - plan.tp2_qty
+        if remaining_qty <= 0.0:
+            del self._positions[plan.symbol]
+            return exits, None
+        new_plan = self._plan(
+            plan,
+            take_profit2=0.0,
+            quantity=remaining_qty,
+            tp2_qty=0.0,
+        )
+        self._positions[plan.symbol] = (side, new_plan)
+        return exits, new_plan
+
+    def _apply_trailing_stop(
+        self, plan: PositionPlan, side: Side, price: float
+    ) -> tuple[list[S.ExitSignal], PositionPlan]:
+        exits: List[S.ExitSignal] = []
         trailing_active = plan.take_profit1 <= 0.0 and plan.take_profit2 <= 0.0
         trail_cond = (
-            (side is Side.SHORT and current_price <= plan.trail_start)
-            or (side is Side.LONG and current_price >= plan.trail_start)
+            (side is Side.SHORT and price <= plan.trail_start)
+            or (side is Side.LONG and price >= plan.trail_start)
         )
         if trailing_active and trail_cond:
             new_stop = (
-                min(plan.stop_loss, current_price + plan.trail_distance)
+                min(plan.stop_loss, price + plan.trail_distance)
                 if side is Side.SHORT
-                else max(plan.stop_loss, current_price - plan.trail_distance)
+                else max(plan.stop_loss, price - plan.trail_distance)
             )
-            plan = PositionPlan(
-                symbol=plan.symbol,
-                entry_price=plan.entry_price,
+            plan = self._plan(
+                plan,
                 stop_loss=new_stop,
-                take_profit1=plan.take_profit1,
-                take_profit2=plan.take_profit2,
-                trail_start=current_price,
-                trail_distance=plan.trail_distance,
-                quantity=plan.quantity,
-                tp1_qty=plan.tp1_qty,
-                tp2_qty=plan.tp2_qty,
-                tail_qty=plan.tail_qty,
+                trail_start=price,
             )
-            self._positions[symbol] = (side, plan)
+            self._positions[plan.symbol] = (side, plan)
+        return exits, plan
 
-        # ------------------------------------------------------------------
-        # Stop loss or trailing stop hit
+    def _check_stop(
+        self, plan: PositionPlan, side: Side, price: float
+    ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
+        exits: List[S.ExitSignal] = []
+        trailing_active = plan.take_profit1 <= 0.0 and plan.take_profit2 <= 0.0
         stop_hit = (
-            (side is Side.SHORT and current_price >= plan.stop_loss)
-            or (side is Side.LONG and current_price <= plan.stop_loss)
+            (side is Side.SHORT and price >= plan.stop_loss)
+            or (side is Side.LONG and price <= plan.stop_loss)
         )
         if stop_hit:
             reason = "TRAIL" if trailing_active else "STOP"
-            exits.append(S.ExitSignal(symbol=symbol, reason=reason))
-            self._close_position(symbol, side, plan)
+            exits.append(S.ExitSignal(symbol=plan.symbol, reason=reason))
+            self._close_position(plan.symbol, side, plan)
             return exits, None
-
         return exits, plan
