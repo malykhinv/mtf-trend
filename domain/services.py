@@ -261,10 +261,17 @@ class RiskManager:
         risk = self._cfg.risk
         # Stop loss is placed above the recent high by ``stop_abs_pct``.
         stop_loss = window.high * (1.0 + risk.stop_abs_pct / 100.0)
-        take_profit1 = entry_price * (1.0 - 0.01)
-        take_profit2 = entry_price * (1.0 - 0.02)
-        trail_start = take_profit2
-        trail_distance = entry_price * (risk.trail_abs_pct / 100.0)
+        # Take profit levels are computed cumulatively using configuration percentages.
+        take_profit1 = entry_price * (1.0 - risk.tp1_pct / 100.0)
+        tp2_total_pct = risk.tp1_pct + risk.tp2_pct
+        take_profit2 = entry_price * (1.0 - tp2_total_pct / 100.0)
+        # Trailing starts after the tail portion moves in favor of the position.
+        trail_start_pct = tp2_total_pct + risk.tail_pct
+        trail_start = entry_price * (1.0 - trail_start_pct / 100.0)
+        # Trailing distance is defined by the larger of absolute percent and
+        # a multiple of the recent price range.
+        range_pct = (window.high - window.low) / entry_price
+        trail_distance = entry_price * max(risk.trail_abs_pct / 100.0, range_pct * risk.trail_sigma_mult)
         quantity = RISK_PER_TRADE_USDT / entry_price
         return PositionPlan(
             symbol=symbol,
