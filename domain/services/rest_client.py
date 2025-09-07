@@ -12,6 +12,7 @@ class RestClient:
     _TAKER_RATIO_EP = "/futures/data/takerlongshortRatio"
     _PREMIUM_EP = "/fapi/v1/premiumIndex"
     _TICKER_EP = "/fapi/v1/ticker/24hr"
+    _DEPTH_EP = "/fapi/v1/depth"
 
     def __init__(self) -> None:
         self._client = httpx.Client(base_url=BINANCE_FAPI_REST, timeout=10.0)
@@ -53,3 +54,15 @@ class RestClient:
         quote_volume = float(data["quoteVolume"])
         last_price = float(data["lastPrice"])
         return quote_volume, last_price
+
+    def fetch_all_tickers(self) -> list[dict[str, str]]:
+        r = self._client.get(self._TICKER_EP)
+        r.raise_for_status()
+        return r.json()
+
+    def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
+        r = self._client.get(self._DEPTH_EP, params={"symbol": symbol, "limit": 10})
+        r.raise_for_status()
+        data = r.json()
+        bids = tuple((float(p), float(q)) for p, q in data.get("bids", []))
+        return bids
