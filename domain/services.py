@@ -99,6 +99,9 @@ class SymbolRegistry:
     def __init__(self) -> None:
         self._states: Dict[str, SymbolState] = {}
 
+    def has(self, symbol: str) -> bool:
+        return symbol in self._states
+
     def get(self, symbol: str) -> SymbolState:
         return self._states[symbol]
 
