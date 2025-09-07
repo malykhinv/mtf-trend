@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from domain.ports.rest_client import RestClient
-import constants
+
+from . import universe_filters as filters
 
 
 class UniverseBuilder:
@@ -14,26 +15,38 @@ class UniverseBuilder:
         tickers = self._rest.fetch_all_tickers()
         for info in tickers:
             sym = info["symbol"]
-            if not sym.endswith("USDT"):
+            if not self._is_usdt_pair(sym):
                 continue
 
-            quote_vol, _ = self._rest.get_24h_stats(sym)
-            if quote_vol < constants.UNIVERSE_MIN_24H_USDT:
+            if not self._passes_volume(sym):
                 continue
 
             bid = float(info["bidPrice"])
             ask = float(info["askPrice"])
-            if bid <= 0:
-                continue
-            spread_bps = (ask - bid) / bid * 10_000.0
-            if spread_bps > constants.UNIVERSE_MAX_SPREAD_BPS:
+            if not self._within_spread(bid, ask):
                 continue
 
-            bids = self._rest.get_depth(sym)
-            top10_bid_usdt = sum(p * q for p, q in bids)
-            if top10_bid_usdt < constants.UNIVERSE_MIN_TOP10_BID_USDT:
+            if not self._has_depth(sym):
                 continue
 
             symbols.append(sym)
 
         return symbols
+
+    def _is_usdt_pair(self, sym: str) -> bool:
+        return sym.endswith("USDT")
+
+    def _passes_volume(self, sym: str) -> bool:
+        quote_vol, _ = self._rest.get_24h_stats(sym)
+        return quote_vol >= filters.MIN_24H_USDT
+
+    def _within_spread(self, bid: float, ask: float) -> bool:
+        if bid <= 0:
+            return False
+        spread_bps = (ask - bid) / bid * 10_000.0
+        return spread_bps <= filters.MAX_SPREAD_BPS
+
+    def _has_depth(self, sym: str) -> bool:
+        bids = self._rest.get_depth(sym)
+        top10_bid_usdt = sum(p * q for p, q in bids)
+        return top10_bid_usdt >= filters.MIN_TOP10_BID_USDT
