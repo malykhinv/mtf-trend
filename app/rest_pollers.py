@@ -1,91 +1,112 @@
+"""REST data pollers for additional metrics."""
+
+from __future__ import annotations
+
 import asyncio
 import random
 
 from domain.models.enums import BotState
 from domain.services.rest_client import RestClient
 from domain.services.symbol_registry import SymbolRegistry
+
 import constants
 
+from .utils import _with_backoff
 
-async def rest_pollers(rest: RestClient, registry: SymbolRegistry) -> None:
-    """Poll REST endpoints for additional metrics."""
 
-    async def _with_backoff(func, *args):
-        delay = 1.0
+class _BasePoller:
+    """Common functionality for REST pollers."""
+
+    _WATCHED_STATES = {
+        BotState.WATCHING,
+        BotState.CONFIRMING,
+        BotState.ENTERED,
+    }
+
+    def __init__(self, rest: RestClient, registry: SymbolRegistry, delay_sec: int) -> None:
+        self._rest = rest
+        self._registry = registry
+        self._delay_sec = delay_sec
+
+    async def _sleep(self) -> None:
+        await asyncio.sleep(self._delay_sec * random.uniform(0.8, 1.2))
+
+    async def run(self) -> None:  # pragma: no cover - to be implemented by subclasses
+        raise NotImplementedError
+
+
+class OpenInterestPoller(_BasePoller):
+    """Poll open interest and update delta percentage metric."""
+
+    def __init__(self, rest: RestClient, registry: SymbolRegistry) -> None:
+        super().__init__(rest, registry, constants.REST_POLL_SEC_OI)
+        self._last_oi: dict[str, float] = {}
+
+    async def run(self) -> None:
         while True:
-            try:
-                return func(*args)
-            except Exception:
-                await asyncio.sleep(delay * random.uniform(0.8, 1.2))
-                delay = min(delay * 2, 60.0)
-
-    async def poll_oi() -> None:
-        """Poll open interest and update delta percentage metric."""
-
-        last_oi: dict[str, float] = {}
-        watched_states = {
-            BotState.WATCHING,
-            BotState.CONFIRMING,
-            BotState.ENTERED,
-        }
-        while True:
-            for symbol in registry.all_symbols():
-                state = registry.get(symbol)
-                if state.state not in watched_states:
+            for symbol in self._registry.all_symbols():
+                state = self._registry.get(symbol)
+                if state.state not in self._WATCHED_STATES:
                     continue
-                oi = await _with_backoff(rest.get_open_interest, symbol)
-                prev = last_oi.get(symbol)
+
+                oi = await _with_backoff(self._rest.get_open_interest, symbol)
+                prev = self._last_oi.get(symbol)
                 delta_pct = ((oi - prev) / prev * 100.0) if prev else 0.0
-                last_oi[symbol] = oi
+                self._last_oi[symbol] = oi
 
                 metrics = state.metrics
                 metrics.delta_oi_pct = delta_pct
-                registry.update(symbol, state)
-            await asyncio.sleep(
-                constants.REST_POLL_SEC_OI * random.uniform(0.8, 1.2)
-            )
+                self._registry.update(symbol, state)
 
-    async def poll_taker() -> None:
-        """Poll taker buy/sell volumes and store them in metrics."""
+            await self._sleep()
 
-        watched_states = {
-            BotState.WATCHING,
-            BotState.CONFIRMING,
-            BotState.ENTERED,
-        }
+
+class TakerRatioPoller(_BasePoller):
+    """Poll taker buy/sell volumes and store them in metrics."""
+
+    def __init__(self, rest: RestClient, registry: SymbolRegistry) -> None:
+        super().__init__(rest, registry, constants.REST_POLL_SEC_TAKER)
+
+    async def run(self) -> None:
         while True:
-            for symbol in registry.all_symbols():
-                state = registry.get(symbol)
-                if state.state not in watched_states:
+            for symbol in self._registry.all_symbols():
+                state = self._registry.get(symbol)
+                if state.state not in self._WATCHED_STATES:
                     continue
-                buy, sell = await _with_backoff(rest.get_taker_ratio, symbol)
+
+                buy, sell = await _with_backoff(self._rest.get_taker_ratio, symbol)
                 metrics = state.metrics
                 metrics.taker_buy_volume = buy
                 metrics.taker_sell_volume = sell
-                registry.update(symbol, state)
-            await asyncio.sleep(
-                constants.REST_POLL_SEC_TAKER * random.uniform(0.8, 1.2)
-            )
+                self._registry.update(symbol, state)
 
-    async def poll_premium() -> None:
-        """Poll premium index percentage and update metric."""
+            await self._sleep()
 
-        watched_states = {
-            BotState.WATCHING,
-            BotState.CONFIRMING,
-            BotState.ENTERED,
-        }
+
+class PremiumIndexPoller(_BasePoller):
+    """Poll premium index percentage and update metric."""
+
+    def __init__(self, rest: RestClient, registry: SymbolRegistry) -> None:
+        super().__init__(rest, registry, constants.REST_POLL_SEC_PREMIUM)
+
+    async def run(self) -> None:
         while True:
-            for symbol in registry.all_symbols():
-                state = registry.get(symbol)
-                if state.state not in watched_states:
+            for symbol in self._registry.all_symbols():
+                state = self._registry.get(symbol)
+                if state.state not in self._WATCHED_STATES:
                     continue
-                premium = await _with_backoff(rest.get_premium_pct, symbol)
+
+                premium = await _with_backoff(self._rest.get_premium_pct, symbol)
                 metrics = state.metrics
                 metrics.premium_pct = premium
-                registry.update(symbol, state)
-            await asyncio.sleep(
-                constants.REST_POLL_SEC_PREMIUM * random.uniform(0.8, 1.2)
-            )
+                self._registry.update(symbol, state)
 
-    await asyncio.gather(poll_oi(), poll_taker(), poll_premium())
+            await self._sleep()
+
+
+__all__ = [
+    "OpenInterestPoller",
+    "TakerRatioPoller",
+    "PremiumIndexPoller",
+]
+

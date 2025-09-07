@@ -14,7 +14,11 @@ import constants
 
 from .ws import ws_stream
 from .metrics import bar_maker
-from .rest_pollers import rest_pollers
+from .rest_pollers import (
+    OpenInterestPoller,
+    TakerRatioPoller,
+    PremiumIndexPoller,
+)
 from .state_machine import fsm_loop
 
 
@@ -62,11 +66,17 @@ def run(cfg: ProfileConfig) -> None:
     risk_manager = RiskManager(cfg)
     trade_manager = TradeManager(trader, risk_manager)
 
+    pollers = [
+        OpenInterestPoller(rest, registry),
+        TakerRatioPoller(rest, registry),
+        PremiumIndexPoller(rest, registry),
+    ]
+
     async def _run() -> None:
         await asyncio.gather(
             ws_stream(ws),
             bar_maker(ws, registry),
-            rest_pollers(rest, registry),
+            *(p.run() for p in pollers),
             fsm_loop(
                 cfg,
                 gstate,
