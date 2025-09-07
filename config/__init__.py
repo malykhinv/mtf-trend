@@ -7,6 +7,9 @@ from domain.models.config import (
     RiskParams,
     TriggerParams,
 )
+from constants import RISK_PER_TRADE_USDT
+
+DEFAULT_MARGIN_USDT = 5 * RISK_PER_TRADE_USDT
 
 
 def make_profile_config_conservative() -> ProfileConfig:
@@ -42,7 +45,13 @@ def make_profile_config_conservative() -> ProfileConfig:
         trail_abs_pct=0.12,
         trail_sigma_mult=1.3,
     )
-    return ProfileConfig(trigger=trigger, confirmation=confirmation, entry=entry, risk=risk)
+    return ProfileConfig(
+        trigger=trigger,
+        confirmation=confirmation,
+        entry=entry,
+        risk=risk,
+        max_margin_usdt=DEFAULT_MARGIN_USDT,
+    )
 
 
 def make_profile_config_balanced() -> ProfileConfig:
@@ -78,7 +87,13 @@ def make_profile_config_balanced() -> ProfileConfig:
         trail_abs_pct=0.12,
         trail_sigma_mult=1.25,
     )
-    return ProfileConfig(trigger=trigger, confirmation=confirmation, entry=entry, risk=risk)
+    return ProfileConfig(
+        trigger=trigger,
+        confirmation=confirmation,
+        entry=entry,
+        risk=risk,
+        max_margin_usdt=DEFAULT_MARGIN_USDT,
+    )
 
 
 def make_profile_config_active() -> ProfileConfig:
@@ -114,4 +129,10 @@ def make_profile_config_active() -> ProfileConfig:
         trail_abs_pct=0.10,
         trail_sigma_mult=1.1,
     )
-    return ProfileConfig(trigger=trigger, confirmation=confirmation, entry=entry, risk=risk)
+    return ProfileConfig(
+        trigger=trigger,
+        confirmation=confirmation,
+        entry=entry,
+        risk=risk,
+        max_margin_usdt=DEFAULT_MARGIN_USDT,
+    )

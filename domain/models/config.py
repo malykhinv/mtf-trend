@@ -47,3 +47,4 @@ class ProfileConfig:
     confirmation: ConfirmationParams
     entry: EntryParams
     risk: RiskParams
+    max_margin_usdt: float

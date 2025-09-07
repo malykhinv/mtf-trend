@@ -399,6 +399,7 @@ class RiskManager:
 
     def __init__(self, config: ProfileConfig) -> None:
         self._cfg = config
+        self._open_risk_usdt: float = 0.0
 
     def build_plan(self, symbol: str, entry_price: float, window: M.PumpWindow) -> T.PositionPlan | None:
         risk = self._cfg.risk
@@ -428,8 +429,13 @@ class RiskManager:
         )
 
     def allow_trade(self, plan: T.PositionPlan) -> bool:
-        # trivial check – ensure position size is positive
-        return plan.quantity > 0
+        required_margin = plan.entry_price * plan.quantity
+        if required_margin > RISK_PER_TRADE_USDT:
+            return False
+        if self._open_risk_usdt + required_margin > self._cfg.max_margin_usdt:
+            return False
+        self._open_risk_usdt += required_margin
+        return True
 
 
 class TradeManager:
