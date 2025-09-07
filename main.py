@@ -168,21 +168,48 @@ async def rest_pollers(rest: RestClient, registry: SymbolRegistry) -> None:
     """
 
     async def poll_oi() -> None:
+        """Poll open interest and update delta percentage metric."""
+
+        last_oi: dict[str, float] = {}
         while True:
             for symbol in registry.all_symbols():
-                rest.get_open_interest(symbol)
+                oi = rest.get_open_interest(symbol)
+                prev = last_oi.get(symbol)
+                delta_pct = ((oi - prev) / prev * 100.0) if prev else 0.0
+                last_oi[symbol] = oi
+
+                state = registry.get(symbol)
+                metrics = getattr(state, "metrics", {}) or {}
+                metrics["delta_oi_pct"] = delta_pct
+                state.metrics = metrics
+                registry.update(symbol, state)
             await asyncio.sleep(constants.REST_POLL_SEC_OI)
 
     async def poll_taker() -> None:
+        """Poll taker buy/sell volumes and store them in metrics."""
+
         while True:
             for symbol in registry.all_symbols():
-                rest.get_taker_ratio(symbol)
+                buy, sell = rest.get_taker_ratio(symbol)
+                state = registry.get(symbol)
+                metrics = getattr(state, "metrics", {}) or {}
+                metrics["taker_buy_volume"] = buy
+                metrics["taker_sell_volume"] = sell
+                state.metrics = metrics
+                registry.update(symbol, state)
             await asyncio.sleep(constants.REST_POLL_SEC_TAKER)
 
     async def poll_premium() -> None:
+        """Poll premium index percentage and update metric."""
+
         while True:
             for symbol in registry.all_symbols():
-                rest.get_premium_pct(symbol)
+                premium = rest.get_premium_pct(symbol)
+                state = registry.get(symbol)
+                metrics = getattr(state, "metrics", {}) or {}
+                metrics["premium_pct"] = premium
+                state.metrics = metrics
+                registry.update(symbol, state)
             await asyncio.sleep(constants.REST_POLL_SEC_PREMIUM)
 
     await asyncio.gather(poll_oi(), poll_taker(), poll_premium())
