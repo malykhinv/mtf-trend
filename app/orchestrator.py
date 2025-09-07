@@ -13,7 +13,7 @@ from domain.services.ws_client import WsClient
 
 from .ws import ws_stream
 from .metrics import bar_maker
-from .rest_pollers import (
+from .pollers import (
     OpenInterestPoller,
     TakerRatioPoller,
     PremiumIndexPoller,
