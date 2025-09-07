@@ -15,10 +15,9 @@ from __future__ import annotations
 
 import asyncio
 
-from domain.models.enums import BotState, OrderType, Profile
+from domain.models.enums import BotState, Profile
 from domain.models.state import GlobalState, SymbolState
 from domain.models.config import ProfileConfig
-from domain.models.trading import OrderSpec
 from config import make_profile_config_balanced
 from domain.services import (
     RestClient,
@@ -133,16 +132,7 @@ async def fsm_loop(
             if plan is None or not risk_manager.allow_trade(plan):
                 continue
 
-            trade_manager.open_position(plan)
-
-            order = OrderSpec(
-                symbol=plan.symbol,
-                side=entry.side,
-                type=OrderType.MARKET,
-                quantity=plan.quantity,
-                price=plan.entry_price,
-            )
-            trader.place(order)
+            trade_manager.open_position(plan, entry.side)
 
             exits, new_plan = trade_manager.on_tick_manage(symbol)
             for _exit in exits:
