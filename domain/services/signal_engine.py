@@ -1,10 +1,40 @@
 from __future__ import annotations
 
 from domain.models import metrics as M, signals as S
-from domain.models.config import ProfileConfig
+from domain.models.config import EntryParams, ProfileConfig, TriggerParams
 from domain.models.enums import Side
 
 from .symbol_registry import SymbolRegistry
+
+
+def _taker_ratio(metrics: M.SymbolMetrics) -> float:
+    taker_buy = metrics.taker_buy_volume
+    taker_sell = metrics.taker_sell_volume
+    if taker_sell > 0:
+        return taker_buy / taker_sell
+    return float("inf") if taker_buy > 0 else 0.0
+
+
+def _meets_trigger(metrics: M.SymbolMetrics, trig: TriggerParams) -> bool:
+    return (
+        metrics.z_px >= trig.z_px
+        and metrics.z_vol >= trig.z_vol
+        and metrics.delta_price_sigma_mult >= trig.delta_price_sigma_mult
+        and metrics.delta_price_abs_pct >= trig.delta_price_abs_pct
+        and metrics.close_pos >= trig.close_pos
+        and metrics.liqs_z >= trig.liqs_z
+    )
+
+
+def _evaluate_entry(metrics: M.SymbolMetrics, entry_cfg: EntryParams) -> bool:
+    low_break = metrics.low_break
+    avwap_loss = metrics.avwap_loss
+    if entry_cfg.require_both:
+        return low_break and avwap_loss
+    return (
+        (entry_cfg.allow_low_break and low_break)
+        or (entry_cfg.allow_avwap_loss and avwap_loss)
+    )
 
 
 class SignalEngine:
@@ -24,15 +54,7 @@ class SignalEngine:
 
         trig = self._config.trigger
 
-        conditions_met = (
-            metrics.z_px >= trig.z_px
-            and metrics.z_vol >= trig.z_vol
-            and metrics.delta_price_sigma_mult >= trig.delta_price_sigma_mult
-            and metrics.delta_price_abs_pct >= trig.delta_price_abs_pct
-            and metrics.close_pos >= trig.close_pos
-            and metrics.liqs_z >= trig.liqs_z
-        )
-        if not conditions_met:
+        if not _meets_trigger(metrics, trig):
             return None
 
         window = M.PumpWindow(
@@ -54,12 +76,7 @@ class SignalEngine:
         if metrics.delta_oi_pct > confirm.delta_oi_max_pct:
             return True
 
-        taker_buy = metrics.taker_buy_volume
-        taker_sell = metrics.taker_sell_volume
-        if taker_sell > 0:
-            taker_ratio = taker_buy / taker_sell
-        else:
-            taker_ratio = float("inf") if taker_buy > 0 else 0.0
+        taker_ratio = _taker_ratio(metrics)
         if taker_ratio > confirm.taker_ratio_max:
             return True
 
@@ -81,16 +98,8 @@ class SignalEngine:
             return None
 
         entry_cfg = self._config.entry
-        low_break = metrics.low_break
-        avwap_loss = metrics.avwap_loss
 
-        if entry_cfg.require_both:
-            allow = low_break and avwap_loss
-        else:
-            allow = (entry_cfg.allow_low_break and low_break) or (
-                entry_cfg.allow_avwap_loss and avwap_loss
-            )
-        if not allow:
+        if not _evaluate_entry(metrics, entry_cfg):
             return None
 
         direction = metrics.direction or Side.SHORT
