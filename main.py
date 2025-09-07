@@ -282,7 +282,7 @@ def main() -> None:
     # expected interfaces for :func:`fsm_loop`.
     signal_engine = SignalEngine(cfg, registry)
     risk_manager = RiskManager(cfg)
-    trade_manager = TradeManager(trader)
+    trade_manager = TradeManager(trader, risk_manager)
 
     # 3) coroutines: ws_stream, bar_maker, rest_pollers, fsm_loop
     #    - strict separation: input→metrics→signals→trading
