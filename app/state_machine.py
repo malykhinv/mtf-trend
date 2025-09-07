@@ -12,7 +12,7 @@ from domain.services.symbol_registry import SymbolRegistry
 from domain.services.signal_engine import SignalEngine
 from domain.services.risk_manager import RiskManager
 from domain.services.trade_manager import TradeManager
-from domain.services.trader import Trader
+from domain.ports.trader import Trader
 import constants
 
 

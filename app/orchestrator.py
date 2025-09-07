@@ -3,13 +3,16 @@ import asyncio
 from domain.models.enums import BotState
 from domain.models.state import GlobalState, SymbolState
 from domain.models.config import ProfileConfig
-from domain.services.rest_client import RestClient
+from domain.ports.rest_client import RestClient as RestClientPort
+from domain.ports.ws_client import WsClient as WsClientPort
+from domain.ports.trader import Trader as TraderPort
 from domain.services.risk_manager import RiskManager
 from domain.services.signal_engine import SignalEngine
 from domain.services.symbol_registry import SymbolRegistry
 from domain.services.trade_manager import TradeManager
-from domain.services.trader import Trader
-from domain.services.ws_client import WsClient
+from infrastructure.binance.rest_client import RestClient
+from infrastructure.binance.ws_client import WsClient
+from infrastructure.binance.trader import Trader
 
 from .ws import ws_stream
 from .metrics import bar_maker
@@ -26,16 +29,16 @@ def run(cfg: ProfileConfig) -> None:
     gstate = GlobalState(profile=cfg.profile, btc_pause_until_ms=None)
 
     registry = SymbolRegistry()
-    rest = RestClient()
+    rest: RestClientPort = RestClient()
 
     builder = UniverseBuilder(rest)
     symbols = builder.build()
     for sym in symbols:
         registry.put(SymbolState(symbol=sym, state=BotState.IDLE))
 
-    ws = WsClient()
+    ws: WsClientPort = WsClient()
     ws.subscribe_symbols(tuple(symbols))
-    trader = Trader()
+    trader: TraderPort = Trader()
 
     signal_engine = SignalEngine(cfg, registry)
     risk_manager = RiskManager(cfg)

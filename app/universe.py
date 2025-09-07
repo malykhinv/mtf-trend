@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from domain.services.rest_client import RestClient
+from domain.ports.rest_client import RestClient
 import constants
 
 
