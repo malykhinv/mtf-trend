@@ -221,7 +221,7 @@ async def fsm_loop(
                 continue
             gstate.btc_pause_until_ms = None
 
-        try:
+        if registry.has("BTCUSDT"):
             btc_state = registry.get("BTCUSDT")
             if btc_state.metrics.z_px > constants.GLOBAL_BTC_PAUSE_Z:
                 gstate.btc_pause_until_ms = (
@@ -229,8 +229,6 @@ async def fsm_loop(
                 )
                 await asyncio.sleep(0)
                 continue
-        except KeyError:
-            pass
 
         for symbol in registry.all_symbols():
             state = registry.get(symbol)
