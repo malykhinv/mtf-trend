@@ -249,7 +249,7 @@ async def fsm_loop(
             if state.state is BotState.ENTERED:
                 exits, new_plan = trade_manager.on_tick_manage(symbol)
                 for _exit in exits:
-                    trader.cancel(symbol, all_for_symbol=False)
+                    trader.cancel(symbol, order_id=None)
                 if new_plan is None:
                     state.state = BotState.COOLDOWN
                     state.last_signal_ts = now

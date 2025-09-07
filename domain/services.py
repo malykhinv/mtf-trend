@@ -77,20 +77,15 @@ class Trader:
         response.raise_for_status()
 
     # ------------------------------------------------------------------
-    def cancel(self, symbol: str, all_for_symbol: bool) -> None:  # pragma: no cover - network
-        if all_for_symbol:
+    def cancel(self, symbol: str, order_id: int | None) -> None:  # pragma: no cover - network
+        if order_id is None:
             endpoint = self._CANCEL_ALL_ENDPOINT
             params = {"symbol": symbol}
-            response = self._signed_request("DELETE", endpoint, params)
-            response.raise_for_status()
         else:
-            # The simplified interface allows cancelling all orders for a
-            # symbol only.  For single order cancel, a more specific order id
-            # would be required, which is outside the scope of this example.
-            endpoint = self._CANCEL_ALL_ENDPOINT
-            params = {"symbol": symbol}
-            response = self._signed_request("DELETE", endpoint, params)
-            response.raise_for_status()
+            endpoint = self._ORDER_ENDPOINT
+            params = {"symbol": symbol, "orderId": str(order_id)}
+        response = self._signed_request("DELETE", endpoint, params)
+        response.raise_for_status()
 
 
 class SymbolRegistry:
