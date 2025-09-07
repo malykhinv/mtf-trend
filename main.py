@@ -23,15 +23,13 @@ from domain.models.enums import BotState, Profile, Side
 from domain.models.state import GlobalState, SymbolState
 from domain.models.config import ProfileConfig
 from config import make_profile_config_balanced
-from domain.services import (
-    RestClient,
-    RiskManager,
-    SignalEngine,
-    SymbolRegistry,
-    TradeManager,
-    Trader,
-    WsClient,
-)
+from domain.services.rest_client import RestClient
+from domain.services.risk_manager import RiskManager
+from domain.services.signal_engine import SignalEngine
+from domain.services.symbol_registry import SymbolRegistry
+from domain.services.trade_manager import TradeManager
+from domain.services.trader import Trader
+from domain.services.ws_client import WsClient
 
 import constants
 

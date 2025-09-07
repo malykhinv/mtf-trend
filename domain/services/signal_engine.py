@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+from domain.models import metrics as M, signals as S
+from domain.models.config import ProfileConfig
+from domain.models.enums import Side
+
+from .symbol_registry import SymbolRegistry
+
+
+class SignalEngine:
+    """Very small placeholder signal engine."""
+
+    def __init__(self, config: ProfileConfig, registry: SymbolRegistry) -> None:
+        self._config = config
+        # ``SignalEngine`` needs access to the registry in order to retrieve
+        # the latest metrics for every symbol.
+        self._registry = registry
+
+    def on_minute_close(self, symbol: str) -> S.PumpSignal | None:
+        """Evaluate minute metrics and possibly emit a pump signal."""
+
+        state = self._registry.get(symbol)
+        metrics = state.metrics
+
+        trig = self._config.trigger
+
+        conditions_met = (
+            metrics.z_px >= trig.z_px
+            and metrics.z_vol >= trig.z_vol
+            and metrics.delta_price_sigma_mult >= trig.delta_price_sigma_mult
+            and metrics.delta_price_abs_pct >= trig.delta_price_abs_pct
+            and metrics.close_pos >= trig.close_pos
+            and metrics.liqs_z >= trig.liqs_z
+        )
+        if not conditions_met:
+            return None
+
+        window = M.PumpWindow(
+            high=metrics.high,
+            low=metrics.low,
+            start_ts=int(metrics.start_ts),
+            end_ts=int(metrics.end_ts),
+        )
+        return S.PumpSignal(symbol=symbol, window=window)
+
+    def confirm_failure(self, symbol: str, window: M.PumpWindow) -> bool:
+        """Determine whether the pump window should be rejected."""
+
+        state = self._registry.get(symbol)
+        metrics = state.metrics
+
+        confirm = self._config.confirmation
+
+        if metrics.delta_oi_pct > confirm.delta_oi_max_pct:
+            return True
+
+        taker_buy = metrics.taker_buy_volume
+        taker_sell = metrics.taker_sell_volume
+        if taker_sell > 0:
+            taker_ratio = taker_buy / taker_sell
+        else:
+            taker_ratio = float("inf") if taker_buy > 0 else 0.0
+        if taker_ratio > confirm.taker_ratio_max:
+            return True
+
+        if metrics.premium_pct > confirm.premium_max_pct:
+            return True
+
+        return False
+
+    def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:
+        """Evaluate entry conditions and possibly emit an entry signal."""
+
+        state = self._registry.get(symbol)
+        metrics = state.metrics
+
+        if window.high <= window.low:
+            return None
+
+        if metrics.premium_pct > self._config.confirmation.premium_max_pct:
+            return None
+
+        entry_cfg = self._config.entry
+        low_break = metrics.low_break
+        avwap_loss = metrics.avwap_loss
+
+        if entry_cfg.require_both:
+            allow = low_break and avwap_loss
+        else:
+            allow = (entry_cfg.allow_low_break and low_break) or (
+                entry_cfg.allow_avwap_loss and avwap_loss
+            )
+        if not allow:
+            return None
+
+        direction = metrics.direction or Side.SHORT
+
+        if metrics.entry_price > 0:
+            price = metrics.entry_price
+        else:
+            if direction is Side.SHORT:
+                price = metrics.best_bid or window.low
+            else:
+                price = metrics.best_ask or window.high
+
+        return S.EntrySignal(symbol=symbol, side=direction, price=price)
