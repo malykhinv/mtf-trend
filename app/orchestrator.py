@@ -15,7 +15,7 @@ import constants
 from .ws import ws_stream
 from .metrics import bar_maker
 from .rest_pollers import rest_pollers
-from .state_machine import fsm_loop
+from .state_machine import BotStateMachine
 
 
 def run(cfg: ProfileConfig) -> None:
@@ -61,21 +61,22 @@ def run(cfg: ProfileConfig) -> None:
     signal_engine = SignalEngine(cfg, registry)
     risk_manager = RiskManager(cfg)
     trade_manager = TradeManager(trader, risk_manager)
+    state_machine = BotStateMachine(
+        cfg,
+        gstate,
+        registry,
+        signal_engine,
+        risk_manager,
+        trade_manager,
+        trader,
+    )
 
     async def _run() -> None:
         await asyncio.gather(
             ws_stream(ws),
             bar_maker(ws, registry),
             rest_pollers(rest, registry),
-            fsm_loop(
-                cfg,
-                gstate,
-                registry,
-                signal_engine,
-                risk_manager,
-                trade_manager,
-                trader,
-            ),
+            state_machine.run(),
         )
 
     asyncio.run(_run())
