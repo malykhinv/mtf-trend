@@ -449,33 +449,6 @@ class TradeManager:
         current_price = plan.entry_price if price is None else price
 
         # ------------------------------------------------------------------
-        # Trailing stop management (active after both take profits executed)
-        trailing_active = plan.take_profit1 <= 0.0 and plan.take_profit2 <= 0.0
-        if trailing_active and current_price <= plan.trail_start:
-            new_stop = min(plan.stop_loss, current_price + plan.trail_distance)
-            plan = T.PositionPlan(
-                symbol=plan.symbol,
-                entry_price=plan.entry_price,
-                stop_loss=new_stop,
-                take_profit1=plan.take_profit1,
-                take_profit2=plan.take_profit2,
-                trail_start=current_price,
-                trail_distance=plan.trail_distance,
-                quantity=plan.quantity,
-            )
-            self._positions[symbol] = plan
-            trailing_active = True
-
-        # ------------------------------------------------------------------
-        # Stop loss or trailing stop hit
-        if current_price >= plan.stop_loss:
-            reason = "TRAIL" if trailing_active else "STOP"
-            exits.append(S.ExitSignal(symbol=symbol, reason=reason))
-            self._risk_manager.release(plan)
-            del self._positions[symbol]
-            return exits, None
-
-        # ------------------------------------------------------------------
         # Take profit levels
         if plan.take_profit1 > 0.0 and current_price <= plan.take_profit1:
             exits.append(S.ExitSignal(symbol=symbol, reason="TP1"))
@@ -506,7 +479,7 @@ class TradeManager:
             self._positions[symbol] = plan
 
         # ------------------------------------------------------------------
-        # Activate trailing after both take profits have been executed
+        # Trailing stop management after take profits
         trailing_active = plan.take_profit1 <= 0.0 and plan.take_profit2 <= 0.0
         if trailing_active and current_price <= plan.trail_start:
             new_stop = min(plan.stop_loss, current_price + plan.trail_distance)
@@ -521,5 +494,14 @@ class TradeManager:
                 quantity=plan.quantity,
             )
             self._positions[symbol] = plan
+
+        # ------------------------------------------------------------------
+        # Stop loss or trailing stop hit
+        if current_price >= plan.stop_loss:
+            reason = "TRAIL" if trailing_active else "STOP"
+            exits.append(S.ExitSignal(symbol=symbol, reason=reason))
+            self._risk_manager.release(plan)
+            del self._positions[symbol]
+            return exits, None
 
         return exits, plan
