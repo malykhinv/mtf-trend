@@ -445,10 +445,10 @@ class TradeManager:
         self._trader = trader
         self._positions: Dict[str, PositionPlan] = {}
 
-    def open_position(self, plan: T.PositionPlan) -> None:
+    def open_position(self, plan: T.PositionPlan, side: Side) -> None:
         order = OrderSpec(
             symbol=plan.symbol,
-            side=Side.SHORT,
+            side=side,
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
