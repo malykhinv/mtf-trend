@@ -243,7 +243,7 @@ class SignalEngine:
 
     def confirm_failure(self, symbol: str, window: M.PumpWindow) -> bool:
         # Placeholder – assume confirmation never fails.
-        return True
+        return False
 
     def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:
         # A real implementation would check additional criteria from the
