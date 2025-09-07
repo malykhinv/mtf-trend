@@ -345,12 +345,17 @@ class SignalEngine:
         if not allow:
             return None
 
-        price = metrics.entry_price or window.low
+        direction = metrics.direction or Side.SHORT
 
-        direction = metrics.direction
-        side = direction if direction is not None else Side.SHORT
+        if metrics.entry_price > 0:
+            price = metrics.entry_price
+        else:
+            if direction is Side.SHORT:
+                price = metrics.best_bid or window.low
+            else:
+                price = metrics.best_ask or window.high
 
-        return S.EntrySignal(symbol=symbol, side=side, price=price)
+        return S.EntrySignal(symbol=symbol, side=direction, price=price)
 
 
 class RiskManager:

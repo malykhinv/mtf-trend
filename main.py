@@ -19,7 +19,7 @@ import time
 import math
 from typing import Deque
 
-from domain.models.enums import BotState, Profile
+from domain.models.enums import BotState, Profile, Side
 from domain.models.state import GlobalState, SymbolState
 from domain.models.config import ProfileConfig
 from config import make_profile_config_balanced
@@ -136,6 +136,12 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
             metrics.last_price = trade.price
             metrics.low_break = low_break
             metrics.avwap_loss = avwap_loss
+            if low_break or avwap_loss:
+                metrics.entry_price = trade.price
+                metrics.direction = Side.SHORT
+            else:
+                metrics.entry_price = 0.0
+                metrics.direction = None
 
             registry.update(trade.symbol, state)
 
