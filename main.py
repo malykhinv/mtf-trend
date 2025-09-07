@@ -233,6 +233,21 @@ async def fsm_loop(
 
     while True:
         for symbol in registry.all_symbols():
+            state = registry.get(symbol)
+            metrics = getattr(state, "metrics", {}) or {}
+            price = metrics.get("last_price")
+
+            # Manage existing position on every iteration
+            plan_before = trade_manager.get_plan(symbol)
+            if plan_before is not None:
+                exits, new_plan = trade_manager.on_tick_manage(symbol, price)
+                if exits:
+                    for _exit in exits:
+                        trader.cancel(symbol, all_for_symbol=False)
+                    if new_plan is None:
+                        risk_manager.notify_close(plan_before)
+
+            # Evaluate potential new entry
             pump = signal_engine.on_minute_close(symbol)
             if pump is None:
                 continue
@@ -248,10 +263,6 @@ async def fsm_loop(
                 continue
 
             trade_manager.open_position(plan, entry.side)
-
-            exits, new_plan = trade_manager.on_tick_manage(symbol)
-            for _exit in exits:
-                trader.cancel(symbol, all_for_symbol=False)
 
         await asyncio.sleep(0)
 

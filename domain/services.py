@@ -437,6 +437,11 @@ class RiskManager:
         self._open_risk_usdt += required_margin
         return True
 
+    def notify_close(self, plan: T.PositionPlan) -> None:
+        """Release risk when a position is closed."""
+        margin = plan.entry_price * plan.quantity
+        self._open_risk_usdt = max(0.0, self._open_risk_usdt - margin)
+
 
 class TradeManager:
     """High level wrapper around :class:`Trader` handling position state."""
@@ -444,6 +449,10 @@ class TradeManager:
     def __init__(self, trader: Trader) -> None:
         self._trader = trader
         self._positions: Dict[str, PositionPlan] = {}
+
+    def get_plan(self, symbol: str) -> T.PositionPlan | None:
+        """Return current plan for ``symbol`` if any."""
+        return self._positions.get(symbol)
 
     def open_position(self, plan: T.PositionPlan, side: Side) -> None:
         order = OrderSpec(
