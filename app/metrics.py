@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
+from collections import deque
+
 import constants
 from domain.models.enums import Side
 from domain.models.market_data import AggTrade, DepthSnapshot, LiquidationEvent
 from domain.services.symbol_registry import SymbolRegistry
 from domain.ports.ws_client import WsClient
 from .metric_utils import update_ewma, zscore, zscore_window
+from . import baseline_store
 
 
 class MetricAggregator:
@@ -153,6 +157,21 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
     """Build per-symbol metrics from websocket events."""
 
     aggregator = MetricAggregator(registry)
+    symbols = registry.all_symbols()
+    baselines = baseline_store.load(symbols)
+    for sym in symbols:
+        state = registry.get(sym)
+        price_win, vol_win = baselines.get(
+            sym,
+            (
+                deque(maxlen=constants.Z_BASE_WINDOW_MIN),
+                deque(maxlen=constants.Z_BASE_WINDOW_MIN),
+            ),
+        )
+        state.metrics.price_win = price_win
+        state.metrics.vol_win = vol_win
+
+    next_persist = time.time() + 60
     while True:
         trade = ws.next_agg_trade()
         if trade:
@@ -165,6 +184,18 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
         liq = ws.next_liquidation()
         if liq:
             aggregator.process_liquidation(liq)
+
+        if time.time() >= next_persist:
+            baseline_store.save(
+                {
+                    sym: (
+                        registry.get(sym).metrics.price_win,
+                        registry.get(sym).metrics.vol_win,
+                    )
+                    for sym in symbols
+                }
+            )
+            next_persist = time.time() + 60
 
         await asyncio.sleep(0)
 
