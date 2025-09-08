@@ -39,19 +39,19 @@ async def _run_with_restart(
     retries: int = TASK_MAX_RESTARTS,
 ) -> None:
     attempt = 0
-    while True:
+    while attempt <= retries:
         try:
             await coro_fn()
-            break
+            logger.info("%s task finished (attempt %d)", name, attempt + 1)
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.exception("%s task failed (attempt %d)", name, attempt + 1)
-            if attempt >= retries:
+            if attempt == retries:
                 raise
-            attempt += 1
             await asyncio.sleep(TASK_RESTART_DELAY_SEC)
             logger.info("Restarting %s", name)
+        attempt += 1
 
 
 NotificationType = Literal["orders", "events"]
