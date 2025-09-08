@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 
 from domain.models.enums import BotState
@@ -7,6 +8,9 @@ from domain.models.state import SymbolState
 from domain.services.symbol_registry import SymbolRegistry
 from domain.services.trade_manager import TradeManager
 from domain.ports.trader import Trader
+
+
+logger = logging.getLogger(__name__)
 
 
 class EnteredHandler:
@@ -34,6 +38,7 @@ class EnteredHandler:
             state.state = BotState.COOLDOWN
             state.last_signal_ts = time.time()
             self._registry.update(symbol, state)
+            logger.info(":< позиция закрыта, символ в охлаждении :>")
 
 
 __all__ = ["EnteredHandler"]
