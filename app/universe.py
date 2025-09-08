@@ -13,16 +13,13 @@ class UniverseBuilder:
         symbols: list[str] = []
 
         tickers = await self._rest.fetch_all_tickers()
-        for info in tickers:
-            sym = info["symbol"]
+        for sym, bid, ask in tickers:
             if not self._is_usdt_pair(sym):
                 continue
 
             if not await self._passes_volume(sym):
                 continue
 
-            bid = float(info["bidPrice"])
-            ask = float(info["askPrice"])
             if not self._within_spread(bid, ask):
                 continue
 
