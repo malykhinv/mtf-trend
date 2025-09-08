@@ -3,8 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections import deque
-from typing import Any, Deque, List
+from typing import Any, List
 
 import websockets
 from websockets.client import WebSocketClientProtocol
@@ -20,11 +19,17 @@ logger = logging.getLogger(__name__)
 class WsClient:
     """Client for Binance Futures websocket streams."""
 
-    def __init__(self) -> None:
+    def __init__(self, queue_maxsize: int = 0) -> None:
         self._symbols: tuple[str, ...] = tuple()
-        self._agg_trades: Deque[AggTrade] = deque()
-        self._depths: Deque[DepthSnapshot] = deque()
-        self._liqs: Deque[LiquidationEvent] = deque()
+        self._agg_trades: asyncio.Queue[AggTrade | None] = asyncio.Queue(
+            maxsize=queue_maxsize
+        )
+        self._depths: asyncio.Queue[DepthSnapshot | None] = asyncio.Queue(
+            maxsize=queue_maxsize
+        )
+        self._liqs: asyncio.Queue[LiquidationEvent | None] = asyncio.Queue(
+            maxsize=queue_maxsize
+        )
         self._ws: WebSocketClientProtocol | None = None
         # Pre-built subscribe message sent on connect/reconnect.  It is
         # created once in ``subscribe_symbols`` so that the network loop
@@ -61,7 +66,7 @@ class WsClient:
                 delay = 1.0
 
                 async for raw in self._ws:
-                    self._parse_message(raw)
+                    await self._parse_message(raw)
 
             except (websockets.exceptions.WebSocketException, OSError) as exc:
                 if self._ws and not self._ws.closed:
@@ -88,7 +93,7 @@ class WsClient:
             )
         return params
 
-    def _parse_message(self, raw: str) -> None:
+    async def _parse_message(self, raw: str) -> None:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
@@ -112,12 +117,12 @@ class WsClient:
 
         handler = handlers.get(event)
         if handler:
-            handler(payload)
+            await handler(payload)
         else:
             logger.warning("Unknown event type: %s", event)
 
-    def _handle_agg_trade(self, payload: dict[str, Any]) -> None:
-        self._agg_trades.append(
+    async def _handle_agg_trade(self, payload: dict[str, Any]) -> None:
+        await self._agg_trades.put(
             AggTrade(
                 symbol=payload["s"],
                 price=float(payload["p"]),
@@ -126,10 +131,10 @@ class WsClient:
             )
         )
 
-    def _handle_depth(self, payload: dict[str, Any]) -> None:
+    async def _handle_depth(self, payload: dict[str, Any]) -> None:
         bids = tuple((float(p), float(q)) for p, q in payload["bids"])
         asks = tuple((float(p), float(q)) for p, q in payload["asks"])
-        self._depths.append(
+        await self._depths.put(
             DepthSnapshot(
                 symbol=payload["s"],
                 bids=bids,
@@ -138,10 +143,10 @@ class WsClient:
             )
         )
 
-    def _handle_liquidation(self, payload: dict[str, Any]) -> None:
+    async def _handle_liquidation(self, payload: dict[str, Any]) -> None:
         order = payload["o"]
         side = Side.LONG if order["S"] == "BUY" else Side.SHORT
-        self._liqs.append(
+        await self._liqs.put(
             LiquidationEvent(
                 symbol=order["s"],
                 side=side,
@@ -151,16 +156,19 @@ class WsClient:
             )
         )
 
-    def next_agg_trade(self) -> AggTrade | None:
-        return self._agg_trades.popleft() if self._agg_trades else None
+    async def next_agg_trade(self) -> AggTrade | None:
+        return await self._agg_trades.get()
 
-    def next_depth(self) -> DepthSnapshot | None:
-        return self._depths.popleft() if self._depths else None
+    async def next_depth(self) -> DepthSnapshot | None:
+        return await self._depths.get()
 
-    def next_liquidation(self) -> LiquidationEvent | None:
-        return self._liqs.popleft() if self._liqs else None
+    async def next_liquidation(self) -> LiquidationEvent | None:
+        return await self._liqs.get()
 
     async def close(self) -> None:  # pragma: no cover - network
         if self._ws and not self._ws.closed:
             await self._ws.close()
-            self._ws = None
+        self._ws = None
+        await self._agg_trades.put(None)
+        await self._depths.put(None)
+        await self._liqs.put(None)

@@ -86,9 +86,9 @@ class NotificationService:
     async def _send(self, msg: str) -> None:
         try:
             if not await self._client.send(msg):
-                logger.error(":< ошибка отправки Telegram-уведомления :>")
+                logger.error("Failed to send notification")
         except Exception:
-            logger.exception(":< ошибка Telegram-уведомления :>")
+            logger.exception("Failed to send notification")
 
     @staticmethod
     def _pnl_pct(entry: float, price: float, side: Side) -> float:

@@ -204,18 +204,31 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
         state.metrics.vol_win = vol_win
 
     next_persist = time.time() + 60
+    trade_task = asyncio.create_task(ws.next_agg_trade())
+    depth_task = asyncio.create_task(ws.next_depth())
+    liq_task = asyncio.create_task(ws.next_liquidation())
     while True:
-        trade = ws.next_agg_trade()
-        if trade:
-            aggregator.process_trade(trade)
+        done, _ = await asyncio.wait(
+            [trade_task, depth_task, liq_task], return_when=asyncio.FIRST_COMPLETED
+        )
 
-        depth = ws.next_depth()
-        if depth:
-            aggregator.process_depth(depth)
+        if trade_task in done:
+            trade = trade_task.result()
+            if trade:
+                aggregator.process_trade(trade)
+            trade_task = asyncio.create_task(ws.next_agg_trade())
 
-        liq = ws.next_liquidation()
-        if liq:
-            aggregator.process_liquidation(liq)
+        if depth_task in done:
+            depth = depth_task.result()
+            if depth:
+                aggregator.process_depth(depth)
+            depth_task = asyncio.create_task(ws.next_depth())
+
+        if liq_task in done:
+            liq = liq_task.result()
+            if liq:
+                aggregator.process_liquidation(liq)
+            liq_task = asyncio.create_task(ws.next_liquidation())
 
         if time.time() >= next_persist:
             baseline_store.save(
@@ -228,6 +241,4 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
                 }
             )
             next_persist = time.time() + 60
-
-        await asyncio.sleep(0)
 
