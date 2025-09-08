@@ -1,23 +1,27 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Dict, List
+from typing import List
 
 from domain.models import signals as S
 from domain.models.enums import OrderType, Side
 from domain.models.trading import OrderSpec, PositionPlan
+from domain.models.state import Position
 
 from .risk_manager import RiskManager
+from domain.services.symbol_registry import SymbolRegistry
 from domain.ports.trader import Trader
 
 
 class TradeManager:
     """High level wrapper around :class:`Trader` handling position state."""
 
-    def __init__(self, trader: Trader, risk_manager: RiskManager) -> None:
+    def __init__(
+        self, trader: Trader, risk_manager: RiskManager, registry: SymbolRegistry
+    ) -> None:
         self._trader = trader
         self._risk_manager = risk_manager
-        self._positions: Dict[str, tuple[Side, PositionPlan]] = {}
+        self._registry = registry
 
     @staticmethod
     def _plan(plan: PositionPlan, **changes: float) -> PositionPlan:
@@ -31,7 +35,9 @@ class TradeManager:
             quantity=plan.quantity,
         )
         await self._trader.place(order)
-        self._positions[plan.symbol] = (side, plan)
+        state = self._registry.get(plan.symbol)
+        state.position = Position(side=side, plan=plan)
+        self._registry.update(plan.symbol, state)
 
     async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
@@ -43,19 +49,22 @@ class TradeManager:
         )
         await self._trader.place(order)
         self._risk_manager.release(plan)
-        del self._positions[symbol]
+        state = self._registry.get(symbol)
+        state.position = None
+        self._registry.update(symbol, state)
 
     async def on_tick_manage(
         self, symbol: str, price: float | None = None
     ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
         """Manage an existing position on each price tick."""
 
-        record = self._positions.get(symbol)
+        state = self._registry.get(symbol)
+        record = state.position
         exits: List[S.ExitSignal] = []
         if record is None:
             return exits, None
 
-        side, plan = record
+        side, plan = record.side, record.plan
         current_price = plan.entry_price if price is None else price
 
         exits, plan = await self._handle_tp1(plan, side, current_price)
@@ -102,7 +111,9 @@ class TradeManager:
             quantity=plan.quantity - plan.tp1_qty,
             tp1_qty=0.0,
         )
-        self._positions[plan.symbol] = (side, new_plan)
+        state = self._registry.get(plan.symbol)
+        state.position = Position(side=side, plan=new_plan)
+        self._registry.update(plan.symbol, state)
         return exits, new_plan
 
     async def _handle_tp2(
@@ -128,7 +139,9 @@ class TradeManager:
         self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
         remaining_qty = plan.quantity - plan.tp2_qty
         if remaining_qty <= 0.0:
-            del self._positions[plan.symbol]
+            state = self._registry.get(plan.symbol)
+            state.position = None
+            self._registry.update(plan.symbol, state)
             return exits, None
         new_plan = self._plan(
             plan,
@@ -136,7 +149,9 @@ class TradeManager:
             quantity=remaining_qty,
             tp2_qty=0.0,
         )
-        self._positions[plan.symbol] = (side, new_plan)
+        state = self._registry.get(plan.symbol)
+        state.position = Position(side=side, plan=new_plan)
+        self._registry.update(plan.symbol, state)
         return exits, new_plan
 
     def _apply_trailing_stop(
@@ -159,7 +174,9 @@ class TradeManager:
                 stop_loss=new_stop,
                 trail_start=price,
             )
-            self._positions[plan.symbol] = (side, plan)
+            state = self._registry.get(plan.symbol)
+            state.position = Position(side=side, plan=plan)
+            self._registry.update(plan.symbol, state)
         return exits, plan
 
     async def _check_stop(
