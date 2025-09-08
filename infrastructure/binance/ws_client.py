@@ -143,14 +143,16 @@ class WsClient:
         )
 
     async def _handle_depth(self, payload: dict[str, Any]) -> None:
-        bids = tuple((float(p), float(q)) for p, q in payload["bids"])
-        asks = tuple((float(p), float(q)) for p, q in payload["asks"])
+        bids_raw = payload.get("bids") or payload.get("b") or []
+        asks_raw = payload.get("asks") or payload.get("a") or []
+        bids = tuple((float(p), float(q)) for p, q in bids_raw)
+        asks = tuple((float(p), float(q)) for p, q in asks_raw)
         await self._depths.put(
             DepthSnapshot(
-                symbol=payload["s"],
+                symbol=payload.get("s", ""),
                 bids=bids,
                 asks=asks,
-                timestamp=int(payload["E"]),
+                timestamp=int(payload.get("E", 0)),
             )
         )
 
