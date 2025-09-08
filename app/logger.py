@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-_LOG_FORMAT = '%(message)s'
+_LOG_FORMAT = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 
 
 def configure(level: int = logging.INFO) -> None:
@@ -13,7 +13,15 @@ def configure(level: int = logging.INFO) -> None:
         Logging level. Defaults to ``logging.INFO`` but can be
         overridden from configuration.
     """
-    logging.basicConfig(level=level, format=_LOG_FORMAT, force=True)
+    logging.basicConfig(
+        level=level,
+        format=_LOG_FORMAT,
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
+    # silence noisy third-party loggers
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
