@@ -42,17 +42,29 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
+        actual_price: float | None = None
         try:
-            await self._trader.place(order)
+            result = await self._trader.place(order)
+            if result is not None:
+                if isinstance(result, dict):
+                    actual_price = result.get("price")
+                else:
+                    actual_price = getattr(result, "price", None)
         except Exception:
             self._risk_manager.release(plan)
             raise
+        if actual_price is None and hasattr(self._trader, "get_price"):
+            try:  # type: ignore[attr-defined]
+                actual_price = await self._trader.get_price(plan.symbol)
+            except Exception:
+                actual_price = None
         state = self._registry.get(plan.symbol)
-        state.position = Position(side=side, plan=plan)
+        stored_plan = plan if actual_price is None else self._plan(plan, entry_price=actual_price)
+        state.position = Position(side=side, plan=stored_plan)
         state.last_signal_ts = time.time()
         self._registry.update(plan.symbol, state)
         if self._notifier:
-            self._notifier.notify_order_open(plan, side)
+            self._notifier.notify_order_open(plan, side, actual_price)
 
     async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
