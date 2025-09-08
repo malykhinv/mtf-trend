@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+from .enums import Profile
+
 
 @dataclass(frozen=True)
 class TriggerParams:
@@ -43,6 +45,7 @@ class RiskParams:
 
 @dataclass(frozen=True)
 class ProfileConfig:
+    profile: Profile
     trigger: TriggerParams
     confirmation: ConfirmationParams
     entry: EntryParams

@@ -7,6 +7,7 @@ from domain.models.config import (
     RiskParams,
     TriggerParams,
 )
+from domain.models.enums import Profile
 from constants import RISK_PER_TRADE_USDT
 
 DEFAULT_MARGIN_USDT = 5 * RISK_PER_TRADE_USDT
@@ -46,6 +47,7 @@ def make_profile_config_active() -> ProfileConfig:
         trail_sigma_mult=1.1,
     )
     return ProfileConfig(
+        profile=Profile.ACTIVE,
         trigger=trigger,
         confirmation=confirmation,
         entry=entry,
