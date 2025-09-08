@@ -24,6 +24,7 @@ class WsClient:
         self._agg_trades: Deque[AggTrade] = deque()
         self._depths: Deque[DepthSnapshot] = deque()
         self._liqs: Deque[LiquidationEvent] = deque()
+        self._ws: websockets.WebSocketClientProtocol | None = None
 
     def subscribe_symbols(self, symbols: tuple[str, ...]) -> None:
         self._symbols = symbols
@@ -34,22 +35,21 @@ class WsClient:
         delay = 1.0
 
         while True:
-            ws = None
             try:
-                ws = await websockets.connect(BINANCE_FAPI_WS)
+                self._ws = await websockets.connect(BINANCE_FAPI_WS)
                 if params:
                     msg = {"method": "SUBSCRIBE", "params": params, "id": 1}
-                    await ws.send(json.dumps(msg))
+                    await self._ws.send(json.dumps(msg))
 
                 attempt = 0
                 delay = 1.0
 
-                async for raw in ws:
+                async for raw in self._ws:
                     self._parse_message(raw)
 
             except (websockets.exceptions.WebSocketException, OSError) as exc:
-                if ws and not ws.closed:
-                    await ws.close()
+                if self._ws and not self._ws.closed:
+                    await self._ws.close()
 
                 attempt += 1
                 logger.warning(
@@ -57,6 +57,8 @@ class WsClient:
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60.0)
+            finally:
+                self._ws = None
 
 
     def _build_params(self) -> List[str]:
@@ -124,3 +126,8 @@ class WsClient:
 
     def next_liquidation(self) -> LiquidationEvent | None:
         return self._liqs.popleft() if self._liqs else None
+
+    async def close(self) -> None:  # pragma: no cover - network
+        if self._ws and not self._ws.closed:
+            await self._ws.close()
+            self._ws = None
