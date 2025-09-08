@@ -3,11 +3,14 @@ from __future__ import annotations
 from decimal import Decimal, ROUND_DOWN
 
 import httpx
+import logging
 
 from constants import RISK_PER_TRADE_USDT, BINANCE_FAPI_REST
 from domain.models import metrics as M
 from domain.models.config import ProfileConfig, RiskParams
 from domain.models.trading import PositionPlan
+
+logger = logging.getLogger(__name__)
 
 
 class RiskManager:
@@ -26,7 +29,8 @@ class RiskManager:
     ) -> PositionPlan | None:
         try:
             filters = await self._get_symbol_filters(symbol)
-        except httpx.HTTPError:
+        except httpx.HTTPError as exc:
+            logger.error("Failed to fetch symbol filters for %s: %s", symbol, exc)
             return None
         step_size = Decimal(filters["LOT_SIZE"]["stepSize"])
         tick_size = Decimal(filters["PRICE_FILTER"]["tickSize"])
@@ -53,6 +57,18 @@ class RiskManager:
         tp1_qty = self._round(tp1_qty, step_size)
         tp2_qty = self._round(tp2_qty, step_size)
         tail_qty = self._round(quantity - tp1_qty - tp2_qty, step_size)
+        logger.info(
+            (
+                "Built plan for %s: SL=%.4f TP1=%.4f TP2=%.4f trail_start=%.4f "
+                "trail_distance=%.4f"
+            ),
+            symbol,
+            stop_loss,
+            take_profit1,
+            take_profit2,
+            trail_start,
+            trail_distance,
+        )
         return PositionPlan(
             symbol=symbol,
             entry_price=entry_price,
@@ -132,9 +148,22 @@ class RiskManager:
 
     def allow_trade(self, plan: PositionPlan) -> bool:
         required_margin = plan.entry_price * plan.quantity
+        logger.info("Required margin for %s: %.2f", plan.symbol, required_margin)
         if required_margin > RISK_PER_TRADE_USDT:
+            logger.warning(
+                "Trade %s rejected: margin %.2f exceeds per-trade limit %.2f",
+                plan.symbol,
+                required_margin,
+                RISK_PER_TRADE_USDT,
+            )
             return False
         if self._open_risk_usdt + required_margin > self._cfg.max_margin_usdt:
+            logger.warning(
+                "Trade %s rejected: total margin %.2f exceeds max %.2f",
+                plan.symbol,
+                self._open_risk_usdt + required_margin,
+                self._cfg.max_margin_usdt,
+            )
             return False
         self._open_risk_usdt += required_margin
         return True
