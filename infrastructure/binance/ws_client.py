@@ -89,17 +89,32 @@ class WsClient:
         return params
 
     def _parse_message(self, raw: str) -> None:
-        data = json.loads(raw)
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.exception("Failed to decode websocket message")
+            return
+
         stream = data.get("stream")
         payload = data.get("data")
-        if not stream or not payload:
+        if stream is None or payload is None:
             return
-        if stream.endswith("aggTrade"):
-            self._handle_agg_trade(payload)
-        elif "depth" in stream:
-            self._handle_depth(payload)
-        elif stream.endswith("forceOrder"):
-            self._handle_liquidation(payload)
+
+        event = stream.rsplit("@", 1)[-1]
+        if event not in {"aggTrade", "forceOrder"} and "depth" in stream:
+            event = "depth"
+
+        handlers = {
+            "aggTrade": self._handle_agg_trade,
+            "depth": self._handle_depth,
+            "forceOrder": self._handle_liquidation,
+        }
+
+        handler = handlers.get(event)
+        if handler:
+            handler(payload)
+        else:
+            logger.warning("Unknown event type: %s", event)
 
     def _handle_agg_trade(self, payload: dict[str, Any]) -> None:
         self._agg_trades.append(
