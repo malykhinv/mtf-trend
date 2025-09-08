@@ -1,5 +1,6 @@
 import sys
 import pathlib
+import logging
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -12,8 +13,9 @@ class DummyClient:
     def __init__(self) -> None:
         self.sent: str | None = None
 
-    def send(self, text: str) -> None:
+    def send(self, text: str) -> bool:
         self.sent = text
+        return True
 
 
 def _plan() -> PositionPlan:
@@ -50,3 +52,15 @@ def test_notify_order_open_without_price():
     notifier.notify_order_open(plan, Side.LONG)
     assert client.sent is not None
     assert "(0.00%)" not in client.sent
+
+
+def test_send_failure_does_not_raise(caplog):
+    class FailingClient:
+        def send(self, text: str) -> bool:
+            return False
+
+    notifier = NotificationService(FailingClient())
+    plan = _plan()
+    with caplog.at_level(logging.ERROR):
+        notifier.notify_order_open(plan, Side.LONG)
+    assert "Failed to send notification" in caplog.text
