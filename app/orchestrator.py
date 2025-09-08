@@ -54,9 +54,25 @@ async def _run_with_restart(
             logger.info("Restarting %s", name)
 
 
+NotificationType = Literal["orders", "events"]
+
+
 async def run(
-    cfg: ProfileConfig, notification_type: Literal["orders", "events"] = "orders"
+    cfg: ProfileConfig, notification_type: NotificationType = "orders"
 ) -> None:
+    """Run orchestrator with the given configuration.
+
+    Args:
+        cfg: Profile configuration.
+        notification_type: Type of notifications to emit. Must be either
+            ``"orders"`` or ``"events"``.
+
+    Raises:
+        ValueError: If ``notification_type`` is not supported.
+    """
+    if notification_type not in {"orders", "events"}:
+        raise ValueError(f"Unsupported notification_type: {notification_type}")
+
     gstate = GlobalState(profile=cfg.profile, btc_pause_until_ms=None)
 
     registry = SymbolRegistry()
