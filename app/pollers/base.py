@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from abc import ABC, abstractmethod
 
@@ -10,6 +11,9 @@ from domain.models.enums import BotState
 from domain.models.state import SymbolState
 from domain.ports.rest_client import RestClient
 from domain.services.symbol_registry import SymbolRegistry
+
+
+logger = logging.getLogger(__name__)
 
 
 class _BasePoller(ABC):
@@ -33,6 +37,7 @@ class _BasePoller(ABC):
         """Poll a single symbol and update its state."""
 
     async def run(self) -> None:
+        logger.info("%s started", self.__class__.__name__)
         while True:
             for symbol in self._registry.all_symbols():
                 state = self._registry.get(symbol)

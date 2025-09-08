@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 import time
 from collections import deque
@@ -15,6 +16,8 @@ from domain.services.symbol_registry import SymbolRegistry
 from domain.ports.ws_client import WsClient
 from .metric_utils import update_ewma, zscore, zscore_window
 from . import baseline_store
+
+logger = logging.getLogger(__name__)
 
 
 class MetricAggregator:
@@ -188,6 +191,7 @@ class MetricAggregator:
 async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
     """Build per-symbol metrics from websocket events."""
 
+    logger.info("bar_maker started")
     aggregator = MetricAggregator(registry)
     symbols = registry.all_symbols()
     baselines = baseline_store.load(symbols)
