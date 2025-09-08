@@ -22,3 +22,6 @@ class WsClient(Protocol):
 
     def next_liquidation(self) -> LiquidationEvent | None:
         ...
+
+    async def close(self) -> None:  # pragma: no cover - network
+        ...

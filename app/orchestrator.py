@@ -1,4 +1,5 @@
 import asyncio
+import signal
 from typing import Literal
 
 from domain.models.enums import BotState
@@ -73,9 +74,32 @@ async def run(
         notifier if notification_type == "events" else None,
     )
 
-    await asyncio.gather(
-        ws_stream(ws),
-        bar_maker(ws, registry),
-        *(p.run() for p in pollers),
-        state_machine.run(),
-    )
+    tasks = [
+        asyncio.create_task(ws_stream(ws)),
+        asyncio.create_task(bar_maker(ws, registry)),
+        *[asyncio.create_task(p.run()) for p in pollers],
+        asyncio.create_task(state_machine.run()),
+    ]
+
+    loop = asyncio.get_running_loop()
+
+    def _shutdown() -> None:
+        for t in tasks:
+            t.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, _shutdown)
+        except NotImplementedError:
+            pass
+
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await rest._client.aclose()
+        await ws.close()
