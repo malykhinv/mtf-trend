@@ -13,17 +13,23 @@ from domain.models.state import Position
 from .risk_manager import RiskManager
 from domain.services.symbol_registry import SymbolRegistry
 from domain.ports.trader import Trader
+from .notification import NotificationService
 
 
 class TradeManager:
     """High level wrapper around :class:`Trader` handling position state."""
 
     def __init__(
-        self, trader: Trader, risk_manager: RiskManager, registry: SymbolRegistry
+        self,
+        trader: Trader,
+        risk_manager: RiskManager,
+        registry: SymbolRegistry,
+        notifier: NotificationService | None = None,
     ) -> None:
         self._trader = trader
         self._risk_manager = risk_manager
         self._registry = registry
+        self._notifier = notifier
 
     @staticmethod
     def _plan(plan: PositionPlan, **changes: float) -> PositionPlan:
