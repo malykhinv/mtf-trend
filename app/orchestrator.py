@@ -156,9 +156,10 @@ async def run(
                             loop.add_signal_handler(sig, _shutdown)
                         except NotImplementedError:
                             pass
-            except* Exception:
-                # individual tasks already log their failures
-                pass
+            except* Exception as eg:
+                for exc in eg.exceptions:
+                    logger.exception("Task failed", exc_info=exc)
+                raise
         else:
             tasks.extend(
                 [
