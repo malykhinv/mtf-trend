@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 import time
 from hashlib import sha256
-from typing import Dict
+from typing import Dict, Any
 from decimal import Decimal, ROUND_DOWN
 
 import httpx
@@ -36,7 +36,7 @@ class Trader:
         url = endpoint + f"?{query}&signature={signature}"
         return await self._client.request(method, url, headers=headers)
 
-    async def place(self, order: OrderSpec) -> None:  # pragma: no cover - network
+    async def place(self, order: OrderSpec) -> dict[str, Any] | None:  # pragma: no cover - network
         info = await self._client.get(
             "/fapi/v1/exchangeInfo", params={"symbol": order.symbol}
         )
@@ -64,6 +64,7 @@ class Trader:
             params["timeInForce"] = "GTC"
         response = await self._signed_request("POST", self._ORDER_ENDPOINT, params)
         response.raise_for_status()
+        return response.json()
 
     async def cancel(
         self, symbol: str, order_id: int | None

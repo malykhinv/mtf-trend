@@ -2,6 +2,7 @@ import asyncio
 import pathlib
 import pytest
 import sys
+from typing import Any
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -15,7 +16,7 @@ from config.profiles.balanced import make_profile_config_balanced
 
 
 class FailingTrader:
-    async def place(self, order):
+    async def place(self, order: Any) -> Any | None:
         raise RuntimeError("failed")
 
 
@@ -23,7 +24,7 @@ class DummyTrader:
     def __init__(self, price: float) -> None:
         self._price = price
 
-    async def place(self, order):
+    async def place(self, order: Any) -> Any | None:
         class R:
             def __init__(self, price: float) -> None:
                 self.price = price

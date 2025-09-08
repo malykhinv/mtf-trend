@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
-from typing import List
+from typing import List, Any
 
 import constants
 from domain.models import signals as S
@@ -42,17 +42,18 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
-        actual_price: float | None = None
+        result: Any | None = None
         try:
             result = await self._trader.place(order)
-            if result is not None:
-                if isinstance(result, dict):
-                    actual_price = result.get("price")
-                else:
-                    actual_price = getattr(result, "price", None)
         except Exception:
             self._risk_manager.release(plan)
             raise
+        actual_price: float | None = None
+        if result is not None:
+            if isinstance(result, dict):
+                actual_price = result.get("price")
+            else:
+                actual_price = getattr(result, "price", None)
         if actual_price is None and hasattr(self._trader, "get_price"):
             try:  # type: ignore[attr-defined]
                 actual_price = await self._trader.get_price(plan.symbol)
