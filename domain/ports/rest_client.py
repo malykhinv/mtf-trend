@@ -24,3 +24,6 @@ class RestClient(Protocol):
 
     async def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
         ...
+
+    async def aclose(self) -> None:
+        ...
