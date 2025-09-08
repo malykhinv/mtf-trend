@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from domain.models.state import SymbolState
 from domain.ports.rest_client import RestClient
 from domain.services.symbol_registry import SymbolRegistry
 
@@ -17,16 +18,7 @@ class PremiumIndexPoller(_BasePoller):
     def __init__(self, rest: RestClient, registry: SymbolRegistry) -> None:
         super().__init__(rest, registry, constants.REST_POLL_SEC_PREMIUM)
 
-    async def run(self) -> None:
-        while True:
-            for symbol in self._registry.all_symbols():
-                state = self._registry.get(symbol)
-                if state.state not in self._WATCHED_STATES:
-                    continue
-
-                premium = await _with_backoff(self._rest.get_premium_pct, symbol)
-                metrics = state.metrics
-                metrics.premium_pct = premium
-                self._registry.update(symbol, state)
-
-            await self._sleep()
+    async def _poll(self, symbol: str, state: SymbolState) -> None:
+        premium = await _with_backoff(self._rest.get_premium_pct, symbol)
+        metrics = state.metrics
+        metrics.premium_pct = premium

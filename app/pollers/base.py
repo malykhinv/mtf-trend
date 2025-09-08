@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import random
+from abc import ABC, abstractmethod
 
 from domain.models.enums import BotState
+from domain.models.state import SymbolState
 from domain.ports.rest_client import RestClient
 from domain.services.symbol_registry import SymbolRegistry
 
 
-class _BasePoller:
+class _BasePoller(ABC):
     """Base class for REST pollers with common logic."""
 
     _WATCHED_STATES = {
@@ -26,5 +28,18 @@ class _BasePoller:
     async def _sleep(self) -> None:
         await asyncio.sleep(self._delay_sec * random.uniform(0.8, 1.2))
 
-    async def run(self) -> None:  # pragma: no cover - to be implemented by subclasses
-        raise NotImplementedError
+    @abstractmethod
+    async def _poll(self, symbol: str, state: SymbolState) -> None:
+        """Poll a single symbol and update its state."""
+
+    async def run(self) -> None:
+        while True:
+            for symbol in self._registry.all_symbols():
+                state = self._registry.get(symbol)
+                if state.state not in self._WATCHED_STATES:
+                    continue
+
+                await self._poll(symbol, state)
+                self._registry.update(symbol, state)
+
+            await self._sleep()
