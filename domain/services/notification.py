@@ -42,10 +42,16 @@ class NotificationService:
         self, plan: PositionPlan, side: Side, price: float, level: int, remaining: float
     ) -> None:
         pnl = self._pnl_pct(plan.entry_price, price, side)
-        msg = (
-            f"TP{level} hit {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
-            f"SL: {plan.stop_loss:.4f} | TP2: {plan.take_profit2:.4f} | Qty left: {remaining:.4f}"
-        )
+        msg = f"TP{level} hit {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)"
+        if level == 1:
+            msg += (
+                f"\nSL: {plan.stop_loss:.4f} | TP2: {plan.take_profit2:.4f} | Qty left: {remaining:.4f}"
+            )
+        else:
+            if remaining > 0.0:
+                msg += f"\nQty left: {remaining:.4f}"
+            else:
+                msg += "\nPosition closed"
         self._client.send(msg)
 
     def notify_stop(
