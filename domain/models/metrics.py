@@ -36,6 +36,9 @@ class SymbolMetrics:
     liq_win: Deque[float] = field(
         default_factory=lambda: deque(maxlen=constants.Z_BASE_WINDOW_MIN)
     )
+    ask_top5_win: Deque[float] = field(
+        default_factory=lambda: deque(maxlen=constants.Z_BASE_WINDOW_MIN)
+    )
 
     # --- EWMA statistics -------------------------------------------------
     price_ewma_mean: float = 0.0
@@ -61,6 +64,8 @@ class SymbolMetrics:
     best_bid: float = 0.0
     best_ask: float = 0.0
     premium_pct: float = 0.0
+    ask_imb: float = 0.0
+    top5ask_vs_base: float = 0.0
 
     # --- liquidation and open interest metrics -------------------------
     liqs_z: float = 0.0
@@ -70,6 +75,12 @@ class SymbolMetrics:
     # --- taker volume metrics ------------------------------------------
     taker_buy_volume: float = 0.0
     taker_sell_volume: float = 0.0
+    cvd_gap_pct: float = 0.0
+    cvd_gap_sec: int = 0
+    latency_sec: int = 0
+    cvd_peak: float = 0.0
+    cvd_peak_price: float = 0.0
+    cvd_peak_ts: int = 0
 
     # --- entry helpers --------------------------------------------------
     low_break: bool = False

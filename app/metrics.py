@@ -6,6 +6,7 @@ import asyncio
 import math
 import time
 from collections import deque
+from statistics import median
 
 import constants
 from domain.models.enums import Side
@@ -136,6 +137,37 @@ class MetricAggregator:
             last_price = metrics.last_price if metrics.last_price > 0 else mid
             premium_pct = (
                 (mid - last_price) / last_price * 100.0 if last_price > 0 else 0.0
+            )
+            # Orderbook imbalance top-10
+            ask_sum = sum(q for _, q in depth.asks[:10])
+            bid_sum = sum(q for _, q in depth.bids[:10])
+            total = ask_sum + bid_sum
+            metrics.ask_imb = ask_sum / total if total > 0 else 0.0
+            # Top-5 ask vs baseline median
+            ask_top5 = sum(q for _, q in depth.asks[:5])
+            metrics.ask_top5_win.append(ask_top5)
+            base = median(metrics.ask_top5_win) if metrics.ask_top5_win else 0.0
+            metrics.top5ask_vs_base = ask_top5 / base if base > 0 else 0.0
+            # CVD divergence and latency
+            cvd = metrics.taker_buy_volume - metrics.taker_sell_volume
+            price = metrics.last_price if metrics.last_price > 0 else mid
+            if cvd > metrics.cvd_peak:
+                metrics.cvd_peak = cvd
+                metrics.cvd_peak_price = price
+                metrics.cvd_peak_ts = depth.timestamp
+                metrics.cvd_gap_pct = 0.0
+                metrics.cvd_gap_sec = 0
+            else:
+                metrics.cvd_gap_pct = (
+                    (metrics.cvd_peak_price - price) / price * 100 if price > 0 else 0.0
+                )
+                metrics.cvd_gap_sec = (
+                    (depth.timestamp - metrics.cvd_peak_ts) // 1000
+                    if metrics.cvd_peak_ts > 0
+                    else 0
+                )
+            metrics.latency_sec = (
+                (depth.timestamp - metrics.end_ts) // 1000 if metrics.end_ts > 0 else 0
             )
             metrics.best_bid = best_bid
             metrics.best_ask = best_ask

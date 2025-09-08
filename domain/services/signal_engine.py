@@ -83,6 +83,22 @@ class SignalEngine:
         if metrics.premium_pct > confirm.premium_max_pct:
             return True
 
+        if metrics.latency_sec < confirm.latency_min_sec:
+            return True
+
+        lob_ok = (
+            metrics.ask_imb >= confirm.ask_imb_min
+            or metrics.top5ask_vs_base >= confirm.top5ask_vs_base_min
+        )
+        if not lob_ok:
+            return True
+
+        if (
+            metrics.cvd_gap_pct < confirm.cvd_gap_pct_min
+            or metrics.cvd_gap_sec < confirm.cvd_gap_sec_min
+        ):
+            return True
+
         return False
 
     def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:
