@@ -143,7 +143,7 @@ class RiskManager:
             info = resp.json()["symbols"][0]["filters"]
             return {f["filterType"]: f for f in info}
         except Exception:
-            logger.exception(":< ошибка запроса фильтров %s :>", symbol)
+            logger.exception("Failed to fetch symbol filters %s", symbol)
             raise
 
     @staticmethod

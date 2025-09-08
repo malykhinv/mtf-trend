@@ -14,13 +14,13 @@ class WsClient(Protocol):
     async def stream(self) -> None:  # pragma: no cover - network
         ...
 
-    def next_agg_trade(self) -> AggTrade | None:
+    async def next_agg_trade(self) -> AggTrade | None:
         ...
 
-    def next_depth(self) -> DepthSnapshot | None:
+    async def next_depth(self) -> DepthSnapshot | None:
         ...
 
-    def next_liquidation(self) -> LiquidationEvent | None:
+    async def next_liquidation(self) -> LiquidationEvent | None:
         ...
 
     async def close(self) -> None:  # pragma: no cover - network
