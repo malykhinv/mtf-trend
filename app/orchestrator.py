@@ -28,7 +28,7 @@ from .state_machine import BotStateMachine
 from .universe import UniverseBuilder
 
 
-def run(
+async def run(
     cfg: ProfileConfig, notification_type: Literal["orders", "events"] = "orders"
 ) -> None:
     gstate = GlobalState(profile=cfg.profile, btc_pause_until_ms=None)
@@ -37,7 +37,7 @@ def run(
     rest: RestClientPort = RestClient()
 
     builder = UniverseBuilder(rest)
-    symbols = asyncio.run(builder.build())
+    symbols = await builder.build()
     for sym in symbols:
         registry.put(SymbolState(symbol=sym, state=BotState.IDLE))
 
@@ -73,12 +73,9 @@ def run(
         notifier if notification_type == "events" else None,
     )
 
-    async def _run() -> None:
-        await asyncio.gather(
-            ws_stream(ws),
-            bar_maker(ws, registry),
-            *(p.run() for p in pollers),
-            state_machine.run(),
-        )
-
-    asyncio.run(_run())
+    await asyncio.gather(
+        ws_stream(ws),
+        bar_maker(ws, registry),
+        *(p.run() for p in pollers),
+        state_machine.run(),
+    )
