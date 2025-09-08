@@ -15,7 +15,6 @@ class _BasePoller:
 
     _WATCHED_STATES = {
         BotState.WATCHING,
-        BotState.CONFIRMING,
         BotState.ENTERED,
     }
 
