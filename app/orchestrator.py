@@ -1,6 +1,7 @@
 import asyncio
+import logging
 import signal
-from typing import Literal
+from typing import Awaitable, Callable, Literal
 
 from domain.models.enums import BotState
 from domain.models.state import GlobalState, SymbolState
@@ -17,6 +18,7 @@ from infrastructure.binance.rest_client import RestClient
 from infrastructure.binance.ws_client import WsClient
 from infrastructure.binance.trader import Trader
 from config.credentials import TELEGRAM
+from constants import TASK_MAX_RESTARTS, TASK_RESTART_DELAY_SEC
 
 from .ws import ws_stream
 from .metrics import bar_maker
@@ -27,6 +29,29 @@ from .pollers import (
 )
 from .state_machine import BotStateMachine
 from .universe import UniverseBuilder
+
+logger = logging.getLogger(__name__)
+
+
+async def _run_with_restart(
+    coro_fn: Callable[[], Awaitable[None]],
+    name: str,
+    retries: int = TASK_MAX_RESTARTS,
+) -> None:
+    attempt = 0
+    while True:
+        try:
+            await coro_fn()
+            break
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("%s task failed (attempt %d)", name, attempt + 1)
+            if attempt >= retries:
+                raise
+            attempt += 1
+            await asyncio.sleep(TASK_RESTART_DELAY_SEC)
+            logger.info("Restarting %s", name)
 
 
 async def run(
@@ -74,12 +99,7 @@ async def run(
         notifier if notification_type == "events" else None,
     )
 
-    tasks = [
-        asyncio.create_task(ws_stream(ws)),
-        asyncio.create_task(bar_maker(ws, registry)),
-        *[asyncio.create_task(p.run()) for p in pollers],
-        asyncio.create_task(state_machine.run()),
-    ]
+    tasks: list[asyncio.Task[None]] = []
 
     loop = asyncio.get_running_loop()
 
@@ -94,7 +114,64 @@ async def run(
             pass
 
     try:
-        await asyncio.gather(*tasks)
+        if hasattr(asyncio, "TaskGroup"):
+            try:
+                async with asyncio.TaskGroup() as tg:
+                    tasks.append(
+                        tg.create_task(
+                            _run_with_restart(lambda: ws_stream(ws), "ws_stream")
+                        )
+                    )
+                    tasks.append(
+                        tg.create_task(
+                            _run_with_restart(
+                                lambda: bar_maker(ws, registry), "bar_maker"
+                            )
+                        )
+                    )
+                    for p in pollers:
+                        tasks.append(
+                            tg.create_task(
+                                _run_with_restart(p.run, p.__class__.__name__)
+                            )
+                        )
+                    tasks.append(
+                        tg.create_task(
+                            _run_with_restart(state_machine.run, "state_machine")
+                        )
+                    )
+            except* Exception:
+                # individual tasks already log their failures
+                pass
+        else:
+            tasks.extend(
+                [
+                    asyncio.create_task(
+                        _run_with_restart(lambda: ws_stream(ws), "ws_stream")
+                    ),
+                    asyncio.create_task(
+                        _run_with_restart(
+                            lambda: bar_maker(ws, registry), "bar_maker"
+                        )
+                    ),
+                    *[
+                        asyncio.create_task(
+                            _run_with_restart(p.run, p.__class__.__name__)
+                        )
+                        for p in pollers
+                    ],
+                    asyncio.create_task(
+                        _run_with_restart(state_machine.run, "state_machine")
+                    ),
+                ]
+            )
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for res in results:
+                if isinstance(res, Exception):
+                    logger.exception("Task failed", exc_info=res)
+                    for t in tasks:
+                        t.cancel()
+                    break
     except asyncio.CancelledError:
         pass
     finally:
