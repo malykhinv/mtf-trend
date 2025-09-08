@@ -43,7 +43,7 @@ class IdleWatchingHandler:
         if entry is None:
             return
 
-        plan = self._risk_manager.build_plan(symbol, entry.price, pump.window)
+        plan = await self._risk_manager.build_plan(symbol, entry.price, pump.window)
         if plan is None or not self._risk_manager.allow_trade(plan):
             return
 

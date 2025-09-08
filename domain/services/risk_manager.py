@@ -17,9 +17,11 @@ class RiskManager:
         self._cfg = config
         self._open_risk_usdt: float = 0.0
 
-    def build_plan(self, symbol: str, entry_price: float, window: M.PumpWindow) -> PositionPlan | None:
+    async def build_plan(
+        self, symbol: str, entry_price: float, window: M.PumpWindow
+    ) -> PositionPlan | None:
         try:
-            filters = self._get_symbol_filters(symbol)
+            filters = await self._get_symbol_filters(symbol)
         except httpx.HTTPError:
             return None
         step_size = Decimal(filters["LOT_SIZE"]["stepSize"])
@@ -107,14 +109,14 @@ class RiskManager:
         tail_qty = quantity - tp1_qty - tp2_qty
         return quantity, tp1_qty, tp2_qty, tail_qty
 
-    def _get_symbol_filters(self, symbol: str) -> dict:
-        resp = httpx.get(
-            BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
-            params={"symbol": symbol},
-            timeout=10.0,
-        )
-        resp.raise_for_status()
-        info = resp.json()["symbols"][0]["filters"]
+    async def _get_symbol_filters(self, symbol: str) -> dict:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
+                params={"symbol": symbol},
+            )
+            resp.raise_for_status()
+            info = resp.json()["symbols"][0]["filters"]
         return {f["filterType"]: f for f in info}
 
     @staticmethod
