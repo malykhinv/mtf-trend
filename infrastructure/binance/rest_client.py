@@ -12,6 +12,7 @@ class RestClient:
     _TAKER_RATIO_EP = "/futures/data/takerlongshortRatio"
     _PREMIUM_EP = "/fapi/v1/premiumIndex"
     _TICKER_EP = "/fapi/v1/ticker/24hr"
+    _BOOK_TICKER_EP = "/fapi/v1/ticker/bookTicker"
     _DEPTH_EP = "/fapi/v1/depth"
 
     def __init__(self) -> None:
@@ -59,14 +60,22 @@ class RestClient:
         r = await self._client.get(self._TICKER_EP)
         r.raise_for_status()
         data = r.json()
-        return [
-            (
-                item["symbol"],
-                float(item["bidPrice"]),
-                float(item["askPrice"]),
-            )
-            for item in data
-        ]
+
+        tickers: list[tuple[str, float, float]] = []
+        for item in data:
+            symbol = item["symbol"]
+            if "bidPrice" in item and "askPrice" in item:
+                bid = float(item["bidPrice"])
+                ask = float(item["askPrice"])
+            else:
+                r_book = await self._client.get(self._BOOK_TICKER_EP, params={"symbol": symbol})
+                r_book.raise_for_status()
+                book = r_book.json()
+                bid = float(book.get("bidPrice", 0.0))
+                ask = float(book.get("askPrice", 0.0))
+            tickers.append((symbol, bid, ask))
+
+        return tickers
 
     async def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
         r = await self._client.get(self._DEPTH_EP, params={"symbol": symbol, "limit": 10})
