@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import hmac
 import time
 from hashlib import sha256
@@ -21,7 +20,7 @@ class Trader:
     _CANCEL_ALL_ENDPOINT = "/fapi/v1/allOpenOrders"
 
     def __init__(self) -> None:
-        self._client = httpx.Client(base_url=BINANCE_FAPI_REST, timeout=10.0)
+        self._client = httpx.AsyncClient(base_url=BINANCE_FAPI_REST, timeout=10.0)
 
     async def _signed_request(
         self, method: str, endpoint: str, params: Dict[str, str]
@@ -34,7 +33,7 @@ class Trader:
         ).hexdigest()
         headers = {"X-MBX-APIKEY": BINANCE.api_key}
         url = endpoint + f"?{query}&signature={signature}"
-        return await asyncio.to_thread(self._client.request, method, url, headers=headers)
+        return await self._client.request(method, url, headers=headers)
 
     async def place(self, order: OrderSpec) -> None:  # pragma: no cover - network
         params: Dict[str, str] = {

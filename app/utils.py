@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable, TypeVar
 
 
-async def _with_backoff(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+T = TypeVar("T")
+
+
+async def _with_backoff(
+    func: Callable[..., Awaitable[T]], *args: Any, **kwargs: Any
+) -> T:
     """Execute ``func`` with exponential backoff on failure.
 
     The ``func`` should be an awaitable callable. Any exception will trigger a

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import httpx
 
 from constants import BINANCE_FAPI_REST, TAKER_RATIO_LIMIT, TAKER_RATIO_PERIOD
@@ -16,12 +15,10 @@ class RestClient:
     _DEPTH_EP = "/fapi/v1/depth"
 
     def __init__(self) -> None:
-        self._client = httpx.Client(base_url=BINANCE_FAPI_REST, timeout=10.0)
+        self._client = httpx.AsyncClient(base_url=BINANCE_FAPI_REST, timeout=10.0)
 
     async def get_open_interest(self, symbol: str) -> float:
-        r = await asyncio.to_thread(
-            self._client.get, self._OPEN_INTEREST_EP, params={"symbol": symbol}
-        )
+        r = await self._client.get(self._OPEN_INTEREST_EP, params={"symbol": symbol})
         r.raise_for_status()
         data = r.json()
         return float(data["openInterest"])
@@ -32,7 +29,7 @@ class RestClient:
             "period": TAKER_RATIO_PERIOD,
             "limit": TAKER_RATIO_LIMIT,
         }
-        r = await asyncio.to_thread(self._client.get, self._TAKER_RATIO_EP, params=params)
+        r = await self._client.get(self._TAKER_RATIO_EP, params=params)
         r.raise_for_status()
         data = r.json()
         if not data:
@@ -41,9 +38,7 @@ class RestClient:
         return float(item["buyVol"]), float(item["sellVol"])
 
     async def get_premium_pct(self, symbol: str) -> float:
-        r = await asyncio.to_thread(
-            self._client.get, self._PREMIUM_EP, params={"symbol": symbol}
-        )
+        r = await self._client.get(self._PREMIUM_EP, params={"symbol": symbol})
         r.raise_for_status()
         data = r.json()
         mark_price = float(data["markPrice"])
@@ -53,9 +48,7 @@ class RestClient:
         return (mark_price / index_price - 1.0) * 100.0
 
     async def get_24h_stats(self, symbol: str) -> tuple[float, float]:
-        r = await asyncio.to_thread(
-            self._client.get, self._TICKER_EP, params={"symbol": symbol}
-        )
+        r = await self._client.get(self._TICKER_EP, params={"symbol": symbol})
         r.raise_for_status()
         data = r.json()
         quote_volume = float(data["quoteVolume"])
@@ -63,14 +56,12 @@ class RestClient:
         return quote_volume, last_price
 
     async def fetch_all_tickers(self) -> list[dict[str, str]]:
-        r = await asyncio.to_thread(self._client.get, self._TICKER_EP)
+        r = await self._client.get(self._TICKER_EP)
         r.raise_for_status()
         return r.json()
 
     async def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
-        r = await asyncio.to_thread(
-            self._client.get, self._DEPTH_EP, params={"symbol": symbol, "limit": 10}
-        )
+        r = await self._client.get(self._DEPTH_EP, params={"symbol": symbol, "limit": 10})
         r.raise_for_status()
         data = r.json()
         bids = tuple((float(p), float(q)) for p, q in data.get("bids", []))
