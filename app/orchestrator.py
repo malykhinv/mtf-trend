@@ -43,6 +43,7 @@ async def _run_with_restart(
         try:
             await coro_fn()
             logger.info("%s task finished (attempt %d)", name, attempt + 1)
+            return
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -51,7 +52,7 @@ async def _run_with_restart(
                 raise
             await asyncio.sleep(TASK_RESTART_DELAY_SEC)
             logger.info("Restarting %s", name)
-        attempt += 1
+            attempt += 1
 
 
 NotificationType = Literal["orders", "events"]
