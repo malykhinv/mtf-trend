@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from collections import deque
 from typing import Any, Deque, List
 
@@ -9,6 +11,9 @@ import websockets
 from constants import BINANCE_FAPI_WS
 from domain.models.enums import Side
 from domain.models.market_data import AggTrade, DepthSnapshot, LiquidationEvent
+
+
+logger = logging.getLogger(__name__)
 
 
 class WsClient:
@@ -25,14 +30,34 @@ class WsClient:
 
     async def stream(self) -> None:  # pragma: no cover - network
         params = self._build_params()
+        attempt = 0
+        delay = 1.0
 
-        async with websockets.connect(BINANCE_FAPI_WS) as ws:
-            if params:
-                msg = {"method": "SUBSCRIBE", "params": params, "id": 1}
-                await ws.send(json.dumps(msg))
+        while True:
+            ws = None
+            try:
+                ws = await websockets.connect(BINANCE_FAPI_WS)
+                if params:
+                    msg = {"method": "SUBSCRIBE", "params": params, "id": 1}
+                    await ws.send(json.dumps(msg))
 
-            async for raw in ws:
-                self._parse_message(raw)
+                attempt = 0
+                delay = 1.0
+
+                async for raw in ws:
+                    self._parse_message(raw)
+
+            except (websockets.exceptions.WebSocketException, OSError) as exc:
+                if ws and not ws.closed:
+                    await ws.close()
+
+                attempt += 1
+                logger.warning(
+                    "WebSocket connection lost (%s). Reconnecting attempt %d", exc, attempt
+                )
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 60.0)
+
 
     def _build_params(self) -> List[str]:
         params: List[str] = []
