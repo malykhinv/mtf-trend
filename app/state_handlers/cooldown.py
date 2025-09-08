@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 from domain.models.enums import BotState
 from domain.models.state import SymbolState
 from domain.services.symbol_registry import SymbolRegistry
 import constants
+
+
+logger = logging.getLogger(__name__)
 
 
 class CooldownHandler:
@@ -20,6 +25,7 @@ class CooldownHandler:
             state.state = BotState.IDLE
             state.last_signal_ts = None
             self._registry.update(symbol, state)
+            logger.info(":< символ %s снова IDLE :>", symbol)
 
 
 __all__ = ["CooldownHandler"]
