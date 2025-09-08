@@ -25,7 +25,7 @@ class CooldownHandler:
             state.state = BotState.IDLE
             state.last_signal_ts = None
             self._registry.update(symbol, state)
-            logger.info(":< символ %s снова IDLE :>", symbol)
+            logger.info("Символ %s снова IDLE", symbol)
 
 
 __all__ = ["CooldownHandler"]

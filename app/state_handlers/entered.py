@@ -38,7 +38,7 @@ class EnteredHandler:
             state.state = BotState.COOLDOWN
             state.last_signal_ts = time.time()
             self._registry.update(symbol, state)
-            logger.info(":< позиция закрыта, символ в охлаждении :>")
+            logger.info("Позиция закрыта, символ в охлаждении")
 
 
 __all__ = ["EnteredHandler"]

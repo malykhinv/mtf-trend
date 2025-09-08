@@ -1,7 +1,7 @@
 import logging
 from typing import Optional
 
-_LOG_FORMAT = ':< %(message)s :>'
+_LOG_FORMAT = '%(message)s'
 
 
 def configure(level: int = logging.INFO) -> None:

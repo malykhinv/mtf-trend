@@ -49,11 +49,11 @@ class TradeManager:
         )
         result: Any | None = None
         if side is Side.SHORT:
-            logger.info(":< открытие шорта %s по %.2f :>", plan.symbol, plan.entry_price)
+            logger.info("Открытие шорта %s по %.2f", plan.symbol, plan.entry_price)
         try:
             result = await self._trader.place(order)
         except Exception:
-            logger.exception(":< ошибка open_position %s :>", plan.symbol)
+            logger.exception("Ошибка open_position %s :>", plan.symbol)
             self._risk_manager.release(plan)
             raise
         actual_price: float | None = None
@@ -76,7 +76,7 @@ class TradeManager:
             try:
                 await self._notifier.notify_order_open(plan, side, actual_price)
             except Exception:
-                logger.exception(":< ошибка Telegram-уведомления :>")
+                logger.exception("Ошибка Telegram-уведомления :>")
 
     async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
@@ -89,7 +89,7 @@ class TradeManager:
         try:
             await self._trader.place(order)
         except Exception:
-            logger.exception(":< ошибка _close_position %s :>", symbol)
+            logger.exception("Ошибка _close_position %s :>", symbol)
             raise
         self._risk_manager.release(plan)
         state = self._registry.get(symbol)
@@ -153,7 +153,7 @@ class TradeManager:
 
             return exits, plan
         except Exception:
-            logger.exception(":< ошибка on_tick_manage %s :>", symbol)
+            logger.exception("Ошибка on_tick_manage %s :>", symbol)
             raise
 
     # ------------------------------------------------------------------
@@ -180,7 +180,7 @@ class TradeManager:
         try:
             await self._trader.place(order)
         except Exception:
-            logger.exception(":< ошибка TP1 %s :>", plan.symbol)
+            logger.exception("Ошибка TP1 %s :>", plan.symbol)
             raise
         self._risk_manager.release(replace(plan, quantity=plan.tp1_qty))
         new_plan = self._plan(
@@ -196,7 +196,7 @@ class TradeManager:
             try:
                 await self._notifier.notify_tp_hit(new_plan, side, price, 1, new_plan.quantity)
             except Exception:
-                logger.exception(":< ошибка Telegram-уведомления :>")
+                logger.exception("Ошибка Telegram-уведомления :>")
         return exits, new_plan
 
     async def _handle_tp2(
@@ -222,7 +222,7 @@ class TradeManager:
         try:
             await self._trader.place(order)
         except Exception:
-            logger.exception(":< ошибка TP2 %s :>", plan.symbol)
+            logger.exception("Ошибка TP2 %s :>", plan.symbol)
             raise
         self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
         remaining_qty = plan.quantity - plan.tp2_qty
@@ -234,7 +234,7 @@ class TradeManager:
                 try:
                     await self._notifier.notify_tp_hit(plan, side, price, 2, 0.0)
                 except Exception:
-                    logger.exception(":< ошибка Telegram-уведомления :>")
+                    logger.exception("Ошибка Telegram-уведомления :>")
             return exits, None
         new_plan = self._plan(
             plan,
@@ -249,7 +249,7 @@ class TradeManager:
             try:
                 await self._notifier.notify_tp_hit(new_plan, side, price, 2, new_plan.quantity)
             except Exception:
-                logger.exception(":< ошибка Telegram-уведомления :>")
+                logger.exception("Ошибка Telegram-уведомления :>")
         return exits, new_plan
 
     async def _apply_trailing_stop(
@@ -281,7 +281,7 @@ class TradeManager:
                     try:
                         await self._notifier.notify_trail_update(plan, side, price, plan.quantity)
                     except Exception:
-                        logger.exception(":< ошибка Telegram-уведомления :>")
+                        logger.exception("Ошибка Telegram-уведомления :>")
         return exits, plan
 
     async def _check_stop(
@@ -302,6 +302,6 @@ class TradeManager:
                 try:
                     await self._notifier.notify_stop(plan, side, price, 0.0)
                 except Exception:
-                    logger.exception(":< ошибка Telegram-уведомления :>")
+                    logger.exception("Ошибка Telegram-уведомления :>")
             return exits, None
         return exits, plan

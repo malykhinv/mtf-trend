@@ -32,7 +32,7 @@ class UniverseBuilder:
 
             symbols.append(sym)
 
-        logger.info(":< выбрано %d монет :>", len(symbols))
+        logger.info("Выбрано %d монет", len(symbols))
         return symbols
 
     def _is_usdt_pair(self, sym: str) -> bool:
