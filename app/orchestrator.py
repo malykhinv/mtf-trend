@@ -74,18 +74,22 @@ async def run(
     if notification_type not in {"orders", "events"}:
         raise ValueError(f"Unsupported notification_type: {notification_type}")
 
+    logger.info("Orchestrator starting with profile %s", cfg.profile)
     gstate = GlobalState(profile=cfg.profile, btc_pause_until_ms=None)
 
     registry = SymbolRegistry()
     rest: RestClientPort = RestClient()
 
+    logger.info("Building trading universe")
     builder = UniverseBuilder(rest)
     symbols = await builder.build()
+    logger.info("Universe built with %d symbols", len(symbols))
     for sym in symbols:
         registry.put(SymbolState(symbol=sym, state=BotState.IDLE))
 
     ws: WsClientPort = WsClient()
     ws.subscribe_symbols(tuple(symbols))
+    logger.info("Subscribed to websocket for %d symbols", len(symbols))
     trader: TraderPort = Trader()
 
     signal_engine = SignalEngine(cfg, registry)
@@ -119,6 +123,8 @@ async def run(
     tasks: list[asyncio.Task[None]] = []
 
     loop = asyncio.get_running_loop()
+
+    logger.info("Starting pipeline tasks")
 
     def _shutdown() -> None:
         for t in tasks:
@@ -198,6 +204,7 @@ async def run(
     except asyncio.CancelledError:
         pass
     finally:
+        logger.info("Shutting down orchestrator")
         for sig in (signal.SIGINT, signal.SIGTERM):
             try:
                 loop.remove_signal_handler(sig)
@@ -209,3 +216,4 @@ async def run(
         await rest.aclose()
         await ws.close()
         await risk_manager.aclose()
+        logger.info("Orchestrator stopped")

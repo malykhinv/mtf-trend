@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from domain.models.enums import BotState
@@ -21,6 +22,8 @@ from .state_handlers import (
     EnteredHandler,
     IdleWatchingHandler,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BotStateMachine:
@@ -51,6 +54,7 @@ class BotStateMachine:
     # Public API
     # ------------------------------------------------------------------
     async def run(self) -> None:
+        logger.info("BotStateMachine started")
         while True:
             now_ms = int(time.time() * 1000)
             if self._pause_guard.should_pause(now_ms):
