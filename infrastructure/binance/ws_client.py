@@ -7,6 +7,7 @@ from collections import deque
 from typing import Any, Deque, List
 
 import websockets
+from websockets.client import WebSocketClientProtocol
 
 from constants import BINANCE_FAPI_WS
 from domain.models.enums import Side
@@ -24,7 +25,7 @@ class WsClient:
         self._agg_trades: Deque[AggTrade] = deque()
         self._depths: Deque[DepthSnapshot] = deque()
         self._liqs: Deque[LiquidationEvent] = deque()
-        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._ws: WebSocketClientProtocol | None = None
 
     def subscribe_symbols(self, symbols: tuple[str, ...]) -> None:
         self._symbols = symbols
