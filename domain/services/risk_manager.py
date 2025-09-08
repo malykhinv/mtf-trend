@@ -38,6 +38,7 @@ class RiskManager:
             tp1_qty=tp1_qty,
             tp2_qty=tp2_qty,
             tail_qty=tail_qty,
+            window_high=window.high,
         )
 
     def _calc_stop_loss(

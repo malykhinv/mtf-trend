@@ -22,3 +22,4 @@ GLOBAL_BTC_PAUSE_Z: Final[float] = 3.0
 GLOBAL_BTC_PAUSE_SEC: Final[int] = 180
 
 RISK_PER_TRADE_USDT: Final[float] = 100.0  # настрой под депозит
+TRADE_INVALIDATION_SEC: Final[int] = 180

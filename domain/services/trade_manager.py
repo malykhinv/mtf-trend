@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from typing import List
 
+import constants
 from domain.models import signals as S
 from domain.models.enums import OrderType, Side
 from domain.models.trading import OrderSpec, PositionPlan
@@ -37,6 +39,7 @@ class TradeManager:
         await self._trader.place(order)
         state = self._registry.get(plan.symbol)
         state.position = Position(side=side, plan=plan)
+        state.last_signal_ts = time.time()
         self._registry.update(plan.symbol, state)
 
     async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
@@ -95,6 +98,18 @@ class TradeManager:
         exits, plan = await self._check_stop(plan, side, current_price)
         if exits:
             return exits, plan
+
+        timed_out = (
+            state.last_signal_ts is not None
+            and time.time() - state.last_signal_ts > constants.TRADE_INVALIDATION_SEC
+        )
+        price_invalid = side is Side.SHORT and (
+            current_price > plan.entry_price or current_price > plan.window_high
+        )
+        if timed_out or price_invalid:
+            exits.append(S.ExitSignal(symbol=plan.symbol, reason="INVALIDATED"))
+            await self._close_position(plan.symbol, side, plan)
+            return exits, None
 
         return exits, plan
 
