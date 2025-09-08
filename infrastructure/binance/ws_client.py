@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any, List
 
 import websockets
-from websockets.client import ClientProtocol
+from websockets.client import WebSocketClientProtocol
 
 from constants import BINANCE_FAPI_WS
 from domain.models.enums import Side
@@ -31,7 +31,7 @@ class WsClient:
         self._liqs: asyncio.Queue[LiquidationEvent | None] = asyncio.Queue(
             maxsize=queue_maxsize
         )
-        self._ws: ClientProtocol | None = None
+        self._ws: WebSocketClientProtocol | None = None
         # Pre-built subscribe message sent on connect/reconnect.  It is
         # created once in ``subscribe_symbols`` so that the network loop
         # does not rebuild JSON on every reconnect.
@@ -80,7 +80,7 @@ class WsClient:
                 await self._consume_messages()
 
             except (websockets.exceptions.WebSocketException, OSError) as exc:
-                if self._ws:
+                if self._ws is not None:
                     await self._ws.close()
 
                 attempt += 1
