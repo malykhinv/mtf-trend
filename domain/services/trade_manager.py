@@ -64,7 +64,7 @@ class TradeManager:
         state.last_signal_ts = time.time()
         self._registry.update(plan.symbol, state)
         if self._notifier:
-            self._notifier.notify_order_open(plan, side, actual_price)
+            await self._notifier.notify_order_open(plan, side, actual_price)
 
     async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
@@ -103,7 +103,7 @@ class TradeManager:
         if exits:
             return exits, plan
 
-        _, plan = self._apply_trailing_stop(plan, side, current_price)
+        _, plan = await self._apply_trailing_stop(plan, side, current_price)
 
         taker_buy = metrics.taker_buy_volume
         taker_sell = metrics.taker_sell_volume
@@ -169,7 +169,7 @@ class TradeManager:
         state.position = Position(side=side, plan=new_plan)
         self._registry.update(plan.symbol, state)
         if self._notifier:
-            self._notifier.notify_tp_hit(new_plan, side, price, 1, new_plan.quantity)
+            await self._notifier.notify_tp_hit(new_plan, side, price, 1, new_plan.quantity)
         return exits, new_plan
 
     async def _handle_tp2(
@@ -199,7 +199,7 @@ class TradeManager:
             state.position = None
             self._registry.update(plan.symbol, state)
             if self._notifier:
-                self._notifier.notify_tp_hit(plan, side, price, 2, 0.0)
+                await self._notifier.notify_tp_hit(plan, side, price, 2, 0.0)
             return exits, None
         new_plan = self._plan(
             plan,
@@ -211,10 +211,10 @@ class TradeManager:
         state.position = Position(side=side, plan=new_plan)
         self._registry.update(plan.symbol, state)
         if self._notifier:
-            self._notifier.notify_tp_hit(new_plan, side, price, 2, new_plan.quantity)
+            await self._notifier.notify_tp_hit(new_plan, side, price, 2, new_plan.quantity)
         return exits, new_plan
 
-    def _apply_trailing_stop(
+    async def _apply_trailing_stop(
         self, plan: PositionPlan, side: Side, price: float
     ) -> tuple[list[S.ExitSignal], PositionPlan]:
         exits: List[S.ExitSignal] = []
@@ -239,7 +239,7 @@ class TradeManager:
                 state.position = Position(side=side, plan=plan)
                 self._registry.update(plan.symbol, state)
                 if self._notifier:
-                    self._notifier.notify_trail_update(plan, side, price, plan.quantity)
+                    await self._notifier.notify_trail_update(plan, side, price, plan.quantity)
         return exits, plan
 
     async def _check_stop(
@@ -256,6 +256,6 @@ class TradeManager:
             exits.append(S.ExitSignal(symbol=plan.symbol, reason=reason))
             await self._close_position(plan.symbol, side, plan)
             if self._notifier:
-                self._notifier.notify_stop(plan, side, price, 0.0)
+                await self._notifier.notify_stop(plan, side, price, 0.0)
             return exits, None
         return exits, plan

@@ -1,7 +1,7 @@
-import sys
-import pathlib
 import asyncio
+import pathlib
 import pytest
+import sys
 
 sys.path.append(str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -35,7 +35,7 @@ class DummyNotifier:
     def __init__(self) -> None:
         self.args = None
 
-    def notify_order_open(self, plan, side, actual_price):
+    async def notify_order_open(self, plan, side, actual_price):
         self.args = (plan, side, actual_price)
 
 
