@@ -13,9 +13,13 @@ from domain.models.trading import PositionPlan
 class RiskManager:
     """Simple position sizing and risk calculations."""
 
-    def __init__(self, config: ProfileConfig) -> None:
+    def __init__(
+        self, config: ProfileConfig, http_client: httpx.AsyncClient | None = None
+    ) -> None:
         self._cfg = config
         self._open_risk_usdt: float = 0.0
+        self._client = http_client or httpx.AsyncClient(timeout=10.0)
+        self._own_client = http_client is None
 
     async def build_plan(
         self, symbol: str, entry_price: float, window: M.PumpWindow
@@ -109,14 +113,17 @@ class RiskManager:
         tail_qty = quantity - tp1_qty - tp2_qty
         return quantity, tp1_qty, tp2_qty, tail_qty
 
+    async def aclose(self) -> None:
+        if self._own_client:
+            await self._client.aclose()
+
     async def _get_symbol_filters(self, symbol: str) -> dict:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
-                params={"symbol": symbol},
-            )
-            resp.raise_for_status()
-            info = resp.json()["symbols"][0]["filters"]
+        resp = await self._client.get(
+            BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
+            params={"symbol": symbol},
+        )
+        resp.raise_for_status()
+        info = resp.json()["symbols"][0]["filters"]
         return {f["filterType"]: f for f in info}
 
     @staticmethod

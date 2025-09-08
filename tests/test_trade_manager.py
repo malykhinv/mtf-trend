@@ -65,6 +65,7 @@ def test_open_position_releases_margin_on_error():
     with pytest.raises(RuntimeError):
         asyncio.run(tm.open_position(plan, Side.SHORT))
     assert risk._open_risk_usdt == 0.0
+    asyncio.run(risk.aclose())
 
 
 def test_open_position_uses_actual_price_and_notifies():
@@ -98,3 +99,4 @@ def test_open_position_uses_actual_price_and_notifies():
     state = registry.get("BTCUSDT")
     assert state.position is not None
     assert state.position.plan.entry_price == 105.0
+    asyncio.run(risk.aclose())
