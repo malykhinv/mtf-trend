@@ -17,11 +17,12 @@ class TelegramClient:
     token: str
     chat_id: str
 
-    def send(self, text: str) -> None:
+    def send(self, text: str) -> bool:
         ok, desc = send_message(self.token, self.chat_id, text)
         if not ok:
             logger.error("Failed to send Telegram message: %s", desc)
-            raise RuntimeError(desc)
+            return False
+        return True
 
 
 class NotificationService:
@@ -44,7 +45,7 @@ class NotificationService:
             f"SL: {plan.stop_loss:.4f} | TP1: {plan.take_profit1:.4f} | TP2: {plan.take_profit2:.4f}\n"
             f"Qty left: {plan.quantity:.4f}"
         )
-        self._client.send(msg)
+        self._send(msg)
 
     def notify_tp_hit(
         self, plan: PositionPlan, side: Side, price: float, level: int, remaining: float
@@ -60,7 +61,7 @@ class NotificationService:
                 msg += f"\nQty left: {remaining:.4f}"
             else:
                 msg += "\nPosition closed"
-        self._client.send(msg)
+        self._send(msg)
 
     def notify_stop(
         self, plan: PositionPlan, side: Side, price: float, remaining: float
@@ -70,7 +71,7 @@ class NotificationService:
             f"Stop hit {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
             f"Qty left: {remaining:.4f}"
         )
-        self._client.send(msg)
+        self._send(msg)
 
     def notify_trail_update(
         self, plan: PositionPlan, side: Side, price: float, remaining: float
@@ -80,7 +81,11 @@ class NotificationService:
             f"Trail update {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
             f"New SL: {plan.stop_loss:.4f} | Qty left: {remaining:.4f}"
         )
-        self._client.send(msg)
+        self._send(msg)
+
+    def _send(self, msg: str) -> None:
+        if not self._client.send(msg):
+            logger.error("Failed to send notification")
 
     @staticmethod
     def _pnl_pct(entry: float, price: float, side: Side) -> float:
