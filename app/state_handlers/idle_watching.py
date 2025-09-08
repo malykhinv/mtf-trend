@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
+
 from domain.models.enums import BotState
 from domain.models.state import SymbolState
 from domain.services.signal_engine import SignalEngine
 from domain.services.risk_manager import RiskManager
 from domain.services.trade_manager import TradeManager
 from domain.services.symbol_registry import SymbolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class IdleWatchingHandler:
@@ -26,30 +30,39 @@ class IdleWatchingHandler:
     async def handle(self, symbol: str, state: SymbolState) -> None:
         pump = self._signal_engine.on_minute_close(symbol)
         if pump is None:
+            reason = "no pump window"
             if state.state is BotState.WATCHING:
                 state.state = BotState.IDLE
                 self._registry.update(symbol, state)
+                logger.debug("%s -> IDLE: %s", symbol, reason)
+            else:
+                logger.debug("%s skipped: %s", symbol, reason)
             return
 
         state.state = BotState.WATCHING
         self._registry.update(symbol, state)
+        logger.debug("%s -> WATCHING: pump detected", symbol)
 
         if self._signal_engine.confirm_failure(symbol):
             state.state = BotState.IDLE
             self._registry.update(symbol, state)
+            logger.debug("%s -> IDLE: confirmation failure", symbol)
             return
 
         entry = self._signal_engine.make_entry(symbol, pump.window)
         if entry is None:
+            logger.debug("%s skipped: entry conditions", symbol)
             return
 
         plan = await self._risk_manager.build_plan(symbol, entry.price, pump.window)
         if plan is None or not self._risk_manager.allow_trade(plan):
+            logger.debug("%s skipped: risk check", symbol)
             return
 
         await self._trade_manager.open_position(plan, entry.side)
         state.state = BotState.ENTERED
         self._registry.update(symbol, state)
+        logger.debug("%s -> ENTERED", symbol)
 
 
 __all__ = ["IdleWatchingHandler"]
