@@ -198,6 +198,11 @@ async def run(
     except asyncio.CancelledError:
         pass
     finally:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.remove_signal_handler(sig)
+            except NotImplementedError:
+                pass
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
