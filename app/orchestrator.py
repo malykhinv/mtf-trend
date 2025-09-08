@@ -194,5 +194,5 @@ async def run(
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await rest._client.aclose()
+        await rest.aclose()
         await ws.close()
