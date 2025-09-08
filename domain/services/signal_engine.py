@@ -118,7 +118,9 @@ class SignalEngine:
         if not _evaluate_entry(metrics, entry_cfg):
             return None
 
-        direction = metrics.direction or Side.SHORT
+        direction: Side = (
+            metrics.direction if metrics.direction is not None else Side.SHORT
+        )
 
         if metrics.entry_price > 0:
             price = metrics.entry_price
