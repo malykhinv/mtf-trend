@@ -52,21 +52,31 @@ class WsClient:
         else:
             self._subscribe_msg = None
 
+    async def _connect_and_subscribe(self) -> None:  # pragma: no cover - network
+        """Establish websocket connection and send subscription message."""
+
+        self._ws = await websockets.connect(BINANCE_FAPI_WS)
+        if self._subscribe_msg and self._ws:
+            await self._ws.send(self._subscribe_msg)
+
+    async def _consume_messages(self) -> None:  # pragma: no cover - network
+        """Read messages from the websocket and dispatch them for handling."""
+
+        assert self._ws is not None
+        async for raw in self._ws:
+            await self._parse_message(raw)
+
     async def stream(self) -> None:  # pragma: no cover - network
         attempt = 0
         delay = 1.0
 
         while True:
             try:
-                self._ws = await websockets.connect(BINANCE_FAPI_WS)
-                if self._subscribe_msg:
-                    await self._ws.send(self._subscribe_msg)
-
+                await self._connect_and_subscribe()
                 attempt = 0
                 delay = 1.0
 
-                async for raw in self._ws:
-                    await self._parse_message(raw)
+                await self._consume_messages()
 
             except (websockets.exceptions.WebSocketException, OSError) as exc:
                 if self._ws and not self._ws.closed:
