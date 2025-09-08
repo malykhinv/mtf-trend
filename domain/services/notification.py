@@ -30,9 +30,17 @@ class NotificationService:
     def __init__(self, client: TelegramClient) -> None:
         self._client = client
 
-    def notify_order_open(self, plan: PositionPlan, side: Side) -> None:
-        msg = (
-            f"Open {side} {plan.symbol} @ {plan.entry_price:.4f} (0.00%)\n"
+    def notify_order_open(
+        self, plan: PositionPlan, side: Side, actual_price: float | None = None
+    ) -> None:
+        price = plan.entry_price if actual_price is None else actual_price
+        msg = f"Open {side} {plan.symbol} @ {price:.4f}"
+        if actual_price is not None:
+            pnl = self._pnl_pct(plan.entry_price, actual_price, side)
+            msg += f" ({pnl:.2f}%)\n"
+        else:
+            msg += "\n"
+        msg += (
             f"SL: {plan.stop_loss:.4f} | TP1: {plan.take_profit1:.4f} | TP2: {plan.take_profit2:.4f}\n"
             f"Qty left: {plan.quantity:.4f}"
         )
