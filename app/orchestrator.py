@@ -154,7 +154,7 @@ async def run(
 
                     for sig in (signal.SIGINT, signal.SIGTERM):
                         try:
-                            loop.add_signal_handler(sig, _shutdown)
+                            loop.add_signal_handler(sig, lambda: _shutdown())
                         except NotImplementedError:
                             pass
             except* Exception as eg:
@@ -185,7 +185,7 @@ async def run(
             )
             for sig in (signal.SIGINT, signal.SIGTERM):
                 try:
-                    loop.add_signal_handler(sig, _shutdown)
+                    loop.add_signal_handler(sig, lambda: _shutdown())
                 except NotImplementedError:
                     pass
             results = await asyncio.gather(*tasks, return_exceptions=True)
