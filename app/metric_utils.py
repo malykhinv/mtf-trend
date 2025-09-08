@@ -1,5 +1,4 @@
 """Utility functions for metric calculations."""
-"""Utility functions for metric calculations."""
 
 from typing import Deque
 
