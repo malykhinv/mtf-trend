@@ -26,21 +26,36 @@ class WsClient:
         self._depths: Deque[DepthSnapshot] = deque()
         self._liqs: Deque[LiquidationEvent] = deque()
         self._ws: WebSocketClientProtocol | None = None
+        # Pre-built subscribe message sent on connect/reconnect.  It is
+        # created once in ``subscribe_symbols`` so that the network loop
+        # does not rebuild JSON on every reconnect.
+        self._subscribe_msg: str | None = None
 
     def subscribe_symbols(self, symbols: tuple[str, ...]) -> None:
+        """Store symbols and build subscription payload.
+
+        The websocket requires a subscription message with all stream names.
+        We pre-build this JSON once to reuse it on reconnects.
+        """
+
         self._symbols = symbols
+        params = self._build_params(symbols)
+        if params:
+            self._subscribe_msg = json.dumps(
+                {"method": "SUBSCRIBE", "params": params, "id": 1}
+            )
+        else:
+            self._subscribe_msg = None
 
     async def stream(self) -> None:  # pragma: no cover - network
-        params = self._build_params()
         attempt = 0
         delay = 1.0
 
         while True:
             try:
                 self._ws = await websockets.connect(BINANCE_FAPI_WS)
-                if params:
-                    msg = {"method": "SUBSCRIBE", "params": params, "id": 1}
-                    await self._ws.send(json.dumps(msg))
+                if self._subscribe_msg:
+                    await self._ws.send(self._subscribe_msg)
 
                 attempt = 0
                 delay = 1.0
@@ -62,9 +77,9 @@ class WsClient:
                 self._ws = None
 
 
-    def _build_params(self) -> List[str]:
+    def _build_params(self, symbols: tuple[str, ...]) -> List[str]:
         params: List[str] = []
-        for sym in self._symbols:
+        for sym in symbols:
             ls = sym.lower()
             params.extend(
                 [f"{ls}@aggTrade", f"{ls}@depth20@100ms", f"{ls}@forceOrder"]
