@@ -123,12 +123,6 @@ async def run(
         for t in tasks:
             t.cancel()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, _shutdown)
-        except NotImplementedError:
-            pass
-
     try:
         if hasattr(asyncio, "TaskGroup"):
             try:
@@ -156,6 +150,12 @@ async def run(
                             _run_with_restart(state_machine.run, "state_machine")
                         )
                     )
+
+                    for sig in (signal.SIGINT, signal.SIGTERM):
+                        try:
+                            loop.add_signal_handler(sig, _shutdown)
+                        except NotImplementedError:
+                            pass
             except* Exception:
                 # individual tasks already log their failures
                 pass
@@ -181,6 +181,11 @@ async def run(
                     ),
                 ]
             )
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try:
+                    loop.add_signal_handler(sig, _shutdown)
+                except NotImplementedError:
+                    pass
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for res in results:
                 if isinstance(res, Exception):
