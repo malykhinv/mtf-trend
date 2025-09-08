@@ -66,3 +66,10 @@ class RestClient:
         data = r.json()
         bids = tuple((float(p), float(q)) for p, q in data.get("bids", []))
         return bids
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._client.aclose()
+
+    async def close(self) -> None:
+        await self.aclose()
