@@ -1,5 +1,5 @@
-from typing import Final
-
-MIN_24H_USDT: Final[float] = 20_000_000.0
-MAX_SPREAD_BPS: Final[float] = 4.0
-MIN_TOP10_BID_USDT: Final[float] = 80_000.0
+from constants import (
+    UNIVERSE_MIN_24H_USDT as MIN_24H_USDT,
+    UNIVERSE_MAX_SPREAD_BPS as MAX_SPREAD_BPS,
+    UNIVERSE_MIN_TOP10_BID_USDT as MIN_TOP10_BID_USDT,
+)
