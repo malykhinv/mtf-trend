@@ -65,6 +65,7 @@ class TradeManager:
             return exits, None
 
         side, plan = record.side, record.plan
+        metrics = state.metrics
         current_price = plan.entry_price if price is None else price
 
         exits, plan = await self._handle_tp1(plan, side, current_price)
@@ -76,6 +77,20 @@ class TradeManager:
             return exits, plan
 
         _, plan = self._apply_trailing_stop(plan, side, current_price)
+
+        taker_buy = metrics.taker_buy_volume
+        taker_sell = metrics.taker_sell_volume
+        taker_ratio = (
+            taker_buy / taker_sell
+            if taker_sell > 0.0
+            else float("inf") if taker_buy > 0.0 else 0.0
+        )
+        if metrics.premium_pct > 0.0 and (
+            metrics.delta_oi_pct > 0.0 or taker_ratio > 1.0
+        ):
+            exits.append(S.ExitSignal(symbol=plan.symbol, reason="LONGS_RETURNED"))
+            await self._close_position(plan.symbol, side, plan)
+            return exits, None
 
         exits, plan = await self._check_stop(plan, side, current_price)
         if exits:
