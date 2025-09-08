@@ -24,36 +24,41 @@ class NotificationService:
     def __init__(self, client: TelegramClient) -> None:
         self._client = client
 
-    def notify_order_open(self, plan: PositionPlan) -> None:
+    def notify_order_open(self, plan: PositionPlan, side: Side) -> None:
         msg = (
-            f"Open {plan.symbol} \n"
-            f"Entry: {plan.entry_price:.4f} | SL: {plan.stop_loss:.4f} \n"
-            f"TP1: {plan.take_profit1:.4f} | TP2: {plan.take_profit2:.4f} \n"
-            f"Qty: {plan.quantity:.4f}"
+            f"Open {side} {plan.symbol} @ {plan.entry_price:.4f} (0.00%)\n"
+            f"SL: {plan.stop_loss:.4f} | TP1: {plan.take_profit1:.4f} | TP2: {plan.take_profit2:.4f}\n"
+            f"Qty left: {plan.quantity:.4f}"
         )
         self._client.send(msg)
 
-    def notify_tp_hit(self, plan: PositionPlan, side: Side, price: float, level: int) -> None:
+    def notify_tp_hit(
+        self, plan: PositionPlan, side: Side, price: float, level: int, remaining: float
+    ) -> None:
         pnl = self._pnl_pct(plan.entry_price, price, side)
         msg = (
-            f"TP{level} hit {plan.symbol} @ {price:.4f} ({pnl:.2f}%)\n"
-            f"SL: {plan.stop_loss:.4f} | TP2: {plan.take_profit2:.4f}"
+            f"TP{level} hit {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
+            f"SL: {plan.stop_loss:.4f} | TP2: {plan.take_profit2:.4f} | Qty left: {remaining:.4f}"
         )
         self._client.send(msg)
 
-    def notify_stop(self, plan: PositionPlan, side: Side, price: float) -> None:
+    def notify_stop(
+        self, plan: PositionPlan, side: Side, price: float, remaining: float
+    ) -> None:
         pnl = self._pnl_pct(plan.entry_price, price, side)
         msg = (
-            f"Stop hit {plan.symbol} @ {price:.4f} ({pnl:.2f}%)\n"
-            f"SL: {plan.stop_loss:.4f}"
+            f"Stop hit {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
+            f"Qty left: {remaining:.4f}"
         )
         self._client.send(msg)
 
-    def notify_trail_update(self, plan: PositionPlan, side: Side, price: float) -> None:
+    def notify_trail_update(
+        self, plan: PositionPlan, side: Side, price: float, remaining: float
+    ) -> None:
         pnl = self._pnl_pct(plan.entry_price, price, side)
         msg = (
-            f"Trail update {plan.symbol} @ {price:.4f} ({pnl:.2f}%)\n"
-            f"New SL: {plan.stop_loss:.4f}"
+            f"Trail update {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
+            f"New SL: {plan.stop_loss:.4f} | Qty left: {remaining:.4f}"
         )
         self._client.send(msg)
 
