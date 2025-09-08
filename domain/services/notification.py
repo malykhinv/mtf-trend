@@ -20,7 +20,7 @@ class TelegramClient:
     async def send(self, text: str) -> bool:
         ok, desc = await send_message(self.token, self.chat_id, text)
         if not ok:
-            logger.error("Failed to send Telegram message: %s", desc)
+            logger.error(":< ошибка отправки Telegram-сообщения: %s :>", desc)
             return False
         return True
 
@@ -84,8 +84,11 @@ class NotificationService:
         await self._send(msg)
 
     async def _send(self, msg: str) -> None:
-        if not await self._client.send(msg):
-            logger.error("Failed to send notification")
+        try:
+            if not await self._client.send(msg):
+                logger.error(":< ошибка отправки Telegram-уведомления :>")
+        except Exception:
+            logger.exception(":< ошибка Telegram-уведомления :>")
 
     @staticmethod
     def _pnl_pct(entry: float, price: float, side: Side) -> float:

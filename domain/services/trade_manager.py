@@ -52,8 +52,8 @@ class TradeManager:
             logger.info(":< открытие шорта %s по %.2f :>", plan.symbol, plan.entry_price)
         try:
             result = await self._trader.place(order)
-        except Exception as exc:
-            logger.error("open_position failed for %s", plan.symbol, exc_info=exc)
+        except Exception:
+            logger.exception(":< ошибка open_position %s :>", plan.symbol)
             self._risk_manager.release(plan)
             raise
         actual_price: float | None = None
@@ -73,7 +73,10 @@ class TradeManager:
         state.last_signal_ts = time.time()
         self._registry.update(plan.symbol, state)
         if self._notifier:
-            await self._notifier.notify_order_open(plan, side, actual_price)
+            try:
+                await self._notifier.notify_order_open(plan, side, actual_price)
+            except Exception:
+                logger.exception(":< ошибка Telegram-уведомления :>")
 
     async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
@@ -85,8 +88,8 @@ class TradeManager:
         )
         try:
             await self._trader.place(order)
-        except Exception as exc:
-            logger.error("_close_position failed for %s", symbol, exc_info=exc)
+        except Exception:
+            logger.exception(":< ошибка _close_position %s :>", symbol)
             raise
         self._risk_manager.release(plan)
         state = self._registry.get(symbol)
@@ -97,58 +100,61 @@ class TradeManager:
         self, symbol: str, price: float | None = None
     ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
         """Manage an existing position on each price tick."""
+        try:
+            state = self._registry.get(symbol)
+            record = state.position
+            exits: List[S.ExitSignal] = []
+            if record is None:
+                return exits, None
 
-        state = self._registry.get(symbol)
-        record = state.position
-        exits: List[S.ExitSignal] = []
-        if record is None:
-            return exits, None
+            side, plan = record.side, record.plan
+            metrics = state.metrics
+            current_price = plan.entry_price if price is None else price
 
-        side, plan = record.side, record.plan
-        metrics = state.metrics
-        current_price = plan.entry_price if price is None else price
+            exits, plan = await self._handle_tp1(plan, side, current_price)
+            if exits:
+                return exits, plan
 
-        exits, plan = await self._handle_tp1(plan, side, current_price)
-        if exits:
+            exits, plan = await self._handle_tp2(plan, side, current_price)
+            if exits:
+                return exits, plan
+
+            _, plan = await self._apply_trailing_stop(plan, side, current_price)
+
+            taker_buy = metrics.taker_buy_volume
+            taker_sell = metrics.taker_sell_volume
+            taker_ratio = (
+                taker_buy / taker_sell
+                if taker_sell > 0.0
+                else float("inf") if taker_buy > 0.0 else 0.0
+            )
+            if metrics.premium_pct > 0.0 and (
+                metrics.delta_oi_pct > 0.0 or taker_ratio > 1.0
+            ):
+                exits.append(S.ExitSignal(symbol=plan.symbol, reason="LONGS_RETURNED"))
+                await self._close_position(plan.symbol, side, plan)
+                return exits, None
+
+            exits, plan = await self._check_stop(plan, side, current_price)
+            if exits:
+                return exits, plan
+
+            timed_out = (
+                state.last_signal_ts is not None
+                and time.time() - state.last_signal_ts > constants.TRADE_INVALIDATION_SEC
+            )
+            price_invalid = side is Side.SHORT and (
+                current_price > plan.entry_price or current_price > plan.window_high
+            )
+            if timed_out or price_invalid:
+                exits.append(S.ExitSignal(symbol=plan.symbol, reason="INVALIDATED"))
+                await self._close_position(plan.symbol, side, plan)
+                return exits, None
+
             return exits, plan
-
-        exits, plan = await self._handle_tp2(plan, side, current_price)
-        if exits:
-            return exits, plan
-
-        _, plan = await self._apply_trailing_stop(plan, side, current_price)
-
-        taker_buy = metrics.taker_buy_volume
-        taker_sell = metrics.taker_sell_volume
-        taker_ratio = (
-            taker_buy / taker_sell
-            if taker_sell > 0.0
-            else float("inf") if taker_buy > 0.0 else 0.0
-        )
-        if metrics.premium_pct > 0.0 and (
-            metrics.delta_oi_pct > 0.0 or taker_ratio > 1.0
-        ):
-            exits.append(S.ExitSignal(symbol=plan.symbol, reason="LONGS_RETURNED"))
-            await self._close_position(plan.symbol, side, plan)
-            return exits, None
-
-        exits, plan = await self._check_stop(plan, side, current_price)
-        if exits:
-            return exits, plan
-
-        timed_out = (
-            state.last_signal_ts is not None
-            and time.time() - state.last_signal_ts > constants.TRADE_INVALIDATION_SEC
-        )
-        price_invalid = side is Side.SHORT and (
-            current_price > plan.entry_price or current_price > plan.window_high
-        )
-        if timed_out or price_invalid:
-            exits.append(S.ExitSignal(symbol=plan.symbol, reason="INVALIDATED"))
-            await self._close_position(plan.symbol, side, plan)
-            return exits, None
-
-        return exits, plan
+        except Exception:
+            logger.exception(":< ошибка on_tick_manage %s :>", symbol)
+            raise
 
     # ------------------------------------------------------------------
     async def _handle_tp1(
@@ -171,7 +177,11 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.tp1_qty,
         )
-        await self._trader.place(order)
+        try:
+            await self._trader.place(order)
+        except Exception:
+            logger.exception(":< ошибка TP1 %s :>", plan.symbol)
+            raise
         self._risk_manager.release(replace(plan, quantity=plan.tp1_qty))
         new_plan = self._plan(
             plan,
@@ -183,7 +193,10 @@ class TradeManager:
         state.position = Position(side=side, plan=new_plan)
         self._registry.update(plan.symbol, state)
         if self._notifier:
-            await self._notifier.notify_tp_hit(new_plan, side, price, 1, new_plan.quantity)
+            try:
+                await self._notifier.notify_tp_hit(new_plan, side, price, 1, new_plan.quantity)
+            except Exception:
+                logger.exception(":< ошибка Telegram-уведомления :>")
         return exits, new_plan
 
     async def _handle_tp2(
@@ -206,7 +219,11 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.tp2_qty,
         )
-        await self._trader.place(order)
+        try:
+            await self._trader.place(order)
+        except Exception:
+            logger.exception(":< ошибка TP2 %s :>", plan.symbol)
+            raise
         self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
         remaining_qty = plan.quantity - plan.tp2_qty
         if remaining_qty <= 0.0:
@@ -214,7 +231,10 @@ class TradeManager:
             state.position = None
             self._registry.update(plan.symbol, state)
             if self._notifier:
-                await self._notifier.notify_tp_hit(plan, side, price, 2, 0.0)
+                try:
+                    await self._notifier.notify_tp_hit(plan, side, price, 2, 0.0)
+                except Exception:
+                    logger.exception(":< ошибка Telegram-уведомления :>")
             return exits, None
         new_plan = self._plan(
             plan,
@@ -226,7 +246,10 @@ class TradeManager:
         state.position = Position(side=side, plan=new_plan)
         self._registry.update(plan.symbol, state)
         if self._notifier:
-            await self._notifier.notify_tp_hit(new_plan, side, price, 2, new_plan.quantity)
+            try:
+                await self._notifier.notify_tp_hit(new_plan, side, price, 2, new_plan.quantity)
+            except Exception:
+                logger.exception(":< ошибка Telegram-уведомления :>")
         return exits, new_plan
 
     async def _apply_trailing_stop(
@@ -255,7 +278,10 @@ class TradeManager:
                 state.position = Position(side=side, plan=plan)
                 self._registry.update(plan.symbol, state)
                 if self._notifier:
-                    await self._notifier.notify_trail_update(plan, side, price, plan.quantity)
+                    try:
+                        await self._notifier.notify_trail_update(plan, side, price, plan.quantity)
+                    except Exception:
+                        logger.exception(":< ошибка Telegram-уведомления :>")
         return exits, plan
 
     async def _check_stop(
@@ -273,6 +299,9 @@ class TradeManager:
             logger.info("stop %s %.2f", plan.symbol, price)
             await self._close_position(plan.symbol, side, plan)
             if self._notifier:
-                await self._notifier.notify_stop(plan, side, price, 0.0)
+                try:
+                    await self._notifier.notify_stop(plan, side, price, 0.0)
+                except Exception:
+                    logger.exception(":< ошибка Telegram-уведомления :>")
             return exits, None
         return exits, plan

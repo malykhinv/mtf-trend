@@ -54,124 +54,134 @@ class SignalEngine:
         """Evaluate minute metrics and possibly emit a pump signal."""
         logger.debug("Checking minute close for %s", symbol)
 
-        state = self._registry.get(symbol)
-        metrics = state.metrics
+        try:
+            state = self._registry.get(symbol)
+            metrics = state.metrics
 
-        trig = self._config.trigger
+            trig = self._config.trigger
 
-        if not _meets_trigger(metrics, trig):
-            return None
+            if not _meets_trigger(metrics, trig):
+                return None
 
-        window = M.PumpWindow(
-            high=metrics.high,
-            low=metrics.low,
-            start_ts=int(metrics.start_ts),
-            end_ts=int(metrics.end_ts),
-        )
-        logger.debug("Pump window found for %s: %s", symbol, window)
-        return S.PumpSignal(symbol=symbol, window=window)
+            window = M.PumpWindow(
+                high=metrics.high,
+                low=metrics.low,
+                start_ts=int(metrics.start_ts),
+                end_ts=int(metrics.end_ts),
+            )
+            logger.debug("Pump window found for %s: %s", symbol, window)
+            return S.PumpSignal(symbol=symbol, window=window)
+        except Exception:
+            logger.exception(":< ошибка on_minute_close %s :>", symbol)
+            raise
 
     def confirm_failure(self, symbol: str) -> bool:
         """Determine whether the pump window should be rejected."""
+        try:
+            state = self._registry.get(symbol)
+            metrics = state.metrics
 
-        state = self._registry.get(symbol)
-        metrics = state.metrics
+            confirm = self._config.confirmation
 
-        confirm = self._config.confirmation
+            if metrics.delta_oi_pct > confirm.delta_oi_max_pct:
+                logger.debug(
+                    "%s confirm failure: delta_oi_pct %.3f > %.3f",
+                    symbol,
+                    metrics.delta_oi_pct,
+                    confirm.delta_oi_max_pct,
+                )
+                return True
 
-        if metrics.delta_oi_pct > confirm.delta_oi_max_pct:
-            logger.debug(
-                "%s confirm failure: delta_oi_pct %.3f > %.3f",
-                symbol,
-                metrics.delta_oi_pct,
-                confirm.delta_oi_max_pct,
+            taker_ratio = _taker_ratio(metrics)
+            if taker_ratio > confirm.taker_ratio_max:
+                logger.debug(
+                    "%s confirm failure: taker_ratio %.3f > %.3f",
+                    symbol,
+                    taker_ratio,
+                    confirm.taker_ratio_max,
+                )
+                return True
+
+            if metrics.premium_pct > confirm.premium_max_pct:
+                logger.debug(
+                    "%s confirm failure: premium_pct %.3f > %.3f",
+                    symbol,
+                    metrics.premium_pct,
+                    confirm.premium_max_pct,
+                )
+                return True
+
+            if metrics.latency_sec < confirm.latency_min_sec:
+                logger.debug(
+                    "%s confirm failure: latency_sec %.3f < %.3f",
+                    symbol,
+                    metrics.latency_sec,
+                    confirm.latency_min_sec,
+                )
+                return True
+
+            lob_ok = (
+                metrics.ask_imb >= confirm.ask_imb_min
+                or metrics.top5ask_vs_base >= confirm.top5ask_vs_base_min
             )
-            return True
+            if not lob_ok:
+                logger.debug(
+                    "%s confirm failure: LOB conditions not met", symbol
+                )
+                return True
 
-        taker_ratio = _taker_ratio(metrics)
-        if taker_ratio > confirm.taker_ratio_max:
-            logger.debug(
-                "%s confirm failure: taker_ratio %.3f > %.3f",
-                symbol,
-                taker_ratio,
-                confirm.taker_ratio_max,
-            )
-            return True
+            if (
+                metrics.cvd_gap_pct < confirm.cvd_gap_pct_min
+                or metrics.cvd_gap_sec < confirm.cvd_gap_sec_min
+            ):
+                logger.debug(
+                    "%s confirm failure: cvd_gap below threshold", symbol
+                )
+                return True
 
-        if metrics.premium_pct > confirm.premium_max_pct:
-            logger.debug(
-                "%s confirm failure: premium_pct %.3f > %.3f",
-                symbol,
-                metrics.premium_pct,
-                confirm.premium_max_pct,
-            )
-            return True
-
-        if metrics.latency_sec < confirm.latency_min_sec:
-            logger.debug(
-                "%s confirm failure: latency_sec %.3f < %.3f",
-                symbol,
-                metrics.latency_sec,
-                confirm.latency_min_sec,
-            )
-            return True
-
-        lob_ok = (
-            metrics.ask_imb >= confirm.ask_imb_min
-            or metrics.top5ask_vs_base >= confirm.top5ask_vs_base_min
-        )
-        if not lob_ok:
-            logger.debug(
-                "%s confirm failure: LOB conditions not met", symbol
-            )
-            return True
-
-        if (
-            metrics.cvd_gap_pct < confirm.cvd_gap_pct_min
-            or metrics.cvd_gap_sec < confirm.cvd_gap_sec_min
-        ):
-            logger.debug(
-                "%s confirm failure: cvd_gap below threshold", symbol
-            )
-            return True
-
-        return False
+            return False
+        except Exception:
+            logger.exception(":< ошибка confirm_failure %s :>", symbol)
+            raise
 
     def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:
         """Evaluate entry conditions and possibly emit an entry signal."""
+        try:
+            state = self._registry.get(symbol)
+            metrics = state.metrics
 
-        state = self._registry.get(symbol)
-        metrics = state.metrics
+            if window.high <= window.low:
+                logger.debug("%s entry skipped: invalid window", symbol)
+                return None
 
-        if window.high <= window.low:
-            logger.debug("%s entry skipped: invalid window", symbol)
-            return None
+            if metrics.premium_pct > self._config.confirmation.premium_max_pct:
+                logger.debug(
+                    "%s entry skipped: premium_pct %.3f > %.3f",
+                    symbol,
+                    metrics.premium_pct,
+                    self._config.confirmation.premium_max_pct,
+                )
+                return None
 
-        if metrics.premium_pct > self._config.confirmation.premium_max_pct:
-            logger.debug(
-                "%s entry skipped: premium_pct %.3f > %.3f",
-                symbol,
-                metrics.premium_pct,
-                self._config.confirmation.premium_max_pct,
+            entry_cfg = self._config.entry
+
+            if not _evaluate_entry(metrics, entry_cfg):
+                logger.debug("%s entry skipped: entry conditions not met", symbol)
+                return None
+
+            direction: Side = (
+                metrics.direction if metrics.direction is not None else Side.SHORT
             )
-            return None
 
-        entry_cfg = self._config.entry
-
-        if not _evaluate_entry(metrics, entry_cfg):
-            logger.debug("%s entry skipped: entry conditions not met", symbol)
-            return None
-
-        direction: Side = (
-            metrics.direction if metrics.direction is not None else Side.SHORT
-        )
-
-        if metrics.entry_price > 0:
-            price = metrics.entry_price
-        else:
-            if direction is Side.SHORT:
-                price = metrics.best_bid or window.low
+            if metrics.entry_price > 0:
+                price = metrics.entry_price
             else:
-                price = metrics.best_ask or window.high
+                if direction is Side.SHORT:
+                    price = metrics.best_bid or window.low
+                else:
+                    price = metrics.best_ask or window.high
 
-        return S.EntrySignal(symbol=symbol, side=direction, price=price)
+            return S.EntrySignal(symbol=symbol, side=direction, price=price)
+        except Exception:
+            logger.exception(":< ошибка make_entry %s :>", symbol)
+            raise

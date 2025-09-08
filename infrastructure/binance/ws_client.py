@@ -68,8 +68,10 @@ class WsClient:
                     await self._ws.close()
 
                 attempt += 1
-                logger.warning(
-                    "WebSocket connection lost (%s). Reconnecting attempt %d", exc, attempt
+                logger.exception(
+                    ":< ошибка WebSocket (%s). попытка переподключения %d :>",
+                    exc,
+                    attempt,
                 )
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 60.0)
