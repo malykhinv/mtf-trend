@@ -1,4 +1,5 @@
 import asyncio
+from typing import Literal
 
 from domain.models.enums import BotState
 from domain.models.state import GlobalState, SymbolState
@@ -10,9 +11,11 @@ from domain.services.risk_manager import RiskManager
 from domain.services.signal_engine import SignalEngine
 from domain.services.symbol_registry import SymbolRegistry
 from domain.services.trade_manager import TradeManager
+from domain.services.notification import NotificationService, TelegramClient
 from infrastructure.binance.rest_client import RestClient
 from infrastructure.binance.ws_client import WsClient
 from infrastructure.binance.trader import Trader
+from config.credentials import TELEGRAM
 
 from .ws import ws_stream
 from .metrics import bar_maker
@@ -25,7 +28,9 @@ from .state_machine import BotStateMachine
 from .universe import UniverseBuilder
 
 
-def run(cfg: ProfileConfig) -> None:
+def run(
+    cfg: ProfileConfig, notification_type: Literal["orders", "events"] = "orders"
+) -> None:
     gstate = GlobalState(profile=cfg.profile, btc_pause_until_ms=None)
 
     registry = SymbolRegistry()
@@ -42,7 +47,15 @@ def run(cfg: ProfileConfig) -> None:
 
     signal_engine = SignalEngine(cfg, registry)
     risk_manager = RiskManager(cfg)
-    trade_manager = TradeManager(trader, risk_manager, registry)
+    token = (
+        TELEGRAM.orders_bot_token
+        if notification_type == "orders"
+        else TELEGRAM.events_bot_token
+    )
+    notifier = NotificationService(TelegramClient(token, TELEGRAM.chat_id))
+    trade_manager = TradeManager(
+        trader, risk_manager, registry, notifier if notification_type == "orders" else None
+    )
 
     pollers = [
         OpenInterestPoller(rest, registry),
@@ -57,6 +70,7 @@ def run(cfg: ProfileConfig) -> None:
         risk_manager,
         trade_manager,
         trader,
+        notifier if notification_type == "events" else None,
     )
 
     async def _run() -> None:

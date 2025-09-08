@@ -12,6 +12,7 @@ from domain.services.symbol_registry import SymbolRegistry
 from domain.services.signal_engine import SignalEngine
 from domain.services.risk_manager import RiskManager
 from domain.services.trade_manager import TradeManager
+from domain.services.notification import NotificationService
 from domain.ports.trader import Trader
 
 from .global_pause_guard import GlobalPauseGuard
@@ -34,6 +35,7 @@ class BotStateMachine:
         risk_manager: RiskManager,
         trade_manager: TradeManager,
         trader: Trader,
+        notifier: NotificationService | None = None,
     ) -> None:
         self._cfg = cfg
         self._registry = registry
@@ -43,6 +45,7 @@ class BotStateMachine:
         self._idle_watching_handler = IdleWatchingHandler(
             registry, signal_engine, risk_manager, trade_manager
         )
+        self._notifier = notifier
 
     # ------------------------------------------------------------------
     # Public API
