@@ -31,6 +31,14 @@ class DummyTrader:
         return R(self._price)
 
 
+class DictTrader:
+    def __init__(self, price: float) -> None:
+        self._price = price
+
+    async def place(self, order):
+        return {"price": self._price}
+
+
 class DummyNotifier:
     def __init__(self) -> None:
         self.args = None
@@ -97,3 +105,34 @@ def test_open_position_uses_actual_price_and_notifies():
     state = registry.get("BTCUSDT")
     assert state.position is not None
     assert state.position.plan.entry_price == 105.0
+
+
+def test_open_position_handles_dict_result():
+    cfg = make_profile_config_balanced()
+    risk = RiskManager(cfg)
+    registry = SymbolRegistry()
+    registry.put(SymbolState(symbol="BTCUSDT", state=BotState.IDLE))
+    notifier = DummyNotifier()
+    tm = TradeManager(DictTrader(95.0), risk, registry, notifier)
+    plan = PositionPlan(
+        symbol="BTCUSDT",
+        entry_price=100.0,
+        stop_loss=110.0,
+        take_profit1=90.0,
+        take_profit2=80.0,
+        trail_start=85.0,
+        trail_distance=5.0,
+        quantity=0.5,
+        tp1_qty=0.2,
+        tp2_qty=0.2,
+        tail_qty=0.1,
+        window_high=110.0,
+    )
+
+    asyncio.run(tm.open_position(plan, Side.SHORT))
+    assert notifier.args is not None
+    _, _, actual_price = notifier.args
+    assert actual_price == 95.0
+    state = registry.get("BTCUSDT")
+    assert state.position is not None
+    assert state.position.plan.entry_price == 95.0

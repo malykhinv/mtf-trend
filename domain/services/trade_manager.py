@@ -45,14 +45,14 @@ class TradeManager:
         actual_price: float | None = None
         try:
             result = await self._trader.place(order)
-            if result is not None:
-                if isinstance(result, dict):
-                    actual_price = result.get("price")
-                else:
-                    actual_price = getattr(result, "price", None)
         except Exception:
             self._risk_manager.release(plan)
             raise
+        if result is not None:
+            if isinstance(result, dict):
+                actual_price = result.get("price")
+            elif hasattr(result, "price"):
+                actual_price = result.price
         if actual_price is None and hasattr(self._trader, "get_price"):
             try:  # type: ignore[attr-defined]
                 actual_price = await self._trader.get_price(plan.symbol)
