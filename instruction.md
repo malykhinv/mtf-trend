@@ -372,7 +372,7 @@ class GlobalState:
 
 ## Эндпоинты и потоки (фиксировано)
 - WS (combined): `@aggTrade`, `@depth@100ms`, `!forceOrder@arr`.
-- REST (только по кандидат-символам в фазах WATCHING/CONFIRMING/ENTERED):
+- REST (только по кандидат-символам в фазах WATCHING/ENTERED):
   - `/fapi/v1/openInterest`
   - `/futures/data/takerlongshortRatio`
   - `/fapi/v1/premiumIndex` (или экв. премия/фандинг)
@@ -420,7 +420,7 @@ class GlobalState:
 ### 4) Детектор «аномальный лонг»
 - На закрытии 1м бара: вычислить `Δp`, `z_px`, `z_vol`, `close_pos`.
 - Сравнить с `ProfileConfig.pump`.
-- TRUE → `SymbolState.state=CONFIRMING`, `pump=PumpWindow(...)`, старт окна 180с; включить REST-опросы и расчёт LOB/CVD.
+- TRUE → `SymbolState.state=CONFIRMING`, `pump=PumpWindow(...)`, старт окна 180с.
 
 ### 5) Подтверждение «толпа не пришла / flip не состоялся» (60–180с)
 - Булевы признаки из `ProfileConfig.confirm`:
