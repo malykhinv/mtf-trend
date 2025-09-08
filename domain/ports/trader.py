@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, Any
 
 from domain.models.trading import OrderSpec
 
@@ -8,7 +8,7 @@ from domain.models.trading import OrderSpec
 class Trader(Protocol):
     """Abstract trading interface."""
 
-    async def place(self, order: OrderSpec) -> None:  # pragma: no cover - network
+    async def place(self, order: OrderSpec) -> Any | None:  # pragma: no cover - network
         ...
 
     async def cancel(
