@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, List
 
 import websockets
@@ -119,13 +120,13 @@ class WsClient:
         if event not in {"aggTrade", "forceOrder"} and "depth" in stream:
             event = "depth"
 
-        handlers = {
+        handlers: dict[str, Callable[[dict[str, Any]], Awaitable[None]]] = {
             "aggTrade": self._handle_agg_trade,
             "depth": self._handle_depth,
             "forceOrder": self._handle_liquidation,
         }
 
-        handler = handlers.get(event)
+        handler: Callable[[dict[str, Any]], Awaitable[None]] | None = handlers.get(event)
         if handler:
             await handler(payload)
         else:
