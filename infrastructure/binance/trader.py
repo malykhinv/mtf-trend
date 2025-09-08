@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import time
 from hashlib import sha256
@@ -22,7 +23,9 @@ class Trader:
     def __init__(self) -> None:
         self._client = httpx.Client(base_url=BINANCE_FAPI_REST, timeout=10.0)
 
-    def _signed_request(self, method: str, endpoint: str, params: Dict[str, str]) -> httpx.Response:
+    async def _signed_request(
+        self, method: str, endpoint: str, params: Dict[str, str]
+    ) -> httpx.Response:
         ts = int(time.time() * 1000)
         params["timestamp"] = str(ts)
         query = "&".join(f"{k}={v}" for k, v in params.items())
@@ -31,9 +34,9 @@ class Trader:
         ).hexdigest()
         headers = {"X-MBX-APIKEY": BINANCE.api_key}
         url = endpoint + f"?{query}&signature={signature}"
-        return self._client.request(method, url, headers=headers)
+        return await asyncio.to_thread(self._client.request, method, url, headers=headers)
 
-    def place(self, order: OrderSpec) -> None:  # pragma: no cover - network
+    async def place(self, order: OrderSpec) -> None:  # pragma: no cover - network
         params: Dict[str, str] = {
             "symbol": order.symbol,
             "side": order.side.value,
@@ -43,15 +46,17 @@ class Trader:
         if order.type is OrderType.LIMIT and order.price is not None:
             params["price"] = f"{order.price}"
             params["timeInForce"] = "GTC"
-        response = self._signed_request("POST", self._ORDER_ENDPOINT, params)
+        response = await self._signed_request("POST", self._ORDER_ENDPOINT, params)
         response.raise_for_status()
 
-    def cancel(self, symbol: str, order_id: int | None) -> None:  # pragma: no cover - network
+    async def cancel(
+        self, symbol: str, order_id: int | None
+    ) -> None:  # pragma: no cover - network
         if order_id is None:
             endpoint = self._CANCEL_ALL_ENDPOINT
             params = {"symbol": symbol}
         else:
             endpoint = self._ORDER_ENDPOINT
             params = {"symbol": symbol, "orderId": str(order_id)}
-        response = self._signed_request("DELETE", endpoint, params)
+        response = await self._signed_request("DELETE", endpoint, params)
         response.raise_for_status()

@@ -23,7 +23,7 @@ class IdleWatchingHandler:
         self._risk_manager = risk_manager
         self._trade_manager = trade_manager
 
-    def handle(self, symbol: str, state: SymbolState) -> None:
+    async def handle(self, symbol: str, state: SymbolState) -> None:
         pump = self._signal_engine.on_minute_close(symbol)
         if pump is None:
             if state.state is BotState.WATCHING:
@@ -47,7 +47,7 @@ class IdleWatchingHandler:
         if plan is None or not self._risk_manager.allow_trade(plan):
             return
 
-        self._trade_manager.open_position(plan, entry.side)
+        await self._trade_manager.open_position(plan, entry.side)
         state.state = BotState.ENTERED
         self._registry.update(symbol, state)
 

@@ -32,7 +32,7 @@ def run(cfg: ProfileConfig) -> None:
     rest: RestClientPort = RestClient()
 
     builder = UniverseBuilder(rest)
-    symbols = builder.build()
+    symbols = asyncio.run(builder.build())
     for sym in symbols:
         registry.put(SymbolState(symbol=sym, state=BotState.IDLE))
 
