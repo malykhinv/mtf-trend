@@ -29,60 +29,60 @@ class RiskManager:
     ) -> PositionPlan | None:
         try:
             filters = await self._get_symbol_filters(symbol)
-        except httpx.HTTPError as exc:
-            logger.error("Failed to fetch symbol filters for %s: %s", symbol, exc)
-            return None
-        step_size = Decimal(filters["LOT_SIZE"]["stepSize"])
-        tick_size = Decimal(filters["PRICE_FILTER"]["tickSize"])
+            step_size = Decimal(filters["LOT_SIZE"]["stepSize"])
+            tick_size = Decimal(filters["PRICE_FILTER"]["tickSize"])
 
-        risk = self._cfg.risk
-        range_pct = (window.high - window.low) / window.low
-        stop_loss = self._round(
-            self._calc_stop_loss(window.high, range_pct, risk), tick_size
-        )
-        take_profit1, take_profit2, tp_total_pct = self._calc_take_profits(
-            entry_price, risk
-        )
-        take_profit1 = self._round(take_profit1, tick_size)
-        take_profit2 = self._round(take_profit2, tick_size)
-        trail_start, trail_distance = self._calc_trailing(
-            entry_price, range_pct, risk, tp_total_pct
-        )
-        trail_start = self._round(trail_start, tick_size)
-        trail_distance = self._round(trail_distance, tick_size)
-        quantity, tp1_qty, tp2_qty, tail_qty = self._calc_quantities(
-            entry_price, risk
-        )
-        quantity = self._round(quantity, step_size)
-        tp1_qty = self._round(tp1_qty, step_size)
-        tp2_qty = self._round(tp2_qty, step_size)
-        tail_qty = self._round(quantity - tp1_qty - tp2_qty, step_size)
-        logger.info(
-            (
-                "Built plan for %s: SL=%.4f TP1=%.4f TP2=%.4f trail_start=%.4f "
-                "trail_distance=%.4f"
-            ),
-            symbol,
-            stop_loss,
-            take_profit1,
-            take_profit2,
-            trail_start,
-            trail_distance,
-        )
-        return PositionPlan(
-            symbol=symbol,
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-            take_profit1=take_profit1,
-            take_profit2=take_profit2,
-            trail_start=trail_start,
-            trail_distance=trail_distance,
-            quantity=quantity,
-            tp1_qty=tp1_qty,
-            tp2_qty=tp2_qty,
-            tail_qty=tail_qty,
-            window_high=window.high,
-        )
+            risk = self._cfg.risk
+            range_pct = (window.high - window.low) / window.low
+            stop_loss = self._round(
+                self._calc_stop_loss(window.high, range_pct, risk), tick_size
+            )
+            take_profit1, take_profit2, tp_total_pct = self._calc_take_profits(
+                entry_price, risk
+            )
+            take_profit1 = self._round(take_profit1, tick_size)
+            take_profit2 = self._round(take_profit2, tick_size)
+            trail_start, trail_distance = self._calc_trailing(
+                entry_price, range_pct, risk, tp_total_pct
+            )
+            trail_start = self._round(trail_start, tick_size)
+            trail_distance = self._round(trail_distance, tick_size)
+            quantity, tp1_qty, tp2_qty, tail_qty = self._calc_quantities(
+                entry_price, risk
+            )
+            quantity = self._round(quantity, step_size)
+            tp1_qty = self._round(tp1_qty, step_size)
+            tp2_qty = self._round(tp2_qty, step_size)
+            tail_qty = self._round(quantity - tp1_qty - tp2_qty, step_size)
+            logger.info(
+                (
+                    "Built plan for %s: SL=%.4f TP1=%.4f TP2=%.4f trail_start=%.4f "
+                    "trail_distance=%.4f"
+                ),
+                symbol,
+                stop_loss,
+                take_profit1,
+                take_profit2,
+                trail_start,
+                trail_distance,
+            )
+            return PositionPlan(
+                symbol=symbol,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit1=take_profit1,
+                take_profit2=take_profit2,
+                trail_start=trail_start,
+                trail_distance=trail_distance,
+                quantity=quantity,
+                tp1_qty=tp1_qty,
+                tp2_qty=tp2_qty,
+                tail_qty=tail_qty,
+                window_high=window.high,
+            )
+        except Exception:
+            logger.exception(":< ошибка build_plan %s :>", symbol)
+            return None
 
     def _calc_stop_loss(
         self, high: float, range_pct: float, risk: RiskParams
@@ -134,40 +134,51 @@ class RiskManager:
             await self._client.aclose()
 
     async def _get_symbol_filters(self, symbol: str) -> dict:
-        resp = await self._client.get(
-            BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
-            params={"symbol": symbol},
-        )
-        resp.raise_for_status()
-        info = resp.json()["symbols"][0]["filters"]
-        return {f["filterType"]: f for f in info}
+        try:
+            resp = await self._client.get(
+                BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
+                params={"symbol": symbol},
+            )
+            resp.raise_for_status()
+            info = resp.json()["symbols"][0]["filters"]
+            return {f["filterType"]: f for f in info}
+        except Exception:
+            logger.exception(":< ошибка запроса фильтров %s :>", symbol)
+            raise
 
     @staticmethod
     def _round(value: float, step: Decimal) -> float:
         return float(Decimal(str(value)).quantize(step, rounding=ROUND_DOWN))
 
     def allow_trade(self, plan: PositionPlan) -> bool:
-        required_margin = plan.entry_price * plan.quantity
-        logger.info("Required margin for %s: %.2f", plan.symbol, required_margin)
-        if required_margin > RISK_PER_TRADE_USDT:
-            logger.warning(
-                "Trade %s rejected: margin %.2f exceeds per-trade limit %.2f",
-                plan.symbol,
-                required_margin,
-                RISK_PER_TRADE_USDT,
-            )
+        try:
+            required_margin = plan.entry_price * plan.quantity
+            logger.info("Required margin for %s: %.2f", plan.symbol, required_margin)
+            if required_margin > RISK_PER_TRADE_USDT:
+                logger.warning(
+                    "Trade %s rejected: margin %.2f exceeds per-trade limit %.2f",
+                    plan.symbol,
+                    required_margin,
+                    RISK_PER_TRADE_USDT,
+                )
+                return False
+            if self._open_risk_usdt + required_margin > self._cfg.max_margin_usdt:
+                logger.warning(
+                    "Trade %s rejected: total margin %.2f exceeds max %.2f",
+                    plan.symbol,
+                    self._open_risk_usdt + required_margin,
+                    self._cfg.max_margin_usdt,
+                )
+                return False
+            self._open_risk_usdt += required_margin
+            return True
+        except Exception:
+            logger.exception(":< ошибка allow_trade %s :>", plan.symbol)
             return False
-        if self._open_risk_usdt + required_margin > self._cfg.max_margin_usdt:
-            logger.warning(
-                "Trade %s rejected: total margin %.2f exceeds max %.2f",
-                plan.symbol,
-                self._open_risk_usdt + required_margin,
-                self._cfg.max_margin_usdt,
-            )
-            return False
-        self._open_risk_usdt += required_margin
-        return True
 
     def release(self, plan: PositionPlan) -> None:
-        margin = plan.entry_price * plan.quantity
-        self._open_risk_usdt = max(0.0, self._open_risk_usdt - margin)
+        try:
+            margin = plan.entry_price * plan.quantity
+            self._open_risk_usdt = max(0.0, self._open_risk_usdt - margin)
+        except Exception:
+            logger.exception(":< ошибка release %s :>", plan.symbol)
