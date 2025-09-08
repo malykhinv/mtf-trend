@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from domain.models.trading import PositionPlan
 from domain.models.enums import Side
 from infrastructure.telegram import send_message
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -15,7 +18,10 @@ class TelegramClient:
     chat_id: str
 
     def send(self, text: str) -> None:
-        send_message(self.token, self.chat_id, text)
+        ok, desc = send_message(self.token, self.chat_id, text)
+        if not ok:
+            logger.error("Failed to send Telegram message: %s", desc)
+            raise RuntimeError(desc)
 
 
 class NotificationService:
