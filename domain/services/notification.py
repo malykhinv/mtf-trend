@@ -17,8 +17,8 @@ class TelegramClient:
     token: str
     chat_id: str
 
-    def send(self, text: str) -> bool:
-        ok, desc = send_message(self.token, self.chat_id, text)
+    async def send(self, text: str) -> bool:
+        ok, desc = await send_message(self.token, self.chat_id, text)
         if not ok:
             logger.error("Failed to send Telegram message: %s", desc)
             return False
@@ -31,7 +31,7 @@ class NotificationService:
     def __init__(self, client: TelegramClient) -> None:
         self._client = client
 
-    def notify_order_open(
+    async def notify_order_open(
         self, plan: PositionPlan, side: Side, actual_price: float | None = None
     ) -> None:
         price = plan.entry_price if actual_price is None else actual_price
@@ -45,9 +45,9 @@ class NotificationService:
             f"SL: {plan.stop_loss:.4f} | TP1: {plan.take_profit1:.4f} | TP2: {plan.take_profit2:.4f}\n"
             f"Qty left: {plan.quantity:.4f}"
         )
-        self._send(msg)
+        await self._send(msg)
 
-    def notify_tp_hit(
+    async def notify_tp_hit(
         self, plan: PositionPlan, side: Side, price: float, level: int, remaining: float
     ) -> None:
         pnl = self._pnl_pct(plan.entry_price, price, side)
@@ -61,9 +61,9 @@ class NotificationService:
                 msg += f"\nQty left: {remaining:.4f}"
             else:
                 msg += "\nPosition closed"
-        self._send(msg)
+        await self._send(msg)
 
-    def notify_stop(
+    async def notify_stop(
         self, plan: PositionPlan, side: Side, price: float, remaining: float
     ) -> None:
         pnl = self._pnl_pct(plan.entry_price, price, side)
@@ -71,9 +71,9 @@ class NotificationService:
             f"Stop hit {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
             f"Qty left: {remaining:.4f}"
         )
-        self._send(msg)
+        await self._send(msg)
 
-    def notify_trail_update(
+    async def notify_trail_update(
         self, plan: PositionPlan, side: Side, price: float, remaining: float
     ) -> None:
         pnl = self._pnl_pct(plan.entry_price, price, side)
@@ -81,10 +81,10 @@ class NotificationService:
             f"Trail update {plan.symbol} {side} @ {price:.4f} ({pnl:.2f}%)\n"
             f"New SL: {plan.stop_loss:.4f} | Qty left: {remaining:.4f}"
         )
-        self._send(msg)
+        await self._send(msg)
 
-    def _send(self, msg: str) -> None:
-        if not self._client.send(msg):
+    async def _send(self, msg: str) -> None:
+        if not await self._client.send(msg):
             logger.error("Failed to send notification")
 
     @staticmethod
