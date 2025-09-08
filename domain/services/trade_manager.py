@@ -4,6 +4,8 @@ import time
 from dataclasses import replace
 from typing import List, Any
 
+import logging
+
 import constants
 from domain.models import signals as S
 from domain.models.enums import OrderType, Side
@@ -14,6 +16,9 @@ from .risk_manager import RiskManager
 from domain.services.symbol_registry import SymbolRegistry
 from domain.ports.trader import Trader
 from .notification import NotificationService
+
+
+logger = logging.getLogger(__name__)
 
 
 class TradeManager:
@@ -43,9 +48,12 @@ class TradeManager:
             quantity=plan.quantity,
         )
         result: Any | None = None
+        if side is Side.SHORT:
+            logger.info(":< открытие шорта %s по %.2f :>", plan.symbol, plan.entry_price)
         try:
             result = await self._trader.place(order)
-        except Exception:
+        except Exception as exc:
+            logger.error("open_position failed for %s", plan.symbol, exc_info=exc)
             self._risk_manager.release(plan)
             raise
         actual_price: float | None = None
@@ -75,7 +83,11 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
-        await self._trader.place(order)
+        try:
+            await self._trader.place(order)
+        except Exception as exc:
+            logger.error("_close_position failed for %s", symbol, exc_info=exc)
+            raise
         self._risk_manager.release(plan)
         state = self._registry.get(symbol)
         state.position = None
@@ -151,6 +163,7 @@ class TradeManager:
             return exits, plan
 
         exits.append(S.ExitSignal(symbol=plan.symbol, reason="TP1"))
+        logger.info("tp1 %s %.2f", plan.symbol, price)
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
         order = OrderSpec(
             symbol=plan.symbol,
@@ -185,6 +198,7 @@ class TradeManager:
             return exits, plan
 
         exits.append(S.ExitSignal(symbol=plan.symbol, reason="TP2"))
+        logger.info("tp2 %s %.2f", plan.symbol, price)
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
         order = OrderSpec(
             symbol=plan.symbol,
@@ -236,6 +250,7 @@ class TradeManager:
                     stop_loss=new_stop,
                     trail_start=price,
                 )
+                logger.info("trail %s %.2f", plan.symbol, new_stop)
                 state = self._registry.get(plan.symbol)
                 state.position = Position(side=side, plan=plan)
                 self._registry.update(plan.symbol, state)
@@ -255,6 +270,7 @@ class TradeManager:
         if stop_hit:
             reason = "TRAIL" if trailing_active else "STOP"
             exits.append(S.ExitSignal(symbol=plan.symbol, reason=reason))
+            logger.info("stop %s %.2f", plan.symbol, price)
             await self._close_position(plan.symbol, side, plan)
             if self._notifier:
                 await self._notifier.notify_stop(plan, side, price, 0.0)
