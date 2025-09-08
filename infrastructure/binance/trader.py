@@ -4,6 +4,7 @@ import hmac
 import time
 from hashlib import sha256
 from typing import Dict
+from decimal import Decimal, ROUND_DOWN
 
 import httpx
 
@@ -36,14 +37,30 @@ class Trader:
         return await self._client.request(method, url, headers=headers)
 
     async def place(self, order: OrderSpec) -> None:  # pragma: no cover - network
+        info = await self._client.get(
+            "/fapi/v1/exchangeInfo", params={"symbol": order.symbol}
+        )
+        info.raise_for_status()
+        data = info.json()["symbols"][0]["filters"]
+        filters = {f["filterType"]: f for f in data}
+        tick_size = Decimal(filters["PRICE_FILTER"]["tickSize"])
+        step_size = Decimal(filters["LOT_SIZE"]["stepSize"])
+        quantity = (
+            Decimal(str(order.quantity))
+            .quantize(step_size, rounding=ROUND_DOWN)
+        )
         params: Dict[str, str] = {
             "symbol": order.symbol,
             "side": order.side.value,
             "type": order.type.value,
-            "quantity": f"{order.quantity}",
+            "quantity": f"{quantity}",
         }
         if order.type is OrderType.LIMIT and order.price is not None:
-            params["price"] = f"{order.price}"
+            price = (
+                Decimal(str(order.price))
+                .quantize(tick_size, rounding=ROUND_DOWN)
+            )
+            params["price"] = f"{price}"
             params["timeInForce"] = "GTC"
         response = await self._signed_request("POST", self._ORDER_ENDPOINT, params)
         response.raise_for_status()

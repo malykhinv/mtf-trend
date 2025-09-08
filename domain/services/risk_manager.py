@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from constants import RISK_PER_TRADE_USDT
+from decimal import Decimal, ROUND_DOWN
+
+import httpx
+
+from constants import RISK_PER_TRADE_USDT, BINANCE_FAPI_REST
 from domain.models import metrics as M
 from domain.models.config import ProfileConfig, RiskParams
 from domain.models.trading import PositionPlan
@@ -14,18 +18,35 @@ class RiskManager:
         self._open_risk_usdt: float = 0.0
 
     def build_plan(self, symbol: str, entry_price: float, window: M.PumpWindow) -> PositionPlan | None:
+        try:
+            filters = self._get_symbol_filters(symbol)
+        except httpx.HTTPError:
+            return None
+        step_size = Decimal(filters["LOT_SIZE"]["stepSize"])
+        tick_size = Decimal(filters["PRICE_FILTER"]["tickSize"])
+
         risk = self._cfg.risk
         range_pct = (window.high - window.low) / window.low
-        stop_loss = self._calc_stop_loss(window.high, range_pct, risk)
+        stop_loss = self._round(
+            self._calc_stop_loss(window.high, range_pct, risk), tick_size
+        )
         take_profit1, take_profit2, tp_total_pct = self._calc_take_profits(
             entry_price, risk
         )
+        take_profit1 = self._round(take_profit1, tick_size)
+        take_profit2 = self._round(take_profit2, tick_size)
         trail_start, trail_distance = self._calc_trailing(
             entry_price, range_pct, risk, tp_total_pct
         )
+        trail_start = self._round(trail_start, tick_size)
+        trail_distance = self._round(trail_distance, tick_size)
         quantity, tp1_qty, tp2_qty, tail_qty = self._calc_quantities(
             entry_price, risk
         )
+        quantity = self._round(quantity, step_size)
+        tp1_qty = self._round(tp1_qty, step_size)
+        tp2_qty = self._round(tp2_qty, step_size)
+        tail_qty = self._round(quantity - tp1_qty - tp2_qty, step_size)
         return PositionPlan(
             symbol=symbol,
             entry_price=entry_price,
@@ -85,6 +106,20 @@ class RiskManager:
         tp2_qty = quantity * (tp2_pct / total_pct)
         tail_qty = quantity - tp1_qty - tp2_qty
         return quantity, tp1_qty, tp2_qty, tail_qty
+
+    def _get_symbol_filters(self, symbol: str) -> dict:
+        resp = httpx.get(
+            BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
+            params={"symbol": symbol},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        info = resp.json()["symbols"][0]["filters"]
+        return {f["filterType"]: f for f in info}
+
+    @staticmethod
+    def _round(value: float, step: Decimal) -> float:
+        return float(Decimal(str(value)).quantize(step, rounding=ROUND_DOWN))
 
     def allow_trade(self, plan: PositionPlan) -> bool:
         required_margin = plan.entry_price * plan.quantity
