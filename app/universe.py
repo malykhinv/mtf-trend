@@ -9,16 +9,16 @@ class UniverseBuilder:
     def __init__(self, rest: RestClient) -> None:
         self._rest = rest
 
-    def build(self) -> list[str]:
+    async def build(self) -> list[str]:
         symbols: list[str] = []
 
-        tickers = self._rest.fetch_all_tickers()
+        tickers = await self._rest.fetch_all_tickers()
         for info in tickers:
             sym = info["symbol"]
             if not self._is_usdt_pair(sym):
                 continue
 
-            if not self._passes_volume(sym):
+            if not await self._passes_volume(sym):
                 continue
 
             bid = float(info["bidPrice"])
@@ -26,7 +26,7 @@ class UniverseBuilder:
             if not self._within_spread(bid, ask):
                 continue
 
-            if not self._has_depth(sym):
+            if not await self._has_depth(sym):
                 continue
 
             symbols.append(sym)
@@ -36,8 +36,8 @@ class UniverseBuilder:
     def _is_usdt_pair(self, sym: str) -> bool:
         return sym.endswith("USDT")
 
-    def _passes_volume(self, sym: str) -> bool:
-        quote_vol, _ = self._rest.get_24h_stats(sym)
+    async def _passes_volume(self, sym: str) -> bool:
+        quote_vol, _ = await self._rest.get_24h_stats(sym)
         return quote_vol >= filters.MIN_24H_USDT
 
     def _within_spread(self, bid: float, ask: float) -> bool:
@@ -46,7 +46,7 @@ class UniverseBuilder:
         spread_bps = (ask - bid) / bid * 10_000.0
         return spread_bps <= filters.MAX_SPREAD_BPS
 
-    def _has_depth(self, sym: str) -> bool:
-        bids = self._rest.get_depth(sym)
+    async def _has_depth(self, sym: str) -> bool:
+        bids = await self._rest.get_depth(sym)
         top10_bid_usdt = sum(p * q for p, q in bids)
         return top10_bid_usdt >= filters.MIN_TOP10_BID_USDT

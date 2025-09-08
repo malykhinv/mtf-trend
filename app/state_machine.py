@@ -63,10 +63,10 @@ class BotStateMachine:
                     continue
 
                 if state.state is BotState.ENTERED:
-                    self._entered_handler.handle(symbol, state)
+                    await self._entered_handler.handle(symbol, state)
                     continue
 
-                self._idle_watching_handler.handle(symbol, state)
+                await self._idle_watching_handler.handle(symbol, state)
 
             await asyncio.sleep(0)
 

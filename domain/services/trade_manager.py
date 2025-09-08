@@ -23,17 +23,17 @@ class TradeManager:
     def _plan(plan: PositionPlan, **changes: float) -> PositionPlan:
         return replace(plan, **changes)
 
-    def open_position(self, plan: PositionPlan, side: Side) -> None:
+    async def open_position(self, plan: PositionPlan, side: Side) -> None:
         order = OrderSpec(
             symbol=plan.symbol,
             side=side,
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
-        self._trader.place(order)
+        await self._trader.place(order)
         self._positions[plan.symbol] = (side, plan)
 
-    def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
+    async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
         order = OrderSpec(
             symbol=plan.symbol,
@@ -41,11 +41,11 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
-        self._trader.place(order)
+        await self._trader.place(order)
         self._risk_manager.release(plan)
         del self._positions[symbol]
 
-    def on_tick_manage(
+    async def on_tick_manage(
         self, symbol: str, price: float | None = None
     ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
         """Manage an existing position on each price tick."""
@@ -58,24 +58,24 @@ class TradeManager:
         side, plan = record
         current_price = plan.entry_price if price is None else price
 
-        exits, plan = self._handle_tp1(plan, side, current_price)
+        exits, plan = await self._handle_tp1(plan, side, current_price)
         if exits:
             return exits, plan
 
-        exits, plan = self._handle_tp2(plan, side, current_price)
+        exits, plan = await self._handle_tp2(plan, side, current_price)
         if exits:
             return exits, plan
 
         _, plan = self._apply_trailing_stop(plan, side, current_price)
 
-        exits, plan = self._check_stop(plan, side, current_price)
+        exits, plan = await self._check_stop(plan, side, current_price)
         if exits:
             return exits, plan
 
         return exits, plan
 
     # ------------------------------------------------------------------
-    def _handle_tp1(
+    async def _handle_tp1(
         self, plan: PositionPlan, side: Side, price: float
     ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
         exits: List[S.ExitSignal] = []
@@ -94,7 +94,7 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.tp1_qty,
         )
-        self._trader.place(order)
+        await self._trader.place(order)
         self._risk_manager.release(replace(plan, quantity=plan.tp1_qty))
         new_plan = self._plan(
             plan,
@@ -105,7 +105,7 @@ class TradeManager:
         self._positions[plan.symbol] = (side, new_plan)
         return exits, new_plan
 
-    def _handle_tp2(
+    async def _handle_tp2(
         self, plan: PositionPlan, side: Side, price: float
     ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
         exits: List[S.ExitSignal] = []
@@ -124,7 +124,7 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.tp2_qty,
         )
-        self._trader.place(order)
+        await self._trader.place(order)
         self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
         remaining_qty = plan.quantity - plan.tp2_qty
         if remaining_qty <= 0.0:
@@ -162,7 +162,7 @@ class TradeManager:
             self._positions[plan.symbol] = (side, plan)
         return exits, plan
 
-    def _check_stop(
+    async def _check_stop(
         self, plan: PositionPlan, side: Side, price: float
     ) -> tuple[list[S.ExitSignal], PositionPlan | None]:
         exits: List[S.ExitSignal] = []
@@ -174,6 +174,6 @@ class TradeManager:
         if stop_hit:
             reason = "TRAIL" if trailing_active else "STOP"
             exits.append(S.ExitSignal(symbol=plan.symbol, reason=reason))
-            self._close_position(plan.symbol, side, plan)
+            await self._close_position(plan.symbol, side, plan)
             return exits, None
         return exits, plan
