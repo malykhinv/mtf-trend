@@ -65,7 +65,7 @@ class SignalEngine:
         )
         return S.PumpSignal(symbol=symbol, window=window)
 
-    def confirm_failure(self, symbol: str, window: M.PumpWindow) -> bool:
+    def confirm_failure(self, symbol: str) -> bool:
         """Determine whether the pump window should be rejected."""
 
         state = self._registry.get(symbol)

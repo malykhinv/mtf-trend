@@ -34,7 +34,7 @@ class IdleWatchingHandler:
         state.state = BotState.WATCHING
         self._registry.update(symbol, state)
 
-        if self._signal_engine.confirm_failure(symbol, pump.window):
+        if self._signal_engine.confirm_failure(symbol):
             state.state = BotState.IDLE
             self._registry.update(symbol, state)
             return
