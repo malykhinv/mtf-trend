@@ -26,10 +26,11 @@ class EnteredHandler:
         price = state.metrics.last_price
         if price <= 0.0:
             return
-        exits, new_plan = await self._trade_manager.on_tick_manage(symbol, price=price)
+        exits, _ = await self._trade_manager.on_tick_manage(symbol, price=price)
         for _exit in exits:
             await self._trader.cancel(symbol, order_id=None)
-        if new_plan is None:
+        state = self._registry.get(symbol)
+        if state.position is None:
             state.state = BotState.COOLDOWN
             state.last_signal_ts = time.time()
             self._registry.update(symbol, state)

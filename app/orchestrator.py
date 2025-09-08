@@ -42,7 +42,7 @@ def run(cfg: ProfileConfig) -> None:
 
     signal_engine = SignalEngine(cfg, registry)
     risk_manager = RiskManager(cfg)
-    trade_manager = TradeManager(trader, risk_manager)
+    trade_manager = TradeManager(trader, risk_manager, registry)
 
     pollers = [
         OpenInterestPoller(rest, registry),

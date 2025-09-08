@@ -3,13 +3,13 @@ from typing import Optional
 
 from .enums import BotState, Profile, Side
 from .metrics import SymbolMetrics
+from .trading import PositionPlan
 
 
 @dataclass
 class Position:
     side: Side
-    entry_price: float
-    quantity: float
+    plan: PositionPlan
 
 
 @dataclass
