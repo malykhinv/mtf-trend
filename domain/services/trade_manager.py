@@ -51,6 +51,8 @@ class TradeManager:
         state.position = Position(side=side, plan=plan)
         state.last_signal_ts = time.time()
         self._registry.update(plan.symbol, state)
+        if self._notifier:
+            self._notifier.notify_order_open(plan, side)
 
     async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
@@ -154,6 +156,8 @@ class TradeManager:
         state = self._registry.get(plan.symbol)
         state.position = Position(side=side, plan=new_plan)
         self._registry.update(plan.symbol, state)
+        if self._notifier:
+            self._notifier.notify_tp_hit(new_plan, side, price, 1, new_plan.quantity)
         return exits, new_plan
 
     async def _handle_tp2(
@@ -182,6 +186,8 @@ class TradeManager:
             state = self._registry.get(plan.symbol)
             state.position = None
             self._registry.update(plan.symbol, state)
+            if self._notifier:
+                self._notifier.notify_tp_hit(plan, side, price, 2, 0.0)
             return exits, None
         new_plan = self._plan(
             plan,
@@ -192,6 +198,8 @@ class TradeManager:
         state = self._registry.get(plan.symbol)
         state.position = Position(side=side, plan=new_plan)
         self._registry.update(plan.symbol, state)
+        if self._notifier:
+            self._notifier.notify_tp_hit(new_plan, side, price, 2, new_plan.quantity)
         return exits, new_plan
 
     def _apply_trailing_stop(
@@ -209,14 +217,17 @@ class TradeManager:
                 if side is Side.SHORT
                 else max(plan.stop_loss, price - plan.trail_distance)
             )
-            plan = self._plan(
-                plan,
-                stop_loss=new_stop,
-                trail_start=price,
-            )
-            state = self._registry.get(plan.symbol)
-            state.position = Position(side=side, plan=plan)
-            self._registry.update(plan.symbol, state)
+            if new_stop != plan.stop_loss:
+                plan = self._plan(
+                    plan,
+                    stop_loss=new_stop,
+                    trail_start=price,
+                )
+                state = self._registry.get(plan.symbol)
+                state.position = Position(side=side, plan=plan)
+                self._registry.update(plan.symbol, state)
+                if self._notifier:
+                    self._notifier.notify_trail_update(plan, side, price, plan.quantity)
         return exits, plan
 
     async def _check_stop(
@@ -232,5 +243,7 @@ class TradeManager:
             reason = "TRAIL" if trailing_active else "STOP"
             exits.append(S.ExitSignal(symbol=plan.symbol, reason=reason))
             await self._close_position(plan.symbol, side, plan)
+            if self._notifier:
+                self._notifier.notify_stop(plan, side, price, 0.0)
             return exits, None
         return exits, plan
