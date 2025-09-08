@@ -36,7 +36,11 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
-        await self._trader.place(order)
+        try:
+            await self._trader.place(order)
+        except Exception:
+            self._risk_manager.release(plan)
+            raise
         state = self._registry.get(plan.symbol)
         state.position = Position(side=side, plan=plan)
         state.last_signal_ts = time.time()
