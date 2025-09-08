@@ -55,10 +55,18 @@ class RestClient:
         last_price = float(data["lastPrice"])
         return quote_volume, last_price
 
-    async def fetch_all_tickers(self) -> list[dict[str, str]]:
+    async def fetch_all_tickers(self) -> list[tuple[str, float, float]]:
         r = await self._client.get(self._TICKER_EP)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        return [
+            (
+                item["symbol"],
+                float(item["bidPrice"]),
+                float(item["askPrice"]),
+            )
+            for item in data
+        ]
 
     async def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
         r = await self._client.get(self._DEPTH_EP, params={"symbol": symbol, "limit": 10})

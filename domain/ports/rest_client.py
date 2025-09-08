@@ -19,7 +19,7 @@ class RestClient(Protocol):
     async def get_24h_stats(self, symbol: str) -> tuple[float, float]:
         ...
 
-    async def fetch_all_tickers(self) -> list[dict[str, str]]:
+    async def fetch_all_tickers(self) -> list[tuple[str, float, float]]:
         ...
 
     async def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
