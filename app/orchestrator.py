@@ -208,3 +208,4 @@ async def run(
         await asyncio.gather(*tasks, return_exceptions=True)
         await rest.aclose()
         await ws.close()
+        await risk_manager.aclose()
