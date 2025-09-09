@@ -93,7 +93,8 @@ async def run(
     trader: TraderPort = Trader()
 
     signal_engine = SignalEngine(cfg, registry)
-    risk_manager = RiskManager(cfg)
+    risk_manager = RiskManager(cfg, trader)
+    await risk_manager.sync_balance()
     token = (
         TELEGRAM.orders_bot_token
         if notification_type == "orders"

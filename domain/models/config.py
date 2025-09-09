@@ -51,3 +51,4 @@ class ProfileConfig:
     entry: EntryParams
     risk: RiskParams
     max_margin_usdt: float
+    risk_per_trade_pct: float

@@ -17,3 +17,7 @@ class Trader(Protocol):
     ) -> None:  # pragma: no cover - network
         """Cancel an order by ``order_id`` or all orders for ``symbol``."""
         raise NotImplementedError
+
+    async def get_balance_usdt(self) -> float:  # pragma: no cover - network
+        """Return available USDT balance."""
+        raise NotImplementedError

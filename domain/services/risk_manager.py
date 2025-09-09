@@ -5,10 +5,11 @@ from decimal import Decimal, ROUND_DOWN
 import httpx
 import logging
 
-from constants import RISK_PER_TRADE_USDT, BINANCE_FAPI_REST
+from constants import BINANCE_FAPI_REST
 from domain.models import metrics as M
 from domain.models.config import ProfileConfig, RiskParams
 from domain.models.trading import PositionPlan
+from domain.ports.trader import Trader as TraderPort
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,25 @@ class RiskManager:
     """Simple position sizing and risk calculations."""
 
     def __init__(
-        self, config: ProfileConfig, http_client: httpx.AsyncClient | None = None
+        self,
+        config: ProfileConfig,
+        trader: TraderPort,
+        http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._cfg = config
+        self._trader = trader
         self._open_risk_usdt: float = 0.0
         self._client = http_client or httpx.AsyncClient(timeout=10.0)
         self._own_client = http_client is None
+        self._risk_per_trade_usdt: float = 10.0
+
+    async def sync_balance(self) -> None:
+        """Synchronize available balance and risk per trade."""
+
+        balance = await self._trader.get_balance_usdt()
+        self._risk_per_trade_usdt = max(
+            10.0, balance * self._cfg.risk_per_trade_pct
+        )
 
     async def build_plan(
         self, symbol: str, entry_price: float, window: M.PumpWindow
@@ -119,7 +133,7 @@ class RiskManager:
     def _calc_quantities(
         self, entry_price: float, risk: RiskParams
     ) -> tuple[float, float, float, float]:
-        quantity = RISK_PER_TRADE_USDT / entry_price
+        quantity = self._risk_per_trade_usdt / entry_price
         tp1_pct = risk.tp1_pct / 100.0
         tp2_pct = risk.tp2_pct / 100.0
         tail_pct = risk.tail_pct / 100.0
@@ -154,12 +168,12 @@ class RiskManager:
         try:
             required_margin = plan.entry_price * plan.quantity
             logger.info("Required margin for %s: %.2f", plan.symbol, required_margin)
-            if required_margin > RISK_PER_TRADE_USDT:
+            if required_margin > self._risk_per_trade_usdt:
                 logger.warning(
                     "Trade %s rejected: margin %.2f exceeds per-trade limit %.2f",
                     plan.symbol,
                     required_margin,
-                    RISK_PER_TRADE_USDT,
+                    self._risk_per_trade_usdt,
                 )
                 return False
             if self._open_risk_usdt + required_margin > self._cfg.max_margin_usdt:

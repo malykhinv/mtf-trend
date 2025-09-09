@@ -19,6 +19,7 @@ class Trader:
 
     _ORDER_ENDPOINT = "/fapi/v1/order"
     _CANCEL_ALL_ENDPOINT = "/fapi/v1/allOpenOrders"
+    _ACCOUNT_ENDPOINT = "/fapi/v2/account"
 
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(base_url=BINANCE_FAPI_REST, timeout=10.0)
@@ -90,3 +91,14 @@ class Trader:
 
         response = await self._signed_request("DELETE", endpoint, params)
         response.raise_for_status()
+
+    async def get_balance_usdt(self) -> float:
+        """Fetch available USDT balance."""
+
+        resp = await self._signed_request("GET", self._ACCOUNT_ENDPOINT, {})
+        resp.raise_for_status()
+        data = resp.json()
+        for asset in data.get("assets", []):
+            if asset.get("asset") == "USDT":
+                return float(asset.get("availableBalance", 0.0))
+        return 0.0
