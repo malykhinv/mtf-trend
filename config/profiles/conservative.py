@@ -53,4 +53,5 @@ def make_profile_config_conservative() -> ProfileConfig:
         entry=entry,
         risk=risk,
         max_margin_usdt=DEFAULT_MARGIN_USDT,
+        risk_per_trade_pct=0.02,
     )

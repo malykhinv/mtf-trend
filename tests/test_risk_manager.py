@@ -43,6 +43,20 @@ class ErrorHTTPClient:
         pass
 
 
+class DummyTrader:
+    def __init__(self, balance: float = 0.0):
+        self._balance = balance
+
+    async def place(self, order):  # pragma: no cover - not used
+        return None
+
+    async def cancel(self, symbol, order_id):  # pragma: no cover - not used
+        return None
+
+    async def get_balance_usdt(self):
+        return self._balance
+
+
 def _make_plan(symbol="BTCUSDT", entry_price=200.0, quantity=1.0):
     return PositionPlan(
         symbol=symbol,
@@ -62,7 +76,7 @@ def _make_plan(symbol="BTCUSDT", entry_price=200.0, quantity=1.0):
 
 def test_build_plan_logs_http_error(caplog):
     cfg = make_profile_config_balanced()
-    risk = RiskManager(cfg, http_client=ErrorHTTPClient())
+    risk = RiskManager(cfg, DummyTrader(), http_client=ErrorHTTPClient())
     window = PumpWindow(high=110.0, low=100.0, start_ts=0, end_ts=0)
     with caplog.at_level(logging.ERROR):
         plan = asyncio.run(risk.build_plan("BTCUSDT", 105.0, window))
@@ -77,7 +91,7 @@ def test_build_plan_logs_levels(caplog):
         {"filterType": "LOT_SIZE", "stepSize": "0.001"},
         {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
     ]
-    risk = RiskManager(cfg, http_client=DummyHTTPClient(filters))
+    risk = RiskManager(cfg, DummyTrader(), http_client=DummyHTTPClient(filters))
     window = PumpWindow(high=110.0, low=100.0, start_ts=0, end_ts=0)
     with caplog.at_level(logging.INFO):
         plan = asyncio.run(risk.build_plan("BTCUSDT", 105.0, window))
@@ -93,7 +107,9 @@ def test_build_plan_logs_levels(caplog):
 
 def test_allow_trade_logs_margin_and_reason(caplog):
     cfg = make_profile_config_balanced()
-    risk = RiskManager(cfg)
+    risk = RiskManager(cfg, DummyTrader(balance=100.0))
+    asyncio.run(risk.sync_balance())
+    assert risk._risk_per_trade_usdt == 10.0
     plan = _make_plan()
     with caplog.at_level(logging.INFO):
         allowed = risk.allow_trade(plan)
@@ -101,3 +117,4 @@ def test_allow_trade_logs_margin_and_reason(caplog):
     text = caplog.text
     assert f"{plan.entry_price * plan.quantity:.2f}" in text
     assert "per-trade limit" in text
+    assert "10.00" in text
