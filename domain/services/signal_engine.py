@@ -19,15 +19,28 @@ def _taker_ratio(metrics: M.SymbolMetrics) -> float:
     return float("inf") if taker_buy > 0 else 0.0
 
 
-def _meets_trigger(metrics: M.SymbolMetrics, trig: TriggerParams) -> bool:
-    return (
-        metrics.z_px >= trig.z_px
-        and metrics.z_vol >= trig.z_vol
-        and metrics.delta_price_sigma_mult >= trig.delta_price_sigma_mult
-        and metrics.delta_price_abs_pct >= trig.delta_price_abs_pct
-        and metrics.close_pos >= trig.close_pos
-        and metrics.liqs_z >= trig.liqs_z
-    )
+def _meets_trigger(metrics: M.SymbolMetrics, trig: TriggerParams) -> tuple[bool, str]:
+    if metrics.z_px < trig.z_px:
+        return False, f"z_px {metrics.z_px:.3f} < {trig.z_px:.3f}"
+    if metrics.z_vol < trig.z_vol:
+        return False, f"z_vol {metrics.z_vol:.3f} < {trig.z_vol:.3f}"
+    if metrics.delta_price_sigma_mult < trig.delta_price_sigma_mult:
+        return (
+            False,
+            "delta_price_sigma_mult %.3f < %.3f"
+            % (metrics.delta_price_sigma_mult, trig.delta_price_sigma_mult),
+        )
+    if metrics.delta_price_abs_pct < trig.delta_price_abs_pct:
+        return (
+            False,
+            "delta_price_abs_pct %.3f < %.3f"
+            % (metrics.delta_price_abs_pct, trig.delta_price_abs_pct),
+        )
+    if metrics.close_pos < trig.close_pos:
+        return False, f"close_pos {metrics.close_pos:.3f} < {trig.close_pos:.3f}"
+    if metrics.liqs_z < trig.liqs_z:
+        return False, f"liqs_z {metrics.liqs_z:.3f} < {trig.liqs_z:.3f}"
+    return True, ""
 
 
 def _evaluate_entry(metrics: M.SymbolMetrics, entry_cfg: EntryParams) -> bool:
@@ -60,7 +73,9 @@ class SignalEngine:
 
             trig = self._config.trigger
 
-            if not _meets_trigger(metrics, trig):
+            ok, reason = _meets_trigger(metrics, trig)
+            if not ok:
+                logger.debug("%s pump skipped: %s", symbol, reason)
                 return None
 
             window = M.PumpWindow(
