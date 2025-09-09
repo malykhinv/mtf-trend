@@ -15,24 +15,39 @@ class UniverseBuilder:
 
     async def build(self) -> list[str]:
         symbols: list[str] = []
+        skipped_usdt = 0
+        skipped_volume = 0
+        skipped_spread = 0
+        skipped_depth = 0
 
         tickers = await self._rest.fetch_all_tickers()
         for sym, bid, ask in tickers:
             if not self._is_usdt_pair(sym):
+                skipped_usdt += 1
                 continue
 
             if not await self._passes_volume(sym):
+                skipped_volume += 1
                 continue
 
             if not self._within_spread(sym, bid, ask):
+                skipped_spread += 1
                 continue
 
             if not await self._has_depth(sym):
+                skipped_depth += 1
                 continue
 
             symbols.append(sym)
 
         logger.info("Выбрано %d монет", len(symbols))
+        logger.info(
+            "Скипы: !USDT=%d, объём=%d, спред=%d, глубина=%d",
+            skipped_usdt,
+            skipped_volume,
+            skipped_spread,
+            skipped_depth,
+        )
         return symbols
 
     def _is_usdt_pair(self, sym: str) -> bool:
