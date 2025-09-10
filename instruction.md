@@ -576,14 +576,20 @@ def main() -> None:
 ## Конфиденшиалы (`config/credentials.py`)
 ```python
 from dataclasses import dataclass
+import os
 
 @dataclass(frozen=True)
 class ApiCredentials:
     api_key: str
     api_secret: str
 
-BINANCE = ApiCredentials(api_key="REPLACE_ME", api_secret="REPLACE_ME")
+api_key = os.getenv("BINANCE_API_KEY")
+api_secret = os.getenv("BINANCE_API_SECRET")
+# при отсутствии переменных — RuntimeError
+BINANCE = ApiCredentials(api_key=api_key, api_secret=api_secret)
 ```
+
+Ключ и секрет читаются из переменных окружения `BINANCE_API_KEY` и `BINANCE_API_SECRET`.
 
 ---
 
