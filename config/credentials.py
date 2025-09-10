@@ -15,7 +15,25 @@ class TelegramCredentials:
     chat_id: str
 
 
-BINANCE = ApiCredentials(api_key="REPLACE_ME", api_secret="REPLACE_ME")
+_api_key = os.getenv("BINANCE_API_KEY")
+_api_secret = os.getenv("BINANCE_API_SECRET")
+_missing = [
+    name
+    for name, value in (
+        ("BINANCE_API_KEY", _api_key),
+        ("BINANCE_API_SECRET", _api_secret),
+    )
+    if not value
+]
+if _missing:
+    raise RuntimeError(
+        "Missing environment variable(s): {}. "
+        "Set BINANCE_API_KEY and BINANCE_API_SECRET to your Binance API credentials.".format(
+            ", ".join(_missing)
+        )
+    )
+
+BINANCE = ApiCredentials(api_key=_api_key, api_secret=_api_secret)
 
 TELEGRAM = TelegramCredentials(
     orders_bot_token=os.getenv("TELEGRAM_ORDERS_BOT_TOKEN", ""),
