@@ -3,6 +3,11 @@ from typing import Final
 BINANCE_FAPI_WS: Final[str] = "wss://fstream.binance.com/stream"
 BINANCE_FAPI_REST: Final[str] = "https://fapi.binance.com"
 
+HTTP_TIMEOUT_CONNECT_SEC: Final[float] = 5.0
+HTTP_TIMEOUT_READ_SEC: Final[float] = 15.0
+HTTP_TIMEOUT_WRITE_SEC: Final[float] = 5.0
+HTTP_TIMEOUT_POOL_SEC: Final[float] = 5.0
+
 UNIVERSE_MIN_24H_USDT: Final[float] = 20_000_000.0
 UNIVERSE_MAX_SPREAD_BPS: Final[float] = 4.0
 UNIVERSE_MIN_TOP10_BID_USDT: Final[float] = 80_000.0
