@@ -5,7 +5,15 @@ import logging
 
 import httpx
 
-from constants import BINANCE_FAPI_REST, TAKER_RATIO_LIMIT, TAKER_RATIO_PERIOD
+from constants import (
+    BINANCE_FAPI_REST,
+    HTTP_TIMEOUT_CONNECT_SEC,
+    HTTP_TIMEOUT_POOL_SEC,
+    HTTP_TIMEOUT_READ_SEC,
+    HTTP_TIMEOUT_WRITE_SEC,
+    TAKER_RATIO_LIMIT,
+    TAKER_RATIO_PERIOD,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +30,13 @@ class RestClient:
     _DEPTH_EP = "/fapi/v1/depth"
 
     def __init__(self) -> None:
-        self._client = httpx.AsyncClient(base_url=BINANCE_FAPI_REST, timeout=10.0)
+        timeout = httpx.Timeout(
+            connect=HTTP_TIMEOUT_CONNECT_SEC,
+            read=HTTP_TIMEOUT_READ_SEC,
+            write=HTTP_TIMEOUT_WRITE_SEC,
+            pool=HTTP_TIMEOUT_POOL_SEC,
+        )
+        self._client = httpx.AsyncClient(base_url=BINANCE_FAPI_REST, timeout=timeout)
 
     async def _get_with_retry(
         self, path: str, params: dict | None = None
