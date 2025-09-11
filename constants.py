@@ -12,6 +12,8 @@ UNIVERSE_MIN_24H_USDT: Final[float] = 1_000_000.0
 UNIVERSE_MAX_SPREAD_BPS: Final[float] = 8.0
 UNIVERSE_MIN_TOP10_BID_USDT: Final[float] = 5_000.0
 
+MAX_SYMBOLS = 180
+
 EWMA_HALF_LIFE_MIN: Final[int] = 45
 Z_BASE_WINDOW_MIN: Final[int] = 60
 
@@ -26,7 +28,7 @@ COOLDOWN_AFTER_TRADE_SEC: Final[int] = 900
 GLOBAL_BTC_PAUSE_Z: Final[float] = 3.0
 GLOBAL_BTC_PAUSE_SEC: Final[int] = 180
 
-RISK_PER_TRADE_USDT: Final[float] = 100.0  # настрой под депозит
+RISK_PER_TRADE_USDT: Final[float] = 10.0
 TRADE_INVALIDATION_SEC: Final[int] = 180
 TASK_MAX_RESTARTS: Final[int] = 1
 TASK_RESTART_DELAY_SEC: Final[int] = 1

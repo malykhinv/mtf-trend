@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+
+from constants import MAX_SYMBOLS
 from domain.ports.rest_client import RestClient
 
 from . import universe_filters as filters
@@ -14,20 +16,16 @@ class UniverseBuilder:
         self._rest = rest
 
     async def build(self) -> list[str]:
-        symbols: list[str] = []
         skipped_usdt = 0
-        skipped_volume = 0
         skipped_spread = 0
         skipped_depth = 0
 
         tickers = await self._rest.fetch_all_tickers()
-        for sym, bid, ask in tickers:
+
+        survivors: list[tuple[str, float]] = []  # (symbol, quote_volume)
+        for sym, bid, ask, qvol in tickers:
             if not self._is_usdt_pair(sym):
                 skipped_usdt += 1
-                continue
-
-            if not await self._passes_volume(sym):
-                skipped_volume += 1
                 continue
 
             if not self._within_spread(sym, bid, ask):
@@ -38,13 +36,24 @@ class UniverseBuilder:
                 skipped_depth += 1
                 continue
 
-            symbols.append(sym)
+            survivors.append((sym, qvol))
+
+        # топ-180 по объёму после отсева
+        survivors.sort(key=lambda x: x[1], reverse=True)
+        selected = survivors[:MAX_SYMBOLS]
+        symbols = [s for s, _ in selected]
+        trimmed_by_limit = max(0, len(survivors) - len(selected))
+
+        logger.info("Выбрано %d монет (лимит %d), всего после отсева: %d",
+                    len(symbols), MAX_SYMBOLS, len(survivors))
+        logger.info("Скипы: !USDT=%d, спред=%d, глубина=%d, по_лимиту=%d",
+                    skipped_usdt, skipped_spread, skipped_depth, trimmed_by_limit)
+        return symbols
 
         logger.info("Выбрано %d монет", len(symbols))
         logger.info(
-            "Скипы: !USDT=%d, объём=%d, спред=%d, глубина=%d",
+            "Скипы: !USDT=%d, спред=%d, глубина=%d",
             skipped_usdt,
-            skipped_volume,
             skipped_spread,
             skipped_depth,
         )
@@ -52,13 +61,6 @@ class UniverseBuilder:
 
     def _is_usdt_pair(self, sym: str) -> bool:
         return sym.endswith("USDT")
-
-    async def _passes_volume(self, sym: str) -> bool:
-        quote_vol, _ = await self._rest.get_24h_stats(sym)
-        if quote_vol < filters.MIN_24H_USDT:
-            logger.debug("%s: объём %.0f < %.0f", sym, quote_vol, filters.MIN_24H_USDT)
-            return False
-        return True
 
     def _within_spread(self, sym: str, bid: float, ask: float) -> bool:
         if bid <= 0:
