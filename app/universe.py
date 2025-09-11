@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 class UniverseBuilder:
     def __init__(self, rest: RestClient) -> None:
         self._rest = rest
+        self._depth_sem = asyncio.Semaphore(20)
 
     async def build(self) -> list[str]:
         skipped_usdt = 0
@@ -82,7 +83,8 @@ class UniverseBuilder:
         return True
 
     async def _has_depth(self, sym: str) -> bool:
-        bids = await self._rest.get_depth(sym)
+        async with self._depth_sem:
+            bids = await self._rest.get_depth(sym)
         top10_bid_usdt = sum(p * q for p, q in bids)
         if top10_bid_usdt < filters.MIN_TOP10_BID_USDT:
             logger.debug(
