@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import httpx
+
 from constants import MAX_SYMBOLS
 from domain.ports.rest_client import RestClient
 
@@ -84,7 +86,11 @@ class UniverseBuilder:
 
     async def _has_depth(self, sym: str) -> bool:
         async with self._depth_sem:
-            bids = await self._rest.get_depth(sym)
+            try:
+                bids = await self._rest.get_depth(sym)
+            except (httpx.HTTPError, httpx.TimeoutException) as exc:
+                logger.warning("%s: depth fetch failed: %s", sym, exc)
+                return False
         top10_bid_usdt = sum(p * q for p, q in bids)
         if top10_bid_usdt < filters.MIN_TOP10_BID_USDT:
             logger.debug(
