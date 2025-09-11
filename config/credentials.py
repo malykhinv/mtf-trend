@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 import os
 
+from dotenv import find_dotenv, load_dotenv
+
+load_dotenv(find_dotenv())
 
 @dataclass(frozen=True)
 class ApiCredentials:
@@ -15,25 +18,10 @@ class TelegramCredentials:
     chat_id: str
 
 
-_api_key = os.getenv("BINANCE_API_KEY")
-_api_secret = os.getenv("BINANCE_API_SECRET")
-_missing = [
-    name
-    for name, value in (
-        ("BINANCE_API_KEY", _api_key),
-        ("BINANCE_API_SECRET", _api_secret),
-    )
-    if not value
-]
-if _missing:
-    raise RuntimeError(
-        "Missing environment variable(s): {}. "
-        "Set BINANCE_API_KEY and BINANCE_API_SECRET to your Binance API credentials.".format(
-            ", ".join(_missing)
-        )
-    )
-
-BINANCE = ApiCredentials(api_key=_api_key, api_secret=_api_secret)
+BINANCE = ApiCredentials(
+    api_key=os.getenv("BINANCE_API_KEY", ""),
+    api_secret=os.getenv("BINANCE_API_SECRET", "")
+)
 
 TELEGRAM = TelegramCredentials(
     orders_bot_token=os.getenv("TELEGRAM_ORDERS_BOT_TOKEN", ""),

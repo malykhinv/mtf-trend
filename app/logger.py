@@ -16,7 +16,7 @@ def configure(level: int = logging.INFO) -> None:
     logging.basicConfig(
         level=level,
         format=_LOG_FORMAT,
-        datefmt="%Y-%m-%d %H:%M:%S",
+        datefmt="%H:%M:%S",
         force=True,
     )
     # silence noisy third-party loggers

@@ -8,7 +8,7 @@ from app.orchestrator import run
 
 def main() -> None:
     cfg = make_profile_config_balanced()
-    configure(level=getattr(cfg, "log_level", logging.INFO))
+    configure(level=logging.INFO)
     asyncio.run(run(cfg))
 
 
