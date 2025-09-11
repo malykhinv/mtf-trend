@@ -29,6 +29,7 @@ class RiskManager:
         self._client = http_client or httpx.AsyncClient(timeout=10.0)
         self._own_client = http_client is None
         self._risk_per_trade_usdt: float = 10.0
+        self._filter_cache: dict[str, dict] = {}
 
     async def sync_balance(self) -> None:
         """Synchronize available balance and risk per trade."""
@@ -148,6 +149,8 @@ class RiskManager:
             await self._client.aclose()
 
     async def _get_symbol_filters(self, symbol: str) -> dict:
+        if symbol in self._filter_cache:
+            return self._filter_cache[symbol]
         try:
             resp = await self._client.get(
                 BINANCE_FAPI_REST + "/fapi/v1/exchangeInfo",
@@ -155,7 +158,9 @@ class RiskManager:
             )
             resp.raise_for_status()
             info = resp.json()["symbols"][0]["filters"]
-            return {f["filterType"]: f for f in info}
+            filters = {f["filterType"]: f for f in info}
+            self._filter_cache[symbol] = filters
+            return filters
         except Exception:
             logger.exception("Failed to fetch symbol filters %s", symbol)
             raise
