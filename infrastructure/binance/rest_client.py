@@ -127,8 +127,11 @@ class RestClient:
         return tickers
 
     async def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
-        r = await self._client.get(self._DEPTH_EP, params={"symbol": symbol, "limit": 10})
-        r.raise_for_status()
+        r = await self._get_with_retry(
+            self._DEPTH_EP, params={"symbol": symbol, "limit": 10}
+        )
+        if r is None:
+            return ()
         data = r.json()
         bids = tuple((float(p), float(q)) for p, q in data.get("bids", []))
         return bids
