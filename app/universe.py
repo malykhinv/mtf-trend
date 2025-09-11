@@ -18,6 +18,7 @@ class UniverseBuilder:
 
     async def build(self) -> list[str]:
         skipped_usdt = 0
+        skipped_volume = 0
         skipped_spread = 0
         skipped_depth = 0
 
@@ -28,6 +29,10 @@ class UniverseBuilder:
         for sym, bid, ask, qvol in tickers:
             if not self._is_usdt_pair(sym):
                 skipped_usdt += 1
+                continue
+
+            if qvol < filters.MIN_24H_USDT:
+                skipped_volume += 1
                 continue
 
             if not self._within_spread(sym, bid, ask):
@@ -53,8 +58,14 @@ class UniverseBuilder:
 
         logger.info("Выбрано %d монет (лимит %d), всего после отсева: %d",
                     len(symbols), MAX_SYMBOLS, len(survivors))
-        logger.info("Скипы: !USDT=%d, спред=%d, глубина=%d, по_лимиту=%d",
-                    skipped_usdt, skipped_spread, skipped_depth, trimmed_by_limit)
+        logger.info(
+            "Скипы: !USDT=%d, объём=%d, спред=%d, глубина=%d, по_лимиту=%d",
+            skipped_usdt,
+            skipped_volume,
+            skipped_spread,
+            skipped_depth,
+            trimmed_by_limit,
+        )
         return symbols
 
     def _is_usdt_pair(self, sym: str) -> bool:

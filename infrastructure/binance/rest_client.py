@@ -100,13 +100,13 @@ class RestClient:
         last_price = float(data["lastPrice"])
         return quote_volume, last_price
 
-    async def fetch_all_tickers(self) -> list[tuple[str, float, float]]:
+    async def fetch_all_tickers(self) -> list[tuple[str, float, float, float]]:
         r = await self._get_with_retry(self._TICKER_EP)
         if r is None:
             return []
         data = r.json()
 
-        tickers: list[tuple[str, float, float]] = []
+        tickers: list[tuple[str, float, float, float]] = []
         for item in data:
             symbol = item["symbol"]
             if "bidPrice" in item and "askPrice" in item:
@@ -121,7 +121,8 @@ class RestClient:
                 book = r_book.json()
                 bid = float(book.get("bidPrice", 0.0))
                 ask = float(book.get("askPrice", 0.0))
-            tickers.append((symbol, bid, ask))
+            qvol = float(item.get("quoteVolume", 0.0))
+            tickers.append((symbol, bid, ask, qvol))
 
         return tickers
 
