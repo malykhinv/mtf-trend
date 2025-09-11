@@ -193,7 +193,7 @@ async def bar_maker(ws: WsClient, registry: SymbolRegistry) -> None:
 
     logger.info("bar_maker started")
     aggregator = MetricAggregator(registry)
-    symbols = registry.all_symbols()
+    symbols = list(registry.all_symbols())
     baselines = baseline_store.load(symbols)
     for sym in symbols:
         state = registry.get(sym)
