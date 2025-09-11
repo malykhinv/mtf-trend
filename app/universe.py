@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from constants import MAX_SYMBOLS
@@ -22,7 +23,8 @@ class UniverseBuilder:
 
         tickers = await self._rest.fetch_all_tickers()
 
-        survivors: list[tuple[str, float]] = []  # (symbol, quote_volume)
+        candidates: list[tuple[str, float]] = []
+        depth_coros = []
         for sym, bid, ask, qvol in tickers:
             if not self._is_usdt_pair(sym):
                 skipped_usdt += 1
@@ -32,11 +34,16 @@ class UniverseBuilder:
                 skipped_spread += 1
                 continue
 
-            if not await self._has_depth(sym):
-                skipped_depth += 1
-                continue
+            candidates.append((sym, qvol))
+            depth_coros.append(self._has_depth(sym))
 
-            survivors.append((sym, qvol))
+        depth_results = await asyncio.gather(*depth_coros)
+        survivors: list[tuple[str, float]] = []
+        for (sym, qvol), has_depth in zip(candidates, depth_results):
+            if has_depth:
+                survivors.append((sym, qvol))
+            else:
+                skipped_depth += 1
 
         # топ-180 по объёму после отсева
         survivors.sort(key=lambda x: x[1], reverse=True)
@@ -48,15 +55,6 @@ class UniverseBuilder:
                     len(symbols), MAX_SYMBOLS, len(survivors))
         logger.info("Скипы: !USDT=%d, спред=%d, глубина=%d, по_лимиту=%d",
                     skipped_usdt, skipped_spread, skipped_depth, trimmed_by_limit)
-        return symbols
-
-        logger.info("Выбрано %d монет", len(symbols))
-        logger.info(
-            "Скипы: !USDT=%d, спред=%d, глубина=%d",
-            skipped_usdt,
-            skipped_spread,
-            skipped_depth,
-        )
         return symbols
 
     def _is_usdt_pair(self, sym: str) -> bool:
