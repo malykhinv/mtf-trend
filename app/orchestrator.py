@@ -118,6 +118,7 @@ async def run(
         risk_manager,
         trade_manager,
         trader,
+        ws,
         notifier if notification_type == "events" else None,
     )
 
