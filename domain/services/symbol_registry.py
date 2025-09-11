@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Iterable
 
 from domain.models.state import SymbolState
 
@@ -23,5 +23,5 @@ class SymbolRegistry:
     def update(self, symbol: str, new_state: SymbolState) -> None:
         self._states[symbol] = new_state
 
-    def all_symbols(self) -> tuple[str, ...]:
-        return tuple(self._states.keys())
+    def all_symbols(self) -> Iterable[str]:
+        return self._states.keys()
