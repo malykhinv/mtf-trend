@@ -23,8 +23,8 @@ class RestClient(Protocol):
         """Return 24h quote volume and last price for ``symbol``."""
         raise NotImplementedError
 
-    async def fetch_all_tickers(self) -> list[tuple[str, float, float]]:
-        """Fetch bid/ask data for all tickers."""
+    async def fetch_all_tickers(self) -> list[tuple[str, float, float, float]]:
+        """Fetch bid/ask data and quote volume for all tickers."""
         raise NotImplementedError
 
     async def get_depth(self, symbol: str) -> tuple[tuple[float, float], ...]:
