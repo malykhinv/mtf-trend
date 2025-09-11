@@ -1,5 +1,7 @@
 from typing import Final
 
+from domain.models.enums import CandleInterval
+
 BINANCE_FAPI_WS: Final[str] = "wss://fstream.binance.com/stream"
 BINANCE_FAPI_REST: Final[str] = "https://fapi.binance.com"
 
@@ -12,7 +14,7 @@ UNIVERSE_MIN_24H_USDT: Final[float] = 1_000_000.0
 UNIVERSE_MAX_SPREAD_BPS: Final[float] = 8.0
 UNIVERSE_MIN_TOP10_BID_USDT: Final[float] = 5_000.0
 
-MAX_SYMBOLS = 180
+MAX_SYMBOLS: int = 180
 
 EWMA_HALF_LIFE_MIN: Final[int] = 45
 Z_BASE_WINDOW_MIN: Final[int] = 60
@@ -21,7 +23,7 @@ REST_POLL_SEC_OI: Final[int] = 20
 REST_POLL_SEC_TAKER: Final[int] = 20
 REST_POLL_SEC_PREMIUM: Final[int] = 20
 
-TAKER_RATIO_PERIOD: Final[str] = "5m"
+TAKER_RATIO_PERIOD: Final[str] = CandleInterval.M5
 TAKER_RATIO_LIMIT: Final[int] = 1
 
 COOLDOWN_AFTER_TRADE_SEC: Final[int] = 900

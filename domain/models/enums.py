@@ -14,6 +14,7 @@ class Side(StrEnum):
 
 class CandleInterval(StrEnum):
     M1 = "1m"
+    M5 = "5m"
 
 
 class OrderType(StrEnum):
