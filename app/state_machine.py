@@ -15,6 +15,7 @@ from domain.services.risk_manager import RiskManager
 from domain.services.trade_manager import TradeManager
 from domain.services.notification import NotificationService
 from domain.ports.trader import Trader
+from domain.ports.ws_client import WsClient
 
 from .global_pause_guard import GlobalPauseGuard
 from .state_handlers import (
@@ -38,6 +39,7 @@ class BotStateMachine:
         risk_manager: RiskManager,
         trade_manager: TradeManager,
         trader: Trader,
+        ws: WsClient,
         notifier: NotificationService | None = None,
     ) -> None:
         self._cfg = cfg
@@ -46,7 +48,7 @@ class BotStateMachine:
         self._cooldown_handler = CooldownHandler(registry)
         self._entered_handler = EnteredHandler(registry, trade_manager, trader)
         self._idle_watching_handler = IdleWatchingHandler(
-            registry, signal_engine, risk_manager, trade_manager
+            registry, signal_engine, risk_manager, trade_manager, ws
         )
         self._notifier = notifier
 

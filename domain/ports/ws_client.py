@@ -12,6 +12,14 @@ class WsClient(Protocol):
         """Subscribe to updates for ``symbols``."""
         raise NotImplementedError
 
+    def add_detail_streams(self, symbols: tuple[str, ...]) -> None:
+        """Subscribe to depth and liquidation streams for ``symbols``."""
+        raise NotImplementedError
+
+    def remove_detail_streams(self, symbols: tuple[str, ...]) -> None:
+        """Unsubscribe from depth and liquidation streams for ``symbols``."""
+        raise NotImplementedError
+
     async def stream(self) -> None:  # pragma: no cover - network
         """Start streaming websocket data."""
         raise NotImplementedError
