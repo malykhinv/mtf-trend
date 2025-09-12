@@ -23,13 +23,25 @@ class Trader:
 
     def __init__(self) -> None:
         self._client = httpx.AsyncClient(base_url=BINANCE_FAPI_REST, timeout=10.0)
+        self._time_offset_ms: int | None = None
+
+    async def _sync_time(self) -> None:
+        """Synchronize timestamp offset with Binance server time."""
+
+        resp = await self._client.get("/fapi/v1/time")
+        resp.raise_for_status()
+        server_ts = int(resp.json()["serverTime"])
+        local_ts = int(time.time() * 1000)
+        self._time_offset_ms = server_ts - local_ts
 
     async def _signed_request(
         self, method: str, endpoint: str, params: Dict[str, str]
     ) -> httpx.Response:
         """Send a signed request to a Binance endpoint."""
 
-        ts = int(time.time() * 1000)
+        if self._time_offset_ms is None:
+            await self._sync_time()
+        ts = int(time.time() * 1000) + self._time_offset_ms
         params["timestamp"] = str(ts)
         query = "&".join(f"{k}={v}" for k, v in params.items())
         signature = hmac.new(
