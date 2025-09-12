@@ -131,12 +131,10 @@ class _WsConnection:
 
     async def stream(self) -> None:  # pragma: no cover - network
         attempt = 0
-        delay = 1.0
         while True:
             try:
                 await self._connect_and_subscribe()
                 attempt = 0
-                delay = 1.0
                 await self._consume_messages()
             except (websockets.exceptions.WebSocketException, OSError) as exc:
                 if self._ws:
@@ -144,12 +142,11 @@ class _WsConnection:
                         await self._ws.close()
                 attempt += 1
                 logger.exception(
-                    "Ошибка WebSocket (%s). попытка переподключения %d",
+                    "Ошибка WebSocket (%s). попытка переподключения %d через 60 сек",
                     exc,
                     attempt,
                 )
-                await asyncio.sleep(delay)
-                delay = min(delay * 2, 60.0)
+                await asyncio.sleep(60.0)
             finally:
                 self._ws = None
 
