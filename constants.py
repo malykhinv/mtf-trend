@@ -5,6 +5,9 @@ from domain.models.enums import CandleInterval
 BINANCE_FAPI_WS: Final[str] = "wss://fstream.binance.com/stream"
 BINANCE_FAPI_REST: Final[str] = "https://fapi.binance.com"
 
+WS_PING_INTERVAL_SEC: Final[float] = 20.0
+WS_PING_TIMEOUT_SEC: Final[float] = 40.0
+
 HTTP_TIMEOUT_CONNECT_SEC: Final[float] = 5.0
 HTTP_TIMEOUT_READ_SEC: Final[float] = 15.0
 HTTP_TIMEOUT_WRITE_SEC: Final[float] = 5.0
