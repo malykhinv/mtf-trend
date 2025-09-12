@@ -144,7 +144,7 @@ class _WsConnection:
                         await self._ws.close()
                 attempt += 1
                 logger.exception(
-                    "Ошибка WebSocket (%s). попытка переподключения %d :>",
+                    "Ошибка WebSocket (%s). попытка переподключения %d",
                     exc,
                     attempt,
                 )

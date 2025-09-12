@@ -86,7 +86,7 @@ class SignalEngine:
             logger.info(f"{symbol}: обнаружена аномалия, окно {window}")
             return S.PumpSignal(symbol=symbol, window=window)
         except Exception:
-            logger.exception("Ошибка on_minute_close %s :>", symbol)
+            logger.exception("Ошибка on_minute_close %s", symbol)
             raise
 
     def confirm_failure(self, symbol: str) -> bool:
@@ -142,7 +142,7 @@ class SignalEngine:
             logger.info(f"{symbol}: сигнал подтверждён")
             return False
         except Exception:
-            logger.exception("Ошибка confirm_failure %s :>", symbol)
+            logger.exception("Ошибка confirm_failure %s", symbol)
             raise
 
     def make_entry(self, symbol: str, window: M.PumpWindow) -> S.EntrySignal | None:
@@ -181,5 +181,5 @@ class SignalEngine:
 
             return S.EntrySignal(symbol=symbol, side=direction, price=price)
         except Exception:
-            logger.exception("Ошибка make_entry %s :>", symbol)
+            logger.exception("Ошибка make_entry %s", symbol)
             raise

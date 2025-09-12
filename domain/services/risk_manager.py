@@ -96,7 +96,7 @@ class RiskManager:
                 window_high=window.high,
             )
         except Exception:
-            logger.exception("Ошибка build_plan %s :>", symbol)
+            logger.exception("Ошибка build_plan %s", symbol)
             return None
 
     def _calc_stop_loss(
@@ -192,7 +192,7 @@ class RiskManager:
             self._open_risk_usdt += required_margin
             return True
         except Exception:
-            logger.exception("Ошибка allow_trade %s :>", plan.symbol)
+            logger.exception("Ошибка allow_trade %s", plan.symbol)
             return False
 
     def release(self, plan: PositionPlan) -> None:
@@ -200,4 +200,4 @@ class RiskManager:
             margin = plan.entry_price * plan.quantity
             self._open_risk_usdt = max(0.0, self._open_risk_usdt - margin)
         except Exception:
-            logger.exception("Ошибка release %s :>", plan.symbol)
+            logger.exception("Ошибка release %s", plan.symbol)

@@ -20,7 +20,7 @@ class TelegramClient:
     async def send(self, text: str) -> bool:
         ok, desc = await send_message(self.token, self.chat_id, text)
         if not ok:
-            logger.error("Ошибка отправки Telegram-сообщения: %s :>", desc)
+            logger.error("Ошибка отправки Telegram-сообщения: %s", desc)
             return False
         return True
 
