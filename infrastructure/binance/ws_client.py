@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -106,7 +107,7 @@ class _WsConnection:
     # Networking
     # ------------------------------------------------------------------
     async def _connect_and_subscribe(self) -> None:  # pragma: no cover - network
-        self._ws = await websockets.connect(BINANCE_FAPI_WS)
+        self._ws = await websockets.connect(BINANCE_FAPI_WS, close_timeout=5)
         if self._subscribe_msg and self._ws:
             await self._ws.send(self._subscribe_msg)
 
@@ -126,7 +127,8 @@ class _WsConnection:
                 await self._consume_messages()
             except (websockets.exceptions.WebSocketException, OSError) as exc:
                 if self._ws:
-                    await self._ws.close()
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await self._ws.close()
                 attempt += 1
                 logger.exception(
                     "Ошибка WebSocket (%s). попытка переподключения %d :>",
@@ -205,7 +207,8 @@ class _WsConnection:
 
     async def close(self) -> None:  # pragma: no cover - network
         if self._ws and not self._ws.closed:
-            await self._ws.close()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await self._ws.close()
         self._ws = None
 
 
