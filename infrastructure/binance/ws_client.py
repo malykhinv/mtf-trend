@@ -10,7 +10,11 @@ from typing import Any, Dict, List, Tuple
 import websockets
 from websockets.client import ClientProtocol
 
-from constants import BINANCE_FAPI_WS
+from constants import (
+    BINANCE_FAPI_WS,
+    WS_PING_INTERVAL_SEC,
+    WS_PING_TIMEOUT_SEC,
+)
 from domain.models.enums import Side
 from domain.models.market_data import AggTrade, DepthSnapshot, LiquidationEvent
 
@@ -27,12 +31,16 @@ class _WsConnection:
         agg_q: asyncio.Queue[AggTrade | None],
         depth_q: asyncio.Queue[DepthSnapshot | None],
         liq_q: asyncio.Queue[LiquidationEvent | None],
+        ping_interval: float = WS_PING_INTERVAL_SEC,
+        ping_timeout: float = WS_PING_TIMEOUT_SEC,
     ) -> None:
         self._symbols = tuple(symbols)
         self._detail_symbols: set[str] = set()
         self._agg_q = agg_q
         self._depth_q = depth_q
         self._liq_q = liq_q
+        self._ping_interval = ping_interval
+        self._ping_timeout = ping_timeout
         self._ws: ClientProtocol | None = None
         self._subscribe_msg: str | None = None
         self._req_id = 0
@@ -107,7 +115,12 @@ class _WsConnection:
     # Networking
     # ------------------------------------------------------------------
     async def _connect_and_subscribe(self) -> None:  # pragma: no cover - network
-        self._ws = await websockets.connect(BINANCE_FAPI_WS, close_timeout=5)
+        self._ws = await websockets.connect(
+            BINANCE_FAPI_WS,
+            close_timeout=5,
+            ping_interval=self._ping_interval,
+            ping_timeout=self._ping_timeout,
+        )
         if self._subscribe_msg and self._ws:
             await self._ws.send(self._subscribe_msg)
 
@@ -215,7 +228,12 @@ class _WsConnection:
 class WsClient:
     """Multiplex websocket client respecting Binance stream limits."""
 
-    def __init__(self, queue_maxsize: int = 0) -> None:
+    def __init__(
+        self,
+        queue_maxsize: int = 0,
+        ping_interval: float = WS_PING_INTERVAL_SEC,
+        ping_timeout: float = WS_PING_TIMEOUT_SEC,
+    ) -> None:
         self._agg_trades: asyncio.Queue[AggTrade | None] = asyncio.Queue(
             maxsize=queue_maxsize
         )
@@ -227,6 +245,8 @@ class WsClient:
         )
         self._conns: list[_WsConnection] = []
         self._symbol_to_conn: dict[str, _WsConnection] = {}
+        self._ping_interval = ping_interval
+        self._ping_timeout = ping_timeout
 
     # ------------------------------------------------------------------
     # Public API
@@ -237,7 +257,14 @@ class WsClient:
         self._symbol_to_conn.clear()
         for i in range(0, len(symbols), chunk_size):
             chunk = tuple(symbols[i : i + chunk_size])
-            conn = _WsConnection(chunk, self._agg_trades, self._depths, self._liqs)
+            conn = _WsConnection(
+                chunk,
+                self._agg_trades,
+                self._depths,
+                self._liqs,
+                ping_interval=self._ping_interval,
+                ping_timeout=self._ping_timeout,
+            )
             self._conns.append(conn)
             for sym in chunk:
                 self._symbol_to_conn[sym] = conn
