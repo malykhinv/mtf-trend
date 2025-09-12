@@ -47,9 +47,10 @@ class IdleWatchingHandler:
             self._ws.add_detail_streams((symbol,))
         state.state = BotState.WATCHING
         self._registry.update(symbol, state)
-        logger.debug("%s -> WATCHING: pump detected", symbol)
+        logger.info(f"{symbol}: обнаружена аномалия, ждём подтверждения")
 
         if self._signal_engine.confirm_failure(symbol):
+            logger.info(f"{symbol}: сигнал отклонён (см. причину выше)")
             self._ws.remove_detail_streams((symbol,))
             state.state = BotState.IDLE
             self._registry.update(symbol, state)
@@ -58,14 +59,15 @@ class IdleWatchingHandler:
 
         entry = self._signal_engine.make_entry(symbol, pump.window)
         if entry is None:
-            logger.debug("%s skipped: entry conditions", symbol)
+            logger.info(f"{symbol}: сигнал отклонён — условия входа")
             return
 
         plan = await self._risk_manager.build_plan(symbol, entry.price, pump.window)
         if plan is None or not self._risk_manager.allow_trade(plan):
-            logger.debug("%s skipped: risk check", symbol)
+            logger.info(f"{symbol}: сигнал отклонён — риски превышены")
             return
 
+        logger.info(f"{symbol}: сигнал подтверждён, открываем позицию")
         await self._trade_manager.open_position(plan, entry.side)
         self._ws.remove_detail_streams((symbol,))
         state.state = BotState.ENTERED
