@@ -48,9 +48,8 @@ def _evaluate_entry(metrics: M.SymbolMetrics, entry_cfg: EntryParams) -> bool:
     avwap_loss = metrics.avwap_loss
     if entry_cfg.require_both:
         return low_break and avwap_loss
-    return (
-        (entry_cfg.allow_low_break and low_break)
-        or (entry_cfg.allow_avwap_loss and avwap_loss)
+    return (entry_cfg.allow_low_break and low_break) or (
+        entry_cfg.allow_avwap_loss and avwap_loss
     )
 
 
@@ -84,7 +83,7 @@ class SignalEngine:
                 start_ts=int(metrics.start_ts),
                 end_ts=int(metrics.end_ts),
             )
-            logger.debug("Pump window found for %s: %s", symbol, window)
+            logger.info(f"{symbol}: обнаружена аномалия, окно {window}")
             return S.PumpSignal(symbol=symbol, window=window)
         except Exception:
             logger.exception("Ошибка on_minute_close %s :>", symbol)
@@ -99,39 +98,27 @@ class SignalEngine:
             confirm = self._config.confirmation
 
             if metrics.delta_oi_pct > confirm.delta_oi_max_pct:
-                logger.debug(
-                    "%s confirm failure: delta_oi_pct %.3f > %.3f",
-                    symbol,
-                    metrics.delta_oi_pct,
-                    confirm.delta_oi_max_pct,
+                logger.info(
+                    f"{symbol}: сигнал отклонён — delta_oi_pct {metrics.delta_oi_pct:.3f} > {confirm.delta_oi_max_pct:.3f}"
                 )
                 return True
 
             taker_ratio = _taker_ratio(metrics)
             if taker_ratio > confirm.taker_ratio_max:
-                logger.debug(
-                    "%s confirm failure: taker_ratio %.3f > %.3f",
-                    symbol,
-                    taker_ratio,
-                    confirm.taker_ratio_max,
+                logger.info(
+                    f"{symbol}: сигнал отклонён — taker_ratio {taker_ratio:.3f} > {confirm.taker_ratio_max:.3f}"
                 )
                 return True
 
             if metrics.premium_pct > confirm.premium_max_pct:
-                logger.debug(
-                    "%s confirm failure: premium_pct %.3f > %.3f",
-                    symbol,
-                    metrics.premium_pct,
-                    confirm.premium_max_pct,
+                logger.info(
+                    f"{symbol}: сигнал отклонён — premium_pct {metrics.premium_pct:.3f} > {confirm.premium_max_pct:.3f}"
                 )
                 return True
 
             if metrics.latency_sec < confirm.latency_min_sec:
-                logger.debug(
-                    "%s confirm failure: latency_sec %.3f < %.3f",
-                    symbol,
-                    metrics.latency_sec,
-                    confirm.latency_min_sec,
+                logger.info(
+                    f"{symbol}: сигнал отклонён — latency_sec {metrics.latency_sec:.3f} < {confirm.latency_min_sec:.3f}"
                 )
                 return True
 
@@ -140,20 +127,19 @@ class SignalEngine:
                 or metrics.top5ask_vs_base >= confirm.top5ask_vs_base_min
             )
             if not lob_ok:
-                logger.debug(
-                    "%s confirm failure: LOB conditions not met", symbol
-                )
+                logger.info(f"{symbol}: сигнал отклонён — условия LOB не выполнены")
                 return True
 
             if (
                 metrics.cvd_gap_pct < confirm.cvd_gap_pct_min
                 or metrics.cvd_gap_sec < confirm.cvd_gap_sec_min
             ):
-                logger.debug(
-                    "%s confirm failure: cvd_gap below threshold", symbol
+                logger.info(
+                    f"{symbol}: сигнал отклонён — cvd_gap {metrics.cvd_gap_pct:.3f}/{metrics.cvd_gap_sec:.3f} < {confirm.cvd_gap_pct_min:.3f}/{confirm.cvd_gap_sec_min:.3f}"
                 )
                 return True
 
+            logger.info(f"{symbol}: сигнал подтверждён")
             return False
         except Exception:
             logger.exception("Ошибка confirm_failure %s :>", symbol)
@@ -166,22 +152,19 @@ class SignalEngine:
             metrics = state.metrics
 
             if window.high <= window.low:
-                logger.debug("%s entry skipped: invalid window", symbol)
+                logger.info(f"{symbol}: сигнал отклонён — некорректное окно")
                 return None
 
             if metrics.premium_pct > self._config.confirmation.premium_max_pct:
-                logger.debug(
-                    "%s entry skipped: premium_pct %.3f > %.3f",
-                    symbol,
-                    metrics.premium_pct,
-                    self._config.confirmation.premium_max_pct,
+                logger.info(
+                    f"{symbol}: сигнал отклонён — premium_pct {metrics.premium_pct:.3f} > {self._config.confirmation.premium_max_pct:.3f}"
                 )
                 return None
 
             entry_cfg = self._config.entry
 
             if not _evaluate_entry(metrics, entry_cfg):
-                logger.debug("%s entry skipped: entry conditions not met", symbol)
+                logger.info(f"{symbol}: сигнал отклонён — условия входа не выполнены")
                 return None
 
             direction: Side = (
