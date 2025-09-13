@@ -19,8 +19,7 @@ def make_profile_config_conservative() -> ProfileConfig:
         z_vol=3.8,
         delta_price_sigma_mult=2.8,
         delta_price_abs_pct=1.0,
-        close_pos=0.75,
-        liqs_z=2.5,
+        upper_wick_body_ratio_max=0.15,
     )
     confirmation = ConfirmationParams(
         delta_oi_max_pct=0.2,
