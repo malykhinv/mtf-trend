@@ -19,28 +19,26 @@ def _taker_ratio(metrics: M.SymbolMetrics) -> float:
     return float("inf") if taker_buy > 0 else 0.0
 
 
-def _meets_trigger(metrics: M.SymbolMetrics, trig: TriggerParams) -> tuple[bool, str]:
-    if metrics.z_px < trig.z_px:
-        return False, f"z_px {metrics.z_px:.3f} < {trig.z_px:.3f}"
-    if metrics.z_vol < trig.z_vol:
-        return False, f"z_vol {metrics.z_vol:.3f} < {trig.z_vol:.3f}"
-    if metrics.delta_price_sigma_mult < trig.delta_price_sigma_mult:
-        return (
-            False,
-            "delta_price_sigma_mult %.3f < %.3f"
-            % (metrics.delta_price_sigma_mult, trig.delta_price_sigma_mult),
-        )
-    if metrics.delta_price_abs_pct < trig.delta_price_abs_pct:
-        return (
-            False,
-            "delta_price_abs_pct %.3f < %.3f"
-            % (metrics.delta_price_abs_pct, trig.delta_price_abs_pct),
-        )
-    if metrics.close_pos < trig.close_pos:
-        return False, f"close_pos {metrics.close_pos:.3f} < {trig.close_pos:.3f}"
-    if metrics.liqs_z < trig.liqs_z:
-        return False, f"liqs_z {metrics.liqs_z:.3f} < {trig.liqs_z:.3f}"
-    return True, ""
+def _meets_trigger(metrics: M.SymbolMetrics, trig: TriggerParams) -> tuple[bool, list[str]]:
+    conditions: list[tuple[str, bool]] = [
+        ("z_px", metrics.z_px >= trig.z_px),
+        ("z_vol", metrics.z_vol >= trig.z_vol),
+        (
+            "delta_price_sigma_mult",
+            metrics.delta_price_sigma_mult >= trig.delta_price_sigma_mult,
+        ),
+        (
+            "delta_price_abs_pct",
+            metrics.delta_price_abs_pct >= trig.delta_price_abs_pct,
+        ),
+        (
+            "upper_wick_body_ratio",
+            metrics.upper_wick_body_ratio <= trig.upper_wick_body_ratio_max,
+        ),
+    ]
+    met = [name for name, ok in conditions if ok]
+    all_met = len(met) == len(conditions)
+    return all_met, met
 
 
 def _evaluate_entry(metrics: M.SymbolMetrics, entry_cfg: EntryParams) -> bool:
@@ -72,9 +70,16 @@ class SignalEngine:
 
             trig = self._config.trigger
 
-            ok, reason = _meets_trigger(metrics, trig)
+            ok, met = _meets_trigger(metrics, trig)
             if not ok:
-                logger.debug("%s pump skipped: %s", symbol, reason)
+                if met:
+                    logger.info(
+                        "%s: частичная аномалия — выполнены условия %s",
+                        symbol,
+                        ", ".join(met),
+                    )
+                else:
+                    logger.debug("%s pump skipped: no trigger conditions met", symbol)
                 return None
 
             window = M.PumpWindow(

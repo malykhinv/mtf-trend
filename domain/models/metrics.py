@@ -51,6 +51,7 @@ class SymbolMetrics:
     end_ts: int = 0
     high: float = 0.0
     low: float = 0.0
+    open: float = 0.0
     last_price: float = 0.0
 
     # --- derived z-scores and price delta metrics -----------------------
@@ -58,7 +59,7 @@ class SymbolMetrics:
     z_vol: float = 0.0
     delta_price_sigma_mult: float = 0.0
     delta_price_abs_pct: float = 0.0
-    close_pos: float = 0.0
+    upper_wick_body_ratio: float = 0.0
 
     # --- orderbook / premium related metrics ---------------------------
     best_bid: float = 0.0

@@ -59,6 +59,7 @@ class MetricAggregator:
             start_ts = trade.timestamp
             metrics.high = trade.price
             metrics.low = trade.price
+            metrics.open = trade.price
             low_break = False
         else:
             metrics.high = max(metrics.high, trade.price)
@@ -82,9 +83,11 @@ class MetricAggregator:
         std_price = metrics.price_ewma_std
         delta_sigma = rng / std_price if std_price > 0 else 0.0
         delta_abs = (high / low - 1.0) * 100 if low > 0 else 0.0
-        close_pos = (trade.price - low) / rng if rng > 0 else 0.0
+        body = abs(trade.price - metrics.open)
+        upper_wick = high - max(metrics.open, trade.price)
+        uw_ratio = upper_wick / body if body > 0 else float("inf")
 
-        return delta_sigma, delta_abs, close_pos, low_break, avwap_loss
+        return delta_sigma, delta_abs, uw_ratio, low_break, avwap_loss
 
     def _update_entry_flags(
         self,
@@ -94,7 +97,7 @@ class MetricAggregator:
         z_vol: float,
         delta_sigma: float,
         delta_abs: float,
-        close_pos: float,
+        upper_wick_ratio: float,
         low_break: bool,
         avwap_loss: bool,
     ) -> None:
@@ -102,7 +105,7 @@ class MetricAggregator:
         metrics.z_vol = z_vol
         metrics.delta_price_sigma_mult = delta_sigma
         metrics.delta_price_abs_pct = delta_abs
-        metrics.close_pos = close_pos
+        metrics.upper_wick_body_ratio = upper_wick_ratio
         metrics.last_price = trade.price
         metrics.low_break = low_break
         metrics.avwap_loss = avwap_loss
@@ -121,11 +124,19 @@ class MetricAggregator:
         state = self._registry.get(trade.symbol)
         metrics = state.metrics
         z_px, z_vol = self._update_price_volume_metrics(trade, metrics)
-        delta_sigma, delta_abs, close_pos, low_break, avwap_loss = self._update_candle(
+        delta_sigma, delta_abs, uw_ratio, low_break, avwap_loss = self._update_candle(
             trade, metrics
         )
         self._update_entry_flags(
-            trade, metrics, z_px, z_vol, delta_sigma, delta_abs, close_pos, low_break, avwap_loss
+            trade,
+            metrics,
+            z_px,
+            z_vol,
+            delta_sigma,
+            delta_abs,
+            uw_ratio,
+            low_break,
+            avwap_loss,
         )
 
         self._registry.update(trade.symbol, state)

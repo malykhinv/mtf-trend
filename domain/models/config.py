@@ -9,8 +9,7 @@ class TriggerParams:
     z_vol: float
     delta_price_sigma_mult: float
     delta_price_abs_pct: float
-    close_pos: float
-    liqs_z: float
+    upper_wick_body_ratio_max: float
 
 
 @dataclass(frozen=True)

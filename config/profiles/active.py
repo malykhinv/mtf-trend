@@ -19,8 +19,7 @@ def make_profile_config_active() -> ProfileConfig:
         z_vol=3.0,
         delta_price_sigma_mult=2.3,
         delta_price_abs_pct=0.8,
-        close_pos=0.65,
-        liqs_z=1.8,
+        upper_wick_body_ratio_max=0.15,
     )
     confirmation = ConfirmationParams(
         delta_oi_max_pct=0.5,
