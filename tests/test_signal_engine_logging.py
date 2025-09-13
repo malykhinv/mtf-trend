@@ -86,3 +86,43 @@ def test_partial_condition_logging(caplog):
     assert _format_condition("z_px", metrics, trig) in info_record.message
     assert _format_condition("delta_price_sigma_mult", metrics, trig) in debug_record.message
     assert _format_condition("upper_wick_body_ratio", metrics, trig) in debug_record.message
+
+
+def test_partial_logging_rate_limit(monkeypatch, caplog):
+    registry = SymbolRegistry()
+    metrics = SymbolMetrics(
+        z_px=2.0,
+        z_vol=0.5,
+        delta_price_sigma_mult=1.1,
+        delta_price_abs_pct=1.2,
+        upper_wick_body_ratio=0.5,
+        end_ts=0,
+    )
+    state = SymbolState(symbol="XYZ", state=BotState.WATCHING, metrics=metrics)
+    registry.put(state)
+
+    engine = SignalEngine(_make_config(), registry)
+
+    current_time = 1_000.0
+
+    def fake_time():
+        return current_time
+
+    monkeypatch.setattr(time, "time", fake_time)
+
+    with caplog.at_level(logging.INFO):
+        metrics.end_ts = int(current_time * 1000)
+        engine.on_minute_close("XYZ")
+        current_time += 30
+        metrics.end_ts = int(current_time * 1000)
+        engine.on_minute_close("XYZ")
+        current_time += 31
+        metrics.end_ts = int(current_time * 1000)
+        engine.on_minute_close("XYZ")
+
+    records = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO and "частичная аномалия" in r.message
+    ]
+    assert len(records) == 2

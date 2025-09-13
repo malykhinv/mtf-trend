@@ -83,6 +83,8 @@ class SignalEngine:
         # ``SignalEngine`` needs access to the registry in order to retrieve
         # the latest metrics for every symbol.
         self._registry = registry
+        # track last time a partial anomaly was logged for each symbol
+        self._last_partial_log: dict[str, float] = {}
 
     def on_minute_close(self, symbol: str) -> S.PumpSignal | None:
         """Evaluate minute metrics and possibly emit a pump signal."""
@@ -92,7 +94,8 @@ class SignalEngine:
             state = self._registry.get(symbol)
             metrics = state.metrics
 
-            now_ms = int(time.time() * 1000)
+            now = time.time()
+            now_ms = int(now * 1000)
             if now_ms - metrics.end_ts >= 60_000:
                 metrics.delta_price_abs_pct = 0.0
                 self._registry.update(symbol, state)
@@ -107,11 +110,16 @@ class SignalEngine:
                     info_met = [c for c in met if c in {"delta_price_abs_pct", "z_px"}]
                     debug_met = [c for c in met if c not in {"delta_price_abs_pct", "z_px"}]
                     if info_met:
-                        logger.info(
-                            "%s: частичная аномалия — выполнены условия %s",
-                            symbol,
-                            ", ".join(_format_condition(c, metrics, trig) for c in info_met),
-                        )
+                        last = self._last_partial_log.get(symbol, 0.0)
+                        if now - last >= 60:
+                            logger.info(
+                                "%s: частичная аномалия — выполнены условия %s",
+                                symbol,
+                                ", ".join(
+                                    _format_condition(c, metrics, trig) for c in info_met
+                                ),
+                            )
+                            self._last_partial_log[symbol] = now
                     if debug_met:
                         logger.debug(
                             "%s: частичная аномалия — выполнены условия %s",
