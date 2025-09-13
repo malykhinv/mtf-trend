@@ -68,6 +68,11 @@ class MetricAggregator:
         metrics.start_ts = start_ts
         metrics.end_ts = trade.timestamp
 
+        baseline = metrics.open if metrics.open > 0 else metrics.price_ewma_mean
+        delta_abs = (
+            abs((trade.price - baseline) / baseline) * 100 if baseline > 0 else 0.0
+        )
+
         high = metrics.high
         low = metrics.low
         rng = high - low
@@ -82,7 +87,6 @@ class MetricAggregator:
 
         std_price = metrics.price_ewma_std
         delta_sigma = rng / std_price if std_price > 0 else 0.0
-        delta_abs = (high / low - 1.0) * 100 if low > 0 else 0.0
         body = abs(trade.price - metrics.open)
         upper_wick = high - max(metrics.open, trade.price)
         uw_ratio = upper_wick / body if body > 0 else float("inf")
