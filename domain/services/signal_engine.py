@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from domain.models import metrics as M, signals as S
 from domain.models.config import EntryParams, ProfileConfig, TriggerParams
@@ -67,6 +68,13 @@ class SignalEngine:
         try:
             state = self._registry.get(symbol)
             metrics = state.metrics
+
+            now_ms = int(time.time() * 1000)
+            if now_ms - metrics.end_ts >= 60_000:
+                metrics.delta_price_abs_pct = 0.0
+                self._registry.update(symbol, state)
+                logger.debug("%s pump skipped: no recent trades", symbol)
+                return None
 
             trig = self._config.trigger
 
