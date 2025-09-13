@@ -42,6 +42,29 @@ def _meets_trigger(metrics: M.SymbolMetrics, trig: TriggerParams) -> tuple[bool,
     return all_met, met
 
 
+_CONDITION_SPEC: dict[str, tuple[str, str, str, str]] = {
+    "z_px": ("z_px", "z_px", ">=", ""),
+    "z_vol": ("z_vol", "z_vol", ">=", ""),
+    "delta_price_sigma_mult": ("delta_price_sigma_mult", "delta_price_sigma_mult", ">=", ""),
+    "delta_price_abs_pct": ("delta_price_abs_pct", "delta_price_abs_pct", ">=", "%"),
+    "upper_wick_body_ratio": (
+        "upper_wick_body_ratio",
+        "upper_wick_body_ratio_max",
+        "<=",
+        "",
+    ),
+}
+
+
+def _format_condition(name: str, metrics: M.SymbolMetrics, trig: TriggerParams) -> str:
+    metric_attr, trig_attr, op, unit = _CONDITION_SPEC[name]
+    metric_val = getattr(metrics, metric_attr)
+    trig_val = getattr(trig, trig_attr)
+    metric_s = f"{metric_val:.3f}{unit}"
+    trig_s = f"{trig_val:.3f}{unit}"
+    return f"{name} {metric_s} {op} {trig_s}"
+
+
 def _evaluate_entry(metrics: M.SymbolMetrics, entry_cfg: EntryParams) -> bool:
     low_break = metrics.low_break
     avwap_loss = metrics.avwap_loss
@@ -87,13 +110,13 @@ class SignalEngine:
                         logger.info(
                             "%s: частичная аномалия — выполнены условия %s",
                             symbol,
-                            ", ".join(info_met),
+                            ", ".join(_format_condition(c, metrics, trig) for c in info_met),
                         )
                     if debug_met:
                         logger.debug(
                             "%s: частичная аномалия — выполнены условия %s",
                             symbol,
-                            ", ".join(debug_met),
+                            ", ".join(_format_condition(c, metrics, trig) for c in debug_met),
                         )
                 else:
                     logger.debug("%s pump skipped: no trigger conditions met", symbol)
