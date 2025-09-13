@@ -73,11 +73,20 @@ class SignalEngine:
             ok, met = _meets_trigger(metrics, trig)
             if not ok:
                 if met:
-                    logger.info(
-                        "%s: частичная аномалия — выполнены условия %s",
-                        symbol,
-                        ", ".join(met),
-                    )
+                    info_met = [c for c in met if c in {"delta_price_abs_pct", "z_px"}]
+                    debug_met = [c for c in met if c not in {"delta_price_abs_pct", "z_px"}]
+                    if info_met:
+                        logger.info(
+                            "%s: частичная аномалия — выполнены условия %s",
+                            symbol,
+                            ", ".join(info_met),
+                        )
+                    if debug_met:
+                        logger.debug(
+                            "%s: частичная аномалия — выполнены условия %s",
+                            symbol,
+                            ", ".join(debug_met),
+                        )
                 else:
                     logger.debug("%s pump skipped: no trigger conditions met", symbol)
                 return None
