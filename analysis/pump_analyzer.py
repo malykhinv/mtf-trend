@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import logging
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import median
 from typing import List, Sequence
@@ -25,6 +25,24 @@ class Candle:
     low: float
     close: float
     volume: float
+
+
+@dataclass
+class PumpRecord:
+    """Record of a detected pump candle."""
+
+    timestamp: int
+    symbol: str
+    tf: str
+    volume: float
+    relative_volume: float
+    atr_mult: float
+    pct_move: float
+    upper_wick_pct: float
+    rehigh_hit: bool
+    max_tp_pct: float
+    stop_loss_pct: float
+    liquidation_volume: float | None
 
 
 def fetch_symbols(exchange: str) -> List[str]:
@@ -153,10 +171,10 @@ def find_pumps(
     config: PumpAnalysisConfig,
     tp_bars: int,
     sl_bars: int,
-) -> List[List[float]]:
+) -> List[dict]:
     """Identify pump candles and compute metrics."""
 
-    results: List[List[float]] = []
+    results: List[dict] = []
     volumes = [c.volume for c in candles]
     window = config.volume_window
     for i in range(window, len(candles) - max(config.rehigh_lookahead, tp_bars, sl_bars)):
@@ -175,11 +193,10 @@ def find_pumps(
             continue
         atr = compute_atr(candles, i, config.atr_window)
         atr_mult = (total_range / atr) if atr else 0
-        range_pct = total_range / c.open * 100 if c.open else 0
         next_high = max(
             candles[j].high for j in range(i + 1, i + 1 + config.rehigh_lookahead)
         )
-        re_high = next_high - c.high
+        rehigh_hit = next_high >= c.high
         max_tp = (
             (max(candles[j].high for j in range(i + 1, i + 1 + tp_bars)) - c.close)
             / c.close
@@ -195,18 +212,17 @@ def find_pumps(
             else 0
         )
         results.append(
-            [
-                c.open_time,
-                pct_gain,
-                rel_vol,
-                upper_wick_ratio,
-                atr_mult,
-                range_pct,
-                upper_wick,
-                re_high,
-                max_tp,
-                max_sl,
-            ]
+            {
+                "timestamp": c.open_time,
+                "volume": c.volume,
+                "relative_volume": rel_vol,
+                "atr_mult": atr_mult,
+                "pct_move": pct_gain,
+                "upper_wick_pct": upper_wick_ratio * 100,
+                "rehigh_hit": rehigh_hit,
+                "max_tp_pct": max_tp,
+                "stop_loss_pct": max_sl,
+            }
         )
     return results
 
@@ -220,41 +236,28 @@ def analyze(
     """Run pump analysis for the given exchange."""
 
     symbols = fetch_symbols(exchange)
-    pumps_found = 0
     out_dir = Path("data/pump_analysis")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{exchange}.csv"
-    headers = [
-        "open_time",
-        "pct_gain",
-        "rel_volume",
-        "upper_wick_ratio",
-        "atr_multiple",
-        "range_pct",
-        "wick_size",
-        "next_re_high",
-        "max_take_profit",
-        "max_stop_loss",
-        "liquidation_volume",
-        "symbol",
-        "interval",
-    ]
+    fieldnames = list(PumpRecord.__annotations__.keys())
     with out_file.open("w", newline="") as fh:
-        writer = csv.writer(fh)
-        writer.writerow(headers)
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        writer.writeheader()
+        pumps_total = 0
         for symbol in symbols:
-            logging.info("Processing %s", symbol)
+            total_candles = 0
+            total_pumps = 0
             for interval in ["1m", "5m"]:
-                candles = fetch_candles(exchange, symbol, interval if exchange == "binance" else interval.strip("m"))
-                pumps = find_pumps(
-                    candles,
-                    config,
-                    tp_bars,
-                    sl_bars,
+                candles = fetch_candles(
+                    exchange,
+                    symbol,
+                    interval if exchange == "binance" else interval.strip("m"),
                 )
-                for row in pumps:
+                total_candles += len(candles)
+                pumps = find_pumps(candles, config, tp_bars, sl_bars)
+                for pump in pumps:
                     interval_ms = int(interval.strip("m")) * 60_000
-                    start = row[0]
+                    start = pump["timestamp"]
                     end = start + interval_ms
                     if exchange == "binance":
                         liq = fetch_binance_liquidations(symbol, start, end)
@@ -262,15 +265,34 @@ def analyze(
                         liq = fetch_bybit_liquidations(symbol, start, end)
                     else:  # pragma: no cover - safety
                         liq = None
-                    if liq is None:
-                        logging.info("Liquidation data unavailable")
-                    writer.writerow(row + [liq, symbol, interval])
-                    pumps_found += 1
+                    record = PumpRecord(
+                        timestamp=pump["timestamp"],
+                        symbol=symbol,
+                        tf=interval,
+                        volume=pump["volume"],
+                        relative_volume=pump["relative_volume"],
+                        atr_mult=pump["atr_mult"],
+                        pct_move=pump["pct_move"],
+                        upper_wick_pct=pump["upper_wick_pct"],
+                        rehigh_hit=pump["rehigh_hit"],
+                        max_tp_pct=pump["max_tp_pct"],
+                        stop_loss_pct=pump["stop_loss_pct"],
+                        liquidation_volume=liq,
+                    )
+                    writer.writerow(asdict(record))
+                    total_pumps += 1
+                    pumps_total += 1
+            logging.info(
+                "Analyzing %s: processed %d candles, found %d pumps",
+                symbol,
+                total_candles,
+                total_pumps,
+            )
     logging.info(
         "Processed %d symbols on %s, found %d pump candles",
         len(symbols),
         exchange,
-        pumps_found,
+        pumps_total,
     )
 
 
@@ -308,4 +330,4 @@ def main() -> None:
 if __name__ == "__main__":  # pragma: no cover - CLI entry
     main()
 
-__all__ = ["main", "analyze"]
+__all__ = ["main", "analyze", "PumpRecord"]
