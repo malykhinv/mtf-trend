@@ -68,13 +68,54 @@ def fetch_symbols(exchange: str) -> List[str]:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        return [s["symbol"] for s in data.get("symbols", []) if s.get("contractType") == "PERPETUAL"]
+        symbols = [
+            s for s in data.get("symbols", []) if s.get("contractType") == "PERPETUAL"
+        ]
+        valid: List[str] = []
+        for s in symbols:
+            pair = s.get("pair") or s.get("symbol")
+            try:
+                kl_resp = requests.get(
+                    "https://fapi.binance.com/fapi/v1/continuousKlines",
+                    params={
+                        "pair": pair,
+                        "contractType": "PERPETUAL",
+                        "interval": "1h",
+                        "limit": 1,
+                    },
+                    timeout=5,
+                )
+                kl_resp.raise_for_status()
+                if kl_resp.json():
+                    valid.append(s["symbol"])
+            except Exception:  # pragma: no cover - network failure logged
+                logging.warning("Skipping symbol %s due to kline error", s.get("symbol"))
+        return valid
     if exchange == "bybit":
         url = "https://api.bybit.com/v5/market/instruments-info"
         resp = requests.get(url, params={"category": "linear"}, timeout=10)
         resp.raise_for_status()
         data = resp.json()
-        return [s["symbol"] for s in data.get("result", {}).get("list", [])]
+        symbols = [s.get("symbol") for s in data.get("result", {}).get("list", [])]
+        valid: List[str] = []
+        for symbol in symbols:
+            try:
+                kl_resp = requests.get(
+                    "https://api.bybit.com/v5/market/kline",
+                    params={
+                        "category": "linear",
+                        "symbol": symbol,
+                        "interval": "1",
+                        "limit": 1,
+                    },
+                    timeout=5,
+                )
+                kl_resp.raise_for_status()
+                if kl_resp.json().get("result", {}).get("list"):
+                    valid.append(symbol)
+            except Exception:  # pragma: no cover - network failure logged
+                logging.warning("Skipping symbol %s due to kline error", symbol)
+        return valid
     raise ValueError(f"Unsupported exchange: {exchange}")
 
 
