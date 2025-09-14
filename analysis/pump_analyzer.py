@@ -1,0 +1,265 @@
+"""CLI for analyzing pump candles across exchanges."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+from statistics import median
+from typing import List, Sequence
+
+import requests
+
+
+@dataclass
+class Candle:
+    """Simple OHLCV candle representation."""
+
+    open_time: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+def fetch_symbols(exchange: str) -> List[str]:
+    """Fetch tradable symbols for the given exchange."""
+
+    if exchange == "binance":
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return [s["symbol"] for s in data.get("symbols", []) if s.get("contractType") == "PERPETUAL"]
+    if exchange == "bybit":
+        url = "https://api.bybit.com/v5/market/instruments-info"
+        resp = requests.get(url, params={"category": "linear"}, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return [s["symbol"] for s in data.get("result", {}).get("list", [])]
+    raise ValueError(f"Unsupported exchange: {exchange}")
+
+
+def fetch_candles(exchange: str, symbol: str, interval: str) -> List[Candle]:
+    """Retrieve recent candles for ``symbol``."""
+
+    if exchange == "binance":
+        url = "https://fapi.binance.com/fapi/v1/klines"
+        params = {"symbol": symbol, "interval": interval, "limit": 200}
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return [
+            Candle(
+                open_time=int(c[0]),
+                open=float(c[1]),
+                high=float(c[2]),
+                low=float(c[3]),
+                close=float(c[4]),
+                volume=float(c[5]),
+            )
+            for c in data
+        ]
+    if exchange == "bybit":
+        url = "https://api.bybit.com/v5/market/kline"
+        params = {"category": "linear", "symbol": symbol, "interval": interval, "limit": 200}
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json().get("result", {}).get("list", [])
+        candles = [
+            Candle(
+                open_time=int(c[0]),
+                open=float(c[1]),
+                high=float(c[2]),
+                low=float(c[3]),
+                close=float(c[4]),
+                volume=float(c[5]),
+            )
+            for c in data
+        ]
+        return sorted(candles, key=lambda c: c.open_time)
+    raise ValueError(f"Unsupported exchange: {exchange}")
+
+
+def fetch_liquidations(exchange: str, symbol: str) -> None:
+    """Attempt to retrieve liquidation history for ``symbol``."""
+
+    if exchange == "binance":
+        url = "https://fapi.binance.com/fapi/v1/forceOrders"
+        try:
+            requests.get(url, params={"symbol": symbol, "limit": 1}, timeout=10)
+        except Exception as exc:  # pragma: no cover - network failure logged
+            logging.warning("Failed to fetch liquidation data: %s", exc)
+        return
+    logging.info("Liquidation endpoint not available for %s", exchange)
+
+
+def _true_range(prev_close: float, candle: Candle) -> float:
+    return max(
+        candle.high - candle.low,
+        abs(candle.high - prev_close),
+        abs(candle.low - prev_close),
+    )
+
+
+def compute_atr(candles: Sequence[Candle], index: int, period: int = 14) -> float:
+    """Compute ATR ending at ``index`` (exclusive)."""
+
+    if index <= 0:
+        return 0.0
+    start = max(1, index - period)
+    trs = [_true_range(candles[i - 1].close, candles[i]) for i in range(start, index)]
+    return sum(trs) / len(trs) if trs else 0.0
+
+
+def find_pumps(
+    candles: Sequence[Candle],
+    pct_gain_thresh: float,
+    vol_mult_thresh: float,
+    wick_ratio_thresh: float,
+    re_high_bars: int,
+    tp_bars: int,
+    sl_bars: int,
+) -> List[List[float]]:
+    """Identify pump candles and compute metrics."""
+
+    results: List[List[float]] = []
+    volumes = [c.volume for c in candles]
+    for i in range(20, len(candles) - max(re_high_bars, tp_bars, sl_bars)):
+        c = candles[i]
+        pct_gain = (c.close - c.open) / c.open * 100 if c.open else 0
+        median_vol = median(volumes[i - 20 : i])
+        rel_vol = c.volume / median_vol if median_vol else 0
+        total_range = c.high - c.low
+        upper_wick = c.high - max(c.open, c.close)
+        upper_wick_ratio = upper_wick / total_range if total_range else 0
+        if not (
+            pct_gain >= pct_gain_thresh
+            and rel_vol >= vol_mult_thresh
+            and upper_wick_ratio <= wick_ratio_thresh
+        ):
+            continue
+        atr = compute_atr(candles, i)
+        atr_mult = (total_range / atr) if atr else 0
+        range_pct = total_range / c.open * 100 if c.open else 0
+        next_high = max(candles[j].high for j in range(i + 1, i + 1 + re_high_bars))
+        re_high = next_high - c.high
+        max_tp = (
+            (max(candles[j].high for j in range(i + 1, i + 1 + tp_bars)) - c.close)
+            / c.close
+            * 100
+            if c.close
+            else 0
+        )
+        max_sl = (
+            (min(candles[j].low for j in range(i + 1, i + 1 + sl_bars)) - c.close)
+            / c.close
+            * 100
+            if c.close
+            else 0
+        )
+        results.append(
+            [
+                c.open_time,
+                pct_gain,
+                rel_vol,
+                upper_wick_ratio,
+                atr_mult,
+                range_pct,
+                upper_wick,
+                re_high,
+                max_tp,
+                max_sl,
+            ]
+        )
+    return results
+
+
+def analyze(
+    exchange: str,
+    pct_gain_thresh: float,
+    vol_mult_thresh: float,
+    wick_ratio_thresh: float,
+    re_high_bars: int,
+    tp_bars: int,
+    sl_bars: int,
+) -> None:
+    """Run pump analysis for the given exchange."""
+
+    symbols = fetch_symbols(exchange)
+    pumps_found = 0
+    out_dir = Path("data/pump_analysis")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{exchange}.csv"
+    headers = [
+        "open_time",
+        "pct_gain",
+        "rel_volume",
+        "upper_wick_ratio",
+        "atr_multiple",
+        "range_pct",
+        "wick_size",
+        "next_re_high",
+        "max_take_profit",
+        "max_stop_loss",
+        "symbol",
+        "interval",
+    ]
+    with out_file.open("w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(headers)
+        for symbol in symbols:
+            logging.info("Processing %s", symbol)
+            fetch_liquidations(exchange, symbol)
+            for interval in ["1m", "5m"]:
+                candles = fetch_candles(exchange, symbol, interval if exchange == "binance" else interval.strip("m"))
+                pumps = find_pumps(
+                    candles,
+                    pct_gain_thresh,
+                    vol_mult_thresh,
+                    wick_ratio_thresh,
+                    re_high_bars,
+                    tp_bars,
+                    sl_bars,
+                )
+                for row in pumps:
+                    writer.writerow(row + [symbol, interval])
+                    pumps_found += 1
+    logging.info(
+        "Processed %d symbols on %s, found %d pump candles",
+        len(symbols),
+        exchange,
+        pumps_found,
+    )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Analyze pump candles for an exchange")
+    parser.add_argument("exchange", choices=["binance", "bybit"], help="Exchange to analyze")
+    parser.add_argument("--pct-gain", type=float, default=3.0, help="Percent gain threshold")
+    parser.add_argument("--vol-mult", type=float, default=3.0, help="Volume multiple vs median")
+    parser.add_argument("--wick-ratio", type=float, default=0.3, help="Maximum upper wick ratio")
+    parser.add_argument("--re-high-bars", type=int, default=3, help="Bars to check for re-high")
+    parser.add_argument("--tp-bars", type=int, default=5, help="Bars to check for take-profit")
+    parser.add_argument("--sl-bars", type=int, default=5, help="Bars to check for stop-loss")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    analyze(
+        args.exchange,
+        args.pct_gain,
+        args.vol_mult,
+        args.wick_ratio,
+        args.re_high_bars,
+        args.tp_bars,
+        args.sl_bars,
+    )
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI entry
+    main()
+
+__all__ = ["main", "analyze"]
