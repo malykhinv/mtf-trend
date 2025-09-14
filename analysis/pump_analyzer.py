@@ -213,7 +213,7 @@ def find_pumps(
     window = config.volume_window
     for i in range(window, len(candles) - max(config.rehigh_lookahead, tp_bars, sl_bars)):
         c = candles[i]
-        pct_gain = (c.close - c.open) / c.open * 100 if c.open else 0
+        pct_gain = (c.high - c.open) / c.open * 100 if c.open else 0
         median_vol = median(volumes[i - window : i])
         rel_vol = c.volume / median_vol if median_vol else 0
         total_range = c.high - c.low
@@ -227,20 +227,21 @@ def find_pumps(
             continue
         atr = compute_atr(candles, i, config.atr_window)
         atr_mult = (total_range / atr) if atr else 0
-        next_high = max(
-            candles[j].high for j in range(i + 1, i + 1 + config.rehigh_lookahead)
+
+        rehigh_index = None
+        for j in range(i + 1, i + 1 + config.rehigh_lookahead):
+            if candles[j].high >= c.high:
+                rehigh_index = j
+                break
+        lookahead_end = (
+            rehigh_index if rehigh_index is not None else i + config.rehigh_lookahead
         )
-        rehigh_hit = next_high >= c.high
+        min_low = min(candles[j].low for j in range(i + 1, lookahead_end + 1))
+        rehigh_hit = rehigh_index is not None
         max_tp = (
-            (c.close - min(candles[j].low for j in range(i + 1, i + 1 + tp_bars)))
-            / c.close
-            * 100
-            if c.close
-            else 0
+            (c.close - min_low) / c.close * 100 if c.close else 0
         )
-        max_sl = (
-            (c.high - c.close) / c.close * 100 if c.close else 0
-        )
+        max_sl = (c.high - c.close) / c.close * 100 if c.close else 0
         results.append(
             {
                 "timestamp": c.open_time,

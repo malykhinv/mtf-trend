@@ -30,6 +30,6 @@ def test_tp_sl_calculation():
     assert len(pumps) == 1
     pump = pumps[0]
     assert pump["rehigh_hit"] is False
-    assert pump["max_tp_pct"] == pytest.approx(8.333, rel=1e-3)
+    assert pump["max_tp_pct"] == pytest.approx(7.407, rel=1e-3)
     assert pump["stop_loss_pct"] == pytest.approx(11.111, rel=1e-3)
 
