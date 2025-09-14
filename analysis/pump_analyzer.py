@@ -12,6 +12,8 @@ from typing import List, Sequence
 
 import requests
 
+from config.pump_analysis import PumpAnalysisConfig, load_config
+
 
 @dataclass
 class Candle:
@@ -117,10 +119,7 @@ def compute_atr(candles: Sequence[Candle], index: int, period: int = 14) -> floa
 
 def find_pumps(
     candles: Sequence[Candle],
-    pct_gain_thresh: float,
-    vol_mult_thresh: float,
-    wick_ratio_thresh: float,
-    re_high_bars: int,
+    config: PumpAnalysisConfig,
     tp_bars: int,
     sl_bars: int,
 ) -> List[List[float]]:
@@ -128,24 +127,27 @@ def find_pumps(
 
     results: List[List[float]] = []
     volumes = [c.volume for c in candles]
-    for i in range(20, len(candles) - max(re_high_bars, tp_bars, sl_bars)):
+    window = config.volume_window
+    for i in range(window, len(candles) - max(config.rehigh_lookahead, tp_bars, sl_bars)):
         c = candles[i]
         pct_gain = (c.close - c.open) / c.open * 100 if c.open else 0
-        median_vol = median(volumes[i - 20 : i])
+        median_vol = median(volumes[i - window : i])
         rel_vol = c.volume / median_vol if median_vol else 0
         total_range = c.high - c.low
         upper_wick = c.high - max(c.open, c.close)
         upper_wick_ratio = upper_wick / total_range if total_range else 0
         if not (
-            pct_gain >= pct_gain_thresh
-            and rel_vol >= vol_mult_thresh
-            and upper_wick_ratio <= wick_ratio_thresh
+            pct_gain >= config.growth_pct
+            and rel_vol >= config.volume_mult
+            and upper_wick_ratio <= config.wick_pct
         ):
             continue
-        atr = compute_atr(candles, i)
+        atr = compute_atr(candles, i, config.atr_window)
         atr_mult = (total_range / atr) if atr else 0
         range_pct = total_range / c.open * 100 if c.open else 0
-        next_high = max(candles[j].high for j in range(i + 1, i + 1 + re_high_bars))
+        next_high = max(
+            candles[j].high for j in range(i + 1, i + 1 + config.rehigh_lookahead)
+        )
         re_high = next_high - c.high
         max_tp = (
             (max(candles[j].high for j in range(i + 1, i + 1 + tp_bars)) - c.close)
@@ -180,10 +182,7 @@ def find_pumps(
 
 def analyze(
     exchange: str,
-    pct_gain_thresh: float,
-    vol_mult_thresh: float,
-    wick_ratio_thresh: float,
-    re_high_bars: int,
+    config: PumpAnalysisConfig,
     tp_bars: int,
     sl_bars: int,
 ) -> None:
@@ -218,10 +217,7 @@ def analyze(
                 candles = fetch_candles(exchange, symbol, interval if exchange == "binance" else interval.strip("m"))
                 pumps = find_pumps(
                     candles,
-                    pct_gain_thresh,
-                    vol_mult_thresh,
-                    wick_ratio_thresh,
-                    re_high_bars,
+                    config,
                     tp_bars,
                     sl_bars,
                 )
@@ -237,23 +233,31 @@ def analyze(
 
 
 def main() -> None:
+    config = load_config()
     parser = argparse.ArgumentParser(description="Analyze pump candles for an exchange")
     parser.add_argument("exchange", choices=["binance", "bybit"], help="Exchange to analyze")
-    parser.add_argument("--pct-gain", type=float, default=3.0, help="Percent gain threshold")
-    parser.add_argument("--vol-mult", type=float, default=3.0, help="Volume multiple vs median")
-    parser.add_argument("--wick-ratio", type=float, default=0.3, help="Maximum upper wick ratio")
-    parser.add_argument("--re-high-bars", type=int, default=3, help="Bars to check for re-high")
+    parser.add_argument("--pct-gain", type=float, default=config.growth_pct, help="Percent gain threshold")
+    parser.add_argument("--vol-mult", type=float, default=config.volume_mult, help="Volume multiple vs median")
+    parser.add_argument("--wick-pct", type=float, default=config.wick_pct, help="Maximum upper wick ratio")
+    parser.add_argument("--vol-window", type=int, default=config.volume_window, help="Median volume window")
+    parser.add_argument("--re-high-bars", type=int, default=config.rehigh_lookahead, help="Bars to check for re-high")
+    parser.add_argument("--atr-window", type=int, default=config.atr_window, help="ATR calculation window")
     parser.add_argument("--tp-bars", type=int, default=5, help="Bars to check for take-profit")
     parser.add_argument("--sl-bars", type=int, default=5, help="Bars to check for stop-loss")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    cfg = PumpAnalysisConfig(
+        growth_pct=args.pct_gain,
+        wick_pct=args.wick_pct,
+        volume_mult=args.vol_mult,
+        volume_window=args.vol_window,
+        rehigh_lookahead=args.re_high_bars,
+        atr_window=args.atr_window,
+    )
     analyze(
         args.exchange,
-        args.pct_gain,
-        args.vol_mult,
-        args.wick_ratio,
-        args.re_high_bars,
+        cfg,
         args.tp_bars,
         args.sl_bars,
     )
