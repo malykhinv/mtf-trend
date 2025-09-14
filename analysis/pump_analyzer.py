@@ -86,17 +86,48 @@ def fetch_candles(exchange: str, symbol: str, interval: str) -> List[Candle]:
     raise ValueError(f"Unsupported exchange: {exchange}")
 
 
-def fetch_liquidations(exchange: str, symbol: str) -> None:
-    """Attempt to retrieve liquidation history for ``symbol``."""
+def fetch_binance_liquidations(
+    symbol: str, interval_start: int, interval_end: int
+) -> float | None:
+    """Return total liquidation volume on Binance for ``symbol`` in interval."""
 
-    if exchange == "binance":
-        url = "https://fapi.binance.com/fapi/v1/forceOrders"
-        try:
-            requests.get(url, params={"symbol": symbol, "limit": 1}, timeout=10)
-        except Exception as exc:  # pragma: no cover - network failure logged
-            logging.warning("Failed to fetch liquidation data: %s", exc)
-        return
-    logging.info("Liquidation endpoint not available for %s", exchange)
+    url = "https://fapi.binance.com/fapi/v1/forceOrders"
+    params = {
+        "symbol": symbol,
+        "startTime": interval_start,
+        "endTime": interval_end,
+        "limit": 1000,
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        return sum(float(item.get("executedQty", 0)) for item in data)
+    except Exception as exc:  # pragma: no cover - network failure logged
+        logging.warning("Failed to fetch Binance liquidations: %s", exc)
+        return None
+
+
+def fetch_bybit_liquidations(
+    symbol: str, interval_start: int, interval_end: int
+) -> float | None:
+    """Return total liquidation volume on Bybit for ``symbol`` in interval."""
+
+    url = "https://api.bybit.com/v5/market/recent-liquidation"
+    params = {
+        "category": "linear",
+        "symbol": symbol,
+        "startTime": interval_start,
+        "endTime": interval_end,
+    }
+    try:
+        resp = requests.get(url, params=params, timeout=10)
+        resp.raise_for_status()
+        data = resp.json().get("result", {}).get("list", [])
+        return sum(float(item.get("qty", 0)) for item in data)
+    except Exception as exc:  # pragma: no cover - network failure logged
+        logging.warning("Failed to fetch Bybit liquidations: %s", exc)
+        return None
 
 
 def _true_range(prev_close: float, candle: Candle) -> float:
@@ -204,6 +235,7 @@ def analyze(
         "next_re_high",
         "max_take_profit",
         "max_stop_loss",
+        "liquidation_volume",
         "symbol",
         "interval",
     ]
@@ -212,7 +244,6 @@ def analyze(
         writer.writerow(headers)
         for symbol in symbols:
             logging.info("Processing %s", symbol)
-            fetch_liquidations(exchange, symbol)
             for interval in ["1m", "5m"]:
                 candles = fetch_candles(exchange, symbol, interval if exchange == "binance" else interval.strip("m"))
                 pumps = find_pumps(
@@ -222,7 +253,18 @@ def analyze(
                     sl_bars,
                 )
                 for row in pumps:
-                    writer.writerow(row + [symbol, interval])
+                    interval_ms = int(interval.strip("m")) * 60_000
+                    start = row[0]
+                    end = start + interval_ms
+                    if exchange == "binance":
+                        liq = fetch_binance_liquidations(symbol, start, end)
+                    elif exchange == "bybit":
+                        liq = fetch_bybit_liquidations(symbol, start, end)
+                    else:  # pragma: no cover - safety
+                        liq = None
+                    if liq is None:
+                        logging.info("Liquidation data unavailable")
+                    writer.writerow(row + [liq, symbol, interval])
                     pumps_found += 1
     logging.info(
         "Processed %d symbols on %s, found %d pump candles",
