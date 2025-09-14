@@ -232,18 +232,14 @@ def find_pumps(
         )
         rehigh_hit = next_high >= c.high
         max_tp = (
-            (max(candles[j].high for j in range(i + 1, i + 1 + tp_bars)) - c.close)
+            (c.close - min(candles[j].low for j in range(i + 1, i + 1 + tp_bars)))
             / c.close
             * 100
             if c.close
             else 0
         )
         max_sl = (
-            (min(candles[j].low for j in range(i + 1, i + 1 + sl_bars)) - c.close)
-            / c.close
-            * 100
-            if c.close
-            else 0
+            (c.high - c.close) / c.close * 100 if c.close else 0
         )
         results.append(
             {
