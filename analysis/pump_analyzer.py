@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import median
 from typing import List, Sequence
+from urllib.parse import urlencode
 
 import pandas as pd
 import requests
 
+from config.credentials import BINANCE
 from config.pump_analysis import PumpAnalysisConfig
 
 
@@ -180,9 +184,23 @@ def fetch_candles(exchange: str, symbol: str, interval: str) -> List[Candle]:
 
 
 def fetch_binance_liquidations(
-    symbol: str, interval_start: int, interval_end: int
+    symbol: str,
+    interval_start: int,
+    interval_end: int,
+    api_key: str | None = None,
+    api_secret: str | None = None,
 ) -> float | None:
     """Return total liquidation volume on Binance for ``symbol`` in interval."""
+
+    if not api_key or not api_secret:
+        api_key = api_key or BINANCE.api_key
+        api_secret = api_secret or BINANCE.api_secret
+
+    if not api_key or not api_secret:
+        logging.warning(
+            "Missing Binance API credentials; skipping liquidation fetch"
+        )
+        return None
 
     url = "https://fapi.binance.com/fapi/v1/forceOrders"
     params = {
@@ -191,8 +209,14 @@ def fetch_binance_liquidations(
         "endTime": interval_end,
         "limit": 1000,
     }
+    query = urlencode(params)
+    signature = hmac.new(
+        api_secret.encode(), query.encode(), hashlib.sha256
+    ).hexdigest()
+    params["signature"] = signature
+    headers = {"X-MBX-APIKEY": api_key}
     try:
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.get(url, params=params, headers=headers, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         return sum(float(item.get("executedQty", 0)) for item in data)
@@ -329,7 +353,9 @@ def analyze(
                 start = pump["timestamp"]
                 end = start + interval_ms
                 if exchange == "binance":
-                    liq = fetch_binance_liquidations(symbol, start, end)
+                    liq = fetch_binance_liquidations(
+                        symbol, start, end, BINANCE.api_key, BINANCE.api_secret
+                    )
                 elif exchange == "bybit":
                     liq = fetch_bybit_liquidations(symbol, start, end)
                 else:  # pragma: no cover - safety
