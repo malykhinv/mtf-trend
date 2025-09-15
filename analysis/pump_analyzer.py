@@ -5,13 +5,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 from typing import List, Sequence
 from urllib.parse import urlencode
 
-import pandas as pd
 import requests
 
 from config.credentials import BINANCE
@@ -323,6 +322,40 @@ def find_pumps(
     return results
 
 
+def _append_record(record: PumpRecord, out_file: Path) -> None:
+    """Append ``record`` to ``out_file`` creating the workbook if needed."""
+
+    try:
+        from openpyxl import Workbook, load_workbook
+
+        if out_file.exists():
+            wb = load_workbook(out_file)
+            ws = wb.active
+        else:
+            wb = Workbook()
+            ws = wb.active
+            ws.append(list(PumpRecord.__annotations__.keys()))
+        ws.append(
+            [
+                record.timestamp,
+                record.symbol,
+                record.tf,
+                record.volume,
+                record.relative_volume,
+                record.atr_mult,
+                record.pct_move,
+                record.upper_wick_pct,
+                record.rehigh_hit,
+                record.max_tp_pct,
+                record.stop_loss_pct,
+                record.liquidation_volume,
+            ]
+        )
+        wb.save(out_file)
+    except Exception as exc:  # pragma: no cover - file or dependency errors
+        logging.warning("Failed to write record to %s: %s", out_file, exc)
+
+
 def analyze(
     exchange: str,
     config: PumpAnalysisConfig,
@@ -331,34 +364,59 @@ def analyze(
 ) -> None:
     """Run pump analysis for the given exchange."""
 
-    symbols = fetch_symbols(exchange)
+    try:
+        symbols = fetch_symbols(exchange)
+    except Exception as exc:  # pragma: no cover - network failure logged
+        logging.warning("Failed to fetch symbols for %s: %s", exchange, exc)
+        symbols = []
     out_dir = Path("data/pump_analysis")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{exchange}.xlsx"
-    records: List[dict] = []
     pumps_total = 0
+    seen: set[tuple[str, str]] = set()
     for symbol in symbols:
         total_candles = 0
         total_pumps = 0
         for interval in ["1m", "5m"]:
-            candles = fetch_candles(
-                exchange,
-                symbol,
-                interval if exchange == "binance" else interval.strip("m"),
-            )
+            try:
+                candles = fetch_candles(
+                    exchange,
+                    symbol,
+                    interval if exchange == "binance" else interval.strip("m"),
+                )
+            except Exception as exc:  # pragma: no cover - network failure logged
+                logging.warning(
+                    "Failed to fetch candles for %s %s: %s", symbol, interval, exc
+                )
+                continue
             total_candles += len(candles)
-            pumps = find_pumps(candles, config, tp_bars, sl_bars)
+            try:
+                pumps = find_pumps(candles, config, tp_bars, sl_bars)
+            except Exception as exc:  # pragma: no cover - safety
+                logging.warning(
+                    "Failed to analyze candles for %s %s: %s", symbol, interval, exc
+                )
+                continue
             for pump in pumps:
+                key = (symbol, interval)
+                if key in seen:
+                    continue
                 interval_ms = int(interval.strip("m")) * 60_000
                 start = pump["timestamp"]
                 end = start + interval_ms
-                if exchange == "binance":
-                    liq = fetch_binance_liquidations(
-                        symbol, start, end, BINANCE.api_key, BINANCE.api_secret
+                try:
+                    if exchange == "binance":
+                        liq = fetch_binance_liquidations(
+                            symbol, start, end, BINANCE.api_key, BINANCE.api_secret
+                        )
+                    elif exchange == "bybit":
+                        liq = fetch_bybit_liquidations(symbol, start, end)
+                    else:  # pragma: no cover - safety
+                        liq = None
+                except Exception as exc:  # pragma: no cover - network failure logged
+                    logging.warning(
+                        "Failed to fetch liquidations for %s %s: %s", symbol, interval, exc
                     )
-                elif exchange == "bybit":
-                    liq = fetch_bybit_liquidations(symbol, start, end)
-                else:  # pragma: no cover - safety
                     liq = None
                 record = PumpRecord(
                     timestamp=pump["timestamp"],
@@ -374,7 +432,8 @@ def analyze(
                     stop_loss_pct=pump["stop_loss_pct"],
                     liquidation_volume=liq,
                 )
-                records.append(asdict(record))
+                _append_record(record, out_file)
+                seen.add(key)
                 total_pumps += 1
                 pumps_total += 1
         logging.info(
@@ -383,9 +442,6 @@ def analyze(
             total_candles,
             total_pumps,
         )
-    if records:
-        df = pd.DataFrame(records, columns=list(PumpRecord.__annotations__.keys()))
-        df.to_excel(out_file, index=False)
     logging.info(
         "Processed %d symbols on %s, found %d pump candles",
         len(symbols),
