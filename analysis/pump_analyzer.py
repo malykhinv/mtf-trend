@@ -52,14 +52,15 @@ class PumpRecord:
     timestamp: int
     symbol: str
     tf: str
+    pct_to_low_break: float
+    pct_to_high_break: float
+    break_direction: int
     volume: float
     relative_volume: float
     atr_mult: float
     pct_move: float
     upper_wick_pct: float
     rehigh_hit: bool
-    max_tp_pct: float
-    stop_loss_pct: float
     liquidation_volume: float | None
 
 
@@ -300,23 +301,42 @@ def find_pumps(
         lookahead_end = (
             rehigh_index if rehigh_index is not None else i + config.rehigh_lookahead
         )
-        min_low = min(candles[j].low for j in range(i + 1, lookahead_end + 1))
         rehigh_hit = rehigh_index is not None
-        max_tp = (
-            (c.close - min_low) / c.close * 100 if c.close else 0
-        )
-        max_sl = (c.high - c.close) / c.close * 100 if c.close else 0
+
+        pct_to_low_break = 0.0
+        pct_to_high_break = 0.0
+        break_direction = 0
+        low_cross_recorded = False
+        high_cross_recorded = False
+        for j in range(i + 1, lookahead_end + 1):
+            next_candle = candles[j]
+            if not low_cross_recorded and next_candle.low <= c.low:
+                if c.close:
+                    pct_to_low_break = (c.close - next_candle.low) / c.close * 100
+                low_cross_recorded = True
+                if break_direction == 0:
+                    break_direction = -1
+            if not high_cross_recorded and next_candle.high >= c.high:
+                if c.close:
+                    pct_to_high_break = (next_candle.high - c.close) / c.close * 100
+                high_cross_recorded = True
+                if break_direction == 0:
+                    break_direction = 1
+            if low_cross_recorded and high_cross_recorded:
+                break
         results.append(
             {
                 "timestamp": c.open_time,
+                "pct_to_low_break": pct_to_low_break,
+                "pct_to_high_break": pct_to_high_break,
+                "break_direction": break_direction,
                 "volume": c.volume,
                 "relative_volume": rel_vol,
                 "atr_mult": atr_mult,
                 "pct_move": pct_gain,
                 "upper_wick_pct": upper_wick_ratio * 100,
                 "rehigh_hit": rehigh_hit,
-                "max_tp_pct": max_tp,
-                "stop_loss_pct": max_sl,
+                "liquidation_volume": None,
             }
         )
     return results
@@ -340,14 +360,15 @@ def _append_record(record: PumpRecord, out_file: Path) -> None:
                 record.timestamp,
                 record.symbol,
                 record.tf,
+                record.pct_to_low_break,
+                record.pct_to_high_break,
+                record.break_direction,
                 record.volume,
                 record.relative_volume,
                 record.atr_mult,
                 record.pct_move,
                 record.upper_wick_pct,
                 record.rehigh_hit,
-                record.max_tp_pct,
-                record.stop_loss_pct,
                 record.liquidation_volume,
             ]
         )
@@ -422,14 +443,15 @@ def analyze(
                     timestamp=pump["timestamp"],
                     symbol=symbol,
                     tf=interval,
+                    pct_to_low_break=pump["pct_to_low_break"],
+                    pct_to_high_break=pump["pct_to_high_break"],
+                    break_direction=pump["break_direction"],
                     volume=pump["volume"],
                     relative_volume=pump["relative_volume"],
                     atr_mult=pump["atr_mult"],
                     pct_move=pump["pct_move"],
                     upper_wick_pct=pump["upper_wick_pct"],
                     rehigh_hit=pump["rehigh_hit"],
-                    max_tp_pct=pump["max_tp_pct"],
-                    stop_loss_pct=pump["stop_loss_pct"],
                     liquidation_volume=liq,
                 )
                 _append_record(record, out_file)
