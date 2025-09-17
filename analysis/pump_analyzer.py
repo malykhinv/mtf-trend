@@ -298,9 +298,6 @@ def find_pumps(
             if candles[j].high >= c.high:
                 rehigh_index = j
                 break
-        lookahead_end = (
-            rehigh_index if rehigh_index is not None else i + config.rehigh_lookahead
-        )
         rehigh_hit = rehigh_index is not None
 
         pct_to_low_break = 0.0
@@ -308,7 +305,7 @@ def find_pumps(
         break_direction = 0
         low_cross_recorded = False
         high_cross_recorded = False
-        for j in range(i + 1, lookahead_end + 1):
+        for j in range(i + 1, len(candles)):
             next_candle = candles[j]
             if not low_cross_recorded and next_candle.low <= c.low:
                 if c.close:
