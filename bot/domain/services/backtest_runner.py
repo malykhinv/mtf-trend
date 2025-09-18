@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
-from ..enums import Side, TradeStatus
+from ..enums import Side, Timeframe, TradeStatus
 from ..models.entities import Candle, Signal, Thresholds, Trade
 from ...data.providers.base import BaseExchangeProvider
 from ...data.repositories.signal_repository import SignalRepository
@@ -19,6 +19,7 @@ from .tp_sl_service import TpSlService
 
 @dataclass(slots=True)
 class BacktestResult:
+    timeframe: Timeframe | None
     trades: Sequence[Trade]
     signals: Sequence[Signal]
 
@@ -52,10 +53,14 @@ class BacktestRunner:
         candles: Sequence[Candle],
         thresholds: Thresholds,
         provider: BaseExchangeProvider,
+        timeframe: Timeframe | None = None,
     ) -> BacktestResult:
         generated_signals: list[Signal] = []
         generated_trades: list[Trade] = []
         await self.refresh_deposit(provider, force=True)
+        effective_timeframe: Timeframe | None = timeframe
+        if effective_timeframe is None and candles:
+            effective_timeframe = candles[-1].timeframe
         for index in range(self._window, len(candles)):
             window_candles = candles[index - self._window : index]
             future_candles = candles[index :]
@@ -66,6 +71,13 @@ class BacktestRunner:
                 future_candles=future_candles,
             )
             for signal in result.signals:
+                resolved_timeframe = (
+                    effective_timeframe or signal.timeframe or signal.candle.timeframe
+                )
+                if resolved_timeframe:
+                    signal.timeframe = resolved_timeframe
+                    signal.candle.timeframe = resolved_timeframe
+                    signal.metadata.setdefault("timeframe", resolved_timeframe.value)
                 accepted, key = self._dedup.should_accept(signal)
                 if not accepted:
                     self._logger.debug("Skipping duplicate signal %s", key)
@@ -81,7 +93,7 @@ class BacktestRunner:
                     source_signal_id=source_signal_id,
                     exchange=signal.candle.exchange,
                     symbol=signal.candle.symbol,
-                    timeframe=signal.timeframe or signal.candle.timeframe,
+                    timeframe=resolved_timeframe,
                     side=signal.side,
                     status=TradeStatus.OPENED,
                     entry_price=signal.candle.close,
@@ -102,7 +114,11 @@ class BacktestRunner:
                 self._update_used_amount()
                 generated_signals.append(signal)
                 generated_trades.append(trade)
-        return BacktestResult(trades=generated_trades, signals=generated_signals)
+        return BacktestResult(
+            timeframe=effective_timeframe,
+            trades=generated_trades,
+            signals=generated_signals,
+        )
 
     async def refresh_deposit(
         self, provider: BaseExchangeProvider, force: bool = False
