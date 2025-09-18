@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
@@ -46,10 +47,35 @@ def init_providers(config: AppConfig) -> Dict[str, BaseExchangeProvider]:
         min_volume = float(cfg.get("min_quote_volume", 0))
         api_base = cfg.get("api_base")
         ws_base = cfg.get("ws_base")
+        env_prefix = name.upper()
+
+        def _resolve_secret(key: str, env_suffix: str) -> str | None:
+            value = cfg.get(key)
+            if value:
+                return str(value)
+            env_key = cfg.get(f"{key}_env") or f"{env_prefix}_{env_suffix}"
+            return config.get(f"env.{env_key}") or os.getenv(env_key)
+
+        api_key = _resolve_secret("api_key", "API_KEY")
+        api_secret = _resolve_secret("api_secret", "API_SECRET")
         if name == "binance":
-            providers[name] = BinanceFuturesProvider(api_base, ws_base, rate, min_volume)
+            providers[name] = BinanceFuturesProvider(
+                api_base,
+                ws_base,
+                rate,
+                min_volume,
+                api_key=api_key,
+                api_secret=api_secret,
+            )
         elif name == "bybit":
-            providers[name] = BybitPerpetualProvider(api_base, ws_base, rate, min_volume)
+            providers[name] = BybitPerpetualProvider(
+                api_base,
+                ws_base,
+                rate,
+                min_volume,
+                api_key=api_key,
+                api_secret=api_secret,
+            )
     return providers
 
 

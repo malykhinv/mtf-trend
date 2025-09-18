@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import hmac
+import time
+from hashlib import sha256
 from typing import Any, AsyncIterator, Iterable, List
+from urllib.parse import urlencode
 
 try:
     import httpx
@@ -25,10 +28,31 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         rate_limit_per_minute: int,
         min_quote_volume: float,
         session: httpx.AsyncClient | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
     ) -> None:
         super().__init__(api_base, ws_base, rate_limit_per_minute, min_quote_volume)
         self._session = session or (httpx.AsyncClient(timeout=10.0) if httpx else None)
         self._logger = get_logger(self.__class__.__name__)
+        self._api_key = api_key
+        self._api_secret = api_secret
+
+    def _require_credentials(self) -> tuple[str, str]:
+        if not self._api_key or not self._api_secret:
+            raise RuntimeError("Binance API credentials are required for private requests")
+        return self._api_key, self._api_secret
+
+    async def _authenticated_get(self, endpoint: str, params: dict[str, Any] | None = None) -> httpx.Response:
+        if not self._session:
+            raise RuntimeError("httpx is required to perform authenticated requests to Binance")
+        api_key, api_secret = self._require_credentials()
+        query_params = params.copy() if params else {}
+        query_params.setdefault("timestamp", int(time.time() * 1000))
+        query_string = urlencode(query_params)
+        signature = hmac.new(api_secret.encode("utf-8"), query_string.encode("utf-8"), sha256).hexdigest()
+        query_params["signature"] = signature
+        headers = {"X-MBX-APIKEY": api_key}
+        return await self._session.get(endpoint, params=query_params, headers=headers)
 
     async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> List[Candle]:
         await self.ensure_rate_limit()
@@ -67,13 +91,24 @@ class BinanceFuturesProvider(BaseExchangeProvider):
 
     async def update_deposit(self) -> dict[str, Any]:
         await self.ensure_rate_limit()
-        if not self._session:
-            raise RuntimeError("httpx is required to fetch account balance from Binance")
         endpoint = f"{self._api_base}/fapi/v2/balance"
-        response = await self._session.get(endpoint)
+        response = await self._authenticated_get(endpoint)
         response.raise_for_status()
         balances = response.json()
-        usdt_balance = next((float(item.get("balance", 0.0)) for item in balances if item.get("asset") == "USDT"), 0.0)
+        usdt_balance = 0.0
+        for item in balances:
+            if item.get("asset") != "USDT":
+                continue
+            for key in ("availableBalance", "balance", "crossWalletBalance", "equity"):
+                value = item.get(key)
+                if value is not None:
+                    try:
+                        usdt_balance = float(value)
+                        break
+                    except (TypeError, ValueError):
+                        continue
+            if usdt_balance:
+                break
         return {"asset": "USDT", "balance": usdt_balance}
 
     async def close(self) -> None:
