@@ -73,11 +73,7 @@ class BacktestRunner:
                 snapshot = self._deposit_snapshot()
                 trade_size = self._calculate_trade_size()
                 timestamp = utcnow()
-                source_signal_id = (
-                    signal.metadata.get("source_signal_id")
-                    if isinstance(signal.metadata, dict) and signal.metadata.get("source_signal_id")
-                    else signal.id
-                )
+                source_signal_id = signal.metadata.get("source_signal_id") or signal.id
                 trade = Trade(
                     id=signal.id,
                     signal_id=signal.id,
@@ -157,6 +153,20 @@ class BacktestRunner:
     def _apply_backtest_outcome(
         self, signal: Signal, trade: Trade, future_candles: Sequence[Candle]
     ) -> None:
+        raw_metrics = signal.metadata.get("metrics")
+        metrics_getter = getattr(raw_metrics, "get", None)
+        metrics: Dict[str, Any] = raw_metrics if callable(metrics_getter) else {}
+
+        def _extract_pct(key: str) -> float:
+            value = metrics.get(key)
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        pct_to_high_break = _extract_pct("pct_to_high_break")
+        pct_to_low_break = _extract_pct("pct_to_low_break")
+
         for candle in future_candles:
             hit_tp, hit_sl = self._check_thresholds(trade, candle)
             status = self._resolve_trade_status(signal, trade, candle, hit_tp, hit_sl)
@@ -164,13 +174,29 @@ class BacktestRunner:
                 continue
             trade.status = status
             trade.closed_at = candle.closed_at
-            exit_price = trade.tp_price if status == TradeStatus.CLOSED_TP else trade.sl_price
+            result_pct: float
+            if trade.side == Side.LONG:
+                if status == TradeStatus.CLOSED_TP:
+                    result_pct = pct_to_high_break
+                else:
+                    result_pct = -pct_to_low_break
+                exit_price = trade.entry_price * (1 + result_pct / 100)
+            else:
+                if status == TradeStatus.CLOSED_TP:
+                    result_pct = pct_to_low_break
+                else:
+                    result_pct = -pct_to_high_break
+                exit_price = trade.entry_price * (1 - result_pct / 100)
             trade.exit_price = exit_price
-            trade.pnl = self._calculate_pnl(trade, exit_price)
-            trade.pnl_pct = (
-                (trade.pnl / trade.used_margin) * 100.0
-                if trade.pnl is not None and trade.used_margin
-                else None
+            trade.pnl = trade.size * (result_pct / 100)
+            trade.pnl_pct = result_pct
+            backtest_meta = trade.metadata.setdefault("backtest", {})
+            backtest_meta.update(
+                {
+                    "result_pct": result_pct,
+                    "pct_to_high_break": pct_to_high_break,
+                    "pct_to_low_break": pct_to_low_break,
+                }
             )
             trade.updated_at = utcnow()
             return
