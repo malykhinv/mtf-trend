@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
+from collections.abc import Mapping
 from typing import Any, Deque, Dict, Iterable, Optional
 
 from ...data.providers.base import BaseExchangeProvider
@@ -52,11 +53,7 @@ class LiveTradingRunner:
         snapshot = await self.refresh_deposit()
         trade_size = self._calculate_trade_size()
         timestamp = utcnow()
-        source_signal_id = (
-            signal.metadata.get("source_signal_id")
-            if isinstance(signal.metadata, dict) and signal.metadata.get("source_signal_id")
-            else signal.id
-        )
+        source_signal_id = signal.metadata.get("source_signal_id") or signal.id
         trade = Trade(
             id=signal.id,
             signal_id=signal.id,
@@ -161,21 +158,25 @@ class LiveTradingRunner:
         self._state.update_deposit(amount, asset, timestamp)
         return self._deposit_snapshot()
 
-    def _extract_deposit(self, balance: Any) -> tuple[str, float]:
-        if isinstance(balance, dict):
-            asset = str(balance.get("asset") or self._deposit_asset or "USDT")
-            for key in ("balance", "availableBalance", "available", "amount", "equity"):
-                value = balance.get(key)
-                if value is not None:
-                    try:
-                        return asset, float(value)
-                    except (TypeError, ValueError):
-                        continue
-            try:
-                return asset, float(balance.get(asset, 0.0))
-            except (TypeError, ValueError):
-                pass
+    def _extract_deposit(self, balance: Mapping[str, Any]) -> tuple[str, float]:
+        asset = str(balance.get("asset") or self._deposit_asset or "USDT")
+        for key in ("balance", "availableBalance", "available", "amount", "equity"):
+            value = self._to_float(balance.get(key))
+            if value is not None:
+                return asset, value
+        fallback = self._to_float(balance.get(asset))
+        if fallback is not None:
+            return asset, fallback
         return self._deposit_asset or "USDT", self._deposit_usdt
+
+    @staticmethod
+    def _to_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _calculate_trade_size(self) -> float:
         return max(10.0, 0.0005 * self._deposit_usdt) if self._deposit_usdt > 0 else 10.0

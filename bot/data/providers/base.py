@@ -63,6 +63,9 @@ class BaseExchangeProvider:
     async def update_deposit(self) -> Dict[str, Any]:
         raise NotImplementedError
 
+    async def close(self) -> None:
+        """Release provider resources."""
+
     def map_candles(
         self, raw: Iterable[Sequence[Any]], symbol: str, timeframe: Timeframe
     ) -> List[Candle]:

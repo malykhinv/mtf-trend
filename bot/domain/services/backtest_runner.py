@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
@@ -118,21 +119,25 @@ class BacktestRunner:
         self._last_deposit_update = timestamp
         self._state.update_deposit(amount, asset, timestamp)
 
-    def _extract_deposit(self, balance: Any) -> tuple[str, float]:
-        if isinstance(balance, dict):
-            asset = str(balance.get("asset") or self._deposit_asset or "USDT")
-            for key in ("balance", "availableBalance", "available", "amount", "equity"):
-                value = balance.get(key)
-                if value is not None:
-                    try:
-                        return asset, float(value)
-                    except (TypeError, ValueError):
-                        continue
-            try:
-                return asset, float(balance.get(asset, 0.0))
-            except (TypeError, ValueError):
-                pass
+    def _extract_deposit(self, balance: Mapping[str, Any]) -> tuple[str, float]:
+        asset = str(balance.get("asset") or self._deposit_asset or "USDT")
+        for key in ("balance", "availableBalance", "available", "amount", "equity"):
+            value = self._to_float(balance.get(key))
+            if value is not None:
+                return asset, value
+        fallback = self._to_float(balance.get(asset))
+        if fallback is not None:
+            return asset, fallback
         return self._deposit_asset or "USDT", self._deposit_usdt
+
+    @staticmethod
+    def _to_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
     def _calculate_trade_size(self) -> float:
         return max(10.0, 0.0005 * self._deposit_usdt) if self._deposit_usdt > 0 else 10.0
@@ -154,8 +159,7 @@ class BacktestRunner:
         self, signal: Signal, trade: Trade, future_candles: Sequence[Candle]
     ) -> None:
         raw_metrics = signal.metadata.get("metrics")
-        metrics_getter = getattr(raw_metrics, "get", None)
-        metrics: Dict[str, Any] = raw_metrics if callable(metrics_getter) else {}
+        metrics: Dict[str, Any] = dict(raw_metrics) if isinstance(raw_metrics, Mapping) else {}
 
         def _extract_pct(key: str) -> float:
             value = metrics.get(key)

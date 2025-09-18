@@ -340,9 +340,7 @@ async def main_async() -> None:
         await run_live(config, providers, thresholds_map, services)
     finally:
         for provider in providers.values():
-            close = getattr(provider, "close", None)
-            if close:
-                await close()
+            await provider.close()
 
 
 def main() -> None:
