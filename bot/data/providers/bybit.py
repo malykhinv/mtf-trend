@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import time
+from hashlib import sha256
 from typing import Any, AsyncIterator, Iterable, List
+from urllib.parse import urlencode
 
 try:
     import httpx
@@ -23,9 +27,40 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         rate_limit_per_minute: int,
         min_quote_volume: float,
         session: httpx.AsyncClient | None = None,
+        api_key: str | None = None,
+        api_secret: str | None = None,
     ) -> None:
         super().__init__(api_base, ws_base, rate_limit_per_minute, min_quote_volume)
         self._session = session or (httpx.AsyncClient(timeout=10.0) if httpx else None)
+        self._api_key = api_key
+        self._api_secret = api_secret
+
+    def _require_credentials(self) -> tuple[str, str]:
+        if not self._api_key or not self._api_secret:
+            raise RuntimeError("Bybit API credentials are required for private requests")
+        return self._api_key, self._api_secret
+
+    async def _authenticated_get(
+        self, endpoint: str, params: dict[str, Any] | None = None
+    ) -> httpx.Response:
+        if not self._session:
+            raise RuntimeError("httpx is required to perform authenticated requests to Bybit")
+        api_key, api_secret = self._require_credentials()
+        query_params = params.copy() if params else {}
+        recv_window = str(query_params.pop("recvWindow", query_params.pop("recv_window", "5000")))
+        query_string = urlencode(sorted(query_params.items())) if query_params else ""
+        timestamp = str(int(time.time() * 1000))
+        query_params["recvWindow"] = recv_window
+        prehash = f"{timestamp}{api_key}{recv_window}{query_string}"
+        signature = hmac.new(api_secret.encode("utf-8"), prehash.encode("utf-8"), sha256).hexdigest()
+        headers = {
+            "X-BAPI-API-KEY": api_key,
+            "X-BAPI-TIMESTAMP": timestamp,
+            "X-BAPI-RECV-WINDOW": recv_window,
+            "X-BAPI-SIGN": signature,
+            "X-BAPI-SIGN-TYPE": "2",
+        }
+        return await self._session.get(endpoint, params=query_params, headers=headers)
 
     async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> List[Candle]:
         await self.ensure_rate_limit()
@@ -66,16 +101,37 @@ class BybitPerpetualProvider(BaseExchangeProvider):
 
     async def update_deposit(self) -> dict[str, Any]:
         await self.ensure_rate_limit()
-        if not self._session:
-            raise RuntimeError("httpx is required to fetch balances from Bybit")
         endpoint = f"{self._api_base}/v5/account/wallet-balance"
         params = {"accountType": "UNIFIED"}
-        response = await self._session.get(endpoint, params=params)
+        response = await self._authenticated_get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        balances = data.get("result", {}).get("list", [])
-        usdt = next((float(item.get("totalWalletBalance", 0.0)) for item in balances if item.get("coin") == "USDT"), 0.0)
-        return {"asset": "USDT", "balance": usdt}
+        result = data.get("result", {})
+        entries = result.get("list", [])
+        usdt_balance = 0.0
+        for entry in entries:
+            coins = entry.get("coin")
+            if isinstance(coins, list):
+                for coin in coins:
+                    if coin.get("coin") == "USDT":
+                        for key in (
+                            "walletBalance",
+                            "availableToWithdraw",
+                            "equity",
+                            "availableBalance",
+                        ):
+                            value = coin.get(key)
+                            if value is not None:
+                                try:
+                                    usdt_balance = float(value)
+                                    break
+                                except (TypeError, ValueError):
+                                    continue
+                        if usdt_balance:
+                            break
+            if usdt_balance:
+                break
+        return {"asset": "USDT", "balance": usdt_balance}
 
     async def close(self) -> None:
         if self._session:
