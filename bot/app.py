@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, Mapping
+from typing import Dict, Iterable, Mapping, Sequence
+
+VALID_MODES = {"backtest", "live"}
 
 from .data.io.config_loader import AppConfig, ConfigLoader
 from .data.io.storage import Storage
@@ -355,7 +358,7 @@ async def run_backtest(
     logger = get_logger("backtest")
     signal_repo, trade_repo, state_repo, _, selector, tp_sl_service, dedup_policy = services
     backtest_cfg = config.get("backtest", {})
-    if not backtest_cfg.get("enabled", False):
+    if not _is_mode_enabled(backtest_cfg):
         logger.info("Backtest disabled")
         return
     runner = BacktestRunner(
@@ -404,7 +407,7 @@ async def run_live(
     logger = get_logger("live")
     signal_repo, trade_repo, state_repo, _, selector, tp_sl_service, dedup_policy = services
     live_cfg = config.get("live", {})
-    if not live_cfg.get("enabled", False):
+    if not _is_mode_enabled(live_cfg):
         logger.info("Live trading disabled")
         return
     provider_name = live_cfg.get("provider") or next(iter(providers))
@@ -449,10 +452,58 @@ async def run_live(
     await runner.run(symbols, timeframe, thresholds_selection)
 
 
-async def main_async() -> None:
+def _normalize_mode(value: object) -> str | None:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized:
+            return normalized
+    return None
+
+
+def _is_mode_enabled(config_section: Mapping[str, object] | object, default: bool = True) -> bool:
+    if not isinstance(config_section, Mapping):
+        return default
+    value = config_section.get("enabled")
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def resolve_mode(config: AppConfig, cli_args: Sequence[str] | None = None) -> str:
+    cli_args = tuple(cli_args or ())
+    cli_mode: str | None = None
+    for index, arg in enumerate(cli_args):
+        if arg in {"--mode", "-m"}:
+            try:
+                candidate = cli_args[index + 1]
+            except IndexError as exc:  # pragma: no cover - defensive
+                raise ValueError("Missing value for --mode flag") from exc
+            cli_mode = candidate
+            break
+        if arg.startswith("--mode="):
+            cli_mode = arg.split("=", 1)[1]
+            break
+    mode = _normalize_mode(cli_mode) or _normalize_mode(config.get("mode")) or "backtest"
+    if mode not in VALID_MODES:
+        raise ValueError(
+            f"Unsupported mode '{mode}'. Expected one of: {', '.join(sorted(VALID_MODES))}"
+        )
+    return mode
+
+
+async def main_async(cli_args: Sequence[str] | None = None) -> None:
     config = load_config()
     configure_logging(config.get("logging.level", "INFO"))
     logger = get_logger("app")
+    mode = resolve_mode(config, cli_args)
     storage = init_storage(config)
     providers = init_providers(config)
     if not providers:
@@ -461,15 +512,19 @@ async def main_async() -> None:
     services = init_services(config, storage)
     thresholds_map = build_thresholds(config)
     try:
-        await run_backtest(config, providers, thresholds_map, services)
-        await run_live(config, providers, thresholds_map, services)
+        if mode == "backtest":
+            await run_backtest(config, providers, thresholds_map, services)
+        elif mode == "live":
+            await run_live(config, providers, thresholds_map, services)
     finally:
         for provider in providers.values():
             await provider.close()
 
 
-def main() -> None:
-    asyncio.run(main_async())
+def main(argv: Sequence[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+    asyncio.run(main_async(argv))
 
 
 if __name__ == "__main__":
