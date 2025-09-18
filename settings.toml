@@ -41,12 +41,12 @@ volume_multiplier = 200000.0
 breakout_threshold = 80.0
 tp_multiplier = 2.5
 sl_multiplier = 1.0
-metadata = { timeframe = "1h" }
+metadata = { timeframe = "15m" }
 
 [backtest]
 enabled = true
 symbols = ["BTCUSDT"]
-timeframe = "1h"
+timeframe = "15m"
 limit = 200
 window = 50
 

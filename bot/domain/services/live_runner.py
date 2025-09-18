@@ -48,7 +48,7 @@ class LiveTradingRunner:
             exchange=signal.candle.exchange,
             symbol=signal.candle.symbol,
             side=signal.side,
-            status=TradeStatus.PENDING,
+            status=TradeStatus.OPENED,
             entry_price=signal.candle.close,
             size=1.0,
             metadata={"mode": "live"},

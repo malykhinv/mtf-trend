@@ -21,9 +21,11 @@ class SignalSelectorService:
         self._metrics_service = metrics_service
 
     def _determine_side(self, momentum: float) -> tuple[Side, BreakDirection]:
-        if momentum >= 0:
-            return Side.LONG, BreakDirection.BULLISH
-        return Side.SHORT, BreakDirection.BEARISH
+        if momentum > 0:
+            return Side.LONG, BreakDirection.HIGH_FIRST
+        if momentum < 0:
+            return Side.SHORT, BreakDirection.LOW_FIRST
+        return Side.LONG, BreakDirection.NONE
 
     def select(self, symbol: str, candles: Sequence[Candle], thresholds: Thresholds) -> SelectionResult:
         metrics = self._metrics_service.calculate(candles)

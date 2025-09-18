@@ -16,7 +16,7 @@ from .base import BaseExchangeProvider
 
 
 class BinanceFuturesProvider(BaseExchangeProvider):
-    exchange = Exchange.BINANCE_FUTURES
+    exchange = Exchange.BINANCE
 
     def __init__(
         self,
