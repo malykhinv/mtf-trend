@@ -1,14 +1,16 @@
 from __future__ import annotations
 
-from typing import Protocol, Any
+from typing import Protocol
 
-from domain.models.trading import OrderSpec
+from domain.models.trading import OrderExecution, OrderSpec
 
 
 class Trader(Protocol):
     """Abstract trading interface."""
 
-    async def place(self, order: OrderSpec) -> Any | None:  # pragma: no cover - network
+    async def place(
+        self, order: OrderSpec
+    ) -> OrderExecution | None:  # pragma: no cover - network
         """Place ``order`` on the exchange."""
         raise NotImplementedError
 
