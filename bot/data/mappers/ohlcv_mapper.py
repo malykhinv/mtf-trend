@@ -5,6 +5,7 @@ from typing import Any, Sequence
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
+from ...utils.clock import get_timezone
 
 
 def map_ohlcv(
@@ -15,8 +16,10 @@ def map_ohlcv(
 ) -> Candle:
     if len(raw) < 6:
         raise ValueError("raw OHLCV should have at least 6 elements")
-    timestamp = datetime.fromtimestamp(raw[0] / 1000 if raw[0] > 1e12 else raw[0], tz=timezone.utc)
-    candle_id = f"{exchange.value}:{symbol}:{timeframe.value}:{int(timestamp.timestamp())}"
+    base_timestamp = raw[0] / 1000 if raw[0] > 1e12 else raw[0]
+    utc_timestamp = datetime.fromtimestamp(base_timestamp, tz=timezone.utc)
+    timestamp = utc_timestamp.astimezone(get_timezone())
+    candle_id = f"{exchange.value}:{symbol}:{timeframe.value}:{int(utc_timestamp.timestamp())}"
     volume = float(raw[5])
     quote_volume = _extract_quote_volume(raw, exchange)
     return Candle(

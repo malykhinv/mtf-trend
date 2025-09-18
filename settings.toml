@@ -1,5 +1,8 @@
 mode = "backtest"
 
+[time]
+zone = "Europe/Belgrade"
+
 [logging]
 level = "INFO"
 

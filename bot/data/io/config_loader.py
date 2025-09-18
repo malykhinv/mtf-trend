@@ -19,6 +19,13 @@ class AppConfig:
             cursor = cursor[part]
         return cursor
 
+    @property
+    def timezone_name(self) -> str:
+        value = self.get("time.zone")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return "UTC"
+
 
 class ConfigLoader:
     def __init__(self, settings_path: Path, env_path: Path | None = None) -> None:

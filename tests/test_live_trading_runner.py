@@ -4,6 +4,7 @@ import asyncio
 import types
 from collections import deque
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -96,7 +97,7 @@ def _build_signal(
 
 
 async def _execute_take_profit(tmp_path) -> None:
-    now = datetime.utcnow().replace(microsecond=0)
+    now = datetime.now(ZoneInfo("UTC")).replace(microsecond=0)
     signal = _build_signal(
         identifier="tp",
         side=Side.LONG,
@@ -164,7 +165,7 @@ async def _execute_take_profit(tmp_path) -> None:
 
 
 async def _execute_stop_loss(tmp_path) -> None:
-    now = datetime.utcnow().replace(microsecond=0)
+    now = datetime.now(ZoneInfo("UTC")).replace(microsecond=0)
     signal = _build_signal(
         identifier="sl",
         side=Side.SHORT,

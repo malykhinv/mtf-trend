@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 VALID_MODES = {"backtest", "live"}
 
@@ -28,7 +29,7 @@ from .domain.services.live_runner import LiveTradingRunner
 from .domain.services.metrics_service import MetricsService
 from .domain.services.selector_service import SignalSelectorService
 from .domain.services.tp_sl_service import TpSlService
-from .utils.clock import utcnow
+from .utils.clock import init_clock, utcnow
 from .utils.logging import configure_logging, get_logger
 
 
@@ -646,8 +647,22 @@ def resolve_mode(config: AppConfig, cli_args: Sequence[str] | None = None) -> st
 
 async def main_async(cli_args: Sequence[str] | None = None) -> None:
     config = load_config()
+    timezone_name = config.timezone_name
+    timezone_warning: str | None = None
+    try:
+        app_timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        app_timezone = ZoneInfo("UTC")
+        timezone_warning = (
+            f"Invalid timezone '{timezone_name}', defaulting to UTC"
+            if timezone_name.upper() != "UTC"
+            else ""
+        )
+    init_clock(app_timezone)
     configure_logging(config.get("logging.level", "INFO"))
     logger = get_logger("app")
+    if timezone_warning:
+        logger.warning(timezone_warning)
     mode = resolve_mode(config, cli_args)
     storage = init_storage(config)
     providers = init_providers(config)
