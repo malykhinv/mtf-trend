@@ -38,19 +38,19 @@ class SignalSelectorService:
             return False
         if (
             thresholds.max_pct_move != 0
-            and metrics.pct_move >= thresholds.max_pct_move
+            and metrics.pct_move > thresholds.max_pct_move
         ):
             reasons.append("long_pct_move")
             return False
         if (
             thresholds.min_relative_volume > 0
-            and metrics.relative_volume <= thresholds.min_relative_volume
+            and metrics.relative_volume < thresholds.min_relative_volume
         ):
             reasons.append("long_relative_volume")
             return False
         if (
             thresholds.max_relative_volume > 0
-            and metrics.relative_volume >= thresholds.max_relative_volume
+            and metrics.relative_volume > thresholds.max_relative_volume
         ):
             reasons.append("long_relative_volume")
             return False
@@ -62,13 +62,13 @@ class SignalSelectorService:
             return False
         if (
             thresholds.max_upper_wick_pct > 0
-            and metrics.upper_wick_pct >= thresholds.max_upper_wick_pct
+            and metrics.upper_wick_pct > thresholds.max_upper_wick_pct
         ):
             reasons.append("long_upper_wick")
             return False
         if (
             thresholds.max_lower_wick_pct > 0
-            and metrics.lower_wick_pct >= thresholds.max_lower_wick_pct
+            and metrics.lower_wick_pct > thresholds.max_lower_wick_pct
         ):
             reasons.append("long_lower_wick")
             return False
@@ -80,51 +80,43 @@ class SignalSelectorService:
         if not thresholds.allow_short:
             reasons.append("short_disabled")
             return False
-
-        min_rel_vol = thresholds.min_relative_volume
-        max_rel_vol = thresholds.max_relative_volume
-        rel_volume = metrics.relative_volume
-        if min_rel_vol > 0 and max_rel_vol > 0:
-            if min_rel_vol <= rel_volume <= max_rel_vol:
-                reasons.append("short_relative_volume")
-                return False
-        elif min_rel_vol > 0:
-            if rel_volume >= min_rel_vol:
-                reasons.append("short_relative_volume")
-                return False
-        elif max_rel_vol > 0:
-            if rel_volume <= max_rel_vol:
-                reasons.append("short_relative_volume")
-                return False
-
+        if metrics.pct_move >= 0:
+            reasons.append("short_positive_body")
+            return False
+        magnitude = abs(metrics.pct_move)
+        if thresholds.min_pct_move > 0 and magnitude <= thresholds.min_pct_move:
+            reasons.append("short_pct_move")
+            return False
+        if thresholds.max_pct_move > 0 and magnitude > thresholds.max_pct_move:
+            reasons.append("short_pct_move")
+            return False
+        if (
+            thresholds.min_relative_volume > 0
+            and metrics.relative_volume < thresholds.min_relative_volume
+        ):
+            reasons.append("short_relative_volume")
+            return False
+        if (
+            thresholds.max_relative_volume > 0
+            and metrics.relative_volume > thresholds.max_relative_volume
+        ):
+            reasons.append("short_relative_volume")
+            return False
         if (
             thresholds.min_atr_mult > 0
-            and metrics.atr_multiple >= thresholds.min_atr_mult
+            and metrics.atr_multiple <= thresholds.min_atr_mult
         ):
             reasons.append("short_atr_mult")
             return False
-
-        pct_move = metrics.pct_move
-        min_pct_move = thresholds.min_pct_move
-        max_pct_move = thresholds.max_pct_move
-        pct_conditions = []
-        if max_pct_move != 0:
-            pct_conditions.append(pct_move > max_pct_move)
-        if min_pct_move != 0:
-            pct_conditions.append(pct_move < min_pct_move)
-        if pct_conditions and not any(pct_conditions):
-            reasons.append("short_pct_move")
-            return False
-
         if (
             thresholds.max_upper_wick_pct > 0
-            and metrics.upper_wick_pct >= thresholds.max_upper_wick_pct
+            and metrics.upper_wick_pct > thresholds.max_upper_wick_pct
         ):
             reasons.append("short_upper_wick")
             return False
         if (
             thresholds.max_lower_wick_pct > 0
-            and metrics.lower_wick_pct >= thresholds.max_lower_wick_pct
+            and metrics.lower_wick_pct > thresholds.max_lower_wick_pct
         ):
             reasons.append("short_lower_wick")
             return False

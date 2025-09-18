@@ -32,51 +32,19 @@ allow = []
 deny = []
 
 [thresholds.default]
-min_relative_volume = 50.0
-max_relative_volume = 100000.0
-min_atr_mult = 100.0
-min_pct_move = 0.0
-max_pct_move = 0.0
-max_upper_wick_pct = 2.0
-max_lower_wick_pct = 1.0
+min_relative_volume = 40.0
+max_relative_volume = 200.0
+min_atr_mult = 5.0
+min_pct_move = 5.0
+max_pct_move = 10.0
+max_upper_wick_pct = 75.0
+max_lower_wick_pct = 50.0
 allow_long = true
 allow_short = true
 
 [[thresholds.default.metrics]]
 name = "atr"
-min_value = 50.0
-
-[[thresholds.default.metrics]]
-name = "average_volume"
-min_value = 100000.0
-
-[[thresholds.default.metrics]]
-name = "momentum"
-min_abs_value = 100.0
-
-[thresholds.symbols.BTCUSDT]
-min_relative_volume = 25.0
-max_relative_volume = 200000.0
-min_atr_mult = 80.0
-min_pct_move = 0.0
-max_pct_move = 0.0
-max_upper_wick_pct = 2.5
-max_lower_wick_pct = 1.0
-allow_long = true
-allow_short = true
-metadata = { timeframe = "15m" }
-
-[[thresholds.symbols.BTCUSDT.metrics]]
-name = "atr"
-min_value = 25.0
-
-[[thresholds.symbols.BTCUSDT.metrics]]
-name = "average_volume"
-min_value = 200000.0
-
-[[thresholds.symbols.BTCUSDT.metrics]]
-name = "momentum"
-min_abs_value = 80.0
+min_value = 5.0
 
 [backtest]
 enabled = true
