@@ -88,6 +88,7 @@ class Trade:
     entry_price: float
     size: float
     used_margin: float = 0.0
+    exit_price: Optional[float] = None
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
     opened_at: Optional[datetime] = None

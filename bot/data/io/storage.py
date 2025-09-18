@@ -237,6 +237,7 @@ class Storage:
             used_margin=float(
                 raw.get("used_margin", raw.get("used_amount", raw.get("size", 0.0)))
             ),
+            exit_price=float(raw["exit_price"]) if raw.get("exit_price") is not None else None,
             tp_price=float(raw["tp_price"]) if raw.get("tp_price") is not None else None,
             sl_price=float(raw["sl_price"]) if raw.get("sl_price") is not None else None,
             opened_at=datetime.fromisoformat(raw["opened_at"]) if raw.get("opened_at") else None,

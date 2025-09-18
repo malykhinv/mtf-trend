@@ -32,6 +32,10 @@ class TradeRepository:
             data["created_at"] = trade.created_at.isoformat()
         if trade.updated_at:
             data["updated_at"] = trade.updated_at.isoformat()
+        if data.get("exit_price") is None:
+            data.pop("exit_price", None)
+        else:
+            data["exit_price"] = float(data["exit_price"])
         if data.get("thresholds_snapshot") is None:
             data.pop("thresholds_snapshot", None)
         elif isinstance(data["thresholds_snapshot"], dict):

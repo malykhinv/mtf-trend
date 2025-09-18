@@ -165,6 +165,7 @@ class BacktestRunner:
             trade.status = status
             trade.closed_at = candle.closed_at
             exit_price = trade.tp_price if status == TradeStatus.CLOSED_TP else trade.sl_price
+            trade.exit_price = exit_price
             trade.pnl = self._calculate_pnl(trade, exit_price)
             trade.pnl_pct = (
                 (trade.pnl / trade.used_margin) * 100.0
