@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from threading import RLock
-from typing import Any, Dict
-
 from ...domain.models.state import (
     get_deposit_amount,
     get_used_amount,
@@ -26,37 +24,24 @@ class StateRepository:
 
     def load(self) -> None:
         with self._lock:
-            raw = self._storage.read("state") or {}
-            deposit_raw = raw.get("deposit")
-            if isinstance(deposit_raw, dict):
-                self._asset = str(deposit_raw.get("asset") or "USDT")
-                amount = float(deposit_raw.get("amount", 0.0))
-                updated_at_raw = deposit_raw.get("updated_at")
-                updated_at = (
-                    datetime.fromisoformat(updated_at_raw)
-                    if isinstance(updated_at_raw, str)
-                    else None
-                )
-                self._deposit_updated_at = updated_at
-                set_deposit(amount, self._asset, updated_at)
-            else:
-                amount = float(raw.get("deposit_usdt", 0.0))
-                self._deposit_updated_at = None
-                set_deposit(amount, self._asset, None)
-            used_raw = raw.get("used_usdt", raw.get("used_amount", 0.0))
-            set_used_amount(float(used_raw))
+            asset, amount, updated_at_raw, used_amount = self._storage.load_state()
+            self._asset = asset
+            updated_at = (
+                datetime.fromisoformat(updated_at_raw)
+                if isinstance(updated_at_raw, str)
+                else None
+            )
+            self._deposit_updated_at = updated_at
+            set_deposit(amount, self._asset, updated_at)
+            set_used_amount(float(used_amount))
 
     def _persist(self) -> None:
-        payload: Dict[str, Any] = {
-            "deposit": {
-                "asset": self._asset,
-                "amount": get_deposit_amount(),
-            },
-            "used_usdt": get_used_amount(),
-        }
-        if self._deposit_updated_at:
-            payload["deposit"]["updated_at"] = self._deposit_updated_at.isoformat()
-        self._storage.write("state", payload)
+        self._storage.save_state(
+            asset=self._asset,
+            deposit_amount=get_deposit_amount(),
+            updated_at=self._deposit_updated_at,
+            used=get_used_amount(),
+        )
 
     def update_deposit(
         self, amount: float, asset: str = "USDT", updated_at: datetime | None = None
