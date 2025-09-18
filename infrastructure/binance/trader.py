@@ -11,7 +11,7 @@ import httpx
 from config.credentials import BINANCE
 from constants import BINANCE_FAPI_REST
 from domain.models.enums import OrderType
-from domain.models.trading import OrderSpec
+from domain.models.trading import OrderExecution, OrderSpec
 
 
 class Trader:
@@ -64,7 +64,9 @@ class Trader:
         step_size = Decimal(filters["LOT_SIZE"]["stepSize"])
         return tick_size, step_size
 
-    async def place(self, order: OrderSpec) -> dict[str, Any] | None:  # pragma: no cover - network
+    async def place(
+        self, order: OrderSpec
+    ) -> OrderExecution | None:  # pragma: no cover - network
         """Submit an order to the exchange."""
 
         tick_size, step_size = await self._get_filters(order.symbol)
@@ -87,7 +89,32 @@ class Trader:
 
         response = await self._signed_request("POST", self._ORDER_ENDPOINT, params)
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+
+        def _as_float(value: Any) -> float | None:
+            try:
+                result = float(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if result == 0.0 and (value is None or value in ("", "0", "0.0")):
+                return None
+            return result
+
+        def _as_int(value: Any) -> int | None:
+            try:
+                return int(value)
+            except (TypeError, ValueError, OverflowError):
+                return None
+
+        return OrderExecution(
+            symbol=payload.get("symbol", order.symbol),
+            order_id=_as_int(payload.get("orderId")),
+            status=payload.get("status"),
+            filled_quantity=_as_float(payload.get("executedQty")),
+            price=_as_float(payload.get("price")),
+            average_price=_as_float(payload.get("avgPrice")),
+            raw=payload,
+        )
 
     async def cancel(
         self, symbol: str, order_id: int | None

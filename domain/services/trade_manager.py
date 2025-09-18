@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
-from typing import List, Any
+from typing import List
 
 import logging
 
 import constants
 from domain.models import signals as S
 from domain.models.enums import OrderType, Side
-from domain.models.trading import OrderSpec, PositionPlan
+from domain.models.trading import OrderExecution, OrderSpec, PositionPlan
 from domain.models.state import Position
 
 from .risk_manager import RiskManager
@@ -47,26 +47,18 @@ class TradeManager:
             type=OrderType.MARKET,
             quantity=plan.quantity,
         )
-        result: Any | None = None
+        execution: OrderExecution | None = None
         if side is Side.SHORT:
             logger.info("Открытие шорта %s по %.2f", plan.symbol, plan.entry_price)
         try:
-            result = await self._trader.place(order)
+            execution = await self._trader.place(order)
         except Exception:
             logger.exception("Ошибка open_position %s", plan.symbol)
             self._risk_manager.release(plan)
             raise
         actual_price: float | None = None
-        if result is not None:
-            if isinstance(result, dict):
-                actual_price = result.get("price")
-            else:
-                actual_price = getattr(result, "price", None)
-        if actual_price is None and hasattr(self._trader, "get_price"):
-            try:  # type: ignore[attr-defined]
-                actual_price = await self._trader.get_price(plan.symbol)
-            except Exception:
-                actual_price = None
+        if execution is not None:
+            actual_price = execution.execution_price
         state = self._registry.get(plan.symbol)
         stored_plan = plan if actual_price is None else self._plan(plan, entry_price=actual_price)
         state.position = Position(side=side, plan=stored_plan)
