@@ -14,7 +14,7 @@ from .base import BaseExchangeProvider
 
 
 class BybitPerpetualProvider(BaseExchangeProvider):
-    exchange = Exchange.BYBIT_PERPETUAL
+    exchange = Exchange.BYBIT
 
     def __init__(
         self,

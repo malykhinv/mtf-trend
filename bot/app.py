@@ -118,7 +118,7 @@ async def run_backtest(
         logger.info("Backtest disabled")
         return
     runner = BacktestRunner(selector, tp_sl_service, signal_repo, trade_repo, dedup_policy, window=int(backtest_cfg.get("window", 50)))
-    timeframe = Timeframe(backtest_cfg.get("timeframe", Timeframe.H1.value))
+    timeframe = Timeframe(backtest_cfg.get("timeframe", Timeframe.M15.value))
     limit = int(backtest_cfg.get("limit", 500))
     for symbol in backtest_cfg.get("symbols", []):
         provider = select_provider_for_symbol(providers, symbol, config)

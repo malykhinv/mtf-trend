@@ -22,7 +22,9 @@ class DeduplicationPolicy:
         self._lock = Lock()
 
     def _make_key(self, signal: Signal) -> str:
-        return f"{signal.candle.symbol}:{signal.side}:{signal.candle.timeframe}:{signal.direction}"
+        return (
+            f"{signal.candle.symbol}:{signal.side}:{signal.candle.timeframe}:{signal.direction.value}"
+        )
 
     def should_accept(self, signal: Signal) -> Tuple[bool, str | None]:
         with self._lock:

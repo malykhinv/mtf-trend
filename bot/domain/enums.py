@@ -1,20 +1,18 @@
 from __future__ import annotations
 
-from enum import Enum
+from enum import Enum, IntEnum
 
 
 class Exchange(str, Enum):
-    BINANCE_FUTURES = "binance_futures"
-    BYBIT_PERPETUAL = "bybit_perpetual"
+    BINANCE = "binance"
+    BYBIT = "bybit"
 
 
 class Timeframe(str, Enum):
     M1 = "1m"
+    M3 = "3m"
     M5 = "5m"
     M15 = "15m"
-    H1 = "1h"
-    H4 = "4h"
-    D1 = "1d"
 
 
 class Side(str, Enum):
@@ -22,13 +20,14 @@ class Side(str, Enum):
     SHORT = "short"
 
 
-class BreakDirection(str, Enum):
-    BULLISH = "bullish"
-    BEARISH = "bearish"
+class BreakDirection(IntEnum):
+    NONE = 0
+    LOW_FIRST = -1
+    HIGH_FIRST = 1
 
 
 class TradeStatus(str, Enum):
-    PENDING = "pending"
-    OPEN = "open"
-    CLOSED = "closed"
-    CANCELLED = "cancelled"
+    OPENED = "opened"
+    CLOSED_TP = "closed_tp"
+    CLOSED_SL = "closed_sl"
+    REJECTED = "rejected"

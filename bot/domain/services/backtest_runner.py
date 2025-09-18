@@ -59,7 +59,7 @@ class BacktestRunner:
                     exchange=signal.candle.exchange,
                     symbol=signal.candle.symbol,
                     side=signal.side,
-                    status=TradeStatus.CLOSED,
+                    status=TradeStatus.CLOSED_TP,
                     entry_price=signal.candle.close,
                     size=1.0,
                     metadata={"mode": "backtest"},
