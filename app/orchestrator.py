@@ -2,7 +2,7 @@ import asyncio
 import logging
 import signal
 from pathlib import Path
-from typing import Awaitable, Callable, Literal
+from typing import TYPE_CHECKING, Awaitable, Callable, Literal
 
 from domain.models.enums import BotState
 from domain.models.state import GlobalState, SymbolState
@@ -31,6 +31,9 @@ from .pollers import (
 )
 from .state_machine import BotStateMachine
 from .universe import UniverseBuilder
+
+if TYPE_CHECKING:
+    from trading_bot.planning import TradePlanAssembler
 
 logger = logging.getLogger(__name__)
 
