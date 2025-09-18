@@ -20,6 +20,8 @@ from .base import BaseExchangeProvider
 
 class BinanceFuturesProvider(BaseExchangeProvider):
     exchange = Exchange.BINANCE
+    max_ohlcv_limit = 1500
+    _ohlcv_limit_fallback = 1500
 
     def __init__(
         self,
@@ -58,6 +60,7 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         await self.ensure_rate_limit()
         if not self._session:
             raise RuntimeError("httpx is required to fetch candles from Binance")
+        limit = self.resolve_ohlcv_limit(limit)
         endpoint = f"{self._api_base}/fapi/v1/klines"
         params = {"symbol": symbol.upper(), "interval": timeframe.value, "limit": limit}
         response = await self._session.get(endpoint, params=params)

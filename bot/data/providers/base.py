@@ -27,6 +27,8 @@ class RateLimiter:
 
 class BaseExchangeProvider:
     exchange: Exchange
+    max_ohlcv_limit: int | None = None
+    _ohlcv_limit_fallback: int = 500
 
     def __init__(
         self,
@@ -51,6 +53,13 @@ class BaseExchangeProvider:
 
     async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> List[Candle]:
         raise NotImplementedError
+
+    def resolve_ohlcv_limit(self, requested_limit: int | None) -> int:
+        """Return a safe OHLCV limit supported by the provider."""
+        max_limit = self.max_ohlcv_limit or self._ohlcv_limit_fallback
+        if requested_limit is None or requested_limit <= 0:
+            return max_limit
+        return min(requested_limit, max_limit)
 
     async def stream_candles(
         self, symbol: str, timeframe: Timeframe

@@ -9,7 +9,6 @@ from ..enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 
 @dataclass(slots=True)
 class Candle:
-    id: Optional[str] = None
     symbol: str
     exchange: Exchange
     timeframe: Timeframe
@@ -18,9 +17,10 @@ class Candle:
     low: float
     close: float
     volume: float
-    quote_volume: Optional[float] = None
     started_at: datetime
     closed_at: datetime
+    id: Optional[str] = None
+    quote_volume: Optional[float] = None
 
 
 @dataclass(slots=True)
@@ -60,16 +60,16 @@ class SignalMetric:
 @dataclass(slots=True)
 class Signal:
     id: str
-    candle_id: Optional[str] = None
     candle: Candle
-    timeframe: Optional[Timeframe] = None
     side: Side
     direction: BreakDirection
     score: float
     triggered_at: datetime
+    thresholds: Thresholds
+    candle_id: Optional[str] = None
+    timeframe: Optional[Timeframe] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    thresholds: Thresholds
     metrics: List[SignalMetric] = field(default_factory=list)
     allow_long: bool = True
     allow_short: bool = True
@@ -80,14 +80,14 @@ class Signal:
 class Trade:
     id: str
     signal_id: str
-    source_signal_id: Optional[str] = None
     exchange: Exchange
     symbol: str
-    timeframe: Optional[Timeframe] = None
     side: Side
     status: TradeStatus
     entry_price: float
     size: float
+    source_signal_id: Optional[str] = None
+    timeframe: Optional[Timeframe] = None
     used_margin: float = 0.0
     exit_price: Optional[float] = None
     tp_price: Optional[float] = None

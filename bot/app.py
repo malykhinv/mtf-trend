@@ -365,7 +365,8 @@ async def run_backtest(
         window=int(backtest_cfg.get("window", 50)),
     )
     timeframe = Timeframe(backtest_cfg.get("timeframe", Timeframe.M15.value))
-    limit = int(backtest_cfg.get("limit", 500))
+    configured_limit = backtest_cfg.get("limit")
+    requested_limit = int(configured_limit) if configured_limit is not None else None
     discovered = await discover_symbol_universe(config, providers, "backtest")
     if not discovered:
         logger.warning("No symbols available for backtest after applying liquidity filters")
@@ -373,6 +374,7 @@ async def run_backtest(
     for symbol in discovered:
         provider = select_provider_for_symbol(providers, symbol, config, discovered)
         try:
+            limit = provider.resolve_ohlcv_limit(requested_limit)
             candles = await provider.fetch_ohlcv(symbol, timeframe, limit)
         except Exception as exc:  # pragma: no cover - network errors
             logger.error("Failed to fetch backtest data for %s: %s", symbol, exc)
