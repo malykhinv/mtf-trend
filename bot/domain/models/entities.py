@@ -33,13 +33,13 @@ class ThresholdMetric:
 @dataclass(slots=True)
 class Thresholds:
     id: Optional[str] = None
-    s: float = 0.0
-    t: float = 0.0
-    u: float = 0.0
-    v: float = 0.0
-    w: float = 0.0
-    x: float = 0.0
-    y: float = 0.0
+    min_relative_volume: float = 0.0
+    max_relative_volume: float = 0.0
+    min_atr_mult: float = 0.0
+    min_pct_move: float = 0.0
+    max_pct_move: float = 0.0
+    max_upper_wick_pct: float = 0.0
+    max_lower_wick_pct: float = 0.0
     allow_long: bool = True
     allow_short: bool = True
     metrics: List[ThresholdMetric] = field(default_factory=list)
