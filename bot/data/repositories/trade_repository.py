@@ -20,12 +20,26 @@ class TradeRepository:
         data["exchange"] = trade.exchange.value
         data["side"] = trade.side.value
         data["status"] = trade.status.value
+        if trade.timeframe:
+            data["timeframe"] = trade.timeframe.value
+        else:
+            data.pop("timeframe", None)
         if trade.opened_at:
             data["opened_at"] = trade.opened_at.isoformat()
         if trade.closed_at:
             data["closed_at"] = trade.closed_at.isoformat()
+        if trade.created_at:
+            data["created_at"] = trade.created_at.isoformat()
+        if trade.updated_at:
+            data["updated_at"] = trade.updated_at.isoformat()
         if data.get("thresholds_snapshot") is None:
             data.pop("thresholds_snapshot", None)
+        elif isinstance(data["thresholds_snapshot"], dict):
+            snapshot = data["thresholds_snapshot"]
+            if trade.thresholds_snapshot and trade.thresholds_snapshot.created_at:
+                snapshot["created_at"] = trade.thresholds_snapshot.created_at.isoformat()
+            if trade.thresholds_snapshot and trade.thresholds_snapshot.updated_at:
+                snapshot["updated_at"] = trade.thresholds_snapshot.updated_at.isoformat()
         return data
 
     def save(self, trade: Trade) -> None:

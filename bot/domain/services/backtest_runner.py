@@ -72,16 +72,26 @@ class BacktestRunner:
                 await self.refresh_deposit(provider)
                 snapshot = self._deposit_snapshot()
                 trade_size = self._calculate_trade_size()
+                timestamp = utcnow()
+                source_signal_id = (
+                    signal.metadata.get("source_signal_id")
+                    if isinstance(signal.metadata, dict) and signal.metadata.get("source_signal_id")
+                    else signal.id
+                )
                 trade = Trade(
                     id=signal.id,
                     signal_id=signal.id,
+                    source_signal_id=source_signal_id,
                     exchange=signal.candle.exchange,
                     symbol=signal.candle.symbol,
+                    timeframe=signal.timeframe or signal.candle.timeframe,
                     side=signal.side,
                     status=TradeStatus.OPENED,
                     entry_price=signal.candle.close,
                     size=trade_size,
                     used_margin=trade_size,
+                    created_at=timestamp,
+                    updated_at=timestamp,
                     allow_long=signal.allow_long,
                     allow_short=signal.allow_short,
                     thresholds_snapshot=signal.thresholds,
@@ -156,6 +166,12 @@ class BacktestRunner:
             trade.closed_at = candle.closed_at
             exit_price = trade.tp_price if status == TradeStatus.CLOSED_TP else trade.sl_price
             trade.pnl = self._calculate_pnl(trade, exit_price)
+            trade.pnl_pct = (
+                (trade.pnl / trade.used_margin) * 100.0
+                if trade.pnl is not None and trade.used_margin
+                else None
+            )
+            trade.updated_at = utcnow()
             return
 
     def _check_thresholds(self, trade: Trade, candle: Candle) -> tuple[bool, bool]:

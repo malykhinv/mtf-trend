@@ -9,6 +9,7 @@ from ..enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 
 @dataclass(slots=True)
 class Candle:
+    id: Optional[str] = None
     symbol: str
     exchange: Exchange
     timeframe: Timeframe
@@ -31,6 +32,7 @@ class ThresholdMetric:
 
 @dataclass(slots=True)
 class Thresholds:
+    id: Optional[str] = None
     s: float = 0.0
     t: float = 0.0
     u: float = 0.0
@@ -42,6 +44,8 @@ class Thresholds:
     allow_short: bool = True
     metrics: List[ThresholdMetric] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
 
 @dataclass(slots=True)
@@ -55,11 +59,15 @@ class SignalMetric:
 @dataclass(slots=True)
 class Signal:
     id: str
+    candle_id: Optional[str] = None
     candle: Candle
+    timeframe: Optional[Timeframe] = None
     side: Side
     direction: BreakDirection
     score: float
     triggered_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     thresholds: Thresholds
     metrics: List[SignalMetric] = field(default_factory=list)
     allow_long: bool = True
@@ -71,8 +79,10 @@ class Signal:
 class Trade:
     id: str
     signal_id: str
+    source_signal_id: Optional[str] = None
     exchange: Exchange
     symbol: str
+    timeframe: Optional[Timeframe] = None
     side: Side
     status: TradeStatus
     entry_price: float
@@ -83,6 +93,9 @@ class Trade:
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     pnl: Optional[float] = None
+    pnl_pct: Optional[float] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     allow_long: bool = True
     allow_short: bool = True
     thresholds_snapshot: Optional[Thresholds] = None

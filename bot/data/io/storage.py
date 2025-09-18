@@ -72,7 +72,10 @@ class Storage:
         metadata = raw.get("metadata", {})
         if not isinstance(metadata, dict):
             metadata = {}
+        created_at_raw = raw.get("created_at")
+        updated_at_raw = raw.get("updated_at")
         return Thresholds(
+            id=str(raw["id"]) if raw.get("id") is not None else None,
             s=float(raw.get("s", 0.0)),
             t=float(raw.get("t", 0.0)),
             u=float(raw.get("u", 0.0)),
@@ -84,6 +87,8 @@ class Storage:
             allow_short=self._to_bool(raw.get("allow_short", True)),
             metrics=metrics,
             metadata=metadata,
+            created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
+            updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
         )
 
     def _deserialize_signal_metric(self, raw: Dict[str, Any]) -> SignalMetric:
@@ -102,7 +107,19 @@ class Storage:
 
     def deserialize_signal(self, raw: Dict[str, Any]) -> Signal:
         candle_raw = raw["candle"]
+        candle_id = candle_raw.get("id")
+        if candle_id is None:
+            try:
+                candle_timestamp = datetime.fromisoformat(candle_raw["started_at"])
+            except (KeyError, ValueError):
+                candle_timestamp = None
+            if candle_timestamp is not None:
+                candle_id = (
+                    f"{candle_raw['exchange']}:{candle_raw['symbol']}:{candle_raw['timeframe']}:"
+                    f"{int(candle_timestamp.timestamp())}"
+                )
         candle = Candle(
+            id=candle_id,
             symbol=candle_raw["symbol"],
             exchange=Exchange(candle_raw["exchange"]),
             timeframe=Timeframe(candle_raw["timeframe"]),
@@ -124,13 +141,27 @@ class Storage:
         metadata = raw.get("metadata", {})
         if not isinstance(metadata, dict):
             metadata = {}
+        created_at_raw = raw.get("created_at")
+        updated_at_raw = raw.get("updated_at")
+        timeframe_raw = raw.get("timeframe")
+        timeframe = Timeframe(timeframe_raw) if isinstance(timeframe_raw, str) else candle.timeframe
+        candle_ref = raw.get("candle_id") or candle.id
+        if candle_ref is None and isinstance(candle.started_at, datetime):
+            candle_ref = (
+                f"{candle.exchange.value}:{candle.symbol}:{candle.timeframe.value}:"
+                f"{int(candle.started_at.timestamp())}"
+            )
         return Signal(
             id=raw["id"],
+            candle_id=candle_ref,
             candle=candle,
+            timeframe=timeframe,
             side=Side(raw["side"]),
             direction=BreakDirection(raw["direction"]),
             score=float(raw["score"]),
             triggered_at=datetime.fromisoformat(raw["triggered_at"]),
+            created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
+            updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
             thresholds=thresholds,
             metrics=metrics,
             allow_long=self._to_bool(raw.get("allow_long", thresholds.allow_long), thresholds.allow_long),
@@ -147,11 +178,34 @@ class Storage:
         metadata = raw.get("metadata", {})
         if not isinstance(metadata, dict):
             metadata = {}
+        created_at_raw = raw.get("created_at")
+        updated_at_raw = raw.get("updated_at")
+        timeframe_raw = raw.get("timeframe")
+        timeframe = Timeframe(timeframe_raw) if isinstance(timeframe_raw, str) else None
+        if timeframe is None and thresholds_snapshot and isinstance(thresholds_snapshot.metadata, dict):
+            meta_tf = thresholds_snapshot.metadata.get("timeframe")
+            if isinstance(meta_tf, str):
+                try:
+                    timeframe = Timeframe(meta_tf)
+                except ValueError:
+                    timeframe = None
+        if timeframe is None:
+            meta = raw.get("metadata")
+            if isinstance(meta, dict):
+                meta_tf = meta.get("timeframe")
+                if isinstance(meta_tf, str):
+                    try:
+                        timeframe = Timeframe(meta_tf)
+                    except ValueError:
+                        timeframe = None
+        source_signal_id = raw.get("source_signal_id") or raw.get("signal_id")
         trade = Trade(
             id=raw["id"],
             signal_id=raw["signal_id"],
+            source_signal_id=source_signal_id,
             exchange=Exchange(raw["exchange"]),
             symbol=raw["symbol"],
+            timeframe=timeframe,
             side=Side(raw["side"]),
             status=TradeStatus(raw["status"]),
             entry_price=float(raw["entry_price"]),
@@ -164,6 +218,9 @@ class Storage:
             opened_at=datetime.fromisoformat(raw["opened_at"]) if raw.get("opened_at") else None,
             closed_at=datetime.fromisoformat(raw["closed_at"]) if raw.get("closed_at") else None,
             pnl=float(raw["pnl"]) if raw.get("pnl") is not None else None,
+            pnl_pct=float(raw["pnl_pct"]) if raw.get("pnl_pct") is not None else None,
+            created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
+            updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
             allow_long=self._to_bool(raw.get("allow_long", True)),
             allow_short=self._to_bool(raw.get("allow_short", True)),
             thresholds_snapshot=thresholds_snapshot,
