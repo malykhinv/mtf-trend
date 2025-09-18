@@ -1,8 +1,0 @@
-{
-  "growth_pct": 3.0,
-  "wick_pct": 0.3,
-  "volume_mult": 3.0,
-  "volume_window": 20,
-  "rehigh_lookahead": 3,
-  "atr_window": 14
-}
