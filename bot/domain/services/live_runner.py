@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import deque
-from typing import Any, Deque, Dict, Iterable
+from typing import Any, Deque, Dict, Iterable, Optional
 
 from ...data.providers.base import BaseExchangeProvider
 from ...data.repositories.signal_repository import SignalRepository
@@ -84,17 +84,45 @@ class LiveTradingRunner:
 
     async def _process_symbol(self, symbol: str, timeframe: Timeframe, thresholds: Thresholds) -> None:
         window: Deque[Candle] = deque(maxlen=self._window)
+        last_error: Optional[str] = None
+        repeat_count = 0
         while True:
-            tf_value = thresholds.metadata.get("timeframe")
-            tf = Timeframe(tf_value) if tf_value else timeframe
-            candles = await self._provider.fetch_ohlcv(symbol, tf, self._window)
-            if candles:
-                window.extend(candles[-self._window :])
-            if len(window) >= self._window:
-                result = self._selector.select(symbol, list(window), thresholds)
-                for signal in result.signals:
-                    await self._handle_signal(signal)
-            await asyncio.sleep(self._poll_interval)
+            try:
+                tf_value = thresholds.metadata.get("timeframe")
+                tf = Timeframe(tf_value) if tf_value else timeframe
+                candles = await self._provider.fetch_ohlcv(symbol, tf, self._window)
+                if candles:
+                    window.extend(candles[-self._window :])
+                if len(window) >= self._window:
+                    result = self._selector.select(symbol, list(window), thresholds)
+                    for signal in result.signals:
+                        await self._handle_signal(signal)
+                last_error = None
+                repeat_count = 0
+                await asyncio.sleep(self._poll_interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                error_signature = f"{type(exc).__name__}: {exc}"
+                if error_signature == last_error:
+                    repeat_count += 1
+                    self._logger.error(
+                        "Error processing %s persists (occurrence #%d): %s",
+                        symbol,
+                        repeat_count + 1,
+                        error_signature,
+                        exc_info=True,
+                    )
+                else:
+                    last_error = error_signature
+                    repeat_count = 0
+                    self._logger.error(
+                        "Error processing %s: %s",
+                        symbol,
+                        error_signature,
+                        exc_info=True,
+                    )
+                await asyncio.sleep(self._poll_interval)
 
     async def run(
         self,
@@ -110,7 +138,14 @@ class LiveTradingRunner:
                 self._logger.warning("No thresholds configured for %s", symbol)
                 continue
             tasks.append(asyncio.create_task(self._process_symbol(symbol, timeframe, thresholds)))
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                self._logger.error(
+                    "Symbol task finished with error: %s",
+                    result,
+                    exc_info=(type(result), result, result.__traceback__),
+                )
 
     async def refresh_deposit(self, force: bool = False) -> Dict[str, Any]:
         if not force and self._last_deposit_update:
