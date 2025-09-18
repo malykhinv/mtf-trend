@@ -27,7 +27,9 @@ class FakeProvider:
             key: deque(sequence) for key, sequence in candles_by_key.items()
         }
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Candle]:
+    async def fetch_ohlcv(
+        self, symbol: str, timeframe: Timeframe, limit: int, since: int | None = None
+    ) -> list[Candle]:
         queue = self._candles_by_key.setdefault((symbol, timeframe), deque())
         if queue:
             return queue.popleft()
@@ -264,7 +266,11 @@ async def _assert_timeframe_cadence(tmp_path, monkeypatch) -> None:
             }
 
         async def fetch_ohlcv(
-            self, symbol: str, timeframe: Timeframe, limit: int
+            self,
+            symbol: str,
+            timeframe: Timeframe,
+            limit: int,
+            since: int | None = None,
         ) -> list[Candle]:
             self.calls[timeframe].append(self._clock.now())
             seconds = _seconds_for_timeframe(timeframe)

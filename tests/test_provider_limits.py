@@ -9,7 +9,9 @@ class _StubProvider(BaseExchangeProvider):
     max_ohlcv_limit = 1500
     _ohlcv_limit_fallback = 1500
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int):  # pragma: no cover - unused
+    async def fetch_ohlcv(
+        self, symbol: str, timeframe: Timeframe, limit: int, since: int | None = None
+    ):  # pragma: no cover - unused
         raise NotImplementedError
 
     async def stream_candles(self, symbol: str, timeframe: Timeframe):  # pragma: no cover - unused
