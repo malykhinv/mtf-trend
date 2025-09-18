@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections import deque
 from collections.abc import Mapping
+from datetime import datetime, timedelta
 from typing import Any, Deque, Dict, Iterable, Optional
 
 from ...data.providers.base import BaseExchangeProvider
@@ -29,7 +30,6 @@ class LiveTradingRunner:
         trade_repository: TradeRepository,
         dedup_policy: DeduplicationPolicy,
         window: int,
-        poll_interval: float = 5.0,
     ) -> None:
         self._provider = provider
         self._selector = selector
@@ -39,12 +39,17 @@ class LiveTradingRunner:
         self._trades = trade_repository
         self._dedup = dedup_policy
         self._window = window
-        self._poll_interval = poll_interval
         self._logger = get_logger(self.__class__.__name__)
         self._deposit_usdt = state_repository.get_deposit()
         self._deposit_asset = state_repository.get_deposit_asset()
         self._last_deposit_update = state_repository.get_last_deposit_update()
         self._trade_watchers: Dict[str, asyncio.Task[None]] = {}
+        self._timeframes: tuple[Timeframe, ...] = (
+            Timeframe.M1,
+            Timeframe.M3,
+            Timeframe.M5,
+            Timeframe.M15,
+        )
 
     async def _handle_signal(self, signal: Signal) -> None:
         accepted, key = self._dedup.should_accept(signal)
@@ -107,7 +112,7 @@ class LiveTradingRunner:
             try:
                 candles = await self._provider.fetch_ohlcv(trade.symbol, timeframe, 3)
                 if not candles:
-                    await asyncio.sleep(self._poll_interval)
+                    await asyncio.sleep(self._get_poll_delay(timeframe))
                     continue
                 for candle in candles:
                     if last_closed_at and candle.closed_at <= last_closed_at:
@@ -142,33 +147,76 @@ class LiveTradingRunner:
                     self._trades.save(trade)
                     self._update_used_amount()
                     return
-                await asyncio.sleep(self._poll_interval)
+                await asyncio.sleep(self._get_poll_delay(timeframe))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 self._logger.error(
                     "Error watching trade %s: %s", trade.id, exc, exc_info=True
                 )
-                await asyncio.sleep(self._poll_interval)
+                await asyncio.sleep(self._get_poll_delay(timeframe))
 
-    async def _process_symbol(self, symbol: str, timeframe: Timeframe, thresholds: Thresholds) -> None:
-        window: Deque[Candle] = deque(maxlen=self._window)
+    async def _process_symbol(self, symbol: str, thresholds: Thresholds) -> None:
+        if self._selector is None:
+            self._logger.warning("Selector is not configured; skipping symbol %s", symbol)
+            return
+        windows: Dict[Timeframe, Deque[Candle]] = {
+            timeframe: deque(maxlen=self._window) for timeframe in self._timeframes
+        }
+        last_closed: Dict[Timeframe, Optional[datetime]] = {
+            timeframe: None for timeframe in self._timeframes
+        }
+        next_poll: Dict[Timeframe, datetime] = {
+            timeframe: utcnow() for timeframe in self._timeframes
+        }
         last_error: Optional[str] = None
         repeat_count = 0
         while True:
             try:
-                tf_value = thresholds.metadata.get("timeframe")
-                tf = Timeframe(tf_value) if tf_value else timeframe
-                candles = await self._provider.fetch_ohlcv(symbol, tf, self._window)
-                if candles:
+                processed = False
+                now = utcnow()
+                for timeframe in self._timeframes:
+                    if now < next_poll[timeframe]:
+                        continue
+                    processed = True
+                    delay = self._get_poll_delay(timeframe)
+                    try:
+                        candles = await self._provider.fetch_ohlcv(
+                            symbol, timeframe, self._window
+                        )
+                    finally:
+                        next_poll[timeframe] = utcnow() + timedelta(seconds=delay)
+                    if not candles:
+                        continue
+                    window = windows[timeframe]
+                    latest_closed = last_closed[timeframe]
+                    new_candles = [
+                        candle
+                        for candle in candles
+                        if candle.closed_at
+                        and (latest_closed is None or candle.closed_at > latest_closed)
+                    ]
+                    if not new_candles:
+                        continue
                     window.extend(candles[-self._window :])
-                if len(window) >= self._window:
+                    last_closed[timeframe] = max(
+                        (candle.closed_at for candle in new_candles if candle.closed_at),
+                        default=latest_closed,
+                    )
+                    if len(window) < self._window:
+                        continue
                     result = self._selector.select(symbol, list(window), thresholds)
                     for signal in result.signals:
                         await self._handle_signal(signal)
                 last_error = None
                 repeat_count = 0
-                await asyncio.sleep(self._poll_interval)
+                now = utcnow()
+                wait_until = min(next_poll.values())
+                wait_seconds = max(0.0, (wait_until - now).total_seconds())
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+                elif not processed:
+                    await asyncio.sleep(0.0)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -191,7 +239,8 @@ class LiveTradingRunner:
                         error_signature,
                         exc_info=True,
                     )
-                await asyncio.sleep(self._poll_interval)
+                min_delay = min(self._get_poll_delay(tf) for tf in self._timeframes)
+                await asyncio.sleep(min_delay)
 
     async def run(
         self,
@@ -206,7 +255,7 @@ class LiveTradingRunner:
             if not thresholds:
                 self._logger.warning("No thresholds configured for %s", symbol)
                 continue
-            tasks.append(asyncio.create_task(self._process_symbol(symbol, timeframe, thresholds)))
+            tasks.append(asyncio.create_task(self._process_symbol(symbol, thresholds)))
         results = await asyncio.gather(*tasks, return_exceptions=True)
         for result in results:
             if isinstance(result, Exception):
@@ -215,6 +264,21 @@ class LiveTradingRunner:
                     result,
                     exc_info=(type(result), result, result.__traceback__),
                 )
+
+    def _get_poll_delay(self, timeframe: Timeframe) -> float:
+        seconds = self._timeframe_to_seconds(timeframe)
+        return max(seconds / 4.0, 0.25)
+
+    @staticmethod
+    def _timeframe_to_seconds(timeframe: Timeframe) -> float:
+        value = timeframe.value
+        if value.endswith("m"):
+            try:
+                minutes = int(value[:-1])
+            except ValueError:
+                return 60.0
+            return float(minutes * 60)
+        return 60.0
 
     async def refresh_deposit(self, force: bool = False) -> Dict[str, Any]:
         if not force and self._last_deposit_update:
