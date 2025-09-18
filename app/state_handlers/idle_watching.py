@@ -62,7 +62,9 @@ class IdleWatchingHandler:
             logger.info(f"{symbol}: сигнал отклонён — условия входа")
             return
 
-        plan = await self._risk_manager.build_plan(symbol, entry.price, pump.window)
+        plan = await self._risk_manager.build_plan(
+            symbol, entry.price, pump.window, entry.side
+        )
         if plan is None or not self._risk_manager.allow_trade(plan):
             logger.info(f"{symbol}: сигнал отклонён — риски превышены")
             return

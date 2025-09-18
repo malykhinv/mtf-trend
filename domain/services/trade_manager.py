@@ -143,8 +143,18 @@ class TradeManager:
                 state.last_signal_ts is not None
                 and time.time() - state.last_signal_ts > constants.TRADE_INVALIDATION_SEC
             )
-            price_invalid = side is Side.SHORT and (
-                current_price > plan.entry_price or current_price > plan.window_high
+            price_invalid = (
+                (side is Side.SHORT and (
+                    current_price > plan.entry_price
+                    or current_price > plan.window_high
+                ))
+                or (
+                    side is Side.LONG
+                    and (
+                        current_price < plan.entry_price
+                        or current_price < plan.window_low
+                    )
+                )
             )
             if timed_out or price_invalid:
                 exits.append(S.ExitSignal(symbol=plan.symbol, reason="INVALIDATED"))

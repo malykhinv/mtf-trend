@@ -26,3 +26,4 @@ class PositionPlan:
     tp2_qty: float
     tail_qty: float
     window_high: float
+    window_low: float
