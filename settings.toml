@@ -10,7 +10,7 @@ volume_period = 20
 momentum_period = 5
 
 [dedup]
-ttl_seconds = 1800
+ttl_seconds = 14400
 max_records = 1000
 
 [providers.binance]
