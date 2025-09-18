@@ -12,7 +12,7 @@ from .data.providers.bybit import BybitPerpetualProvider
 from .data.repositories.signal_repository import SignalRepository
 from .data.repositories.trade_repository import TradeRepository
 from .domain.enums import Timeframe
-from .domain.models.entities import Thresholds
+from .domain.models.entities import ThresholdMetric, Thresholds
 from .domain.services.backtest_runner import BacktestRunner
 from .domain.services.dedup_policy import DeduplicationPolicy
 from .domain.services.live_runner import LiveTradingRunner
@@ -51,13 +51,80 @@ def init_providers(config: AppConfig) -> Dict[str, BaseExchangeProvider]:
     return providers
 
 
+def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
+    metrics_raw = raw.get("metrics", []) if isinstance(raw, dict) else []
+    metrics: list[ThresholdMetric] = []
+    if isinstance(metrics_raw, list):
+        for item in metrics_raw:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not name:
+                continue
+            metrics.append(
+                ThresholdMetric(
+                    name=str(name),
+                    min_value=float(item["min_value"]) if item.get("min_value") is not None else None,
+                    max_value=float(item["max_value"]) if item.get("max_value") is not None else None,
+                    min_abs_value=float(item["min_abs_value"]) if item.get("min_abs_value") is not None else None,
+                )
+            )
+    def _get_float(key: str, fallback: float = 0.0) -> float:
+        if not isinstance(raw, dict):
+            return fallback
+        value = raw.get(key)
+        if value is None:
+            return fallback
+        return float(value)
+
+    def _get_upper_lower(name: str, fallback: float = 0.0) -> float:
+        upper = name.upper()
+        lower = name.lower()
+        return _get_float(upper, _get_float(lower, fallback))
+
+    def _get_bool(key: str, default: bool) -> bool:
+        if not isinstance(raw, dict):
+            return default
+        value = raw.get(key)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered in {"true", "1", "yes"}:
+                return True
+            if lowered in {"false", "0", "no"}:
+                return False
+        return default
+
+    allow_long = _get_bool("allow_long", True)
+    allow_short = _get_bool("allow_short", True)
+    metadata = raw.get("metadata", {}) if isinstance(raw, dict) else {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+    return Thresholds(
+        s=_get_upper_lower("s"),
+        t=_get_upper_lower("t"),
+        u=_get_upper_lower("u"),
+        v=_get_upper_lower("v"),
+        w=_get_upper_lower("w"),
+        x=_get_upper_lower("x"),
+        y=_get_upper_lower("y"),
+        allow_long=allow_long,
+        allow_short=allow_short,
+        metrics=metrics,
+        metadata=metadata if isinstance(metadata, dict) else {},
+    )
+
+
 def build_thresholds(config: AppConfig) -> Dict[str, Thresholds]:
     raw = config.get("thresholds", {})
+    if not isinstance(raw, dict):
+        return {"default": Thresholds()}
     thresholds: Dict[str, Thresholds] = {}
     default_raw = raw.get("default", {})
-    thresholds["default"] = Thresholds(**default_raw)
+    thresholds["default"] = _parse_threshold(default_raw)
     for symbol, data in raw.get("symbols", {}).items():
-        thresholds[symbol] = Thresholds(**data)
+        thresholds[symbol] = _parse_threshold(data)
     return thresholds
 
 

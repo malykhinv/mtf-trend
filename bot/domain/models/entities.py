@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 
@@ -22,13 +22,34 @@ class Candle:
 
 
 @dataclass(slots=True)
+class ThresholdMetric:
+    name: str
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    min_abs_value: Optional[float] = None
+
+
+@dataclass(slots=True)
 class Thresholds:
-    atr_multiplier: float = 1.0
-    volume_multiplier: float = 1.0
-    breakout_threshold: float = 0.0
-    tp_multiplier: float = 1.5
-    sl_multiplier: float = 1.0
+    s: float = 0.0
+    t: float = 0.0
+    u: float = 0.0
+    v: float = 0.0
+    w: float = 0.0
+    x: float = 0.0
+    y: float = 0.0
+    allow_long: bool = True
+    allow_short: bool = True
+    metrics: List[ThresholdMetric] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SignalMetric:
+    name: str
+    value: float
+    passed: bool
+    threshold: Optional[ThresholdMetric] = None
 
 
 @dataclass(slots=True)
@@ -40,6 +61,9 @@ class Signal:
     score: float
     triggered_at: datetime
     thresholds: Thresholds
+    metrics: List[SignalMetric] = field(default_factory=list)
+    allow_long: bool = True
+    allow_short: bool = True
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -58,4 +82,7 @@ class Trade:
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     pnl: Optional[float] = None
+    allow_long: bool = True
+    allow_short: bool = True
+    thresholds_snapshot: Optional[Thresholds] = None
     metadata: Dict[str, Any] = field(default_factory=dict)

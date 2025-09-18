@@ -24,6 +24,8 @@ class TradeRepository:
             data["opened_at"] = trade.opened_at.isoformat()
         if trade.closed_at:
             data["closed_at"] = trade.closed_at.isoformat()
+        if data.get("thresholds_snapshot") is None:
+            data.pop("thresholds_snapshot", None)
         return data
 
     def save(self, trade: Trade) -> None:

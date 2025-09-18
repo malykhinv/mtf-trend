@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Sequence
+from typing import List, Sequence
 
-from ..models.entities import Candle, Thresholds
+from ..models.entities import Candle, SignalMetric, Thresholds
 from ...utils import math_ops
 
 
@@ -29,10 +29,25 @@ class MetricsService:
         momentum = closes[-1] - closes[-self._momentum_period]
         return Metrics(atr=atr, average_volume=avg_volume, momentum=momentum)
 
-    def passes_thresholds(self, metrics: Metrics, thresholds: Thresholds) -> Dict[str, bool]:
-        conditions = {
-            "atr": metrics.atr >= thresholds.atr_multiplier,
-            "volume": metrics.average_volume >= thresholds.volume_multiplier,
-            "momentum": abs(metrics.momentum) >= thresholds.breakout_threshold,
-        }
-        return conditions
+    def evaluate_thresholds(self, metrics: Metrics, thresholds: Thresholds) -> List[SignalMetric]:
+        evaluations: List[SignalMetric] = []
+        for metric_threshold in thresholds.metrics:
+            value = getattr(metrics, metric_threshold.name, None)
+            if value is None:
+                raise KeyError(f"unknown metric '{metric_threshold.name}'")
+            passed = True
+            if metric_threshold.min_value is not None and value < metric_threshold.min_value:
+                passed = False
+            if metric_threshold.max_value is not None and value > metric_threshold.max_value:
+                passed = False
+            if metric_threshold.min_abs_value is not None and abs(value) < metric_threshold.min_abs_value:
+                passed = False
+            evaluations.append(
+                SignalMetric(
+                    name=metric_threshold.name,
+                    value=value,
+                    passed=passed,
+                    threshold=metric_threshold,
+                )
+            )
+        return evaluations

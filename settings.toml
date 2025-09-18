@@ -29,19 +29,51 @@ rate_limit_per_minute = 600
 min_quote_volume = 250000.0
 
 [thresholds.default]
-atr_multiplier = 50.0
-volume_multiplier = 100000.0
-breakout_threshold = 100.0
-tp_multiplier = 2.0
-sl_multiplier = 1.0
+S = 50.0
+T = 100000.0
+U = 100.0
+V = 0.0
+W = 0.0
+X = 2.0
+Y = 1.0
+allow_long = true
+allow_short = true
+
+[[thresholds.default.metrics]]
+name = "atr"
+min_value = 50.0
+
+[[thresholds.default.metrics]]
+name = "average_volume"
+min_value = 100000.0
+
+[[thresholds.default.metrics]]
+name = "momentum"
+min_abs_value = 100.0
 
 [thresholds.symbols.BTCUSDT]
-atr_multiplier = 25.0
-volume_multiplier = 200000.0
-breakout_threshold = 80.0
-tp_multiplier = 2.5
-sl_multiplier = 1.0
+S = 25.0
+T = 200000.0
+U = 80.0
+V = 0.0
+W = 0.0
+X = 2.5
+Y = 1.0
+allow_long = true
+allow_short = true
 metadata = { timeframe = "15m" }
+
+[[thresholds.symbols.BTCUSDT.metrics]]
+name = "atr"
+min_value = 25.0
+
+[[thresholds.symbols.BTCUSDT.metrics]]
+name = "average_volume"
+min_value = 200000.0
+
+[[thresholds.symbols.BTCUSDT.metrics]]
+name = "momentum"
+min_abs_value = 80.0
 
 [backtest]
 enabled = true
