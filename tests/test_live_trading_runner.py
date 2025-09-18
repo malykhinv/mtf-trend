@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import types
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -15,6 +16,7 @@ from bot.domain.models.entities import Candle, Signal, Thresholds
 from bot.domain.services.dedup_policy import DeduplicationPolicy
 from bot.domain.services.live_runner import LiveTradingRunner
 from bot.domain.services.tp_sl_service import TpSlService
+from bot.domain.services.selector_service import SelectionResult
 
 
 class FakeProvider:
@@ -33,6 +35,17 @@ class FakeProvider:
 
     async def update_deposit(self) -> dict[str, float | str]:
         return {"asset": "USDT", "balance": 10_000.0}
+
+
+class FakeClock:
+    def __init__(self, start: datetime) -> None:
+        self._now = start
+
+    def now(self) -> datetime:
+        return self._now
+
+    def advance(self, seconds: float) -> None:
+        self._now += timedelta(seconds=seconds)
 
 
 def _build_signal(
@@ -124,8 +137,9 @@ async def _execute_take_profit(tmp_path) -> None:
         trade_repository=trade_repo,
         dedup_policy=DeduplicationPolicy(),
         window=1,
-        poll_interval=0.01,
     )
+
+    runner._get_poll_delay = types.MethodType(lambda self, timeframe: 0.01, runner)
 
     await runner._handle_signal(signal)
 
@@ -190,8 +204,9 @@ async def _execute_stop_loss(tmp_path) -> None:
         trade_repository=trade_repo,
         dedup_policy=DeduplicationPolicy(),
         window=1,
-        poll_interval=0.01,
     )
+
+    runner._get_poll_delay = types.MethodType(lambda self, timeframe: 0.01, runner)
 
     await runner._handle_signal(signal)
 
@@ -218,3 +233,111 @@ def test_trade_watcher_closes_on_take_profit(tmp_path) -> None:
 
 def test_trade_watcher_closes_on_stop_loss(tmp_path) -> None:
     asyncio.run(_execute_stop_loss(tmp_path))
+
+
+async def _assert_timeframe_cadence(tmp_path, monkeypatch) -> None:
+    base_time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    clock = FakeClock(base_time)
+    monkeypatch.setattr("bot.domain.services.live_runner.utcnow", clock.now)
+
+    real_sleep = asyncio.sleep
+
+    async def fake_sleep(delay: float) -> None:
+        clock.advance(delay)
+        await real_sleep(0)
+
+    monkeypatch.setattr("bot.domain.services.live_runner.asyncio.sleep", fake_sleep)
+
+    class CadenceProvider:
+        exchange = Exchange.BINANCE
+
+        def __init__(self, clock: FakeClock) -> None:
+            self._clock = clock
+            self.calls: dict[Timeframe, list[datetime]] = {
+                tf: [] for tf in (Timeframe.M1, Timeframe.M3, Timeframe.M5, Timeframe.M15)
+            }
+            self._last_close: dict[Timeframe, datetime] = {
+                tf: clock.now() - timedelta(seconds=_seconds_for_timeframe(tf))
+                for tf in self.calls
+            }
+
+        async def fetch_ohlcv(
+            self, symbol: str, timeframe: Timeframe, limit: int
+        ) -> list[Candle]:
+            self.calls[timeframe].append(self._clock.now())
+            seconds = _seconds_for_timeframe(timeframe)
+            next_close = self._last_close[timeframe] + timedelta(seconds=seconds)
+            self._last_close[timeframe] = next_close
+            candle = Candle(
+                id=f"{symbol}-{timeframe.value}-{len(self.calls[timeframe])}",
+                symbol=symbol,
+                exchange=Exchange.BINANCE,
+                timeframe=timeframe,
+                open=100.0,
+                high=101.0,
+                low=99.0,
+                close=100.5,
+                volume=1000.0,
+                started_at=next_close - timedelta(seconds=seconds),
+                closed_at=next_close,
+            )
+            return [candle]
+
+        async def update_deposit(self) -> dict[str, float | str]:
+            return {"asset": "USDT", "balance": 10_000.0}
+
+    def _seconds_for_timeframe(timeframe: Timeframe) -> int:
+        return {
+            Timeframe.M1: 60,
+            Timeframe.M3: 180,
+            Timeframe.M5: 300,
+            Timeframe.M15: 900,
+        }[timeframe]
+
+    provider = CadenceProvider(clock)
+    storage = Storage(tmp_path / "cadence.xlsx")
+    runner = LiveTradingRunner(
+        provider=provider,
+        selector=_NoopSelector(),
+        tp_sl_service=TpSlService(),
+        signal_repository=SignalRepository(storage),
+        state_repository=StateRepository(storage),
+        trade_repository=TradeRepository(storage),
+        dedup_policy=DeduplicationPolicy(),
+        window=1,
+    )
+
+    thresholds = Thresholds(id="thr-cadence")
+    task = asyncio.create_task(runner._process_symbol("BTCUSDT", thresholds))
+
+    async def _wait_for_samples() -> None:
+        while min(len(samples) for samples in provider.calls.values()) < 3:
+            await real_sleep(0)
+
+    await asyncio.wait_for(_wait_for_samples(), timeout=1.0)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    for timeframe, timestamps in provider.calls.items():
+        assert len(timestamps) >= 3
+        expected = runner._get_poll_delay(timeframe)
+        for earlier, later in zip(timestamps, timestamps[1:]):
+            delta = (later - earlier).total_seconds()
+            assert delta >= expected - 1e-6
+
+
+class _NoopSelector:
+    def select(
+        self,
+        symbol: str,
+        candles: list[Candle],
+        thresholds: Thresholds,
+        future_candles: list[Candle] | None = None,
+    ) -> SelectionResult:
+        return SelectionResult(signals=[], rejected=[])
+
+
+def test_timeframe_cadence_respects_limits(tmp_path, monkeypatch) -> None:
+    asyncio.run(_assert_timeframe_cadence(tmp_path, monkeypatch))

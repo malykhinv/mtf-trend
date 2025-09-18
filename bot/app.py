@@ -411,7 +411,6 @@ async def run_live(
     provider = providers[provider_name]
     timeframe = Timeframe(live_cfg.get("timeframe", Timeframe.M5.value))
     window = int(live_cfg.get("window", 50))
-    poll_interval = float(live_cfg.get("poll_interval", 10.0))
     runner = LiveTradingRunner(
         provider,
         selector,
@@ -421,7 +420,6 @@ async def run_live(
         trade_repo,
         dedup_policy,
         window=window,
-        poll_interval=poll_interval,
     )
     discovered = await discover_symbol_universe(
         config,
