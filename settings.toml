@@ -1,3 +1,5 @@
+mode = "backtest"
+
 [logging]
 level = "INFO"
 
