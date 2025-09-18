@@ -63,7 +63,7 @@ class MetricsService:
         body = current.close - current.open
         body_abs = abs(body)
         pct_move = (
-            (current.high - current.open) / current.open * 100 if current.open else 0.0
+            (current.close - current.open) / current.open * 100 if current.open else 0.0
         )
         median_window = min(20, len(candles))
         relative_volume = (
