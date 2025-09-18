@@ -4,7 +4,7 @@ import asyncio
 import hmac
 import time
 from hashlib import sha256
-from typing import Any, AsyncIterator, Iterable, List
+from typing import Any, AsyncIterator, Dict, Iterable, List
 from urllib.parse import urlencode
 
 try:
@@ -98,6 +98,32 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         raw = data.get("result", {}).get("list", [])
         symbols = [item.get("symbol") for item in raw if item.get("status") == "Trading"]
         return [symbol for symbol in symbols if symbol]
+
+    async def get_24h_quote_volume(self) -> Dict[str, float]:
+        await self.ensure_rate_limit()
+        if not self._session:
+            raise RuntimeError("httpx is required to fetch statistics from Bybit")
+        endpoint = f"{self._api_base}/derivatives/v3/public/tickers"
+        params = {"category": "linear"}
+        response = await self._session.get(endpoint, params=params)
+        response.raise_for_status()
+        data = response.json()
+        items = data.get("result", {}).get("list", [])
+        volumes: Dict[str, float] = {}
+        if isinstance(items, list):
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                symbol = item.get("symbol")
+                if not isinstance(symbol, str):
+                    continue
+                volume_raw = item.get("turnover24h") or item.get("turnover")
+                try:
+                    volume = float(volume_raw)
+                except (TypeError, ValueError):
+                    continue
+                volumes[symbol.upper()] = volume
+        return volumes
 
     async def update_deposit(self) -> dict[str, Any]:
         await self.ensure_rate_limit()

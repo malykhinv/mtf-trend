@@ -4,7 +4,7 @@ import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Iterable, Mapping
 
 from .data.io.config_loader import AppConfig, ConfigLoader
 from .data.io.storage import Storage
@@ -216,14 +216,123 @@ def init_services(config: AppConfig, storage: Storage) -> tuple[
     )
 
 
+def _normalize_symbol_set(raw: object) -> set[str]:
+    symbols: set[str] = set()
+    if isinstance(raw, str):
+        raw = [raw]
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        for item in raw:
+            if isinstance(item, str) and item:
+                symbols.add(item.upper())
+    return symbols
+
+
+def _resolve_provider_name(
+    symbol: str,
+    config: AppConfig,
+    providers: Dict[str, BaseExchangeProvider],
+    default: str | None = None,
+) -> str:
+    mapping = config.get("symbols.providers", {})
+    provider_name: str | None = None
+    if isinstance(mapping, Mapping):
+        provider_name = mapping.get(symbol) or mapping.get("default")
+    if not provider_name and default:
+        provider_name = default
+    if not provider_name:
+        provider_name = next(iter(providers))
+    if provider_name not in providers:
+        provider_name = next(iter(providers))
+    return provider_name
+
+
+async def discover_symbol_universe(
+    config: AppConfig,
+    providers: Dict[str, BaseExchangeProvider],
+    mode: str,
+    provider_scope: Iterable[str] | None = None,
+) -> Dict[str, str]:
+    logger = get_logger("symbol-discovery")
+    selection_cfg = config.get("symbols.selection", {})
+    suffix = "USDT"
+    min_quote_volume = 5_000_000.0
+    allow: set[str] = set()
+    deny: set[str] = set()
+    if isinstance(selection_cfg, Mapping):
+        suffix = str(selection_cfg.get("quote_suffix", suffix)).upper() or suffix
+        min_quote_volume = float(selection_cfg.get("min_quote_volume", min_quote_volume))
+        allow |= _normalize_symbol_set(selection_cfg.get("allow"))
+        deny |= _normalize_symbol_set(selection_cfg.get("deny"))
+    mode_cfg = config.get(mode, {})
+    if isinstance(mode_cfg, Mapping):
+        allow |= _normalize_symbol_set(mode_cfg.get("allow"))
+        allow |= _normalize_symbol_set(mode_cfg.get("symbols"))
+        deny |= _normalize_symbol_set(mode_cfg.get("deny"))
+
+    provider_names = list(provider_scope or providers.keys())
+    discovered: Dict[str, str] = {}
+    volumes: Dict[str, float] = {}
+
+    for provider_name in provider_names:
+        provider = providers.get(provider_name)
+        if not provider:
+            continue
+        try:
+            stats = await provider.get_24h_quote_volume()
+        except NotImplementedError:
+            logger.debug("Provider %s does not expose 24h statistics", provider_name)
+            continue
+        except Exception as exc:  # pragma: no cover - network errors
+            logger.warning("Failed to fetch 24h statistics from %s: %s", provider_name, exc)
+            continue
+        if not isinstance(stats, Mapping):
+            continue
+        for symbol, volume in stats.items():
+            if not isinstance(symbol, str):
+                continue
+            normalized = symbol.upper()
+            if suffix and not normalized.endswith(suffix):
+                continue
+            if normalized in deny:
+                continue
+            try:
+                volume_value = float(volume)
+            except (TypeError, ValueError):
+                continue
+            if volume_value < min_quote_volume:
+                continue
+            existing_volume = volumes.get(normalized)
+            if existing_volume is None or volume_value > existing_volume:
+                volumes[normalized] = volume_value
+                discovered[normalized] = provider_name
+
+    default_provider = provider_names[0] if len(provider_names) == 1 else None
+    for symbol in allow:
+        if symbol in deny:
+            continue
+        if symbol not in discovered:
+            provider_name = _resolve_provider_name(symbol, config, providers, default_provider)
+            if provider_name in providers:
+                discovered[symbol] = provider_name
+
+    for symbol in list(discovered):
+        if symbol in deny:
+            discovered.pop(symbol, None)
+
+    return dict(sorted(discovered.items()))
+
+
 def select_provider_for_symbol(
     providers: Dict[str, BaseExchangeProvider],
     symbol: str,
     config: AppConfig,
+    discovered: Dict[str, str] | None = None,
 ) -> BaseExchangeProvider:
-    mapping = config.get("symbols.providers", {})
-    name = mapping.get(symbol) or mapping.get("default") or next(iter(providers))
-    return providers[name]
+    if discovered and symbol in discovered:
+        provider_name = discovered[symbol]
+    else:
+        provider_name = _resolve_provider_name(symbol, config, providers)
+    return providers[provider_name]
 
 
 async def run_backtest(
@@ -257,8 +366,12 @@ async def run_backtest(
     )
     timeframe = Timeframe(backtest_cfg.get("timeframe", Timeframe.M15.value))
     limit = int(backtest_cfg.get("limit", 500))
-    for symbol in backtest_cfg.get("symbols", []):
-        provider = select_provider_for_symbol(providers, symbol, config)
+    discovered = await discover_symbol_universe(config, providers, "backtest")
+    if not discovered:
+        logger.warning("No symbols available for backtest after applying liquidity filters")
+        return
+    for symbol in discovered:
+        provider = select_provider_for_symbol(providers, symbol, config, discovered)
         try:
             candles = await provider.fetch_ohlcv(symbol, timeframe, limit)
         except Exception as exc:  # pragma: no cover - network errors
@@ -305,7 +418,16 @@ async def run_live(
         window=window,
         poll_interval=poll_interval,
     )
-    symbols = live_cfg.get("symbols", [])
+    discovered = await discover_symbol_universe(
+        config,
+        providers,
+        "live",
+        provider_scope=[provider_name],
+    )
+    symbols = [symbol for symbol, name in discovered.items() if name == provider_name]
+    if not symbols:
+        logger.warning("No symbols available for live trading after applying liquidity filters")
+        return
 
     await runner.refresh_deposit(force=True)
 

@@ -60,6 +60,10 @@ class BaseExchangeProvider:
     async def get_symbols(self) -> Iterable[str]:
         raise NotImplementedError
 
+    async def get_24h_quote_volume(self) -> Dict[str, float]:
+        """Return a mapping of symbol to 24 hour quote volume."""
+        raise NotImplementedError
+
     async def update_deposit(self) -> Dict[str, Any]:
         raise NotImplementedError
 

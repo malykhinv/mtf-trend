@@ -4,7 +4,7 @@ import asyncio
 import hmac
 import time
 from hashlib import sha256
-from typing import Any, AsyncIterator, Iterable, List
+from typing import Any, AsyncIterator, Dict, Iterable, List
 from urllib.parse import urlencode
 
 try:
@@ -88,6 +88,30 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         info = response.json()
         symbols = [item["symbol"] for item in info.get("symbols", []) if item.get("status") == "TRADING"]
         return [symbol for symbol in symbols if not symbol.endswith("_PERP")]  # filter illiquid synthetics
+
+    async def get_24h_quote_volume(self) -> Dict[str, float]:
+        await self.ensure_rate_limit()
+        if not self._session:
+            raise RuntimeError("httpx is required to fetch statistics from Binance")
+        endpoint = f"{self._api_base}/fapi/v1/ticker/24hr"
+        response = await self._session.get(endpoint)
+        response.raise_for_status()
+        data = response.json()
+        volumes: Dict[str, float] = {}
+        if isinstance(data, list):
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                symbol = item.get("symbol")
+                if not isinstance(symbol, str):
+                    continue
+                volume_raw = item.get("quoteVolume")
+                try:
+                    volume = float(volume_raw)
+                except (TypeError, ValueError):
+                    continue
+                volumes[symbol.upper()] = volume
+        return volumes
 
     async def update_deposit(self) -> dict[str, Any]:
         await self.ensure_rate_limit()
