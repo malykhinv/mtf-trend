@@ -25,6 +25,12 @@ ws_base = "wss://stream.bybit.com/v5/public/linear"
 rate_limit_per_minute = 600
 min_quote_volume = 250000.0
 
+[symbols.selection]
+min_quote_volume = 5000000.0
+quote_suffix = "USDT"
+allow = []
+deny = []
+
 [thresholds.default]
 min_relative_volume = 50.0
 max_relative_volume = 100000.0
@@ -74,14 +80,12 @@ min_abs_value = 80.0
 
 [backtest]
 enabled = true
-symbols = ["BTCUSDT"]
 timeframe = "15m"
 limit = 200
 window = 50
 
 [live]
 enabled = false
-symbols = ["BTCUSDT"]
 provider = "binance"
 timeframe = "5m"
 window = 50
