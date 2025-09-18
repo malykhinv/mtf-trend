@@ -80,44 +80,42 @@ class SignalSelectorService:
         if not thresholds.allow_short:
             reasons.append("short_disabled")
             return False
-        if metrics.pct_move >= 0:
-            reasons.append("short_positive_body")
-            return False
+
         min_rel_vol = thresholds.min_relative_volume
         max_rel_vol = thresholds.max_relative_volume
-        rel_volume_valid = True
+        rel_volume = metrics.relative_volume
         if min_rel_vol > 0 and max_rel_vol > 0:
-            rel_volume_valid = (
-                metrics.relative_volume < min_rel_vol
-                or metrics.relative_volume > max_rel_vol
-            )
+            if min_rel_vol <= rel_volume <= max_rel_vol:
+                reasons.append("short_relative_volume")
+                return False
         elif min_rel_vol > 0:
-            rel_volume_valid = metrics.relative_volume < min_rel_vol
+            if rel_volume >= min_rel_vol:
+                reasons.append("short_relative_volume")
+                return False
         elif max_rel_vol > 0:
-            rel_volume_valid = metrics.relative_volume > max_rel_vol
-        if not rel_volume_valid:
-            reasons.append("short_relative_volume")
-            return False
+            if rel_volume <= max_rel_vol:
+                reasons.append("short_relative_volume")
+                return False
+
         if (
             thresholds.min_atr_mult > 0
             and metrics.atr_multiple >= thresholds.min_atr_mult
         ):
             reasons.append("short_atr_mult")
             return False
+
         pct_move = metrics.pct_move
         min_pct_move = thresholds.min_pct_move
         max_pct_move = thresholds.max_pct_move
-        pct_move_valid = True
-        conditions = []
+        pct_conditions = []
         if max_pct_move != 0:
-            conditions.append(pct_move > max_pct_move)
+            pct_conditions.append(pct_move > max_pct_move)
         if min_pct_move != 0:
-            conditions.append(pct_move < min_pct_move)
-        if conditions:
-            pct_move_valid = any(conditions)
-        if not pct_move_valid:
+            pct_conditions.append(pct_move < min_pct_move)
+        if pct_conditions and not any(pct_conditions):
             reasons.append("short_pct_move")
             return False
+
         if (
             thresholds.max_upper_wick_pct > 0
             and metrics.upper_wick_pct >= thresholds.max_upper_wick_pct
@@ -150,9 +148,9 @@ class SignalSelectorService:
         if not allow_long and not allow_short:
             return SelectionResult(signals=[], rejected=failed + entry_failures)
         side: Side | None = None
-        if metrics.pct_move > 0 and allow_long:
+        if allow_long and not allow_short:
             side = Side.LONG
-        elif metrics.pct_move < 0 and allow_short:
+        elif allow_short and not allow_long:
             side = Side.SHORT
         elif allow_long:
             side = Side.LONG
