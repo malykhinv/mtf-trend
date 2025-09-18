@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from datetime import datetime
 from typing import Any, AsyncIterator, Dict, Iterable, List, Sequence
 
 from ...domain.enums import Exchange, Timeframe
@@ -51,7 +52,13 @@ class BaseExchangeProvider:
                 filtered.append(candle)
         return filtered
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> List[Candle]:
+    async def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int,
+        since: int | None = None,
+    ) -> List[Candle]:
         raise NotImplementedError
 
     def resolve_ohlcv_limit(self, requested_limit: int | None) -> int:
@@ -86,3 +93,22 @@ class BaseExchangeProvider:
 
     async def ensure_rate_limit(self) -> None:
         await self._rate_limiter.throttle()
+
+    def _sort_and_deduplicate(self, candles: Iterable[Candle]) -> List[Candle]:
+        """Return candles ordered by start time without duplicates."""
+
+        sorted_candles = sorted(candles, key=lambda candle: candle.started_at)
+        deduplicated: List[Candle] = []
+        seen: set[tuple[str | None, int]] = set()
+        for candle in sorted_candles:
+            started_at = candle.started_at
+            if isinstance(started_at, datetime):
+                timestamp_ms = int(started_at.timestamp() * 1000)
+            else:  # pragma: no cover - defensive, Candle.started_at is datetime
+                timestamp_ms = int(started_at)
+            key = (candle.id, timestamp_ms)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduplicated.append(candle)
+        return deduplicated

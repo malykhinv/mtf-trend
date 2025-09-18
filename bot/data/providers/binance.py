@@ -56,18 +56,27 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         headers = {"X-MBX-APIKEY": api_key}
         return await self._session.get(endpoint, params=query_params, headers=headers)
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> List[Candle]:
+    async def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int,
+        since: int | None = None,
+    ) -> List[Candle]:
         await self.ensure_rate_limit()
         if not self._session:
             raise RuntimeError("httpx is required to fetch candles from Binance")
         limit = self.resolve_ohlcv_limit(limit)
         endpoint = f"{self._api_base}/fapi/v1/klines"
         params = {"symbol": symbol.upper(), "interval": timeframe.value, "limit": limit}
+        if since is not None:
+            params["startTime"] = since
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         raw: Iterable[Any] = response.json()
         candles = self.map_candles(raw, symbol, timeframe)
-        return await self._filter_liquidity(candles)
+        filtered = await self._filter_liquidity(candles)
+        return self._sort_and_deduplicate(filtered)
 
     async def stream_candles(
         self, symbol: str, timeframe: Timeframe

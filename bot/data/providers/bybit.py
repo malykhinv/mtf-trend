@@ -64,19 +64,33 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         }
         return await self._session.get(endpoint, params=query_params, headers=headers)
 
-    async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> List[Candle]:
+    async def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int,
+        since: int | None = None,
+    ) -> List[Candle]:
         await self.ensure_rate_limit()
         if not self._session:
             raise RuntimeError("httpx is required to fetch candles from Bybit")
         limit = self.resolve_ohlcv_limit(limit)
         endpoint = f"{self._api_base}/derivatives/v3/public/kline"
-        params = {"symbol": symbol.upper(), "interval": timeframe.value, "limit": limit, "category": "linear"}
+        params = {
+            "symbol": symbol.upper(),
+            "interval": timeframe.value,
+            "limit": limit,
+            "category": "linear",
+        }
+        if since is not None:
+            params["start"] = since
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
         raw: Iterable[Any] = data.get("result", {}).get("list", [])
         candles = self.map_candles(raw, symbol, timeframe)
-        return await self._filter_liquidity(candles)
+        filtered = await self._filter_liquidity(candles)
+        return self._sort_and_deduplicate(filtered)
 
     async def stream_candles(
         self, symbol: str, timeframe: Timeframe

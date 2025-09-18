@@ -21,7 +21,7 @@ from .data.repositories.signal_repository import SignalRepository
 from .data.repositories.state_repository import StateRepository
 from .data.repositories.trade_repository import TradeRepository
 from .domain.enums import Timeframe
-from .domain.models.entities import ThresholdMetric, Thresholds
+from .domain.models.entities import Candle, ThresholdMetric, Thresholds
 from .domain.services.backtest_runner import BacktestRunner
 from .domain.services.dedup_policy import DeduplicationPolicy
 from .domain.services.live_runner import LiveTradingRunner
@@ -436,7 +436,43 @@ async def run_backtest(
         for timeframe in timeframes:
             try:
                 limit = provider.resolve_ohlcv_limit(requested_limit)
-                candles = await provider.fetch_ohlcv(symbol, timeframe, limit)
+                history_batches_raw = backtest_cfg.get("history_batches", 10)
+                history_batches = (
+                    int(history_batches_raw)
+                    if isinstance(history_batches_raw, (int, float, str))
+                    and str(history_batches_raw).strip()
+                    else 10
+                )
+                history_batches = max(history_batches, 1)
+                timeframe_delta = timeframe.to_timedelta()
+                timeframe_ms = int(timeframe_delta.total_seconds() * 1000)
+                total_candles = limit * history_batches
+                start_dt = utcnow() - timeframe_delta * total_candles
+                since_ms = int(start_dt.timestamp() * 1000)
+                candles: list[Candle] = []
+                seen: set[tuple[str | None, int]] = set()
+                for _ in range(history_batches):
+                    batch = await provider.fetch_ohlcv(
+                        symbol, timeframe, limit, since=since_ms
+                    )
+                    if batch:
+                        for candle in batch:
+                            key = (
+                                candle.id,
+                                int(candle.started_at.timestamp() * 1000),
+                            )
+                            if key in seen:
+                                continue
+                            seen.add(key)
+                            candles.append(candle)
+                        last_candle = max(batch, key=lambda c: c.started_at)
+                        since_ms = int(
+                            (last_candle.started_at + timeframe_delta).timestamp()
+                            * 1000
+                        )
+                    else:
+                        since_ms += timeframe_ms * limit
+                candles.sort(key=lambda candle: candle.started_at)
             except Exception as exc:  # pragma: no cover - network errors
                 logger.error(
                     "Failed to fetch backtest data for %s (%s): %s",

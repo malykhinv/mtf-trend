@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from enum import Enum, IntEnum
 
 
@@ -13,6 +14,15 @@ class Timeframe(str, Enum):
     M3 = "3m"
     M5 = "5m"
     M15 = "15m"
+
+    def to_timedelta(self) -> timedelta:
+        mapping = {
+            Timeframe.M1: timedelta(minutes=1),
+            Timeframe.M3: timedelta(minutes=3),
+            Timeframe.M5: timedelta(minutes=5),
+            Timeframe.M15: timedelta(minutes=15),
+        }
+        return mapping[self]
 
 
 class Side(str, Enum):
