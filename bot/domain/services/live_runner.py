@@ -51,6 +51,9 @@ class LiveTradingRunner:
             status=TradeStatus.OPENED,
             entry_price=signal.candle.close,
             size=1.0,
+            allow_long=signal.allow_long,
+            allow_short=signal.allow_short,
+            thresholds_snapshot=signal.thresholds,
             metadata={"mode": "live"},
         )
         self._tp_sl_service.assign(signal, trade)

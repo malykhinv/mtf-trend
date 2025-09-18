@@ -62,6 +62,9 @@ class BacktestRunner:
                     status=TradeStatus.CLOSED_TP,
                     entry_price=signal.candle.close,
                     size=1.0,
+                    allow_long=signal.allow_long,
+                    allow_short=signal.allow_short,
+                    thresholds_snapshot=signal.thresholds,
                     metadata={"mode": "backtest"},
                 )
                 self._tp_sl_service.assign(signal, trade)

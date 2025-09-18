@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Iterable, List, Sequence
 
 from ..enums import BreakDirection, Side
@@ -29,11 +29,15 @@ class SignalSelectorService:
 
     def select(self, symbol: str, candles: Sequence[Candle], thresholds: Thresholds) -> SelectionResult:
         metrics = self._metrics_service.calculate(candles)
-        checks = self._metrics_service.passes_thresholds(metrics, thresholds)
-        failed = [name for name, passed in checks.items() if not passed]
+        evaluations = self._metrics_service.evaluate_thresholds(metrics, thresholds)
+        failed = [evaluation.name for evaluation in evaluations if not evaluation.passed]
         if failed:
             return SelectionResult(signals=[], rejected=failed)
         side, direction = self._determine_side(metrics.momentum)
+        if (side == Side.LONG and not thresholds.allow_long) or (
+            side == Side.SHORT and not thresholds.allow_short
+        ):
+            return SelectionResult(signals=[], rejected=["side_not_allowed"])
         signal = Signal(
             id=ids.uuid_str(),
             candle=candles[-1],
@@ -42,9 +46,12 @@ class SignalSelectorService:
             score=abs(metrics.momentum),
             triggered_at=utcnow(),
             thresholds=thresholds,
+            metrics=evaluations,
+            allow_long=thresholds.allow_long,
+            allow_short=thresholds.allow_short,
             metadata={
                 "metrics": metrics.__dict__,
-                "checks": checks,
+                "evaluations": [asdict(evaluation) for evaluation in evaluations],
                 "symbol": symbol,
             },
         )

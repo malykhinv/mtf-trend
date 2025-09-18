@@ -19,8 +19,10 @@ class TpSlService:
     def assign(self, signal: Signal, trade: Trade) -> TpSlResult:
         thresholds: Thresholds = signal.thresholds
         atr = signal.metadata.get("metrics", {}).get("atr", 0.0)
-        risk = atr * thresholds.sl_multiplier
-        reward = risk * self._risk_reward_ratio
+        risk_multiplier = thresholds.y or 1.0
+        tp_multiplier = thresholds.x
+        risk = atr * risk_multiplier
+        reward = atr * tp_multiplier if tp_multiplier else risk * self._risk_reward_ratio
         entry_price = trade.entry_price
         if signal.side == Side.LONG:
             tp = entry_price + reward
