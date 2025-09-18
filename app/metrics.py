@@ -50,10 +50,11 @@ class MetricAggregator:
 
     def _update_candle(
         self, trade: AggTrade, metrics
-    ) -> tuple[float, float, float, bool, bool]:
+    ) -> tuple[float, float, float, bool, bool, bool, bool]:
         price_win = metrics.price_win
         vol_win = metrics.vol_win
         prev_low = metrics.low
+        prev_high = metrics.high
         start_ts = metrics.start_ts
         if trade.timestamp - start_ts >= 60_000 or start_ts == 0:
             start_ts = trade.timestamp
@@ -61,10 +62,12 @@ class MetricAggregator:
             metrics.low = trade.price
             metrics.open = trade.price
             low_break = False
+            high_break = False
         else:
             metrics.high = max(metrics.high, trade.price)
             metrics.low = min(metrics.low, trade.price)
             low_break = prev_low > 0 and trade.price < prev_low
+            high_break = prev_high > 0 and trade.price > prev_high
         metrics.start_ts = start_ts
         metrics.end_ts = trade.timestamp
 
@@ -84,6 +87,7 @@ class MetricAggregator:
             else 0.0
         )
         avwap_loss = total_vol > 0 and trade.price < avwap
+        avwap_gain = total_vol > 0 and trade.price > avwap
 
         std_price = metrics.price_ewma_std
         delta_sigma = rng / std_price if std_price > 0 else 0.0
@@ -91,7 +95,23 @@ class MetricAggregator:
         upper_wick = high - max(metrics.open, trade.price)
         uw_ratio = upper_wick / body if body > 0 else float("inf")
 
-        return delta_sigma, delta_abs, uw_ratio, low_break, avwap_loss
+        return (
+            delta_sigma,
+            delta_abs,
+            uw_ratio,
+            low_break,
+            avwap_loss,
+            high_break,
+            avwap_gain,
+        )
+
+    @staticmethod
+    def _should_enter_short(low_break: bool, avwap_loss: bool) -> bool:
+        return low_break or avwap_loss
+
+    @staticmethod
+    def _should_enter_long(high_break: bool, avwap_gain: bool) -> bool:
+        return high_break or avwap_gain
 
     def _update_entry_flags(
         self,
@@ -104,6 +124,8 @@ class MetricAggregator:
         upper_wick_ratio: float,
         low_break: bool,
         avwap_loss: bool,
+        high_break: bool,
+        avwap_gain: bool,
     ) -> None:
         metrics.z_px = z_px
         metrics.z_vol = z_vol
@@ -113,12 +135,17 @@ class MetricAggregator:
         metrics.last_price = trade.price
         metrics.low_break = low_break
         metrics.avwap_loss = avwap_loss
-        if low_break or avwap_loss:
+        metrics.high_break = high_break
+        metrics.avwap_gain = avwap_gain
+
+        metrics.entry_price = 0.0
+        metrics.direction = None
+        if self._should_enter_short(low_break, avwap_loss):
             metrics.entry_price = trade.price
             metrics.direction = Side.SHORT
-        else:
-            metrics.entry_price = 0.0
-            metrics.direction = None
+        elif self._should_enter_long(high_break, avwap_gain):
+            metrics.entry_price = trade.price
+            metrics.direction = Side.LONG
 
 
     # ------------------------------------------------------------------
@@ -128,9 +155,15 @@ class MetricAggregator:
         state = self._registry.get(trade.symbol)
         metrics = state.metrics
         z_px, z_vol = self._update_price_volume_metrics(trade, metrics)
-        delta_sigma, delta_abs, uw_ratio, low_break, avwap_loss = self._update_candle(
-            trade, metrics
-        )
+        (
+            delta_sigma,
+            delta_abs,
+            uw_ratio,
+            low_break,
+            avwap_loss,
+            high_break,
+            avwap_gain,
+        ) = self._update_candle(trade, metrics)
         self._update_entry_flags(
             trade,
             metrics,
@@ -141,6 +174,8 @@ class MetricAggregator:
             uw_ratio,
             low_break,
             avwap_loss,
+            high_break,
+            avwap_gain,
         )
 
         self._registry.update(trade.symbol, state)
