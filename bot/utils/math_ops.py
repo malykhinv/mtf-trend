@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 from collections import deque
+from statistics import mean, median as _median
 from typing import Deque, Iterable, List, Sequence
-
-from statistics import mean
 
 from ..domain.models.entities import Candle
 
@@ -52,6 +51,13 @@ def ema(values: Iterable[float], period: int) -> float:
     for value in values_list[1:]:
         ema_value = value * k + ema_value * (1 - k)
     return ema_value
+
+
+def median(values: Iterable[float], period: int) -> float:
+    data = list(values)[-period:]
+    if not data:
+        raise ValueError("values must not be empty")
+    return _median(data)
 
 
 def window(sequence: Sequence[Candle], size: int) -> Deque[Candle]:
