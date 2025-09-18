@@ -47,7 +47,13 @@ class BacktestRunner:
         generated_trades: list[Trade] = []
         for index in range(self._window, len(candles)):
             window_candles = candles[index - self._window : index]
-            result = self._selector.select(symbol, window_candles, thresholds)
+            future_candles = candles[index :]
+            result = self._selector.select(
+                symbol,
+                window_candles,
+                thresholds,
+                future_candles=future_candles,
+            )
             for signal in result.signals:
                 accepted, key = self._dedup.should_accept(signal)
                 if not accepted:
