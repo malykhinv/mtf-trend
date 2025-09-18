@@ -18,6 +18,7 @@ class Candle:
     low: float
     close: float
     volume: float
+    quote_volume: Optional[float] = None
     started_at: datetime
     closed_at: datetime
 

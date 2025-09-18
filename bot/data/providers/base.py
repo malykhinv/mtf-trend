@@ -42,7 +42,12 @@ class BaseExchangeProvider:
         self._logger = get_logger(self.__class__.__name__)
 
     async def _filter_liquidity(self, candles: Sequence[Candle]) -> List[Candle]:
-        return [c for c in candles if c.volume >= self._min_quote_volume]
+        filtered: List[Candle] = []
+        for candle in candles:
+            quote_volume = candle.quote_volume if candle.quote_volume is not None else candle.volume
+            if quote_volume >= self._min_quote_volume:
+                filtered.append(candle)
+        return filtered
 
     async def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> List[Candle]:
         raise NotImplementedError
