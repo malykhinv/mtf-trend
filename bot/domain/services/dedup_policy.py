@@ -16,15 +16,13 @@ class DedupRecord:
 
 
 class DeduplicationPolicy:
-    def __init__(self, ttl_seconds: int = 600, max_records: int = 1000) -> None:
+    def __init__(self, ttl_seconds: int = 14400, max_records: int = 1000) -> None:
         self._ttl = timedelta(seconds=ttl_seconds)
         self._records: Deque[DedupRecord] = deque(maxlen=max_records)
         self._lock = Lock()
 
     def _make_key(self, signal: Signal) -> str:
-        return (
-            f"{signal.candle.symbol}:{signal.side}:{signal.candle.timeframe}:{signal.direction.value}"
-        )
+        return f"{signal.candle.symbol}:{signal.candle.timeframe}"
 
     def should_accept(self, signal: Signal) -> Tuple[bool, str | None]:
         with self._lock:

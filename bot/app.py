@@ -151,7 +151,7 @@ def init_services(config: AppConfig, storage: Storage) -> tuple[
     tp_sl_service = TpSlService()
     dedup_cfg = config.get("dedup", {})
     dedup_policy = DeduplicationPolicy(
-        ttl_seconds=int(dedup_cfg.get("ttl_seconds", 1800)),
+        ttl_seconds=int(dedup_cfg.get("ttl_seconds", 14400)),
         max_records=int(dedup_cfg.get("max_records", 1000)),
     )
     return (

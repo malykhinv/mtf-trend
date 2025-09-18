@@ -8,7 +8,6 @@ from ..enums import BreakDirection, Side
 from ..models.entities import Candle, Signal, Thresholds
 from .metrics_service import Metrics, MetricsService
 from ...utils import ids
-from ...utils.clock import utcnow
 
 
 @dataclass(slots=True)
@@ -116,13 +115,14 @@ class SignalSelectorService:
         direction = metrics.break_direction
         if direction is BreakDirection.NONE:
             direction = BreakDirection.HIGH_FIRST if side == Side.LONG else BreakDirection.LOW_FIRST
+        candle = candles[-1]
         signal = Signal(
             id=ids.uuid_str(),
-            candle=candles[-1],
+            candle=candle,
             side=side,
             direction=direction,
             score=fabs(metrics.pct_move),
-            triggered_at=utcnow(),
+            triggered_at=candle.closed_at,
             thresholds=thresholds,
             metrics=evaluations,
             allow_long=allow_long,
