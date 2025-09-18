@@ -143,6 +143,10 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
         trade,
         status=TradeStatus.CLOSED_TP,
         exit_price=105.0,
+        tp_price=105.0,
+        sl_price=95.0,
+        tp_pct=5.0,
+        sl_pct=-5.0,
         pnl=5.0,
         pnl_pct=5.0,
         closed_at=now + timedelta(minutes=10),
@@ -155,6 +159,8 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
     assert rows[0]["status"] == updated_trade.status.value
     assert rows[0]["exit_price"] == updated_trade.exit_price
     assert rows[0]["pnl"] == updated_trade.pnl
+    assert rows[0]["tp_pct"] == updated_trade.tp_pct
+    assert rows[0]["sl_pct"] == updated_trade.sl_pct
 
     second_trade = _build_trade("2", now + timedelta(minutes=1))
     repository.save(second_trade)
