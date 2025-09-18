@@ -65,13 +65,32 @@ def _format_condition(name: str, metrics: M.SymbolMetrics, trig: TriggerParams) 
     return f"{name} {metric_s} {op} {trig_s}"
 
 
+def _resolve_direction(metrics: M.SymbolMetrics) -> Side | None:
+    if metrics.direction is not None:
+        return metrics.direction
+    if metrics.low_break or metrics.avwap_loss:
+        return Side.SHORT
+    if metrics.high_break or metrics.avwap_gain:
+        return Side.LONG
+    return None
+
+
 def _evaluate_entry(metrics: M.SymbolMetrics, entry_cfg: EntryParams) -> bool:
-    low_break = metrics.low_break
-    avwap_loss = metrics.avwap_loss
+    direction = _resolve_direction(metrics)
+    if direction is Side.LONG:
+        primary_trigger = metrics.high_break
+        secondary_trigger = metrics.avwap_gain
+    else:
+        primary_trigger = metrics.low_break
+        secondary_trigger = metrics.avwap_loss
+
     if entry_cfg.require_both:
-        return low_break and avwap_loss
-    return (entry_cfg.allow_low_break and low_break) or (
-        entry_cfg.allow_avwap_loss and avwap_loss
+        return primary_trigger and secondary_trigger
+
+    allow_primary = entry_cfg.allow_low_break
+    allow_secondary = entry_cfg.allow_avwap_loss
+    return (allow_primary and primary_trigger) or (
+        allow_secondary and secondary_trigger
     )
 
 
@@ -220,17 +239,19 @@ class SignalEngine:
                 logger.info(f"{symbol}: сигнал отклонён — условия входа не выполнены")
                 return None
 
-            direction: Side = (
-                metrics.direction if metrics.direction is not None else Side.SHORT
-            )
+            direction = _resolve_direction(metrics)
+            if direction is None:
+                logger.info(f"{symbol}: сигнал отклонён — направление не определено")
+                return None
 
             if metrics.entry_price > 0:
                 price = metrics.entry_price
             else:
-                if direction is Side.SHORT:
-                    price = metrics.best_bid or window.low
-                else:
-                    price = metrics.best_ask or window.high
+                price = (
+                    metrics.best_bid or window.low
+                    if direction is Side.SHORT
+                    else metrics.best_ask or window.high
+                )
 
             return S.EntrySignal(symbol=symbol, side=direction, price=price)
         except Exception:

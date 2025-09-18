@@ -50,6 +50,8 @@ class TradeManager:
         result: Any | None = None
         if side is Side.SHORT:
             logger.info("Открытие шорта %s по %.2f", plan.symbol, plan.entry_price)
+        else:
+            logger.info("Открытие лонга %s по %.2f", plan.symbol, plan.entry_price)
         try:
             result = await self._trader.place(order)
         except Exception:

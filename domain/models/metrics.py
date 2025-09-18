@@ -86,5 +86,7 @@ class SymbolMetrics:
     # --- entry helpers --------------------------------------------------
     low_break: bool = False
     avwap_loss: bool = False
+    high_break: bool = False
+    avwap_gain: bool = False
     entry_price: float = 0.0
     direction: Side | None = None
