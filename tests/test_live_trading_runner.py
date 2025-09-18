@@ -154,6 +154,7 @@ async def _execute_take_profit(tmp_path) -> None:
     assert status == TradeStatus.CLOSED_TP
     trade = trade_repo.get(signal.id)
     assert trade is not None
+    assert trade.size == pytest.approx(500.0)
     assert trade.exit_price == pytest.approx(trade.tp_price)
     assert trade.pnl_pct == pytest.approx(trade.tp_pct)
     assert trade.pnl == pytest.approx(trade.size * (trade.pnl_pct or 0) / 100)
@@ -221,6 +222,7 @@ async def _execute_stop_loss(tmp_path) -> None:
     assert status == TradeStatus.CLOSED_SL
     trade = trade_repo.get(signal.id)
     assert trade is not None
+    assert trade.size == pytest.approx(500.0)
     assert trade.exit_price == pytest.approx(trade.sl_price)
     assert trade.pnl_pct == pytest.approx(trade.sl_pct)
     assert trade.pnl == pytest.approx(trade.size * (trade.pnl_pct or 0) / 100)

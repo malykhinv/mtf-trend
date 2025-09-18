@@ -315,7 +315,7 @@ class LiveTradingRunner:
             return None
 
     def _calculate_trade_size(self) -> float:
-        return max(10.0, 0.0005 * self._deposit_usdt) if self._deposit_usdt > 0 else 10.0
+        return max(10.0, 0.05 * self._deposit_usdt) if self._deposit_usdt > 0 else 10.0
 
     def _deposit_snapshot(self) -> Dict[str, Any]:
         return {
