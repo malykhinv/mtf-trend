@@ -145,8 +145,7 @@ def init_services(config: AppConfig, storage: Storage) -> tuple[
         momentum_period=int(metrics_cfg.get("momentum_period", 5)),
     )
     selector = SignalSelectorService(metrics_service)
-    tp_sl_cfg = config.get("tp_sl", {})
-    tp_sl_service = TpSlService(risk_reward_ratio=float(tp_sl_cfg.get("risk_reward_ratio", 2.0)))
+    tp_sl_service = TpSlService()
     dedup_cfg = config.get("dedup", {})
     dedup_policy = DeduplicationPolicy(
         ttl_seconds=int(dedup_cfg.get("ttl_seconds", 1800)),

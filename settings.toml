@@ -9,9 +9,6 @@ atr_period = 14
 volume_period = 20
 momentum_period = 5
 
-[tp_sl]
-risk_reward_ratio = 2.0
-
 [dedup]
 ttl_seconds = 1800
 max_records = 1000
