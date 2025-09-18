@@ -113,14 +113,14 @@ class MetricsService:
                 if broke_high and high_break_index is None:
                     high_break_index = idx
                     pct_to_high_break = (
-                        max(current.high - current.close, 0.0) / current.close * 100
+                        max(candle.high - current.close, 0.0) / current.close * 100
                         if current.close
                         else 0.0
                     )
                 if broke_low and low_break_index is None:
                     low_break_index = idx
                     pct_to_low_break = (
-                        min(current.low - current.close, 0.0) / current.close * 100
+                        max(current.close - candle.low, 0.0) / current.close * 100
                         if current.close
                         else 0.0
                     )
