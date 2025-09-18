@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from threading import RLock
 from typing import Dict, List, Optional
 
@@ -15,42 +14,10 @@ class TradeRepository:
         self._cache: Dict[str, Trade] = {}
         self.load()
 
-    def _serialize(self, trade: Trade) -> Dict[str, object]:
-        data = asdict(trade)
-        data["exchange"] = trade.exchange.value
-        data["side"] = trade.side.value
-        data["status"] = trade.status.value
-        if trade.timeframe:
-            data["timeframe"] = trade.timeframe.value
-        else:
-            data.pop("timeframe", None)
-        if trade.opened_at:
-            data["opened_at"] = trade.opened_at.isoformat()
-        if trade.closed_at:
-            data["closed_at"] = trade.closed_at.isoformat()
-        if trade.created_at:
-            data["created_at"] = trade.created_at.isoformat()
-        if trade.updated_at:
-            data["updated_at"] = trade.updated_at.isoformat()
-        if data.get("exit_price") is None:
-            data.pop("exit_price", None)
-        else:
-            data["exit_price"] = float(data["exit_price"])
-        if data.get("thresholds_snapshot") is None:
-            data.pop("thresholds_snapshot", None)
-        elif isinstance(data["thresholds_snapshot"], dict):
-            snapshot = data["thresholds_snapshot"]
-            if trade.thresholds_snapshot and trade.thresholds_snapshot.created_at:
-                snapshot["created_at"] = trade.thresholds_snapshot.created_at.isoformat()
-            if trade.thresholds_snapshot and trade.thresholds_snapshot.updated_at:
-                snapshot["updated_at"] = trade.thresholds_snapshot.updated_at.isoformat()
-        return data
-
     def save(self, trade: Trade) -> None:
         with self._lock:
             self._cache[trade.id] = trade
-            payload = {tid: self._serialize(td) for tid, td in self._cache.items()}
-            self._storage.write("trades", payload)
+            self._storage.save_trade(trade)
 
     def get(self, trade_id: str) -> Optional[Trade]:
         with self._lock:
@@ -62,7 +29,7 @@ class TradeRepository:
 
     def load(self) -> None:
         with self._lock:
-            data = self._storage.read("trades") or {}
-            for key, raw in data.items():
-                trade = self._storage.deserialize_trade(raw)
-                self._cache[key] = trade
+            self._cache.clear()
+            trades = self._storage.load_trades()
+            for trade in trades:
+                self._cache[trade.id] = trade

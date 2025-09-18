@@ -2,7 +2,7 @@
 level = "INFO"
 
 [storage]
-path = "var/state.json"
+path = "var/state.xlsx"
 
 [metrics]
 atr_period = 14

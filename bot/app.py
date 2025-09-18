@@ -34,7 +34,10 @@ def load_config() -> AppConfig:
 
 
 def init_storage(config: AppConfig) -> Storage:
-    storage_path = Path(config.get("storage.path", "state.json"))
+    path_setting = config.get("storage.path", "var/state.xlsx")
+    storage_path = Path(path_setting)
+    if storage_path.suffix.lower() != ".xlsx":
+        storage_path = storage_path.with_suffix(".xlsx")
     storage_path.parent.mkdir(parents=True, exist_ok=True)
     return Storage(storage_path)
 
