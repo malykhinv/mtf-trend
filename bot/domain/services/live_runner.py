@@ -44,6 +44,7 @@ class LiveTradingRunner:
         self._deposit_usdt = state_repository.get_deposit()
         self._deposit_asset = state_repository.get_deposit_asset()
         self._last_deposit_update = state_repository.get_last_deposit_update()
+        self._trade_watchers: Dict[str, asyncio.Task[None]] = {}
 
     async def _handle_signal(self, signal: Signal) -> None:
         accepted, key = self._dedup.should_accept(signal)
@@ -78,6 +79,77 @@ class LiveTradingRunner:
         self._trades.save(trade)
         self._update_used_amount()
         self._logger.info("Signal accepted %s", signal.id)
+        self._start_trade_watch(signal, trade)
+
+    def _start_trade_watch(self, signal: Signal, trade: Trade) -> None:
+        existing = self._trade_watchers.get(trade.id)
+        if existing and not existing.done():
+            existing.cancel()
+        task = asyncio.create_task(self._watch_trade(signal, trade))
+        self._trade_watchers[trade.id] = task
+
+        def _cleanup(task: asyncio.Task[None]) -> None:
+            self._trade_watchers.pop(trade.id, None)
+            if task.cancelled():
+                return
+            exception = task.exception()
+            if exception is not None:
+                self._logger.error(
+                    "Trade watcher for %s failed: %s", trade.id, exception, exc_info=True
+                )
+
+        task.add_done_callback(_cleanup)
+
+    async def _watch_trade(self, signal: Signal, trade: Trade) -> None:
+        timeframe = trade.timeframe or signal.candle.timeframe
+        last_closed_at = signal.candle.closed_at
+        while trade.status == TradeStatus.OPENED:
+            try:
+                candles = await self._provider.fetch_ohlcv(trade.symbol, timeframe, 3)
+                if not candles:
+                    await asyncio.sleep(self._poll_interval)
+                    continue
+                for candle in candles:
+                    if last_closed_at and candle.closed_at <= last_closed_at:
+                        continue
+                    last_closed_at = candle.closed_at
+                    hit_tp, hit_sl = self._tp_sl_service.check_levels(trade, candle)
+                    status = self._tp_sl_service.resolve_status(
+                        signal, trade, candle, hit_tp, hit_sl
+                    )
+                    if status is None:
+                        continue
+                    trade.status = status
+                    trade.closed_at = candle.closed_at
+                    if status == TradeStatus.CLOSED_TP:
+                        exit_price = trade.tp_price
+                        result_pct = trade.tp_pct
+                    else:
+                        exit_price = trade.sl_price
+                        result_pct = trade.sl_pct
+                    trade.exit_price = exit_price
+                    trade.pnl_pct = result_pct
+                    trade.pnl = (
+                        trade.size * (result_pct / 100)
+                        if result_pct is not None and trade.size is not None
+                        else None
+                    )
+                    trade.updated_at = utcnow()
+                    live_meta = trade.metadata.setdefault("live", {})
+                    if result_pct is not None:
+                        live_meta["result_pct"] = result_pct
+                    live_meta["closed_status"] = status.value
+                    self._trades.save(trade)
+                    self._update_used_amount()
+                    return
+                await asyncio.sleep(self._poll_interval)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._logger.error(
+                    "Error watching trade %s: %s", trade.id, exc, exc_info=True
+                )
+                await asyncio.sleep(self._poll_interval)
 
     async def _process_symbol(self, symbol: str, timeframe: Timeframe, thresholds: Thresholds) -> None:
         window: Deque[Candle] = deque(maxlen=self._window)

@@ -65,6 +65,8 @@ class ExcelWriter:
             "exit_price",
             "tp_price",
             "sl_price",
+            "tp_pct",
+            "sl_pct",
             "opened_at",
             "closed_at",
             "pnl",

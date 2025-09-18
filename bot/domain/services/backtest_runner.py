@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
-from ..enums import BreakDirection, Side, TradeStatus
+from ..enums import Side, TradeStatus
 from ..models.entities import Candle, Signal, Thresholds, Trade
 from ...data.providers.base import BaseExchangeProvider
 from ...data.repositories.signal_repository import SignalRepository
@@ -172,8 +172,8 @@ class BacktestRunner:
         pct_to_low_break = _extract_pct("pct_to_low_break")
 
         for candle in future_candles:
-            hit_tp, hit_sl = self._check_thresholds(trade, candle)
-            status = self._resolve_trade_status(signal, trade, candle, hit_tp, hit_sl)
+            hit_tp, hit_sl = self._tp_sl_service.check_levels(trade, candle)
+            status = self._tp_sl_service.resolve_status(signal, trade, candle, hit_tp, hit_sl)
             if status is None:
                 continue
             trade.status = status
@@ -205,57 +205,3 @@ class BacktestRunner:
             trade.updated_at = utcnow()
             return
 
-    def _check_thresholds(self, trade: Trade, candle: Candle) -> tuple[bool, bool]:
-        tp_price = trade.tp_price
-        sl_price = trade.sl_price
-        if tp_price is None or sl_price is None:
-            return False, False
-        if trade.side == Side.LONG:
-            hit_tp = candle.high >= tp_price
-            hit_sl = candle.low <= sl_price
-        else:
-            hit_tp = candle.low <= tp_price
-            hit_sl = candle.high >= sl_price
-        return hit_tp, hit_sl
-
-    def _resolve_trade_status(
-        self,
-        signal: Signal,
-        trade: Trade,
-        candle: Candle,
-        hit_tp: bool,
-        hit_sl: bool,
-    ) -> TradeStatus | None:
-        if not hit_tp and not hit_sl:
-            return None
-        if hit_tp and hit_sl:
-            direction = signal.direction
-            if direction == BreakDirection.HIGH_FIRST:
-                hit_sl = False
-            elif direction == BreakDirection.LOW_FIRST:
-                hit_tp = False
-            else:
-                tp_price = trade.tp_price
-                sl_price = trade.sl_price
-                if trade.side == Side.LONG:
-                    if tp_price is not None and candle.open >= tp_price:
-                        hit_sl = False
-                    elif sl_price is not None and candle.open <= sl_price:
-                        hit_tp = False
-                else:
-                    if tp_price is not None and candle.open <= tp_price:
-                        hit_sl = False
-                    elif sl_price is not None and candle.open >= sl_price:
-                        hit_tp = False
-        if hit_tp:
-            return TradeStatus.CLOSED_TP
-        if hit_sl:
-            return TradeStatus.CLOSED_SL
-        return None
-
-    def _calculate_pnl(self, trade: Trade, exit_price: float | None) -> float | None:
-        if exit_price is None:
-            return None
-        if trade.side == Side.LONG:
-            return exit_price - trade.entry_price
-        return trade.entry_price - exit_price

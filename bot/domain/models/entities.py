@@ -92,6 +92,8 @@ class Trade:
     exit_price: Optional[float] = None
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
+    tp_pct: Optional[float] = None
+    sl_pct: Optional[float] = None
     opened_at: Optional[datetime] = None
     closed_at: Optional[datetime] = None
     pnl: Optional[float] = None
