@@ -17,9 +17,12 @@ class Metrics:
     relative_volume: float
     atr_multiple: float
     upper_wick_pct: float
+    body_pct: float
     lower_wick_pct: float
     pct_to_high: float
     pct_to_low: float
+    pct_to_high_break: float
+    pct_to_low_break: float
     break_direction: BreakDirection
 
     def as_dict(self) -> Dict[str, float]:
@@ -31,9 +34,12 @@ class Metrics:
             "relative_volume": self.relative_volume,
             "atr_multiple": self.atr_multiple,
             "upper_wick_pct": self.upper_wick_pct,
+            "body_pct": self.body_pct,
             "lower_wick_pct": self.lower_wick_pct,
             "pct_to_high": self.pct_to_high,
             "pct_to_low": self.pct_to_low,
+            "pct_to_high_break": self.pct_to_high_break,
+            "pct_to_low_break": self.pct_to_low_break,
             "break_direction": float(self.break_direction.value),
         }
 
@@ -56,17 +62,35 @@ class MetricsService:
         current = candles[-1]
         body = current.close - current.open
         body_abs = abs(body)
-        pct_move = (body / current.open) * 100 if current.open else 0.0
-        relative_volume = current.volume / avg_volume if avg_volume else 0.0
-        atr_multiple = body_abs / atr if atr else 0.0
-        upper_wick = current.high - max(current.open, current.close)
-        lower_wick = min(current.open, current.close) - current.low
-        upper_wick_pct = (upper_wick / body_abs * 100) if body_abs else 0.0
-        lower_wick_pct = (lower_wick / body_abs * 100) if body_abs else 0.0
+        pct_move = (
+            (current.high - current.open) / current.open * 100 if current.open else 0.0
+        )
+        median_window = min(20, len(candles))
+        relative_volume = (
+            current.volume / math_ops.median([c.volume for c in candles], median_window)
+            if median_window
+            else 0.0
+        )
+        range_total = current.high - current.low
+        atr_multiple = (range_total / atr) if atr else 0.0
+        upper_wick = max(current.high - max(current.open, current.close), 0.0)
+        lower_wick = max(min(current.open, current.close) - current.low, 0.0)
+        if range_total:
+            upper_wick_pct = (upper_wick / range_total) * 100
+            body_pct = (body_abs / range_total) * 100
+            lower_wick_pct = (lower_wick / range_total) * 100
+            remainder = 100.0 - (upper_wick_pct + body_pct + lower_wick_pct)
+            body_pct += remainder
+        else:
+            upper_wick_pct = 0.0
+            body_pct = 0.0
+            lower_wick_pct = 0.0
 
         future = list(future_candles or [])
         pct_to_high = float("nan")
         pct_to_low = float("nan")
+        pct_to_high_break = 0.0
+        pct_to_low_break = 0.0
         break_direction = BreakDirection.NONE
         if future:
             max_future_high = max(c.high for c in future)
@@ -81,18 +105,38 @@ class MetricsService:
                 if current.close
                 else 0.0
             )
-            for candle in future:
+            high_break_index: int | None = None
+            low_break_index: int | None = None
+            for idx, candle in enumerate(future):
                 broke_high = candle.high >= current.high
                 broke_low = candle.low <= current.low
-                if broke_high and broke_low:
-                    break_direction = BreakDirection.NONE
+                if broke_high and high_break_index is None:
+                    high_break_index = idx
+                    pct_to_high_break = (
+                        max(current.high - current.close, 0.0) / current.close * 100
+                        if current.close
+                        else 0.0
+                    )
+                if broke_low and low_break_index is None:
+                    low_break_index = idx
+                    pct_to_low_break = (
+                        min(current.low - current.close, 0.0) / current.close * 100
+                        if current.close
+                        else 0.0
+                    )
+                if high_break_index is not None and low_break_index is not None:
                     break
-                if broke_high:
+            if high_break_index is not None and low_break_index is not None:
+                if high_break_index < low_break_index:
                     break_direction = BreakDirection.HIGH_FIRST
-                    break
-                if broke_low:
+                elif low_break_index < high_break_index:
                     break_direction = BreakDirection.LOW_FIRST
-                    break
+                else:
+                    break_direction = BreakDirection.NONE
+            elif high_break_index is not None:
+                break_direction = BreakDirection.HIGH_FIRST
+            elif low_break_index is not None:
+                break_direction = BreakDirection.LOW_FIRST
         return Metrics(
             atr=atr,
             average_volume=avg_volume,
@@ -101,9 +145,12 @@ class MetricsService:
             relative_volume=relative_volume,
             atr_multiple=atr_multiple,
             upper_wick_pct=upper_wick_pct,
+            body_pct=body_pct,
             lower_wick_pct=lower_wick_pct,
             pct_to_high=pct_to_high,
             pct_to_low=pct_to_low,
+            pct_to_high_break=pct_to_high_break,
+            pct_to_low_break=pct_to_low_break,
             break_direction=break_direction,
         )
 
