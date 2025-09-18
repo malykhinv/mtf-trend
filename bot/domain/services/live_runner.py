@@ -51,16 +51,26 @@ class LiveTradingRunner:
             return
         snapshot = await self.refresh_deposit()
         trade_size = self._calculate_trade_size()
+        timestamp = utcnow()
+        source_signal_id = (
+            signal.metadata.get("source_signal_id")
+            if isinstance(signal.metadata, dict) and signal.metadata.get("source_signal_id")
+            else signal.id
+        )
         trade = Trade(
             id=signal.id,
             signal_id=signal.id,
+            source_signal_id=source_signal_id,
             exchange=signal.candle.exchange,
             symbol=signal.candle.symbol,
+            timeframe=signal.timeframe or signal.candle.timeframe,
             side=signal.side,
             status=TradeStatus.OPENED,
             entry_price=signal.candle.close,
             size=trade_size,
             used_margin=trade_size,
+            created_at=timestamp,
+            updated_at=timestamp,
             allow_long=signal.allow_long,
             allow_short=signal.allow_short,
             thresholds_snapshot=signal.thresholds,

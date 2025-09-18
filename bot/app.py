@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
@@ -102,7 +103,10 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
     metadata = raw.get("metadata", {}) if isinstance(raw, dict) else {}
     if not isinstance(metadata, dict):
         metadata = {}
+    created_at_raw = raw.get("created_at") if isinstance(raw, dict) else None
+    updated_at_raw = raw.get("updated_at") if isinstance(raw, dict) else None
     return Thresholds(
+        id=str(raw.get("id")) if isinstance(raw, dict) and raw.get("id") is not None else None,
         s=_get_upper_lower("s"),
         t=_get_upper_lower("t"),
         u=_get_upper_lower("u"),
@@ -114,6 +118,8 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
         allow_short=allow_short,
         metrics=metrics,
         metadata=metadata if isinstance(metadata, dict) else {},
+        created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
+        updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
     )
 
 

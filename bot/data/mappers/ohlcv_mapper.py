@@ -16,7 +16,9 @@ def map_ohlcv(
     if len(raw) < 6:
         raise ValueError("raw OHLCV should have at least 6 elements")
     timestamp = datetime.fromtimestamp(raw[0] / 1000 if raw[0] > 1e12 else raw[0], tz=timezone.utc)
+    candle_id = f"{exchange.value}:{symbol}:{timeframe.value}:{int(timestamp.timestamp())}"
     return Candle(
+        id=candle_id,
         symbol=symbol,
         exchange=exchange,
         timeframe=timeframe,
