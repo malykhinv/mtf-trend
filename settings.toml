@@ -56,7 +56,7 @@ window = 50
 
 [live]
 enabled = false
-provider = "binance"
+providers = ["binance", "bybit"]
 timeframe = "5m"
 window = 50
 poll_interval = 10.0

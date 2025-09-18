@@ -15,16 +15,17 @@ from ..io.storage import Storage
 class StateRepository:
     """Persisted state of the trading capital."""
 
-    def __init__(self, storage: Storage) -> None:
+    def __init__(self, storage: Storage, key: str | None = None) -> None:
         self._storage = storage
         self._lock = RLock()
+        self._key = key or "default"
         self._asset = "USDT"
         self._deposit_updated_at: datetime | None = None
         self.load()
 
     def load(self) -> None:
         with self._lock:
-            asset, amount, updated_at_raw, used_amount = self._storage.load_state()
+            asset, amount, updated_at_raw, used_amount = self._storage.load_state(self._key)
             self._asset = asset
             updated_at = (
                 datetime.fromisoformat(updated_at_raw)
@@ -32,15 +33,16 @@ class StateRepository:
                 else None
             )
             self._deposit_updated_at = updated_at
-            set_deposit(amount, self._asset, updated_at)
-            set_used_amount(float(used_amount))
+            set_deposit(amount, self._asset, updated_at, key=self._key)
+            set_used_amount(float(used_amount), key=self._key)
 
     def _persist(self) -> None:
         self._storage.save_state(
             asset=self._asset,
-            deposit_amount=get_deposit_amount(),
+            deposit_amount=get_deposit_amount(self._key),
             updated_at=self._deposit_updated_at,
-            used=get_used_amount(),
+            used=get_used_amount(self._key),
+            key=self._key,
         )
 
     def update_deposit(
@@ -49,11 +51,11 @@ class StateRepository:
         with self._lock:
             self._asset = asset
             self._deposit_updated_at = updated_at or utcnow()
-            set_deposit(amount, self._asset, self._deposit_updated_at)
+            set_deposit(amount, self._asset, self._deposit_updated_at, key=self._key)
             self._persist()
 
     def get_deposit(self) -> float:
-        return get_deposit_amount()
+        return get_deposit_amount(self._key)
 
     def get_deposit_asset(self) -> str:
         return self._asset
@@ -63,8 +65,11 @@ class StateRepository:
 
     def set_used_amount(self, amount: float) -> None:
         with self._lock:
-            set_used_amount(amount)
+            set_used_amount(amount, key=self._key)
             self._persist()
 
     def get_used_amount(self) -> float:
-        return get_used_amount()
+        return get_used_amount(self._key)
+
+    def derive(self, key: str) -> "StateRepository":
+        return StateRepository(self._storage, key)

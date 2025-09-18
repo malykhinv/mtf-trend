@@ -4,10 +4,12 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import pytest
 from openpyxl import load_workbook
 
 from bot.data.io.storage import Storage
 from bot.data.repositories.signal_repository import SignalRepository
+from bot.data.repositories.state_repository import StateRepository
 from bot.data.repositories.trade_repository import TradeRepository
 from bot.domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from bot.domain.models.entities import Candle, Signal, Thresholds, Trade
@@ -169,3 +171,38 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
     assert {row["id"] for row in rows} == {trade.id, second_trade.id}
     status_map = {row["id"]: row["status"] for row in rows}
     assert status_map[trade.id] == updated_trade.status.value
+
+
+def test_state_repository_persists_per_provider(tmp_path) -> None:
+    storage, workbook_path = _create_storage(tmp_path)
+    default_repo = StateRepository(storage)
+    binance_repo = StateRepository(storage, key="binance")
+    bybit_repo = StateRepository(storage, key="bybit")
+
+    now = datetime.utcnow().replace(microsecond=0)
+    binance_repo.update_deposit(1_000.0, "USDT", now)
+    binance_repo.set_used_amount(250.0)
+
+    later = now + timedelta(minutes=5)
+    bybit_repo.update_deposit(2_000.0, "USDT", later)
+    bybit_repo.set_used_amount(125.0)
+
+    # Reload repositories to ensure persisted values are scoped.
+    reloaded_binance = StateRepository(storage, key="binance")
+    reloaded_bybit = StateRepository(storage, key="bybit")
+
+    assert reloaded_binance.get_deposit() == pytest.approx(1_000.0)
+    assert reloaded_binance.get_used_amount() == pytest.approx(250.0)
+    assert reloaded_binance.get_last_deposit_update() == now
+
+    assert reloaded_bybit.get_deposit() == pytest.approx(2_000.0)
+    assert reloaded_bybit.get_used_amount() == pytest.approx(125.0)
+    assert reloaded_bybit.get_last_deposit_update() == later
+
+    # Default scope remains untouched.
+    assert default_repo.get_deposit() == 0.0
+    assert default_repo.get_used_amount() == 0.0
+
+    rows = _read_sheet_rows(workbook_path, "State")
+    keys = {row.get("key") for row in rows}
+    assert {"binance", "bybit"}.issubset(keys)
