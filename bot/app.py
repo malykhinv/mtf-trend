@@ -71,18 +71,13 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
                     min_abs_value=float(item["min_abs_value"]) if item.get("min_abs_value") is not None else None,
                 )
             )
-    def _get_float(key: str, fallback: float = 0.0) -> float:
+    def _get_float_from_keys(keys: list[str], fallback: float = 0.0) -> float:
         if not isinstance(raw, dict):
             return fallback
-        value = raw.get(key)
-        if value is None:
-            return fallback
-        return float(value)
-
-    def _get_upper_lower(name: str, fallback: float = 0.0) -> float:
-        upper = name.upper()
-        lower = name.lower()
-        return _get_float(upper, _get_float(lower, fallback))
+        for key in keys:
+            if key in raw and raw[key] is not None:
+                return float(raw[key])
+        return fallback
 
     def _get_bool(key: str, default: bool) -> bool:
         if not isinstance(raw, dict):
@@ -107,13 +102,37 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
     updated_at_raw = raw.get("updated_at") if isinstance(raw, dict) else None
     return Thresholds(
         id=str(raw.get("id")) if isinstance(raw, dict) and raw.get("id") is not None else None,
-        s=_get_upper_lower("s"),
-        t=_get_upper_lower("t"),
-        u=_get_upper_lower("u"),
-        v=_get_upper_lower("v"),
-        w=_get_upper_lower("w"),
-        x=_get_upper_lower("x"),
-        y=_get_upper_lower("y"),
+        min_relative_volume=_get_float_from_keys(
+            [
+                "min_relative_volume",
+                "minRelativeVolume",
+                "S",
+                "s",
+            ]
+        ),
+        max_relative_volume=_get_float_from_keys(
+            [
+                "max_relative_volume",
+                "maxRelativeVolume",
+                "T",
+                "t",
+            ]
+        ),
+        min_atr_mult=_get_float_from_keys(
+            ["min_atr_mult", "minAtrMult", "U", "u"],
+        ),
+        min_pct_move=_get_float_from_keys(
+            ["min_pct_move", "minPctMove", "V", "v"],
+        ),
+        max_pct_move=_get_float_from_keys(
+            ["max_pct_move", "maxPctMove", "W", "w"],
+        ),
+        max_upper_wick_pct=_get_float_from_keys(
+            ["max_upper_wick_pct", "maxUpperWickPct", "X", "x"],
+        ),
+        max_lower_wick_pct=_get_float_from_keys(
+            ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"],
+        ),
         allow_long=allow_long,
         allow_short=allow_short,
         metrics=metrics,

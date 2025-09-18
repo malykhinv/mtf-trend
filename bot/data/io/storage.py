@@ -74,15 +74,39 @@ class Storage:
             metadata = {}
         created_at_raw = raw.get("created_at")
         updated_at_raw = raw.get("updated_at")
+        def _get_float_from_keys(keys: list[str]) -> float:
+            for key in keys:
+                if raw.get(key) is not None:
+                    return float(raw[key])
+            return 0.0
+
         return Thresholds(
             id=str(raw["id"]) if raw.get("id") is not None else None,
-            s=float(raw.get("s", 0.0)),
-            t=float(raw.get("t", 0.0)),
-            u=float(raw.get("u", 0.0)),
-            v=float(raw.get("v", 0.0)),
-            w=float(raw.get("w", 0.0)),
-            x=float(raw.get("x", 0.0)),
-            y=float(raw.get("y", 0.0)),
+            min_relative_volume=_get_float_from_keys(
+                [
+                    "min_relative_volume",
+                    "minRelativeVolume",
+                    "S",
+                    "s",
+                ]
+            ),
+            max_relative_volume=_get_float_from_keys(
+                [
+                    "max_relative_volume",
+                    "maxRelativeVolume",
+                    "T",
+                    "t",
+                ]
+            ),
+            min_atr_mult=_get_float_from_keys(["min_atr_mult", "minAtrMult", "U", "u"]),
+            min_pct_move=_get_float_from_keys(["min_pct_move", "minPctMove", "V", "v"]),
+            max_pct_move=_get_float_from_keys(["max_pct_move", "maxPctMove", "W", "w"]),
+            max_upper_wick_pct=_get_float_from_keys(
+                ["max_upper_wick_pct", "maxUpperWickPct", "X", "x"]
+            ),
+            max_lower_wick_pct=_get_float_from_keys(
+                ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
+            ),
             allow_long=self._to_bool(raw.get("allow_long", True)),
             allow_short=self._to_bool(raw.get("allow_short", True)),
             metrics=metrics,

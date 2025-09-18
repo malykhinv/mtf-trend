@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from math import fabs, isnan
+from math import fabs
 from typing import Iterable, List, Sequence
 
 from ..enums import BreakDirection, Side
@@ -30,26 +30,47 @@ class SignalSelectorService:
         if metrics.pct_move <= 0:
             reasons.append("long_negative_body")
             return False
-        if thresholds.s > 0 and metrics.pct_move < thresholds.s:
+        if (
+            thresholds.min_pct_move != 0
+            and metrics.pct_move <= thresholds.min_pct_move
+        ):
             reasons.append("long_pct_move")
             return False
-        if thresholds.t > 0 and metrics.relative_volume < thresholds.t:
+        if (
+            thresholds.max_pct_move != 0
+            and metrics.pct_move >= thresholds.max_pct_move
+        ):
+            reasons.append("long_pct_move")
+            return False
+        if (
+            thresholds.min_relative_volume > 0
+            and metrics.relative_volume <= thresholds.min_relative_volume
+        ):
             reasons.append("long_relative_volume")
             return False
-        if thresholds.u > 0 and metrics.atr_multiple < thresholds.u:
+        if (
+            thresholds.max_relative_volume > 0
+            and metrics.relative_volume >= thresholds.max_relative_volume
+        ):
+            reasons.append("long_relative_volume")
+            return False
+        if (
+            thresholds.min_atr_mult > 0
+            and metrics.atr_multiple <= thresholds.min_atr_mult
+        ):
             reasons.append("long_atr_mult")
             return False
-        if thresholds.v > 0 and metrics.upper_wick_pct > thresholds.v:
+        if (
+            thresholds.max_upper_wick_pct > 0
+            and metrics.upper_wick_pct >= thresholds.max_upper_wick_pct
+        ):
             reasons.append("long_upper_wick")
             return False
-        if thresholds.w > 0 and metrics.lower_wick_pct > thresholds.w:
+        if (
+            thresholds.max_lower_wick_pct > 0
+            and metrics.lower_wick_pct >= thresholds.max_lower_wick_pct
+        ):
             reasons.append("long_lower_wick")
-            return False
-        if thresholds.x > 0 and not isnan(metrics.pct_to_high) and metrics.pct_to_high < thresholds.x:
-            reasons.append("long_pct_to_high")
-            return False
-        if thresholds.y > 0 and not isnan(metrics.pct_to_low) and fabs(metrics.pct_to_low) > thresholds.y:
-            reasons.append("long_pct_to_low")
             return False
         return True
 
@@ -62,26 +83,52 @@ class SignalSelectorService:
         if metrics.pct_move >= 0:
             reasons.append("short_positive_body")
             return False
-        if thresholds.s > 0 and fabs(metrics.pct_move) < thresholds.s:
-            reasons.append("short_pct_move")
-            return False
-        if thresholds.t > 0 and metrics.relative_volume < thresholds.t:
+        min_rel_vol = thresholds.min_relative_volume
+        max_rel_vol = thresholds.max_relative_volume
+        rel_volume_valid = True
+        if min_rel_vol > 0 and max_rel_vol > 0:
+            rel_volume_valid = (
+                metrics.relative_volume < min_rel_vol
+                or metrics.relative_volume > max_rel_vol
+            )
+        elif min_rel_vol > 0:
+            rel_volume_valid = metrics.relative_volume < min_rel_vol
+        elif max_rel_vol > 0:
+            rel_volume_valid = metrics.relative_volume > max_rel_vol
+        if not rel_volume_valid:
             reasons.append("short_relative_volume")
             return False
-        if thresholds.u > 0 and metrics.atr_multiple < thresholds.u:
+        if (
+            thresholds.min_atr_mult > 0
+            and metrics.atr_multiple >= thresholds.min_atr_mult
+        ):
             reasons.append("short_atr_mult")
             return False
-        if thresholds.v > 0 and metrics.lower_wick_pct > thresholds.v:
-            reasons.append("short_lower_wick")
+        pct_move = metrics.pct_move
+        min_pct_move = thresholds.min_pct_move
+        max_pct_move = thresholds.max_pct_move
+        pct_move_valid = True
+        conditions = []
+        if max_pct_move != 0:
+            conditions.append(pct_move > max_pct_move)
+        if min_pct_move != 0:
+            conditions.append(pct_move < min_pct_move)
+        if conditions:
+            pct_move_valid = any(conditions)
+        if not pct_move_valid:
+            reasons.append("short_pct_move")
             return False
-        if thresholds.w > 0 and metrics.upper_wick_pct > thresholds.w:
+        if (
+            thresholds.max_upper_wick_pct > 0
+            and metrics.upper_wick_pct >= thresholds.max_upper_wick_pct
+        ):
             reasons.append("short_upper_wick")
             return False
-        if thresholds.x > 0 and not isnan(metrics.pct_to_low) and fabs(metrics.pct_to_low) < thresholds.x:
-            reasons.append("short_pct_to_low")
-            return False
-        if thresholds.y > 0 and not isnan(metrics.pct_to_high) and metrics.pct_to_high > thresholds.y:
-            reasons.append("short_pct_to_high")
+        if (
+            thresholds.max_lower_wick_pct > 0
+            and metrics.lower_wick_pct >= thresholds.max_lower_wick_pct
+        ):
+            reasons.append("short_lower_wick")
             return False
         return True
 

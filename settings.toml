@@ -26,13 +26,13 @@ rate_limit_per_minute = 600
 min_quote_volume = 250000.0
 
 [thresholds.default]
-S = 50.0
-T = 100000.0
-U = 100.0
-V = 0.0
-W = 0.0
-X = 2.0
-Y = 1.0
+min_relative_volume = 50.0
+max_relative_volume = 100000.0
+min_atr_mult = 100.0
+min_pct_move = 0.0
+max_pct_move = 0.0
+max_upper_wick_pct = 2.0
+max_lower_wick_pct = 1.0
 allow_long = true
 allow_short = true
 
@@ -49,13 +49,13 @@ name = "momentum"
 min_abs_value = 100.0
 
 [thresholds.symbols.BTCUSDT]
-S = 25.0
-T = 200000.0
-U = 80.0
-V = 0.0
-W = 0.0
-X = 2.5
-Y = 1.0
+min_relative_volume = 25.0
+max_relative_volume = 200000.0
+min_atr_mult = 80.0
+min_pct_move = 0.0
+max_pct_move = 0.0
+max_upper_wick_pct = 2.5
+max_lower_wick_pct = 1.0
 allow_long = true
 allow_short = true
 metadata = { timeframe = "15m" }
