@@ -19,6 +19,8 @@ from .base import BaseExchangeProvider
 
 class BybitPerpetualProvider(BaseExchangeProvider):
     exchange = Exchange.BYBIT
+    max_ohlcv_limit = 1000
+    _ohlcv_limit_fallback = 1000
 
     def __init__(
         self,
@@ -66,6 +68,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         await self.ensure_rate_limit()
         if not self._session:
             raise RuntimeError("httpx is required to fetch candles from Bybit")
+        limit = self.resolve_ohlcv_limit(limit)
         endpoint = f"{self._api_base}/derivatives/v3/public/kline"
         params = {"symbol": symbol.upper(), "interval": timeframe.value, "limit": limit, "category": "linear"}
         response = await self._session.get(endpoint, params=params)

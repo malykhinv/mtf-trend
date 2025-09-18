@@ -81,7 +81,7 @@ min_abs_value = 80.0
 [backtest]
 enabled = true
 timeframe = "15m"
-limit = 200
+limit = 1500
 window = 50
 
 [live]
