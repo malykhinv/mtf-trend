@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import signal
+from pathlib import Path
 from typing import Awaitable, Callable, Literal
 
 from domain.models.enums import BotState
@@ -18,6 +19,7 @@ from infrastructure.binance.rest_client import RestClient
 from infrastructure.binance.ws_client import WsClient
 from infrastructure.binance.trader import Trader
 from config.credentials import TELEGRAM
+from trade_log import SQLiteTradeLog
 from constants import TASK_MAX_RESTARTS, TASK_RESTART_DELAY_SEC
 
 from .ws import ws_stream
@@ -101,8 +103,13 @@ async def run(
         else TELEGRAM.events_bot_token
     )
     notifier = NotificationService(TelegramClient(token, TELEGRAM.chat_id))
+    trade_log_repo = SQLiteTradeLog(Path("data/runtime/trades.db"))
     trade_manager = TradeManager(
-        trader, risk_manager, registry, notifier if notification_type == "orders" else None
+        trader,
+        risk_manager,
+        registry,
+        notifier if notification_type == "orders" else None,
+        trade_log=trade_log_repo,
     )
 
     pollers = [
@@ -218,4 +225,5 @@ async def run(
         await rest.aclose()
         await ws.close()
         await risk_manager.aclose()
+        trade_log_repo.close()
         logger.info("Orchestrator stopped")

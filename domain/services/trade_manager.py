@@ -15,6 +15,7 @@ from domain.models.state import Position
 from .risk_manager import RiskManager
 from domain.services.symbol_registry import SymbolRegistry
 from domain.ports.trader import Trader
+from trade_log import TradeLogRepository, TradeRecord
 from .notification import NotificationService
 
 
@@ -30,11 +31,43 @@ class TradeManager:
         risk_manager: RiskManager,
         registry: SymbolRegistry,
         notifier: NotificationService | None = None,
+        trade_log: TradeLogRepository | None = None,
     ) -> None:
         self._trader = trader
         self._risk_manager = risk_manager
         self._registry = registry
         self._notifier = notifier
+        self._trade_log = trade_log
+
+    def _log_trade(
+        self,
+        *,
+        symbol: str,
+        side: Side,
+        outcome: str,
+        price: float | None,
+        quantity: float,
+        take_profit: float | None = None,
+        stop_loss: float | None = None,
+        fees: float | None = None,
+    ) -> None:
+        if self._trade_log is None:
+            return
+        try:
+            record = TradeRecord(
+                timestamp=time.time(),
+                symbol=symbol,
+                side=side,
+                outcome=outcome,
+                entry=price,
+                take_profit=take_profit,
+                stop_loss=stop_loss,
+                quantity=quantity,
+                fees=fees,
+            )
+            self._trade_log.append(record)
+        except Exception:
+            logger.exception("Ошибка записи сделки %s", symbol)
 
     @staticmethod
     def _plan(plan: PositionPlan, **changes: float) -> PositionPlan:
@@ -66,13 +99,36 @@ class TradeManager:
         state.position = Position(side=side, plan=stored_plan)
         state.last_signal_ts = time.time()
         self._registry.update(plan.symbol, state)
+        self._log_trade(
+            symbol=stored_plan.symbol,
+            side=side,
+            outcome="OPEN",
+            price=actual_price if actual_price is not None else stored_plan.entry_price,
+            quantity=stored_plan.quantity,
+            take_profit=
+            (
+                stored_plan.take_profit1
+                if stored_plan.take_profit1 > 0.0
+                else stored_plan.take_profit2 if stored_plan.take_profit2 > 0.0 else None
+            ),
+            stop_loss=stored_plan.stop_loss,
+            fees=0.0,
+        )
         if self._notifier:
             try:
                 await self._notifier.notify_order_open(plan, side, actual_price)
             except Exception:
                 logger.exception("Ошибка Telegram-уведомления")
 
-    async def _close_position(self, symbol: str, side: Side, plan: PositionPlan) -> None:
+    async def _close_position(
+        self,
+        symbol: str,
+        side: Side,
+        plan: PositionPlan,
+        *,
+        outcome: str,
+        price: float | None,
+    ) -> None:
         exit_side = Side.LONG if side is Side.SHORT else Side.SHORT
         order = OrderSpec(
             symbol=plan.symbol,
@@ -86,6 +142,21 @@ class TradeManager:
             logger.exception("Ошибка _close_position %s", symbol)
             raise
         self._risk_manager.release(plan)
+        self._log_trade(
+            symbol=plan.symbol,
+            side=side,
+            outcome=outcome,
+            price=price,
+            quantity=plan.quantity,
+            take_profit=
+            (
+                plan.take_profit1
+                if plan.take_profit1 > 0.0
+                else plan.take_profit2 if plan.take_profit2 > 0.0 else None
+            ),
+            stop_loss=plan.stop_loss,
+            fees=0.0,
+        )
         state = self._registry.get(symbol)
         state.position = None
         self._registry.update(symbol, state)
@@ -126,7 +197,13 @@ class TradeManager:
                 metrics.delta_oi_pct > 0.0 or taker_ratio > 1.0
             ):
                 exits.append(S.ExitSignal(symbol=plan.symbol, reason="LONGS_RETURNED"))
-                await self._close_position(plan.symbol, side, plan)
+                await self._close_position(
+                    plan.symbol,
+                    side,
+                    plan,
+                    outcome="LONGS_RETURNED",
+                    price=current_price,
+                )
                 return exits, None
 
             exits, plan = await self._check_stop(plan, side, current_price)
@@ -142,7 +219,13 @@ class TradeManager:
             )
             if timed_out or price_invalid:
                 exits.append(S.ExitSignal(symbol=plan.symbol, reason="INVALIDATED"))
-                await self._close_position(plan.symbol, side, plan)
+                await self._close_position(
+                    plan.symbol,
+                    side,
+                    plan,
+                    outcome="INVALIDATED",
+                    price=current_price,
+                )
                 return exits, None
 
             return exits, plan
@@ -177,6 +260,16 @@ class TradeManager:
             logger.exception("Ошибка TP1 %s", plan.symbol)
             raise
         self._risk_manager.release(replace(plan, quantity=plan.tp1_qty))
+        self._log_trade(
+            symbol=plan.symbol,
+            side=side,
+            outcome="TP1",
+            price=price,
+            quantity=plan.tp1_qty,
+            take_profit=plan.take_profit1 if plan.take_profit1 > 0.0 else None,
+            stop_loss=plan.stop_loss,
+            fees=0.0,
+        )
         new_plan = self._plan(
             plan,
             take_profit1=0.0,
@@ -219,6 +312,16 @@ class TradeManager:
             logger.exception("Ошибка TP2 %s", plan.symbol)
             raise
         self._risk_manager.release(replace(plan, quantity=plan.tp2_qty))
+        self._log_trade(
+            symbol=plan.symbol,
+            side=side,
+            outcome="TP2",
+            price=price,
+            quantity=plan.tp2_qty,
+            take_profit=plan.take_profit2 if plan.take_profit2 > 0.0 else None,
+            stop_loss=plan.stop_loss,
+            fees=0.0,
+        )
         remaining_qty = plan.quantity - plan.tp2_qty
         if remaining_qty <= 0.0:
             state = self._registry.get(plan.symbol)
@@ -291,7 +394,13 @@ class TradeManager:
             reason = "TRAIL" if trailing_active else "STOP"
             exits.append(S.ExitSignal(symbol=plan.symbol, reason=reason))
             logger.info("stop %s %.2f", plan.symbol, price)
-            await self._close_position(plan.symbol, side, plan)
+            await self._close_position(
+                plan.symbol,
+                side,
+                plan,
+                outcome=reason,
+                price=price,
+            )
             if self._notifier:
                 try:
                     await self._notifier.notify_stop(plan, side, price, 0.0)
