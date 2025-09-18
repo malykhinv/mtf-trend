@@ -1,0 +1,64 @@
+[logging]
+level = "INFO"
+
+[storage]
+path = "var/state.json"
+
+[metrics]
+atr_period = 14
+volume_period = 20
+momentum_period = 5
+
+[tp_sl]
+risk_reward_ratio = 2.0
+
+[dedup]
+ttl_seconds = 1800
+max_records = 1000
+
+[providers.binance]
+api_base = "https://fapi.binance.com"
+ws_base = "wss://fstream.binance.com/ws"
+rate_limit_per_minute = 1200
+min_quote_volume = 500000.0
+
+[providers.bybit]
+api_base = "https://api.bybit.com"
+ws_base = "wss://stream.bybit.com/v5/public/linear"
+rate_limit_per_minute = 600
+min_quote_volume = 250000.0
+
+[thresholds.default]
+atr_multiplier = 50.0
+volume_multiplier = 100000.0
+breakout_threshold = 100.0
+tp_multiplier = 2.0
+sl_multiplier = 1.0
+
+[thresholds.symbols.BTCUSDT]
+atr_multiplier = 25.0
+volume_multiplier = 200000.0
+breakout_threshold = 80.0
+tp_multiplier = 2.5
+sl_multiplier = 1.0
+metadata = { timeframe = "1h" }
+
+[backtest]
+enabled = true
+symbols = ["BTCUSDT"]
+timeframe = "1h"
+limit = 200
+window = 50
+
+[live]
+enabled = false
+symbols = ["BTCUSDT"]
+provider = "binance"
+timeframe = "5m"
+window = 50
+poll_interval = 10.0
+balance_interval = 120.0
+
+[symbols.providers]
+default = "binance"
+BTCUSDT = "binance"
