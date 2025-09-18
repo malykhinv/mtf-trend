@@ -370,7 +370,34 @@ async def run_backtest(
         dedup_policy,
         window=int(backtest_cfg.get("window", 50)),
     )
-    timeframe = Timeframe(backtest_cfg.get("timeframe", Timeframe.M15.value))
+    configured_timeframes = backtest_cfg.get("timeframes")
+    timeframes: tuple[Timeframe, ...]
+    if isinstance(configured_timeframes, (list, tuple, set, frozenset)):
+        parsed: list[Timeframe] = []
+        for raw in configured_timeframes:
+            try:
+                parsed.append(Timeframe(raw))
+            except Exception:
+                continue
+        timeframes = tuple(parsed)
+    else:
+        timeframe_value = backtest_cfg.get("timeframe")
+        if timeframe_value is not None:
+            timeframes = (Timeframe(timeframe_value),)
+        else:
+            timeframes = (
+                Timeframe.M1,
+                Timeframe.M3,
+                Timeframe.M5,
+                Timeframe.M15,
+            )
+    if not timeframes:
+        timeframes = (
+            Timeframe.M1,
+            Timeframe.M3,
+            Timeframe.M5,
+            Timeframe.M15,
+        )
     configured_limit = backtest_cfg.get("limit")
     requested_limit = int(configured_limit) if configured_limit is not None else None
     discovered = await discover_symbol_universe(config, providers, "backtest")
@@ -379,15 +406,26 @@ async def run_backtest(
         return
     for symbol in discovered:
         provider = select_provider_for_symbol(providers, symbol, config, discovered)
-        try:
-            limit = provider.resolve_ohlcv_limit(requested_limit)
-            candles = await provider.fetch_ohlcv(symbol, timeframe, limit)
-        except Exception as exc:  # pragma: no cover - network errors
-            logger.error("Failed to fetch backtest data for %s: %s", symbol, exc)
-            continue
-        thresholds = thresholds_map.get(symbol) or thresholds_map["default"]
-        result = await runner.run(symbol, candles, thresholds, provider)
-        logger.info("Backtest for %s produced %d trades", symbol, len(result.trades))
+        for timeframe in timeframes:
+            try:
+                limit = provider.resolve_ohlcv_limit(requested_limit)
+                candles = await provider.fetch_ohlcv(symbol, timeframe, limit)
+            except Exception as exc:  # pragma: no cover - network errors
+                logger.error(
+                    "Failed to fetch backtest data for %s (%s): %s",
+                    symbol,
+                    timeframe.value,
+                    exc,
+                )
+                continue
+            thresholds = thresholds_map.get(symbol) or thresholds_map["default"]
+            result = await runner.run(symbol, candles, thresholds, provider, timeframe=timeframe)
+            logger.info(
+                "Backtest for %s (%s) produced %d trades",
+                symbol,
+                result.timeframe.value if result.timeframe else timeframe.value,
+                len(result.trades),
+            )
 
 
 async def run_live(

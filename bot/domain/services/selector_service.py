@@ -174,6 +174,7 @@ class SignalSelectorService:
                 "metrics": metrics.as_dict(),
                 "evaluations": [asdict(evaluation) for evaluation in evaluations],
                 "symbol": symbol,
+                "timeframe": candle.timeframe.value,
             },
         )
         return SelectionResult(signals=[signal], rejected=[])

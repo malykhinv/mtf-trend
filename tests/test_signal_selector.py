@@ -19,36 +19,44 @@ def _build_candle_sequence(
     final_low: float,
     base_volume: float,
     final_volume: float,
+    timeframe: Timeframe = Timeframe.M15,
 ) -> list[Candle]:
     base_time = datetime(2024, 1, 1)
+    minutes_map = {
+        Timeframe.M1: 1,
+        Timeframe.M3: 3,
+        Timeframe.M5: 5,
+        Timeframe.M15: 15,
+    }
+    step_minutes = minutes_map[timeframe]
     candles: list[Candle] = []
     for index in range(count - 1):
         candles.append(
             Candle(
                 symbol="TESTUSDT",
                 exchange=Exchange.BINANCE,
-                timeframe=Timeframe.M15,
+                timeframe=timeframe,
                 open=100.0,
                 high=102.0,
                 low=98.0,
                 close=100.0,
                 volume=base_volume,
-                started_at=base_time + timedelta(minutes=15 * index),
-                closed_at=base_time + timedelta(minutes=15 * (index + 1)),
+                started_at=base_time + timedelta(minutes=step_minutes * index),
+                closed_at=base_time + timedelta(minutes=step_minutes * (index + 1)),
             )
         )
     candles.append(
         Candle(
             symbol="TESTUSDT",
             exchange=Exchange.BINANCE,
-            timeframe=Timeframe.M15,
+            timeframe=timeframe,
             open=final_open,
             high=final_high,
             low=final_low,
             close=final_close,
             volume=final_volume,
-            started_at=base_time + timedelta(minutes=15 * (count - 1)),
-            closed_at=base_time + timedelta(minutes=15 * count),
+            started_at=base_time + timedelta(minutes=step_minutes * (count - 1)),
+            closed_at=base_time + timedelta(minutes=step_minutes * count),
         )
     )
     return candles
@@ -147,3 +155,24 @@ def test_select_rejects_short_with_positive_body(selector: SignalSelectorService
 
     assert not result.signals
     assert "short_positive_body" in result.rejected
+
+
+def test_select_includes_timeframe_metadata(selector: SignalSelectorService) -> None:
+    candles = _build_candle_sequence(
+        count=20,
+        final_open=100.0,
+        final_close=94.0,
+        final_high=112.0,
+        final_low=82.0,
+        base_volume=2_000_000.0,
+        final_volume=110_000_000.0,
+        timeframe=Timeframe.M5,
+    )
+    thresholds = _default_thresholds()
+
+    result = selector.select("TESTUSDT", candles, thresholds)
+
+    assert len(result.signals) == 1
+    signal = result.signals[0]
+    assert signal.timeframe is Timeframe.M5
+    assert signal.metadata["timeframe"] == Timeframe.M5.value
