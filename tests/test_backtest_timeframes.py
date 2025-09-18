@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from bot.app import run_backtest
+from bot.app import SymbolUniverse, run_backtest
 from bot.data.io.config_loader import AppConfig
 from bot.domain.enums import Timeframe
 from bot.domain.models.entities import Thresholds
@@ -38,7 +38,7 @@ def test_run_backtest_iterates_over_timeframes(monkeypatch):
             return SimpleNamespace(timeframe=timeframe, trades=[], signals=[])
 
     async def fake_discover(*args, **kwargs):
-        return {"BTCUSDT": "dummy"}
+        return SymbolUniverse(assignments={"BTCUSDT": "dummy"}, pipelines={"dummy": ("BTCUSDT",)})
 
     async def _exercise() -> None:
         monkeypatch.setattr("bot.app.BacktestRunner", _StubRunner)

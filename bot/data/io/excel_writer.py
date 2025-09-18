@@ -82,7 +82,7 @@ class ExcelWriter:
 
     STATE_SHEET = SheetConfig(
         name="State",
-        headers=["asset", "deposit_amount", "deposit_updated_at", "used_amount"],
+        headers=["key", "asset", "deposit_amount", "deposit_updated_at", "used_amount"],
     )
 
     def __init__(self, path: Path) -> None:
@@ -119,20 +119,29 @@ class ExcelWriter:
             ws = self._get_sheet(wb, self.TRADE_SHEET)
             return list(self._iter_rows(ws, self.TRADE_SHEET.headers))
 
-    def write_state(self, row: Dict[str, object]) -> None:
+    def write_state(self, row: Dict[str, object], key: Optional[str] = None) -> None:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.STATE_SHEET)
-            # State sheet only keeps a single row; replace the contents.
-            self._replace_all_rows(ws, self.STATE_SHEET.headers, [row])
+            row = dict(row)
+            row["key"] = key if key is not None else "default"
+            if key is None:
+                self._replace_all_rows(ws, self.STATE_SHEET.headers, [row])
+            else:
+                self._upsert_row(ws, self.STATE_SHEET.headers, "key", row)
             wb.save(self._path)
 
-    def read_state(self) -> Optional[Dict[str, object]]:
+    def read_state(self, key: Optional[str] = None) -> Optional[Dict[str, object]]:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.STATE_SHEET)
-            for row in self._iter_rows(ws, self.STATE_SHEET.headers):
-                return row
+            if key is None:
+                for row in self._iter_rows(ws, self.STATE_SHEET.headers):
+                    return row
+            else:
+                for row in self._iter_rows(ws, self.STATE_SHEET.headers):
+                    if row.get("key") == key:
+                        return row
             return None
 
     # ------------------------------------------------------------------
@@ -164,7 +173,40 @@ class ExcelWriter:
         ws = workbook[config.name]
         if ws.max_row == 0:
             self._write_headers(ws, config.headers)
+        if config is self.STATE_SHEET:
+            self._ensure_state_sheet_schema(ws)
         return ws
+
+    def _ensure_state_sheet_schema(self, sheet: Worksheet) -> None:
+        expected = self.STATE_SHEET.headers
+        existing_headers = [cell.value for cell in sheet[1]] if sheet.max_row else []
+        if existing_headers[: len(expected)] == expected:
+            return
+        legacy_headers = ["asset", "deposit_amount", "deposit_updated_at", "used_amount"]
+        if existing_headers[: len(legacy_headers)] == legacy_headers:
+            rows: List[Dict[str, object]] = []
+            for row in sheet.iter_rows(min_row=2, values_only=True):
+                if all(value is None for value in row):
+                    continue
+                rows.append(
+                    {
+                        header: row[idx] if idx < len(row) else None
+                        for idx, header in enumerate(legacy_headers)
+                    }
+                )
+            self._write_headers(sheet, expected)
+            for row in rows:
+                sheet.append(
+                    [
+                        "default",
+                        row.get("asset"),
+                        row.get("deposit_amount"),
+                        row.get("deposit_updated_at"),
+                        row.get("used_amount"),
+                    ]
+                )
+        else:
+            self._write_headers(sheet, expected)
 
     def _write_headers(self, sheet: Worksheet, headers: Iterable[str]) -> None:
         sheet.delete_rows(1, sheet.max_row)

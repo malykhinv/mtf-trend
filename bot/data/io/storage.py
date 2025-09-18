@@ -62,7 +62,13 @@ class Storage:
     # State API
     # ------------------------------------------------------------------
     def save_state(
-        self, asset: str, deposit_amount: float, updated_at: Optional[datetime], used: float
+        self,
+        asset: str,
+        deposit_amount: float,
+        updated_at: Optional[datetime],
+        used: float,
+        *,
+        key: Optional[str] = None,
     ) -> None:
         row = {
             "asset": asset,
@@ -70,10 +76,13 @@ class Storage:
             "deposit_updated_at": updated_at.isoformat() if updated_at else None,
             "used_amount": float(used),
         }
-        self._writer.write_state(row)
+        self._writer.write_state(row, key=key)
 
-    def load_state(self) -> tuple[str, float, Optional[str], float]:
-        row = self._writer.read_state()
+    def load_state(self, key: Optional[str] = None) -> tuple[str, float, Optional[str], float]:
+        key_value = key if key is not None else "default"
+        row = self._writer.read_state(key_value)
+        if row is None and key_value == "default":
+            row = self._writer.read_state(None)
         if row is None:
             return ("USDT", 0.0, None, 0.0)
         asset = str(row.get("asset") or "USDT")

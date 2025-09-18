@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import asyncio
+import contextlib
 import os
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Sequence
@@ -27,6 +30,21 @@ from .domain.services.selector_service import SignalSelectorService
 from .domain.services.tp_sl_service import TpSlService
 from .utils.clock import utcnow
 from .utils.logging import configure_logging, get_logger
+
+
+@dataclass(frozen=True)
+class SymbolUniverse:
+    assignments: Dict[str, str]
+    pipelines: Dict[str, tuple[str, ...]]
+
+    def provider_for(self, symbol: str) -> str | None:
+        return self.assignments.get(symbol)
+
+    def symbols(self) -> tuple[str, ...]:
+        return tuple(self.assignments.keys())
+
+    def symbols_for_provider(self, provider: str) -> tuple[str, ...]:
+        return self.pipelines.get(provider, tuple())
 
 
 def load_config() -> AppConfig:
@@ -257,7 +275,7 @@ async def discover_symbol_universe(
     providers: Dict[str, BaseExchangeProvider],
     mode: str,
     provider_scope: Iterable[str] | None = None,
-) -> Dict[str, str]:
+) -> SymbolUniverse:
     logger = get_logger("symbol-discovery")
     selection_cfg = config.get("symbols.selection", {})
     suffix = "USDT"
@@ -325,14 +343,21 @@ async def discover_symbol_universe(
         if symbol in deny:
             discovered.pop(symbol, None)
 
-    return dict(sorted(discovered.items()))
+    assignments = dict(sorted(discovered.items()))
+    pipelines: Dict[str, tuple[str, ...]] = {}
+    for symbol, provider_name in assignments.items():
+        existing = set(pipelines.get(provider_name, ()))
+        existing.add(symbol)
+        pipelines[provider_name] = tuple(sorted(existing))
+
+    return SymbolUniverse(assignments=assignments, pipelines=pipelines)
 
 
 def select_provider_for_symbol(
     providers: Dict[str, BaseExchangeProvider],
     symbol: str,
     config: AppConfig,
-    discovered: Dict[str, str] | None = None,
+    discovered: Mapping[str, str] | None = None,
 ) -> BaseExchangeProvider:
     if discovered and symbol in discovered:
         provider_name = discovered[symbol]
@@ -400,12 +425,14 @@ async def run_backtest(
         )
     configured_limit = backtest_cfg.get("limit")
     requested_limit = int(configured_limit) if configured_limit is not None else None
-    discovered = await discover_symbol_universe(config, providers, "backtest")
-    if not discovered:
+    universe = await discover_symbol_universe(config, providers, "backtest")
+    if not universe.assignments:
         logger.warning("No symbols available for backtest after applying liquidity filters")
         return
-    for symbol in discovered:
-        provider = select_provider_for_symbol(providers, symbol, config, discovered)
+    for symbol in universe.assignments:
+        provider = select_provider_for_symbol(
+            providers, symbol, config, universe.assignments
+        )
         for timeframe in timeframes:
             try:
                 limit = provider.resolve_ohlcv_limit(requested_limit)
@@ -448,46 +475,90 @@ async def run_live(
     if not _is_mode_enabled(live_cfg):
         logger.info("Live trading disabled")
         return
-    provider_name = live_cfg.get("provider") or next(iter(providers))
-    provider = providers[provider_name]
+    provider_values = live_cfg.get("providers")
+    provider_names: list[str] = []
+    if isinstance(provider_values, str):
+        provider_names = [provider_values]
+    elif isinstance(provider_values, Iterable):
+        provider_names = [str(value) for value in provider_values if isinstance(value, str)]
+
+    if not provider_names:
+        single = live_cfg.get("provider")
+        if isinstance(single, str):
+            provider_names = [single]
+
+    if not provider_names:
+        provider_names = list(providers.keys())
+
+    invalid = [name for name in provider_names if name not in providers]
+    if invalid:
+        logger.warning("Unknown providers configured for live mode: %s", ", ".join(invalid))
+    provider_names = [name for name in provider_names if name in providers]
+    if not provider_names:
+        logger.warning("No valid providers configured for live trading")
+        return
+
     timeframe = Timeframe(live_cfg.get("timeframe", Timeframe.M5.value))
     window = int(live_cfg.get("window", 50))
-    runner = LiveTradingRunner(
-        provider,
-        selector,
-        tp_sl_service,
-        signal_repo,
-        state_repo,
-        trade_repo,
-        dedup_policy,
-        window=window,
-    )
-    discovered = await discover_symbol_universe(
+    universe = await discover_symbol_universe(
         config,
         providers,
         "live",
-        provider_scope=[provider_name],
+        provider_scope=provider_names,
     )
-    symbols = [symbol for symbol, name in discovered.items() if name == provider_name]
-    if not symbols:
+    pipelines = {
+        name: list(sorted(universe.symbols_for_provider(name)))
+        for name in provider_names
+        if universe.symbols_for_provider(name)
+    }
+    if not pipelines:
         logger.warning("No symbols available for live trading after applying liquidity filters")
         return
 
-    await runner.refresh_deposit(force=True)
+    async def run_pipeline(provider_name: str, symbols: list[str]) -> None:
+        provider = providers[provider_name]
+        scoped_state = state_repo.derive(provider_name) if hasattr(state_repo, "derive") else state_repo
+        runner = LiveTradingRunner(
+            provider,
+            selector,
+            tp_sl_service,
+            signal_repo,
+            scoped_state,
+            trade_repo,
+            dedup_policy,
+            window=window,
+        )
 
-    async def deposit_monitor() -> None:
-        while True:
-            try:
-                snapshot = await runner.refresh_deposit(force=True)
-                logger.info("Deposit update at %s: %s", utcnow().isoformat(), snapshot)
-            except Exception as exc:  # pragma: no cover - network errors
-                logger.warning("Failed to update deposit: %s", exc)
-            await asyncio.sleep(3600.0)
+        await runner.refresh_deposit(force=True)
 
-    asyncio.create_task(deposit_monitor())
+        async def deposit_monitor() -> None:
+            while True:
+                try:
+                    snapshot = await runner.refresh_deposit(force=True)
+                    logger.info(
+                        "[%s] Deposit update at %s: %s",
+                        provider_name,
+                        utcnow().isoformat(),
+                        snapshot,
+                    )
+                except Exception as exc:  # pragma: no cover - network errors
+                    logger.warning("[%s] Failed to update deposit: %s", provider_name, exc)
+                await asyncio.sleep(3600.0)
 
-    thresholds_selection = {symbol: thresholds_map.get(symbol, thresholds_map["default"]) for symbol in symbols}
-    await runner.run(symbols, timeframe, thresholds_selection)
+        monitor_task = asyncio.create_task(deposit_monitor())
+        thresholds_selection = {
+            symbol: thresholds_map.get(symbol, thresholds_map["default"])
+            for symbol in symbols
+        }
+        try:
+            await runner.run(symbols, timeframe, thresholds_selection)
+        finally:
+            monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await monitor_task
+
+    tasks = [asyncio.create_task(run_pipeline(name, symbols)) for name, symbols in pipelines.items()]
+    await asyncio.gather(*tasks)
 
 
 def _normalize_mode(value: object) -> str | None:
