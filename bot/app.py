@@ -10,6 +10,7 @@ from .data.providers.base import BaseExchangeProvider
 from .data.providers.binance import BinanceFuturesProvider
 from .data.providers.bybit import BybitPerpetualProvider
 from .data.repositories.signal_repository import SignalRepository
+from .data.repositories.state_repository import StateRepository
 from .data.repositories.trade_repository import TradeRepository
 from .domain.enums import Timeframe
 from .domain.models.entities import ThresholdMetric, Thresholds
@@ -131,6 +132,7 @@ def build_thresholds(config: AppConfig) -> Dict[str, Thresholds]:
 def init_services(config: AppConfig, storage: Storage) -> tuple[
     SignalRepository,
     TradeRepository,
+    StateRepository,
     MetricsService,
     SignalSelectorService,
     TpSlService,
@@ -138,6 +140,7 @@ def init_services(config: AppConfig, storage: Storage) -> tuple[
 ]:
     signal_repo = SignalRepository(storage)
     trade_repo = TradeRepository(storage)
+    state_repo = StateRepository(storage)
     metrics_cfg = config.get("metrics", {})
     metrics_service = MetricsService(
         atr_period=int(metrics_cfg.get("atr_period", 14)),
@@ -151,7 +154,15 @@ def init_services(config: AppConfig, storage: Storage) -> tuple[
         ttl_seconds=int(dedup_cfg.get("ttl_seconds", 1800)),
         max_records=int(dedup_cfg.get("max_records", 1000)),
     )
-    return signal_repo, trade_repo, metrics_service, selector, tp_sl_service, dedup_policy
+    return (
+        signal_repo,
+        trade_repo,
+        state_repo,
+        metrics_service,
+        selector,
+        tp_sl_service,
+        dedup_policy,
+    )
 
 
 def select_provider_for_symbol(
@@ -171,6 +182,7 @@ async def run_backtest(
     services: tuple[
         SignalRepository,
         TradeRepository,
+        StateRepository,
         MetricsService,
         SignalSelectorService,
         TpSlService,
@@ -178,12 +190,20 @@ async def run_backtest(
     ],
 ) -> None:
     logger = get_logger("backtest")
-    signal_repo, trade_repo, _, selector, tp_sl_service, dedup_policy = services
+    signal_repo, trade_repo, state_repo, _, selector, tp_sl_service, dedup_policy = services
     backtest_cfg = config.get("backtest", {})
     if not backtest_cfg.get("enabled", False):
         logger.info("Backtest disabled")
         return
-    runner = BacktestRunner(selector, tp_sl_service, signal_repo, trade_repo, dedup_policy, window=int(backtest_cfg.get("window", 50)))
+    runner = BacktestRunner(
+        selector,
+        tp_sl_service,
+        signal_repo,
+        state_repo,
+        trade_repo,
+        dedup_policy,
+        window=int(backtest_cfg.get("window", 50)),
+    )
     timeframe = Timeframe(backtest_cfg.get("timeframe", Timeframe.M15.value))
     limit = int(backtest_cfg.get("limit", 500))
     for symbol in backtest_cfg.get("symbols", []):
@@ -194,7 +214,7 @@ async def run_backtest(
             logger.error("Failed to fetch backtest data for %s: %s", symbol, exc)
             continue
         thresholds = thresholds_map.get(symbol) or thresholds_map["default"]
-        result = runner.run(symbol, candles, thresholds)
+        result = await runner.run(symbol, candles, thresholds, provider)
         logger.info("Backtest for %s produced %d trades", symbol, len(result.trades))
 
 
@@ -205,6 +225,7 @@ async def run_live(
     services: tuple[
         SignalRepository,
         TradeRepository,
+        StateRepository,
         MetricsService,
         SignalSelectorService,
         TpSlService,
@@ -212,7 +233,7 @@ async def run_live(
     ],
 ) -> None:
     logger = get_logger("live")
-    signal_repo, trade_repo, _, selector, tp_sl_service, dedup_policy = services
+    signal_repo, trade_repo, state_repo, _, selector, tp_sl_service, dedup_policy = services
     live_cfg = config.get("live", {})
     if not live_cfg.get("enabled", False):
         logger.info("Live trading disabled")
@@ -227,6 +248,7 @@ async def run_live(
         selector,
         tp_sl_service,
         signal_repo,
+        state_repo,
         trade_repo,
         dedup_policy,
         window=window,
@@ -234,14 +256,16 @@ async def run_live(
     )
     symbols = live_cfg.get("symbols", [])
 
+    await runner.refresh_deposit(force=True)
+
     async def deposit_monitor() -> None:
         while True:
             try:
-                balance = await provider.update_deposit()
-                logger.info("Deposit update at %s: %s", utcnow().isoformat(), balance)
+                snapshot = await runner.refresh_deposit(force=True)
+                logger.info("Deposit update at %s: %s", utcnow().isoformat(), snapshot)
             except Exception as exc:  # pragma: no cover - network errors
                 logger.warning("Failed to update deposit: %s", exc)
-            await asyncio.sleep(float(live_cfg.get("balance_interval", 60.0)))
+            await asyncio.sleep(3600.0)
 
     asyncio.create_task(deposit_monitor())
 
