@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 from openpyxl import load_workbook
@@ -96,10 +97,13 @@ def _read_sheet_rows(path: Path, sheet_name: str) -> list[dict[str, object]]:
 def test_signal_repository_updates_excel(tmp_path) -> None:
     storage, workbook_path = _create_storage(tmp_path)
     repository = SignalRepository(storage)
-    now = datetime.utcnow().replace(microsecond=0)
+    now = datetime.now(ZoneInfo("UTC")).replace(microsecond=0)
 
     signal = _build_signal("1", 10.0, now)
     repository.save(signal)
+    loaded_signals = {loaded.id: loaded for loaded in storage.load_signals()}
+    assert loaded_signals[signal.id].triggered_at == signal.triggered_at
+    assert loaded_signals[signal.id].triggered_at.tzinfo is not None
 
     rows = _read_sheet_rows(workbook_path, "Signals")
     assert len(rows) == 1
@@ -126,15 +130,23 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert {row["id"] for row in rows} == {signal.id, another_signal.id}
     scores = {row["id"]: row["score"] for row in rows}
     assert scores[signal.id] == updated_signal.score
+    loaded_signals = {loaded.id: loaded for loaded in storage.load_signals()}
+    assert loaded_signals[signal.id].updated_at == updated_signal.updated_at
+    assert loaded_signals[signal.id].updated_at.tzinfo is not None
+    assert loaded_signals[another_signal.id].triggered_at == another_signal.triggered_at
+    assert loaded_signals[another_signal.id].triggered_at.tzinfo is not None
 
 
 def test_trade_repository_updates_excel(tmp_path) -> None:
     storage, workbook_path = _create_storage(tmp_path)
     repository = TradeRepository(storage)
-    now = datetime.utcnow().replace(microsecond=0)
+    now = datetime.now(ZoneInfo("UTC")).replace(microsecond=0)
 
     trade = _build_trade("1", now)
     repository.save(trade)
+    loaded_trades = {loaded.id: loaded for loaded in storage.load_trades()}
+    assert loaded_trades[trade.id].opened_at == trade.opened_at
+    assert loaded_trades[trade.id].opened_at and loaded_trades[trade.id].opened_at.tzinfo is not None
 
     rows = _read_sheet_rows(workbook_path, "Trades")
     assert len(rows) == 1
@@ -171,6 +183,11 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
     assert {row["id"] for row in rows} == {trade.id, second_trade.id}
     status_map = {row["id"]: row["status"] for row in rows}
     assert status_map[trade.id] == updated_trade.status.value
+    loaded_trades = {loaded.id: loaded for loaded in storage.load_trades()}
+    assert loaded_trades[trade.id].updated_at == updated_trade.updated_at
+    assert loaded_trades[trade.id].updated_at and loaded_trades[trade.id].updated_at.tzinfo is not None
+    assert loaded_trades[second_trade.id].opened_at == second_trade.opened_at
+    assert loaded_trades[second_trade.id].opened_at and loaded_trades[second_trade.id].opened_at.tzinfo is not None
 
 
 def test_state_repository_persists_per_provider(tmp_path) -> None:
@@ -179,7 +196,7 @@ def test_state_repository_persists_per_provider(tmp_path) -> None:
     binance_repo = StateRepository(storage, key="binance")
     bybit_repo = StateRepository(storage, key="bybit")
 
-    now = datetime.utcnow().replace(microsecond=0)
+    now = datetime.now(ZoneInfo("UTC")).replace(microsecond=0)
     binance_repo.update_deposit(1_000.0, "USDT", now)
     binance_repo.set_used_amount(250.0)
 
@@ -194,10 +211,12 @@ def test_state_repository_persists_per_provider(tmp_path) -> None:
     assert reloaded_binance.get_deposit() == pytest.approx(1_000.0)
     assert reloaded_binance.get_used_amount() == pytest.approx(250.0)
     assert reloaded_binance.get_last_deposit_update() == now
+    assert reloaded_binance.get_last_deposit_update() and reloaded_binance.get_last_deposit_update().tzinfo is not None
 
     assert reloaded_bybit.get_deposit() == pytest.approx(2_000.0)
     assert reloaded_bybit.get_used_amount() == pytest.approx(125.0)
     assert reloaded_bybit.get_last_deposit_update() == later
+    assert reloaded_bybit.get_last_deposit_update() and reloaded_bybit.get_last_deposit_update().tzinfo is not None
 
     # Default scope remains untouched.
     assert default_repo.get_deposit() == 0.0
