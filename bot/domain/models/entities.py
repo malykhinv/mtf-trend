@@ -77,6 +77,7 @@ class Trade:
     status: TradeStatus
     entry_price: float
     size: float
+    used_margin: float = 0.0
     tp_price: Optional[float] = None
     sl_price: Optional[float] = None
     opened_at: Optional[datetime] = None

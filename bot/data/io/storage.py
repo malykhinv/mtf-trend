@@ -155,7 +155,10 @@ class Storage:
             side=Side(raw["side"]),
             status=TradeStatus(raw["status"]),
             entry_price=float(raw["entry_price"]),
-            size=float(raw["size"]),
+            size=float(raw.get("size", 0.0)),
+            used_margin=float(
+                raw.get("used_margin", raw.get("used_amount", raw.get("size", 0.0)))
+            ),
             tp_price=float(raw["tp_price"]) if raw.get("tp_price") is not None else None,
             sl_price=float(raw["sl_price"]) if raw.get("sl_price") is not None else None,
             opened_at=datetime.fromisoformat(raw["opened_at"]) if raw.get("opened_at") else None,
