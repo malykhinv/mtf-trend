@@ -112,20 +112,22 @@ class MetricsService:
                 broke_low = candle.low <= current.low
                 if broke_high and high_break_index is None:
                     high_break_index = idx
-                    pct_to_high_break = (
-                        max(candle.high - current.close, 0.0) / current.close * 100
-                        if current.close
-                        else 0.0
-                    )
                 if broke_low and low_break_index is None:
                     low_break_index = idx
-                    pct_to_low_break = (
-                        max(current.close - candle.low, 0.0) / current.close * 100
-                        if current.close
-                        else 0.0
-                    )
                 if high_break_index is not None and low_break_index is not None:
                     break
+            if high_break_index is not None:
+                pct_to_high_break = (
+                    max(current.high - current.close, 0.0) / current.close * 100
+                    if current.close
+                    else 0.0
+                )
+            if low_break_index is not None:
+                pct_to_low_break = (
+                    max(current.close - current.low, 0.0) / current.close * 100
+                    if current.close
+                    else 0.0
+                )
             if high_break_index is not None and low_break_index is not None:
                 if high_break_index < low_break_index:
                     break_direction = BreakDirection.HIGH_FIRST
