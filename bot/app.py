@@ -7,7 +7,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, Sequence
+from typing import Dict, Iterable, Protocol, Sequence, TypeVar, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 VALID_MODES = {"backtest", "live"}
@@ -17,6 +17,7 @@ from .data.io.config_models import (
     BinanceProviderConfig,
     BybitProviderConfig,
     ExchangeProviderConfig,
+    ProviderKind,
 )
 from .data.io.storage import Storage
 from .data.providers.base import BaseExchangeProvider
@@ -35,6 +36,59 @@ from .domain.services.selector_service import SignalSelectorService
 from .domain.services.tp_sl_service import TpSlService
 from .utils.clock import init_clock, utcnow
 from .utils.logging import configure_logging, get_logger
+
+
+ProviderConfigT = TypeVar("ProviderConfigT", bound=ExchangeProviderConfig)
+ProviderT = TypeVar("ProviderT", bound=BaseExchangeProvider)
+
+
+class ProviderFactory(Protocol[ProviderConfigT, ProviderT]):
+    def __call__(
+        self,
+        config: ProviderConfigT,
+        api_key: str | None,
+        api_secret: str | None,
+    ) -> ProviderT:
+        ...
+
+
+ProviderFactoryType = ProviderFactory[ExchangeProviderConfig, BaseExchangeProvider]
+
+
+def _create_binance_provider(
+    config: BinanceProviderConfig,
+    api_key: str | None,
+    api_secret: str | None,
+) -> BinanceFuturesProvider:
+    return BinanceFuturesProvider(
+        config.api_base,
+        config.ws_base,
+        config.rate_limit_per_minute,
+        config.min_quote_volume,
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+
+
+def _create_bybit_provider(
+    config: BybitProviderConfig,
+    api_key: str | None,
+    api_secret: str | None,
+) -> BybitPerpetualProvider:
+    return BybitPerpetualProvider(
+        config.api_base,
+        config.ws_base,
+        config.rate_limit_per_minute,
+        config.min_quote_volume,
+        api_key=api_key,
+        api_secret=api_secret,
+    )
+
+
+PROVIDER_FACTORIES: dict[ProviderKind, ProviderFactoryType] = {
+    ProviderKind.BINANCE: cast(ProviderFactoryType, _create_binance_provider),
+    ProviderKind.BYBIT: cast(ProviderFactoryType, _create_bybit_provider),
+}
 
 
 @dataclass(frozen=True)
@@ -74,37 +128,22 @@ def init_providers(config: AppConfig) -> Dict[str, BaseExchangeProvider]:
     for name, provider_cfg in config.providers.items():
         api_key = provider_cfg.get_api_key(env_values)
         api_secret = provider_cfg.get_api_secret(env_values)
-        provider = _build_provider(name, provider_cfg, api_key, api_secret)
+        provider = _build_provider(provider_cfg.kind, provider_cfg, api_key, api_secret)
         if provider is not None:
             providers[name] = provider
     return providers
 
 
 def _build_provider(
-    name: str,
+    kind: ProviderKind,
     provider_cfg: ExchangeProviderConfig,
     api_key: str | None,
     api_secret: str | None,
 ) -> BaseExchangeProvider | None:
-    if isinstance(provider_cfg, BinanceProviderConfig) or name == "binance":
-        return BinanceFuturesProvider(
-            provider_cfg.api_base,
-            provider_cfg.ws_base,
-            provider_cfg.rate_limit_per_minute,
-            provider_cfg.min_quote_volume,
-            api_key=api_key,
-            api_secret=api_secret,
-        )
-    if isinstance(provider_cfg, BybitProviderConfig) or name == "bybit":
-        return BybitPerpetualProvider(
-            provider_cfg.api_base,
-            provider_cfg.ws_base,
-            provider_cfg.rate_limit_per_minute,
-            provider_cfg.min_quote_volume,
-            api_key=api_key,
-            api_secret=api_secret,
-        )
-    return None
+    factory = PROVIDER_FACTORIES.get(kind)
+    if factory is None:
+        return None
+    return factory(provider_cfg, api_key, api_secret)
 
 
 def build_thresholds(config: AppConfig) -> Dict[str, Thresholds]:
@@ -513,3 +552,5 @@ def main(argv: Sequence[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+
+
