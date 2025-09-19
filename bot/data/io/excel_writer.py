@@ -7,6 +7,8 @@ from typing import Dict, Iterable, List, Optional
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
+from .excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
+
 
 @dataclass(frozen=True)
 class SheetConfig:
@@ -93,55 +95,56 @@ class ExcelWriter:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-    def write_signal(self, row: Dict[str, object]) -> None:
+    def write_signal(self, row: StoredSignalRow) -> None:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.SIGNAL_SHEET)
-            self._upsert_row(ws, self.SIGNAL_SHEET.headers, "id", row)
+            self._upsert_row(ws, self.SIGNAL_SHEET.headers, "id", row.to_excel_row())
             wb.save(self._path)
 
-    def read_signals(self) -> List[Dict[str, object]]:
+    def read_signals(self) -> List[StoredSignalRow]:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.SIGNAL_SHEET)
-            return list(self._iter_rows(ws, self.SIGNAL_SHEET.headers))
+            return [
+                StoredSignalRow.from_excel_row(row)
+                for row in self._iter_rows(ws, self.SIGNAL_SHEET.headers)
+            ]
 
-    def write_trade(self, row: Dict[str, object]) -> None:
+    def write_trade(self, row: StoredTradeRow) -> None:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.TRADE_SHEET)
-            self._upsert_row(ws, self.TRADE_SHEET.headers, "id", row)
+            self._upsert_row(ws, self.TRADE_SHEET.headers, "id", row.to_excel_row())
             wb.save(self._path)
 
-    def read_trades(self) -> List[Dict[str, object]]:
+    def read_trades(self) -> List[StoredTradeRow]:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.TRADE_SHEET)
-            return list(self._iter_rows(ws, self.TRADE_SHEET.headers))
+            return [
+                StoredTradeRow.from_excel_row(row)
+                for row in self._iter_rows(ws, self.TRADE_SHEET.headers)
+            ]
 
-    def write_state(self, row: Dict[str, object], key: Optional[str] = None) -> None:
+    def write_state(self, row: StoredStateRow) -> None:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.STATE_SHEET)
-            row = dict(row)
-            row["key"] = key if key is not None else "default"
-            if key is None:
-                self._replace_all_rows(ws, self.STATE_SHEET.headers, [row])
-            else:
-                self._upsert_row(ws, self.STATE_SHEET.headers, "key", row)
+            self._upsert_row(ws, self.STATE_SHEET.headers, "key", row.to_excel_row())
             wb.save(self._path)
 
-    def read_state(self, key: Optional[str] = None) -> Optional[Dict[str, object]]:
+    def read_state(self, key: Optional[str] = None) -> Optional[StoredStateRow]:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.STATE_SHEET)
             if key is None:
                 for row in self._iter_rows(ws, self.STATE_SHEET.headers):
-                    return row
+                    return StoredStateRow.from_excel_row(row)
             else:
                 for row in self._iter_rows(ws, self.STATE_SHEET.headers):
                     if row.get("key") == key:
-                        return row
+                        return StoredStateRow.from_excel_row(row)
             return None
 
     # ------------------------------------------------------------------
