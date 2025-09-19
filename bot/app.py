@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import asyncio
 import contextlib
-import os
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,6 +13,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 VALID_MODES = {"backtest", "live"}
 
 from .data.io.config_loader import AppConfig, ConfigLoader
+from .data.io.config_models import (
+    BinanceProviderConfig,
+    BybitProviderConfig,
+    ExchangeProviderConfig,
+)
 from .data.io.storage import Storage
 from .data.providers.base import BaseExchangeProvider
 from .data.providers.binance import BinanceFuturesProvider
@@ -66,42 +70,41 @@ def init_storage(config: AppConfig) -> Storage:
 
 def init_providers(config: AppConfig) -> Dict[str, BaseExchangeProvider]:
     providers: Dict[str, BaseExchangeProvider] = {}
-    providers_cfg = config.get("providers", {})
-    for name, cfg in providers_cfg.items():
-        rate = int(cfg.get("rate_limit_per_minute", 60))
-        min_volume = float(cfg.get("min_quote_volume", 0))
-        api_base = cfg.get("api_base")
-        ws_base = cfg.get("ws_base")
-        env_prefix = name.upper()
-
-        def _resolve_secret(key: str, env_suffix: str) -> str | None:
-            value = cfg.get(key)
-            if value:
-                return str(value)
-            env_key = cfg.get(f"{key}_env") or f"{env_prefix}_{env_suffix}"
-            return config.get(f"env.{env_key}") or os.getenv(env_key)
-
-        api_key = _resolve_secret("api_key", "API_KEY")
-        api_secret = _resolve_secret("api_secret", "API_SECRET")
-        if name == "binance":
-            providers[name] = BinanceFuturesProvider(
-                api_base,
-                ws_base,
-                rate,
-                min_volume,
-                api_key=api_key,
-                api_secret=api_secret,
-            )
-        elif name == "bybit":
-            providers[name] = BybitPerpetualProvider(
-                api_base,
-                ws_base,
-                rate,
-                min_volume,
-                api_key=api_key,
-                api_secret=api_secret,
-            )
+    env_values = config.env
+    for name, provider_cfg in config.providers.items():
+        api_key = provider_cfg.get_api_key(env_values)
+        api_secret = provider_cfg.get_api_secret(env_values)
+        provider = _build_provider(name, provider_cfg, api_key, api_secret)
+        if provider is not None:
+            providers[name] = provider
     return providers
+
+
+def _build_provider(
+    name: str,
+    provider_cfg: ExchangeProviderConfig,
+    api_key: str | None,
+    api_secret: str | None,
+) -> BaseExchangeProvider | None:
+    if isinstance(provider_cfg, BinanceProviderConfig) or name == "binance":
+        return BinanceFuturesProvider(
+            provider_cfg.api_base,
+            provider_cfg.ws_base,
+            provider_cfg.rate_limit_per_minute,
+            provider_cfg.min_quote_volume,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+    if isinstance(provider_cfg, BybitProviderConfig) or name == "bybit":
+        return BybitPerpetualProvider(
+            provider_cfg.api_base,
+            provider_cfg.ws_base,
+            provider_cfg.rate_limit_per_minute,
+            provider_cfg.min_quote_volume,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+    return None
 
 
 def build_thresholds(config: AppConfig) -> Dict[str, Thresholds]:

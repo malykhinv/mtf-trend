@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence, TypeVar
 
 from ...domain.enums import Timeframe
 from ...domain.models.entities import ThresholdMetric as DomainThresholdMetric
@@ -137,6 +138,136 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 def _float_or_default(value: float | None) -> float:
     return value if value is not None else 0.0
+
+
+def _normalize_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        candidate = value.strip()
+        return candidate or None
+    return str(value)
+
+
+@dataclass(slots=True)
+class ProviderCredential:
+    value: str | None = None
+    env_key: str | None = None
+
+    @classmethod
+    def from_mapping(
+        cls, raw: Mapping[str, Any], key: str, default_env: str | None = None
+    ) -> "ProviderCredential":
+        value = _normalize_str(raw.get(key))
+        env_key = _normalize_str(raw.get(f"{key}_env"))
+        if env_key is None:
+            env_key = default_env
+        return cls(value=value, env_key=env_key)
+
+    def resolve(self, env: Mapping[str, str] | None = None) -> str | None:
+        if self.value is not None:
+            return self.value
+        if not self.env_key:
+            return None
+        env_mapping = env or {}
+        candidate = env_mapping.get(self.env_key)
+        normalized = _normalize_str(candidate)
+        if normalized is not None:
+            return normalized
+        fallback = os.getenv(self.env_key)
+        if isinstance(fallback, str):
+            fallback = fallback.strip()
+            if fallback:
+                return fallback
+        return None
+
+
+ProviderConfigT = TypeVar("ProviderConfigT", bound="ExchangeProviderConfig")
+
+
+@dataclass(slots=True)
+class ExchangeProviderConfig:
+    name: str
+    api_base: str
+    ws_base: str
+    rate_limit_per_minute: int
+    min_quote_volume: float
+    api_key: ProviderCredential = field(default_factory=ProviderCredential)
+    api_secret: ProviderCredential = field(default_factory=ProviderCredential)
+
+    @classmethod
+    def from_mapping(
+        cls: type[ProviderConfigT],
+        name: str,
+        raw: Mapping[str, Any] | None,
+    ) -> ProviderConfigT:
+        if raw is None or not isinstance(raw, Mapping):
+            raw = {}
+        prefix = name.upper()
+        api_base = _normalize_str(raw.get("api_base")) or ""
+        ws_base = _normalize_str(raw.get("ws_base")) or ""
+        rate_limit = _to_int(raw.get("rate_limit_per_minute"), 60, minimum=1)
+        min_volume = _to_optional_float(raw.get("min_quote_volume")) or 0.0
+        api_key = ProviderCredential.from_mapping(
+            raw, "api_key", f"{prefix}_API_KEY"
+        )
+        api_secret = ProviderCredential.from_mapping(
+            raw, "api_secret", f"{prefix}_API_SECRET"
+        )
+        return cls(
+            name=name,
+            api_base=api_base,
+            ws_base=ws_base,
+            rate_limit_per_minute=rate_limit,
+            min_quote_volume=min_volume,
+            api_key=api_key,
+            api_secret=api_secret,
+        )
+
+    def get_api_key(self, env: Mapping[str, str] | None = None) -> str | None:
+        return self.api_key.resolve(env)
+
+    def get_api_secret(self, env: Mapping[str, str] | None = None) -> str | None:
+        return self.api_secret.resolve(env)
+
+    @property
+    def api_key_env(self) -> str | None:
+        return self.api_key.env_key
+
+    @property
+    def api_secret_env(self) -> str | None:
+        return self.api_secret.env_key
+
+
+@dataclass(slots=True)
+class BinanceProviderConfig(ExchangeProviderConfig):
+    pass
+
+
+@dataclass(slots=True)
+class BybitProviderConfig(ExchangeProviderConfig):
+    pass
+
+
+_PROVIDER_CONFIG_TYPES: dict[str, type[ExchangeProviderConfig]] = {
+    "binance": BinanceProviderConfig,
+    "bybit": BybitProviderConfig,
+}
+
+
+def parse_exchange_provider_configs(
+    raw: Any,
+) -> dict[str, ExchangeProviderConfig]:
+    if not isinstance(raw, Mapping):
+        return {}
+    providers: dict[str, ExchangeProviderConfig] = {}
+    for name, value in raw.items():
+        if not isinstance(name, str):
+            continue
+        config_cls = _PROVIDER_CONFIG_TYPES.get(name.lower(), ExchangeProviderConfig)
+        mapping = value if isinstance(value, Mapping) else {}
+        providers[name] = config_cls.from_mapping(name, mapping)
+    return providers
 
 
 @dataclass(slots=True)

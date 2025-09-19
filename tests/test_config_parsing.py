@@ -1,5 +1,6 @@
 from bot.app import build_thresholds
 from bot.data.io.config_loader import AppConfig
+from bot.data.io.config_models import BinanceProviderConfig, BybitProviderConfig
 from bot.domain.enums import Timeframe
 
 
@@ -82,3 +83,49 @@ def test_build_thresholds_uses_typed_models() -> None:
     eth_cfg = thresholds["ETHUSDT"]
     assert eth_cfg.min_pct_move == 0.25
     assert eth_cfg.allow_short is False
+
+
+def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("BYBIT_API_KEY", "from-env")
+    config = AppConfig(
+        raw={
+            "providers": {
+                "binance": {
+                    "api_base": "https://fapi.binance.com",
+                    "ws_base": "wss://fstream.binance.com/ws",
+                    "rate_limit_per_minute": "1200",
+                    "min_quote_volume": "500000",
+                    "api_key_env": "BINANCE_KEY",
+                },
+                "bybit": {
+                    "api_base": "https://api.bybit.com",
+                    "ws_base": "wss://stream.bybit.com/v5/public/linear",
+                    "rate_limit_per_minute": 600,
+                    "min_quote_volume": 250000,
+                    "api_secret": "super-secret",
+                },
+            },
+            "env": {"BINANCE_KEY": "binance-from-env"},
+        }
+    )
+
+    providers = config.providers
+    assert set(providers) == {"binance", "bybit"}
+
+    binance_cfg = providers["binance"]
+    assert isinstance(binance_cfg, BinanceProviderConfig)
+    assert binance_cfg.api_base == "https://fapi.binance.com"
+    assert binance_cfg.ws_base == "wss://fstream.binance.com/ws"
+    assert binance_cfg.rate_limit_per_minute == 1200
+    assert binance_cfg.min_quote_volume == 500000.0
+    assert binance_cfg.api_key_env == "BINANCE_KEY"
+    assert binance_cfg.api_secret_env == "BINANCE_API_SECRET"
+    assert binance_cfg.get_api_key(config.env) == "binance-from-env"
+    assert binance_cfg.get_api_secret(config.env) is None
+
+    bybit_cfg = providers["bybit"]
+    assert isinstance(bybit_cfg, BybitProviderConfig)
+    assert bybit_cfg.api_key_env == "BYBIT_API_KEY"
+    assert bybit_cfg.api_secret_env == "BYBIT_API_SECRET"
+    assert bybit_cfg.get_api_key(config.env) == "from-env"
+    assert bybit_cfg.get_api_secret(config.env) == "super-secret"
