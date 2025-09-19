@@ -89,7 +89,7 @@ def _build_signal(identifier: str, score: float, triggered_at: datetime) -> Sign
         allow_short=True,
         metrics_snapshot=snapshot,
         metadata=SignalMetadata(
-            extra={"note": "initial"},
+            note="initial",
             evaluations=[
                 EvaluationMetadata(
                     name="atr",
@@ -119,7 +119,7 @@ def _build_trade(identifier: str, opened_at: datetime) -> Trade:
         created_at=opened_at,
         allow_long=True,
         allow_short=True,
-        metadata=TradeMetadata(extra={"note": "initial"}),
+        metadata=TradeMetadata(note="initial"),
     )
 
 
@@ -157,8 +157,8 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert isinstance(evaluations[0].threshold, ThresholdMetricMetadata)
     assert evaluations[0].threshold is not None
     assert evaluations[0].threshold.min_value == pytest.approx(1.0)
-    assert "metrics" not in loaded_signals[signal.id].metadata.extra
-    assert loaded_signals[signal.id].metadata.extra.get("note") == "initial"
+    assert "metrics" not in loaded_signals[signal.id].metadata.to_dict()
+    assert loaded_signals[signal.id].metadata.note == "initial"
 
     stored_payloads = storage._writer.read_signals()
     assert stored_payloads and isinstance(stored_payloads[0], SignalPayload)
@@ -217,7 +217,7 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
     assert loaded_trades[trade.id].opened_at == trade.opened_at
     assert loaded_trades[trade.id].opened_at and loaded_trades[trade.id].opened_at.tzinfo is not None
     assert loaded_trades[trade.id].metadata is not None
-    assert loaded_trades[trade.id].metadata.extra.get("note") == "initial"
+    assert loaded_trades[trade.id].metadata.note == "initial"
 
     rows = _read_sheet_rows(workbook_path, "Trades")
     assert len(rows) == 1

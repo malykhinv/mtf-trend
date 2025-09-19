@@ -6,6 +6,7 @@ from typing import Sequence
 from ..enums import Side, Timeframe, TradeStatus
 from ..models.entities import Candle, Signal, Thresholds, Trade
 from ..models.metadata import (
+    BacktestMetadata,
     DepositSnapshotMetadata,
     SignalMetadata,
     TradeMetadata,
@@ -118,7 +119,11 @@ class BacktestRunner:
                     allow_long=signal.allow_long,
                     allow_short=signal.allow_short,
                     thresholds_snapshot=signal.thresholds,
-                    metadata=TradeMetadata(mode="backtest", deposit_snapshot=snapshot),
+                    metadata=TradeMetadata(
+                        mode="backtest",
+                        deposit_snapshot=snapshot,
+                        backtest=BacktestMetadata(),
+                    ),
                 )
                 self._tp_sl_service.assign(signal, trade)
                 trade.opened_at = signal.candle.closed_at
@@ -204,8 +209,12 @@ class BacktestRunner:
             trade.pnl = trade.size * (result_pct / 100)
             trade.pnl_pct = result_pct
             if trade.metadata is None:
-                trade.metadata = TradeMetadata(mode="backtest")
-            backtest_meta = trade.metadata.ensure_backtest()
+                trade.metadata = TradeMetadata(
+                    mode="backtest", backtest=BacktestMetadata()
+                )
+            if trade.metadata.backtest is None:
+                trade.metadata.backtest = BacktestMetadata()
+            backtest_meta = trade.metadata.backtest
             backtest_meta.result_pct = result_pct
             backtest_meta.pct_to_high_break = pct_to_high_break
             backtest_meta.pct_to_low_break = pct_to_low_break

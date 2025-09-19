@@ -141,7 +141,7 @@ def test_build_thresholds_uses_typed_models() -> None:
     assert isinstance(default_cfg.metadata, ThresholdsMetadata)
     assert default_cfg.metadata is not None
     assert default_cfg.metadata.timeframe is Timeframe.M15
-    assert default_cfg.metadata.extra["note"] == "default"
+    assert default_cfg.metadata.note == "default"
 
     eth_cfg = thresholds["ETHUSDT"]
     assert eth_cfg.min_pct_move == 0.25
