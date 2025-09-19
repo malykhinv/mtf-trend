@@ -46,6 +46,38 @@ def test_symbol_selection_and_overrides_are_typed() -> None:
     assert config.symbol_provider_mapping["default"] == "bybit"
 
 
+def test_metrics_and_dedup_configs_are_typed() -> None:
+    config = AppConfig(
+        raw={
+            "metrics": {
+                "atr_period": "21",
+                "volume_period": 30.9,
+                "momentum_period": 0,
+            },
+            "dedup": {
+                "ttl_seconds": "3600",
+                "max_records": "0",
+            },
+        }
+    )
+
+    metrics = config.metrics
+    assert metrics.atr_period == 21
+    assert metrics.volume_period == 30
+    assert metrics.momentum_period == 1
+
+    dedup = config.dedup
+    assert dedup.ttl_seconds == 3600
+    assert dedup.max_records == 1
+
+    defaults = AppConfig(raw={})
+    assert defaults.metrics.atr_period == 14
+    assert defaults.metrics.volume_period == 20
+    assert defaults.metrics.momentum_period == 5
+    assert defaults.dedup.ttl_seconds == 14_400
+    assert defaults.dedup.max_records == 1_000
+
+
 def test_build_thresholds_uses_typed_models() -> None:
     config = AppConfig(
         raw={

@@ -271,6 +271,38 @@ def parse_exchange_provider_configs(
 
 
 @dataclass(slots=True)
+class MetricsConfig:
+    atr_period: int = 14
+    volume_period: int = 20
+    momentum_period: int = 5
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "MetricsConfig":
+        if not isinstance(raw, Mapping):
+            raw = {}
+        return cls(
+            atr_period=_to_int(raw.get("atr_period"), 14, minimum=1),
+            volume_period=_to_int(raw.get("volume_period"), 20, minimum=1),
+            momentum_period=_to_int(raw.get("momentum_period"), 5, minimum=1),
+        )
+
+
+@dataclass(slots=True)
+class DedupConfig:
+    ttl_seconds: int = 14_400
+    max_records: int = 1_000
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "DedupConfig":
+        if not isinstance(raw, Mapping):
+            raw = {}
+        return cls(
+            ttl_seconds=_to_int(raw.get("ttl_seconds"), 14_400, minimum=1),
+            max_records=_to_int(raw.get("max_records"), 1_000, minimum=1),
+        )
+
+
+@dataclass(slots=True)
 class ThresholdMetricConfig:
     name: str
     min_value: float | None = None

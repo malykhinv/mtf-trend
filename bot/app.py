@@ -127,18 +127,18 @@ def init_services(config: AppConfig, storage: Storage) -> tuple[
     signal_repo = SignalRepository(storage)
     trade_repo = TradeRepository(storage)
     state_repo = StateRepository(storage)
-    metrics_cfg = config.get("metrics", {})
+    metrics_cfg = config.metrics
     metrics_service = MetricsService(
-        atr_period=int(metrics_cfg.get("atr_period", 14)),
-        volume_period=int(metrics_cfg.get("volume_period", 20)),
-        momentum_period=int(metrics_cfg.get("momentum_period", 5)),
+        atr_period=metrics_cfg.atr_period,
+        volume_period=metrics_cfg.volume_period,
+        momentum_period=metrics_cfg.momentum_period,
     )
     selector = SignalSelectorService(metrics_service)
     tp_sl_service = TpSlService()
-    dedup_cfg = config.get("dedup", {})
+    dedup_cfg = config.dedup
     dedup_policy = DeduplicationPolicy(
-        ttl_seconds=int(dedup_cfg.get("ttl_seconds", 14400)),
-        max_records=int(dedup_cfg.get("max_records", 1000)),
+        ttl_seconds=dedup_cfg.ttl_seconds,
+        max_records=dedup_cfg.max_records,
     )
     return (
         signal_repo,
