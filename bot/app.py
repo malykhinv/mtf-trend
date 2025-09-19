@@ -392,7 +392,7 @@ async def run_live(
 
     async def run_pipeline(provider_name: str, symbols: list[str]) -> None:
         provider = providers[provider_name]
-        scoped_state = state_repo.derive(provider_name) if hasattr(state_repo, "derive") else state_repo
+        scoped_state = state_repo.derive(provider_name)
         runner = LiveTradingRunner(
             provider,
             selector,
