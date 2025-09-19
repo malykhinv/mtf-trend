@@ -16,9 +16,22 @@ def map_ohlcv(
 ) -> Candle:
     if len(raw) < 6:
         raise ValueError("raw OHLCV should have at least 6 elements")
-    base_timestamp = raw[0] / 1000 if raw[0] > 1e12 else raw[0]
-    utc_timestamp = datetime.fromtimestamp(base_timestamp, tz=timezone.utc)
+    raw_timestamp = raw[0]
+    if isinstance(raw_timestamp, datetime):
+        if raw_timestamp.tzinfo is None:
+            raise ValueError("raw OHLCV timestamp must include timezone information")
+        utc_timestamp = raw_timestamp.astimezone(timezone.utc)
+    else:
+        try:
+            base_timestamp = float(raw_timestamp)
+        except (TypeError, ValueError) as exc:
+            raise TypeError("raw OHLCV timestamp must be numeric or datetime") from exc
+        if base_timestamp > 1e12:
+            base_timestamp /= 1000
+        utc_timestamp = datetime.fromtimestamp(base_timestamp, tz=timezone.utc)
     timestamp = utc_timestamp.astimezone(get_timezone())
+    if not isinstance(timestamp, datetime):  # pragma: no cover - defensive
+        raise TypeError("Candle timestamp must be a datetime instance")
     candle_id = f"{exchange.value}:{symbol}:{timeframe.value}:{int(utc_timestamp.timestamp())}"
     volume = float(raw[5])
     quote_volume = _extract_quote_volume(raw, exchange)

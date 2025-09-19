@@ -102,11 +102,7 @@ class BaseExchangeProvider:
         deduplicated: List[Candle] = []
         seen: set[tuple[str | None, int]] = set()
         for candle in sorted_candles:
-            started_at = candle.started_at
-            if isinstance(started_at, datetime):
-                timestamp_ms = int(started_at.timestamp() * 1000)
-            else:  # pragma: no cover - defensive, Candle.started_at is datetime
-                timestamp_ms = int(started_at)
+            timestamp_ms = int(candle.started_at.timestamp() * 1000)
             key = (candle.id, timestamp_ms)
             if key in seen:
                 continue
