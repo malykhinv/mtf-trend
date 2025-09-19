@@ -92,3 +92,169 @@ def test_bybit_fetch_ohlcv_forwards_since_and_sorts() -> None:
     assert params.get("start") == 987654321
     assert len(candles) == 2
     assert [c.started_at for c in candles] == sorted(c.started_at for c in candles)
+
+
+def test_binance_get_symbols_filters_trading_pairs() -> None:
+    payload = {
+        "symbols": [
+            {"symbol": "btcusdt", "status": "TRADING"},
+            {"symbol": "ethusdt", "status": "HALT"},
+            {"symbol": "btcusd_perp", "status": "TRADING"},
+        ]
+    }
+    session = _FakeSession(payload)
+    provider = BinanceFuturesProvider(
+        api_base="https://example.com",
+        ws_base="wss://example.com/ws",
+        rate_limit_per_minute=60,
+        min_quote_volume=0.0,
+        session=session,
+    )
+
+    symbols = asyncio.run(provider.get_symbols())
+
+    assert symbols == ["BTCUSDT"]
+
+
+def test_binance_get_24h_quote_volume_uses_typed_payload() -> None:
+    payload = [
+        {"symbol": "BTCUSDT", "quoteVolume": "123.45"},
+        {"symbol": "ETHUSDT", "quoteVolume": 67.89},
+    ]
+    session = _FakeSession(payload)
+    provider = BinanceFuturesProvider(
+        api_base="https://example.com",
+        ws_base="wss://example.com/ws",
+        rate_limit_per_minute=60,
+        min_quote_volume=0.0,
+        session=session,
+    )
+
+    volumes = asyncio.run(provider.get_24h_quote_volume())
+
+    assert volumes == {"BTCUSDT": 123.45, "ETHUSDT": 67.89}
+
+
+def test_binance_update_deposit_prefers_available_balance() -> None:
+    session = _FakeSession([])
+    provider = BinanceFuturesProvider(
+        api_base="https://example.com",
+        ws_base="wss://example.com/ws",
+        rate_limit_per_minute=60,
+        min_quote_volume=0.0,
+        session=session,
+    )
+
+    async def fake_auth_get(endpoint: str, params=None):  # type: ignore[override]
+        return _FakeResponse(
+            [
+                {"asset": "BTC", "balance": "10"},
+                {
+                    "asset": "USDT",
+                    "availableBalance": "42.0",
+                    "balance": "100.0",
+                },
+            ]
+        )
+
+    provider._authenticated_get = fake_auth_get  # type: ignore[assignment]
+
+    snapshot = asyncio.run(provider.update_deposit())
+
+    assert snapshot.asset == "USDT"
+    assert snapshot.balance == 42.0
+    assert snapshot.raw == {
+        "asset": "USDT",
+        "availableBalance": "42.0",
+        "balance": "100.0",
+    }
+
+
+def test_bybit_get_symbols_extracts_linear_trading_pairs() -> None:
+    payload = {
+        "result": {
+            "list": [
+                {"symbol": "BTCUSDT", "status": "Trading"},
+                {"symbol": "ETHUSDT", "status": "Settled"},
+            ]
+        }
+    }
+    session = _FakeSession(payload)
+    provider = BybitPerpetualProvider(
+        api_base="https://example.com",
+        ws_base="wss://example.com/ws",
+        rate_limit_per_minute=60,
+        min_quote_volume=0.0,
+        session=session,
+    )
+
+    symbols = asyncio.run(provider.get_symbols())
+
+    assert symbols == ["BTCUSDT"]
+
+
+def test_bybit_get_24h_quote_volume_handles_optional_fields() -> None:
+    payload = {
+        "result": {
+            "list": [
+                {"symbol": "BTCUSDT", "turnover24h": "123.45"},
+                {"symbol": "ETHUSDT", "turnover": 67.89},
+                {"symbol": "XRPUSDT"},
+            ]
+        }
+    }
+    session = _FakeSession(payload)
+    provider = BybitPerpetualProvider(
+        api_base="https://example.com",
+        ws_base="wss://example.com/ws",
+        rate_limit_per_minute=60,
+        min_quote_volume=0.0,
+        session=session,
+    )
+
+    volumes = asyncio.run(provider.get_24h_quote_volume())
+
+    assert volumes == {"BTCUSDT": 123.45, "ETHUSDT": 67.89}
+
+
+def test_bybit_update_deposit_prefers_available_to_withdraw() -> None:
+    session = _FakeSession({})
+    provider = BybitPerpetualProvider(
+        api_base="https://example.com",
+        ws_base="wss://example.com/ws",
+        rate_limit_per_minute=60,
+        min_quote_volume=0.0,
+        session=session,
+    )
+
+    async def fake_auth_get(endpoint: str, params=None):  # type: ignore[override]
+        return _FakeResponse(
+            {
+                "result": {
+                    "list": [
+                        {
+                            "coin": [
+                                {"coin": "BTC", "walletBalance": "5"},
+                                {
+                                    "coin": "USDT",
+                                    "availableToWithdraw": "12.5",
+                                    "equity": "25",
+                                },
+                            ]
+                        }
+                    ]
+                }
+            }
+        )
+
+    provider._authenticated_get = fake_auth_get  # type: ignore[assignment]
+
+    snapshot = asyncio.run(provider.update_deposit())
+
+    assert snapshot.asset == "USDT"
+    assert snapshot.balance == 12.5
+    assert snapshot.raw == {
+        "coin": "USDT",
+        "availableToWithdraw": "12.5",
+        "equity": "25",
+    }

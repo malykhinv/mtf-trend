@@ -4,83 +4,45 @@ import asyncio
 import hmac
 import time
 from hashlib import sha256
-from dataclasses import dataclass
-from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Sequence
+from typing import AsyncGenerator, Dict, List, Mapping, Protocol, Sequence
 from urllib.parse import urlencode
 
 try:
-    import httpx
+    import httpx  # type: ignore[import-not-found]
 except ImportError:  # pragma: no cover
-    httpx = None  # type: ignore
+    httpx = None
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
-from ..models import BybitInstrument, BybitKline, BybitTicker, DepositSnapshot
+from ..models import (
+    BybitCoinBalance,
+    BybitInstrumentsPayload,
+    BybitKline,
+    BybitKlinesPayload,
+    BybitTicker,
+    BybitTickersPayload,
+    BybitWalletBalancePayload,
+    DepositSnapshot,
+)
+from ..models.exchange import _select_first_available
 from .base import BaseExchangeProvider
 
 
-@dataclass(slots=True)
-class _BybitCoinBalance:
-    asset: str
-    wallet_balance: float | None
-    available_to_withdraw: float | None
-    equity: float | None
-    available_balance: float | None
-    raw: Mapping[str, Any] | None
+class _HttpResponse(Protocol):
+    def raise_for_status(self) -> None: ...
 
-    @classmethod
-    def from_raw(cls, raw: Mapping[str, Any]) -> "_BybitCoinBalance":
-        asset = str(raw.get("coin") or "").upper()
-        wallet_balance = _to_float(raw.get("walletBalance"))
-        available_to_withdraw = _to_float(raw.get("availableToWithdraw"))
-        equity = _to_float(raw.get("equity"))
-        available_balance = _to_float(raw.get("availableBalance"))
-        return cls(
-            asset=asset,
-            wallet_balance=wallet_balance,
-            available_to_withdraw=available_to_withdraw,
-            equity=equity,
-            available_balance=available_balance,
-            raw=raw,
-        )
+    def json(self) -> object: ...
 
 
-@dataclass(slots=True)
-class _BybitAccountBalance:
-    coins: Sequence[_BybitCoinBalance]
-    raw: Mapping[str, Any] | None
+class _HttpClient(Protocol):
+    async def get(
+        self,
+        endpoint: str,
+        params: Mapping[str, object] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> _HttpResponse: ...
 
-    @classmethod
-    def from_raw(cls, raw: Mapping[str, Any]) -> "_BybitAccountBalance":
-        coins_raw = raw.get("coin")
-        coins: list[_BybitCoinBalance] = []
-        if isinstance(coins_raw, Sequence):
-            for item in coins_raw:
-                if isinstance(item, Mapping):
-                    coins.append(_BybitCoinBalance.from_raw(item))
-        return cls(coins=tuple(coins), raw=raw)
-
-
-def _normalize_kline_entry(entry: Any) -> Mapping[str, Any] | None:
-    if isinstance(entry, Mapping):
-        return entry
-    if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes, bytearray)):
-        keys = (
-            "start",
-            "open",
-            "high",
-            "low",
-            "close",
-            "volume",
-            "turnover",
-        )
-        normalized: dict[str, Any] = {}
-        for index, key in enumerate(keys):
-            if index < len(entry):
-                normalized[key] = entry[index]
-        if normalized:
-            return normalized
-    return None
+    async def aclose(self) -> None: ...
 
 
 class BybitPerpetualProvider(BaseExchangeProvider):
@@ -94,12 +56,14 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         ws_base: str,
         rate_limit_per_minute: int,
         min_quote_volume: float,
-        session: httpx.AsyncClient | None = None,
+        session: _HttpClient | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
     ) -> None:
         super().__init__(api_base, ws_base, rate_limit_per_minute, min_quote_volume)
-        self._session = session or (httpx.AsyncClient(timeout=10.0) if httpx else None)
+        self._session: _HttpClient | None = session or (
+            httpx.AsyncClient(timeout=10.0) if httpx else None
+        )
         self._api_key = api_key
         self._api_secret = api_secret
 
@@ -109,12 +73,12 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         return self._api_key, self._api_secret
 
     async def _authenticated_get(
-        self, endpoint: str, params: dict[str, Any] | None = None
-    ) -> httpx.Response:
+        self, endpoint: str, params: Mapping[str, object] | None = None
+    ) -> _HttpResponse:
         if not self._session:
             raise RuntimeError("httpx is required to perform authenticated requests to Bybit")
         api_key, api_secret = self._require_credentials()
-        query_params = params.copy() if params else {}
+        query_params = dict(params) if params else {}
         recv_window = str(query_params.pop("recvWindow", query_params.pop("recv_window", "5000")))
         query_string = urlencode(sorted(query_params.items())) if query_params else ""
         timestamp = str(int(time.time() * 1000))
@@ -153,24 +117,14 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        raw_entries = data.get("result", {}).get("list", [])
-        if not isinstance(raw_entries, Sequence):
-            raise TypeError("Bybit klines payload must be a sequence")
-        normalized_entries = [
-            _normalize_kline_entry(item) for item in raw_entries
-        ]
-        entries = [
-            BybitKline.from_raw(item)
-            for item in normalized_entries
-            if item is not None
-        ]
+        entries = BybitKlinesPayload.from_http(data).entries
         candles = self.map_candles(entries, symbol, timeframe)
         filtered = await self._filter_liquidity(candles)
         return self._sort_and_deduplicate(filtered)
 
     async def stream_candles(
         self, symbol: str, timeframe: Timeframe
-    ) -> AsyncIterator[Candle]:
+    ) -> AsyncGenerator[Candle, None]:
         if not httpx:
             raise RuntimeError("httpx is required for streaming via Bybit API")
         while True:
@@ -188,7 +142,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        instruments = _parse_bybit_instruments(data)
+        instruments = BybitInstrumentsPayload.from_http(data).instruments
         trading = [item.symbol for item in instruments if item.status == "Trading"]
         return trading
 
@@ -201,7 +155,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        tickers = _parse_bybit_tickers(data)
+        tickers = BybitTickersPayload.from_http(data).tickers
         volumes: Dict[str, float] = {}
         for ticker in tickers:
             volume = ticker.quote_volume()
@@ -217,20 +171,12 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         response = await self._authenticated_get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        result_raw = data.get("result")
-        entries_raw = result_raw.get("list") if isinstance(result_raw, Mapping) else None
-        entries: Sequence[_BybitAccountBalance] = []
-        if isinstance(entries_raw, Sequence):
-            parsed: list[_BybitAccountBalance] = []
-            for entry in entries_raw:
-                if isinstance(entry, Mapping):
-                    parsed.append(_BybitAccountBalance.from_raw(entry))
-            entries = tuple(parsed)
+        accounts = BybitWalletBalancePayload.from_http(data).accounts
 
         target_asset = "USDT"
-        selected_coin: _BybitCoinBalance | None = None
-        raw_coin: Mapping[str, Any] | None = None
-        for entry in entries:
+        selected_coin: BybitCoinBalance | None = None
+        raw_coin: Mapping[str, object] | None = None
+        for entry in accounts:
             selected_coin = next((coin for coin in entry.coins if coin.asset == target_asset), None)
             if selected_coin:
                 raw_coin = selected_coin.raw
@@ -244,76 +190,15 @@ class BybitPerpetualProvider(BaseExchangeProvider):
             await self._session.aclose()
 
 
-def _to_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _select_bybit_amount(balance: _BybitCoinBalance | None) -> float:
+def _select_bybit_amount(balance: BybitCoinBalance | None) -> float:
     if balance is None:
         return 0.0
-    for value in (
-        balance.available_to_withdraw,
-        balance.available_balance,
-        balance.wallet_balance,
-        balance.equity,
-    ):
-        if value is not None:
-            return value
-    return 0.0
-
-
-def _parse_bybit_instruments(payload: Any) -> list[BybitInstrument]:
-    if not isinstance(payload, Mapping):
-        return []
-    try:
-        result = payload["result"]
-    except KeyError:
-        return []
-    if not isinstance(result, Mapping):
-        return []
-    try:
-        instruments_raw = result["list"]
-    except KeyError:
-        return []
-    if not isinstance(instruments_raw, Sequence):
-        return []
-    parsed: list[BybitInstrument] = []
-    for item in instruments_raw:
-        if not isinstance(item, Mapping):
-            continue
-        try:
-            parsed.append(BybitInstrument.from_raw(item))
-        except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
-            continue
-    return parsed
-
-
-def _parse_bybit_tickers(payload: Any) -> list[BybitTicker]:
-    if not isinstance(payload, Mapping):
-        return []
-    try:
-        result = payload["result"]
-    except KeyError:
-        return []
-    if not isinstance(result, Mapping):
-        return []
-    try:
-        tickers_raw = result["list"]
-    except KeyError:
-        return []
-    if not isinstance(tickers_raw, Sequence):
-        return []
-    parsed: list[BybitTicker] = []
-    for item in tickers_raw:
-        if not isinstance(item, Mapping):
-            continue
-        try:
-            parsed.append(BybitTicker.from_raw(item))
-        except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
-            continue
-    return parsed
+    amount = _select_first_available(
+        (
+            balance.available_to_withdraw,
+            balance.available_balance,
+            balance.wallet_balance,
+            balance.equity,
+        )
+    )
+    return amount if amount is not None else 0.0
