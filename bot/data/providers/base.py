@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Dict, Iterable, List, Sequence
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
+from ..models import DepositSnapshot
 from ..mappers.ohlcv_mapper import map_ohlcv
 from ...utils.logging import get_logger
 
@@ -80,7 +81,7 @@ class BaseExchangeProvider:
         """Return a mapping of symbol to 24 hour quote volume."""
         raise NotImplementedError
 
-    async def update_deposit(self) -> Dict[str, Any]:
+    async def update_deposit(self) -> DepositSnapshot:
         raise NotImplementedError
 
     async def close(self) -> None:

@@ -4,7 +4,8 @@ import asyncio
 import hmac
 import time
 from hashlib import sha256
-from typing import Any, AsyncIterator, Dict, Iterable, List
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Sequence
 from urllib.parse import urlencode
 
 try:
@@ -15,7 +16,43 @@ except ImportError:  # pragma: no cover
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
 from ...utils.logging import get_logger
+from ..models import DepositSnapshot
 from .base import BaseExchangeProvider
+
+
+@dataclass(slots=True)
+class _BinanceBalance:
+    asset: str
+    balance: float | None
+    available_balance: float | None
+    cross_wallet_balance: float | None
+    equity: float | None
+    raw: Mapping[str, Any] | None
+
+    @classmethod
+    def from_raw(cls, raw: Mapping[str, Any]) -> "_BinanceBalance":
+        asset = str(raw.get("asset") or "").upper()
+        balance = cls._to_float(raw.get("balance"))
+        available_balance = cls._to_float(raw.get("availableBalance"))
+        cross_wallet_balance = cls._to_float(raw.get("crossWalletBalance"))
+        equity = cls._to_float(raw.get("equity"))
+        return cls(
+            asset=asset,
+            balance=balance,
+            available_balance=available_balance,
+            cross_wallet_balance=cross_wallet_balance,
+            equity=equity,
+            raw=raw,
+        )
+
+    @staticmethod
+    def _to_float(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
 
 
 class BinanceFuturesProvider(BaseExchangeProvider):
@@ -125,28 +162,40 @@ class BinanceFuturesProvider(BaseExchangeProvider):
                 volumes[symbol.upper()] = volume
         return volumes
 
-    async def update_deposit(self) -> dict[str, Any]:
+    async def update_deposit(self) -> DepositSnapshot:
         await self.ensure_rate_limit()
         endpoint = f"{self._api_base}/fapi/v2/balance"
         response = await self._authenticated_get(endpoint)
         response.raise_for_status()
-        balances = response.json()
-        usdt_balance = 0.0
-        for item in balances:
-            if item.get("asset") != "USDT":
-                continue
-            for key in ("availableBalance", "balance", "crossWalletBalance", "equity"):
-                value = item.get(key)
-                if value is not None:
-                    try:
-                        usdt_balance = float(value)
-                        break
-                    except (TypeError, ValueError):
-                        continue
-            if usdt_balance:
-                break
-        return {"asset": "USDT", "balance": usdt_balance}
+        raw_balances = response.json()
+        balances: Sequence[_BinanceBalance] = []
+        if isinstance(raw_balances, Sequence):
+            parsed: list[_BinanceBalance] = []
+            for item in raw_balances:
+                if isinstance(item, Mapping):
+                    parsed.append(_BinanceBalance.from_raw(item))
+            balances = tuple(parsed)
+
+        target_asset = "USDT"
+        selected = next((balance for balance in balances if balance.asset == target_asset), None)
+        amount = _select_amount(selected)
+        raw = selected.raw if selected else None
+        return DepositSnapshot(asset=target_asset, balance=amount, raw=raw)
 
     async def close(self) -> None:
         if self._session:
             await self._session.aclose()
+
+
+def _select_amount(balance: _BinanceBalance | None) -> float:
+    if balance is None:
+        return 0.0
+    for value in (
+        balance.available_balance,
+        balance.balance,
+        balance.cross_wallet_balance,
+        balance.equity,
+    ):
+        if value is not None:
+            return value
+    return 0.0
