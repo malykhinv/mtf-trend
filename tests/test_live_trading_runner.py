@@ -97,7 +97,7 @@ def _build_signal(
         pct_to_low=-11.0,
         pct_to_high_break=12.0,
         pct_to_low_break=13.0,
-        break_direction=0.0,
+        break_direction=BreakDirection.NONE,
     )
     return Signal(
         id=f"sig-{identifier}",

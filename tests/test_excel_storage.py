@@ -61,7 +61,7 @@ def _build_signal(identifier: str, score: float, triggered_at: datetime) -> Sign
         pct_to_low=-(11.0 + base),
         pct_to_high_break=12.0 + base,
         pct_to_low_break=13.0 + base,
-        break_direction=0.0,
+        break_direction=BreakDirection.NONE,
     )
     return Signal(
         id=f"sig-{identifier}",
