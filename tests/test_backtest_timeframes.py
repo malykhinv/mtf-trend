@@ -26,6 +26,14 @@ class _StubProvider:
 
 def test_run_backtest_iterates_over_timeframes(monkeypatch):
     config = AppConfig(raw={"backtest": {"enabled": True, "history_batches": 1}})
+    assert config.backtest.enabled is True
+    assert config.backtest.history_batches == 1
+    assert config.backtest.timeframes == (
+        Timeframe.M1,
+        Timeframe.M3,
+        Timeframe.M5,
+        Timeframe.M15,
+    )
     provider = _StubProvider()
     providers = {"dummy": provider}
     thresholds_map = {"default": Thresholds()}
@@ -120,6 +128,9 @@ def test_run_backtest_fetches_batched_history(monkeypatch):
             }
         }
     )
+    assert config.backtest.limit == limit
+    assert config.backtest.history_batches == history_batches
+    assert config.backtest.timeframes == (timeframe,)
     thresholds_map = {"default": Thresholds()}
     providers = {"dummy": provider}
     services = tuple(object() for _ in range(7))
