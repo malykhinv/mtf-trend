@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import time
-from datetime import datetime
 from typing import Any, AsyncIterator, Dict, Iterable, List, Sequence
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
-from ..models import DepositSnapshot
+from ..models import DepositSnapshot, OhlcvSnapshot
 from ..mappers.ohlcv_mapper import map_ohlcv
 from ...utils.logging import get_logger
 
@@ -88,9 +87,9 @@ class BaseExchangeProvider:
         """Release provider resources."""
 
     def map_candles(
-        self, raw: Iterable[Sequence[Any]], symbol: str, timeframe: Timeframe
+        self, entries: Iterable[OhlcvSnapshot], symbol: str, timeframe: Timeframe
     ) -> List[Candle]:
-        return [map_ohlcv(item, symbol, self.exchange, timeframe) for item in raw]
+        return [map_ohlcv(item, symbol, self.exchange, timeframe) for item in entries]
 
     async def ensure_rate_limit(self) -> None:
         await self._rate_limiter.throttle()
