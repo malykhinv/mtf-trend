@@ -14,7 +14,7 @@ from ...utils.logging import get_logger
 from ...utils.clock import utcnow
 from ..enums import Timeframe, TradeStatus
 from ..models.entities import Candle, Signal, Thresholds, Trade
-from ..models.metadata import DepositSnapshotMetadata, TradeMetadata
+from ..models.metadata import DepositSnapshotMetadata, LiveMetadata, TradeMetadata
 from .dedup_policy import DeduplicationPolicy
 from .selector_service import SignalSelectorService
 from .tp_sl_service import TpSlService
@@ -86,7 +86,9 @@ class LiveTradingRunner:
             allow_long=signal.allow_long,
             allow_short=signal.allow_short,
             thresholds_snapshot=signal.thresholds,
-            metadata=TradeMetadata(mode="live", deposit_snapshot=snapshot_metadata),
+            metadata=TradeMetadata(
+                mode="live", deposit_snapshot=snapshot_metadata, live=LiveMetadata()
+            ),
         )
         self._tp_sl_service.assign(signal, trade)
         self._signals.save(signal)
@@ -150,8 +152,10 @@ class LiveTradingRunner:
                     )
                     trade.updated_at = utcnow()
                     if trade.metadata is None:
-                        trade.metadata = TradeMetadata(mode="live")
-                    live_meta = trade.metadata.ensure_live()
+                        trade.metadata = TradeMetadata(mode="live", live=LiveMetadata())
+                    if trade.metadata.live is None:
+                        trade.metadata.live = LiveMetadata()
+                    live_meta = trade.metadata.live
                     if result_pct is not None:
                         live_meta.result_pct = result_pct
                     live_meta.closed_status = status

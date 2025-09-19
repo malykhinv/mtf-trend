@@ -17,8 +17,11 @@ from ...domain.models.entities import (
 )
 from ...domain.models.metadata import (
     SignalMetadata,
+    SignalMetadataPayload,
     ThresholdsMetadata,
+    ThresholdsMetadataPayload,
     TradeMetadata,
+    TradeMetadataPayload,
 )
 from ...domain.services.metrics_service import SelectionMetricsSnapshot
 from .excel_rows import (
@@ -130,11 +133,13 @@ class Storage:
 
     def _deserialize_thresholds(self, payload: ThresholdPayload) -> Thresholds:
         metrics = [self._deserialize_threshold_metric(metric) for metric in payload.metrics]
-        metadata = ThresholdsMetadata.from_mapping(payload.metadata)
+        metadata_payload = ThresholdsMetadataPayload.from_mapping(payload.metadata)
+        metadata = ThresholdsMetadata.from_mapping(metadata_payload)
         created_at_raw = payload.created_at
         updated_at_raw = payload.updated_at
 
         short_pct_move_ranges: List[tuple[float | None, float | None]] = []
+        short_relative_volume_ranges: List[tuple[float | None, float | None]] = []
         ranges_raw = payload.raw.get("short_pct_move_ranges")
         if isinstance(ranges_raw, list):
             for entry in ranges_raw:
@@ -176,54 +181,21 @@ class Storage:
                 else:
                     continue
                 short_pct_move_ranges.append((min_value, max_value))
-        if not short_pct_move_ranges and metadata and metadata.extra:
-            extra_ranges = metadata.extra.get("short_pct_move_ranges")
-            if isinstance(extra_ranges, list):
-                for entry in extra_ranges:
-                    min_value = None
-                    max_value = None
-                    if isinstance(entry, dict):
-                        min_raw = entry.get("min")
-                        if min_raw is None:
-                            min_raw = entry.get("min_value")
-                        max_raw = entry.get("max")
-                        if max_raw is None:
-                            max_raw = entry.get("max_value")
-                        if min_raw is None:
-                            continue
-                        try:
-                            min_value = float(cast(Union[int, float, str], min_raw))
-                        except (TypeError, ValueError):
-                            continue
-                        if max_raw is not None:
-                            try:
-                                max_value = float(cast(Union[int, float, str], max_raw))
-                            except (TypeError, ValueError):
-                                max_value = None
-                    elif isinstance(entry, (list, tuple)) and entry:
-                        sequence_entry = cast(Sequence[JSONValue], entry)
-                        first_value = sequence_entry[0]
-                        try:
-                            min_value = (
-                                float(cast(Union[int, float, str], first_value))
-                                if first_value is not None
-                                else None
-                            )
-                        except (TypeError, ValueError):
-                            min_value = None
-                        if len(sequence_entry) > 1:
-                            second_value = sequence_entry[1]
-                            try:
-                                max_value = (
-                                    float(cast(Union[int, float, str], second_value))
-                                    if second_value is not None
-                                    else None
-                                )
-                            except (TypeError, ValueError):
-                                max_value = None
-                    if min_value is None and max_value is None:
-                        continue
-                    short_pct_move_ranges.append((min_value, max_value))
+        if not short_pct_move_ranges and metadata:
+            for range_value in metadata.short_pct_move_ranges:
+                if range_value.is_empty():
+                    continue
+                short_pct_move_ranges.append(
+                    (range_value.minimum, range_value.maximum)
+                )
+
+        if metadata:
+            for range_value in metadata.short_relative_volume_ranges:
+                if range_value.is_empty():
+                    continue
+                short_relative_volume_ranges.append(
+                    (range_value.minimum, range_value.maximum)
+                )
 
         def _float_from_value(value: JSONValue | None) -> float:
             if isinstance(value, (int, float)):
@@ -271,6 +243,7 @@ class Storage:
                 ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
             ),
             short_pct_move_ranges=short_pct_move_ranges,
+            short_relative_volume_ranges=short_relative_volume_ranges,
             allow_long=self._to_bool(
                 payload.raw.get("allow_long", payload.allow_long), default_allow_long
             ),
@@ -332,14 +305,14 @@ class Storage:
         )
         thresholds = self._deserialize_thresholds(payload.thresholds)
         metrics = [self._deserialize_signal_metric(metric) for metric in payload.metrics]
-        metadata_dict: Dict[str, Any] = dict(payload.metadata)
+        metadata_mapping = payload.metadata
         metrics_snapshot = self._deserialize_metrics_snapshot(payload.metrics_snapshot)
         if metrics_snapshot is None:
-            legacy_snapshot = metadata_dict.get("metrics")
+            legacy_snapshot = metadata_mapping.get("metrics")
             if isinstance(legacy_snapshot, Mapping):
                 metrics_snapshot = self._deserialize_metrics_snapshot(legacy_snapshot)
-                if metrics_snapshot is not None:
-                    metadata_dict.pop("metrics", None)
+        metadata_payload = SignalMetadataPayload.from_mapping(metadata_mapping)
+        signal_metadata = SignalMetadata.from_mapping(metadata_payload)
         created_at_raw = payload.created_at
         updated_at_raw = payload.updated_at
         timeframe_raw = payload.timeframe
@@ -366,7 +339,7 @@ class Storage:
             allow_long=self._to_bool(payload.allow_long, thresholds.allow_long),
             allow_short=self._to_bool(payload.allow_short, thresholds.allow_short),
             metrics_snapshot=metrics_snapshot,
-            metadata=SignalMetadata.from_mapping(metadata_dict),
+            metadata=signal_metadata,
         )
 
     def deserialize_trade(self, payload: TradePayload) -> Trade:
@@ -375,29 +348,28 @@ class Storage:
             if payload.thresholds_snapshot is not None
             else None
         )
-        metadata_dict: Dict[str, Any] = dict(payload.metadata)
+        metadata_payload = TradeMetadataPayload.from_mapping(payload.metadata)
+        trade_metadata = TradeMetadata.from_mapping(metadata_payload)
         created_at_raw = payload.created_at
         updated_at_raw = payload.updated_at
         timeframe_raw = payload.timeframe
         timeframe = Timeframe(timeframe_raw) if isinstance(timeframe_raw, str) else None
         if timeframe is None and thresholds_snapshot and thresholds_snapshot.metadata:
             meta_tf = thresholds_snapshot.metadata.timeframe
-            if isinstance(meta_tf, Timeframe):
+            if meta_tf is not None:
                 timeframe = meta_tf
             else:
-                extra_tf = thresholds_snapshot.metadata.extra.get("timeframe")
-                if isinstance(extra_tf, str):
+                raw_tf = thresholds_snapshot.metadata.timeframe_raw
+                if isinstance(raw_tf, str):
                     try:
-                        timeframe = Timeframe(extra_tf)
+                        timeframe = Timeframe(raw_tf)
                     except ValueError:
                         timeframe = None
-        if timeframe is None:
-            meta_tf = metadata_dict.get("timeframe")
-            if isinstance(meta_tf, str):
-                try:
-                    timeframe = Timeframe(meta_tf)
-                except ValueError:
-                    timeframe = None
+        if timeframe is None and trade_metadata and trade_metadata.timeframe:
+            try:
+                timeframe = Timeframe(trade_metadata.timeframe)
+            except ValueError:
+                timeframe = None
         source_signal_id = payload.source_signal_id or payload.signal_id
         trade = Trade(
             id=payload.id,
@@ -425,7 +397,7 @@ class Storage:
             allow_long=self._to_bool(payload.allow_long),
             allow_short=self._to_bool(payload.allow_short),
             thresholds_snapshot=thresholds_snapshot,
-            metadata=TradeMetadata.from_mapping(metadata_dict),
+            metadata=trade_metadata,
         )
         return trade
 

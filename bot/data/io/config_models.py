@@ -10,7 +10,7 @@ from ...app_modes import AppMode
 from ...domain.enums import Timeframe
 from ...domain.models.entities import ThresholdMetric as DomainThresholdMetric
 from ...domain.models.entities import Thresholds as DomainThresholds
-from ...domain.models.metadata import ThresholdsMetadata
+from ...domain.models.metadata import ThresholdsMetadata, ThresholdsMetadataPayload
 from .config_types import (
     BacktestSection,
     DedupSection,
@@ -469,9 +469,10 @@ class ThresholdConfig:
         else:
             data = raw
         metadata_raw = data.get("metadata")
-        metadata = ThresholdsMetadata.from_mapping(
+        metadata_payload = ThresholdsMetadataPayload.from_mapping(
             metadata_raw if isinstance(metadata_raw, Mapping) else None
         )
+        metadata = ThresholdsMetadata.from_mapping(metadata_payload)
         metrics_raw = data.get("metrics") or ()
         metrics: list[ThresholdMetricConfig] = []
         for item in metrics_raw:
@@ -481,17 +482,26 @@ class ThresholdConfig:
         short_pct_move_ranges = _parse_range_list(
             data.get("short_pct_move_ranges")
         )
-        metadata_extra = metadata.extra if metadata else {}
-        if not short_pct_move_ranges and metadata_extra:
-            short_pct_move_ranges = _parse_range_list(
-                metadata_extra.get("short_pct_move_ranges")
+        if not short_pct_move_ranges and metadata:
+            short_pct_move_ranges = tuple(
+                (
+                    range_value.minimum,
+                    range_value.maximum,
+                )
+                for range_value in metadata.short_pct_move_ranges
+                if not range_value.is_empty()
             )
         short_relative_volume_ranges = _parse_range_list(
             data.get("short_relative_volume_ranges")
         )
-        if not short_relative_volume_ranges and metadata_extra:
-            short_relative_volume_ranges = _parse_range_list(
-                metadata_extra.get("short_relative_volume_ranges")
+        if not short_relative_volume_ranges and metadata:
+            short_relative_volume_ranges = tuple(
+                (
+                    range_value.minimum,
+                    range_value.maximum,
+                )
+                for range_value in metadata.short_relative_volume_ranges
+                if not range_value.is_empty()
             )
         return cls(
             id=str(data.get("id")) if data.get("id") is not None else None,

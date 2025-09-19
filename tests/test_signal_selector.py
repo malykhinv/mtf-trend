@@ -113,7 +113,7 @@ def test_select_allows_long_when_thresholds_met(selector: SignalSelectorService)
     assert threshold_meta is not None
     assert threshold_meta.name == "atr"
     assert threshold_meta.min_value == pytest.approx(5.0)
-    assert "metrics" not in signal.metadata.extra
+    assert "metrics" not in signal.metadata.to_dict()
 
 
 def test_select_redirects_to_short_when_long_body_growth_too_small(
