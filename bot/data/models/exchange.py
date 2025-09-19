@@ -2,18 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Iterable, Mapping, Sequence
+from typing import Iterable, Mapping, Sequence, cast
 
 from .ohlcv import OhlcvSnapshot
 
 
-def _ensure_str(value: object, field: str) -> str:
-    if not isinstance(value, str):
-        raise TypeError(f"Expected {field} to be str, got {type(value)!r}")
-    return value
+def parse_string(value: object, *, field: str) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)):
+        return str(value)
+    raise TypeError(f"Expected {field} to be str-compatible, got {type(value)!r}")
 
 
-def _ensure_float(value: object, field: str) -> float:
+def parse_float(value: object, *, field: str) -> float:
     if isinstance(value, (int, float)):
         return float(value)
     if isinstance(value, str):
@@ -24,7 +26,20 @@ def _ensure_float(value: object, field: str) -> float:
     raise TypeError(f"Expected numeric value for {field}, got {type(value)!r}")
 
 
-def _ensure_datetime(value: object, field: str) -> datetime:
+def parse_optional_float(value: object | None) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:  # pragma: no cover - defensive
+            return None
+    return None
+
+
+def parse_datetime(value: object, *, field: str) -> datetime:
     if isinstance(value, datetime):
         if value.tzinfo is None:
             raise ValueError(f"{field} must include timezone information")
@@ -43,24 +58,265 @@ def _ensure_datetime(value: object, field: str) -> datetime:
     return datetime.fromtimestamp(timestamp, tz=timezone.utc)
 
 
-def _ensure_optional_float(value: object | None) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        try:
-            return float(value)
-        except ValueError:  # pragma: no cover - defensive
-            return None
-    return None
+@dataclass(slots=True)
+class BinanceSymbolInfoData:
+    symbol: str
+    status: str
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BinanceSymbolInfoData":
+        return cls(
+            symbol=parse_string(payload["symbol"], field="symbol"),
+            status=parse_string(payload["status"], field="status"),
+        )
 
 
-def _extract_first(raw: Mapping[str, object], keys: Sequence[str], field: str) -> object:
-    for key in keys:
-        if key in raw:
-            return raw[key]
-    raise KeyError(f"{field} not found in payload")
+@dataclass(slots=True)
+class BinanceExchangeInfoResponse:
+    symbols: tuple[BinanceSymbolInfoData, ...]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BinanceExchangeInfoResponse":
+        raw_symbols = cast(Sequence[Mapping[str, object]], payload["symbols"])
+        symbols = tuple(
+            BinanceSymbolInfoData.decode(symbol_payload)
+            for symbol_payload in raw_symbols
+        )
+        return cls(symbols=symbols)
+
+
+@dataclass(slots=True)
+class BinanceTicker24hData:
+    symbol: str
+    quote_volume: object
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BinanceTicker24hData":
+        return cls(
+            symbol=parse_string(payload["symbol"], field="symbol"),
+            quote_volume=payload.get("quoteVolume"),
+        )
+
+
+@dataclass(slots=True)
+class BinanceTickers24hResponse:
+    tickers: tuple[BinanceTicker24hData, ...]
+
+    @classmethod
+    def decode(cls, payload: Sequence[Mapping[str, object]]) -> "BinanceTickers24hResponse":
+        tickers = tuple(BinanceTicker24hData.decode(item) for item in payload)
+        return cls(tickers=tickers)
+
+
+@dataclass(slots=True)
+class BinanceKlineData:
+    open_time: object
+    close_time: object
+    open_price: object
+    high_price: object
+    low_price: object
+    close_price: object
+    volume: object
+    quote_volume: object | None
+    raw: Sequence[object]
+
+    @classmethod
+    def decode(cls, payload: Sequence[object]) -> "BinanceKlineData":
+        close_source = payload[6] if len(payload) > 6 else payload[0]
+        quote_volume = payload[7] if len(payload) > 7 else None
+        return cls(
+            open_time=payload[0],
+            close_time=close_source,
+            open_price=payload[1],
+            high_price=payload[2],
+            low_price=payload[3],
+            close_price=payload[4],
+            volume=payload[5],
+            quote_volume=quote_volume,
+            raw=payload,
+        )
+
+
+@dataclass(slots=True)
+class BinanceKlinesResponse:
+    entries: tuple[BinanceKlineData, ...]
+
+    @classmethod
+    def decode(cls, payload: Sequence[Sequence[object]]) -> "BinanceKlinesResponse":
+        entries = tuple(BinanceKlineData.decode(item) for item in payload)
+        return cls(entries=entries)
+
+
+@dataclass(slots=True)
+class BinanceBalanceData:
+    asset: str
+    balance: object | None
+    available_balance: object | None
+    cross_wallet_balance: object | None
+    equity: object | None
+    raw: Mapping[str, object]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BinanceBalanceData":
+        return cls(
+            asset=parse_string(payload.get("asset", ""), field="asset"),
+            balance=payload.get("balance"),
+            available_balance=payload.get("availableBalance"),
+            cross_wallet_balance=payload.get("crossWalletBalance"),
+            equity=payload.get("equity"),
+            raw=payload,
+        )
+
+
+@dataclass(slots=True)
+class BinanceBalancesResponse:
+    balances: tuple[BinanceBalanceData, ...]
+
+    @classmethod
+    def decode(cls, payload: Sequence[Mapping[str, object]]) -> "BinanceBalancesResponse":
+        balances = tuple(BinanceBalanceData.decode(item) for item in payload)
+        return cls(balances=balances)
+
+
+@dataclass(slots=True)
+class BybitInstrumentData:
+    symbol: str
+    status: str
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitInstrumentData":
+        return cls(
+            symbol=parse_string(payload["symbol"], field="symbol"),
+            status=parse_string(payload["status"], field="status"),
+        )
+
+
+@dataclass(slots=True)
+class BybitInstrumentsResponse:
+    instruments: tuple[BybitInstrumentData, ...]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitInstrumentsResponse":
+        result_raw = payload.get("result") or {}
+        result = cast(Mapping[str, object], result_raw)
+        instrument_payloads = cast(Sequence[Mapping[str, object]], result.get("list", ()))
+        instruments = tuple(BybitInstrumentData.decode(item) for item in instrument_payloads)
+        return cls(instruments=instruments)
+
+
+@dataclass(slots=True)
+class BybitTickerData:
+    symbol: str
+    turnover24h: object | None
+    turnover: object | None
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitTickerData":
+        return cls(
+            symbol=parse_string(payload["symbol"], field="symbol"),
+            turnover24h=payload.get("turnover24h"),
+            turnover=payload.get("turnover"),
+        )
+
+
+@dataclass(slots=True)
+class BybitTickersResponse:
+    tickers: tuple[BybitTickerData, ...]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitTickersResponse":
+        result_raw = payload.get("result") or {}
+        result = cast(Mapping[str, object], result_raw)
+        raw_tickers = cast(Sequence[Mapping[str, object]], result.get("list", ()))
+        tickers = tuple(BybitTickerData.decode(item) for item in raw_tickers)
+        return cls(tickers=tickers)
+
+
+@dataclass(slots=True)
+class BybitKlineData:
+    start: object
+    close_time: object
+    open_price: object
+    high_price: object
+    low_price: object
+    close_price: object
+    volume: object
+    turnover: object | None
+    raw: Sequence[object]
+
+    @classmethod
+    def decode(cls, payload: Sequence[object]) -> "BybitKlineData":
+        turnover = payload[6] if len(payload) > 6 else None
+        return cls(
+            start=payload[0],
+            close_time=payload[0],
+            open_price=payload[1],
+            high_price=payload[2],
+            low_price=payload[3],
+            close_price=payload[4],
+            volume=payload[5],
+            turnover=turnover,
+            raw=payload,
+        )
+
+
+@dataclass(slots=True)
+class BybitKlinesResponse:
+    entries: tuple[BybitKlineData, ...]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitKlinesResponse":
+        result_raw = payload.get("result") or {}
+        result = cast(Mapping[str, object], result_raw)
+        raw_entries = cast(Sequence[Sequence[object]], result.get("list", ()))
+        entries = tuple(BybitKlineData.decode(item) for item in raw_entries)
+        return cls(entries=entries)
+
+
+@dataclass(slots=True)
+class BybitCoinBalanceData:
+    asset: str
+    wallet_balance: object | None
+    available_to_withdraw: object | None
+    equity: object | None
+    available_balance: object | None
+    raw: Mapping[str, object]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitCoinBalanceData":
+        return cls(
+            asset=parse_string(payload.get("coin", ""), field="coin"),
+            wallet_balance=payload.get("walletBalance"),
+            available_to_withdraw=payload.get("availableToWithdraw"),
+            equity=payload.get("equity"),
+            available_balance=payload.get("availableBalance"),
+            raw=payload,
+        )
+
+
+@dataclass(slots=True)
+class BybitAccountBalanceData:
+    coins: tuple[BybitCoinBalanceData, ...]
+    raw: Mapping[str, object]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitAccountBalanceData":
+        coin_payloads = cast(Sequence[Mapping[str, object]], payload.get("coin") or ())
+        coins = tuple(BybitCoinBalanceData.decode(item) for item in coin_payloads)
+        return cls(coins=coins, raw=payload)
+
+
+@dataclass(slots=True)
+class BybitWalletBalanceResponse:
+    accounts: tuple[BybitAccountBalanceData, ...]
+
+    @classmethod
+    def decode(cls, payload: Mapping[str, object]) -> "BybitWalletBalanceResponse":
+        result_raw = payload.get("result") or {}
+        result = cast(Mapping[str, object], result_raw)
+        entries = cast(Sequence[Mapping[str, object]], result.get("list", ()))
+        accounts = tuple(BybitAccountBalanceData.decode(item) for item in entries)
+        return cls(accounts=accounts)
 
 
 @dataclass(slots=True)
@@ -69,10 +325,8 @@ class BinanceSymbolInfo:
     status: str
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BinanceSymbolInfo":
-        symbol = _ensure_str(payload["symbol"], "symbol").upper()
-        status = _ensure_str(payload["status"], "status")
-        return cls(symbol=symbol, status=status)
+    def from_payload(cls, payload: BinanceSymbolInfoData) -> "BinanceSymbolInfo":
+        return cls(symbol=payload.symbol.upper(), status=payload.status)
 
 
 @dataclass(slots=True)
@@ -80,20 +334,9 @@ class BinanceExchangeInfoPayload:
     symbols: tuple[BinanceSymbolInfo, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BinanceExchangeInfoPayload":
-        if not isinstance(payload, Mapping):
-            raise TypeError("Binance exchange info payload must be a mapping")
-        symbols_raw = payload.get("symbols")
-        if not isinstance(symbols_raw, Sequence):
-            raise TypeError("Binance exchange info symbols must be a sequence")
-        symbols: list[BinanceSymbolInfo] = []
-        for item in symbols_raw:
-            if isinstance(item, Mapping):
-                try:
-                    symbols.append(BinanceSymbolInfo.from_payload(item))
-                except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
-                    continue
-        return cls(tuple(symbols))
+    def from_http(cls, payload: BinanceExchangeInfoResponse) -> "BinanceExchangeInfoPayload":
+        symbols = tuple(BinanceSymbolInfo.from_payload(item) for item in payload.symbols)
+        return cls(symbols=symbols)
 
 
 @dataclass(slots=True)
@@ -102,10 +345,9 @@ class BinanceTicker24h:
     quote_volume: float
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BinanceTicker24h":
-        symbol = _ensure_str(payload["symbol"], "symbol").upper()
-        quote_volume = _ensure_float(payload["quoteVolume"], "quoteVolume")
-        return cls(symbol=symbol, quote_volume=quote_volume)
+    def from_payload(cls, payload: BinanceTicker24hData) -> "BinanceTicker24h":
+        quote_volume = parse_float(payload.quote_volume, field="quoteVolume")
+        return cls(symbol=payload.symbol.upper(), quote_volume=quote_volume)
 
 
 @dataclass(slots=True)
@@ -113,17 +355,9 @@ class BinanceTickers24hPayload:
     tickers: tuple[BinanceTicker24h, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BinanceTickers24hPayload":
-        if not isinstance(payload, Sequence):
-            raise TypeError("Binance ticker payload must be a sequence")
-        tickers: list[BinanceTicker24h] = []
-        for item in payload:
-            if isinstance(item, Mapping):
-                try:
-                    tickers.append(BinanceTicker24h.from_payload(item))
-                except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
-                    continue
-        return cls(tuple(tickers))
+    def from_http(cls, payload: BinanceTickers24hResponse) -> "BinanceTickers24hPayload":
+        tickers = tuple(BinanceTicker24h.from_payload(item) for item in payload.tickers)
+        return cls(tickers=tickers)
 
 
 @dataclass(slots=True)
@@ -139,18 +373,15 @@ class BinanceKline(OhlcvSnapshot):
     raw: Sequence[object]
 
     @classmethod
-    def from_payload(cls, payload: Sequence[object]) -> "BinanceKline":
-        if len(payload) < 6:
-            raise ValueError("Binance kline payload must include at least 6 entries")
-        opened_at = _ensure_datetime(payload[0], "open time")
-        close_source = payload[6] if len(payload) > 6 else payload[0]
-        closed_at = _ensure_datetime(close_source, "close time")
-        open_price = _ensure_float(payload[1], "open price")
-        high_price = _ensure_float(payload[2], "high price")
-        low_price = _ensure_float(payload[3], "low price")
-        close_price = _ensure_float(payload[4], "close price")
-        volume = _ensure_float(payload[5], "volume")
-        quote_volume = _ensure_optional_float(payload[7] if len(payload) > 7 else None)
+    def from_payload(cls, payload: BinanceKlineData) -> "BinanceKline":
+        opened_at = parse_datetime(payload.open_time, field="open time")
+        closed_at = parse_datetime(payload.close_time, field="close time")
+        open_price = parse_float(payload.open_price, field="open price")
+        high_price = parse_float(payload.high_price, field="high price")
+        low_price = parse_float(payload.low_price, field="low price")
+        close_price = parse_float(payload.close_price, field="close price")
+        volume = parse_float(payload.volume, field="volume")
+        quote_volume = parse_optional_float(payload.quote_volume)
         return cls(
             opened_at=opened_at,
             closed_at=closed_at,
@@ -160,7 +391,7 @@ class BinanceKline(OhlcvSnapshot):
             close_price=close_price,
             volume=volume,
             quote_volume=quote_volume,
-            raw=payload,
+            raw=payload.raw,
         )
 
 
@@ -169,17 +400,9 @@ class BinanceKlinesPayload:
     entries: tuple[BinanceKline, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BinanceKlinesPayload":
-        if not isinstance(payload, Sequence):
-            raise TypeError("Binance klines payload must be a sequence")
-        entries: list[BinanceKline] = []
-        for item in payload:
-            if isinstance(item, Sequence) and not isinstance(item, (str, bytes, bytearray)):
-                try:
-                    entries.append(BinanceKline.from_payload(item))
-                except (ValueError, TypeError):  # pragma: no cover - defensive
-                    continue
-        return cls(tuple(entries))
+    def from_http(cls, payload: BinanceKlinesResponse) -> "BinanceKlinesPayload":
+        entries = tuple(BinanceKline.from_payload(item) for item in payload.entries)
+        return cls(entries=entries)
 
 
 @dataclass(slots=True)
@@ -192,19 +415,14 @@ class BinanceBalance:
     raw: Mapping[str, object]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BinanceBalance":
-        asset = str(payload.get("asset") or "").upper()
-        balance = _ensure_optional_float(payload.get("balance"))
-        available_balance = _ensure_optional_float(payload.get("availableBalance"))
-        cross_wallet_balance = _ensure_optional_float(payload.get("crossWalletBalance"))
-        equity = _ensure_optional_float(payload.get("equity"))
+    def from_payload(cls, payload: BinanceBalanceData) -> "BinanceBalance":
         return cls(
-            asset=asset,
-            balance=balance,
-            available_balance=available_balance,
-            cross_wallet_balance=cross_wallet_balance,
-            equity=equity,
-            raw=payload,
+            asset=payload.asset.upper(),
+            balance=parse_optional_float(payload.balance),
+            available_balance=parse_optional_float(payload.available_balance),
+            cross_wallet_balance=parse_optional_float(payload.cross_wallet_balance),
+            equity=parse_optional_float(payload.equity),
+            raw=payload.raw,
         )
 
 
@@ -213,14 +431,9 @@ class BinanceBalancesPayload:
     balances: tuple[BinanceBalance, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BinanceBalancesPayload":
-        if not isinstance(payload, Sequence):
-            raise TypeError("Binance balances payload must be a sequence")
-        balances: list[BinanceBalance] = []
-        for item in payload:
-            if isinstance(item, Mapping):
-                balances.append(BinanceBalance.from_payload(item))
-        return cls(tuple(balances))
+    def from_http(cls, payload: BinanceBalancesResponse) -> "BinanceBalancesPayload":
+        balances = tuple(BinanceBalance.from_payload(item) for item in payload.balances)
+        return cls(balances=balances)
 
 
 @dataclass(slots=True)
@@ -229,10 +442,8 @@ class BybitInstrument:
     status: str
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BybitInstrument":
-        symbol = _ensure_str(payload["symbol"], "symbol").upper()
-        status = _ensure_str(payload["status"], "status")
-        return cls(symbol=symbol, status=status)
+    def from_payload(cls, payload: BybitInstrumentData) -> "BybitInstrument":
+        return cls(symbol=payload.symbol.upper(), status=payload.status)
 
 
 @dataclass(slots=True)
@@ -240,23 +451,9 @@ class BybitInstrumentsPayload:
     instruments: tuple[BybitInstrument, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BybitInstrumentsPayload":
-        if not isinstance(payload, Mapping):
-            raise TypeError("Bybit instruments payload must be a mapping")
-        result = payload.get("result")
-        if not isinstance(result, Mapping):
-            raise TypeError("Bybit instruments result must be a mapping")
-        instruments_raw = result.get("list")
-        if not isinstance(instruments_raw, Sequence):
-            raise TypeError("Bybit instruments list must be a sequence")
-        instruments: list[BybitInstrument] = []
-        for item in instruments_raw:
-            if isinstance(item, Mapping):
-                try:
-                    instruments.append(BybitInstrument.from_payload(item))
-                except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
-                    continue
-        return cls(tuple(instruments))
+    def from_http(cls, payload: BybitInstrumentsResponse) -> "BybitInstrumentsPayload":
+        instruments = tuple(BybitInstrument.from_payload(item) for item in payload.instruments)
+        return cls(instruments=instruments)
 
 
 @dataclass(slots=True)
@@ -266,11 +463,12 @@ class BybitTicker:
     turnover: float | None
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BybitTicker":
-        symbol = _ensure_str(payload["symbol"], "symbol").upper()
-        turnover24h = _ensure_optional_float(payload.get("turnover24h"))
-        turnover = _ensure_optional_float(payload.get("turnover"))
-        return cls(symbol=symbol, turnover24h=turnover24h, turnover=turnover)
+    def from_payload(cls, payload: BybitTickerData) -> "BybitTicker":
+        return cls(
+            symbol=payload.symbol.upper(),
+            turnover24h=parse_optional_float(payload.turnover24h),
+            turnover=parse_optional_float(payload.turnover),
+        )
 
     def quote_volume(self) -> float | None:
         if self.turnover24h is not None:
@@ -283,23 +481,9 @@ class BybitTickersPayload:
     tickers: tuple[BybitTicker, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BybitTickersPayload":
-        if not isinstance(payload, Mapping):
-            raise TypeError("Bybit tickers payload must be a mapping")
-        result = payload.get("result")
-        if not isinstance(result, Mapping):
-            raise TypeError("Bybit tickers result must be a mapping")
-        tickers_raw = result.get("list")
-        if not isinstance(tickers_raw, Sequence):
-            raise TypeError("Bybit tickers list must be a sequence")
-        tickers: list[BybitTicker] = []
-        for item in tickers_raw:
-            if isinstance(item, Mapping):
-                try:
-                    tickers.append(BybitTicker.from_payload(item))
-                except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
-                    continue
-        return cls(tuple(tickers))
+    def from_http(cls, payload: BybitTickersResponse) -> "BybitTickersPayload":
+        tickers = tuple(BybitTicker.from_payload(item) for item in payload.tickers)
+        return cls(tickers=tickers)
 
 
 @dataclass(slots=True)
@@ -312,41 +496,18 @@ class BybitKline(OhlcvSnapshot):
     close_price: float
     volume: float
     quote_volume: float | None
-    raw: Mapping[str, object]
+    raw: Sequence[object]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BybitKline":
-        opened_value = _extract_first(
-            payload,
-            ("startTime", "start", "openTime", "open_time", "timestamp"),
-            "open time",
-        )
-        closed_value = (
-            payload.get("endTime")
-            or payload.get("end")
-            or payload.get("closeTime")
-            or opened_value
-        )
-        opened_at = _ensure_datetime(opened_value, "open time")
-        closed_at = _ensure_datetime(closed_value, "close time")
-        open_price = _ensure_float(
-            _extract_first(payload, ("openPrice", "open"), "open price"), "open price"
-        )
-        high_price = _ensure_float(
-            _extract_first(payload, ("highPrice", "high"), "high price"), "high price"
-        )
-        low_price = _ensure_float(
-            _extract_first(payload, ("lowPrice", "low"), "low price"), "low price"
-        )
-        close_price = _ensure_float(
-            _extract_first(payload, ("closePrice", "close"), "close price"), "close price"
-        )
-        volume = _ensure_float(
-            _extract_first(payload, ("volume", "vol", "turnover"), "volume"), "volume"
-        )
-        quote_volume = _ensure_optional_float(
-            payload.get("turnover") or payload.get("quoteVolume") or payload.get("quote_volume")
-        )
+    def from_payload(cls, payload: BybitKlineData) -> "BybitKline":
+        opened_at = parse_datetime(payload.start, field="open time")
+        closed_at = parse_datetime(payload.close_time, field="close time")
+        open_price = parse_float(payload.open_price, field="open price")
+        high_price = parse_float(payload.high_price, field="high price")
+        low_price = parse_float(payload.low_price, field="low price")
+        close_price = parse_float(payload.close_price, field="close price")
+        volume = parse_float(payload.volume, field="volume")
+        quote_volume = parse_optional_float(payload.turnover)
         return cls(
             opened_at=opened_at,
             closed_at=closed_at,
@@ -356,22 +517,8 @@ class BybitKline(OhlcvSnapshot):
             close_price=close_price,
             volume=volume,
             quote_volume=quote_volume,
-            raw=payload,
+            raw=payload.raw,
         )
-
-
-def _normalize_bybit_kline_entry(entry: object) -> Mapping[str, object] | None:
-    if isinstance(entry, Mapping):
-        return entry
-    if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes, bytearray)):
-        keys = ("start", "open", "high", "low", "close", "volume", "turnover")
-        normalized: dict[str, object] = {}
-        for index, key in enumerate(keys):
-            if index < len(entry):
-                normalized[key] = entry[index]
-        if normalized:
-            return normalized
-    return None
 
 
 @dataclass(slots=True)
@@ -379,24 +526,9 @@ class BybitKlinesPayload:
     entries: tuple[BybitKline, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BybitKlinesPayload":
-        if not isinstance(payload, Mapping):
-            raise TypeError("Bybit klines payload must be a mapping")
-        result = payload.get("result")
-        if not isinstance(result, Mapping):
-            raise TypeError("Bybit klines result must be a mapping")
-        raw_entries = result.get("list")
-        if not isinstance(raw_entries, Sequence):
-            raise TypeError("Bybit klines list must be a sequence")
-        entries: list[BybitKline] = []
-        for item in raw_entries:
-            normalized = _normalize_bybit_kline_entry(item)
-            if normalized is not None:
-                try:
-                    entries.append(BybitKline.from_payload(normalized))
-                except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
-                    continue
-        return cls(tuple(entries))
+    def from_http(cls, payload: BybitKlinesResponse) -> "BybitKlinesPayload":
+        entries = tuple(BybitKline.from_payload(item) for item in payload.entries)
+        return cls(entries=entries)
 
 
 @dataclass(slots=True)
@@ -409,19 +541,14 @@ class BybitCoinBalance:
     raw: Mapping[str, object]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BybitCoinBalance":
-        asset = str(payload.get("coin") or "").upper()
-        wallet_balance = _ensure_optional_float(payload.get("walletBalance"))
-        available_to_withdraw = _ensure_optional_float(payload.get("availableToWithdraw"))
-        equity = _ensure_optional_float(payload.get("equity"))
-        available_balance = _ensure_optional_float(payload.get("availableBalance"))
+    def from_payload(cls, payload: BybitCoinBalanceData) -> "BybitCoinBalance":
         return cls(
-            asset=asset,
-            wallet_balance=wallet_balance,
-            available_to_withdraw=available_to_withdraw,
-            equity=equity,
-            available_balance=available_balance,
-            raw=payload,
+            asset=payload.asset.upper(),
+            wallet_balance=parse_optional_float(payload.wallet_balance),
+            available_to_withdraw=parse_optional_float(payload.available_to_withdraw),
+            equity=parse_optional_float(payload.equity),
+            available_balance=parse_optional_float(payload.available_balance),
+            raw=payload.raw,
         )
 
 
@@ -431,14 +558,9 @@ class BybitAccountBalance:
     raw: Mapping[str, object]
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, object]) -> "BybitAccountBalance":
-        coins_raw = payload.get("coin")
-        coins: list[BybitCoinBalance] = []
-        if isinstance(coins_raw, Sequence):
-            for item in coins_raw:
-                if isinstance(item, Mapping):
-                    coins.append(BybitCoinBalance.from_payload(item))
-        return cls(coins=tuple(coins), raw=payload)
+    def from_payload(cls, payload: BybitAccountBalanceData) -> "BybitAccountBalance":
+        coins = tuple(BybitCoinBalance.from_payload(item) for item in payload.coins)
+        return cls(coins=coins, raw=payload.raw)
 
 
 @dataclass(slots=True)
@@ -446,18 +568,9 @@ class BybitWalletBalancePayload:
     accounts: tuple[BybitAccountBalance, ...]
 
     @classmethod
-    def from_http(cls, payload: object) -> "BybitWalletBalancePayload":
-        if not isinstance(payload, Mapping):
-            raise TypeError("Bybit wallet balance payload must be a mapping")
-        result = payload.get("result")
-        accounts: list[BybitAccountBalance] = []
-        if isinstance(result, Mapping):
-            entries = result.get("list")
-            if isinstance(entries, Sequence):
-                for item in entries:
-                    if isinstance(item, Mapping):
-                        accounts.append(BybitAccountBalance.from_payload(item))
-        return cls(tuple(accounts))
+    def from_http(cls, payload: BybitWalletBalanceResponse) -> "BybitWalletBalancePayload":
+        accounts = tuple(BybitAccountBalance.from_payload(item) for item in payload.accounts)
+        return cls(accounts=accounts)
 
 
 def _select_first_available(values: Iterable[float | None]) -> float | None:
@@ -465,3 +578,4 @@ def _select_first_available(values: Iterable[float | None]) -> float | None:
         if value is not None:
             return value
     return None
+

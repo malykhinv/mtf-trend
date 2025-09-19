@@ -4,7 +4,7 @@ import asyncio
 import hmac
 import time
 from hashlib import sha256
-from typing import AsyncGenerator, Dict, List, Mapping, Protocol, Sequence
+from typing import AsyncGenerator, Dict, List, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlencode
 
 try:
@@ -18,10 +18,14 @@ from ...utils.logging import get_logger
 from ..models import (
     BinanceBalance,
     BinanceBalancesPayload,
+    BinanceBalancesResponse,
     BinanceExchangeInfoPayload,
+    BinanceExchangeInfoResponse,
     BinanceKline,
     BinanceKlinesPayload,
+    BinanceKlinesResponse,
     BinanceTickers24hPayload,
+    BinanceTickers24hResponse,
     DepositSnapshot,
 )
 from ..models.exchange import _select_first_available
@@ -104,8 +108,9 @@ class BinanceFuturesProvider(BaseExchangeProvider):
             params["startTime"] = since
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
-        payload = response.json()
-        klines_payload = BinanceKlinesPayload.from_http(payload)
+        payload = cast(Sequence[Sequence[object]], response.json())
+        typed = BinanceKlinesResponse.decode(payload)
+        klines_payload = BinanceKlinesPayload.from_http(typed)
         entries: Sequence[BinanceKline] = klines_payload.entries
         candles = self.map_candles(entries, symbol, timeframe)
         filtered = await self._filter_liquidity(candles)
@@ -130,8 +135,9 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         endpoint = f"{self._api_base}/fapi/v1/exchangeInfo"
         response = await self._session.get(endpoint)
         response.raise_for_status()
-        info = response.json()
-        symbols = BinanceExchangeInfoPayload.from_http(info).symbols
+        info = cast(Mapping[str, object], response.json())
+        typed = BinanceExchangeInfoResponse.decode(info)
+        symbols = BinanceExchangeInfoPayload.from_http(typed).symbols
         trading = [item.symbol for item in symbols if item.status.upper() == "TRADING"]
         return [symbol for symbol in trading if not symbol.endswith("_PERP")]  # filter illiquid synthetics
 
@@ -142,8 +148,9 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         endpoint = f"{self._api_base}/fapi/v1/ticker/24hr"
         response = await self._session.get(endpoint)
         response.raise_for_status()
-        data = response.json()
-        tickers = BinanceTickers24hPayload.from_http(data).tickers
+        data = cast(Sequence[Mapping[str, object]], response.json())
+        typed = BinanceTickers24hResponse.decode(data)
+        tickers = BinanceTickers24hPayload.from_http(typed).tickers
         return {ticker.symbol: ticker.quote_volume for ticker in tickers}
 
     async def update_deposit(self) -> DepositSnapshot:
@@ -151,8 +158,9 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         endpoint = f"{self._api_base}/fapi/v2/balance"
         response = await self._authenticated_get(endpoint)
         response.raise_for_status()
-        raw_balances = response.json()
-        balances = BinanceBalancesPayload.from_http(raw_balances).balances
+        raw_balances = cast(Sequence[Mapping[str, object]], response.json())
+        typed = BinanceBalancesResponse.decode(raw_balances)
+        balances = BinanceBalancesPayload.from_http(typed).balances
 
         target_asset = "USDT"
         selected = next((balance for balance in balances if balance.asset == target_asset), None)

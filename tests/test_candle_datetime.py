@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 import pytest
 
 from bot.data.mappers.ohlcv_mapper import map_ohlcv
-from bot.data.models import BinanceKline
+from bot.data.models import BinanceKline, BinanceKlineData
 from bot.data.providers.base import BaseExchangeProvider
 from bot.domain.enums import Exchange, Timeframe
 from bot.domain.models.entities import Candle
@@ -37,7 +37,10 @@ def _build_candle(started_at: datetime) -> Candle:
 def test_map_ohlcv_started_at_is_datetime() -> None:
     raw = [1_697_049_600_000, 1, 2, 3, 4, 5, 6, 7]
     candle = map_ohlcv(
-        BinanceKline.from_payload(raw), "BTC/USDT", Exchange.BINANCE, Timeframe.M1
+        BinanceKline.from_payload(BinanceKlineData.decode(raw)),
+        "BTC/USDT",
+        Exchange.BINANCE,
+        Timeframe.M1,
     )
 
     assert isinstance(candle.started_at, datetime)
@@ -48,7 +51,7 @@ def test_map_ohlcv_rejects_naive_datetime() -> None:
     raw = [datetime(2023, 1, 1), 1, 2, 3, 4, 5]
 
     with pytest.raises(ValueError):
-        BinanceKline.from_payload(raw)
+        BinanceKline.from_payload(BinanceKlineData.decode(raw))
 
 
 def test_map_ohlcv_accepts_aware_datetime() -> None:
@@ -56,7 +59,10 @@ def test_map_ohlcv_accepts_aware_datetime() -> None:
     raw = [aware_datetime, 1, 2, 3, 4, 5]
 
     candle = map_ohlcv(
-        BinanceKline.from_payload(raw), "BTC/USDT", Exchange.BINANCE, Timeframe.M1
+        BinanceKline.from_payload(BinanceKlineData.decode(raw)),
+        "BTC/USDT",
+        Exchange.BINANCE,
+        Timeframe.M1,
     )
 
     assert candle.started_at.tzinfo is not None

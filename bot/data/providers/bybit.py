@@ -4,7 +4,7 @@ import asyncio
 import hmac
 import time
 from hashlib import sha256
-from typing import AsyncGenerator, Dict, List, Mapping, Protocol, Sequence
+from typing import AsyncGenerator, Dict, List, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlencode
 
 try:
@@ -17,11 +17,15 @@ from ...domain.models.entities import Candle
 from ..models import (
     BybitCoinBalance,
     BybitInstrumentsPayload,
+    BybitInstrumentsResponse,
     BybitKline,
     BybitKlinesPayload,
+    BybitKlinesResponse,
     BybitTicker,
     BybitTickersPayload,
+    BybitTickersResponse,
     BybitWalletBalancePayload,
+    BybitWalletBalanceResponse,
     DepositSnapshot,
 )
 from ..models.exchange import _select_first_available
@@ -116,8 +120,9 @@ class BybitPerpetualProvider(BaseExchangeProvider):
             params["start"] = since
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
-        data = response.json()
-        entries = BybitKlinesPayload.from_http(data).entries
+        data = cast(Mapping[str, object], response.json())
+        typed = BybitKlinesResponse.decode(data)
+        entries = BybitKlinesPayload.from_http(typed).entries
         candles = self.map_candles(entries, symbol, timeframe)
         filtered = await self._filter_liquidity(candles)
         return self._sort_and_deduplicate(filtered)
@@ -141,8 +146,9 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         params = {"category": "linear"}
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
-        data = response.json()
-        instruments = BybitInstrumentsPayload.from_http(data).instruments
+        data = cast(Mapping[str, object], response.json())
+        typed = BybitInstrumentsResponse.decode(data)
+        instruments = BybitInstrumentsPayload.from_http(typed).instruments
         trading = [item.symbol for item in instruments if item.status == "Trading"]
         return trading
 
@@ -154,8 +160,9 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         params = {"category": "linear"}
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
-        data = response.json()
-        tickers = BybitTickersPayload.from_http(data).tickers
+        data = cast(Mapping[str, object], response.json())
+        typed = BybitTickersResponse.decode(data)
+        tickers = BybitTickersPayload.from_http(typed).tickers
         volumes: Dict[str, float] = {}
         for ticker in tickers:
             volume = ticker.quote_volume()
@@ -170,8 +177,9 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         params = {"accountType": "UNIFIED"}
         response = await self._authenticated_get(endpoint, params=params)
         response.raise_for_status()
-        data = response.json()
-        accounts = BybitWalletBalancePayload.from_http(data).accounts
+        data = cast(Mapping[str, object], response.json())
+        typed = BybitWalletBalanceResponse.decode(data)
+        accounts = BybitWalletBalancePayload.from_http(typed).accounts
 
         target_asset = "USDT"
         selected_coin: BybitCoinBalance | None = None
