@@ -8,8 +8,10 @@ from typing import Any, Dict, Mapping
 
 from .config_models import (
     BacktestConfig,
+    DedupConfig,
     ExchangeProviderConfig,
     LiveConfig,
+    MetricsConfig,
     ModeSelectionOverrides,
     SymbolSelectionConfig,
     ThresholdsConfig,
@@ -28,6 +30,8 @@ class AppConfig:
     backtest: BacktestConfig = field(init=False)
     live: LiveConfig = field(init=False)
     providers: dict[str, ExchangeProviderConfig] = field(init=False)
+    metrics: MetricsConfig = field(init=False)
+    dedup: DedupConfig = field(init=False)
 
     def __post_init__(self) -> None:
         self.thresholds = ThresholdsConfig.from_raw(self.get("thresholds", {}))
@@ -39,6 +43,8 @@ class AppConfig:
         )
         self.backtest = BacktestConfig.from_raw(self.get("backtest", {}))
         self.live = LiveConfig.from_raw(self.get("live", {}))
+        self.metrics = MetricsConfig.from_raw(self.get("metrics", {}))
+        self.dedup = DedupConfig.from_raw(self.get("dedup", {}))
         env_values: dict[str, str] = {}
         env_raw = self.get("env", {})
         if isinstance(env_raw, Mapping):
