@@ -15,6 +15,7 @@ from bot.data.repositories.state_repository import StateRepository
 from bot.data.repositories.trade_repository import TradeRepository
 from bot.domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from bot.domain.models.entities import Candle, Signal, Thresholds
+from bot.domain.services.metrics_service import SelectionMetricsSnapshot
 from bot.domain.services.dedup_policy import DeduplicationPolicy
 from bot.domain.services.live_runner import LiveTradingRunner
 from bot.domain.services.tp_sl_service import TpSlService
@@ -82,6 +83,22 @@ def _build_signal(
         max_relative_volume=5.0,
         metadata={"timeframe": timeframe.value},
     )
+    snapshot = SelectionMetricsSnapshot(
+        atr=1.0,
+        average_volume=2.0,
+        momentum=3.0,
+        pct_move=4.0,
+        relative_volume=5.0,
+        atr_multiple=6.0,
+        upper_wick_pct=7.0,
+        body_pct=8.0,
+        lower_wick_pct=9.0,
+        pct_to_high=10.0,
+        pct_to_low=-11.0,
+        pct_to_high_break=12.0,
+        pct_to_low_break=13.0,
+        break_direction=0.0,
+    )
     return Signal(
         id=f"sig-{identifier}",
         candle=candle,
@@ -94,6 +111,7 @@ def _build_signal(
         timeframe=timeframe,
         created_at=candle_close,
         updated_at=candle_close,
+        metrics_snapshot=snapshot,
     )
 
 

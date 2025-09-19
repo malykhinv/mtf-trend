@@ -46,6 +46,7 @@ class ExcelWriter:
             "candle_closed_at",
             "thresholds_json",
             "metrics_json",
+            "metrics_snapshot_json",
             "metadata_json",
         ],
     )

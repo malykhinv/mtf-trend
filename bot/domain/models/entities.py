@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
+
+
+if TYPE_CHECKING:
+    from ..services.metrics_service import SelectionMetricsSnapshot
 
 
 @dataclass(slots=True)
@@ -79,6 +83,7 @@ class Signal:
     metrics: List[SignalMetric] = field(default_factory=list)
     allow_long: bool = True
     allow_short: bool = True
+    metrics_snapshot: SelectionMetricsSnapshot | None = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
