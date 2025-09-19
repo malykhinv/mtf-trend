@@ -58,6 +58,14 @@ max = 5.0
 [[thresholds.default.short_pct_move_ranges]]
 min = 10.0
 
+[thresholds.default.metadata]
+
+[[thresholds.default.metadata.short_relative_volume_ranges]]
+max = 40.0
+
+[[thresholds.default.metadata.short_relative_volume_ranges]]
+min = 200.0
+
 [backtest]
 enabled = true
 timeframe = "15m"
