@@ -51,6 +51,13 @@ allow_short = true
 name = "atr"
 min_value = 5.0
 
+[[thresholds.default.short_pct_move_ranges]]
+min = 3.0
+max = 5.0
+
+[[thresholds.default.short_pct_move_ranges]]
+min = 10.0
+
 [backtest]
 enabled = true
 timeframe = "15m"
