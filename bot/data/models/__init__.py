@@ -5,6 +5,7 @@ from .exchange import (
     BybitInstrument,
     BybitTicker,
 )
+from .ohlcv import BinanceKline, BybitKline, OhlcvSnapshot
 
 __all__ = [
     "DepositSnapshot",
@@ -12,4 +13,7 @@ __all__ = [
     "BinanceTicker24h",
     "BybitInstrument",
     "BybitTicker",
+    "BinanceKline",
+    "BybitKline",
+    "OhlcvSnapshot",
 ]

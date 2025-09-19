@@ -1,67 +1,40 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Sequence
+from datetime import timezone
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
 from ...utils.clock import get_timezone
+from ..models import OhlcvSnapshot
 
 
 def map_ohlcv(
-    raw: Sequence[Any],
+    snapshot: OhlcvSnapshot,
     symbol: str,
     exchange: Exchange,
     timeframe: Timeframe,
 ) -> Candle:
-    if len(raw) < 6:
-        raise ValueError("raw OHLCV should have at least 6 elements")
-    raw_timestamp = raw[0]
-    if isinstance(raw_timestamp, datetime):
-        if raw_timestamp.tzinfo is None:
-            raise ValueError("raw OHLCV timestamp must include timezone information")
-        utc_timestamp = raw_timestamp.astimezone(timezone.utc)
-    else:
-        try:
-            base_timestamp = float(raw_timestamp)
-        except (TypeError, ValueError) as exc:
-            raise TypeError("raw OHLCV timestamp must be numeric or datetime") from exc
-        if base_timestamp > 1e12:
-            base_timestamp /= 1000
-        utc_timestamp = datetime.fromtimestamp(base_timestamp, tz=timezone.utc)
-    timestamp = utc_timestamp.astimezone(get_timezone())
-    if not isinstance(timestamp, datetime):  # pragma: no cover - defensive
-        raise TypeError("Candle timestamp must be a datetime instance")
-    candle_id = f"{exchange.value}:{symbol}:{timeframe.value}:{int(utc_timestamp.timestamp())}"
-    volume = float(raw[5])
-    quote_volume = _extract_quote_volume(raw, exchange)
+    opened_at = snapshot.opened_at.astimezone(timezone.utc)
+    closed_at = snapshot.closed_at.astimezone(timezone.utc)
+    timestamp = opened_at.astimezone(get_timezone())
+    candle_id = f"{exchange.value}:{symbol}:{timeframe.value}:{int(opened_at.timestamp())}"
     return Candle(
         id=candle_id,
         symbol=symbol,
         exchange=exchange,
         timeframe=timeframe,
-        open=float(raw[1]),
-        high=float(raw[2]),
-        low=float(raw[3]),
-        close=float(raw[4]),
-        volume=volume,
-        quote_volume=quote_volume,
+        open=snapshot.open_price,
+        high=snapshot.high_price,
+        low=snapshot.low_price,
+        close=snapshot.close_price,
+        volume=snapshot.volume,
+        quote_volume=_extract_quote_volume(snapshot),
         started_at=timestamp,
-        closed_at=timestamp,
+        closed_at=closed_at.astimezone(get_timezone()),
     )
 
 
-def _extract_quote_volume(raw: Sequence[Any], exchange: Exchange) -> float | None:
-    if exchange == Exchange.BINANCE and len(raw) > 7:
-        return _safe_float(raw[7])
-    if exchange == Exchange.BYBIT and len(raw) > 6:
-        # Bybit provides turnover (quote volume) at index 6 in the kline array
-        return _safe_float(raw[6])
+def _extract_quote_volume(snapshot: OhlcvSnapshot) -> float | None:
+    if snapshot.quote_volume is not None:
+        return snapshot.quote_volume
     return None
-
-
-def _safe_float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None

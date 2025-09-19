@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
-from ..models import BybitInstrument, BybitTicker, DepositSnapshot
+from ..models import BybitInstrument, BybitKline, BybitTicker, DepositSnapshot
 from .base import BaseExchangeProvider
 
 
@@ -131,8 +131,11 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        raw: Iterable[Any] = data.get("result", {}).get("list", [])
-        candles = self.map_candles(raw, symbol, timeframe)
+        raw_entries = data.get("result", {}).get("list", [])
+        if not isinstance(raw_entries, Sequence):
+            raise TypeError("Bybit klines payload must be a sequence")
+        entries = [BybitKline.from_raw(item) for item in raw_entries]
+        candles = self.map_candles(entries, symbol, timeframe)
         filtered = await self._filter_liquidity(candles)
         return self._sort_and_deduplicate(filtered)
 

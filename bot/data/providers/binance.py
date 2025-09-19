@@ -16,7 +16,12 @@ except ImportError:  # pragma: no cover
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
 from ...utils.logging import get_logger
-from ..models import BinanceSymbolInfo, BinanceTicker24h, DepositSnapshot
+from ..models import (
+    BinanceKline,
+    BinanceSymbolInfo,
+    BinanceTicker24h,
+    DepositSnapshot,
+)
 from .base import BaseExchangeProvider
 
 
@@ -110,8 +115,11 @@ class BinanceFuturesProvider(BaseExchangeProvider):
             params["startTime"] = since
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
-        raw: Iterable[Any] = response.json()
-        candles = self.map_candles(raw, symbol, timeframe)
+        payload = response.json()
+        if not isinstance(payload, Sequence):
+            raise TypeError("Binance klines payload must be a sequence")
+        entries = [BinanceKline.from_raw(item) for item in payload]
+        candles = self.map_candles(entries, symbol, timeframe)
         filtered = await self._filter_liquidity(candles)
         return self._sort_and_deduplicate(filtered)
 
