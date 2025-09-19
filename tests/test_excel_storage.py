@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ from bot.data.repositories.state_repository import StateRepository
 from bot.data.repositories.trade_repository import TradeRepository
 from bot.domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from bot.domain.models.entities import Candle, Signal, Thresholds, Trade
+from bot.domain.services.metrics_service import SelectionMetricsSnapshot
 
 
 def _create_storage(tmp_path: Path) -> tuple[Storage, Path]:
@@ -44,6 +46,23 @@ def _build_signal(identifier: str, score: float, triggered_at: datetime) -> Sign
         max_relative_volume=5.0,
         metadata={"timeframe": Timeframe.M15.value},
     )
+    base = score / 10.0
+    snapshot = SelectionMetricsSnapshot(
+        atr=1.0 + base,
+        average_volume=2.0 + base,
+        momentum=3.0 + base,
+        pct_move=4.0 + base,
+        relative_volume=5.0 + base,
+        atr_multiple=6.0 + base,
+        upper_wick_pct=7.0 + base,
+        body_pct=8.0 + base,
+        lower_wick_pct=9.0 + base,
+        pct_to_high=10.0 + base,
+        pct_to_low=-(11.0 + base),
+        pct_to_high_break=12.0 + base,
+        pct_to_low_break=13.0 + base,
+        break_direction=0.0,
+    )
     return Signal(
         id=f"sig-{identifier}",
         candle=candle,
@@ -58,6 +77,7 @@ def _build_signal(identifier: str, score: float, triggered_at: datetime) -> Sign
         updated_at=triggered_at,
         allow_long=True,
         allow_short=True,
+        metrics_snapshot=snapshot,
         metadata={"note": "initial"},
     )
 
@@ -105,11 +125,16 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     loaded_signals = {loaded.id: loaded for loaded in storage.load_signals()}
     assert loaded_signals[signal.id].triggered_at == signal.triggered_at
     assert loaded_signals[signal.id].triggered_at.tzinfo is not None
+    assert loaded_signals[signal.id].metrics_snapshot == signal.metrics_snapshot
+    assert "metrics" not in loaded_signals[signal.id].metadata
 
     stored_rows = storage._writer.read_signals()
     assert stored_rows and isinstance(stored_rows[0], StoredSignalRow)
     assert stored_rows[0].score == pytest.approx(signal.score)
     assert stored_rows[0].allow_long is True
+    assert stored_rows[0].metrics_snapshot_json is not None
+    stored_snapshot = json.loads(stored_rows[0].metrics_snapshot_json)
+    assert stored_snapshot["pct_move"] == pytest.approx(signal.metrics_snapshot.pct_move)
 
     rows = _read_sheet_rows(workbook_path, "Signals")
     assert len(rows) == 1
@@ -141,6 +166,7 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert loaded_signals[signal.id].updated_at.tzinfo is not None
     assert loaded_signals[another_signal.id].triggered_at == another_signal.triggered_at
     assert loaded_signals[another_signal.id].triggered_at.tzinfo is not None
+    assert loaded_signals[another_signal.id].metrics_snapshot == another_signal.metrics_snapshot
 
 
 def test_trade_repository_updates_excel(tmp_path) -> None:

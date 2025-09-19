@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Sequence
 
@@ -159,18 +158,13 @@ class BacktestRunner:
     def _apply_backtest_outcome(
         self, signal: Signal, trade: Trade, future_candles: Sequence[Candle]
     ) -> None:
-        raw_metrics = signal.metadata.get("metrics")
-        metrics: Dict[str, Any] = dict(raw_metrics) if isinstance(raw_metrics, Mapping) else {}
+        snapshot = signal.metrics_snapshot
+        if snapshot is None:
+            self._logger.debug("Signal %s missing metrics snapshot", signal.id)
+            return
 
-        def _extract_pct(key: str) -> float:
-            value = metrics.get(key)
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return 0.0
-
-        pct_to_high_break = _extract_pct("pct_to_high_break")
-        pct_to_low_break = _extract_pct("pct_to_low_break")
+        pct_to_high_break = snapshot.pct_to_high_break
+        pct_to_low_break = snapshot.pct_to_low_break
 
         for candle in future_candles:
             hit_tp, hit_sl = self._tp_sl_service.check_levels(trade, candle)

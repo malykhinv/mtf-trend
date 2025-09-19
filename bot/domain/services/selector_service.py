@@ -6,7 +6,7 @@ from typing import Iterable, List, Sequence
 
 from ..enums import BreakDirection, Side
 from ..models.entities import Candle, Signal, Thresholds
-from .metrics_service import Metrics, MetricsService
+from .metrics_service import Metrics, MetricsService, SelectionMetricsSnapshot
 from ...utils import ids
 from ...utils.clock import utcnow
 
@@ -157,6 +157,7 @@ class SignalSelectorService:
     ) -> SelectionResult:
         metrics = self._metrics_service.calculate(candles, future_candles)
         evaluations = self._metrics_service.evaluate_thresholds(metrics, thresholds)
+        metrics_snapshot = SelectionMetricsSnapshot.from_metrics(metrics)
         failed = [evaluation.name for evaluation in evaluations if not evaluation.passed]
         if failed:
             return SelectionResult(signals=[], rejected=failed)
@@ -196,8 +197,8 @@ class SignalSelectorService:
             metrics=evaluations,
             allow_long=allow_long,
             allow_short=allow_short,
+            metrics_snapshot=metrics_snapshot,
             metadata={
-                "metrics": metrics.as_dict(),
                 "evaluations": [asdict(evaluation) for evaluation in evaluations],
                 "symbol": symbol,
                 "timeframe": candle.timeframe.value,

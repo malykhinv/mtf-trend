@@ -83,6 +83,7 @@ class StoredSignalRow:
     candle_closed_at: str
     thresholds_json: str
     metrics_json: str
+    metrics_snapshot_json: str | None
     metadata_json: str
 
     def __post_init__(self) -> None:
@@ -110,6 +111,7 @@ class StoredSignalRow:
         object.__setattr__(self, "candle_closed_at", _require_str(self.candle_closed_at, "candle_closed_at"))
         object.__setattr__(self, "thresholds_json", _require_str(self.thresholds_json, "thresholds_json"))
         object.__setattr__(self, "metrics_json", _require_str(self.metrics_json, "metrics_json"))
+        object.__setattr__(self, "metrics_snapshot_json", _optional_str(self.metrics_snapshot_json))
         object.__setattr__(self, "metadata_json", _require_str(self.metadata_json, "metadata_json"))
 
     def to_excel_row(self) -> dict[str, object]:
@@ -138,6 +140,7 @@ class StoredSignalRow:
             "candle_closed_at": self.candle_closed_at,
             "thresholds_json": self.thresholds_json,
             "metrics_json": self.metrics_json,
+            "metrics_snapshot_json": self.metrics_snapshot_json,
             "metadata_json": self.metadata_json,
         }
 
@@ -168,6 +171,7 @@ class StoredSignalRow:
             candle_closed_at=row.get("candle_closed_at"),
             thresholds_json=row.get("thresholds_json"),
             metrics_json=row.get("metrics_json"),
+            metrics_snapshot_json=row.get("metrics_snapshot_json"),
             metadata_json=row.get("metadata_json"),
         )
 

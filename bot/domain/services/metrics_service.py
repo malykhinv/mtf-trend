@@ -1,11 +1,109 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Sequence
+from typing import Dict, List, Mapping, Sequence
 
 from ..enums import BreakDirection
 from ..models.entities import Candle, SignalMetric, Thresholds
 from ...utils import math_ops
+
+
+SNAPSHOT_FIELDS = (
+    "atr",
+    "average_volume",
+    "momentum",
+    "pct_move",
+    "relative_volume",
+    "atr_multiple",
+    "upper_wick_pct",
+    "body_pct",
+    "lower_wick_pct",
+    "pct_to_high",
+    "pct_to_low",
+    "pct_to_high_break",
+    "pct_to_low_break",
+    "break_direction",
+)
+
+
+@dataclass(slots=True)
+class SelectionMetricsSnapshot:
+    atr: float
+    average_volume: float
+    momentum: float
+    pct_move: float
+    relative_volume: float
+    atr_multiple: float
+    upper_wick_pct: float
+    body_pct: float
+    lower_wick_pct: float
+    pct_to_high: float
+    pct_to_low: float
+    pct_to_high_break: float
+    pct_to_low_break: float
+    break_direction: float
+
+    def to_mapping(self) -> Dict[str, float]:
+        return {
+            "atr": self.atr,
+            "average_volume": self.average_volume,
+            "momentum": self.momentum,
+            "pct_move": self.pct_move,
+            "relative_volume": self.relative_volume,
+            "atr_multiple": self.atr_multiple,
+            "upper_wick_pct": self.upper_wick_pct,
+            "body_pct": self.body_pct,
+            "lower_wick_pct": self.lower_wick_pct,
+            "pct_to_high": self.pct_to_high,
+            "pct_to_low": self.pct_to_low,
+            "pct_to_high_break": self.pct_to_high_break,
+            "pct_to_low_break": self.pct_to_low_break,
+            "break_direction": self.break_direction,
+        }
+
+    @classmethod
+    def from_metrics(cls, metrics: "Metrics") -> "SelectionMetricsSnapshot":
+        return cls(
+            atr=metrics.atr,
+            average_volume=metrics.average_volume,
+            momentum=metrics.momentum,
+            pct_move=metrics.pct_move,
+            relative_volume=metrics.relative_volume,
+            atr_multiple=metrics.atr_multiple,
+            upper_wick_pct=metrics.upper_wick_pct,
+            body_pct=metrics.body_pct,
+            lower_wick_pct=metrics.lower_wick_pct,
+            pct_to_high=metrics.pct_to_high,
+            pct_to_low=metrics.pct_to_low,
+            pct_to_high_break=metrics.pct_to_high_break,
+            pct_to_low_break=metrics.pct_to_low_break,
+            break_direction=float(metrics.break_direction.value),
+        )
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, object]) -> "SelectionMetricsSnapshot":
+        values: Dict[str, float] = {}
+        for key in SNAPSHOT_FIELDS:
+            raw_value = data.get(key)
+            if raw_value is None:
+                raise KeyError(f"missing '{key}' in metrics snapshot")
+            values[key] = float(raw_value)
+        return cls(
+            atr=values["atr"],
+            average_volume=values["average_volume"],
+            momentum=values["momentum"],
+            pct_move=values["pct_move"],
+            relative_volume=values["relative_volume"],
+            atr_multiple=values["atr_multiple"],
+            upper_wick_pct=values["upper_wick_pct"],
+            body_pct=values["body_pct"],
+            lower_wick_pct=values["lower_wick_pct"],
+            pct_to_high=values["pct_to_high"],
+            pct_to_low=values["pct_to_low"],
+            pct_to_high_break=values["pct_to_high_break"],
+            pct_to_low_break=values["pct_to_low_break"],
+            break_direction=values["break_direction"],
+        )
 
 
 @dataclass(slots=True)
@@ -26,22 +124,8 @@ class Metrics:
     break_direction: BreakDirection
 
     def as_dict(self) -> Dict[str, float]:
-        return {
-            "atr": self.atr,
-            "average_volume": self.average_volume,
-            "momentum": self.momentum,
-            "pct_move": self.pct_move,
-            "relative_volume": self.relative_volume,
-            "atr_multiple": self.atr_multiple,
-            "upper_wick_pct": self.upper_wick_pct,
-            "body_pct": self.body_pct,
-            "lower_wick_pct": self.lower_wick_pct,
-            "pct_to_high": self.pct_to_high,
-            "pct_to_low": self.pct_to_low,
-            "pct_to_high_break": self.pct_to_high_break,
-            "pct_to_low_break": self.pct_to_low_break,
-            "break_direction": float(self.break_direction.value),
-        }
+        snapshot = SelectionMetricsSnapshot.from_metrics(self)
+        return snapshot.to_mapping()
 
 
 class MetricsService:

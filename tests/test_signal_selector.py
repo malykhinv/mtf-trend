@@ -101,7 +101,11 @@ def test_select_allows_long_when_thresholds_met(selector: SignalSelectorService)
 
     assert not result.rejected
     assert len(result.signals) == 1
-    assert result.signals[0].side is Side.LONG
+    signal = result.signals[0]
+    assert signal.side is Side.LONG
+    assert signal.metrics_snapshot is not None
+    assert signal.metrics_snapshot.pct_move == pytest.approx(6.0)
+    assert "metrics" not in signal.metadata
 
 
 def test_select_redirects_to_short_when_long_body_growth_too_small(

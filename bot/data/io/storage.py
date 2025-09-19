@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from ...domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from ...domain.models.entities import (
@@ -15,6 +15,7 @@ from ...domain.models.entities import (
     Thresholds,
     Trade,
 )
+from ...domain.services.metrics_service import SelectionMetricsSnapshot
 from .excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
 from .excel_writer import ExcelWriter
 
@@ -240,6 +241,15 @@ class Storage:
         metadata = raw.get("metadata", {})
         if not isinstance(metadata, dict):
             metadata = {}
+        snapshot_raw = raw.get("metrics_snapshot")
+        metrics_snapshot = self._deserialize_metrics_snapshot(snapshot_raw)
+        if metrics_snapshot is None:
+            legacy_snapshot = metadata.get("metrics")
+            if isinstance(legacy_snapshot, Mapping):
+                metrics_snapshot = self._deserialize_metrics_snapshot(legacy_snapshot)
+                if metrics_snapshot is not None:
+                    metadata = dict(metadata)
+                    metadata.pop("metrics", None)
         created_at_raw = raw.get("created_at")
         updated_at_raw = raw.get("updated_at")
         timeframe_raw = raw.get("timeframe")
@@ -265,6 +275,7 @@ class Storage:
             metrics=metrics,
             allow_long=self._to_bool(raw.get("allow_long", thresholds.allow_long), thresholds.allow_long),
             allow_short=self._to_bool(raw.get("allow_short", thresholds.allow_short), thresholds.allow_short),
+            metrics_snapshot=metrics_snapshot,
             metadata=metadata,
         )
 
@@ -346,6 +357,11 @@ class Storage:
                 metric_dict["threshold"] = threshold
             metrics.append(metric_dict)
         metadata = json.dumps(signal.metadata or {}, sort_keys=True)
+        snapshot_json = None
+        if signal.metrics_snapshot is not None:
+            snapshot_json = json.dumps(
+                signal.metrics_snapshot.to_mapping(), sort_keys=True
+            )
         candle = signal.candle
         return StoredSignalRow(
             id=signal.id,
@@ -372,6 +388,7 @@ class Storage:
             candle_closed_at=candle.closed_at.isoformat(),
             thresholds_json=json.dumps(thresholds, sort_keys=True),
             metrics_json=json.dumps(metrics, sort_keys=True),
+            metrics_snapshot_json=snapshot_json,
             metadata_json=metadata,
         )
 
@@ -419,9 +436,11 @@ class Storage:
         thresholds_json = row.thresholds_json
         metrics_json = row.metrics_json
         metadata_json = row.metadata_json
+        snapshot_json = row.metrics_snapshot_json
         thresholds = self._safe_json_load(thresholds_json, {})
         metrics = self._safe_json_load(metrics_json, [])
         metadata = self._safe_json_load(metadata_json, {})
+        snapshot = self._safe_json_load(snapshot_json, None)
         candle: Dict[str, Any] = {
             "id": row.candle_id,
             "symbol": row.symbol,
@@ -453,9 +472,20 @@ class Storage:
             "allow_short": row.allow_short,
             "thresholds": thresholds,
             "metrics": metrics,
+            "metrics_snapshot": snapshot,
             "metadata": metadata,
         }
         return payload
+
+    def _deserialize_metrics_snapshot(
+        self, raw: Any
+    ) -> SelectionMetricsSnapshot | None:
+        if not isinstance(raw, Mapping):
+            return None
+        try:
+            return SelectionMetricsSnapshot.from_mapping(raw)
+        except (KeyError, TypeError, ValueError):
+            return None
 
     def _row_to_trade_payload(self, row: StoredTradeRow) -> Dict[str, Any]:
         thresholds_json = row.thresholds_snapshot_json
