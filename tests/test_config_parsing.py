@@ -1,6 +1,10 @@
 from bot.app import build_thresholds
 from bot.data.io.config_loader import AppConfig
-from bot.data.io.config_models import BinanceProviderConfig, BybitProviderConfig
+from bot.data.io.config_models import (
+    BinanceProviderConfig,
+    BybitProviderConfig,
+    ProviderKind,
+)
 from bot.domain.enums import Timeframe
 
 
@@ -146,6 +150,7 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
 
     binance_cfg = providers["binance"]
     assert isinstance(binance_cfg, BinanceProviderConfig)
+    assert binance_cfg.kind is ProviderKind.BINANCE
     assert binance_cfg.api_base == "https://fapi.binance.com"
     assert binance_cfg.ws_base == "wss://fstream.binance.com/ws"
     assert binance_cfg.rate_limit_per_minute == 1200
@@ -157,6 +162,7 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
 
     bybit_cfg = providers["bybit"]
     assert isinstance(bybit_cfg, BybitProviderConfig)
+    assert bybit_cfg.kind is ProviderKind.BYBIT
     assert bybit_cfg.api_key_env == "BYBIT_API_KEY"
     assert bybit_cfg.api_secret_env == "BYBIT_API_SECRET"
     assert bybit_cfg.get_api_key(config.env) == "from-env"

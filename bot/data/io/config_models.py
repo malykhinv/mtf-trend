@@ -3,7 +3,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Iterable, Mapping, Sequence, TypeVar
+from enum import Enum
+from typing import Any, Iterable, Mapping, Sequence, Tuple, TypeVar
 
 from ...domain.enums import Timeframe
 from ...domain.models.entities import ThresholdMetric as DomainThresholdMetric
@@ -182,12 +183,19 @@ class ProviderCredential:
         return None
 
 
+class ProviderKind(str, Enum):
+    GENERIC = "generic"
+    BINANCE = "binance"
+    BYBIT = "bybit"
+
+
 ProviderConfigT = TypeVar("ProviderConfigT", bound="ExchangeProviderConfig")
 
 
 @dataclass(slots=True)
 class ExchangeProviderConfig:
     name: str
+    kind: ProviderKind = field(init=False, default=ProviderKind.GENERIC)
     api_base: str
     ws_base: str
     rate_limit_per_minute: int
@@ -214,7 +222,7 @@ class ExchangeProviderConfig:
         api_secret = ProviderCredential.from_mapping(
             raw, "api_secret", f"{prefix}_API_SECRET"
         )
-        return cls(
+        instance = cls(
             name=name,
             api_base=api_base,
             ws_base=ws_base,
@@ -223,6 +231,7 @@ class ExchangeProviderConfig:
             api_key=api_key,
             api_secret=api_secret,
         )
+        return instance
 
     def get_api_key(self, env: Mapping[str, str] | None = None) -> str | None:
         return self.api_key.resolve(env)
@@ -241,17 +250,16 @@ class ExchangeProviderConfig:
 
 @dataclass(slots=True)
 class BinanceProviderConfig(ExchangeProviderConfig):
-    pass
+    kind: ProviderKind = field(init=False, default=ProviderKind.BINANCE)
 
 
 @dataclass(slots=True)
 class BybitProviderConfig(ExchangeProviderConfig):
-    pass
+    kind: ProviderKind = field(init=False, default=ProviderKind.BYBIT)
 
-
-_PROVIDER_CONFIG_TYPES: dict[str, type[ExchangeProviderConfig]] = {
-    "binance": BinanceProviderConfig,
-    "bybit": BybitProviderConfig,
+_PROVIDER_CONFIG_TYPES: dict[str, tuple[ProviderKind, type[ExchangeProviderConfig]]] = {
+    "binance": (ProviderKind.BINANCE, BinanceProviderConfig),
+    "bybit": (ProviderKind.BYBIT, BybitProviderConfig),
 }
 
 
@@ -264,9 +272,13 @@ def parse_exchange_provider_configs(
     for name, value in raw.items():
         if not isinstance(name, str):
             continue
-        config_cls = _PROVIDER_CONFIG_TYPES.get(name.lower(), ExchangeProviderConfig)
+        kind, config_cls = _PROVIDER_CONFIG_TYPES.get(
+            name.lower(), (ProviderKind.GENERIC, ExchangeProviderConfig)
+        )
         mapping = value if isinstance(value, Mapping) else {}
-        providers[name] = config_cls.from_mapping(name, mapping)
+        config = config_cls.from_mapping(name, mapping)
+        config.kind = kind
+        providers[name] = config
     return providers
 
 
