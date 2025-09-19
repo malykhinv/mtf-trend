@@ -4,7 +4,8 @@ import asyncio
 import hmac
 import time
 from hashlib import sha256
-from typing import Any, AsyncIterator, Dict, Iterable, List
+from dataclasses import dataclass
+from typing import Any, AsyncIterator, Dict, Iterable, List, Mapping, Sequence
 from urllib.parse import urlencode
 
 try:
@@ -14,7 +15,50 @@ except ImportError:  # pragma: no cover
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
+from ..models import DepositSnapshot
 from .base import BaseExchangeProvider
+
+
+@dataclass(slots=True)
+class _BybitCoinBalance:
+    asset: str
+    wallet_balance: float | None
+    available_to_withdraw: float | None
+    equity: float | None
+    available_balance: float | None
+    raw: Mapping[str, Any] | None
+
+    @classmethod
+    def from_raw(cls, raw: Mapping[str, Any]) -> "_BybitCoinBalance":
+        asset = str(raw.get("coin") or "").upper()
+        wallet_balance = _to_float(raw.get("walletBalance"))
+        available_to_withdraw = _to_float(raw.get("availableToWithdraw"))
+        equity = _to_float(raw.get("equity"))
+        available_balance = _to_float(raw.get("availableBalance"))
+        return cls(
+            asset=asset,
+            wallet_balance=wallet_balance,
+            available_to_withdraw=available_to_withdraw,
+            equity=equity,
+            available_balance=available_balance,
+            raw=raw,
+        )
+
+
+@dataclass(slots=True)
+class _BybitAccountBalance:
+    coins: Sequence[_BybitCoinBalance]
+    raw: Mapping[str, Any] | None
+
+    @classmethod
+    def from_raw(cls, raw: Mapping[str, Any]) -> "_BybitAccountBalance":
+        coins_raw = raw.get("coin")
+        coins: list[_BybitCoinBalance] = []
+        if isinstance(coins_raw, Sequence):
+            for item in coins_raw:
+                if isinstance(item, Mapping):
+                    coins.append(_BybitCoinBalance.from_raw(item))
+        return cls(coins=tuple(coins), raw=raw)
 
 
 class BybitPerpetualProvider(BaseExchangeProvider):
@@ -142,40 +186,58 @@ class BybitPerpetualProvider(BaseExchangeProvider):
                 volumes[symbol.upper()] = volume
         return volumes
 
-    async def update_deposit(self) -> dict[str, Any]:
+    async def update_deposit(self) -> DepositSnapshot:
         await self.ensure_rate_limit()
         endpoint = f"{self._api_base}/v5/account/wallet-balance"
         params = {"accountType": "UNIFIED"}
         response = await self._authenticated_get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        result = data.get("result", {})
-        entries = result.get("list", [])
-        usdt_balance = 0.0
+        result_raw = data.get("result")
+        entries_raw = result_raw.get("list") if isinstance(result_raw, Mapping) else None
+        entries: Sequence[_BybitAccountBalance] = []
+        if isinstance(entries_raw, Sequence):
+            parsed: list[_BybitAccountBalance] = []
+            for entry in entries_raw:
+                if isinstance(entry, Mapping):
+                    parsed.append(_BybitAccountBalance.from_raw(entry))
+            entries = tuple(parsed)
+
+        target_asset = "USDT"
+        selected_coin: _BybitCoinBalance | None = None
+        raw_coin: Mapping[str, Any] | None = None
         for entry in entries:
-            coins = entry.get("coin")
-            if isinstance(coins, list):
-                for coin in coins:
-                    if coin.get("coin") == "USDT":
-                        for key in (
-                            "walletBalance",
-                            "availableToWithdraw",
-                            "equity",
-                            "availableBalance",
-                        ):
-                            value = coin.get(key)
-                            if value is not None:
-                                try:
-                                    usdt_balance = float(value)
-                                    break
-                                except (TypeError, ValueError):
-                                    continue
-                        if usdt_balance:
-                            break
-            if usdt_balance:
+            selected_coin = next((coin for coin in entry.coins if coin.asset == target_asset), None)
+            if selected_coin:
+                raw_coin = selected_coin.raw
                 break
-        return {"asset": "USDT", "balance": usdt_balance}
+
+        amount = _select_bybit_amount(selected_coin)
+        return DepositSnapshot(asset=target_asset, balance=amount, raw=raw_coin)
 
     async def close(self) -> None:
         if self._session:
             await self._session.aclose()
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _select_bybit_amount(balance: _BybitCoinBalance | None) -> float:
+    if balance is None:
+        return 0.0
+    for value in (
+        balance.available_to_withdraw,
+        balance.available_balance,
+        balance.wallet_balance,
+        balance.equity,
+    ):
+        if value is not None:
+            return value
+    return 0.0

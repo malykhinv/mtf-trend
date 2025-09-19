@@ -10,6 +10,7 @@ from ...data.providers.base import BaseExchangeProvider
 from ...data.repositories.signal_repository import SignalRepository
 from ...data.repositories.state_repository import StateRepository
 from ...data.repositories.trade_repository import TradeRepository
+from ...data.models import DepositSnapshot
 from ...utils.logging import get_logger
 from ...utils.clock import utcnow
 from .dedup_policy import DeduplicationPolicy
@@ -43,8 +44,9 @@ class BacktestRunner:
         self._dedup = dedup_policy
         self._window = window
         self._logger = get_logger(self.__class__.__name__)
-        self._deposit_usdt = state_repository.get_deposit()
-        self._deposit_asset = state_repository.get_deposit_asset()
+        initial_asset = state_repository.get_deposit_asset()
+        initial_balance = state_repository.get_deposit()
+        self._deposit = DepositSnapshot(asset=initial_asset, balance=initial_balance)
         self._last_deposit_update = state_repository.get_last_deposit_update()
 
     async def run(
@@ -122,46 +124,29 @@ class BacktestRunner:
 
     async def refresh_deposit(
         self, provider: BaseExchangeProvider, force: bool = False
-    ) -> None:
+    ) -> DepositSnapshot:
         if not force and self._last_deposit_update:
             delta = (utcnow() - self._last_deposit_update).total_seconds()
             if delta < 3600:
-                return
-        balance = await provider.update_deposit()
-        asset, amount = self._extract_deposit(balance)
+                return self._deposit
+        snapshot = await provider.update_deposit()
+        asset = snapshot.asset or self._deposit.asset
+        amount = snapshot.balance
+        normalized = DepositSnapshot(asset=asset, balance=amount, raw=snapshot.raw)
         timestamp = utcnow()
-        self._deposit_usdt = amount
-        self._deposit_asset = asset
+        self._deposit = normalized
         self._last_deposit_update = timestamp
         self._state.update_deposit(amount, asset, timestamp)
-
-    def _extract_deposit(self, balance: Mapping[str, Any]) -> tuple[str, float]:
-        asset = str(balance.get("asset") or self._deposit_asset or "USDT")
-        for key in ("balance", "availableBalance", "available", "amount", "equity"):
-            value = self._to_float(balance.get(key))
-            if value is not None:
-                return asset, value
-        fallback = self._to_float(balance.get(asset))
-        if fallback is not None:
-            return asset, fallback
-        return self._deposit_asset or "USDT", self._deposit_usdt
-
-    @staticmethod
-    def _to_float(value: Any) -> float | None:
-        if value is None:
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
+        return self._deposit
 
     def _calculate_trade_size(self) -> float:
-        return max(10.0, 0.05 * self._deposit_usdt) if self._deposit_usdt > 0 else 10.0
+        balance = self._deposit.balance
+        return max(10.0, 0.05 * balance) if balance > 0 else 10.0
 
     def _deposit_snapshot(self) -> Dict[str, Any]:
         return {
-            "asset": self._deposit_asset,
-            "balance": self._deposit_usdt,
+            "asset": self._deposit.asset,
+            "balance": self._deposit.balance,
             "updated_at": self._last_deposit_update.isoformat() if self._last_deposit_update else None,
         }
 

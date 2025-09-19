@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from bot.data.io.storage import Storage
+from bot.data.models import DepositSnapshot
 from bot.data.repositories.signal_repository import SignalRepository
 from bot.data.repositories.state_repository import StateRepository
 from bot.data.repositories.trade_repository import TradeRepository
@@ -36,8 +37,8 @@ class FakeProvider:
             return queue.popleft()
         return []
 
-    async def update_deposit(self) -> dict[str, float | str]:
-        return {"asset": "USDT", "balance": 10_000.0}
+    async def update_deposit(self) -> DepositSnapshot:
+        return DepositSnapshot(asset="USDT", balance=10_000.0)
 
 
 class FakeClock:
@@ -292,8 +293,8 @@ async def _assert_timeframe_cadence(tmp_path, monkeypatch) -> None:
             )
             return [candle]
 
-        async def update_deposit(self) -> dict[str, float | str]:
-            return {"asset": "USDT", "balance": 10_000.0}
+        async def update_deposit(self) -> DepositSnapshot:
+            return DepositSnapshot(asset="USDT", balance=10_000.0)
 
     def _seconds_for_timeframe(timeframe: Timeframe) -> int:
         return {

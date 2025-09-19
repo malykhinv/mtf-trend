@@ -1,5 +1,6 @@
 import pytest
 
+from bot.data.models import DepositSnapshot
 from bot.data.providers.base import BaseExchangeProvider
 from bot.domain.enums import Exchange, Timeframe
 
@@ -23,7 +24,7 @@ class _StubProvider(BaseExchangeProvider):
     async def get_24h_quote_volume(self):  # pragma: no cover - unused
         raise NotImplementedError
 
-    async def update_deposit(self):  # pragma: no cover - unused
+    async def update_deposit(self) -> DepositSnapshot:  # pragma: no cover - unused
         raise NotImplementedError
 
 
