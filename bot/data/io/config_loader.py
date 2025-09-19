@@ -13,10 +13,13 @@ from .config_models import (
     DedupConfig,
     ExchangeProviderConfig,
     LiveConfig,
+    LoggingConfig,
     MetricsConfig,
     ModeSelectionOverrides,
+    StorageConfig,
     SymbolSelectionConfig,
     ThresholdsConfig,
+    TimeConfig,
     parse_exchange_provider_configs,
     parse_symbol_provider_mapping,
 )
@@ -34,21 +37,37 @@ class AppConfig:
     providers: dict[str, ExchangeProviderConfig] = field(init=False)
     metrics: MetricsConfig = field(init=False)
     dedup: DedupConfig = field(init=False)
+    storage: StorageConfig = field(init=False)
+    logging: LoggingConfig = field(init=False)
+    time: TimeConfig = field(init=False)
+    _default_mode_raw: Any = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self.thresholds = ThresholdsConfig.from_raw(self.get("thresholds", {}))
-        self.symbol_selection = SymbolSelectionConfig.from_raw(
-            self.get("symbols.selection", {})
-        )
-        self.symbol_provider_mapping = parse_symbol_provider_mapping(
-            self.get("symbols.providers", {})
-        )
-        self.backtest = BacktestConfig.from_raw(self.get("backtest", {}))
-        self.live = LiveConfig.from_raw(self.get("live", {}))
-        self.metrics = MetricsConfig.from_raw(self.get("metrics", {}))
-        self.dedup = DedupConfig.from_raw(self.get("dedup", {}))
+        raw = self.raw
+
+        self.storage = StorageConfig.from_raw(raw.get("storage"))
+        self.logging = LoggingConfig.from_raw(raw.get("logging"))
+        self.time = TimeConfig.from_raw(raw.get("time"))
+        self._default_mode_raw = raw.get("mode")
+
+        thresholds_raw = raw.get("thresholds", {})
+        self.thresholds = ThresholdsConfig.from_raw(thresholds_raw)
+
+        symbols_raw = raw.get("symbols")
+        selection_raw: Any = {}
+        providers_raw: Any = {}
+        if isinstance(symbols_raw, Mapping):
+            selection_raw = symbols_raw.get("selection", {})
+            providers_raw = symbols_raw.get("providers", {})
+        self.symbol_selection = SymbolSelectionConfig.from_raw(selection_raw)
+        self.symbol_provider_mapping = parse_symbol_provider_mapping(providers_raw)
+
+        self.backtest = BacktestConfig.from_raw(raw.get("backtest"))
+        self.live = LiveConfig.from_raw(raw.get("live"))
+        self.metrics = MetricsConfig.from_raw(raw.get("metrics"))
+        self.dedup = DedupConfig.from_raw(raw.get("dedup"))
         env_values: dict[str, str] = {}
-        env_raw = self.get("env", {})
+        env_raw = raw.get("env", {})
         if isinstance(env_raw, Mapping):
             for key, value in env_raw.items():
                 if not isinstance(key, str):
@@ -57,22 +76,8 @@ class AppConfig:
                     continue
                 env_values[key] = str(value)
         self.env = env_values
-        self.providers = parse_exchange_provider_configs(self.get("providers", {}))
-
-    def get(self, path: str, default: Any = None) -> Any:
-        cursor: Any = self.raw
-        for part in path.split('.'):
-            if not isinstance(cursor, Mapping) or part not in cursor:
-                return default
-            cursor = cursor[part]
-        return cursor
-
-    @property
-    def timezone_name(self) -> str:
-        value = self.get("time.zone")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-        return "UTC"
+        providers_raw = raw.get("providers", {})
+        self.providers = parse_exchange_provider_configs(providers_raw)
 
     def selection_overrides_for(self, mode: AppMode) -> ModeSelectionOverrides:
         if mode is AppMode.BACKTEST:
@@ -80,6 +85,21 @@ class AppConfig:
         if mode is AppMode.LIVE:
             return self.live.selection
         return ModeSelectionOverrides()
+
+    @property
+    def default_mode(self) -> AppMode:
+        parsed = _parse_optional_mode(self._default_mode_raw)
+        if parsed is not None:
+            return parsed
+        return AppMode.BACKTEST
+
+
+def _parse_optional_mode(value: Any) -> AppMode | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return AppMode.parse(value)
 
 
 class ConfigLoader:

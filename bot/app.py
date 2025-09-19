@@ -113,8 +113,7 @@ def load_config() -> AppConfig:
 
 
 def init_storage(config: AppConfig) -> Storage:
-    path_setting = config.get("storage.path", "var/state.xlsx")
-    storage_path = Path(path_setting)
+    storage_path = Path(config.storage.path)
     if storage_path.suffix.lower() != ".xlsx":
         storage_path = storage_path.with_suffix(".xlsx")
     storage_path.parent.mkdir(parents=True, exist_ok=True)
@@ -494,18 +493,13 @@ def resolve_mode(config: AppConfig, cli_args: Sequence[str] | None = None) -> Ap
     if cli_mode is not None:
         return cli_mode
 
-    config_mode_raw = config.get("mode")
-    if isinstance(config_mode_raw, str) and not config_mode_raw.strip():
-        config_mode_raw = None
-    if config_mode_raw is not None:
-        return AppMode.parse(config_mode_raw)
-
-    return AppMode.BACKTEST
+    config_mode = config.time.mode or config.default_mode
+    return config_mode
 
 
 async def main_async(cli_args: Sequence[str] | None = None) -> None:
     config = load_config()
-    timezone_name = config.timezone_name
+    timezone_name = config.time.zone
     timezone_warning: str | None = None
     try:
         app_timezone = ZoneInfo(timezone_name)
@@ -517,7 +511,7 @@ async def main_async(cli_args: Sequence[str] | None = None) -> None:
             else ""
         )
     init_clock(app_timezone)
-    configure_logging(config.get("logging.level", "INFO"))
+    configure_logging(config.logging.level)
     logger = get_logger("app")
     if timezone_warning:
         logger.warning(timezone_warning)
