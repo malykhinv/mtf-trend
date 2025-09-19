@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, Mapping, Type, TypeVar
 
-from ..enums import TradeStatus
+from ..enums import Timeframe, TradeStatus
 
 if TYPE_CHECKING:
     from .entities import ThresholdMetric
@@ -24,6 +24,49 @@ class _SerializableDataclass:
     @classmethod
     def from_mapping(cls: Type[T], raw: Mapping[str, Any] | None) -> T | None:
         raise NotImplementedError
+
+@dataclass(slots=True)
+class ThresholdsMetadata(_SerializableDataclass):
+    timeframe: Timeframe | None = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        if self.timeframe is not None:
+            data["timeframe"] = (
+                self.timeframe.value
+                if isinstance(self.timeframe, Timeframe)
+                else str(self.timeframe)
+            )
+        if self.extra:
+            data.update(self.extra)
+        return data
+
+    @classmethod
+    def from_mapping(
+        cls, raw: Mapping[str, Any] | None
+    ) -> "ThresholdsMetadata" | None:
+        if not raw or not isinstance(raw, Mapping):
+            return None
+        extra: Dict[str, Any] = {
+            key: raw[key] for key in raw.keys() - {"timeframe"}
+        }
+        timeframe_value: Timeframe | None = None
+        if "timeframe" in raw:
+            timeframe_raw = raw["timeframe"]
+            if isinstance(timeframe_raw, Timeframe):
+                timeframe_value = timeframe_raw
+            elif isinstance(timeframe_raw, str):
+                try:
+                    timeframe_value = Timeframe(timeframe_raw)
+                except ValueError:
+                    extra.setdefault("timeframe", timeframe_raw)
+            else:
+                extra.setdefault("timeframe", timeframe_raw)
+        if timeframe_value is None and not extra:
+            return None
+        return cls(timeframe=timeframe_value, extra=extra)
+
 
 @dataclass(slots=True)
 class ThresholdMetricMetadata(_SerializableDataclass):

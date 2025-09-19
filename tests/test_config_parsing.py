@@ -7,6 +7,7 @@ from bot.data.io.config_models import (
     ProviderKind,
 )
 from bot.domain.enums import Timeframe
+from bot.domain.models.metadata import ThresholdsMetadata
 
 
 def test_symbol_selection_and_overrides_are_typed() -> None:
@@ -90,17 +91,22 @@ def test_build_thresholds_uses_typed_models() -> None:
                 "default": {
                     "min_relative_volume": "1.5",
                     "allow_long": False,
-                    "short_pct_move_ranges": [
-                        {"min": 0.5, "max": 1.0},
-                    ],
                     "metrics": [
                         {"name": "rsi", "min_value": "5", "max_value": 60},
                     ],
+                    "metadata": {
+                        "timeframe": "15m",
+                        "short_pct_move_ranges": [
+                            {"min": 0.5, "max": 1.0},
+                        ],
+                        "note": "default",
+                    },
                 },
                 "symbols": {
                     "ETHUSDT": {
                         "min_pct_move": "0.25",
                         "allow_short": False,
+                        "metadata": {"timeframe": "5m"},
                     }
                 },
             }
@@ -116,10 +122,17 @@ def test_build_thresholds_uses_typed_models() -> None:
     assert default_cfg.metrics[0].name == "rsi"
     assert default_cfg.metrics[0].min_value == 5.0
     assert default_cfg.metrics[0].max_value == 60.0
+    assert isinstance(default_cfg.metadata, ThresholdsMetadata)
+    assert default_cfg.metadata is not None
+    assert default_cfg.metadata.timeframe is Timeframe.M15
+    assert default_cfg.metadata.extra["note"] == "default"
 
     eth_cfg = thresholds["ETHUSDT"]
     assert eth_cfg.min_pct_move == 0.25
     assert eth_cfg.allow_short is False
+    assert isinstance(eth_cfg.metadata, ThresholdsMetadata)
+    assert eth_cfg.metadata is not None
+    assert eth_cfg.metadata.timeframe is Timeframe.M5
 
 
 def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None:
