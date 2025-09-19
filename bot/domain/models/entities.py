@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
+from .metadata import SignalMetadata, TradeMetadata
 
 
 if TYPE_CHECKING:
@@ -54,7 +55,7 @@ class Thresholds:
     allow_long: bool = True
     allow_short: bool = True
     metrics: List[ThresholdMetric] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: SignalMetadata | None = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -84,7 +85,7 @@ class Signal:
     allow_long: bool = True
     allow_short: bool = True
     metrics_snapshot: SelectionMetricsSnapshot | None = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: SignalMetadata | None = None
 
 
 @dataclass(slots=True)
@@ -114,4 +115,4 @@ class Trade:
     allow_long: bool = True
     allow_short: bool = True
     thresholds_snapshot: Optional[Thresholds] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    metadata: TradeMetadata | None = None

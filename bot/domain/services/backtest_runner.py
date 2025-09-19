@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Sequence
+from typing import Sequence
 
 from ..enums import Side, Timeframe, TradeStatus
 from ..models.entities import Candle, Signal, Thresholds, Trade
+from ..models.metadata import (
+    DepositSnapshotMetadata,
+    SignalMetadata,
+    TradeMetadata,
+)
 from ...data.providers.base import BaseExchangeProvider
 from ...data.repositories.signal_repository import SignalRepository
 from ...data.repositories.state_repository import StateRepository
@@ -78,7 +83,13 @@ class BacktestRunner:
                 if resolved_timeframe:
                     signal.timeframe = resolved_timeframe
                     signal.candle.timeframe = resolved_timeframe
-                    signal.metadata.setdefault("timeframe", resolved_timeframe.value)
+                    if signal.metadata is None:
+                        signal.metadata = SignalMetadata(
+                            symbol=signal.candle.symbol,
+                            timeframe=resolved_timeframe.value,
+                        )
+                    else:
+                        signal.metadata.timeframe = resolved_timeframe.value
                 accepted, key = self._dedup.should_accept(signal)
                 if not accepted:
                     self._logger.debug("Skipping duplicate signal %s", key)
@@ -87,7 +98,9 @@ class BacktestRunner:
                 snapshot = self._deposit_snapshot()
                 trade_size = self._calculate_trade_size()
                 timestamp = utcnow()
-                source_signal_id = signal.metadata.get("source_signal_id") or signal.id
+                source_signal_id = (
+                    signal.metadata.source_signal_id if signal.metadata else None
+                ) or signal.id
                 trade = Trade(
                     id=signal.id,
                     signal_id=signal.id,
@@ -105,7 +118,7 @@ class BacktestRunner:
                     allow_long=signal.allow_long,
                     allow_short=signal.allow_short,
                     thresholds_snapshot=signal.thresholds,
-                    metadata={"mode": "backtest", "deposit_snapshot": snapshot},
+                    metadata=TradeMetadata(mode="backtest", deposit_snapshot=snapshot),
                 )
                 self._tp_sl_service.assign(signal, trade)
                 trade.opened_at = signal.candle.closed_at
@@ -142,12 +155,13 @@ class BacktestRunner:
         balance = self._deposit.balance
         return max(10.0, 0.05 * balance) if balance > 0 else 10.0
 
-    def _deposit_snapshot(self) -> Dict[str, Any]:
-        return {
-            "asset": self._deposit.asset,
-            "balance": self._deposit.balance,
-            "updated_at": self._last_deposit_update.isoformat() if self._last_deposit_update else None,
-        }
+    def _deposit_snapshot(self) -> DepositSnapshotMetadata:
+        updated_at = self._last_deposit_update
+        return DepositSnapshotMetadata(
+            asset=self._deposit.asset,
+            balance=self._deposit.balance,
+            updated_at=updated_at,
+        )
 
     def _update_used_amount(self) -> None:
         open_amount = sum(
@@ -189,14 +203,12 @@ class BacktestRunner:
             trade.exit_price = exit_price
             trade.pnl = trade.size * (result_pct / 100)
             trade.pnl_pct = result_pct
-            backtest_meta = trade.metadata.setdefault("backtest", {})
-            backtest_meta.update(
-                {
-                    "result_pct": result_pct,
-                    "pct_to_high_break": pct_to_high_break,
-                    "pct_to_low_break": pct_to_low_break,
-                }
-            )
+            if trade.metadata is None:
+                trade.metadata = TradeMetadata(mode="backtest")
+            backtest_meta = trade.metadata.ensure_backtest()
+            backtest_meta.result_pct = result_pct
+            backtest_meta.pct_to_high_break = pct_to_high_break
+            backtest_meta.pct_to_low_break = pct_to_low_break
             trade.updated_at = utcnow()
             return
 

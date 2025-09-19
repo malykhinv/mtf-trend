@@ -6,6 +6,7 @@ from typing import Iterable, List, Sequence
 
 from ..enums import BreakDirection, Side
 from ..models.entities import Candle, Signal, Thresholds
+from ..models.metadata import EvaluationMetadata, SignalMetadata
 from .metrics_service import Metrics, MetricsService, SelectionMetricsSnapshot
 from ...utils import ids
 from ...utils.clock import utcnow
@@ -182,6 +183,17 @@ class SignalSelectorService:
             direction = BreakDirection.HIGH_FIRST if side == Side.LONG else BreakDirection.LOW_FIRST
         candle = candles[-1]
         timestamp = utcnow()
+        evaluations_metadata = [
+            EvaluationMetadata(
+                name=evaluation.name,
+                value=evaluation.value,
+                passed=evaluation.passed,
+                threshold=asdict(evaluation.threshold)
+                if evaluation.threshold is not None
+                else None,
+            )
+            for evaluation in evaluations
+        ]
         signal = Signal(
             id=ids.uuid_str(),
             candle_id=candle.id,
@@ -198,11 +210,11 @@ class SignalSelectorService:
             allow_long=allow_long,
             allow_short=allow_short,
             metrics_snapshot=metrics_snapshot,
-            metadata={
-                "evaluations": [asdict(evaluation) for evaluation in evaluations],
-                "symbol": symbol,
-                "timeframe": candle.timeframe.value,
-            },
+            metadata=SignalMetadata(
+                evaluations=evaluations_metadata,
+                symbol=symbol,
+                timeframe=candle.timeframe.value,
+            ),
         )
         return SelectionResult(signals=[signal], rejected=[])
 

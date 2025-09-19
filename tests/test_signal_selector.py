@@ -105,7 +105,8 @@ def test_select_allows_long_when_thresholds_met(selector: SignalSelectorService)
     assert signal.side is Side.LONG
     assert signal.metrics_snapshot is not None
     assert signal.metrics_snapshot.pct_move == pytest.approx(6.0)
-    assert "metrics" not in signal.metadata
+    assert signal.metadata is not None
+    assert "metrics" not in signal.metadata.extra
 
 
 def test_select_redirects_to_short_when_long_body_growth_too_small(
@@ -282,4 +283,5 @@ def test_select_includes_timeframe_metadata(selector: SignalSelectorService) -> 
     assert len(result.signals) == 1
     signal = result.signals[0]
     assert signal.timeframe is Timeframe.M5
-    assert signal.metadata["timeframe"] == Timeframe.M5.value
+    assert signal.metadata is not None
+    assert signal.metadata.timeframe == Timeframe.M5.value

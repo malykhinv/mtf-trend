@@ -16,6 +16,7 @@ from bot.data.repositories.state_repository import StateRepository
 from bot.data.repositories.trade_repository import TradeRepository
 from bot.domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from bot.domain.models.entities import Candle, Signal, Thresholds, Trade
+from bot.domain.models.metadata import SignalMetadata, TradeMetadata
 from bot.domain.services.metrics_service import SelectionMetricsSnapshot
 
 
@@ -78,7 +79,7 @@ def _build_signal(identifier: str, score: float, triggered_at: datetime) -> Sign
         allow_long=True,
         allow_short=True,
         metrics_snapshot=snapshot,
-        metadata={"note": "initial"},
+        metadata=SignalMetadata(extra={"note": "initial"}),
     )
 
 
@@ -99,7 +100,7 @@ def _build_trade(identifier: str, opened_at: datetime) -> Trade:
         created_at=opened_at,
         allow_long=True,
         allow_short=True,
-        metadata={"note": "initial"},
+        metadata=TradeMetadata(extra={"note": "initial"}),
     )
 
 
@@ -126,7 +127,9 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert loaded_signals[signal.id].triggered_at == signal.triggered_at
     assert loaded_signals[signal.id].triggered_at.tzinfo is not None
     assert loaded_signals[signal.id].metrics_snapshot == signal.metrics_snapshot
-    assert "metrics" not in loaded_signals[signal.id].metadata
+    assert loaded_signals[signal.id].metadata is not None
+    assert "metrics" not in loaded_signals[signal.id].metadata.extra
+    assert loaded_signals[signal.id].metadata.extra.get("note") == "initial"
 
     stored_rows = storage._writer.read_signals()
     assert stored_rows and isinstance(stored_rows[0], StoredSignalRow)
@@ -179,6 +182,8 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
     loaded_trades = {loaded.id: loaded for loaded in storage.load_trades()}
     assert loaded_trades[trade.id].opened_at == trade.opened_at
     assert loaded_trades[trade.id].opened_at and loaded_trades[trade.id].opened_at.tzinfo is not None
+    assert loaded_trades[trade.id].metadata is not None
+    assert loaded_trades[trade.id].metadata.extra.get("note") == "initial"
 
     rows = _read_sheet_rows(workbook_path, "Trades")
     assert len(rows) == 1
