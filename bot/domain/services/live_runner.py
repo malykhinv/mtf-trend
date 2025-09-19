@@ -14,6 +14,7 @@ from ...utils.logging import get_logger
 from ...utils.clock import utcnow
 from ..enums import Timeframe, TradeStatus
 from ..models.entities import Candle, Signal, Thresholds, Trade
+from ..models.metadata import DepositSnapshotMetadata, TradeMetadata
 from .dedup_policy import DeduplicationPolicy
 from .selector_service import SignalSelectorService
 from .tp_sl_service import TpSlService
@@ -60,7 +61,14 @@ class LiveTradingRunner:
         snapshot = await self.refresh_deposit()
         trade_size = self._calculate_trade_size()
         timestamp = utcnow()
-        source_signal_id = signal.metadata.get("source_signal_id") or signal.id
+        source_signal_id = (
+            signal.metadata.source_signal_id if signal.metadata else None
+        ) or signal.id
+        snapshot_metadata = DepositSnapshotMetadata(
+            asset=snapshot.asset,
+            balance=snapshot.balance,
+            updated_at=self._last_deposit_update,
+        )
         trade = Trade(
             id=signal.id,
             signal_id=signal.id,
@@ -78,16 +86,7 @@ class LiveTradingRunner:
             allow_long=signal.allow_long,
             allow_short=signal.allow_short,
             thresholds_snapshot=signal.thresholds,
-            metadata={
-                "mode": "live",
-                "deposit_snapshot": {
-                    "asset": snapshot.asset,
-                    "balance": snapshot.balance,
-                    "updated_at": self._last_deposit_update.isoformat()
-                    if self._last_deposit_update
-                    else None,
-                },
-            },
+            metadata=TradeMetadata(mode="live", deposit_snapshot=snapshot_metadata),
         )
         self._tp_sl_service.assign(signal, trade)
         self._signals.save(signal)
@@ -150,10 +149,12 @@ class LiveTradingRunner:
                         else None
                     )
                     trade.updated_at = utcnow()
-                    live_meta = trade.metadata.setdefault("live", {})
+                    if trade.metadata is None:
+                        trade.metadata = TradeMetadata(mode="live")
+                    live_meta = trade.metadata.ensure_live()
                     if result_pct is not None:
-                        live_meta["result_pct"] = result_pct
-                    live_meta["closed_status"] = status.value
+                        live_meta.result_pct = result_pct
+                    live_meta.closed_status = status
                     self._trades.save(trade)
                     self._update_used_amount()
                     return

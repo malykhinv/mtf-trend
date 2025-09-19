@@ -15,6 +15,7 @@ from ...domain.models.entities import (
     Thresholds,
     Trade,
 )
+from ...domain.models.metadata import SignalMetadata, TradeMetadata
 from ...domain.services.metrics_service import SelectionMetricsSnapshot
 from .excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
 from .excel_writer import ExcelWriter
@@ -238,18 +239,16 @@ class Storage:
             for metric_raw in metrics_raw:
                 if isinstance(metric_raw, dict) and "name" in metric_raw:
                     metrics.append(self._deserialize_signal_metric(metric_raw))
-        metadata = raw.get("metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {}
+        metadata_raw = raw.get("metadata")
+        metadata_dict = dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}
         snapshot_raw = raw.get("metrics_snapshot")
         metrics_snapshot = self._deserialize_metrics_snapshot(snapshot_raw)
         if metrics_snapshot is None:
-            legacy_snapshot = metadata.get("metrics")
+            legacy_snapshot = metadata_dict.get("metrics")
             if isinstance(legacy_snapshot, Mapping):
                 metrics_snapshot = self._deserialize_metrics_snapshot(legacy_snapshot)
                 if metrics_snapshot is not None:
-                    metadata = dict(metadata)
-                    metadata.pop("metrics", None)
+                    metadata_dict.pop("metrics", None)
         created_at_raw = raw.get("created_at")
         updated_at_raw = raw.get("updated_at")
         timeframe_raw = raw.get("timeframe")
@@ -276,7 +275,7 @@ class Storage:
             allow_long=self._to_bool(raw.get("allow_long", thresholds.allow_long), thresholds.allow_long),
             allow_short=self._to_bool(raw.get("allow_short", thresholds.allow_short), thresholds.allow_short),
             metrics_snapshot=metrics_snapshot,
-            metadata=metadata,
+            metadata=SignalMetadata.from_mapping(metadata_dict),
         )
 
     def deserialize_trade(self, raw: Dict[str, Any]) -> Trade:
@@ -285,9 +284,8 @@ class Storage:
             if raw.get("thresholds_snapshot")
             else None
         )
-        metadata = raw.get("metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {}
+        metadata_raw = raw.get("metadata")
+        metadata_dict = dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}
         created_at_raw = raw.get("created_at")
         updated_at_raw = raw.get("updated_at")
         timeframe_raw = raw.get("timeframe")
@@ -300,14 +298,12 @@ class Storage:
                 except ValueError:
                     timeframe = None
         if timeframe is None:
-            meta = raw.get("metadata")
-            if isinstance(meta, dict):
-                meta_tf = meta.get("timeframe")
-                if isinstance(meta_tf, str):
-                    try:
-                        timeframe = Timeframe(meta_tf)
-                    except ValueError:
-                        timeframe = None
+            meta_tf = metadata_dict.get("timeframe")
+            if isinstance(meta_tf, str):
+                try:
+                    timeframe = Timeframe(meta_tf)
+                except ValueError:
+                    timeframe = None
         source_signal_id = raw.get("source_signal_id") or raw.get("signal_id")
         trade = Trade(
             id=raw["id"],
@@ -335,7 +331,7 @@ class Storage:
             allow_long=self._to_bool(raw.get("allow_long", True)),
             allow_short=self._to_bool(raw.get("allow_short", True)),
             thresholds_snapshot=thresholds_snapshot,
-            metadata=metadata,
+            metadata=TradeMetadata.from_mapping(metadata_dict),
         )
         return trade
 
@@ -356,7 +352,7 @@ class Storage:
             if isinstance(threshold, dict):
                 metric_dict["threshold"] = threshold
             metrics.append(metric_dict)
-        metadata = json.dumps(signal.metadata or {}, sort_keys=True)
+        metadata = json.dumps(self._signal_metadata_to_mapping(signal.metadata), sort_keys=True)
         snapshot_json = None
         if signal.metrics_snapshot is not None:
             snapshot_json = json.dumps(
@@ -402,7 +398,9 @@ class Storage:
                 snapshot["updated_at"] = trade.thresholds_snapshot.updated_at.isoformat()
             snapshot["metadata"] = dict(trade.thresholds_snapshot.metadata or {})
             thresholds_snapshot = json.dumps(snapshot, sort_keys=True)
-        metadata_json = json.dumps(trade.metadata or {}, sort_keys=True)
+        metadata_json = json.dumps(
+            self._trade_metadata_to_mapping(trade.metadata), sort_keys=True
+        )
         return StoredTradeRow(
             id=trade.id,
             signal_id=trade.signal_id,
@@ -431,6 +429,18 @@ class Storage:
             thresholds_snapshot_json=thresholds_snapshot,
             metadata_json=metadata_json,
         )
+
+    @staticmethod
+    def _signal_metadata_to_mapping(metadata: SignalMetadata | None) -> Dict[str, Any]:
+        if metadata is None:
+            return {}
+        return metadata.to_dict()
+
+    @staticmethod
+    def _trade_metadata_to_mapping(metadata: TradeMetadata | None) -> Dict[str, Any]:
+        if metadata is None:
+            return {}
+        return metadata.to_dict()
 
     def _row_to_signal_payload(self, row: StoredSignalRow) -> Dict[str, Any]:
         thresholds_json = row.thresholds_json

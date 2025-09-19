@@ -180,7 +180,9 @@ async def _execute_take_profit(tmp_path) -> None:
     assert trade.exit_price == pytest.approx(trade.tp_price)
     assert trade.pnl_pct == pytest.approx(trade.tp_pct)
     assert trade.pnl == pytest.approx(trade.size * (trade.pnl_pct or 0) / 100)
-    assert trade.metadata.get("live", {}).get("closed_status") == TradeStatus.CLOSED_TP.value
+    assert trade.metadata is not None
+    assert trade.metadata.live is not None
+    assert trade.metadata.live.closed_status == TradeStatus.CLOSED_TP
 
 
 async def _execute_stop_loss(tmp_path) -> None:
@@ -248,7 +250,9 @@ async def _execute_stop_loss(tmp_path) -> None:
     assert trade.exit_price == pytest.approx(trade.sl_price)
     assert trade.pnl_pct == pytest.approx(trade.sl_pct)
     assert trade.pnl == pytest.approx(trade.size * (trade.pnl_pct or 0) / 100)
-    assert trade.metadata.get("live", {}).get("closed_status") == TradeStatus.CLOSED_SL.value
+    assert trade.metadata is not None
+    assert trade.metadata.live is not None
+    assert trade.metadata.live.closed_status == TradeStatus.CLOSED_SL
 
 
 def test_trade_watcher_closes_on_take_profit(tmp_path) -> None:
