@@ -98,7 +98,7 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         limit: int,
         since: int | None = None,
     ) -> List[Candle]:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         if not self._session:
             raise RuntimeError("httpx is required to fetch candles from Binance")
         limit = self.resolve_ohlcv_limit(limit)
@@ -129,7 +129,7 @@ class BinanceFuturesProvider(BaseExchangeProvider):
             await asyncio.sleep(1)
 
     async def get_symbols(self) -> list[str]:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         if not self._session:
             raise RuntimeError("httpx is required to fetch symbols from Binance")
         endpoint = f"{self._api_base}/fapi/v1/exchangeInfo"
@@ -142,7 +142,7 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         return [symbol for symbol in trading if not symbol.endswith("_PERP")]  # filter illiquid synthetics
 
     async def get_24h_quote_volume(self) -> Dict[str, float]:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         if not self._session:
             raise RuntimeError("httpx is required to fetch statistics from Binance")
         endpoint = f"{self._api_base}/fapi/v1/ticker/24hr"
@@ -154,7 +154,7 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         return {ticker.symbol: ticker.quote_volume for ticker in tickers}
 
     async def update_deposit(self) -> DepositSnapshot:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         endpoint = f"{self._api_base}/fapi/v2/balance"
         response = await self._authenticated_get(endpoint)
         response.raise_for_status()

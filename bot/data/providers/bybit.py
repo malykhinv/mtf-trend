@@ -105,7 +105,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         limit: int,
         since: int | None = None,
     ) -> List[Candle]:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         if not self._session:
             raise RuntimeError("httpx is required to fetch candles from Bybit")
         limit = self.resolve_ohlcv_limit(limit)
@@ -139,7 +139,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
             await asyncio.sleep(1)
 
     async def get_symbols(self) -> list[str]:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         if not self._session:
             raise RuntimeError("httpx is required to fetch symbols from Bybit")
         endpoint = f"{self._api_base}/derivatives/v3/public/instruments-info"
@@ -153,7 +153,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         return trading
 
     async def get_24h_quote_volume(self) -> Dict[str, float]:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         if not self._session:
             raise RuntimeError("httpx is required to fetch statistics from Bybit")
         endpoint = f"{self._api_base}/derivatives/v3/public/tickers"
@@ -172,7 +172,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         return volumes
 
     async def update_deposit(self) -> DepositSnapshot:
-        await self.ensure_rate_limit()
+        await self.rate_limiter.throttle()
         endpoint = f"{self._api_base}/v5/account/wallet-balance"
         params = {"accountType": "UNIFIED"}
         response = await self._authenticated_get(endpoint, params=params)

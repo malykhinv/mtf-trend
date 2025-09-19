@@ -44,6 +44,10 @@ class BaseExchangeProvider:
         self._min_quote_volume = min_quote_volume
         self._logger = get_logger(self.__class__.__name__)
 
+    @property
+    def rate_limiter(self) -> RateLimiter:
+        return self._rate_limiter
+
     async def _filter_liquidity(self, candles: Sequence[Candle]) -> List[Candle]:
         filtered: List[Candle] = []
         for candle in candles:
@@ -91,9 +95,6 @@ class BaseExchangeProvider:
         self, entries: Iterable[OhlcvSnapshot], symbol: str, timeframe: Timeframe
     ) -> List[Candle]:
         return [map_ohlcv(item, symbol, self.exchange, timeframe) for item in entries]
-
-    async def ensure_rate_limit(self) -> None:
-        await self._rate_limiter.throttle()
 
     def _sort_and_deduplicate(self, candles: Iterable[Candle]) -> List[Candle]:
         """Return candles ordered by start time without duplicates."""
