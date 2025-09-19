@@ -15,7 +15,7 @@ except ImportError:  # pragma: no cover
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
-from ..models import DepositSnapshot
+from ..models import BybitInstrument, BybitTicker, DepositSnapshot
 from .base import BaseExchangeProvider
 
 
@@ -147,7 +147,7 @@ class BybitPerpetualProvider(BaseExchangeProvider):
                 yield candles[-1]
             await asyncio.sleep(1)
 
-    async def get_symbols(self) -> Iterable[str]:
+    async def get_symbols(self) -> list[str]:
         await self.ensure_rate_limit()
         if not self._session:
             raise RuntimeError("httpx is required to fetch symbols from Bybit")
@@ -156,9 +156,9 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        raw = data.get("result", {}).get("list", [])
-        symbols = [item.get("symbol") for item in raw if item.get("status") == "Trading"]
-        return [symbol for symbol in symbols if symbol]
+        instruments = _parse_bybit_instruments(data)
+        trading = [item.symbol for item in instruments if item.status == "Trading"]
+        return trading
 
     async def get_24h_quote_volume(self) -> Dict[str, float]:
         await self.ensure_rate_limit()
@@ -169,21 +169,13 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint, params=params)
         response.raise_for_status()
         data = response.json()
-        items = data.get("result", {}).get("list", [])
+        tickers = _parse_bybit_tickers(data)
         volumes: Dict[str, float] = {}
-        if isinstance(items, list):
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                symbol = item.get("symbol")
-                if not isinstance(symbol, str):
-                    continue
-                volume_raw = item.get("turnover24h") or item.get("turnover")
-                try:
-                    volume = float(volume_raw)
-                except (TypeError, ValueError):
-                    continue
-                volumes[symbol.upper()] = volume
+        for ticker in tickers:
+            volume = ticker.quote_volume()
+            if volume is None:
+                continue
+            volumes[ticker.symbol] = volume
         return volumes
 
     async def update_deposit(self) -> DepositSnapshot:
@@ -241,3 +233,55 @@ def _select_bybit_amount(balance: _BybitCoinBalance | None) -> float:
         if value is not None:
             return value
     return 0.0
+
+
+def _parse_bybit_instruments(payload: Any) -> list[BybitInstrument]:
+    if not isinstance(payload, Mapping):
+        return []
+    try:
+        result = payload["result"]
+    except KeyError:
+        return []
+    if not isinstance(result, Mapping):
+        return []
+    try:
+        instruments_raw = result["list"]
+    except KeyError:
+        return []
+    if not isinstance(instruments_raw, Sequence):
+        return []
+    parsed: list[BybitInstrument] = []
+    for item in instruments_raw:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            parsed.append(BybitInstrument.from_raw(item))
+        except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
+            continue
+    return parsed
+
+
+def _parse_bybit_tickers(payload: Any) -> list[BybitTicker]:
+    if not isinstance(payload, Mapping):
+        return []
+    try:
+        result = payload["result"]
+    except KeyError:
+        return []
+    if not isinstance(result, Mapping):
+        return []
+    try:
+        tickers_raw = result["list"]
+    except KeyError:
+        return []
+    if not isinstance(tickers_raw, Sequence):
+        return []
+    parsed: list[BybitTicker] = []
+    for item in tickers_raw:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            parsed.append(BybitTicker.from_raw(item))
+        except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
+            continue
+    return parsed
