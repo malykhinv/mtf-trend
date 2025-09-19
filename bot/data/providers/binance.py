@@ -16,7 +16,7 @@ except ImportError:  # pragma: no cover
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
 from ...utils.logging import get_logger
-from ..models import DepositSnapshot
+from ..models import BinanceSymbolInfo, BinanceTicker24h, DepositSnapshot
 from .base import BaseExchangeProvider
 
 
@@ -127,7 +127,7 @@ class BinanceFuturesProvider(BaseExchangeProvider):
                 yield candles[-1]
             await asyncio.sleep(1)
 
-    async def get_symbols(self) -> Iterable[str]:
+    async def get_symbols(self) -> list[str]:
         await self.ensure_rate_limit()
         if not self._session:
             raise RuntimeError("httpx is required to fetch symbols from Binance")
@@ -135,8 +135,9 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint)
         response.raise_for_status()
         info = response.json()
-        symbols = [item["symbol"] for item in info.get("symbols", []) if item.get("status") == "TRADING"]
-        return [symbol for symbol in symbols if not symbol.endswith("_PERP")]  # filter illiquid synthetics
+        symbols = _parse_binance_symbols(info)
+        trading = [item.symbol for item in symbols if item.status.upper() == "TRADING"]
+        return [symbol for symbol in trading if not symbol.endswith("_PERP")]  # filter illiquid synthetics
 
     async def get_24h_quote_volume(self) -> Dict[str, float]:
         await self.ensure_rate_limit()
@@ -146,21 +147,8 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         response = await self._session.get(endpoint)
         response.raise_for_status()
         data = response.json()
-        volumes: Dict[str, float] = {}
-        if isinstance(data, list):
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                symbol = item.get("symbol")
-                if not isinstance(symbol, str):
-                    continue
-                volume_raw = item.get("quoteVolume")
-                try:
-                    volume = float(volume_raw)
-                except (TypeError, ValueError):
-                    continue
-                volumes[symbol.upper()] = volume
-        return volumes
+        tickers = _parse_binance_tickers(data)
+        return {ticker.symbol: ticker.quote_volume for ticker in tickers}
 
     async def update_deposit(self) -> DepositSnapshot:
         await self.ensure_rate_limit()
@@ -199,3 +187,37 @@ def _select_amount(balance: _BinanceBalance | None) -> float:
         if value is not None:
             return value
     return 0.0
+
+
+def _parse_binance_symbols(payload: Any) -> list[BinanceSymbolInfo]:
+    if not isinstance(payload, Mapping):
+        return []
+    try:
+        symbols_raw = payload["symbols"]
+    except KeyError:
+        return []
+    if not isinstance(symbols_raw, Sequence):
+        return []
+    parsed: list[BinanceSymbolInfo] = []
+    for item in symbols_raw:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            parsed.append(BinanceSymbolInfo.from_raw(item))
+        except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
+            continue
+    return parsed
+
+
+def _parse_binance_tickers(payload: Any) -> list[BinanceTicker24h]:
+    if not isinstance(payload, Sequence):
+        return []
+    parsed: list[BinanceTicker24h] = []
+    for item in payload:
+        if not isinstance(item, Mapping):
+            continue
+        try:
+            parsed.append(BinanceTicker24h.from_raw(item))
+        except (KeyError, TypeError, ValueError):  # pragma: no cover - defensive
+            continue
+    return parsed

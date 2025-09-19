@@ -354,20 +354,13 @@ async def discover_symbol_universe(
         except Exception as exc:  # pragma: no cover - network errors
             logger.warning("Failed to fetch 24h statistics from %s: %s", provider_name, exc)
             continue
-        if not isinstance(stats, Mapping):
-            continue
         for symbol, volume in stats.items():
-            if not isinstance(symbol, str):
-                continue
             normalized = symbol.upper()
             if suffix and not normalized.endswith(suffix):
                 continue
             if normalized in deny:
                 continue
-            try:
-                volume_value = float(volume)
-            except (TypeError, ValueError):
-                continue
+            volume_value = float(volume)
             if volume_value < min_quote_volume:
                 continue
             existing_volume = volumes.get(normalized)
