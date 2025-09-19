@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Mapping, Sequence
+from typing import Dict, List, Mapping, Sequence, Union, cast
 
 from ..enums import BreakDirection
 from ..models.entities import Candle, SignalMetric, Thresholds
@@ -90,7 +90,7 @@ class SelectionMetricsSnapshot:
                 raise KeyError(f"missing '{key}' in metrics snapshot")
             if key == "break_direction":
                 try:
-                    direction_value = int(float(raw_value))
+                    direction_value = int(float(cast(Union[int, float, str], raw_value)))
                 except (TypeError, ValueError) as exc:
                     raise ValueError("invalid break_direction value") from exc
                 try:
@@ -98,7 +98,7 @@ class SelectionMetricsSnapshot:
                 except ValueError as exc:
                     raise ValueError("unknown break_direction value") from exc
                 continue
-            values[key] = float(raw_value)
+            values[key] = float(cast(Union[int, float, str], raw_value))
         if break_direction is None:
             raise KeyError("missing 'break_direction' in metrics snapshot")
         return cls(

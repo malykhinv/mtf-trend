@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Union, cast
 
 from ...domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from ...domain.models.entities import (
@@ -21,7 +21,18 @@ from ...domain.models.metadata import (
     TradeMetadata,
 )
 from ...domain.services.metrics_service import SelectionMetricsSnapshot
-from .excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
+from .excel_rows import (
+    JSONDict,
+    JSONValue,
+    SignalMetricPayload,
+    SignalPayload,
+    StoredSignalRow,
+    StoredStateRow,
+    StoredTradeRow,
+    ThresholdMetricPayload,
+    ThresholdPayload,
+    TradePayload,
+)
 from .excel_writer import ExcelWriter
 
 
@@ -39,10 +50,9 @@ class Storage:
     def load_signals(self) -> List[Signal]:
         rows = self._writer.read_signals()
         signals: List[Signal] = []
-        for row in rows:
-            raw = self._row_to_signal_payload(row)
+        for payload in rows:
             try:
-                signals.append(self.deserialize_signal(raw))
+                signals.append(self.deserialize_signal(payload))
             except Exception:
                 continue
         return signals
@@ -57,10 +67,9 @@ class Storage:
     def load_trades(self) -> List[Trade]:
         rows = self._writer.read_trades()
         trades: List[Trade] = []
-        for row in rows:
-            raw = self._row_to_trade_payload(row)
+        for payload in rows:
             try:
-                trades.append(self.deserialize_trade(raw))
+                trades.append(self.deserialize_trade(payload))
             except Exception:
                 continue
         return trades
@@ -111,29 +120,22 @@ class Storage:
                 return False
         return default
 
-    def _deserialize_threshold_metric(self, raw: Dict[str, Any]) -> ThresholdMetric:
+    def _deserialize_threshold_metric(self, payload: ThresholdMetricPayload) -> ThresholdMetric:
         return ThresholdMetric(
-            name=raw["name"],
-            min_value=float(raw["min_value"]) if raw.get("min_value") is not None else None,
-            max_value=float(raw["max_value"]) if raw.get("max_value") is not None else None,
-            min_abs_value=float(raw["min_abs_value"]) if raw.get("min_abs_value") is not None else None,
+            name=payload.name,
+            min_value=payload.min_value,
+            max_value=payload.max_value,
+            min_abs_value=payload.min_abs_value,
         )
 
-    def _deserialize_thresholds(self, raw: Dict[str, Any]) -> Thresholds:
-        metrics_raw = raw.get("metrics", [])
-        metrics: List[ThresholdMetric] = []
-        if isinstance(metrics_raw, list):
-            for metric_raw in metrics_raw:
-                if isinstance(metric_raw, dict) and "name" in metric_raw:
-                    metrics.append(self._deserialize_threshold_metric(metric_raw))
-        metadata_raw = raw.get("metadata")
-        metadata = ThresholdsMetadata.from_mapping(
-            metadata_raw if isinstance(metadata_raw, Mapping) else None
-        )
-        created_at_raw = raw.get("created_at")
-        updated_at_raw = raw.get("updated_at")
-        short_pct_move_ranges: List[tuple[float, Optional[float]]] = []
-        ranges_raw = raw.get("short_pct_move_ranges")
+    def _deserialize_thresholds(self, payload: ThresholdPayload) -> Thresholds:
+        metrics = [self._deserialize_threshold_metric(metric) for metric in payload.metrics]
+        metadata = ThresholdsMetadata.from_mapping(payload.metadata)
+        created_at_raw = payload.created_at
+        updated_at_raw = payload.updated_at
+
+        short_pct_move_ranges: List[tuple[float | None, float | None]] = []
+        ranges_raw = payload.raw.get("short_pct_move_ranges")
         if isinstance(ranges_raw, list):
             for entry in ranges_raw:
                 min_value: float | None
@@ -147,11 +149,30 @@ class Storage:
                         max_raw = entry.get("max_value")
                     if min_raw is None:
                         continue
-                    min_value = float(min_raw)
-                    max_value = float(max_raw) if max_raw is not None else None
+                    try:
+                        min_value = float(cast(Union[int, float, str], min_raw))
+                    except (TypeError, ValueError):
+                        continue
+                    max_value = None
+                    if max_raw is not None:
+                        try:
+                            max_value = float(cast(Union[int, float, str], max_raw))
+                        except (TypeError, ValueError):
+                            max_value = None
                 elif isinstance(entry, (list, tuple)) and entry:
-                    min_value = float(entry[0])
-                    max_value = float(entry[1]) if len(entry) > 1 and entry[1] is not None else None
+                    sequence_entry = cast(Sequence[JSONValue], entry)
+                    try:
+                        min_value = float(cast(Union[int, float, str], sequence_entry[0]))
+                    except (TypeError, ValueError):
+                        continue
+                    max_value = None
+                    if len(sequence_entry) > 1 and sequence_entry[1] is not None:
+                        try:
+                            max_value = float(
+                                cast(Union[int, float, str], sequence_entry[1])
+                            )
+                        except (TypeError, ValueError):
+                            max_value = None
                 else:
                     continue
                 short_pct_move_ranges.append((min_value, max_value))
@@ -171,24 +192,31 @@ class Storage:
                         if min_raw is None:
                             continue
                         try:
-                            min_value = float(min_raw)
+                            min_value = float(cast(Union[int, float, str], min_raw))
                         except (TypeError, ValueError):
                             continue
                         if max_raw is not None:
                             try:
-                                max_value = float(max_raw)
+                                max_value = float(cast(Union[int, float, str], max_raw))
                             except (TypeError, ValueError):
                                 max_value = None
                     elif isinstance(entry, (list, tuple)) and entry:
+                        sequence_entry = cast(Sequence[JSONValue], entry)
+                        first_value = sequence_entry[0]
                         try:
-                            min_value = float(entry[0]) if entry[0] is not None else None
+                            min_value = (
+                                float(cast(Union[int, float, str], first_value))
+                                if first_value is not None
+                                else None
+                            )
                         except (TypeError, ValueError):
                             min_value = None
-                        if len(entry) > 1:
+                        if len(sequence_entry) > 1:
+                            second_value = sequence_entry[1]
                             try:
                                 max_value = (
-                                    float(entry[1])
-                                    if entry[1] is not None
+                                    float(cast(Union[int, float, str], second_value))
+                                    if second_value is not None
                                     else None
                                 )
                             except (TypeError, ValueError):
@@ -196,29 +224,42 @@ class Storage:
                     if min_value is None and max_value is None:
                         continue
                     short_pct_move_ranges.append((min_value, max_value))
-        def _get_float_from_keys(keys: list[str]) -> float:
-            for key in keys:
-                if raw.get(key) is not None:
-                    return float(raw[key])
+
+        def _float_from_value(value: JSONValue | None) -> float:
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, str):
+                try:
+                    return float(value)
+                except ValueError:
+                    return 0.0
             return 0.0
 
+        def _get_float_from_keys(keys: list[str]) -> float:
+            value = payload.get_first(keys)
+            if value is not None:
+                return _float_from_value(value)
+            return 0.0
+
+        default_allow_long = payload.allow_long if isinstance(payload.allow_long, bool) else True
+        default_allow_short = payload.allow_short if isinstance(payload.allow_short, bool) else True
+
+        id_raw = payload.raw.get("id")
         return Thresholds(
-            id=str(raw["id"]) if raw.get("id") is not None else None,
-            min_relative_volume=_get_float_from_keys(
-                [
-                    "min_relative_volume",
-                    "minRelativeVolume",
-                    "S",
-                    "s",
-                ]
+            id=str(id_raw) if isinstance(id_raw, str) else None,
+            min_relative_volume=_float_from_value(
+                payload.raw.get("min_relative_volume")
+                or payload.raw.get("minRelativeVolume")
+                or payload.raw.get("S")
+                or payload.raw.get("s")
+                or 0
             ),
-            max_relative_volume=_get_float_from_keys(
-                [
-                    "max_relative_volume",
-                    "maxRelativeVolume",
-                    "T",
-                    "t",
-                ]
+            max_relative_volume=_float_from_value(
+                payload.raw.get("max_relative_volume")
+                or payload.raw.get("maxRelativeVolume")
+                or payload.raw.get("T")
+                or payload.raw.get("t")
+                or 0
             ),
             min_atr_mult=_get_float_from_keys(["min_atr_mult", "minAtrMult", "U", "u"]),
             min_pct_move=_get_float_from_keys(["min_pct_move", "minPctMove", "V", "v"]),
@@ -230,111 +271,114 @@ class Storage:
                 ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
             ),
             short_pct_move_ranges=short_pct_move_ranges,
-            allow_long=self._to_bool(raw.get("allow_long", True)),
-            allow_short=self._to_bool(raw.get("allow_short", True)),
+            allow_long=self._to_bool(
+                payload.raw.get("allow_long", payload.allow_long), default_allow_long
+            ),
+            allow_short=self._to_bool(
+                payload.raw.get("allow_short", payload.allow_short), default_allow_short
+            ),
             metrics=metrics,
             metadata=metadata,
             created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
             updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
         )
 
-    def _deserialize_signal_metric(self, raw: Dict[str, Any]) -> SignalMetric:
-        threshold_raw = raw.get("threshold")
+    def _deserialize_signal_metric(self, payload: SignalMetricPayload) -> SignalMetric:
         threshold = (
-            self._deserialize_threshold_metric(threshold_raw)
-            if isinstance(threshold_raw, dict) and "name" in threshold_raw
+            self._deserialize_threshold_metric(payload.threshold)
+            if payload.threshold is not None
             else None
         )
         return SignalMetric(
-            name=raw["name"],
-            value=float(raw["value"]),
-            passed=bool(raw.get("passed", False)),
+            name=payload.name,
+            value=payload.value,
+            passed=payload.passed,
             threshold=threshold,
         )
 
-    def deserialize_signal(self, raw: Dict[str, Any]) -> Signal:
-        candle_raw = raw["candle"]
-        candle_id = candle_raw.get("id")
+    def deserialize_signal(self, payload: SignalPayload) -> Signal:
+        candle_payload = payload.candle
+        candle_id = candle_payload.id
         if candle_id is None:
             try:
-                candle_timestamp = datetime.fromisoformat(candle_raw["started_at"])
-            except (KeyError, ValueError):
+                candle_timestamp = datetime.fromisoformat(candle_payload.started_at)
+            except ValueError:
                 candle_timestamp = None
             if candle_timestamp is not None:
+                timeframe_value = candle_payload.timeframe or payload.timeframe or ""
                 candle_id = (
-                    f"{candle_raw['exchange']}:{candle_raw['symbol']}:{candle_raw['timeframe']}:"
+                    f"{candle_payload.exchange}:{candle_payload.symbol}:{timeframe_value}:"
                     f"{int(candle_timestamp.timestamp())}"
                 )
+
+        candle_timeframe_str = candle_payload.timeframe or payload.timeframe
+        if candle_timeframe_str is None:
+            raise ValueError("Signal payload missing candle timeframe")
+        candle_timeframe = Timeframe(candle_timeframe_str)
+
         candle = Candle(
+            symbol=candle_payload.symbol,
+            exchange=Exchange(candle_payload.exchange),
+            timeframe=candle_timeframe,
+            open=candle_payload.open,
+            high=candle_payload.high,
+            low=candle_payload.low,
+            close=candle_payload.close,
+            volume=candle_payload.volume,
+            started_at=datetime.fromisoformat(candle_payload.started_at),
+            closed_at=datetime.fromisoformat(candle_payload.closed_at),
             id=candle_id,
-            symbol=candle_raw["symbol"],
-            exchange=Exchange(candle_raw["exchange"]),
-            timeframe=Timeframe(candle_raw["timeframe"]),
-            open=candle_raw["open"],
-            high=candle_raw["high"],
-            low=candle_raw["low"],
-            close=candle_raw["close"],
-            volume=candle_raw["volume"],
-            started_at=datetime.fromisoformat(candle_raw["started_at"]),
-            closed_at=datetime.fromisoformat(candle_raw["closed_at"]),
+            quote_volume=candle_payload.quote_volume,
         )
-        thresholds = self._deserialize_thresholds(raw["thresholds"])
-        metrics_raw = raw.get("metrics", [])
-        metrics: List[SignalMetric] = []
-        if isinstance(metrics_raw, list):
-            for metric_raw in metrics_raw:
-                if isinstance(metric_raw, dict) and "name" in metric_raw:
-                    metrics.append(self._deserialize_signal_metric(metric_raw))
-        metadata_raw = raw.get("metadata")
-        metadata_dict = dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}
-        snapshot_raw = raw.get("metrics_snapshot")
-        metrics_snapshot = self._deserialize_metrics_snapshot(snapshot_raw)
+        thresholds = self._deserialize_thresholds(payload.thresholds)
+        metrics = [self._deserialize_signal_metric(metric) for metric in payload.metrics]
+        metadata_dict: Dict[str, Any] = dict(payload.metadata)
+        metrics_snapshot = self._deserialize_metrics_snapshot(payload.metrics_snapshot)
         if metrics_snapshot is None:
             legacy_snapshot = metadata_dict.get("metrics")
             if isinstance(legacy_snapshot, Mapping):
                 metrics_snapshot = self._deserialize_metrics_snapshot(legacy_snapshot)
                 if metrics_snapshot is not None:
                     metadata_dict.pop("metrics", None)
-        created_at_raw = raw.get("created_at")
-        updated_at_raw = raw.get("updated_at")
-        timeframe_raw = raw.get("timeframe")
+        created_at_raw = payload.created_at
+        updated_at_raw = payload.updated_at
+        timeframe_raw = payload.timeframe
         timeframe = Timeframe(timeframe_raw) if isinstance(timeframe_raw, str) else candle.timeframe
-        candle_ref = raw.get("candle_id") or candle.id
+        candle_ref = payload.candle_id or candle.id
         if candle_ref is None and isinstance(candle.started_at, datetime):
             candle_ref = (
                 f"{candle.exchange.value}:{candle.symbol}:{candle.timeframe.value}:"
                 f"{int(candle.started_at.timestamp())}"
             )
         return Signal(
-            id=raw["id"],
+            id=payload.id,
             candle_id=candle_ref,
             candle=candle,
             timeframe=timeframe,
-            side=Side(raw["side"]),
-            direction=BreakDirection(raw["direction"]),
-            score=raw["score"],
-            triggered_at=datetime.fromisoformat(raw["triggered_at"]),
+            side=Side(payload.side),
+            direction=BreakDirection(payload.direction),
+            score=payload.score,
+            triggered_at=datetime.fromisoformat(payload.triggered_at),
             created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
             updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
             thresholds=thresholds,
             metrics=metrics,
-            allow_long=self._to_bool(raw.get("allow_long", thresholds.allow_long), thresholds.allow_long),
-            allow_short=self._to_bool(raw.get("allow_short", thresholds.allow_short), thresholds.allow_short),
+            allow_long=self._to_bool(payload.allow_long, thresholds.allow_long),
+            allow_short=self._to_bool(payload.allow_short, thresholds.allow_short),
             metrics_snapshot=metrics_snapshot,
             metadata=SignalMetadata.from_mapping(metadata_dict),
         )
 
-    def deserialize_trade(self, raw: Dict[str, Any]) -> Trade:
+    def deserialize_trade(self, payload: TradePayload) -> Trade:
         thresholds_snapshot = (
-            self._deserialize_thresholds(raw["thresholds_snapshot"])
-            if raw.get("thresholds_snapshot")
+            self._deserialize_thresholds(payload.thresholds_snapshot)
+            if payload.thresholds_snapshot is not None
             else None
         )
-        metadata_raw = raw.get("metadata")
-        metadata_dict = dict(metadata_raw) if isinstance(metadata_raw, Mapping) else {}
-        created_at_raw = raw.get("created_at")
-        updated_at_raw = raw.get("updated_at")
-        timeframe_raw = raw.get("timeframe")
+        metadata_dict: Dict[str, Any] = dict(payload.metadata)
+        created_at_raw = payload.created_at
+        updated_at_raw = payload.updated_at
+        timeframe_raw = payload.timeframe
         timeframe = Timeframe(timeframe_raw) if isinstance(timeframe_raw, str) else None
         if timeframe is None and thresholds_snapshot and thresholds_snapshot.metadata:
             meta_tf = thresholds_snapshot.metadata.timeframe
@@ -354,32 +398,32 @@ class Storage:
                     timeframe = Timeframe(meta_tf)
                 except ValueError:
                     timeframe = None
-        source_signal_id = raw.get("source_signal_id") or raw.get("signal_id")
+        source_signal_id = payload.source_signal_id or payload.signal_id
         trade = Trade(
-            id=raw["id"],
-            signal_id=raw["signal_id"],
+            id=payload.id,
+            signal_id=payload.signal_id,
             source_signal_id=source_signal_id,
-            exchange=Exchange(raw["exchange"]),
-            symbol=raw["symbol"],
+            exchange=Exchange(payload.exchange),
+            symbol=payload.symbol,
             timeframe=timeframe,
-            side=Side(raw["side"]),
-            status=TradeStatus(raw["status"]),
-            entry_price=raw["entry_price"],
-            size=raw.get("size", 0.0),
-            used_margin=raw.get("used_margin", raw.get("used_amount", raw.get("size", 0.0))),
-            exit_price=raw.get("exit_price"),
-            tp_price=raw.get("tp_price"),
-            sl_price=raw.get("sl_price"),
-            tp_pct=raw.get("tp_pct"),
-            sl_pct=raw.get("sl_pct"),
-            opened_at=datetime.fromisoformat(raw["opened_at"]) if raw.get("opened_at") else None,
-            closed_at=datetime.fromisoformat(raw["closed_at"]) if raw.get("closed_at") else None,
-            pnl=raw.get("pnl"),
-            pnl_pct=raw.get("pnl_pct"),
+            side=Side(payload.side),
+            status=TradeStatus(payload.status),
+            entry_price=payload.entry_price,
+            size=payload.size,
+            used_margin=payload.used_margin if payload.used_margin else payload.size,
+            exit_price=payload.exit_price,
+            tp_price=payload.tp_price,
+            sl_price=payload.sl_price,
+            tp_pct=payload.tp_pct,
+            sl_pct=payload.sl_pct,
+            opened_at=datetime.fromisoformat(payload.opened_at) if payload.opened_at else None,
+            closed_at=datetime.fromisoformat(payload.closed_at) if payload.closed_at else None,
+            pnl=payload.pnl,
+            pnl_pct=payload.pnl_pct,
             created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
             updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
-            allow_long=self._to_bool(raw.get("allow_long", True)),
-            allow_short=self._to_bool(raw.get("allow_short", True)),
+            allow_long=self._to_bool(payload.allow_long),
+            allow_short=self._to_bool(payload.allow_short),
             thresholds_snapshot=thresholds_snapshot,
             metadata=TradeMetadata.from_mapping(metadata_dict),
         )
@@ -500,102 +544,14 @@ class Storage:
             return {}
         return metadata.to_dict()
 
-    def _row_to_signal_payload(self, row: StoredSignalRow) -> Dict[str, Any]:
-        thresholds_json = row.thresholds_json
-        metrics_json = row.metrics_json
-        metadata_json = row.metadata_json
-        snapshot_json = row.metrics_snapshot_json
-        thresholds = self._safe_json_load(thresholds_json, {})
-        metrics = self._safe_json_load(metrics_json, [])
-        metadata = self._safe_json_load(metadata_json, {})
-        snapshot = self._safe_json_load(snapshot_json, None)
-        candle: Dict[str, Any] = {
-            "id": row.candle_id,
-            "symbol": row.symbol,
-            "exchange": row.exchange,
-            "timeframe": row.candle_timeframe or row.timeframe,
-            "open": row.candle_open,
-            "high": row.candle_high,
-            "low": row.candle_low,
-            "close": row.candle_close,
-            "volume": row.candle_volume,
-            "started_at": row.candle_started_at,
-            "closed_at": row.candle_closed_at,
-        }
-        quote_volume = row.candle_quote_volume
-        if quote_volume is not None:
-            candle["quote_volume"] = quote_volume
-        payload: Dict[str, Any] = {
-            "id": row.id,
-            "candle_id": row.candle_id,
-            "candle": candle,
-            "side": row.side,
-            "direction": row.direction,
-            "score": row.score,
-            "triggered_at": row.triggered_at,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-            "timeframe": row.timeframe,
-            "allow_long": row.allow_long,
-            "allow_short": row.allow_short,
-            "thresholds": thresholds,
-            "metrics": metrics,
-            "metrics_snapshot": snapshot,
-            "metadata": metadata,
-        }
-        return payload
-
     def _deserialize_metrics_snapshot(
-        self, raw: Any
+        self, raw: Mapping[str, Any] | JSONDict | None
     ) -> SelectionMetricsSnapshot | None:
+        if raw is None:
+            return None
         if not isinstance(raw, Mapping):
             return None
         try:
             return SelectionMetricsSnapshot.from_mapping(raw)
         except (KeyError, TypeError, ValueError):
             return None
-
-    def _row_to_trade_payload(self, row: StoredTradeRow) -> Dict[str, Any]:
-        thresholds_json = row.thresholds_snapshot_json
-        metadata_json = row.metadata_json
-        thresholds = self._safe_json_load(thresholds_json, None)
-        metadata = self._safe_json_load(metadata_json, {})
-        payload: Dict[str, Any] = {
-            "id": row.id,
-            "signal_id": row.signal_id,
-            "source_signal_id": row.source_signal_id,
-            "exchange": row.exchange,
-            "symbol": row.symbol,
-            "timeframe": row.timeframe,
-            "side": row.side,
-            "status": row.status,
-            "entry_price": row.entry_price,
-            "size": row.size,
-            "used_margin": row.used_margin,
-            "exit_price": row.exit_price,
-            "tp_price": row.tp_price,
-            "sl_price": row.sl_price,
-            "tp_pct": row.tp_pct,
-            "sl_pct": row.sl_pct,
-            "opened_at": row.opened_at,
-            "closed_at": row.closed_at,
-            "pnl": row.pnl,
-            "pnl_pct": row.pnl_pct,
-            "created_at": row.created_at,
-            "updated_at": row.updated_at,
-            "allow_long": row.allow_long,
-            "allow_short": row.allow_short,
-            "thresholds_snapshot": thresholds,
-            "metadata": metadata,
-        }
-        return payload
-
-    def _safe_json_load(self, raw: Any, default: Any) -> Any:
-        if raw in (None, ""):
-            return default
-        if isinstance(raw, (dict, list)):
-            return raw
-        try:
-            return json.loads(str(raw))
-        except (TypeError, json.JSONDecodeError):
-            return default

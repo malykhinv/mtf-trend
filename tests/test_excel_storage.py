@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -9,7 +8,11 @@ from zoneinfo import ZoneInfo
 import pytest
 from openpyxl import load_workbook
 
-from bot.data.io.excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
+from bot.data.io.excel_rows import (
+    SignalPayload,
+    StoredStateRow,
+    TradePayload,
+)
 from bot.data.io.storage import Storage
 from bot.data.repositories.signal_repository import SignalRepository
 from bot.data.repositories.state_repository import StateRepository
@@ -157,13 +160,14 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert "metrics" not in loaded_signals[signal.id].metadata.extra
     assert loaded_signals[signal.id].metadata.extra.get("note") == "initial"
 
-    stored_rows = storage._writer.read_signals()
-    assert stored_rows and isinstance(stored_rows[0], StoredSignalRow)
-    assert stored_rows[0].score == pytest.approx(signal.score)
-    assert stored_rows[0].allow_long is True
-    assert stored_rows[0].metrics_snapshot_json is not None
-    stored_snapshot = json.loads(stored_rows[0].metrics_snapshot_json)
-    assert stored_snapshot["pct_move"] == pytest.approx(signal.metrics_snapshot.pct_move)
+    stored_payloads = storage._writer.read_signals()
+    assert stored_payloads and isinstance(stored_payloads[0], SignalPayload)
+    assert stored_payloads[0].score == pytest.approx(signal.score)
+    assert stored_payloads[0].allow_long is True
+    assert stored_payloads[0].metrics_snapshot is not None
+    assert stored_payloads[0].metrics_snapshot["pct_move"] == pytest.approx(
+        signal.metrics_snapshot.pct_move
+    )
 
     rows = _read_sheet_rows(workbook_path, "Signals")
     assert len(rows) == 1
@@ -257,7 +261,7 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
     assert loaded_trades[second_trade.id].opened_at and loaded_trades[second_trade.id].opened_at.tzinfo is not None
 
     stored_trades = storage._writer.read_trades()
-    assert stored_trades and isinstance(stored_trades[0], StoredTradeRow)
+    assert stored_trades and isinstance(stored_trades[0], TradePayload)
     assert stored_trades[0].entry_price == pytest.approx(trade.entry_price)
 
 
