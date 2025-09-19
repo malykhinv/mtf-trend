@@ -19,7 +19,7 @@ def test_map_ohlcv_uses_configured_timezone() -> None:
     raw = [base_timestamp, 1.0, 2.0, 0.5, 1.5, 100.0]
 
     candle = map_ohlcv(
-        BinanceKline.from_raw(raw), "BTCUSDT", Exchange.BINANCE, Timeframe.M1
+        BinanceKline.from_payload(raw), "BTCUSDT", Exchange.BINANCE, Timeframe.M1
     )
 
     assert candle.started_at.tzinfo == tz

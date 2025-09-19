@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncIterator, Dict, Iterable, List, Sequence
+from typing import Any, AsyncGenerator, AsyncIterator, Dict, Iterable, List, Sequence, cast
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
@@ -70,8 +70,9 @@ class BaseExchangeProvider:
 
     async def stream_candles(
         self, symbol: str, timeframe: Timeframe
-    ) -> AsyncIterator[Candle]:
+    ) -> AsyncGenerator[Candle, None]:
         raise NotImplementedError
+        yield cast(Candle, None)
 
     async def get_symbols(self) -> Iterable[str]:
         raise NotImplementedError
