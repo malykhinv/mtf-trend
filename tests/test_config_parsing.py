@@ -29,6 +29,10 @@ def test_symbol_selection_and_overrides_are_typed() -> None:
                 "window": "25",
                 "allow": ["btcusdt"],
             },
+            "storage": {"path": " data/state "},
+            "logging": {"level": "debug"},
+            "time": {"zone": "Europe/Belgrade", "mode": "live"},
+            "mode": "backtest",
         }
     )
 
@@ -50,6 +54,12 @@ def test_symbol_selection_and_overrides_are_typed() -> None:
     assert live_cfg.window == 25
     assert config.symbol_provider_mapping["BTCUSDT"] == "binance"
     assert config.symbol_provider_mapping["default"] == "bybit"
+    assert config.storage.path == "data/state"
+    assert config.logging.level == "DEBUG"
+    assert config.time.zone == "Europe/Belgrade"
+    assert config.time.mode is AppMode.LIVE
+    assert config.default_mode is AppMode.BACKTEST
+    assert not hasattr(config, "get")
 
 
 def test_metrics_and_dedup_configs_are_typed() -> None:

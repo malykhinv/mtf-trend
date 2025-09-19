@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Iterable, Mapping, Sequence, Tuple, TypeVar
 
+from ...app_modes import AppMode
 from ...domain.enums import Timeframe
 from ...domain.models.entities import ThresholdMetric as DomainThresholdMetric
 from ...domain.models.entities import Thresholds as DomainThresholds
@@ -149,6 +150,77 @@ def _normalize_str(value: Any) -> str | None:
         candidate = value.strip()
         return candidate or None
     return str(value)
+
+
+@dataclass(slots=True)
+class StorageConfig:
+    path: str = "var/state.xlsx"
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "StorageConfig":
+        path_value: Any
+        if isinstance(raw, Mapping):
+            path_value = raw.get("path")
+        else:
+            path_value = raw
+        if isinstance(path_value, str):
+            candidate = path_value.strip()
+            if candidate:
+                return cls(path=candidate)
+        elif path_value is not None:
+            return cls(path=str(path_value))
+        return cls()
+
+
+@dataclass(slots=True)
+class LoggingConfig:
+    level: str = "INFO"
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "LoggingConfig":
+        level_value: Any
+        if isinstance(raw, Mapping):
+            level_value = raw.get("level")
+        else:
+            level_value = raw
+        if isinstance(level_value, str):
+            candidate = level_value.strip()
+            if candidate:
+                return cls(level=candidate.upper())
+        elif level_value is not None:
+            return cls(level=str(level_value).upper())
+        return cls()
+
+
+def _parse_optional_mode(value: Any) -> AppMode | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return AppMode.parse(value)
+
+
+@dataclass(slots=True)
+class TimeConfig:
+    zone: str = "UTC"
+    mode: AppMode | None = None
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> "TimeConfig":
+        zone = "UTC"
+        mode: AppMode | None = None
+        if isinstance(raw, Mapping):
+            zone_raw = raw.get("zone")
+            if isinstance(zone_raw, str) and zone_raw.strip():
+                zone = zone_raw.strip()
+            elif zone_raw is not None:
+                zone = str(zone_raw)
+            mode = _parse_optional_mode(raw.get("mode"))
+        elif isinstance(raw, str) and raw.strip():
+            zone = raw.strip()
+        elif raw is not None:
+            zone = str(raw)
+        return cls(zone=zone, mode=mode)
 
 
 @dataclass(slots=True)

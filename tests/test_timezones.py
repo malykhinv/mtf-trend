@@ -9,7 +9,7 @@ from bot.utils.clock import get_timezone, init_clock
 
 def test_app_config_timezone_defaults_to_utc() -> None:
     config = AppConfig(raw={})
-    assert config.timezone_name == "UTC"
+    assert config.time.zone == "UTC"
 
 
 def test_map_ohlcv_uses_configured_timezone() -> None:
