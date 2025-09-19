@@ -2,14 +2,39 @@ from __future__ import annotations
 
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping
+
+from .config_models import (
+    BacktestConfig,
+    LiveConfig,
+    ModeSelectionOverrides,
+    SymbolSelectionConfig,
+    ThresholdsConfig,
+    parse_symbol_provider_mapping,
+)
 
 
 @dataclass(slots=True)
 class AppConfig:
     raw: Dict[str, Any]
+    thresholds: ThresholdsConfig = field(init=False)
+    symbol_selection: SymbolSelectionConfig = field(init=False)
+    symbol_provider_mapping: dict[str, str] = field(init=False)
+    backtest: BacktestConfig = field(init=False)
+    live: LiveConfig = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.thresholds = ThresholdsConfig.from_raw(self.get("thresholds", {}))
+        self.symbol_selection = SymbolSelectionConfig.from_raw(
+            self.get("symbols.selection", {})
+        )
+        self.symbol_provider_mapping = parse_symbol_provider_mapping(
+            self.get("symbols.providers", {})
+        )
+        self.backtest = BacktestConfig.from_raw(self.get("backtest", {}))
+        self.live = LiveConfig.from_raw(self.get("live", {}))
 
     def get(self, path: str, default: Any = None) -> Any:
         cursor: Any = self.raw
@@ -25,6 +50,13 @@ class AppConfig:
         if isinstance(value, str) and value.strip():
             return value.strip()
         return "UTC"
+
+    def selection_overrides_for(self, mode: str) -> ModeSelectionOverrides:
+        if mode == "backtest":
+            return self.backtest.selection
+        if mode == "live":
+            return self.live.selection
+        return ModeSelectionOverrides()
 
 
 class ConfigLoader:

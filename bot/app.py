@@ -8,7 +8,7 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence
+from typing import Dict, Iterable, Sequence
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 VALID_MODES = {"backtest", "live"}
@@ -22,7 +22,7 @@ from .data.repositories.signal_repository import SignalRepository
 from .data.repositories.state_repository import StateRepository
 from .data.repositories.trade_repository import TradeRepository
 from .domain.enums import Timeframe
-from .domain.models.entities import Candle, ThresholdMetric, Thresholds
+from .domain.models.entities import Candle, Thresholds
 from .domain.services.backtest_runner import BacktestRunner
 from .domain.services.dedup_policy import DeduplicationPolicy
 from .domain.services.live_runner import LiveTradingRunner
@@ -104,148 +104,11 @@ def init_providers(config: AppConfig) -> Dict[str, BaseExchangeProvider]:
     return providers
 
 
-def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
-    metrics_raw = raw.get("metrics", []) if isinstance(raw, dict) else []
-    metrics: list[ThresholdMetric] = []
-    if isinstance(metrics_raw, list):
-        for item in metrics_raw:
-            if not isinstance(item, dict):
-                continue
-            name = item.get("name")
-            if not name:
-                continue
-            metrics.append(
-                ThresholdMetric(
-                    name=str(name),
-                    min_value=float(item["min_value"]) if item.get("min_value") is not None else None,
-                    max_value=float(item["max_value"]) if item.get("max_value") is not None else None,
-                    min_abs_value=float(item["min_abs_value"]) if item.get("min_abs_value") is not None else None,
-                )
-            )
-    def _get_float_from_keys(keys: list[str], fallback: float = 0.0) -> float:
-        if not isinstance(raw, dict):
-            return fallback
-        for key in keys:
-            if key in raw and raw[key] is not None:
-                return float(raw[key])
-        return fallback
-
-    def _get_bool(key: str, default: bool) -> bool:
-        if not isinstance(raw, dict):
-            return default
-        value = raw.get(key)
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            lowered = value.strip().lower()
-            if lowered in {"true", "1", "yes"}:
-                return True
-            if lowered in {"false", "0", "no"}:
-                return False
-        return default
-
-    def _parse_range_list(source: object) -> list[tuple[float | None, float | None]]:
-        parsed: list[tuple[float | None, float | None]] = []
-        if not isinstance(source, list):
-            return parsed
-        for entry in source:
-            min_value: float | None = None
-            max_value: float | None = None
-            if isinstance(entry, dict):
-                min_raw = entry.get("min")
-                if min_raw is None:
-                    min_raw = entry.get("min_value")
-                max_raw = entry.get("max")
-                if max_raw is None:
-                    max_raw = entry.get("max_value")
-                if min_raw is not None:
-                    min_value = float(min_raw)
-                if max_raw is not None:
-                    max_value = float(max_raw)
-            elif isinstance(entry, (list, tuple)):
-                if len(entry) > 0 and entry[0] is not None:
-                    min_value = float(entry[0])
-                if len(entry) > 1 and entry[1] is not None:
-                    max_value = float(entry[1])
-            elif isinstance(entry, (int, float)):
-                min_value = float(entry)
-            if min_value is None and max_value is None:
-                continue
-            parsed.append((min_value, max_value))
-        return parsed
-
-    short_pct_move_ranges: list[tuple[float | None, float | None]] = []
-    if isinstance(raw, dict):
-        short_pct_move_ranges = _parse_range_list(raw.get("short_pct_move_ranges"))
-    allow_long = _get_bool("allow_long", True)
-    allow_short = _get_bool("allow_short", True)
-    metadata = raw.get("metadata", {}) if isinstance(raw, dict) else {}
-    if not isinstance(metadata, dict):
-        metadata = {}
-    if not short_pct_move_ranges:
-        short_pct_move_ranges = _parse_range_list(metadata.get("short_pct_move_ranges"))
-    short_relative_volume_ranges = _parse_range_list(
-        raw.get("short_relative_volume_ranges") if isinstance(raw, dict) else None
-    )
-    if not short_relative_volume_ranges:
-        short_relative_volume_ranges = _parse_range_list(
-            metadata.get("short_relative_volume_ranges")
-        )
-    created_at_raw = raw.get("created_at") if isinstance(raw, dict) else None
-    updated_at_raw = raw.get("updated_at") if isinstance(raw, dict) else None
-    return Thresholds(
-        id=str(raw.get("id")) if isinstance(raw, dict) and raw.get("id") is not None else None,
-        min_relative_volume=_get_float_from_keys(
-            [
-                "min_relative_volume",
-                "minRelativeVolume",
-                "S",
-                "s",
-            ]
-        ),
-        max_relative_volume=_get_float_from_keys(
-            [
-                "max_relative_volume",
-                "maxRelativeVolume",
-                "T",
-                "t",
-            ]
-        ),
-        min_atr_mult=_get_float_from_keys(
-            ["min_atr_mult", "minAtrMult", "U", "u"],
-        ),
-        min_pct_move=_get_float_from_keys(
-            ["min_pct_move", "minPctMove", "V", "v"],
-        ),
-        max_pct_move=_get_float_from_keys(
-            ["max_pct_move", "maxPctMove", "W", "w"],
-        ),
-        max_upper_wick_pct=_get_float_from_keys(
-            ["max_upper_wick_pct", "maxUpperWickPct", "X", "x"],
-        ),
-        max_lower_wick_pct=_get_float_from_keys(
-            ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"],
-        ),
-        short_pct_move_ranges=short_pct_move_ranges,
-        short_relative_volume_ranges=short_relative_volume_ranges,
-        allow_long=allow_long,
-        allow_short=allow_short,
-        metrics=metrics,
-        metadata=metadata if isinstance(metadata, dict) else {},
-        created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
-        updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
-    )
-
-
 def build_thresholds(config: AppConfig) -> Dict[str, Thresholds]:
-    raw = config.get("thresholds", {})
-    if not isinstance(raw, dict):
-        return {"default": Thresholds()}
-    thresholds: Dict[str, Thresholds] = {}
-    default_raw = raw.get("default", {})
-    thresholds["default"] = _parse_threshold(default_raw)
-    for symbol, data in raw.get("symbols", {}).items():
-        thresholds[symbol] = _parse_threshold(data)
+    thresholds_cfg = config.thresholds
+    thresholds: Dict[str, Thresholds] = {"default": thresholds_cfg.default.to_domain()}
+    for symbol, cfg in thresholds_cfg.symbols.items():
+        thresholds[symbol] = cfg.to_domain()
     return thresholds
 
 
@@ -285,27 +148,19 @@ def init_services(config: AppConfig, storage: Storage) -> tuple[
     )
 
 
-def _normalize_symbol_set(raw: object) -> set[str]:
-    symbols: set[str] = set()
-    if isinstance(raw, str):
-        raw = [raw]
-    if isinstance(raw, (list, tuple, set, frozenset)):
-        for item in raw:
-            if isinstance(item, str) and item:
-                symbols.add(item.upper())
-    return symbols
-
-
 def _resolve_provider_name(
     symbol: str,
     config: AppConfig,
     providers: Dict[str, BaseExchangeProvider],
     default: str | None = None,
 ) -> str:
-    mapping = config.get("symbols.providers", {})
-    provider_name: str | None = None
-    if isinstance(mapping, Mapping):
-        provider_name = mapping.get(symbol) or mapping.get("default")
+    mapping = config.symbol_provider_mapping
+    symbol_key = symbol.upper()
+    provider_name = (
+        mapping.get(symbol_key)
+        or mapping.get(symbol)
+        or mapping.get("default")
+    )
     if not provider_name and default:
         provider_name = default
     if not provider_name:
@@ -322,21 +177,15 @@ async def discover_symbol_universe(
     provider_scope: Iterable[str] | None = None,
 ) -> SymbolUniverse:
     logger = get_logger("symbol-discovery")
-    selection_cfg = config.get("symbols.selection", {})
-    suffix = "USDT"
-    min_quote_volume = 5_000_000.0
-    allow: set[str] = set()
-    deny: set[str] = set()
-    if isinstance(selection_cfg, Mapping):
-        suffix = str(selection_cfg.get("quote_suffix", suffix)).upper() or suffix
-        min_quote_volume = float(selection_cfg.get("min_quote_volume", min_quote_volume))
-        allow |= _normalize_symbol_set(selection_cfg.get("allow"))
-        deny |= _normalize_symbol_set(selection_cfg.get("deny"))
-    mode_cfg = config.get(mode, {})
-    if isinstance(mode_cfg, Mapping):
-        allow |= _normalize_symbol_set(mode_cfg.get("allow"))
-        allow |= _normalize_symbol_set(mode_cfg.get("symbols"))
-        deny |= _normalize_symbol_set(mode_cfg.get("deny"))
+    selection_cfg = config.symbol_selection
+    suffix = selection_cfg.quote_suffix
+    min_quote_volume = selection_cfg.min_quote_volume
+    allow: set[str] = set(selection_cfg.allow)
+    deny: set[str] = set(selection_cfg.deny)
+    overrides = config.selection_overrides_for(mode)
+    allow.update(overrides.allow)
+    allow.update(overrides.symbols)
+    deny.update(overrides.deny)
 
     provider_names = list(provider_scope or providers.keys())
     discovered: Dict[str, str] = {}
@@ -420,8 +269,8 @@ async def run_backtest(
 ) -> None:
     logger = get_logger("backtest")
     signal_repo, trade_repo, state_repo, _, selector, tp_sl_service, dedup_policy = services
-    backtest_cfg = config.get("backtest", {})
-    if not _is_mode_enabled(backtest_cfg):
+    backtest_cfg = config.backtest
+    if not backtest_cfg.enabled:
         logger.info("Backtest disabled")
         return
     runner = BacktestRunner(
@@ -431,38 +280,10 @@ async def run_backtest(
         state_repo,
         trade_repo,
         dedup_policy,
-        window=int(backtest_cfg.get("window", 50)),
+        window=backtest_cfg.window,
     )
-    configured_timeframes = backtest_cfg.get("timeframes")
-    timeframes: tuple[Timeframe, ...]
-    if isinstance(configured_timeframes, (list, tuple, set, frozenset)):
-        parsed: list[Timeframe] = []
-        for raw in configured_timeframes:
-            try:
-                parsed.append(Timeframe(raw))
-            except Exception:
-                continue
-        timeframes = tuple(parsed)
-    else:
-        timeframe_value = backtest_cfg.get("timeframe")
-        if timeframe_value is not None:
-            timeframes = (Timeframe(timeframe_value),)
-        else:
-            timeframes = (
-                Timeframe.M1,
-                Timeframe.M3,
-                Timeframe.M5,
-                Timeframe.M15,
-            )
-    if not timeframes:
-        timeframes = (
-            Timeframe.M1,
-            Timeframe.M3,
-            Timeframe.M5,
-            Timeframe.M15,
-        )
-    configured_limit = backtest_cfg.get("limit")
-    requested_limit = int(configured_limit) if configured_limit is not None else None
+    timeframes = backtest_cfg.timeframes
+    requested_limit = backtest_cfg.limit
     universe = await discover_symbol_universe(config, providers, "backtest")
     if not universe.assignments:
         logger.warning("No symbols available for backtest after applying liquidity filters")
@@ -474,14 +295,7 @@ async def run_backtest(
         for timeframe in timeframes:
             try:
                 limit = provider.resolve_ohlcv_limit(requested_limit)
-                history_batches_raw = backtest_cfg.get("history_batches", 10)
-                history_batches = (
-                    int(history_batches_raw)
-                    if isinstance(history_batches_raw, (int, float, str))
-                    and str(history_batches_raw).strip()
-                    else 10
-                )
-                history_batches = max(history_batches, 1)
+                history_batches = backtest_cfg.history_batches
                 timeframe_delta = timeframe.to_timedelta()
                 timeframe_ms = int(timeframe_delta.total_seconds() * 1000)
                 total_candles = limit * history_batches
@@ -545,24 +359,11 @@ async def run_live(
 ) -> None:
     logger = get_logger("live")
     signal_repo, trade_repo, state_repo, _, selector, tp_sl_service, dedup_policy = services
-    live_cfg = config.get("live", {})
-    if not _is_mode_enabled(live_cfg):
+    live_cfg = config.live
+    if not live_cfg.enabled:
         logger.info("Live trading disabled")
         return
-    provider_values = live_cfg.get("providers")
-    provider_names: list[str] = []
-    if isinstance(provider_values, str):
-        provider_names = [provider_values]
-    elif isinstance(provider_values, Iterable):
-        provider_names = [str(value) for value in provider_values if isinstance(value, str)]
-
-    if not provider_names:
-        single = live_cfg.get("provider")
-        if isinstance(single, str):
-            provider_names = [single]
-
-    if not provider_names:
-        provider_names = list(providers.keys())
+    provider_names: list[str] = list(live_cfg.providers) or list(providers.keys())
 
     invalid = [name for name in provider_names if name not in providers]
     if invalid:
@@ -572,8 +373,8 @@ async def run_live(
         logger.warning("No valid providers configured for live trading")
         return
 
-    timeframe = Timeframe(live_cfg.get("timeframe", Timeframe.M5.value))
-    window = int(live_cfg.get("window", 50))
+    timeframe = live_cfg.timeframe
+    window = live_cfg.window
     universe = await discover_symbol_universe(
         config,
         providers,
@@ -641,23 +442,6 @@ def _normalize_mode(value: object) -> str | None:
         if normalized:
             return normalized
     return None
-
-
-def _is_mode_enabled(config_section: Mapping[str, object] | object, default: bool = True) -> bool:
-    if not isinstance(config_section, Mapping):
-        return default
-    value = config_section.get("enabled")
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes", "on"}:
-            return True
-        if lowered in {"false", "0", "no", "off"}:
-            return False
-    return bool(value)
 
 
 def resolve_mode(config: AppConfig, cli_args: Sequence[str] | None = None) -> str:
