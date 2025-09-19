@@ -8,10 +8,12 @@ from typing import Any, Dict, Mapping
 
 from .config_models import (
     BacktestConfig,
+    ExchangeProviderConfig,
     LiveConfig,
     ModeSelectionOverrides,
     SymbolSelectionConfig,
     ThresholdsConfig,
+    parse_exchange_provider_configs,
     parse_symbol_provider_mapping,
 )
 
@@ -19,11 +21,13 @@ from .config_models import (
 @dataclass(slots=True)
 class AppConfig:
     raw: Dict[str, Any]
+    env: dict[str, str] = field(init=False)
     thresholds: ThresholdsConfig = field(init=False)
     symbol_selection: SymbolSelectionConfig = field(init=False)
     symbol_provider_mapping: dict[str, str] = field(init=False)
     backtest: BacktestConfig = field(init=False)
     live: LiveConfig = field(init=False)
+    providers: dict[str, ExchangeProviderConfig] = field(init=False)
 
     def __post_init__(self) -> None:
         self.thresholds = ThresholdsConfig.from_raw(self.get("thresholds", {}))
@@ -35,6 +39,17 @@ class AppConfig:
         )
         self.backtest = BacktestConfig.from_raw(self.get("backtest", {}))
         self.live = LiveConfig.from_raw(self.get("live", {}))
+        env_values: dict[str, str] = {}
+        env_raw = self.get("env", {})
+        if isinstance(env_raw, Mapping):
+            for key, value in env_raw.items():
+                if not isinstance(key, str):
+                    continue
+                if value is None:
+                    continue
+                env_values[key] = str(value)
+        self.env = env_values
+        self.providers = parse_exchange_provider_configs(self.get("providers", {}))
 
     def get(self, path: str, default: Any = None) -> Any:
         cursor: Any = self.raw

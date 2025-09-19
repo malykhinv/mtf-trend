@@ -61,6 +61,28 @@ class _BybitAccountBalance:
         return cls(coins=tuple(coins), raw=raw)
 
 
+def _normalize_kline_entry(entry: Any) -> Mapping[str, Any] | None:
+    if isinstance(entry, Mapping):
+        return entry
+    if isinstance(entry, Sequence) and not isinstance(entry, (str, bytes, bytearray)):
+        keys = (
+            "start",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "turnover",
+        )
+        normalized: dict[str, Any] = {}
+        for index, key in enumerate(keys):
+            if index < len(entry):
+                normalized[key] = entry[index]
+        if normalized:
+            return normalized
+    return None
+
+
 class BybitPerpetualProvider(BaseExchangeProvider):
     exchange = Exchange.BYBIT
     max_ohlcv_limit = 1000
@@ -134,7 +156,14 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         raw_entries = data.get("result", {}).get("list", [])
         if not isinstance(raw_entries, Sequence):
             raise TypeError("Bybit klines payload must be a sequence")
-        entries = [BybitKline.from_raw(item) for item in raw_entries]
+        normalized_entries = [
+            _normalize_kline_entry(item) for item in raw_entries
+        ]
+        entries = [
+            BybitKline.from_raw(item)
+            for item in normalized_entries
+            if item is not None
+        ]
         candles = self.map_candles(entries, symbol, timeframe)
         filtered = await self._filter_liquidity(candles)
         return self._sort_and_deduplicate(filtered)
