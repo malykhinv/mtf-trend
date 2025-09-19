@@ -4,13 +4,32 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Iterable, Mapping, Sequence, Tuple, TypeVar
+from typing import Iterable, Mapping, Sequence, Tuple, TypeVar, cast
 
 from ...app_modes import AppMode
 from ...domain.enums import Timeframe
 from ...domain.models.entities import ThresholdMetric as DomainThresholdMetric
 from ...domain.models.entities import Thresholds as DomainThresholds
 from ...domain.models.metadata import ThresholdsMetadata
+from .config_types import (
+    BacktestSection,
+    DedupSection,
+    LiveSection,
+    LoggingSection,
+    MetricsSection,
+    ModeSelectionSection,
+    NumberInput,
+    ProviderSection,
+    ProvidersSection,
+    RangeEntry,
+    StorageSection,
+    SymbolSelectionSection,
+    SymbolSetInput,
+    ThresholdMetricSection,
+    ThresholdSection,
+    ThresholdsSection,
+    TimeSection,
+)
 
 
 _DEFAULT_BACKTEST_TIMEFRAMES: tuple[Timeframe, ...] = (
@@ -21,7 +40,7 @@ _DEFAULT_BACKTEST_TIMEFRAMES: tuple[Timeframe, ...] = (
 )
 
 
-def _to_optional_float(value: Any) -> float | None:
+def _to_optional_float(value: NumberInput) -> float | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -34,7 +53,7 @@ def _to_optional_float(value: Any) -> float | None:
     return None
 
 
-def _to_bool(value: Any, default: bool) -> bool:
+def _to_bool(value: bool | str | int | float | None, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -48,7 +67,7 @@ def _to_bool(value: Any, default: bool) -> bool:
     return bool(value)
 
 
-def _to_int(value: Any, default: int, minimum: int | None = None) -> int:
+def _to_int(value: NumberInput, default: int, minimum: int | None = None) -> int:
     if isinstance(value, bool):
         candidate: int | None = 1 if value else 0
     elif isinstance(value, (int, float)):
@@ -67,7 +86,7 @@ def _to_int(value: Any, default: int, minimum: int | None = None) -> int:
     return candidate
 
 
-def _to_optional_int(value: Any) -> int | None:
+def _to_optional_int(value: NumberInput) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -82,18 +101,23 @@ def _to_optional_int(value: Any) -> int | None:
     return None
 
 
-def _normalize_symbol_set(value: Any) -> frozenset[str]:
+def _normalize_symbol_set(value: SymbolSetInput | Sequence[str] | None) -> frozenset[str]:
+    if value is None:
+        return frozenset()
     symbols: set[str] = set()
     if isinstance(value, str):
-        value = [value]
-    if isinstance(value, Iterable):
-        for item in value:
-            if isinstance(item, str) and item.strip():
-                symbols.add(item.strip().upper())
+        items: Iterable[str] = [value]
+    elif isinstance(value, Sequence):
+        items = value
+    else:
+        return frozenset()
+    for item in items:
+        if isinstance(item, str) and item.strip():
+            symbols.add(item.strip().upper())
     return frozenset(symbols)
 
 
-def _parse_range_entry(entry: Any) -> tuple[float | None, float | None] | None:
+def _parse_range_entry(entry: RangeEntry) -> tuple[float | None, float | None] | None:
     min_value: float | None = None
     max_value: float | None = None
     if isinstance(entry, Mapping):
@@ -117,8 +141,10 @@ def _parse_range_entry(entry: Any) -> tuple[float | None, float | None] | None:
     return (min_value, max_value)
 
 
-def _parse_range_list(source: Any) -> tuple[tuple[float | None, float | None], ...]:
-    if not isinstance(source, Iterable) or isinstance(source, (str, bytes, bytearray)):
+def _parse_range_list(
+    source: Sequence[RangeEntry] | None,
+) -> tuple[tuple[float | None, float | None], ...]:
+    if not source:
         return tuple()
     parsed: list[tuple[float | None, float | None]] = []
     for entry in source:
@@ -128,7 +154,7 @@ def _parse_range_list(source: Any) -> tuple[tuple[float | None, float | None], .
     return tuple(parsed)
 
 
-def _parse_datetime(value: Any) -> datetime | None:
+def _parse_datetime(value: datetime | str | None) -> datetime | None:
     if isinstance(value, datetime):
         return value
     if isinstance(value, str) and value.strip():
@@ -143,7 +169,7 @@ def _float_or_default(value: float | None) -> float:
     return value if value is not None else 0.0
 
 
-def _normalize_str(value: Any) -> str | None:
+def _normalize_str(value: str | int | float | bool | None) -> str | None:
     if value is None:
         return None
     if isinstance(value, str):
@@ -157,18 +183,15 @@ class StorageConfig:
     path: str = "var/state.xlsx"
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "StorageConfig":
-        path_value: Any
-        if isinstance(raw, Mapping):
-            path_value = raw.get("path")
-        else:
-            path_value = raw
-        if isinstance(path_value, str):
-            candidate = path_value.strip()
-            if candidate:
-                return cls(path=candidate)
-        elif path_value is not None:
-            return cls(path=str(path_value))
+    def from_raw(cls, raw: StorageSection | None) -> "StorageConfig":
+        if not raw:
+            return cls()
+        path_value = raw.get("path")
+        if path_value is None:
+            return cls()
+        candidate = str(path_value).strip()
+        if candidate:
+            return cls(path=candidate)
         return cls()
 
 
@@ -177,22 +200,19 @@ class LoggingConfig:
     level: str = "INFO"
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "LoggingConfig":
-        level_value: Any
-        if isinstance(raw, Mapping):
-            level_value = raw.get("level")
-        else:
-            level_value = raw
-        if isinstance(level_value, str):
-            candidate = level_value.strip()
-            if candidate:
-                return cls(level=candidate.upper())
-        elif level_value is not None:
-            return cls(level=str(level_value).upper())
+    def from_raw(cls, raw: LoggingSection | None) -> "LoggingConfig":
+        if not raw:
+            return cls()
+        level_value = raw.get("level")
+        if level_value is None:
+            return cls()
+        candidate = str(level_value).strip()
+        if candidate:
+            return cls(level=candidate.upper())
         return cls()
 
 
-def _parse_optional_mode(value: Any) -> AppMode | None:
+def _parse_optional_mode(value: str | AppMode | None) -> AppMode | None:
     if value is None:
         return None
     if isinstance(value, str) and not value.strip():
@@ -206,20 +226,16 @@ class TimeConfig:
     mode: AppMode | None = None
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "TimeConfig":
+    def from_raw(cls, raw: TimeSection | None) -> "TimeConfig":
         zone = "UTC"
         mode: AppMode | None = None
-        if isinstance(raw, Mapping):
+        if raw:
             zone_raw = raw.get("zone")
-            if isinstance(zone_raw, str) and zone_raw.strip():
-                zone = zone_raw.strip()
-            elif zone_raw is not None:
-                zone = str(zone_raw)
+            if zone_raw is not None:
+                candidate = str(zone_raw).strip()
+                if candidate:
+                    zone = candidate
             mode = _parse_optional_mode(raw.get("mode"))
-        elif isinstance(raw, str) and raw.strip():
-            zone = raw.strip()
-        elif raw is not None:
-            zone = str(raw)
         return cls(zone=zone, mode=mode)
 
 
@@ -230,10 +246,12 @@ class ProviderCredential:
 
     @classmethod
     def from_mapping(
-        cls, raw: Mapping[str, Any], key: str, default_env: str | None = None
+        cls, raw: ProviderSection, key: str, default_env: str | None = None
     ) -> "ProviderCredential":
-        value = _normalize_str(raw.get(key))
-        env_key = _normalize_str(raw.get(f"{key}_env"))
+        value = _normalize_str(cast(str | int | float | bool | None, raw.get(key)))
+        env_key = _normalize_str(
+            cast(str | int | float | bool | None, raw.get(f"{key}_env"))
+        )
         if env_key is None:
             env_key = default_env
         return cls(value=value, env_key=env_key)
@@ -280,20 +298,22 @@ class ExchangeProviderConfig:
     def from_mapping(
         cls: type[ProviderConfigT],
         name: str,
-        raw: Mapping[str, Any] | None,
+        raw: ProviderSection | None,
     ) -> ProviderConfigT:
-        if raw is None or not isinstance(raw, Mapping):
-            raw = {}
+        if raw is None:
+            data: ProviderSection = ProviderSection()
+        else:
+            data = raw
         prefix = name.upper()
-        api_base = _normalize_str(raw.get("api_base")) or ""
-        ws_base = _normalize_str(raw.get("ws_base")) or ""
-        rate_limit = _to_int(raw.get("rate_limit_per_minute"), 60, minimum=1)
-        min_volume = _to_optional_float(raw.get("min_quote_volume")) or 0.0
+        api_base = _normalize_str(data.get("api_base")) or ""
+        ws_base = _normalize_str(data.get("ws_base")) or ""
+        rate_limit = _to_int(data.get("rate_limit_per_minute"), 60, minimum=1)
+        min_volume = _to_optional_float(data.get("min_quote_volume")) or 0.0
         api_key = ProviderCredential.from_mapping(
-            raw, "api_key", f"{prefix}_API_KEY"
+            data, "api_key", f"{prefix}_API_KEY"
         )
         api_secret = ProviderCredential.from_mapping(
-            raw, "api_secret", f"{prefix}_API_SECRET"
+            data, "api_secret", f"{prefix}_API_SECRET"
         )
         instance = cls(
             name=name,
@@ -337,19 +357,16 @@ _PROVIDER_CONFIG_TYPES: dict[str, tuple[ProviderKind, type[ExchangeProviderConfi
 
 
 def parse_exchange_provider_configs(
-    raw: Any,
+    raw: ProvidersSection | None,
 ) -> dict[str, ExchangeProviderConfig]:
-    if not isinstance(raw, Mapping):
+    if not raw:
         return {}
     providers: dict[str, ExchangeProviderConfig] = {}
     for name, value in raw.items():
-        if not isinstance(name, str):
-            continue
         kind, config_cls = _PROVIDER_CONFIG_TYPES.get(
             name.lower(), (ProviderKind.GENERIC, ExchangeProviderConfig)
         )
-        mapping = value if isinstance(value, Mapping) else {}
-        config = config_cls.from_mapping(name, mapping)
+        config = config_cls.from_mapping(name, value)
         config.kind = kind
         providers[name] = config
     return providers
@@ -362,13 +379,15 @@ class MetricsConfig:
     momentum_period: int = 5
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "MetricsConfig":
-        if not isinstance(raw, Mapping):
-            raw = {}
+    def from_raw(cls, raw: MetricsSection | None) -> "MetricsConfig":
+        if raw is None:
+            data: MetricsSection = MetricsSection()
+        else:
+            data = raw
         return cls(
-            atr_period=_to_int(raw.get("atr_period"), 14, minimum=1),
-            volume_period=_to_int(raw.get("volume_period"), 20, minimum=1),
-            momentum_period=_to_int(raw.get("momentum_period"), 5, minimum=1),
+            atr_period=_to_int(data.get("atr_period"), 14, minimum=1),
+            volume_period=_to_int(data.get("volume_period"), 20, minimum=1),
+            momentum_period=_to_int(data.get("momentum_period"), 5, minimum=1),
         )
 
 
@@ -378,12 +397,14 @@ class DedupConfig:
     max_records: int = 1_000
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "DedupConfig":
-        if not isinstance(raw, Mapping):
-            raw = {}
+    def from_raw(cls, raw: DedupSection | None) -> "DedupConfig":
+        if raw is None:
+            data: DedupSection = DedupSection()
+        else:
+            data = raw
         return cls(
-            ttl_seconds=_to_int(raw.get("ttl_seconds"), 14_400, minimum=1),
-            max_records=_to_int(raw.get("max_records"), 1_000, minimum=1),
+            ttl_seconds=_to_int(data.get("ttl_seconds"), 14_400, minimum=1),
+            max_records=_to_int(data.get("max_records"), 1_000, minimum=1),
         )
 
 
@@ -395,12 +416,15 @@ class ThresholdMetricConfig:
     min_abs_value: float | None = None
 
     @classmethod
-    def from_mapping(cls, raw: Mapping[str, Any]) -> "ThresholdMetricConfig" | None:
+    def from_mapping(cls, raw: ThresholdMetricSection) -> "ThresholdMetricConfig" | None:
         name = raw.get("name")
-        if not isinstance(name, str) or not name.strip():
+        if name is None:
+            return None
+        candidate = name.strip()
+        if not candidate:
             return None
         return cls(
-            name=name.strip(),
+            name=candidate,
             min_value=_to_optional_float(raw.get("min_value")),
             max_value=_to_optional_float(raw.get("max_value")),
             min_abs_value=_to_optional_float(raw.get("min_abs_value")),
@@ -439,40 +463,40 @@ class ThresholdConfig:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_mapping(cls, raw: Mapping[str, Any] | None) -> "ThresholdConfig":
-        if raw is None or not isinstance(raw, Mapping):
-            raw = {}
-        metadata_raw = raw.get("metadata")
+    def from_mapping(cls, raw: ThresholdSection | None) -> "ThresholdConfig":
+        if raw is None:
+            data: ThresholdSection = ThresholdSection()
+        else:
+            data = raw
+        metadata_raw = data.get("metadata")
         metadata = ThresholdsMetadata.from_mapping(
             metadata_raw if isinstance(metadata_raw, Mapping) else None
         )
-        metrics_raw = raw.get("metrics")
+        metrics_raw = data.get("metrics") or ()
         metrics: list[ThresholdMetricConfig] = []
-        if isinstance(metrics_raw, Iterable) and not isinstance(
-            metrics_raw, (str, bytes, bytearray)
-        ):
-            for item in metrics_raw:
-                if isinstance(item, Mapping):
-                    metric = ThresholdMetricConfig.from_mapping(item)
-                    if metric is not None:
-                        metrics.append(metric)
-        short_pct_move_ranges = _parse_range_list(raw.get("short_pct_move_ranges"))
+        for item in metrics_raw:
+            metric = ThresholdMetricConfig.from_mapping(item)
+            if metric is not None:
+                metrics.append(metric)
+        short_pct_move_ranges = _parse_range_list(
+            data.get("short_pct_move_ranges")
+        )
         metadata_extra = metadata.extra if metadata else {}
         if not short_pct_move_ranges and metadata_extra:
             short_pct_move_ranges = _parse_range_list(
                 metadata_extra.get("short_pct_move_ranges")
             )
         short_relative_volume_ranges = _parse_range_list(
-            raw.get("short_relative_volume_ranges")
+            data.get("short_relative_volume_ranges")
         )
         if not short_relative_volume_ranges and metadata_extra:
             short_relative_volume_ranges = _parse_range_list(
                 metadata_extra.get("short_relative_volume_ranges")
             )
         return cls(
-            id=str(raw.get("id")) if raw.get("id") is not None else None,
+            id=str(data.get("id")) if data.get("id") is not None else None,
             min_relative_volume=_coerce_from_keys(
-                raw,
+                data,
                 [
                     "min_relative_volume",
                     "minRelativeVolume",
@@ -481,7 +505,7 @@ class ThresholdConfig:
                 ],
             ),
             max_relative_volume=_coerce_from_keys(
-                raw,
+                data,
                 [
                     "max_relative_volume",
                     "maxRelativeVolume",
@@ -489,23 +513,29 @@ class ThresholdConfig:
                     "t",
                 ],
             ),
-            min_atr_mult=_coerce_from_keys(raw, ["min_atr_mult", "minAtrMult", "U", "u"]),
-            min_pct_move=_coerce_from_keys(raw, ["min_pct_move", "minPctMove", "V", "v"]),
-            max_pct_move=_coerce_from_keys(raw, ["max_pct_move", "maxPctMove", "W", "w"]),
+            min_atr_mult=_coerce_from_keys(
+                data, ["min_atr_mult", "minAtrMult", "U", "u"]
+            ),
+            min_pct_move=_coerce_from_keys(
+                data, ["min_pct_move", "minPctMove", "V", "v"]
+            ),
+            max_pct_move=_coerce_from_keys(
+                data, ["max_pct_move", "maxPctMove", "W", "w"]
+            ),
             max_upper_wick_pct=_coerce_from_keys(
-                raw, ["max_upper_wick_pct", "maxUpperWickPct", "X", "x"]
+                data, ["max_upper_wick_pct", "maxUpperWickPct", "X", "x"]
             ),
             max_lower_wick_pct=_coerce_from_keys(
-                raw, ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
+                data, ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
             ),
-            allow_long=_to_bool(raw.get("allow_long"), True),
-            allow_short=_to_bool(raw.get("allow_short"), True),
+            allow_long=_to_bool(data.get("allow_long"), True),
+            allow_short=_to_bool(data.get("allow_short"), True),
             metrics=tuple(metrics),
             short_pct_move_ranges=short_pct_move_ranges,
             short_relative_volume_ranges=short_relative_volume_ranges,
             metadata=metadata,
-            created_at=_parse_datetime(raw.get("created_at")),
-            updated_at=_parse_datetime(raw.get("updated_at")),
+            created_at=_parse_datetime(data.get("created_at")),
+            updated_at=_parse_datetime(data.get("updated_at")),
         )
 
     def to_domain(self) -> DomainThresholds:
@@ -530,13 +560,17 @@ class ThresholdConfig:
 
 
 def _coerce_from_keys(
-    raw: Mapping[str, Any], keys: Sequence[str], fallback: float | None = None
+    raw: Mapping[str, object],
+    keys: Sequence[str],
+    fallback: float | None = None,
 ) -> float | None:
     for key in keys:
         if key in raw:
-            value = _to_optional_float(raw.get(key))
-            if value is not None:
-                return value
+            candidate = raw.get(key)
+            if isinstance(candidate, (str, int, float, bool)) or candidate is None:
+                value = _to_optional_float(candidate)
+                if value is not None:
+                    return value
     return fallback
 
 
@@ -546,17 +580,16 @@ class ThresholdsConfig:
     symbols: dict[str, ThresholdConfig]
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "ThresholdsConfig":
-        if not isinstance(raw, Mapping):
-            raw = {}
-        default_raw = raw.get("default") if isinstance(raw, Mapping) else None
-        default_cfg = ThresholdConfig.from_mapping(default_raw)
+    def from_raw(cls, raw: ThresholdsSection | None) -> "ThresholdsConfig":
+        if raw is None:
+            data: ThresholdsSection = ThresholdsSection()
+        else:
+            data = raw
+        default_cfg = ThresholdConfig.from_mapping(data.get("default"))
         symbols_cfg: dict[str, ThresholdConfig] = {}
-        symbols_raw = raw.get("symbols") if isinstance(raw, Mapping) else None
-        if isinstance(symbols_raw, Mapping):
-            for key, value in symbols_raw.items():
-                if isinstance(key, str):
-                    symbols_cfg[key] = ThresholdConfig.from_mapping(value)
+        symbols_raw = data.get("symbols") or {}
+        for key, value in symbols_raw.items():
+            symbols_cfg[key] = ThresholdConfig.from_mapping(value)
         return cls(default=default_cfg, symbols=symbols_cfg)
 
 
@@ -568,19 +601,24 @@ class SymbolSelectionConfig:
     deny: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "SymbolSelectionConfig":
-        if not isinstance(raw, Mapping):
-            raw = {}
-        quote_suffix_raw = raw.get("quote_suffix", "USDT")
-        quote_suffix = str(quote_suffix_raw).upper() if quote_suffix_raw is not None else "USDT"
-        if not quote_suffix:
-            quote_suffix = "USDT"
-        min_quote_volume = _to_optional_float(raw.get("min_quote_volume")) or 5_000_000.0
+    def from_raw(cls, raw: SymbolSelectionSection | None) -> "SymbolSelectionConfig":
+        if raw is None:
+            data: SymbolSelectionSection = SymbolSelectionSection()
+        else:
+            data = raw
+        quote_suffix = "USDT"
+        quote_suffix_raw = data.get("quote_suffix")
+        if quote_suffix_raw is not None:
+            candidate = str(quote_suffix_raw).strip().upper()
+            if candidate:
+                quote_suffix = candidate
+        min_volume_value = data.get("min_quote_volume")
+        min_quote_volume = _to_optional_float(min_volume_value) or 5_000_000.0
         return cls(
             quote_suffix=quote_suffix,
             min_quote_volume=min_quote_volume,
-            allow=_normalize_symbol_set(raw.get("allow")),
-            deny=_normalize_symbol_set(raw.get("deny")),
+            allow=_normalize_symbol_set(data.get("allow")),
+            deny=_normalize_symbol_set(data.get("deny")),
         )
 
 
@@ -591,13 +629,15 @@ class ModeSelectionOverrides:
     symbols: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "ModeSelectionOverrides":
-        if not isinstance(raw, Mapping):
-            raw = {}
+    def from_raw(cls, raw: ModeSelectionSection | None) -> "ModeSelectionOverrides":
+        if raw is None:
+            data: ModeSelectionSection = ModeSelectionSection()
+        else:
+            data = raw
         return cls(
-            allow=_normalize_symbol_set(raw.get("allow")),
-            deny=_normalize_symbol_set(raw.get("deny")),
-            symbols=_normalize_symbol_set(raw.get("symbols")),
+            allow=_normalize_symbol_set(data.get("allow")),
+            deny=_normalize_symbol_set(data.get("deny")),
+            symbols=_normalize_symbol_set(data.get("symbols")),
         )
 
 
@@ -611,22 +651,24 @@ class BacktestConfig:
     selection: ModeSelectionOverrides
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "BacktestConfig":
-        if not isinstance(raw, Mapping):
-            raw = {}
-        enabled = _to_bool(raw.get("enabled"), True)
-        window = _to_int(raw.get("window"), 50, minimum=1)
-        timeframes = _parse_timeframes(raw.get("timeframes"))
+    def from_raw(cls, raw: BacktestSection | None) -> "BacktestConfig":
+        if raw is None:
+            data: BacktestSection = BacktestSection()
+        else:
+            data = raw
+        enabled = _to_bool(data.get("enabled"), True)
+        window = _to_int(data.get("window"), 50, minimum=1)
+        timeframes = _parse_timeframes(data.get("timeframes"))
         if not timeframes:
-            single_timeframe = raw.get("timeframe")
+            single_timeframe = data.get("timeframe")
             timeframe_value = _parse_timeframe(single_timeframe)
             if timeframe_value is not None:
                 timeframes = (timeframe_value,)
         if not timeframes:
             timeframes = _DEFAULT_BACKTEST_TIMEFRAMES
-        limit = _to_optional_int(raw.get("limit"))
-        history_batches = _to_int(raw.get("history_batches"), 10, minimum=1)
-        selection = ModeSelectionOverrides.from_raw(raw)
+        limit = _to_optional_int(data.get("limit"))
+        history_batches = _to_int(data.get("history_batches"), 10, minimum=1)
+        selection = ModeSelectionOverrides.from_raw(data)
         return cls(
             enabled=enabled,
             window=window,
@@ -637,20 +679,26 @@ class BacktestConfig:
         )
 
 
-def _parse_timeframes(value: Any) -> tuple[Timeframe, ...]:
+def _parse_timeframes(
+    value: Sequence[str | Timeframe] | str | Timeframe | None,
+) -> tuple[Timeframe, ...]:
+    if value is None:
+        return tuple()
     if isinstance(value, (str, Timeframe)):
-        value = [value]
-    if not isinstance(value, Iterable) or isinstance(value, (bytes, bytearray)):
+        candidates: Iterable[str | Timeframe] = [value]
+    elif isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
+        candidates = value
+    else:
         return tuple()
     parsed: list[Timeframe] = []
-    for item in value:
+    for item in candidates:
         timeframe = _parse_timeframe(item)
         if timeframe is not None:
             parsed.append(timeframe)
     return tuple(parsed)
 
 
-def _parse_timeframe(value: Any) -> Timeframe | None:
+def _parse_timeframe(value: str | Timeframe | None) -> Timeframe | None:
     if isinstance(value, Timeframe):
         return value
     if isinstance(value, str) and value.strip():
@@ -670,14 +718,16 @@ class LiveConfig:
     selection: ModeSelectionOverrides
 
     @classmethod
-    def from_raw(cls, raw: Any) -> "LiveConfig":
-        if not isinstance(raw, Mapping):
-            raw = {}
-        enabled = _to_bool(raw.get("enabled"), True)
-        providers = _parse_providers(raw)
-        timeframe = _parse_timeframe(raw.get("timeframe")) or Timeframe.M5
-        window = _to_int(raw.get("window"), 50, minimum=1)
-        selection = ModeSelectionOverrides.from_raw(raw)
+    def from_raw(cls, raw: LiveSection | None) -> "LiveConfig":
+        if raw is None:
+            data: LiveSection = LiveSection()
+        else:
+            data = raw
+        enabled = _to_bool(data.get("enabled"), True)
+        providers = _parse_providers(data)
+        timeframe = _parse_timeframe(data.get("timeframe")) or Timeframe.M5
+        window = _to_int(data.get("window"), 50, minimum=1)
+        selection = ModeSelectionOverrides.from_raw(data)
         return cls(
             enabled=enabled,
             providers=providers,
@@ -687,33 +737,36 @@ class LiveConfig:
         )
 
 
-def _parse_providers(raw: Mapping[str, Any]) -> tuple[str, ...]:
+def _parse_providers(raw: LiveSection) -> tuple[str, ...]:
     providers_value = raw.get("providers")
+    providers: list[str]
     if isinstance(providers_value, str):
-        providers = [providers_value]
-    elif isinstance(providers_value, Iterable) and not isinstance(
-        providers_value, (bytes, bytearray)
+        candidate = providers_value.strip()
+        providers = [candidate] if candidate else []
+    elif isinstance(providers_value, Sequence) and not isinstance(
+        providers_value, (bytes, bytearray, str)
     ):
         providers = [
-            str(value)
-            for value in providers_value
-            if isinstance(value, str) and value.strip()
+            item.strip()
+            for item in providers_value
+            if isinstance(item, str) and item.strip()
         ]
     else:
         providers = []
     if not providers:
         single = raw.get("provider")
-        if isinstance(single, str) and single.strip():
-            providers = [single.strip()]
+        if isinstance(single, str):
+            candidate = single.strip()
+            if candidate:
+                providers = [candidate]
     return tuple(providers)
 
 
-def parse_symbol_provider_mapping(raw: Any) -> dict[str, str]:
+def parse_symbol_provider_mapping(raw: dict[str, str] | None) -> dict[str, str]:
+    if not raw:
+        return {}
     mapping: dict[str, str] = {}
-    if isinstance(raw, Mapping):
-        for key, value in raw.items():
-            if not isinstance(key, str) or not isinstance(value, str):
-                continue
-            normalized = "default" if key.lower() == "default" else key.upper()
-            mapping[normalized] = value
+    for key, value in raw.items():
+        normalized = "default" if key.lower() == "default" else key.upper()
+        mapping[normalized] = value
     return mapping
