@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from math import fabs
 from typing import Iterable, List, Sequence
 
 from ..enums import BreakDirection, Side
 from ..models.entities import Candle, Signal, Thresholds
-from ..models.metadata import EvaluationMetadata, SignalMetadata
+from ..models.metadata import (
+    EvaluationMetadata,
+    SignalMetadata,
+    ThresholdMetricMetadata,
+)
 from .metrics_service import Metrics, MetricsService, SelectionMetricsSnapshot
 from ...utils import ids
 from ...utils.clock import utcnow
@@ -188,9 +192,9 @@ class SignalSelectorService:
                 name=evaluation.name,
                 value=evaluation.value,
                 passed=evaluation.passed,
-                threshold=asdict(evaluation.threshold)
-                if evaluation.threshold is not None
-                else None,
+                threshold=ThresholdMetricMetadata.from_threshold(
+                    evaluation.threshold
+                ),
             )
             for evaluation in evaluations
         ]

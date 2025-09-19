@@ -6,6 +6,7 @@ import pytest
 
 from bot.domain.enums import Exchange, Side, Timeframe
 from bot.domain.models.entities import Candle, ThresholdMetric, Thresholds
+from bot.domain.models.metadata import ThresholdMetricMetadata
 from bot.domain.services.metrics_service import MetricsService
 from bot.domain.services.selector_service import SignalSelectorService
 
@@ -106,6 +107,12 @@ def test_select_allows_long_when_thresholds_met(selector: SignalSelectorService)
     assert signal.metrics_snapshot is not None
     assert signal.metrics_snapshot.pct_move == pytest.approx(6.0)
     assert signal.metadata is not None
+    assert signal.metadata.evaluations
+    threshold_meta = signal.metadata.evaluations[0].threshold
+    assert isinstance(threshold_meta, ThresholdMetricMetadata)
+    assert threshold_meta is not None
+    assert threshold_meta.name == "atr"
+    assert threshold_meta.min_value == pytest.approx(5.0)
     assert "metrics" not in signal.metadata.extra
 
 

@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Mapping, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Type, TypeVar
 
 from ..enums import TradeStatus
+
+if TYPE_CHECKING:
+    from .entities import ThresholdMetric
 
 
 T = TypeVar("T", bound="_SerializableDataclass")
@@ -23,11 +26,68 @@ class _SerializableDataclass:
         raise NotImplementedError
 
 @dataclass(slots=True)
+class ThresholdMetricMetadata(_SerializableDataclass):
+    name: str
+    min_value: float | None = None
+    max_value: float | None = None
+    min_abs_value: float | None = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {"name": self.name}
+        if self.min_value is not None:
+            data["min_value"] = self.min_value
+        if self.max_value is not None:
+            data["max_value"] = self.max_value
+        if self.min_abs_value is not None:
+            data["min_abs_value"] = self.min_abs_value
+        if self.extra:
+            data.update(self.extra)
+        return data
+
+    @classmethod
+    def from_mapping(
+        cls, raw: Mapping[str, Any] | None
+    ) -> "ThresholdMetricMetadata" | None:
+        if not raw or "name" not in raw:
+            return None
+        known = {"name", "min_value", "max_value", "min_abs_value"}
+        extra = {key: raw[key] for key in raw.keys() - known}
+
+        def _to_float(value: Any) -> float | None:
+            try:
+                return float(value) if value is not None else None
+            except (TypeError, ValueError):
+                return None
+
+        return cls(
+            name=str(raw["name"]),
+            min_value=_to_float(raw.get("min_value")),
+            max_value=_to_float(raw.get("max_value")),
+            min_abs_value=_to_float(raw.get("min_abs_value")),
+            extra=extra,
+        )
+
+    @classmethod
+    def from_threshold(
+        cls, threshold: "ThresholdMetric" | None
+    ) -> "ThresholdMetricMetadata" | None:
+        if threshold is None:
+            return None
+        return cls(
+            name=threshold.name,
+            min_value=threshold.min_value,
+            max_value=threshold.max_value,
+            min_abs_value=threshold.min_abs_value,
+        )
+
+
+@dataclass(slots=True)
 class EvaluationMetadata(_SerializableDataclass):
     name: str
     value: float | None = None
     passed: bool | None = None
-    threshold: Dict[str, Any] | None = None
+    threshold: ThresholdMetricMetadata | None = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -37,7 +97,7 @@ class EvaluationMetadata(_SerializableDataclass):
         if self.passed is not None:
             data["passed"] = self.passed
         if self.threshold is not None:
-            data["threshold"] = self.threshold
+            data["threshold"] = self.threshold.to_dict()
         if self.extra:
             data.update(self.extra)
         return data
@@ -49,7 +109,9 @@ class EvaluationMetadata(_SerializableDataclass):
         known = {"name", "value", "passed", "threshold"}
         extra = {key: raw[key] for key in raw.keys() - known}
         threshold = raw.get("threshold")
-        threshold_dict = dict(threshold) if isinstance(threshold, Mapping) else None
+        threshold_metadata = ThresholdMetricMetadata.from_mapping(
+            threshold if isinstance(threshold, Mapping) else None
+        )
         value = raw.get("value")
         try:
             value_f = float(value) if value is not None else None
@@ -65,7 +127,7 @@ class EvaluationMetadata(_SerializableDataclass):
             name=str(raw["name"]),
             value=value_f,
             passed=passed_bool,
-            threshold=threshold_dict,
+            threshold=threshold_metadata,
             extra=extra,
         )
 

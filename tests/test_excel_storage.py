@@ -16,7 +16,12 @@ from bot.data.repositories.state_repository import StateRepository
 from bot.data.repositories.trade_repository import TradeRepository
 from bot.domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from bot.domain.models.entities import Candle, Signal, Thresholds, Trade
-from bot.domain.models.metadata import SignalMetadata, TradeMetadata
+from bot.domain.models.metadata import (
+    EvaluationMetadata,
+    SignalMetadata,
+    ThresholdMetricMetadata,
+    TradeMetadata,
+)
 from bot.domain.services.metrics_service import SelectionMetricsSnapshot
 
 
@@ -79,7 +84,17 @@ def _build_signal(identifier: str, score: float, triggered_at: datetime) -> Sign
         allow_long=True,
         allow_short=True,
         metrics_snapshot=snapshot,
-        metadata=SignalMetadata(extra={"note": "initial"}),
+        metadata=SignalMetadata(
+            extra={"note": "initial"},
+            evaluations=[
+                EvaluationMetadata(
+                    name="atr",
+                    value=thresholds.min_relative_volume,
+                    passed=True,
+                    threshold=ThresholdMetricMetadata(name="atr", min_value=1.0),
+                )
+            ],
+        ),
     )
 
 
@@ -128,6 +143,11 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert loaded_signals[signal.id].triggered_at.tzinfo is not None
     assert loaded_signals[signal.id].metrics_snapshot == signal.metrics_snapshot
     assert loaded_signals[signal.id].metadata is not None
+    evaluations = loaded_signals[signal.id].metadata.evaluations
+    assert evaluations
+    assert isinstance(evaluations[0].threshold, ThresholdMetricMetadata)
+    assert evaluations[0].threshold is not None
+    assert evaluations[0].threshold.min_value == pytest.approx(1.0)
     assert "metrics" not in loaded_signals[signal.id].metadata.extra
     assert loaded_signals[signal.id].metadata.extra.get("note") == "initial"
 
