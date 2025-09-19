@@ -2,7 +2,7 @@ from zoneinfo import ZoneInfo
 
 from bot.data.io.config_loader import AppConfig
 from bot.data.mappers.ohlcv_mapper import map_ohlcv
-from bot.data.models import BinanceKline
+from bot.data.models import BinanceKline, BinanceKlineData
 from bot.domain.enums import Exchange, Timeframe
 from bot.utils.clock import get_timezone, init_clock
 
@@ -19,7 +19,10 @@ def test_map_ohlcv_uses_configured_timezone() -> None:
     raw = [base_timestamp, 1.0, 2.0, 0.5, 1.5, 100.0]
 
     candle = map_ohlcv(
-        BinanceKline.from_payload(raw), "BTCUSDT", Exchange.BINANCE, Timeframe.M1
+        BinanceKline.from_payload(BinanceKlineData.decode(raw)),
+        "BTCUSDT",
+        Exchange.BINANCE,
+        Timeframe.M1,
     )
 
     assert candle.started_at.tzinfo == tz
