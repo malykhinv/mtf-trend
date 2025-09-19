@@ -15,6 +15,7 @@ from ...domain.models.entities import (
     Thresholds,
     Trade,
 )
+from .excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
 from .excel_writer import ExcelWriter
 
 
@@ -70,13 +71,14 @@ class Storage:
         *,
         key: Optional[str] = None,
     ) -> None:
-        row = {
-            "asset": asset,
-            "deposit_amount": float(deposit_amount),
-            "deposit_updated_at": updated_at.isoformat() if updated_at else None,
-            "used_amount": float(used),
-        }
-        self._writer.write_state(row, key=key)
+        stored_row = StoredStateRow(
+            key=key or "default",
+            asset=asset,
+            deposit_amount=deposit_amount,
+            deposit_updated_at=updated_at.isoformat() if updated_at else None,
+            used_amount=used,
+        )
+        self._writer.write_state(stored_row)
 
     def load_state(self, key: Optional[str] = None) -> tuple[str, float, Optional[str], float]:
         key_value = key if key is not None else "default"
@@ -85,13 +87,10 @@ class Storage:
             row = self._writer.read_state(None)
         if row is None:
             return ("USDT", 0.0, None, 0.0)
-        asset = str(row.get("asset") or "USDT")
-        amount_raw = row.get("deposit_amount")
-        updated_raw = row.get("deposit_updated_at")
-        used_raw = row.get("used_amount")
-        amount = float(amount_raw) if amount_raw is not None else 0.0
-        used = float(used_raw) if used_raw is not None else 0.0
-        updated_at = str(updated_raw) if updated_raw else None
+        asset = row.asset or "USDT"
+        amount = row.deposit_amount
+        used = row.used_amount
+        updated_at = row.deposit_updated_at
         return (asset, amount, updated_at, used)
 
     @staticmethod
@@ -223,11 +222,11 @@ class Storage:
             symbol=candle_raw["symbol"],
             exchange=Exchange(candle_raw["exchange"]),
             timeframe=Timeframe(candle_raw["timeframe"]),
-            open=float(candle_raw["open"]),
-            high=float(candle_raw["high"]),
-            low=float(candle_raw["low"]),
-            close=float(candle_raw["close"]),
-            volume=float(candle_raw["volume"]),
+            open=candle_raw["open"],
+            high=candle_raw["high"],
+            low=candle_raw["low"],
+            close=candle_raw["close"],
+            volume=candle_raw["volume"],
             started_at=datetime.fromisoformat(candle_raw["started_at"]),
             closed_at=datetime.fromisoformat(candle_raw["closed_at"]),
         )
@@ -258,7 +257,7 @@ class Storage:
             timeframe=timeframe,
             side=Side(raw["side"]),
             direction=BreakDirection(raw["direction"]),
-            score=float(raw["score"]),
+            score=raw["score"],
             triggered_at=datetime.fromisoformat(raw["triggered_at"]),
             created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
             updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
@@ -308,20 +307,18 @@ class Storage:
             timeframe=timeframe,
             side=Side(raw["side"]),
             status=TradeStatus(raw["status"]),
-            entry_price=float(raw["entry_price"]),
-            size=float(raw.get("size", 0.0)),
-            used_margin=float(
-                raw.get("used_margin", raw.get("used_amount", raw.get("size", 0.0)))
-            ),
-            exit_price=float(raw["exit_price"]) if raw.get("exit_price") is not None else None,
-            tp_price=float(raw["tp_price"]) if raw.get("tp_price") is not None else None,
-            sl_price=float(raw["sl_price"]) if raw.get("sl_price") is not None else None,
-            tp_pct=float(raw["tp_pct"]) if raw.get("tp_pct") is not None else None,
-            sl_pct=float(raw["sl_pct"]) if raw.get("sl_pct") is not None else None,
+            entry_price=raw["entry_price"],
+            size=raw.get("size", 0.0),
+            used_margin=raw.get("used_margin", raw.get("used_amount", raw.get("size", 0.0))),
+            exit_price=raw.get("exit_price"),
+            tp_price=raw.get("tp_price"),
+            sl_price=raw.get("sl_price"),
+            tp_pct=raw.get("tp_pct"),
+            sl_pct=raw.get("sl_pct"),
             opened_at=datetime.fromisoformat(raw["opened_at"]) if raw.get("opened_at") else None,
             closed_at=datetime.fromisoformat(raw["closed_at"]) if raw.get("closed_at") else None,
-            pnl=float(raw["pnl"]) if raw.get("pnl") is not None else None,
-            pnl_pct=float(raw["pnl_pct"]) if raw.get("pnl_pct") is not None else None,
+            pnl=raw.get("pnl"),
+            pnl_pct=raw.get("pnl_pct"),
             created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
             updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
             allow_long=self._to_bool(raw.get("allow_long", True)),
@@ -334,7 +331,7 @@ class Storage:
     # ------------------------------------------------------------------
     # Serialization helpers
     # ------------------------------------------------------------------
-    def _serialize_signal(self, signal: Signal) -> Dict[str, object]:
+    def _serialize_signal(self, signal: Signal) -> StoredSignalRow:
         thresholds = asdict(signal.thresholds)
         if signal.thresholds.created_at:
             thresholds["created_at"] = signal.thresholds.created_at.isoformat()
@@ -350,37 +347,35 @@ class Storage:
             metrics.append(metric_dict)
         metadata = json.dumps(signal.metadata or {}, sort_keys=True)
         candle = signal.candle
-        return {
-            "id": signal.id,
-            "candle_id": signal.candle_id or candle.id,
-            "symbol": candle.symbol,
-            "exchange": candle.exchange.value,
-            "timeframe": signal.timeframe.value if signal.timeframe else None,
-            "candle_timeframe": candle.timeframe.value,
-            "side": signal.side.value,
-            "direction": signal.direction.value,
-            "score": float(signal.score),
-            "triggered_at": signal.triggered_at.isoformat(),
-            "created_at": signal.created_at.isoformat() if signal.created_at else None,
-            "updated_at": signal.updated_at.isoformat() if signal.updated_at else None,
-            "allow_long": bool(signal.allow_long),
-            "allow_short": bool(signal.allow_short),
-            "candle_open": float(candle.open),
-            "candle_high": float(candle.high),
-            "candle_low": float(candle.low),
-            "candle_close": float(candle.close),
-            "candle_volume": float(candle.volume),
-            "candle_quote_volume": float(candle.quote_volume)
-            if candle.quote_volume is not None
-            else None,
-            "candle_started_at": candle.started_at.isoformat(),
-            "candle_closed_at": candle.closed_at.isoformat(),
-            "thresholds_json": json.dumps(thresholds, sort_keys=True),
-            "metrics_json": json.dumps(metrics, sort_keys=True),
-            "metadata_json": metadata,
-        }
+        return StoredSignalRow(
+            id=signal.id,
+            candle_id=signal.candle_id or candle.id,
+            symbol=candle.symbol,
+            exchange=candle.exchange.value,
+            timeframe=signal.timeframe.value if signal.timeframe else None,
+            candle_timeframe=candle.timeframe.value,
+            side=signal.side.value,
+            direction=signal.direction.value,
+            score=signal.score,
+            triggered_at=signal.triggered_at.isoformat(),
+            created_at=signal.created_at.isoformat() if signal.created_at else None,
+            updated_at=signal.updated_at.isoformat() if signal.updated_at else None,
+            allow_long=bool(signal.allow_long),
+            allow_short=bool(signal.allow_short),
+            candle_open=candle.open,
+            candle_high=candle.high,
+            candle_low=candle.low,
+            candle_close=candle.close,
+            candle_volume=candle.volume,
+            candle_quote_volume=candle.quote_volume,
+            candle_started_at=candle.started_at.isoformat(),
+            candle_closed_at=candle.closed_at.isoformat(),
+            thresholds_json=json.dumps(thresholds, sort_keys=True),
+            metrics_json=json.dumps(metrics, sort_keys=True),
+            metadata_json=metadata,
+        )
 
-    def _serialize_trade(self, trade: Trade) -> Dict[str, object]:
+    def _serialize_trade(self, trade: Trade) -> StoredTradeRow:
         thresholds_snapshot = None
         if trade.thresholds_snapshot:
             snapshot = asdict(trade.thresholds_snapshot)
@@ -391,107 +386,107 @@ class Storage:
             snapshot["metadata"] = dict(trade.thresholds_snapshot.metadata or {})
             thresholds_snapshot = json.dumps(snapshot, sort_keys=True)
         metadata_json = json.dumps(trade.metadata or {}, sort_keys=True)
-        return {
-            "id": trade.id,
-            "signal_id": trade.signal_id,
-            "source_signal_id": trade.source_signal_id,
-            "exchange": trade.exchange.value,
-            "symbol": trade.symbol,
-            "timeframe": trade.timeframe.value if trade.timeframe else None,
-            "side": trade.side.value,
-            "status": trade.status.value,
-            "entry_price": float(trade.entry_price),
-            "size": float(trade.size),
-            "used_margin": float(trade.used_margin),
-            "exit_price": float(trade.exit_price) if trade.exit_price is not None else None,
-            "tp_price": float(trade.tp_price) if trade.tp_price is not None else None,
-            "sl_price": float(trade.sl_price) if trade.sl_price is not None else None,
-            "tp_pct": float(trade.tp_pct) if trade.tp_pct is not None else None,
-            "sl_pct": float(trade.sl_pct) if trade.sl_pct is not None else None,
-            "opened_at": trade.opened_at.isoformat() if trade.opened_at else None,
-            "closed_at": trade.closed_at.isoformat() if trade.closed_at else None,
-            "pnl": float(trade.pnl) if trade.pnl is not None else None,
-            "pnl_pct": float(trade.pnl_pct) if trade.pnl_pct is not None else None,
-            "created_at": trade.created_at.isoformat() if trade.created_at else None,
-            "updated_at": trade.updated_at.isoformat() if trade.updated_at else None,
-            "allow_long": bool(trade.allow_long),
-            "allow_short": bool(trade.allow_short),
-            "thresholds_snapshot_json": thresholds_snapshot,
-            "metadata_json": metadata_json,
-        }
+        return StoredTradeRow(
+            id=trade.id,
+            signal_id=trade.signal_id,
+            source_signal_id=trade.source_signal_id,
+            exchange=trade.exchange.value,
+            symbol=trade.symbol,
+            timeframe=trade.timeframe.value if trade.timeframe else None,
+            side=trade.side.value,
+            status=trade.status.value,
+            entry_price=trade.entry_price,
+            size=trade.size,
+            used_margin=trade.used_margin,
+            exit_price=trade.exit_price,
+            tp_price=trade.tp_price,
+            sl_price=trade.sl_price,
+            tp_pct=trade.tp_pct,
+            sl_pct=trade.sl_pct,
+            opened_at=trade.opened_at.isoformat() if trade.opened_at else None,
+            closed_at=trade.closed_at.isoformat() if trade.closed_at else None,
+            pnl=trade.pnl,
+            pnl_pct=trade.pnl_pct,
+            created_at=trade.created_at.isoformat() if trade.created_at else None,
+            updated_at=trade.updated_at.isoformat() if trade.updated_at else None,
+            allow_long=bool(trade.allow_long),
+            allow_short=bool(trade.allow_short),
+            thresholds_snapshot_json=thresholds_snapshot,
+            metadata_json=metadata_json,
+        )
 
-    def _row_to_signal_payload(self, row: Dict[str, object]) -> Dict[str, Any]:
-        thresholds_json = row.get("thresholds_json")
-        metrics_json = row.get("metrics_json")
-        metadata_json = row.get("metadata_json")
+    def _row_to_signal_payload(self, row: StoredSignalRow) -> Dict[str, Any]:
+        thresholds_json = row.thresholds_json
+        metrics_json = row.metrics_json
+        metadata_json = row.metadata_json
         thresholds = self._safe_json_load(thresholds_json, {})
         metrics = self._safe_json_load(metrics_json, [])
         metadata = self._safe_json_load(metadata_json, {})
         candle: Dict[str, Any] = {
-            "id": row.get("candle_id"),
-            "symbol": row.get("symbol"),
-            "exchange": row.get("exchange"),
-            "timeframe": row.get("candle_timeframe") or row.get("timeframe"),
-            "open": row.get("candle_open") or 0.0,
-            "high": row.get("candle_high") or 0.0,
-            "low": row.get("candle_low") or 0.0,
-            "close": row.get("candle_close") or 0.0,
-            "volume": row.get("candle_volume") or 0.0,
-            "started_at": row.get("candle_started_at"),
-            "closed_at": row.get("candle_closed_at"),
+            "id": row.candle_id,
+            "symbol": row.symbol,
+            "exchange": row.exchange,
+            "timeframe": row.candle_timeframe or row.timeframe,
+            "open": row.candle_open,
+            "high": row.candle_high,
+            "low": row.candle_low,
+            "close": row.candle_close,
+            "volume": row.candle_volume,
+            "started_at": row.candle_started_at,
+            "closed_at": row.candle_closed_at,
         }
-        quote_volume = row.get("candle_quote_volume")
+        quote_volume = row.candle_quote_volume
         if quote_volume is not None:
             candle["quote_volume"] = quote_volume
         payload: Dict[str, Any] = {
-            "id": row.get("id"),
-            "candle_id": row.get("candle_id"),
+            "id": row.id,
+            "candle_id": row.candle_id,
             "candle": candle,
-            "side": row.get("side"),
-            "direction": row.get("direction"),
-            "score": row.get("score") or 0.0,
-            "triggered_at": row.get("triggered_at"),
-            "created_at": row.get("created_at"),
-            "updated_at": row.get("updated_at"),
-            "timeframe": row.get("timeframe"),
-            "allow_long": row.get("allow_long", True),
-            "allow_short": row.get("allow_short", True),
+            "side": row.side,
+            "direction": row.direction,
+            "score": row.score,
+            "triggered_at": row.triggered_at,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "timeframe": row.timeframe,
+            "allow_long": row.allow_long,
+            "allow_short": row.allow_short,
             "thresholds": thresholds,
             "metrics": metrics,
             "metadata": metadata,
         }
         return payload
 
-    def _row_to_trade_payload(self, row: Dict[str, object]) -> Dict[str, Any]:
-        thresholds_json = row.get("thresholds_snapshot_json")
-        metadata_json = row.get("metadata_json")
+    def _row_to_trade_payload(self, row: StoredTradeRow) -> Dict[str, Any]:
+        thresholds_json = row.thresholds_snapshot_json
+        metadata_json = row.metadata_json
         thresholds = self._safe_json_load(thresholds_json, None)
         metadata = self._safe_json_load(metadata_json, {})
         payload: Dict[str, Any] = {
-            "id": row.get("id"),
-            "signal_id": row.get("signal_id"),
-            "source_signal_id": row.get("source_signal_id"),
-            "exchange": row.get("exchange"),
-            "symbol": row.get("symbol"),
-            "timeframe": row.get("timeframe"),
-            "side": row.get("side"),
-            "status": row.get("status"),
-            "entry_price": row.get("entry_price"),
-            "size": row.get("size"),
-            "used_margin": row.get("used_margin"),
-            "exit_price": row.get("exit_price"),
-            "tp_price": row.get("tp_price"),
-            "sl_price": row.get("sl_price"),
-            "tp_pct": row.get("tp_pct"),
-            "sl_pct": row.get("sl_pct"),
-            "opened_at": row.get("opened_at"),
-            "closed_at": row.get("closed_at"),
-            "pnl": row.get("pnl"),
-            "pnl_pct": row.get("pnl_pct"),
-            "created_at": row.get("created_at"),
-            "updated_at": row.get("updated_at"),
-            "allow_long": row.get("allow_long", True),
-            "allow_short": row.get("allow_short", True),
+            "id": row.id,
+            "signal_id": row.signal_id,
+            "source_signal_id": row.source_signal_id,
+            "exchange": row.exchange,
+            "symbol": row.symbol,
+            "timeframe": row.timeframe,
+            "side": row.side,
+            "status": row.status,
+            "entry_price": row.entry_price,
+            "size": row.size,
+            "used_margin": row.used_margin,
+            "exit_price": row.exit_price,
+            "tp_price": row.tp_price,
+            "sl_price": row.sl_price,
+            "tp_pct": row.tp_pct,
+            "sl_pct": row.sl_pct,
+            "opened_at": row.opened_at,
+            "closed_at": row.closed_at,
+            "pnl": row.pnl,
+            "pnl_pct": row.pnl_pct,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+            "allow_long": row.allow_long,
+            "allow_short": row.allow_short,
             "thresholds_snapshot": thresholds,
             "metadata": metadata,
         }

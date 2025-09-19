@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from openpyxl import load_workbook
 
+from bot.data.io.excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
 from bot.data.io.storage import Storage
 from bot.data.repositories.signal_repository import SignalRepository
 from bot.data.repositories.state_repository import StateRepository
@@ -105,6 +106,11 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert loaded_signals[signal.id].triggered_at == signal.triggered_at
     assert loaded_signals[signal.id].triggered_at.tzinfo is not None
 
+    stored_rows = storage._writer.read_signals()
+    assert stored_rows and isinstance(stored_rows[0], StoredSignalRow)
+    assert stored_rows[0].score == pytest.approx(signal.score)
+    assert stored_rows[0].allow_long is True
+
     rows = _read_sheet_rows(workbook_path, "Signals")
     assert len(rows) == 1
     assert rows[0]["id"] == signal.id
@@ -189,6 +195,10 @@ def test_trade_repository_updates_excel(tmp_path) -> None:
     assert loaded_trades[second_trade.id].opened_at == second_trade.opened_at
     assert loaded_trades[second_trade.id].opened_at and loaded_trades[second_trade.id].opened_at.tzinfo is not None
 
+    stored_trades = storage._writer.read_trades()
+    assert stored_trades and isinstance(stored_trades[0], StoredTradeRow)
+    assert stored_trades[0].entry_price == pytest.approx(trade.entry_price)
+
 
 def test_state_repository_persists_per_provider(tmp_path) -> None:
     storage, workbook_path = _create_storage(tmp_path)
@@ -225,3 +235,7 @@ def test_state_repository_persists_per_provider(tmp_path) -> None:
     rows = _read_sheet_rows(workbook_path, "State")
     keys = {row.get("key") for row in rows}
     assert {"binance", "bybit"}.issubset(keys)
+
+    stored_state = storage._writer.read_state("binance")
+    assert stored_state and isinstance(stored_state, StoredStateRow)
+    assert stored_state.deposit_amount == pytest.approx(1_000.0)
