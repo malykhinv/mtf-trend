@@ -41,9 +41,9 @@ class SelectionMetricsSnapshot:
     pct_to_low: float
     pct_to_high_break: float
     pct_to_low_break: float
-    break_direction: float
+    break_direction: BreakDirection
 
-    def to_mapping(self) -> Dict[str, float]:
+    def to_mapping(self) -> Dict[str, float | int]:
         return {
             "atr": self.atr,
             "average_volume": self.average_volume,
@@ -58,7 +58,7 @@ class SelectionMetricsSnapshot:
             "pct_to_low": self.pct_to_low,
             "pct_to_high_break": self.pct_to_high_break,
             "pct_to_low_break": self.pct_to_low_break,
-            "break_direction": self.break_direction,
+            "break_direction": int(self.break_direction.value),
         }
 
     @classmethod
@@ -77,17 +77,30 @@ class SelectionMetricsSnapshot:
             pct_to_low=metrics.pct_to_low,
             pct_to_high_break=metrics.pct_to_high_break,
             pct_to_low_break=metrics.pct_to_low_break,
-            break_direction=float(metrics.break_direction.value),
+            break_direction=metrics.break_direction,
         )
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, object]) -> "SelectionMetricsSnapshot":
         values: Dict[str, float] = {}
+        break_direction: BreakDirection | None = None
         for key in SNAPSHOT_FIELDS:
             raw_value = data.get(key)
             if raw_value is None:
                 raise KeyError(f"missing '{key}' in metrics snapshot")
+            if key == "break_direction":
+                try:
+                    direction_value = int(float(raw_value))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("invalid break_direction value") from exc
+                try:
+                    break_direction = BreakDirection(direction_value)
+                except ValueError as exc:
+                    raise ValueError("unknown break_direction value") from exc
+                continue
             values[key] = float(raw_value)
+        if break_direction is None:
+            raise KeyError("missing 'break_direction' in metrics snapshot")
         return cls(
             atr=values["atr"],
             average_volume=values["average_volume"],
@@ -102,7 +115,7 @@ class SelectionMetricsSnapshot:
             pct_to_low=values["pct_to_low"],
             pct_to_high_break=values["pct_to_high_break"],
             pct_to_low_break=values["pct_to_low_break"],
-            break_direction=values["break_direction"],
+            break_direction=break_direction,
         )
 
 
