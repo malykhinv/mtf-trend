@@ -9,6 +9,7 @@ from typing import Any, Iterable, Mapping, Sequence, Tuple, TypeVar
 from ...domain.enums import Timeframe
 from ...domain.models.entities import ThresholdMetric as DomainThresholdMetric
 from ...domain.models.entities import Thresholds as DomainThresholds
+from ...domain.models.metadata import ThresholdsMetadata
 
 
 _DEFAULT_BACKTEST_TIMEFRAMES: tuple[Timeframe, ...] = (
@@ -361,7 +362,7 @@ class ThresholdConfig:
     short_relative_volume_ranges: tuple[tuple[float | None, float | None], ...] = field(
         default_factory=tuple
     )
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: ThresholdsMetadata | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -370,7 +371,9 @@ class ThresholdConfig:
         if raw is None or not isinstance(raw, Mapping):
             raw = {}
         metadata_raw = raw.get("metadata")
-        metadata = metadata_raw if isinstance(metadata_raw, Mapping) else {}
+        metadata = ThresholdsMetadata.from_mapping(
+            metadata_raw if isinstance(metadata_raw, Mapping) else None
+        )
         metrics_raw = raw.get("metrics")
         metrics: list[ThresholdMetricConfig] = []
         if isinstance(metrics_raw, Iterable) and not isinstance(
@@ -382,16 +385,17 @@ class ThresholdConfig:
                     if metric is not None:
                         metrics.append(metric)
         short_pct_move_ranges = _parse_range_list(raw.get("short_pct_move_ranges"))
-        if not short_pct_move_ranges and metadata:
+        metadata_extra = metadata.extra if metadata else {}
+        if not short_pct_move_ranges and metadata_extra:
             short_pct_move_ranges = _parse_range_list(
-                metadata.get("short_pct_move_ranges")
+                metadata_extra.get("short_pct_move_ranges")
             )
         short_relative_volume_ranges = _parse_range_list(
             raw.get("short_relative_volume_ranges")
         )
-        if not short_relative_volume_ranges and metadata:
+        if not short_relative_volume_ranges and metadata_extra:
             short_relative_volume_ranges = _parse_range_list(
-                metadata.get("short_relative_volume_ranges")
+                metadata_extra.get("short_relative_volume_ranges")
             )
         return cls(
             id=str(raw.get("id")) if raw.get("id") is not None else None,
@@ -447,7 +451,7 @@ class ThresholdConfig:
             allow_long=self.allow_long,
             allow_short=self.allow_short,
             metrics=[metric.to_domain() for metric in self.metrics],
-            metadata=dict(self.metadata),
+            metadata=self.metadata,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )

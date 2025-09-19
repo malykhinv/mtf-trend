@@ -20,6 +20,7 @@ from bot.domain.models.metadata import (
     EvaluationMetadata,
     SignalMetadata,
     ThresholdMetricMetadata,
+    ThresholdsMetadata,
     TradeMetadata,
 )
 from bot.domain.services.metrics_service import SelectionMetricsSnapshot
@@ -50,7 +51,7 @@ def _build_signal(identifier: str, score: float, triggered_at: datetime) -> Sign
         id=f"thr-{identifier}",
         min_relative_volume=1.0,
         max_relative_volume=5.0,
-        metadata={"timeframe": Timeframe.M15.value},
+        metadata=ThresholdsMetadata(timeframe=Timeframe.M15),
     )
     base = score / 10.0
     snapshot = SelectionMetricsSnapshot(
@@ -142,6 +143,11 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     assert loaded_signals[signal.id].triggered_at == signal.triggered_at
     assert loaded_signals[signal.id].triggered_at.tzinfo is not None
     assert loaded_signals[signal.id].metrics_snapshot == signal.metrics_snapshot
+    assert isinstance(loaded_signals[signal.id].thresholds.metadata, ThresholdsMetadata)
+    assert (
+        loaded_signals[signal.id].thresholds.metadata
+        and loaded_signals[signal.id].thresholds.metadata.timeframe is Timeframe.M15
+    )
     assert loaded_signals[signal.id].metadata is not None
     evaluations = loaded_signals[signal.id].metadata.evaluations
     assert evaluations
@@ -187,6 +193,10 @@ def test_signal_repository_updates_excel(tmp_path) -> None:
     loaded_signals = {loaded.id: loaded for loaded in storage.load_signals()}
     assert loaded_signals[signal.id].updated_at == updated_signal.updated_at
     assert loaded_signals[signal.id].updated_at.tzinfo is not None
+    assert (
+        loaded_signals[signal.id].thresholds.metadata
+        and loaded_signals[signal.id].thresholds.metadata.timeframe is Timeframe.M15
+    )
     assert loaded_signals[another_signal.id].triggered_at == another_signal.triggered_at
     assert loaded_signals[another_signal.id].triggered_at.tzinfo is not None
     assert loaded_signals[another_signal.id].metrics_snapshot == another_signal.metrics_snapshot

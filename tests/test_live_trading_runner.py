@@ -15,6 +15,7 @@ from bot.data.repositories.state_repository import StateRepository
 from bot.data.repositories.trade_repository import TradeRepository
 from bot.domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from bot.domain.models.entities import Candle, Signal, Thresholds
+from bot.domain.models.metadata import ThresholdsMetadata
 from bot.domain.services.metrics_service import SelectionMetricsSnapshot
 from bot.domain.services.dedup_policy import DeduplicationPolicy
 from bot.domain.services.live_runner import LiveTradingRunner
@@ -81,7 +82,7 @@ def _build_signal(
         id=f"thr-{identifier}",
         min_relative_volume=1.0,
         max_relative_volume=5.0,
-        metadata={"timeframe": timeframe.value},
+        metadata=ThresholdsMetadata(timeframe=timeframe),
     )
     snapshot = SelectionMetricsSnapshot(
         atr=1.0,

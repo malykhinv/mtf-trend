@@ -15,7 +15,11 @@ from ...domain.models.entities import (
     Thresholds,
     Trade,
 )
-from ...domain.models.metadata import SignalMetadata, TradeMetadata
+from ...domain.models.metadata import (
+    SignalMetadata,
+    ThresholdsMetadata,
+    TradeMetadata,
+)
 from ...domain.services.metrics_service import SelectionMetricsSnapshot
 from .excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
 from .excel_writer import ExcelWriter
@@ -122,9 +126,10 @@ class Storage:
             for metric_raw in metrics_raw:
                 if isinstance(metric_raw, dict) and "name" in metric_raw:
                     metrics.append(self._deserialize_threshold_metric(metric_raw))
-        metadata = raw.get("metadata", {})
-        if not isinstance(metadata, dict):
-            metadata = {}
+        metadata_raw = raw.get("metadata")
+        metadata = ThresholdsMetadata.from_mapping(
+            metadata_raw if isinstance(metadata_raw, Mapping) else None
+        )
         created_at_raw = raw.get("created_at")
         updated_at_raw = raw.get("updated_at")
         short_pct_move_ranges: List[tuple[float, Optional[float]]] = []
@@ -150,6 +155,47 @@ class Storage:
                 else:
                     continue
                 short_pct_move_ranges.append((min_value, max_value))
+        if not short_pct_move_ranges and metadata and metadata.extra:
+            extra_ranges = metadata.extra.get("short_pct_move_ranges")
+            if isinstance(extra_ranges, list):
+                for entry in extra_ranges:
+                    min_value = None
+                    max_value = None
+                    if isinstance(entry, dict):
+                        min_raw = entry.get("min")
+                        if min_raw is None:
+                            min_raw = entry.get("min_value")
+                        max_raw = entry.get("max")
+                        if max_raw is None:
+                            max_raw = entry.get("max_value")
+                        if min_raw is None:
+                            continue
+                        try:
+                            min_value = float(min_raw)
+                        except (TypeError, ValueError):
+                            continue
+                        if max_raw is not None:
+                            try:
+                                max_value = float(max_raw)
+                            except (TypeError, ValueError):
+                                max_value = None
+                    elif isinstance(entry, (list, tuple)) and entry:
+                        try:
+                            min_value = float(entry[0]) if entry[0] is not None else None
+                        except (TypeError, ValueError):
+                            min_value = None
+                        if len(entry) > 1:
+                            try:
+                                max_value = (
+                                    float(entry[1])
+                                    if entry[1] is not None
+                                    else None
+                                )
+                            except (TypeError, ValueError):
+                                max_value = None
+                    if min_value is None and max_value is None:
+                        continue
+                    short_pct_move_ranges.append((min_value, max_value))
         def _get_float_from_keys(keys: list[str]) -> float:
             for key in keys:
                 if raw.get(key) is not None:
@@ -290,13 +336,17 @@ class Storage:
         updated_at_raw = raw.get("updated_at")
         timeframe_raw = raw.get("timeframe")
         timeframe = Timeframe(timeframe_raw) if isinstance(timeframe_raw, str) else None
-        if timeframe is None and thresholds_snapshot and isinstance(thresholds_snapshot.metadata, dict):
-            meta_tf = thresholds_snapshot.metadata.get("timeframe")
-            if isinstance(meta_tf, str):
-                try:
-                    timeframe = Timeframe(meta_tf)
-                except ValueError:
-                    timeframe = None
+        if timeframe is None and thresholds_snapshot and thresholds_snapshot.metadata:
+            meta_tf = thresholds_snapshot.metadata.timeframe
+            if isinstance(meta_tf, Timeframe):
+                timeframe = meta_tf
+            else:
+                extra_tf = thresholds_snapshot.metadata.extra.get("timeframe")
+                if isinstance(extra_tf, str):
+                    try:
+                        timeframe = Timeframe(extra_tf)
+                    except ValueError:
+                        timeframe = None
         if timeframe is None:
             meta_tf = metadata_dict.get("timeframe")
             if isinstance(meta_tf, str):
@@ -344,7 +394,11 @@ class Storage:
             thresholds["created_at"] = signal.thresholds.created_at.isoformat()
         if signal.thresholds.updated_at:
             thresholds["updated_at"] = signal.thresholds.updated_at.isoformat()
-        thresholds["metadata"] = dict(signal.thresholds.metadata or {})
+        thresholds["metadata"] = (
+            signal.thresholds.metadata.to_dict()
+            if signal.thresholds.metadata
+            else {}
+        )
         metrics: List[Dict[str, Any]] = []
         for metric in signal.metrics:
             metric_dict = asdict(metric)
@@ -396,7 +450,11 @@ class Storage:
                 snapshot["created_at"] = trade.thresholds_snapshot.created_at.isoformat()
             if trade.thresholds_snapshot.updated_at:
                 snapshot["updated_at"] = trade.thresholds_snapshot.updated_at.isoformat()
-            snapshot["metadata"] = dict(trade.thresholds_snapshot.metadata or {})
+            snapshot["metadata"] = (
+                trade.thresholds_snapshot.metadata.to_dict()
+                if trade.thresholds_snapshot.metadata
+                else {}
+            )
             thresholds_snapshot = json.dumps(snapshot, sort_keys=True)
         metadata_json = json.dumps(
             self._trade_metadata_to_mapping(trade.metadata), sort_keys=True
