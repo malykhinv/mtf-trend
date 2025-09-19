@@ -1,6 +1,12 @@
+import shutil
+import subprocess
+import sys
+
+import pytest
+
 from bot.app import build_thresholds
 from bot.app_modes import AppMode
-from bot.data.io.config_loader import AppConfig
+from bot.data.io.config_loader import AppConfig, ConfigStructureError
 from bot.data.io.config_models import (
     BinanceProviderConfig,
     BybitProviderConfig,
@@ -191,3 +197,31 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
     assert bybit_cfg.api_secret_env == "BYBIT_API_SECRET"
     assert bybit_cfg.get_api_key(config.env) == "from-env"
     assert bybit_cfg.get_api_secret(config.env) == "super-secret"
+
+
+def test_invalid_symbols_section_raises() -> None:
+    with pytest.raises(ConfigStructureError):
+        AppConfig(raw={"symbols": []})
+
+
+def test_mypy_strict_on_io_module() -> None:
+    if shutil.which("mypy") is None:
+        pytest.skip("mypy is not installed")
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "mypy",
+            "--strict",
+            "--ignore-missing-imports",
+            "--follow-imports=skip",
+            "bot/data/io/config_loader.py",
+            "bot/data/io/config_models.py",
+            "bot/data/io/config_types.py",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout
