@@ -2,12 +2,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
-from typing import Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, cast
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .excel_rows import StoredSignalRow, StoredStateRow, StoredTradeRow
+from .excel_rows import (
+    SignalPayload,
+    StoredSignalRow,
+    StoredStateRow,
+    StoredTradeRow,
+    TradePayload,
+)
 
 
 @dataclass(frozen=True)
@@ -103,7 +109,7 @@ class ExcelWriter:
             self._upsert_row(ws, self.SIGNAL_SHEET.headers, "id", row.to_excel_row())
             wb.save(self._path)
 
-    def read_signals(self) -> List[StoredSignalRow]:
+    def read_signals(self) -> List[SignalPayload]:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.SIGNAL_SHEET)
@@ -119,7 +125,7 @@ class ExcelWriter:
             self._upsert_row(ws, self.TRADE_SHEET.headers, "id", row.to_excel_row())
             wb.save(self._path)
 
-    def read_trades(self) -> List[StoredTradeRow]:
+    def read_trades(self) -> List[TradePayload]:
         with self._lock:
             wb = self._load()
             ws = self._get_sheet(wb, self.TRADE_SHEET)
@@ -158,7 +164,10 @@ class ExcelWriter:
         wb = Workbook()
         # Replace the default sheet with signals to keep order predictable.
         default = wb.active
-        default.title = self.SIGNAL_SHEET.name
+        if default is None:
+            default = wb.create_sheet(self.SIGNAL_SHEET.name)
+        else:
+            default.title = self.SIGNAL_SHEET.name
         self._write_headers(default, self.SIGNAL_SHEET.headers)
         wb.create_sheet(self.TRADE_SHEET.name)
         wb.create_sheet(self.STATE_SHEET.name)
@@ -171,10 +180,10 @@ class ExcelWriter:
 
     def _get_sheet(self, workbook: Workbook, config: SheetConfig) -> Worksheet:
         if config.name not in workbook.sheetnames:
-            ws = workbook.create_sheet(config.name)
+            ws = cast(Worksheet, workbook.create_sheet(config.name))
             self._write_headers(ws, config.headers)
             return ws
-        ws = workbook[config.name]
+        ws = cast(Worksheet, workbook[config.name])
         if ws.max_row == 0:
             self._write_headers(ws, config.headers)
         if config is self.STATE_SHEET:
@@ -189,24 +198,24 @@ class ExcelWriter:
         legacy_headers = ["asset", "deposit_amount", "deposit_updated_at", "used_amount"]
         if existing_headers[: len(legacy_headers)] == legacy_headers:
             rows: List[Dict[str, object]] = []
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                if all(value is None for value in row):
+            for excel_row in sheet.iter_rows(min_row=2, values_only=True):
+                if all(value is None for value in excel_row):
                     continue
                 rows.append(
                     {
-                        header: row[idx] if idx < len(row) else None
+                        header: excel_row[idx] if idx < len(excel_row) else None
                         for idx, header in enumerate(legacy_headers)
                     }
                 )
             self._write_headers(sheet, expected)
-            for row in rows:
+            for stored in rows:
                 sheet.append(
                     [
                         "default",
-                        row.get("asset"),
-                        row.get("deposit_amount"),
-                        row.get("deposit_updated_at"),
-                        row.get("used_amount"),
+                        stored.get("asset"),
+                        stored.get("deposit_amount"),
+                        stored.get("deposit_updated_at"),
+                        stored.get("used_amount"),
                     ]
                 )
         else:
@@ -242,7 +251,7 @@ class ExcelWriter:
             cell_value = excel_row[key_index].value
             if cell_value == key_value:
                 for idx, header in enumerate(headers):
-                    excel_row[idx].value = row.get(header)
+                    excel_row[idx].value = cast(Any, row.get(header))
                 break
         else:
             sheet.append([row.get(header) for header in headers])
