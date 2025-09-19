@@ -74,14 +74,10 @@ class AppConfig:
             return value.strip()
         return "UTC"
 
-    def selection_overrides_for(self, mode: AppMode | str) -> ModeSelectionOverrides:
-        if isinstance(mode, AppMode):
-            key = mode.value
-        else:
-            key = mode
-        if key == "backtest":
+    def selection_overrides_for(self, mode: AppMode) -> ModeSelectionOverrides:
+        if mode is AppMode.BACKTEST:
             return self.backtest.selection
-        if key == "live":
+        if mode is AppMode.LIVE:
             return self.live.selection
         return ModeSelectionOverrides()
 
