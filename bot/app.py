@@ -10,8 +10,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Protocol, Sequence, TypeVar, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VALID_MODES = {"backtest", "live"}
-
+from .app_modes import AppMode
 from .data.io.config_loader import AppConfig, ConfigLoader
 from .data.io.config_models import (
     BinanceProviderConfig,
@@ -215,7 +214,7 @@ def _resolve_provider_name(
 async def discover_symbol_universe(
     config: AppConfig,
     providers: Dict[str, BaseExchangeProvider],
-    mode: str,
+    mode: AppMode,
     provider_scope: Iterable[str] | None = None,
 ) -> SymbolUniverse:
     logger = get_logger("symbol-discovery")
@@ -326,7 +325,7 @@ async def run_backtest(
     )
     timeframes = backtest_cfg.timeframes
     requested_limit = backtest_cfg.limit
-    universe = await discover_symbol_universe(config, providers, "backtest")
+    universe = await discover_symbol_universe(config, providers, AppMode.BACKTEST)
     if not universe.assignments:
         logger.warning("No symbols available for backtest after applying liquidity filters")
         return
@@ -420,7 +419,7 @@ async def run_live(
     universe = await discover_symbol_universe(
         config,
         providers,
-        "live",
+        AppMode.LIVE,
         provider_scope=provider_names,
     )
     pipelines = {
@@ -478,34 +477,30 @@ async def run_live(
     await asyncio.gather(*tasks)
 
 
-def _normalize_mode(value: object) -> str | None:
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized:
-            return normalized
-    return None
-
-
-def resolve_mode(config: AppConfig, cli_args: Sequence[str] | None = None) -> str:
+def resolve_mode(config: AppConfig, cli_args: Sequence[str] | None = None) -> AppMode:
     cli_args = tuple(cli_args or ())
-    cli_mode: str | None = None
+    cli_mode: AppMode | None = None
     for index, arg in enumerate(cli_args):
         if arg in {"--mode", "-m"}:
             try:
                 candidate = cli_args[index + 1]
             except IndexError as exc:  # pragma: no cover - defensive
                 raise ValueError("Missing value for --mode flag") from exc
-            cli_mode = candidate
+            cli_mode = AppMode.parse(candidate)
             break
         if arg.startswith("--mode="):
-            cli_mode = arg.split("=", 1)[1]
+            cli_mode = AppMode.parse(arg.split("=", 1)[1])
             break
-    mode = _normalize_mode(cli_mode) or _normalize_mode(config.get("mode")) or "backtest"
-    if mode not in VALID_MODES:
-        raise ValueError(
-            f"Unsupported mode '{mode}'. Expected one of: {', '.join(sorted(VALID_MODES))}"
-        )
-    return mode
+    if cli_mode is not None:
+        return cli_mode
+
+    config_mode_raw = config.get("mode")
+    if isinstance(config_mode_raw, str) and not config_mode_raw.strip():
+        config_mode_raw = None
+    if config_mode_raw is not None:
+        return AppMode.parse(config_mode_raw)
+
+    return AppMode.BACKTEST
 
 
 async def main_async(cli_args: Sequence[str] | None = None) -> None:
@@ -535,9 +530,9 @@ async def main_async(cli_args: Sequence[str] | None = None) -> None:
     services = init_services(config, storage)
     thresholds_map = build_thresholds(config)
     try:
-        if mode == "backtest":
+        if mode is AppMode.BACKTEST:
             await run_backtest(config, providers, thresholds_map, services)
-        elif mode == "live":
+        elif mode is AppMode.LIVE:
             await run_live(config, providers, thresholds_map, services)
     finally:
         for provider in providers.values():

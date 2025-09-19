@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from bot.app import main_async, resolve_mode
+from bot.app_modes import AppMode
 from bot.data.io.config_loader import AppConfig
 
 
@@ -82,8 +83,8 @@ def test_main_async_runs_live_only(monkeypatch):
 
 def test_resolve_mode_precedence():
     config = AppConfig(raw={"mode": "live"})
-    assert resolve_mode(config, ["--mode", "backtest"]) == "backtest"
-    assert resolve_mode(config, []) == "live"
+    assert resolve_mode(config, ["--mode", "backtest"]) == AppMode.BACKTEST
+    assert resolve_mode(config, []) == AppMode.LIVE
 
 
 def test_resolve_mode_invalid():

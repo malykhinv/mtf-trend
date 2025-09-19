@@ -1,4 +1,5 @@
 from bot.app import build_thresholds
+from bot.app_modes import AppMode
 from bot.data.io.config_loader import AppConfig
 from bot.data.io.config_models import (
     BinanceProviderConfig,
@@ -36,7 +37,7 @@ def test_symbol_selection_and_overrides_are_typed() -> None:
     assert selection.allow == frozenset({"BTCUSDT", "ETHUSDT"})
     assert selection.deny == frozenset({"DOGEUSDT"})
 
-    overrides = config.selection_overrides_for("live")
+    overrides = config.selection_overrides_for(AppMode.LIVE)
     assert overrides.allow == frozenset({"BTCUSDT"})
     assert overrides.symbols == frozenset()
     assert overrides.deny == frozenset()

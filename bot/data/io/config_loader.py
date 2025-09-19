@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
+from bot.app_modes import AppMode
+
 from .config_models import (
     BacktestConfig,
     DedupConfig,
@@ -72,10 +74,14 @@ class AppConfig:
             return value.strip()
         return "UTC"
 
-    def selection_overrides_for(self, mode: str) -> ModeSelectionOverrides:
-        if mode == "backtest":
+    def selection_overrides_for(self, mode: AppMode | str) -> ModeSelectionOverrides:
+        if isinstance(mode, AppMode):
+            key = mode.value
+        else:
+            key = mode
+        if key == "backtest":
             return self.backtest.selection
-        if mode == "live":
+        if key == "live":
             return self.live.selection
         return ModeSelectionOverrides()
 
