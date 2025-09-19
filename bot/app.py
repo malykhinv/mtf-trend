@@ -144,39 +144,53 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
                 return False
         return default
 
-    short_pct_move_ranges: list[tuple[float, float | None]] = []
-    if isinstance(raw, dict):
-        ranges_raw = raw.get("short_pct_move_ranges")
-        if isinstance(ranges_raw, list):
-            for entry in ranges_raw:
-                min_value: float | None
-                max_value: float | None
-                if isinstance(entry, dict):
-                    min_raw = (
-                        entry.get("min")
-                        if entry.get("min") is not None
-                        else entry.get("min_value")
-                    )
-                    max_raw = (
-                        entry.get("max")
-                        if entry.get("max") is not None
-                        else entry.get("max_value")
-                    )
-                    if min_raw is None:
-                        continue
+    def _parse_range_list(source: object) -> list[tuple[float | None, float | None]]:
+        parsed: list[tuple[float | None, float | None]] = []
+        if not isinstance(source, list):
+            return parsed
+        for entry in source:
+            min_value: float | None = None
+            max_value: float | None = None
+            if isinstance(entry, dict):
+                min_raw = entry.get("min")
+                if min_raw is None:
+                    min_raw = entry.get("min_value")
+                max_raw = entry.get("max")
+                if max_raw is None:
+                    max_raw = entry.get("max_value")
+                if min_raw is not None:
                     min_value = float(min_raw)
-                    max_value = float(max_raw) if max_raw is not None else None
-                elif isinstance(entry, (list, tuple)) and entry:
+                if max_raw is not None:
+                    max_value = float(max_raw)
+            elif isinstance(entry, (list, tuple)):
+                if len(entry) > 0 and entry[0] is not None:
                     min_value = float(entry[0])
-                    max_value = float(entry[1]) if len(entry) > 1 and entry[1] is not None else None
-                else:
-                    continue
-                short_pct_move_ranges.append((min_value, max_value))
+                if len(entry) > 1 and entry[1] is not None:
+                    max_value = float(entry[1])
+            elif isinstance(entry, (int, float)):
+                min_value = float(entry)
+            if min_value is None and max_value is None:
+                continue
+            parsed.append((min_value, max_value))
+        return parsed
+
+    short_pct_move_ranges: list[tuple[float | None, float | None]] = []
+    if isinstance(raw, dict):
+        short_pct_move_ranges = _parse_range_list(raw.get("short_pct_move_ranges"))
     allow_long = _get_bool("allow_long", True)
     allow_short = _get_bool("allow_short", True)
     metadata = raw.get("metadata", {}) if isinstance(raw, dict) else {}
     if not isinstance(metadata, dict):
         metadata = {}
+    if not short_pct_move_ranges:
+        short_pct_move_ranges = _parse_range_list(metadata.get("short_pct_move_ranges"))
+    short_relative_volume_ranges = _parse_range_list(
+        raw.get("short_relative_volume_ranges") if isinstance(raw, dict) else None
+    )
+    if not short_relative_volume_ranges:
+        short_relative_volume_ranges = _parse_range_list(
+            metadata.get("short_relative_volume_ranges")
+        )
     created_at_raw = raw.get("created_at") if isinstance(raw, dict) else None
     updated_at_raw = raw.get("updated_at") if isinstance(raw, dict) else None
     return Thresholds(
@@ -213,6 +227,7 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
             ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"],
         ),
         short_pct_move_ranges=short_pct_move_ranges,
+        short_relative_volume_ranges=short_relative_volume_ranges,
         allow_long=allow_long,
         allow_short=allow_short,
         metrics=metrics,

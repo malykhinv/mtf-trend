@@ -103,18 +103,31 @@ class SignalSelectorService:
             if thresholds.max_pct_move > 0 and growth > thresholds.max_pct_move:
                 reasons.append("short_pct_move")
                 return False
-        if (
-            thresholds.min_relative_volume > 0
-            and metrics.relative_volume < thresholds.min_relative_volume
-        ):
-            reasons.append("short_relative_volume")
-            return False
-        if (
-            thresholds.max_relative_volume > 0
-            and metrics.relative_volume > thresholds.max_relative_volume
-        ):
-            reasons.append("short_relative_volume")
-            return False
+        if thresholds.short_relative_volume_ranges:
+            in_volume_range = False
+            for min_value, max_value in thresholds.short_relative_volume_ranges:
+                if min_value is not None and metrics.relative_volume < min_value:
+                    continue
+                if max_value is not None and metrics.relative_volume > max_value:
+                    continue
+                in_volume_range = True
+                break
+            if not in_volume_range:
+                reasons.append("short_relative_volume")
+                return False
+        else:
+            if (
+                thresholds.min_relative_volume > 0
+                and metrics.relative_volume < thresholds.min_relative_volume
+            ):
+                reasons.append("short_relative_volume")
+                return False
+            if (
+                thresholds.max_relative_volume > 0
+                and metrics.relative_volume > thresholds.max_relative_volume
+            ):
+                reasons.append("short_relative_volume")
+                return False
         if (
             thresholds.min_atr_mult > 0
             and metrics.atr_multiple <= thresholds.min_atr_mult
