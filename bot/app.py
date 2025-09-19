@@ -144,6 +144,34 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
                 return False
         return default
 
+    short_pct_move_ranges: list[tuple[float, float | None]] = []
+    if isinstance(raw, dict):
+        ranges_raw = raw.get("short_pct_move_ranges")
+        if isinstance(ranges_raw, list):
+            for entry in ranges_raw:
+                min_value: float | None
+                max_value: float | None
+                if isinstance(entry, dict):
+                    min_raw = (
+                        entry.get("min")
+                        if entry.get("min") is not None
+                        else entry.get("min_value")
+                    )
+                    max_raw = (
+                        entry.get("max")
+                        if entry.get("max") is not None
+                        else entry.get("max_value")
+                    )
+                    if min_raw is None:
+                        continue
+                    min_value = float(min_raw)
+                    max_value = float(max_raw) if max_raw is not None else None
+                elif isinstance(entry, (list, tuple)) and entry:
+                    min_value = float(entry[0])
+                    max_value = float(entry[1]) if len(entry) > 1 and entry[1] is not None else None
+                else:
+                    continue
+                short_pct_move_ranges.append((min_value, max_value))
     allow_long = _get_bool("allow_long", True)
     allow_short = _get_bool("allow_short", True)
     metadata = raw.get("metadata", {}) if isinstance(raw, dict) else {}
@@ -184,6 +212,7 @@ def _parse_threshold(raw: Dict[str, object]) -> Thresholds:
         max_lower_wick_pct=_get_float_from_keys(
             ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"],
         ),
+        short_pct_move_ranges=short_pct_move_ranges,
         allow_long=allow_long,
         allow_short=allow_short,
         metrics=metrics,

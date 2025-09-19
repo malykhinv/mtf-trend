@@ -126,6 +126,29 @@ class Storage:
             metadata = {}
         created_at_raw = raw.get("created_at")
         updated_at_raw = raw.get("updated_at")
+        short_pct_move_ranges: List[tuple[float, Optional[float]]] = []
+        ranges_raw = raw.get("short_pct_move_ranges")
+        if isinstance(ranges_raw, list):
+            for entry in ranges_raw:
+                min_value: float | None
+                max_value: float | None
+                if isinstance(entry, dict):
+                    min_raw = entry.get("min")
+                    if min_raw is None:
+                        min_raw = entry.get("min_value")
+                    max_raw = entry.get("max")
+                    if max_raw is None:
+                        max_raw = entry.get("max_value")
+                    if min_raw is None:
+                        continue
+                    min_value = float(min_raw)
+                    max_value = float(max_raw) if max_raw is not None else None
+                elif isinstance(entry, (list, tuple)) and entry:
+                    min_value = float(entry[0])
+                    max_value = float(entry[1]) if len(entry) > 1 and entry[1] is not None else None
+                else:
+                    continue
+                short_pct_move_ranges.append((min_value, max_value))
         def _get_float_from_keys(keys: list[str]) -> float:
             for key in keys:
                 if raw.get(key) is not None:
@@ -159,6 +182,7 @@ class Storage:
             max_lower_wick_pct=_get_float_from_keys(
                 ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
             ),
+            short_pct_move_ranges=short_pct_move_ranges,
             allow_long=self._to_bool(raw.get("allow_long", True)),
             allow_short=self._to_bool(raw.get("allow_short", True)),
             metrics=metrics,

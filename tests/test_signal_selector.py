@@ -71,6 +71,7 @@ def _default_thresholds() -> Thresholds:
         max_pct_move=10.0,
         max_upper_wick_pct=75.0,
         max_lower_wick_pct=50.0,
+        short_pct_move_ranges=[(3.0, 5.0), (10.0, None)],
         allow_long=True,
         allow_short=True,
         metrics=[ThresholdMetric(name="atr", min_value=5.0)],
@@ -102,7 +103,9 @@ def test_select_allows_long_when_thresholds_met(selector: SignalSelectorService)
     assert result.signals[0].side is Side.LONG
 
 
-def test_select_rejects_when_body_growth_too_small(selector: SignalSelectorService) -> None:
+def test_select_redirects_to_short_when_long_body_growth_too_small(
+    selector: SignalSelectorService,
+) -> None:
     candles = _build_candle_sequence(
         count=20,
         final_open=100.0,
@@ -116,11 +119,73 @@ def test_select_rejects_when_body_growth_too_small(selector: SignalSelectorServi
 
     result = selector.select("TESTUSDT", candles, thresholds)
 
-    assert not result.signals
-    assert "long_pct_move" in result.rejected
+    assert len(result.signals) == 1
+    assert result.signals[0].side is Side.SHORT
 
 
 def test_select_allows_short_when_thresholds_met(selector: SignalSelectorService) -> None:
+    candles = _build_candle_sequence(
+        count=20,
+        final_open=100.0,
+        final_close=104.0,
+        final_high=140.0,
+        final_low=86.0,
+        base_volume=2_000_000.0,
+        final_volume=110_000_000.0,
+    )
+    thresholds = _default_thresholds()
+
+    result = selector.select("TESTUSDT", candles, thresholds)
+
+    assert len(result.signals) == 1
+    assert result.signals[0].side is Side.SHORT
+
+
+def test_select_allows_short_when_pct_move_in_high_range(
+    selector: SignalSelectorService,
+) -> None:
+    candles = _build_candle_sequence(
+        count=20,
+        final_open=100.0,
+        final_close=112.0,
+        final_high=130.0,
+        final_low=99.0,
+        base_volume=2_000_000.0,
+        final_volume=110_000_000.0,
+    )
+    thresholds = _default_thresholds()
+
+    result = selector.select("TESTUSDT", candles, thresholds)
+
+    assert not result.rejected
+    assert len(result.signals) == 1
+    assert result.signals[0].side is Side.SHORT
+
+
+def test_select_rejects_short_outside_pct_move_ranges(
+    selector: SignalSelectorService,
+) -> None:
+    candles = _build_candle_sequence(
+        count=20,
+        final_open=100.0,
+        final_close=106.0,
+        final_high=112.0,
+        final_low=82.0,
+        base_volume=2_000_000.0,
+        final_volume=120_000_000.0,
+    )
+    thresholds = _default_thresholds()
+    thresholds.allow_long = False
+
+    result = selector.select("TESTUSDT", candles, thresholds)
+
+    assert not result.signals
+    assert "short_pct_move" in result.rejected
+
+
+def test_select_rejects_short_with_non_positive_body(
+    selector: SignalSelectorService,
+) -> None:
     candles = _build_candle_sequence(
         count=20,
         final_open=100.0,
@@ -134,36 +199,17 @@ def test_select_allows_short_when_thresholds_met(selector: SignalSelectorService
 
     result = selector.select("TESTUSDT", candles, thresholds)
 
-    assert not result.rejected
-    assert len(result.signals) == 1
-    assert result.signals[0].side is Side.SHORT
-
-
-def test_select_rejects_short_with_positive_body(selector: SignalSelectorService) -> None:
-    candles = _build_candle_sequence(
-        count=20,
-        final_open=100.0,
-        final_close=102.0,
-        final_high=112.0,
-        final_low=82.0,
-        base_volume=2_000_000.0,
-        final_volume=120_000_000.0,
-    )
-    thresholds = _default_thresholds()
-
-    result = selector.select("TESTUSDT", candles, thresholds)
-
     assert not result.signals
-    assert "short_positive_body" in result.rejected
+    assert "short_non_positive_body" in result.rejected
 
 
 def test_select_includes_timeframe_metadata(selector: SignalSelectorService) -> None:
     candles = _build_candle_sequence(
         count=20,
         final_open=100.0,
-        final_close=94.0,
-        final_high=112.0,
-        final_low=82.0,
+        final_close=112.0,
+        final_high=130.0,
+        final_low=95.0,
         base_volume=2_000_000.0,
         final_volume=110_000_000.0,
         timeframe=Timeframe.M5,

@@ -80,16 +80,29 @@ class SignalSelectorService:
         if not thresholds.allow_short:
             reasons.append("short_disabled")
             return False
-        if metrics.pct_move >= 0:
-            reasons.append("short_positive_body")
+        if metrics.pct_move <= 0:
+            reasons.append("short_non_positive_body")
             return False
-        magnitude = abs(metrics.pct_move)
-        if thresholds.min_pct_move > 0 and magnitude <= thresholds.min_pct_move:
-            reasons.append("short_pct_move")
-            return False
-        if thresholds.max_pct_move > 0 and magnitude > thresholds.max_pct_move:
-            reasons.append("short_pct_move")
-            return False
+        growth = metrics.pct_move
+        if thresholds.short_pct_move_ranges:
+            in_range = False
+            for min_value, max_value in thresholds.short_pct_move_ranges:
+                if growth < min_value:
+                    continue
+                if max_value is not None and growth > max_value:
+                    continue
+                in_range = True
+                break
+            if not in_range:
+                reasons.append("short_pct_move")
+                return False
+        else:
+            if thresholds.min_pct_move > 0 and growth <= thresholds.min_pct_move:
+                reasons.append("short_pct_move")
+                return False
+            if thresholds.max_pct_move > 0 and growth > thresholds.max_pct_move:
+                reasons.append("short_pct_move")
+                return False
         if (
             thresholds.min_relative_volume > 0
             and metrics.relative_volume < thresholds.min_relative_volume

@@ -41,6 +41,7 @@ class Thresholds:
     max_pct_move: float = 0.0
     max_upper_wick_pct: float = 0.0
     max_lower_wick_pct: float = 0.0
+    short_pct_move_ranges: List[tuple[float, Optional[float]]] = field(default_factory=list)
     allow_long: bool = True
     allow_short: bool = True
     metrics: List[ThresholdMetric] = field(default_factory=list)
