@@ -172,9 +172,6 @@ class LiveTradingRunner:
                 await asyncio.sleep(self._get_poll_delay(timeframe))
 
     async def _process_symbol(self, symbol: str, thresholds: Thresholds) -> None:
-        if self._selector is None:
-            self._logger.warning("Selector is not configured; skipping symbol %s", symbol)
-            return
         windows: Dict[Timeframe, Deque[Candle]] = {
             timeframe: deque(maxlen=self._window) for timeframe in self._timeframes
         }
