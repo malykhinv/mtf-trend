@@ -456,9 +456,6 @@ class SymbolProviderMapping:
     def __iter__(self) -> Iterator[SymbolProviderRoute]:
         return iter(self.routes)
 
-    def as_dict(self) -> dict[str, str]:
-        return {route.symbol: route.provider for route in self.routes}
-
 
 def parse_symbol_provider_mapping(
     routes: tuple[SymbolProviderRoutePayload, ...]
