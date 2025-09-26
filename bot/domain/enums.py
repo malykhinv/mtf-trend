@@ -40,4 +40,3 @@ class TradeStatus(str, Enum):
     OPENED = "opened"
     CLOSED_TP = "closed_tp"
     CLOSED_SL = "closed_sl"
-    REJECTED = "rejected"
