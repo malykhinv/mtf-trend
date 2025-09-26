@@ -8,11 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from openpyxl import load_workbook
 
-from bot.data.io.excel_rows import (
-    SignalPayload,
-    StoredStateRow,
-    TradePayload,
-)
+from bot.data.io.excel_rows import SignalPayload, StateRow, TradePayload
 from bot.data.io.storage import Storage
 from bot.data.repositories.signal_repository import SignalRepository
 from bot.data.repositories.state_repository import StateRepository
@@ -302,5 +298,5 @@ def test_state_repository_persists_per_provider(tmp_path) -> None:
     assert {"binance", "bybit"}.issubset(keys)
 
     stored_state = storage._writer.read_state("binance")
-    assert stored_state and isinstance(stored_state, StoredStateRow)
+    assert stored_state and isinstance(stored_state, StateRow)
     assert stored_state.deposit_amount == pytest.approx(1_000.0)

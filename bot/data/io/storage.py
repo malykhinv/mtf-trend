@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -29,12 +28,12 @@ from .excel_rows import (
     JSONValue,
     SignalMetricPayload,
     SignalPayload,
-    StoredSignalRow,
-    StoredStateRow,
-    StoredTradeRow,
+    SignalRow,
+    StateRow,
     ThresholdMetricPayload,
-    ThresholdPayload,
+    ThresholdRow,
     TradePayload,
+    TradeRow,
 )
 from .excel_writer import ExcelWriter
 
@@ -89,7 +88,7 @@ class Storage:
         *,
         key: Optional[str] = None,
     ) -> None:
-        stored_row = StoredStateRow(
+        stored_row = StateRow(
             key=key or "default",
             asset=asset,
             deposit_amount=deposit_amount,
@@ -131,7 +130,7 @@ class Storage:
             min_abs_value=payload.min_abs_value,
         )
 
-    def _deserialize_thresholds(self, payload: ThresholdPayload) -> Thresholds:
+    def _deserialize_thresholds(self, payload: ThresholdRow) -> Thresholds:
         metrics = [self._deserialize_threshold_metric(metric) for metric in payload.metrics]
         metadata_payload = ThresholdsMetadataPayload.from_mapping(payload.metadata)
         metadata = ThresholdsMetadata.from_mapping(metadata_payload)
@@ -404,32 +403,42 @@ class Storage:
     # ------------------------------------------------------------------
     # Serialization helpers
     # ------------------------------------------------------------------
-    def _serialize_signal(self, signal: Signal) -> StoredSignalRow:
-        thresholds = asdict(signal.thresholds)
+    def _serialize_signal(self, signal: Signal) -> SignalRow:
+        thresholds_mapping = asdict(signal.thresholds)
         if signal.thresholds.created_at:
-            thresholds["created_at"] = signal.thresholds.created_at.isoformat()
+            thresholds_mapping["created_at"] = signal.thresholds.created_at.isoformat()
         if signal.thresholds.updated_at:
-            thresholds["updated_at"] = signal.thresholds.updated_at.isoformat()
-        thresholds["metadata"] = (
+            thresholds_mapping["updated_at"] = signal.thresholds.updated_at.isoformat()
+        thresholds_mapping["metadata"] = (
             signal.thresholds.metadata.to_dict()
             if signal.thresholds.metadata
             else {}
         )
-        metrics: List[Dict[str, Any]] = []
+        thresholds_row = ThresholdRow.from_mapping(thresholds_mapping)
+        metrics_payloads: List[SignalMetricPayload] = []
         for metric in signal.metrics:
-            metric_dict = asdict(metric)
-            threshold = metric_dict.get("threshold")
-            if isinstance(threshold, dict):
-                metric_dict["threshold"] = threshold
-            metrics.append(metric_dict)
-        metadata = json.dumps(self._signal_metadata_to_mapping(signal.metadata), sort_keys=True)
-        snapshot_json = None
-        if signal.metrics_snapshot is not None:
-            snapshot_json = json.dumps(
-                signal.metrics_snapshot.to_mapping(), sort_keys=True
+            threshold_payload = None
+            if metric.threshold is not None:
+                threshold_payload = ThresholdMetricPayload(
+                    name=metric.threshold.name,
+                    min_value=metric.threshold.min_value,
+                    max_value=metric.threshold.max_value,
+                    min_abs_value=metric.threshold.min_abs_value,
+                )
+            metrics_payloads.append(
+                SignalMetricPayload(
+                    name=metric.name,
+                    value=metric.value,
+                    passed=metric.passed,
+                    threshold=threshold_payload,
+                )
             )
+        metadata_mapping = self._signal_metadata_to_mapping(signal.metadata)
+        snapshot_mapping: JSONDict | None = None
+        if signal.metrics_snapshot is not None:
+            snapshot_mapping = signal.metrics_snapshot.to_mapping()
         candle = signal.candle
-        return StoredSignalRow(
+        return SignalRow(
             id=signal.id,
             candle_id=signal.candle_id or candle.id,
             symbol=candle.symbol,
@@ -452,30 +461,28 @@ class Storage:
             candle_quote_volume=candle.quote_volume,
             candle_started_at=candle.started_at.isoformat(),
             candle_closed_at=candle.closed_at.isoformat(),
-            thresholds_json=json.dumps(thresholds, sort_keys=True),
-            metrics_json=json.dumps(metrics, sort_keys=True),
-            metrics_snapshot_json=snapshot_json,
-            metadata_json=metadata,
+            thresholds=thresholds_row,
+            metrics=tuple(metrics_payloads),
+            metrics_snapshot=snapshot_mapping,
+            metadata=metadata_mapping,
         )
 
-    def _serialize_trade(self, trade: Trade) -> StoredTradeRow:
-        thresholds_snapshot = None
+    def _serialize_trade(self, trade: Trade) -> TradeRow:
+        thresholds_snapshot_row: ThresholdRow | None = None
         if trade.thresholds_snapshot:
-            snapshot = asdict(trade.thresholds_snapshot)
+            snapshot_mapping = asdict(trade.thresholds_snapshot)
             if trade.thresholds_snapshot.created_at:
-                snapshot["created_at"] = trade.thresholds_snapshot.created_at.isoformat()
+                snapshot_mapping["created_at"] = trade.thresholds_snapshot.created_at.isoformat()
             if trade.thresholds_snapshot.updated_at:
-                snapshot["updated_at"] = trade.thresholds_snapshot.updated_at.isoformat()
-            snapshot["metadata"] = (
+                snapshot_mapping["updated_at"] = trade.thresholds_snapshot.updated_at.isoformat()
+            snapshot_mapping["metadata"] = (
                 trade.thresholds_snapshot.metadata.to_dict()
                 if trade.thresholds_snapshot.metadata
                 else {}
             )
-            thresholds_snapshot = json.dumps(snapshot, sort_keys=True)
-        metadata_json = json.dumps(
-            self._trade_metadata_to_mapping(trade.metadata), sort_keys=True
-        )
-        return StoredTradeRow(
+            thresholds_snapshot_row = ThresholdRow.from_mapping(snapshot_mapping)
+        metadata_mapping = self._trade_metadata_to_mapping(trade.metadata)
+        return TradeRow(
             id=trade.id,
             signal_id=trade.signal_id,
             source_signal_id=trade.source_signal_id,
@@ -500,8 +507,8 @@ class Storage:
             updated_at=trade.updated_at.isoformat() if trade.updated_at else None,
             allow_long=bool(trade.allow_long),
             allow_short=bool(trade.allow_short),
-            thresholds_snapshot_json=thresholds_snapshot,
-            metadata_json=metadata_json,
+            thresholds_snapshot=thresholds_snapshot_row,
+            metadata=metadata_mapping,
         )
 
     @staticmethod
