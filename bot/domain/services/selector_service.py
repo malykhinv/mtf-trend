@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import fabs
-from typing import Iterable, List, Sequence
+from typing import List, Sequence
 
 from ..enums import BreakDirection, Side
 from ..models.entities import Candle, Signal, Thresholds
@@ -222,11 +222,3 @@ class SignalSelectorService:
         )
         return SelectionResult(signals=[signal], rejected=[])
 
-    def batch_select(
-        self, batch: Iterable[tuple[str, Sequence[Candle], Thresholds]]
-    ) -> List[Signal]:
-        signals: List[Signal] = []
-        for symbol, candles, thresholds in batch:
-            result = self.select(symbol, candles, thresholds)
-            signals.extend(result.signals)
-        return signals
