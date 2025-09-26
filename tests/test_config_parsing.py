@@ -166,14 +166,12 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
             "providers": {
                 "binance": {
                     "api_base": "https://fapi.binance.com",
-                    "ws_base": "wss://fstream.binance.com/ws",
                     "rate_limit_per_minute": "1200",
                     "min_quote_volume": "500000",
                     "api_key_env": "BINANCE_KEY",
                 },
                 "bybit": {
                     "api_base": "https://api.bybit.com",
-                    "ws_base": "wss://stream.bybit.com/v5/public/linear",
                     "rate_limit_per_minute": 600,
                     "min_quote_volume": 250000,
                     "api_secret": "super-secret",
@@ -190,7 +188,6 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
     assert isinstance(binance_cfg, BinanceProviderConfig)
     assert binance_cfg.kind is ProviderKind.BINANCE
     assert binance_cfg.api_base == "https://fapi.binance.com"
-    assert binance_cfg.ws_base == "wss://fstream.binance.com/ws"
     assert binance_cfg.rate_limit_per_minute == 1200
     assert binance_cfg.min_quote_volume == 500000.0
     assert binance_cfg.api_key_env == "BINANCE_KEY"

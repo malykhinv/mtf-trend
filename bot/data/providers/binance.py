@@ -55,14 +55,13 @@ class BinanceFuturesProvider(BaseExchangeProvider):
     def __init__(
         self,
         api_base: str,
-        ws_base: str,
         rate_limit_per_minute: int,
         min_quote_volume: float,
         session: _HttpClient | None = None,
         api_key: str | None = None,
         api_secret: str | None = None,
     ) -> None:
-        super().__init__(api_base, ws_base, rate_limit_per_minute, min_quote_volume)
+        super().__init__(api_base, rate_limit_per_minute, min_quote_volume)
         self._session: _HttpClient | None = session or (
             httpx.AsyncClient(timeout=10.0) if httpx else None
         )

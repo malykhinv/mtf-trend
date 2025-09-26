@@ -20,13 +20,11 @@ max_records = 1000
 
 [providers.binance]
 api_base = "https://fapi.binance.com"
-ws_base = "wss://fstream.binance.com/ws"
 rate_limit_per_minute = 1200
 min_quote_volume = 500000.0
 
 [providers.bybit]
 api_base = "https://api.bybit.com"
-ws_base = "wss://stream.bybit.com/v5/public/linear"
 rate_limit_per_minute = 600
 min_quote_volume = 250000.0
 

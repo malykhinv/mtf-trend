@@ -34,12 +34,10 @@ class BaseExchangeProvider:
     def __init__(
         self,
         api_base: str,
-        ws_base: str,
         rate_limit_per_minute: int,
         min_quote_volume: float,
     ) -> None:
         self._api_base = api_base
-        self._ws_base = ws_base
         self._rate_limiter = RateLimiter(rate_limit_per_minute)
         self._min_quote_volume = min_quote_volume
         self._logger = get_logger(self.__class__.__name__)

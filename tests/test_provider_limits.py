@@ -45,7 +45,6 @@ class _StubBybitProvider(_StubProvider):
 def test_resolve_ohlcv_limit(provider_cls, expected_limit, requested_limit):
     provider = provider_cls(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=1200,
         min_quote_volume=1.0,
     )

@@ -36,7 +36,6 @@ def test_binance_fetch_ohlcv_forwards_since_and_sorts() -> None:
     session = _FakeSession(payload)
     provider = BinanceFuturesProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
@@ -76,7 +75,6 @@ def test_bybit_fetch_ohlcv_forwards_since_and_sorts() -> None:
     session = _FakeSession(payload)
     provider = BybitPerpetualProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
@@ -105,7 +103,6 @@ def test_binance_get_symbols_filters_trading_pairs() -> None:
     session = _FakeSession(payload)
     provider = BinanceFuturesProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
@@ -124,7 +121,6 @@ def test_binance_get_24h_quote_volume_uses_typed_payload() -> None:
     session = _FakeSession(payload)
     provider = BinanceFuturesProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
@@ -139,7 +135,6 @@ def test_binance_update_deposit_prefers_available_balance() -> None:
     session = _FakeSession([])
     provider = BinanceFuturesProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
@@ -182,7 +177,6 @@ def test_bybit_get_symbols_extracts_linear_trading_pairs() -> None:
     session = _FakeSession(payload)
     provider = BybitPerpetualProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
@@ -206,7 +200,6 @@ def test_bybit_get_24h_quote_volume_handles_optional_fields() -> None:
     session = _FakeSession(payload)
     provider = BybitPerpetualProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
@@ -221,7 +214,6 @@ def test_bybit_update_deposit_prefers_available_to_withdraw() -> None:
     session = _FakeSession({})
     provider = BybitPerpetualProvider(
         api_base="https://example.com",
-        ws_base="wss://example.com/ws",
         rate_limit_per_minute=60,
         min_quote_volume=0.0,
         session=session,
