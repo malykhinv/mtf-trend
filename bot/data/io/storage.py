@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Union, cast
+from typing import Any, Dict, List, Mapping, Optional
 
 from ...domain.enums import BreakDirection, Exchange, Side, Timeframe, TradeStatus
 from ...domain.models.entities import (
@@ -18,7 +17,6 @@ from ...domain.models.metadata import (
     SignalMetadata,
     SignalMetadataPayload,
     ThresholdsMetadata,
-    ThresholdsMetadataPayload,
     TradeMetadata,
     TradeMetadataPayload,
 )
@@ -132,54 +130,13 @@ class Storage:
 
     def _deserialize_thresholds(self, payload: ThresholdRow) -> Thresholds:
         metrics = [self._deserialize_threshold_metric(metric) for metric in payload.metrics]
-        metadata_payload = ThresholdsMetadataPayload.from_mapping(payload.metadata)
-        metadata = ThresholdsMetadata.from_mapping(metadata_payload)
-        created_at_raw = payload.created_at
-        updated_at_raw = payload.updated_at
-
-        short_pct_move_ranges: List[tuple[float | None, float | None]] = []
-        short_relative_volume_ranges: List[tuple[float | None, float | None]] = []
-        ranges_raw = payload.raw.get("short_pct_move_ranges")
-        if isinstance(ranges_raw, list):
-            for entry in ranges_raw:
-                min_value: float | None
-                max_value: float | None
-                if isinstance(entry, dict):
-                    min_raw = entry.get("min")
-                    if min_raw is None:
-                        min_raw = entry.get("min_value")
-                    max_raw = entry.get("max")
-                    if max_raw is None:
-                        max_raw = entry.get("max_value")
-                    if min_raw is None:
-                        continue
-                    try:
-                        min_value = float(cast(Union[int, float, str], min_raw))
-                    except (TypeError, ValueError):
-                        continue
-                    max_value = None
-                    if max_raw is not None:
-                        try:
-                            max_value = float(cast(Union[int, float, str], max_raw))
-                        except (TypeError, ValueError):
-                            max_value = None
-                elif isinstance(entry, (list, tuple)) and entry:
-                    sequence_entry = cast(Sequence[JSONValue], entry)
-                    try:
-                        min_value = float(cast(Union[int, float, str], sequence_entry[0]))
-                    except (TypeError, ValueError):
-                        continue
-                    max_value = None
-                    if len(sequence_entry) > 1 and sequence_entry[1] is not None:
-                        try:
-                            max_value = float(
-                                cast(Union[int, float, str], sequence_entry[1])
-                            )
-                        except (TypeError, ValueError):
-                            max_value = None
-                else:
-                    continue
-                short_pct_move_ranges.append((min_value, max_value))
+        metadata = ThresholdsMetadata.from_mapping(payload.metadata)
+        short_pct_move_ranges: List[tuple[float | None, float | None]] = list(
+            payload.short_pct_move_ranges
+        )
+        short_relative_volume_ranges: List[tuple[float | None, float | None]] = list(
+            payload.short_relative_volume_ranges
+        )
         if not short_pct_move_ranges and metadata:
             for range_value in metadata.short_pct_move_ranges:
                 if range_value.is_empty():
@@ -187,8 +144,7 @@ class Storage:
                 short_pct_move_ranges.append(
                     (range_value.minimum, range_value.maximum)
                 )
-
-        if metadata:
+        if not short_relative_volume_ranges and metadata:
             for range_value in metadata.short_relative_volume_ranges:
                 if range_value.is_empty():
                     continue
@@ -196,63 +152,37 @@ class Storage:
                     (range_value.minimum, range_value.maximum)
                 )
 
-        def _float_from_value(value: JSONValue | None) -> float:
-            if isinstance(value, (int, float)):
-                return float(value)
-            if isinstance(value, str):
-                try:
-                    return float(value)
-                except ValueError:
-                    return 0.0
-            return 0.0
+        def _float_or_default(value: float | None, default: float = 0.0) -> float:
+            return float(value) if value is not None else default
 
-        def _get_float_from_keys(keys: list[str]) -> float:
-            value = payload.get_first(keys)
-            if value is not None:
-                return _float_from_value(value)
-            return 0.0
+        created_at = (
+            datetime.fromisoformat(payload.created_at)
+            if isinstance(payload.created_at, str)
+            else None
+        )
+        updated_at = (
+            datetime.fromisoformat(payload.updated_at)
+            if isinstance(payload.updated_at, str)
+            else None
+        )
 
-        default_allow_long = payload.allow_long if isinstance(payload.allow_long, bool) else True
-        default_allow_short = payload.allow_short if isinstance(payload.allow_short, bool) else True
-
-        id_raw = payload.raw.get("id")
         return Thresholds(
-            id=str(id_raw) if isinstance(id_raw, str) else None,
-            min_relative_volume=_float_from_value(
-                payload.raw.get("min_relative_volume")
-                or payload.raw.get("minRelativeVolume")
-                or payload.raw.get("S")
-                or payload.raw.get("s")
-                or 0
-            ),
-            max_relative_volume=_float_from_value(
-                payload.raw.get("max_relative_volume")
-                or payload.raw.get("maxRelativeVolume")
-                or payload.raw.get("T")
-                or payload.raw.get("t")
-                or 0
-            ),
-            min_atr_mult=_get_float_from_keys(["min_atr_mult", "minAtrMult", "U", "u"]),
-            min_pct_move=_get_float_from_keys(["min_pct_move", "minPctMove", "V", "v"]),
-            max_pct_move=_get_float_from_keys(["max_pct_move", "maxPctMove", "W", "w"]),
-            max_upper_wick_pct=_get_float_from_keys(
-                ["max_upper_wick_pct", "maxUpperWickPct", "X", "x"]
-            ),
-            max_lower_wick_pct=_get_float_from_keys(
-                ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
-            ),
+            id=payload.id,
+            min_relative_volume=_float_or_default(payload.min_relative_volume),
+            max_relative_volume=_float_or_default(payload.max_relative_volume),
+            min_atr_mult=_float_or_default(payload.min_atr_mult),
+            min_pct_move=_float_or_default(payload.min_pct_move),
+            max_pct_move=_float_or_default(payload.max_pct_move),
+            max_upper_wick_pct=_float_or_default(payload.max_upper_wick_pct),
+            max_lower_wick_pct=_float_or_default(payload.max_lower_wick_pct),
             short_pct_move_ranges=short_pct_move_ranges,
             short_relative_volume_ranges=short_relative_volume_ranges,
-            allow_long=self._to_bool(
-                payload.raw.get("allow_long", payload.allow_long), default_allow_long
-            ),
-            allow_short=self._to_bool(
-                payload.raw.get("allow_short", payload.allow_short), default_allow_short
-            ),
+            allow_long=self._to_bool(payload.allow_long, True),
+            allow_short=self._to_bool(payload.allow_short, True),
             metrics=metrics,
             metadata=metadata,
-            created_at=datetime.fromisoformat(created_at_raw) if isinstance(created_at_raw, str) else None,
-            updated_at=datetime.fromisoformat(updated_at_raw) if isinstance(updated_at_raw, str) else None,
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
     def _deserialize_signal_metric(self, payload: SignalMetricPayload) -> SignalMetric:
@@ -404,124 +334,10 @@ class Storage:
     # Serialization helpers
     # ------------------------------------------------------------------
     def _serialize_signal(self, signal: Signal) -> SignalRow:
-        thresholds_mapping = asdict(signal.thresholds)
-        if signal.thresholds.created_at:
-            thresholds_mapping["created_at"] = signal.thresholds.created_at.isoformat()
-        if signal.thresholds.updated_at:
-            thresholds_mapping["updated_at"] = signal.thresholds.updated_at.isoformat()
-        thresholds_mapping["metadata"] = (
-            signal.thresholds.metadata.to_dict()
-            if signal.thresholds.metadata
-            else {}
-        )
-        thresholds_row = ThresholdRow.from_mapping(thresholds_mapping)
-        metrics_payloads: List[SignalMetricPayload] = []
-        for metric in signal.metrics:
-            threshold_payload = None
-            if metric.threshold is not None:
-                threshold_payload = ThresholdMetricPayload(
-                    name=metric.threshold.name,
-                    min_value=metric.threshold.min_value,
-                    max_value=metric.threshold.max_value,
-                    min_abs_value=metric.threshold.min_abs_value,
-                )
-            metrics_payloads.append(
-                SignalMetricPayload(
-                    name=metric.name,
-                    value=metric.value,
-                    passed=metric.passed,
-                    threshold=threshold_payload,
-                )
-            )
-        metadata_mapping = self._signal_metadata_to_mapping(signal.metadata)
-        snapshot_mapping: JSONDict | None = None
-        if signal.metrics_snapshot is not None:
-            snapshot_mapping = signal.metrics_snapshot.to_mapping()
-        candle = signal.candle
-        return SignalRow(
-            id=signal.id,
-            candle_id=signal.candle_id or candle.id,
-            symbol=candle.symbol,
-            exchange=candle.exchange.value,
-            timeframe=signal.timeframe.value if signal.timeframe else None,
-            candle_timeframe=candle.timeframe.value,
-            side=signal.side.value,
-            direction=signal.direction.value,
-            score=signal.score,
-            triggered_at=signal.triggered_at.isoformat(),
-            created_at=signal.created_at.isoformat() if signal.created_at else None,
-            updated_at=signal.updated_at.isoformat() if signal.updated_at else None,
-            allow_long=bool(signal.allow_long),
-            allow_short=bool(signal.allow_short),
-            candle_open=candle.open,
-            candle_high=candle.high,
-            candle_low=candle.low,
-            candle_close=candle.close,
-            candle_volume=candle.volume,
-            candle_quote_volume=candle.quote_volume,
-            candle_started_at=candle.started_at.isoformat(),
-            candle_closed_at=candle.closed_at.isoformat(),
-            thresholds=thresholds_row,
-            metrics=tuple(metrics_payloads),
-            metrics_snapshot=snapshot_mapping,
-            metadata=metadata_mapping,
-        )
+        return SignalRow.from_signal(signal)
 
     def _serialize_trade(self, trade: Trade) -> TradeRow:
-        thresholds_snapshot_row: ThresholdRow | None = None
-        if trade.thresholds_snapshot:
-            snapshot_mapping = asdict(trade.thresholds_snapshot)
-            if trade.thresholds_snapshot.created_at:
-                snapshot_mapping["created_at"] = trade.thresholds_snapshot.created_at.isoformat()
-            if trade.thresholds_snapshot.updated_at:
-                snapshot_mapping["updated_at"] = trade.thresholds_snapshot.updated_at.isoformat()
-            snapshot_mapping["metadata"] = (
-                trade.thresholds_snapshot.metadata.to_dict()
-                if trade.thresholds_snapshot.metadata
-                else {}
-            )
-            thresholds_snapshot_row = ThresholdRow.from_mapping(snapshot_mapping)
-        metadata_mapping = self._trade_metadata_to_mapping(trade.metadata)
-        return TradeRow(
-            id=trade.id,
-            signal_id=trade.signal_id,
-            source_signal_id=trade.source_signal_id,
-            exchange=trade.exchange.value,
-            symbol=trade.symbol,
-            timeframe=trade.timeframe.value if trade.timeframe else None,
-            side=trade.side.value,
-            status=trade.status.value,
-            entry_price=trade.entry_price,
-            size=trade.size,
-            used_margin=trade.used_margin,
-            exit_price=trade.exit_price,
-            tp_price=trade.tp_price,
-            sl_price=trade.sl_price,
-            tp_pct=trade.tp_pct,
-            sl_pct=trade.sl_pct,
-            opened_at=trade.opened_at.isoformat() if trade.opened_at else None,
-            closed_at=trade.closed_at.isoformat() if trade.closed_at else None,
-            pnl=trade.pnl,
-            pnl_pct=trade.pnl_pct,
-            created_at=trade.created_at.isoformat() if trade.created_at else None,
-            updated_at=trade.updated_at.isoformat() if trade.updated_at else None,
-            allow_long=bool(trade.allow_long),
-            allow_short=bool(trade.allow_short),
-            thresholds_snapshot=thresholds_snapshot_row,
-            metadata=metadata_mapping,
-        )
-
-    @staticmethod
-    def _signal_metadata_to_mapping(metadata: SignalMetadata | None) -> Dict[str, Any]:
-        if metadata is None:
-            return {}
-        return metadata.to_dict()
-
-    @staticmethod
-    def _trade_metadata_to_mapping(metadata: TradeMetadata | None) -> Dict[str, Any]:
-        if metadata is None:
-            return {}
-        return metadata.to_dict()
+        return TradeRow.from_trade(trade)
 
     def _deserialize_metrics_snapshot(
         self, raw: Mapping[str, Any] | JSONDict | None
