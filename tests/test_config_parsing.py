@@ -1,6 +1,7 @@
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -12,13 +13,19 @@ from bot.data.io.config_models import (
     BybitProviderConfig,
     ProviderKind,
 )
+from bot.data.io.config_types import parse_app_config_payload
 from bot.domain.enums import Timeframe
 from bot.domain.models.metadata import ThresholdsMetadata
 
 
+def _build_config(raw: dict[str, object]) -> AppConfig:
+    payload = parse_app_config_payload(raw)
+    return AppConfig(payload)
+
+
 def test_symbol_selection_and_overrides_are_typed() -> None:
-    config = AppConfig(
-        raw={
+    config = _build_config(
+        {
             "symbols": {
                 "selection": {
                     "quote_suffix": "usdc",
@@ -58,19 +65,20 @@ def test_symbol_selection_and_overrides_are_typed() -> None:
     assert live_cfg.providers == ("binance",)
     assert live_cfg.timeframe == Timeframe.M5
     assert live_cfg.window == 25
-    assert config.symbol_provider_mapping["BTCUSDT"] == "binance"
-    assert config.symbol_provider_mapping["default"] == "bybit"
+    assert (
+        config.symbol_provider_mapping.provider_for("BTCUSDT") == "binance"
+    )
+    assert config.symbol_provider_mapping.provider_for("default") == "bybit"
     assert config.storage.path == "data/state"
     assert config.logging.level == "DEBUG"
     assert config.time.zone == "Europe/Belgrade"
     assert config.time.mode is AppMode.LIVE
     assert config.default_mode is AppMode.BACKTEST
-    assert not hasattr(config, "get")
 
 
 def test_metrics_and_dedup_configs_are_typed() -> None:
-    config = AppConfig(
-        raw={
+    config = _build_config(
+        {
             "metrics": {
                 "atr_period": "21",
                 "volume_period": 30.9,
@@ -92,7 +100,7 @@ def test_metrics_and_dedup_configs_are_typed() -> None:
     assert dedup.ttl_seconds == 3600
     assert dedup.max_records == 1
 
-    defaults = AppConfig(raw={})
+    defaults = _build_config({})
     assert defaults.metrics.atr_period == 14
     assert defaults.metrics.volume_period == 20
     assert defaults.metrics.momentum_period == 5
@@ -101,8 +109,8 @@ def test_metrics_and_dedup_configs_are_typed() -> None:
 
 
 def test_build_thresholds_uses_typed_models() -> None:
-    config = AppConfig(
-        raw={
+    config = _build_config(
+        {
             "thresholds": {
                 "default": {
                     "min_relative_volume": "1.5",
@@ -153,8 +161,8 @@ def test_build_thresholds_uses_typed_models() -> None:
 
 def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None:
     monkeypatch.setenv("BYBIT_API_KEY", "from-env")
-    config = AppConfig(
-        raw={
+    config = _build_config(
+        {
             "providers": {
                 "binance": {
                     "api_base": "https://fapi.binance.com",
@@ -176,9 +184,9 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
     )
 
     providers = config.providers
-    assert set(providers) == {"binance", "bybit"}
+    assert set(providers.names()) == {"binance", "bybit"}
 
-    binance_cfg = providers["binance"]
+    binance_cfg = providers.by_name("binance")
     assert isinstance(binance_cfg, BinanceProviderConfig)
     assert binance_cfg.kind is ProviderKind.BINANCE
     assert binance_cfg.api_base == "https://fapi.binance.com"
@@ -190,7 +198,7 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
     assert binance_cfg.get_api_key(config.env) == "binance-from-env"
     assert binance_cfg.get_api_secret(config.env) is None
 
-    bybit_cfg = providers["bybit"]
+    bybit_cfg = providers.by_name("bybit")
     assert isinstance(bybit_cfg, BybitProviderConfig)
     assert bybit_cfg.kind is ProviderKind.BYBIT
     assert bybit_cfg.api_key_env == "BYBIT_API_KEY"
@@ -201,7 +209,7 @@ def test_provider_configs_are_typed_and_resolve_credentials(monkeypatch) -> None
 
 def test_invalid_symbols_section_raises() -> None:
     with pytest.raises(ConfigStructureError):
-        AppConfig(raw={"symbols": []})
+        _build_config({"symbols": []})
 
 
 def test_mypy_strict_on_io_module() -> None:

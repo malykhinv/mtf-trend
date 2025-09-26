@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Iterable, Mapping, Sequence, Tuple, TypeVar, cast
+from typing import Iterable, Iterator, Mapping
 
 from ...app_modes import AppMode
 from ...domain.enums import Timeframe
@@ -12,23 +12,25 @@ from ...domain.models.entities import ThresholdMetric as DomainThresholdMetric
 from ...domain.models.entities import Thresholds as DomainThresholds
 from ...domain.models.metadata import ThresholdsMetadata, ThresholdsMetadataPayload
 from .config_types import (
-    BacktestSection,
-    DedupSection,
-    LiveSection,
-    LoggingSection,
-    MetricsSection,
-    ModeSelectionSection,
-    NumberInput,
-    ProviderSection,
-    ProvidersSection,
-    RangeEntry,
-    StorageSection,
-    SymbolSelectionSection,
-    SymbolSetInput,
-    ThresholdMetricSection,
-    ThresholdSection,
-    ThresholdsSection,
-    TimeSection,
+    AppConfigPayload,
+    BacktestConfigPayload,
+    DedupConfigPayload,
+    LiveConfigPayload,
+    LoggingConfigPayload,
+    MetricsConfigPayload,
+    ModeSelectionPayload,
+    ProviderConfigPayload,
+    ProviderCredentialPayload,
+    ProvidersConfigPayload,
+    RangePayload,
+    StorageConfigPayload,
+    SymbolProviderRoutePayload,
+    SymbolSelectionPayload,
+    SymbolsConfigPayload,
+    ThresholdConfigPayload,
+    ThresholdMetricConfigPayload,
+    ThresholdsConfigPayload,
+    TimeConfigPayload,
 )
 
 
@@ -40,142 +42,20 @@ _DEFAULT_BACKTEST_TIMEFRAMES: tuple[Timeframe, ...] = (
 )
 
 
-def _to_optional_float(value: NumberInput) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return float(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _to_bool(value: bool | str | int | float | None, default: bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"true", "1", "yes", "on"}:
-            return True
-        if lowered in {"false", "0", "no", "off"}:
-            return False
+def _coerce_positive_int(value: int | None, default: int, *, minimum: int = 1) -> int:
     if value is None:
         return default
-    return bool(value)
+    return value if value >= minimum else minimum
 
 
-def _to_int(value: NumberInput, default: int, minimum: int | None = None) -> int:
-    if isinstance(value, bool):
-        candidate: int | None = 1 if value else 0
-    elif isinstance(value, (int, float)):
-        candidate = int(value)
-    elif isinstance(value, str) and value.strip():
-        try:
-            candidate = int(float(value))
-        except ValueError:
-            candidate = None
-    else:
-        candidate = None
-    if candidate is None:
-        candidate = default
-    if minimum is not None and candidate < minimum:
-        return minimum
-    return candidate
-
-
-def _to_optional_int(value: NumberInput) -> int | None:
+def _coerce_non_negative_float(value: float | None, default: float = 0.0) -> float:
     if value is None:
-        return None
-    if isinstance(value, bool):
-        return 1 if value else 0
-    if isinstance(value, (int, float)):
-        return int(value)
-    if isinstance(value, str) and value.strip():
-        try:
-            return int(float(value))
-        except ValueError:
-            return None
-    return None
+        return default
+    return value
 
 
-def _normalize_symbol_set(value: SymbolSetInput | Sequence[str] | None) -> frozenset[str]:
-    if value is None:
-        return frozenset()
-    symbols: set[str] = set()
-    if isinstance(value, str):
-        items: Iterable[str] = [value]
-    elif isinstance(value, Sequence):
-        items = value
-    else:
-        return frozenset()
-    for item in items:
-        if isinstance(item, str) and item.strip():
-            symbols.add(item.strip().upper())
-    return frozenset(symbols)
-
-
-def _parse_range_entry(entry: RangeEntry) -> tuple[float | None, float | None] | None:
-    min_value: float | None = None
-    max_value: float | None = None
-    if isinstance(entry, Mapping):
-        min_raw = entry.get("min")
-        if min_raw is None:
-            min_raw = entry.get("min_value")
-        max_raw = entry.get("max")
-        if max_raw is None:
-            max_raw = entry.get("max_value")
-        min_value = _to_optional_float(min_raw)
-        max_value = _to_optional_float(max_raw)
-    elif isinstance(entry, Sequence) and not isinstance(entry, (str, bytes, bytearray)):
-        if len(entry) > 0:
-            min_value = _to_optional_float(entry[0])
-        if len(entry) > 1:
-            max_value = _to_optional_float(entry[1])
-    elif isinstance(entry, (int, float)):
-        min_value = float(entry)
-    if min_value is None and max_value is None:
-        return None
-    return (min_value, max_value)
-
-
-def _parse_range_list(
-    source: Sequence[RangeEntry] | None,
-) -> tuple[tuple[float | None, float | None], ...]:
-    if not source:
-        return tuple()
-    parsed: list[tuple[float | None, float | None]] = []
-    for entry in source:
-        parsed_entry = _parse_range_entry(entry)
-        if parsed_entry is not None:
-            parsed.append(parsed_entry)
-    return tuple(parsed)
-
-
-def _parse_datetime(value: datetime | str | None) -> datetime | None:
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            return datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    return None
-
-
-def _float_or_default(value: float | None) -> float:
-    return value if value is not None else 0.0
-
-
-def _normalize_str(value: str | int | float | bool | None) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        candidate = value.strip()
-        return candidate or None
-    return str(value)
+def _ranges_to_tuples(ranges: Iterable[RangePayload]) -> tuple[tuple[float | None, float | None], ...]:
+    return tuple((item.minimum, item.maximum) for item in ranges)
 
 
 @dataclass(slots=True)
@@ -183,16 +63,9 @@ class StorageConfig:
     path: str = "var/state.xlsx"
 
     @classmethod
-    def from_raw(cls, raw: StorageSection | None) -> "StorageConfig":
-        if not raw:
-            return cls()
-        path_value = raw.get("path")
-        if path_value is None:
-            return cls()
-        candidate = str(path_value).strip()
-        if candidate:
-            return cls(path=candidate)
-        return cls()
+    def from_payload(cls, payload: StorageConfigPayload) -> "StorageConfig":
+        path = payload.path.strip() if payload.path else "var/state.xlsx"
+        return cls(path=path)
 
 
 @dataclass(slots=True)
@@ -200,24 +73,9 @@ class LoggingConfig:
     level: str = "INFO"
 
     @classmethod
-    def from_raw(cls, raw: LoggingSection | None) -> "LoggingConfig":
-        if not raw:
-            return cls()
-        level_value = raw.get("level")
-        if level_value is None:
-            return cls()
-        candidate = str(level_value).strip()
-        if candidate:
-            return cls(level=candidate.upper())
-        return cls()
-
-
-def _parse_optional_mode(value: str | AppMode | None) -> AppMode | None:
-    if value is None:
-        return None
-    if isinstance(value, str) and not value.strip():
-        return None
-    return AppMode.parse(value)
+    def from_payload(cls, payload: LoggingConfigPayload) -> "LoggingConfig":
+        level = payload.level.upper().strip() if payload.level else "INFO"
+        return cls(level=level)
 
 
 @dataclass(slots=True)
@@ -226,17 +84,9 @@ class TimeConfig:
     mode: AppMode | None = None
 
     @classmethod
-    def from_raw(cls, raw: TimeSection | None) -> "TimeConfig":
-        zone = "UTC"
-        mode: AppMode | None = None
-        if raw:
-            zone_raw = raw.get("zone")
-            if zone_raw is not None:
-                candidate = str(zone_raw).strip()
-                if candidate:
-                    zone = candidate
-            mode = _parse_optional_mode(raw.get("mode"))
-        return cls(zone=zone, mode=mode)
+    def from_payload(cls, payload: TimeConfigPayload) -> "TimeConfig":
+        zone = payload.zone or "UTC"
+        return cls(zone=zone, mode=payload.mode)
 
 
 @dataclass(slots=True)
@@ -245,33 +95,34 @@ class ProviderCredential:
     env_key: str | None = None
 
     @classmethod
-    def from_mapping(
-        cls, raw: ProviderSection, key: str, default_env: str | None = None
-    ) -> "ProviderCredential":
-        value = _normalize_str(cast(str | int | float | bool | None, raw.get(key)))
-        env_key = _normalize_str(
-            cast(str | int | float | bool | None, raw.get(f"{key}_env"))
-        )
-        if env_key is None:
-            env_key = default_env
-        return cls(value=value, env_key=env_key)
+    def from_payload(cls, payload: ProviderCredentialPayload) -> "ProviderCredential":
+        env_key = payload.env_key
+        if env_key:
+            env_key = env_key.strip()
+        value = payload.value.strip() if payload.value else None
+        return cls(value=value, env_key=env_key or None)
 
     def resolve(self, env: Mapping[str, str] | None = None) -> str | None:
-        if self.value is not None:
-            return self.value
+        if self.value is not None and self.value.strip():
+            return self.value.strip()
         if not self.env_key:
             return None
         env_mapping = env or {}
         candidate = env_mapping.get(self.env_key)
-        normalized = _normalize_str(candidate)
-        if normalized is not None:
-            return normalized
+        if candidate:
+            candidate = candidate.strip()
+            if candidate:
+                return candidate
         fallback = os.getenv(self.env_key)
-        if isinstance(fallback, str):
+        if fallback:
             fallback = fallback.strip()
             if fallback:
                 return fallback
         return None
+
+    @property
+    def env(self) -> str | None:
+        return self.env_key
 
 
 class ProviderKind(str, Enum):
@@ -280,47 +131,33 @@ class ProviderKind(str, Enum):
     BYBIT = "bybit"
 
 
-ProviderConfigT = TypeVar("ProviderConfigT", bound="ExchangeProviderConfig")
-
-
 @dataclass(slots=True)
 class ExchangeProviderConfig:
     name: str
-    kind: ProviderKind = field(init=False, default=ProviderKind.GENERIC)
     api_base: str
     ws_base: str
     rate_limit_per_minute: int
     min_quote_volume: float
     api_key: ProviderCredential = field(default_factory=ProviderCredential)
     api_secret: ProviderCredential = field(default_factory=ProviderCredential)
+    kind: ProviderKind = field(init=False, default=ProviderKind.GENERIC)
 
     @classmethod
-    def from_mapping(
-        cls: type[ProviderConfigT],
-        name: str,
-        raw: ProviderSection | None,
-    ) -> ProviderConfigT:
-        if raw is None:
-            data: ProviderSection = ProviderSection()
-        else:
-            data = raw
-        prefix = name.upper()
-        api_base = _normalize_str(data.get("api_base")) or ""
-        ws_base = _normalize_str(data.get("ws_base")) or ""
-        rate_limit = _to_int(data.get("rate_limit_per_minute"), 60, minimum=1)
-        min_volume = _to_optional_float(data.get("min_quote_volume")) or 0.0
-        api_key = ProviderCredential.from_mapping(
-            data, "api_key", f"{prefix}_API_KEY"
-        )
-        api_secret = ProviderCredential.from_mapping(
-            data, "api_secret", f"{prefix}_API_SECRET"
-        )
+    def from_payload(
+        cls, name: str, payload: ProviderConfigPayload
+    ) -> "ExchangeProviderConfig":
+        api_base = payload.api_base.strip() if payload.api_base else ""
+        ws_base = payload.ws_base.strip() if payload.ws_base else ""
+        rate_limit = _coerce_positive_int(payload.rate_limit_per_minute, 60)
+        min_quote_volume = _coerce_non_negative_float(payload.min_quote_volume)
+        api_key = ProviderCredential.from_payload(payload.api_key)
+        api_secret = ProviderCredential.from_payload(payload.api_secret)
         instance = cls(
             name=name,
             api_base=api_base,
             ws_base=ws_base,
             rate_limit_per_minute=rate_limit,
-            min_quote_volume=min_volume,
+            min_quote_volume=min_quote_volume,
             api_key=api_key,
             api_secret=api_secret,
         )
@@ -334,11 +171,11 @@ class ExchangeProviderConfig:
 
     @property
     def api_key_env(self) -> str | None:
-        return self.api_key.env_key
+        return self.api_key.env
 
     @property
     def api_secret_env(self) -> str | None:
-        return self.api_secret.env_key
+        return self.api_secret.env
 
 
 @dataclass(slots=True)
@@ -350,26 +187,45 @@ class BinanceProviderConfig(ExchangeProviderConfig):
 class BybitProviderConfig(ExchangeProviderConfig):
     kind: ProviderKind = field(init=False, default=ProviderKind.BYBIT)
 
+
 _PROVIDER_CONFIG_TYPES: dict[str, tuple[ProviderKind, type[ExchangeProviderConfig]]] = {
     "binance": (ProviderKind.BINANCE, BinanceProviderConfig),
     "bybit": (ProviderKind.BYBIT, BybitProviderConfig),
 }
 
 
-def parse_exchange_provider_configs(
-    raw: ProvidersSection | None,
-) -> dict[str, ExchangeProviderConfig]:
-    if not raw:
-        return {}
-    providers: dict[str, ExchangeProviderConfig] = {}
-    for name, value in raw.items():
+@dataclass(slots=True)
+class ProvidersConfig:
+    providers: tuple[ExchangeProviderConfig, ...]
+    _index: dict[str, ExchangeProviderConfig] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._index = {provider.name: provider for provider in self.providers}
+
+    def by_name(self, name: str) -> ExchangeProviderConfig:
+        return self._index[name]
+
+    def __iter__(self) -> Iterator[ExchangeProviderConfig]:
+        return iter(self.providers)
+
+    def __len__(self) -> int:
+        return len(self.providers)
+
+    def names(self) -> tuple[str, ...]:
+        return tuple(self._index)
+
+
+def parse_exchange_provider_configs(payload: ProvidersConfigPayload) -> ProvidersConfig:
+    providers: list[ExchangeProviderConfig] = []
+    for provider_payload in payload.providers:
+        name = provider_payload.name
         kind, config_cls = _PROVIDER_CONFIG_TYPES.get(
             name.lower(), (ProviderKind.GENERIC, ExchangeProviderConfig)
         )
-        config = config_cls.from_mapping(name, value)
+        config = config_cls.from_payload(name, provider_payload)
         config.kind = kind
-        providers[name] = config
-    return providers
+        providers.append(config)
+    return ProvidersConfig(providers=tuple(providers))
 
 
 @dataclass(slots=True)
@@ -379,15 +235,11 @@ class MetricsConfig:
     momentum_period: int = 5
 
     @classmethod
-    def from_raw(cls, raw: MetricsSection | None) -> "MetricsConfig":
-        if raw is None:
-            data: MetricsSection = MetricsSection()
-        else:
-            data = raw
+    def from_payload(cls, payload: MetricsConfigPayload) -> "MetricsConfig":
         return cls(
-            atr_period=_to_int(data.get("atr_period"), 14, minimum=1),
-            volume_period=_to_int(data.get("volume_period"), 20, minimum=1),
-            momentum_period=_to_int(data.get("momentum_period"), 5, minimum=1),
+            atr_period=_coerce_positive_int(payload.atr_period, 14),
+            volume_period=_coerce_positive_int(payload.volume_period, 20),
+            momentum_period=_coerce_positive_int(payload.momentum_period, 5),
         )
 
 
@@ -397,14 +249,10 @@ class DedupConfig:
     max_records: int = 1_000
 
     @classmethod
-    def from_raw(cls, raw: DedupSection | None) -> "DedupConfig":
-        if raw is None:
-            data: DedupSection = DedupSection()
-        else:
-            data = raw
+    def from_payload(cls, payload: DedupConfigPayload) -> "DedupConfig":
         return cls(
-            ttl_seconds=_to_int(data.get("ttl_seconds"), 14_400, minimum=1),
-            max_records=_to_int(data.get("max_records"), 1_000, minimum=1),
+            ttl_seconds=_coerce_positive_int(payload.ttl_seconds, 14_400),
+            max_records=_coerce_positive_int(payload.max_records, 1_000),
         )
 
 
@@ -416,18 +264,12 @@ class ThresholdMetricConfig:
     min_abs_value: float | None = None
 
     @classmethod
-    def from_mapping(cls, raw: ThresholdMetricSection) -> "ThresholdMetricConfig" | None:
-        name = raw.get("name")
-        if name is None:
-            return None
-        candidate = name.strip()
-        if not candidate:
-            return None
+    def from_payload(cls, payload: ThresholdMetricConfigPayload) -> "ThresholdMetricConfig":
         return cls(
-            name=candidate,
-            min_value=_to_optional_float(raw.get("min_value")),
-            max_value=_to_optional_float(raw.get("max_value")),
-            min_abs_value=_to_optional_float(raw.get("min_abs_value")),
+            name=payload.name,
+            min_value=payload.min_value,
+            max_value=payload.max_value,
+            min_abs_value=payload.min_abs_value,
         )
 
     def to_domain(self) -> DomainThresholdMetric:
@@ -463,101 +305,59 @@ class ThresholdConfig:
     updated_at: datetime | None = None
 
     @classmethod
-    def from_mapping(cls, raw: ThresholdSection | None) -> "ThresholdConfig":
-        if raw is None:
-            data: ThresholdSection = ThresholdSection()
-        else:
-            data = raw
-        metadata_raw = data.get("metadata")
-        metadata_payload = ThresholdsMetadataPayload.from_mapping(
-            metadata_raw if isinstance(metadata_raw, Mapping) else None
+    def from_payload(cls, payload: ThresholdConfigPayload) -> "ThresholdConfig":
+        metadata = None
+        if payload.metadata is not None:
+            metadata = ThresholdsMetadata.from_mapping(payload.metadata)
+        metrics = tuple(
+            ThresholdMetricConfig.from_payload(metric_payload)
+            for metric_payload in payload.metrics
         )
-        metadata = ThresholdsMetadata.from_mapping(metadata_payload)
-        metrics_raw = data.get("metrics") or ()
-        metrics: list[ThresholdMetricConfig] = []
-        for item in metrics_raw:
-            metric = ThresholdMetricConfig.from_mapping(item)
-            if metric is not None:
-                metrics.append(metric)
-        short_pct_move_ranges = _parse_range_list(
-            data.get("short_pct_move_ranges")
+        short_pct_move_ranges = _ranges_to_tuples(payload.short_pct_move_ranges)
+        short_relative_volume_ranges = _ranges_to_tuples(
+            payload.short_relative_volume_ranges
         )
         if not short_pct_move_ranges and metadata:
             short_pct_move_ranges = tuple(
-                (
-                    range_value.minimum,
-                    range_value.maximum,
-                )
-                for range_value in metadata.short_pct_move_ranges
-                if not range_value.is_empty()
+                (item.minimum, item.maximum)
+                for item in metadata.short_pct_move_ranges
+                if not item.is_empty()
             )
-        short_relative_volume_ranges = _parse_range_list(
-            data.get("short_relative_volume_ranges")
-        )
         if not short_relative_volume_ranges and metadata:
             short_relative_volume_ranges = tuple(
-                (
-                    range_value.minimum,
-                    range_value.maximum,
-                )
-                for range_value in metadata.short_relative_volume_ranges
-                if not range_value.is_empty()
+                (item.minimum, item.maximum)
+                for item in metadata.short_relative_volume_ranges
+                if not item.is_empty()
             )
         return cls(
-            id=str(data.get("id")) if data.get("id") is not None else None,
-            min_relative_volume=_coerce_from_keys(
-                data,
-                [
-                    "min_relative_volume",
-                    "minRelativeVolume",
-                    "S",
-                    "s",
-                ],
-            ),
-            max_relative_volume=_coerce_from_keys(
-                data,
-                [
-                    "max_relative_volume",
-                    "maxRelativeVolume",
-                    "T",
-                    "t",
-                ],
-            ),
-            min_atr_mult=_coerce_from_keys(
-                data, ["min_atr_mult", "minAtrMult", "U", "u"]
-            ),
-            min_pct_move=_coerce_from_keys(
-                data, ["min_pct_move", "minPctMove", "V", "v"]
-            ),
-            max_pct_move=_coerce_from_keys(
-                data, ["max_pct_move", "maxPctMove", "W", "w"]
-            ),
-            max_upper_wick_pct=_coerce_from_keys(
-                data, ["max_upper_wick_pct", "maxUpperWickPct", "X", "x"]
-            ),
-            max_lower_wick_pct=_coerce_from_keys(
-                data, ["max_lower_wick_pct", "maxLowerWickPct", "Y", "y"]
-            ),
-            allow_long=_to_bool(data.get("allow_long"), True),
-            allow_short=_to_bool(data.get("allow_short"), True),
-            metrics=tuple(metrics),
+            id=payload.id,
+            min_relative_volume=payload.min_relative_volume,
+            max_relative_volume=payload.max_relative_volume,
+            min_atr_mult=payload.min_atr_mult,
+            min_pct_move=payload.min_pct_move,
+            max_pct_move=payload.max_pct_move,
+            max_upper_wick_pct=payload.max_upper_wick_pct,
+            max_lower_wick_pct=payload.max_lower_wick_pct,
+            allow_long=True if payload.allow_long is None else bool(payload.allow_long),
+            allow_short=True if payload.allow_short is None else bool(payload.allow_short),
+            metrics=metrics,
             short_pct_move_ranges=short_pct_move_ranges,
             short_relative_volume_ranges=short_relative_volume_ranges,
             metadata=metadata,
-            created_at=_parse_datetime(data.get("created_at")),
-            updated_at=_parse_datetime(data.get("updated_at")),
+            created_at=payload.created_at,
+            updated_at=payload.updated_at,
         )
 
     def to_domain(self) -> DomainThresholds:
         return DomainThresholds(
             id=self.id,
-            min_relative_volume=_float_or_default(self.min_relative_volume),
-            max_relative_volume=_float_or_default(self.max_relative_volume),
-            min_atr_mult=_float_or_default(self.min_atr_mult),
-            min_pct_move=_float_or_default(self.min_pct_move),
-            max_pct_move=_float_or_default(self.max_pct_move),
-            max_upper_wick_pct=_float_or_default(self.max_upper_wick_pct),
-            max_lower_wick_pct=_float_or_default(self.max_lower_wick_pct),
+            min_relative_volume=_coerce_non_negative_float(self.min_relative_volume),
+            max_relative_volume=_coerce_non_negative_float(self.max_relative_volume),
+            min_atr_mult=_coerce_non_negative_float(self.min_atr_mult),
+            min_pct_move=_coerce_non_negative_float(self.min_pct_move),
+            max_pct_move=_coerce_non_negative_float(self.max_pct_move),
+            max_upper_wick_pct=_coerce_non_negative_float(self.max_upper_wick_pct),
+            max_lower_wick_pct=_coerce_non_negative_float(self.max_lower_wick_pct),
             short_pct_move_ranges=[*self.short_pct_move_ranges],
             short_relative_volume_ranges=[*self.short_relative_volume_ranges],
             allow_long=self.allow_long,
@@ -569,38 +369,47 @@ class ThresholdConfig:
         )
 
 
-def _coerce_from_keys(
-    raw: Mapping[str, object],
-    keys: Sequence[str],
-    fallback: float | None = None,
-) -> float | None:
-    for key in keys:
-        if key in raw:
-            candidate = raw.get(key)
-            if isinstance(candidate, (str, int, float, bool)) or candidate is None:
-                value = _to_optional_float(candidate)
-                if value is not None:
-                    return value
-    return fallback
+@dataclass(slots=True)
+class SymbolThresholdConfig:
+    symbol: str
+    config: ThresholdConfig
 
 
 @dataclass(slots=True)
 class ThresholdsConfig:
     default: ThresholdConfig
-    symbols: dict[str, ThresholdConfig]
+    overrides: tuple[SymbolThresholdConfig, ...]
 
     @classmethod
-    def from_raw(cls, raw: ThresholdsSection | None) -> "ThresholdsConfig":
-        if raw is None:
-            data: ThresholdsSection = ThresholdsSection()
-        else:
-            data = raw
-        default_cfg = ThresholdConfig.from_mapping(data.get("default"))
-        symbols_cfg: dict[str, ThresholdConfig] = {}
-        symbols_raw = data.get("symbols") or {}
-        for key, value in symbols_raw.items():
-            symbols_cfg[key] = ThresholdConfig.from_mapping(value)
-        return cls(default=default_cfg, symbols=symbols_cfg)
+    def from_payload(cls, payload: ThresholdsConfigPayload) -> "ThresholdsConfig":
+        default_config = ThresholdConfig.from_payload(payload.default)
+        overrides = tuple(
+            SymbolThresholdConfig(symbol=item.symbol, config=ThresholdConfig.from_payload(item.config))
+            for item in payload.overrides
+        )
+        return cls(default=default_config, overrides=overrides)
+
+    def for_symbol(self, symbol: str) -> ThresholdConfig:
+        upper_symbol = symbol.upper()
+        for override in self.overrides:
+            if override.symbol == upper_symbol:
+                return override.config
+        return self.default
+
+
+@dataclass(slots=True)
+class ModeSelectionOverrides:
+    allow: frozenset[str] = field(default_factory=frozenset)
+    deny: frozenset[str] = field(default_factory=frozenset)
+    symbols: frozenset[str] = field(default_factory=frozenset)
+
+    @classmethod
+    def from_payload(cls, payload: ModeSelectionPayload) -> "ModeSelectionOverrides":
+        return cls(
+            allow=frozenset(payload.allow),
+            deny=frozenset(payload.deny),
+            symbols=frozenset(payload.symbols),
+        )
 
 
 @dataclass(slots=True)
@@ -611,44 +420,54 @@ class SymbolSelectionConfig:
     deny: frozenset[str] = field(default_factory=frozenset)
 
     @classmethod
-    def from_raw(cls, raw: SymbolSelectionSection | None) -> "SymbolSelectionConfig":
-        if raw is None:
-            data: SymbolSelectionSection = SymbolSelectionSection()
-        else:
-            data = raw
-        quote_suffix = "USDT"
-        quote_suffix_raw = data.get("quote_suffix")
-        if quote_suffix_raw is not None:
-            candidate = str(quote_suffix_raw).strip().upper()
-            if candidate:
-                quote_suffix = candidate
-        min_volume_value = data.get("min_quote_volume")
-        min_quote_volume = _to_optional_float(min_volume_value) or 5_000_000.0
+    def from_payload(cls, payload: SymbolSelectionPayload) -> "SymbolSelectionConfig":
+        suffix = payload.quote_suffix or "USDT"
+        min_quote_volume = (
+            payload.min_quote_volume if payload.min_quote_volume is not None else 5_000_000.0
+        )
+        selection = ModeSelectionOverrides.from_payload(payload.selection)
         return cls(
-            quote_suffix=quote_suffix,
+            quote_suffix=suffix,
             min_quote_volume=min_quote_volume,
-            allow=_normalize_symbol_set(data.get("allow")),
-            deny=_normalize_symbol_set(data.get("deny")),
+            allow=selection.allow,
+            deny=selection.deny,
         )
 
 
 @dataclass(slots=True)
-class ModeSelectionOverrides:
-    allow: frozenset[str] = field(default_factory=frozenset)
-    deny: frozenset[str] = field(default_factory=frozenset)
-    symbols: frozenset[str] = field(default_factory=frozenset)
+class SymbolProviderRoute:
+    symbol: str
+    provider: str
 
-    @classmethod
-    def from_raw(cls, raw: ModeSelectionSection | None) -> "ModeSelectionOverrides":
-        if raw is None:
-            data: ModeSelectionSection = ModeSelectionSection()
-        else:
-            data = raw
-        return cls(
-            allow=_normalize_symbol_set(data.get("allow")),
-            deny=_normalize_symbol_set(data.get("deny")),
-            symbols=_normalize_symbol_set(data.get("symbols")),
-        )
+
+@dataclass(slots=True)
+class SymbolProviderMapping:
+    routes: tuple[SymbolProviderRoute, ...]
+    _index: dict[str, SymbolProviderRoute] = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._index = {route.symbol: route for route in self.routes}
+
+    def provider_for(self, symbol: str) -> str | None:
+        normalized = "default" if symbol.lower() == "default" else symbol.upper()
+        route = self._index.get(normalized)
+        return route.provider if route else None
+
+    def __iter__(self) -> Iterator[SymbolProviderRoute]:
+        return iter(self.routes)
+
+    def as_dict(self) -> dict[str, str]:
+        return {route.symbol: route.provider for route in self.routes}
+
+
+def parse_symbol_provider_mapping(
+    routes: tuple[SymbolProviderRoutePayload, ...]
+) -> SymbolProviderMapping:
+    mapping_routes = tuple(
+        SymbolProviderRoute(symbol=route.symbol, provider=route.provider)
+        for route in routes
+    )
+    return SymbolProviderMapping(routes=mapping_routes)
 
 
 @dataclass(slots=True)
@@ -661,62 +480,18 @@ class BacktestConfig:
     selection: ModeSelectionOverrides
 
     @classmethod
-    def from_raw(cls, raw: BacktestSection | None) -> "BacktestConfig":
-        if raw is None:
-            data: BacktestSection = BacktestSection()
-        else:
-            data = raw
-        enabled = _to_bool(data.get("enabled"), True)
-        window = _to_int(data.get("window"), 50, minimum=1)
-        timeframes = _parse_timeframes(data.get("timeframes"))
-        if not timeframes:
-            single_timeframe = data.get("timeframe")
-            timeframe_value = _parse_timeframe(single_timeframe)
-            if timeframe_value is not None:
-                timeframes = (timeframe_value,)
-        if not timeframes:
-            timeframes = _DEFAULT_BACKTEST_TIMEFRAMES
-        limit = _to_optional_int(data.get("limit"))
-        history_batches = _to_int(data.get("history_batches"), 10, minimum=1)
-        selection = ModeSelectionOverrides.from_raw(data)
+    def from_payload(cls, payload: BacktestConfigPayload) -> "BacktestConfig":
+        timeframes = payload.timeframes or _DEFAULT_BACKTEST_TIMEFRAMES
+        limit = payload.limit
+        selection = ModeSelectionOverrides.from_payload(payload.selection)
         return cls(
-            enabled=enabled,
-            window=window,
+            enabled=True if payload.enabled is None else bool(payload.enabled),
+            window=_coerce_positive_int(payload.window, 50),
             timeframes=timeframes,
             limit=limit,
-            history_batches=history_batches,
+            history_batches=_coerce_positive_int(payload.history_batches, 10),
             selection=selection,
         )
-
-
-def _parse_timeframes(
-    value: Sequence[str | Timeframe] | str | Timeframe | None,
-) -> tuple[Timeframe, ...]:
-    if value is None:
-        return tuple()
-    if isinstance(value, (str, Timeframe)):
-        candidates: Iterable[str | Timeframe] = [value]
-    elif isinstance(value, Iterable) and not isinstance(value, (bytes, bytearray)):
-        candidates = value
-    else:
-        return tuple()
-    parsed: list[Timeframe] = []
-    for item in candidates:
-        timeframe = _parse_timeframe(item)
-        if timeframe is not None:
-            parsed.append(timeframe)
-    return tuple(parsed)
-
-
-def _parse_timeframe(value: str | Timeframe | None) -> Timeframe | None:
-    if isinstance(value, Timeframe):
-        return value
-    if isinstance(value, str) and value.strip():
-        try:
-            return Timeframe(value)
-        except ValueError:
-            return None
-    return None
 
 
 @dataclass(slots=True)
@@ -728,55 +503,76 @@ class LiveConfig:
     selection: ModeSelectionOverrides
 
     @classmethod
-    def from_raw(cls, raw: LiveSection | None) -> "LiveConfig":
-        if raw is None:
-            data: LiveSection = LiveSection()
-        else:
-            data = raw
-        enabled = _to_bool(data.get("enabled"), True)
-        providers = _parse_providers(data)
-        timeframe = _parse_timeframe(data.get("timeframe")) or Timeframe.M5
-        window = _to_int(data.get("window"), 50, minimum=1)
-        selection = ModeSelectionOverrides.from_raw(data)
+    def from_payload(cls, payload: LiveConfigPayload) -> "LiveConfig":
+        providers = payload.providers or tuple()
+        timeframe = payload.timeframe or Timeframe.M5
+        selection = ModeSelectionOverrides.from_payload(payload.selection)
         return cls(
-            enabled=enabled,
-            providers=providers,
+            enabled=True if payload.enabled is None else bool(payload.enabled),
+            providers=providers or tuple(),
             timeframe=timeframe,
-            window=window,
+            window=_coerce_positive_int(payload.window, 50),
             selection=selection,
         )
 
 
-def _parse_providers(raw: LiveSection) -> tuple[str, ...]:
-    providers_value = raw.get("providers")
-    providers: list[str]
-    if isinstance(providers_value, str):
-        candidate = providers_value.strip()
-        providers = [candidate] if candidate else []
-    elif isinstance(providers_value, Sequence) and not isinstance(
-        providers_value, (bytes, bytearray, str)
-    ):
-        providers = [
-            item.strip()
-            for item in providers_value
-            if isinstance(item, str) and item.strip()
-        ]
-    else:
-        providers = []
-    if not providers:
-        single = raw.get("provider")
-        if isinstance(single, str):
-            candidate = single.strip()
-            if candidate:
-                providers = [candidate]
-    return tuple(providers)
+@dataclass(slots=True)
+class SymbolsConfig:
+    selection: SymbolSelectionConfig
+    providers: SymbolProviderMapping
+
+    @classmethod
+    def from_payload(cls, payload: SymbolsConfigPayload) -> "SymbolsConfig":
+        selection = SymbolSelectionConfig.from_payload(payload.selection)
+        providers = parse_symbol_provider_mapping(payload.providers)
+        return cls(selection=selection, providers=providers)
 
 
-def parse_symbol_provider_mapping(raw: dict[str, str] | None) -> dict[str, str]:
-    if not raw:
-        return {}
-    mapping: dict[str, str] = {}
-    for key, value in raw.items():
-        normalized = "default" if key.lower() == "default" else key.upper()
-        mapping[normalized] = value
-    return mapping
+@dataclass(slots=True)
+class AppConfig:
+    payload: AppConfigPayload
+    env: dict[str, str] = field(init=False)
+    thresholds: ThresholdsConfig = field(init=False)
+    symbols: SymbolsConfig = field(init=False)
+    backtest: BacktestConfig = field(init=False)
+    live: LiveConfig = field(init=False)
+    providers: ProvidersConfig = field(init=False)
+    metrics: MetricsConfig = field(init=False)
+    dedup: DedupConfig = field(init=False)
+    storage: StorageConfig = field(init=False)
+    logging: LoggingConfig = field(init=False)
+    time: TimeConfig = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.env = self.payload.env.as_dict()
+        self.storage = StorageConfig.from_payload(self.payload.storage)
+        self.logging = LoggingConfig.from_payload(self.payload.logging)
+        self.time = TimeConfig.from_payload(self.payload.time)
+        self.thresholds = ThresholdsConfig.from_payload(self.payload.thresholds)
+        self.symbols = SymbolsConfig.from_payload(self.payload.symbols)
+        self.backtest = BacktestConfig.from_payload(self.payload.backtest)
+        self.live = LiveConfig.from_payload(self.payload.live)
+        self.providers = parse_exchange_provider_configs(self.payload.providers)
+        self.metrics = MetricsConfig.from_payload(self.payload.metrics)
+        self.dedup = DedupConfig.from_payload(self.payload.dedup)
+
+    def selection_overrides_for(self, mode: AppMode) -> ModeSelectionOverrides:
+        if mode is AppMode.BACKTEST:
+            return self.backtest.selection
+        if mode is AppMode.LIVE:
+            return self.live.selection
+        return ModeSelectionOverrides()
+
+    @property
+    def default_mode(self) -> AppMode:
+        if self.payload.mode is not None:
+            return self.payload.mode
+        return AppMode.BACKTEST
+
+    @property
+    def symbol_selection(self) -> SymbolSelectionConfig:
+        return self.symbols.selection
+
+    @property
+    def symbol_provider_mapping(self) -> SymbolProviderMapping:
+        return self.symbols.providers

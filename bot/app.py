@@ -123,12 +123,12 @@ def init_storage(config: AppConfig) -> Storage:
 def init_providers(config: AppConfig) -> Dict[str, BaseExchangeProvider]:
     providers: Dict[str, BaseExchangeProvider] = {}
     env_values = config.env
-    for name, provider_cfg in config.providers.items():
+    for provider_cfg in config.providers:
         api_key = provider_cfg.get_api_key(env_values)
         api_secret = provider_cfg.get_api_secret(env_values)
         provider = _build_provider(provider_cfg.kind, provider_cfg, api_key, api_secret)
         if provider is not None:
-            providers[name] = provider
+            providers[provider_cfg.name] = provider
     return providers
 
 
@@ -147,8 +147,8 @@ def _build_provider(
 def build_thresholds(config: AppConfig) -> Dict[str, Thresholds]:
     thresholds_cfg = config.thresholds
     thresholds: Dict[str, Thresholds] = {"default": thresholds_cfg.default.to_domain()}
-    for symbol, cfg in thresholds_cfg.symbols.items():
-        thresholds[symbol] = cfg.to_domain()
+    for override in thresholds_cfg.overrides:
+        thresholds[override.symbol] = override.config.to_domain()
     return thresholds
 
 
@@ -197,9 +197,9 @@ def _resolve_provider_name(
     mapping = config.symbol_provider_mapping
     symbol_key = symbol.upper()
     provider_name = (
-        mapping.get(symbol_key)
-        or mapping.get(symbol)
-        or mapping.get("default")
+        mapping.provider_for(symbol_key)
+        or mapping.provider_for(symbol)
+        or mapping.provider_for("default")
     )
     if not provider_name and default:
         provider_name = default
