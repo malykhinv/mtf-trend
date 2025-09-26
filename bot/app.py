@@ -98,9 +98,6 @@ class SymbolUniverse:
     def provider_for(self, symbol: str) -> str | None:
         return self.assignments.get(symbol)
 
-    def symbols(self) -> tuple[str, ...]:
-        return tuple(self.assignments.keys())
-
     def symbols_for_provider(self, provider: str) -> tuple[str, ...]:
         return self.pipelines.get(provider, tuple())
 
