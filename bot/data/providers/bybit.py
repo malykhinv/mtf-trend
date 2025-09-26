@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import asyncio
 import hmac
 import time
 from hashlib import sha256
-from typing import AsyncGenerator, Dict, List, Mapping, Protocol, Sequence, cast
+from typing import Dict, List, Mapping, Protocol, Sequence, cast
 from urllib.parse import urlencode
 
 try:
@@ -126,17 +125,6 @@ class BybitPerpetualProvider(BaseExchangeProvider):
         candles = self.map_candles(entries, symbol, timeframe)
         filtered = await self._filter_liquidity(candles)
         return self._sort_and_deduplicate(filtered)
-
-    async def stream_candles(
-        self, symbol: str, timeframe: Timeframe
-    ) -> AsyncGenerator[Candle, None]:
-        if not httpx:
-            raise RuntimeError("httpx is required for streaming via Bybit API")
-        while True:
-            candles = await self.fetch_ohlcv(symbol, timeframe, limit=1)
-            if candles:
-                yield candles[-1]
-            await asyncio.sleep(1)
 
     async def get_symbols(self) -> list[str]:
         await self.rate_limiter.throttle()

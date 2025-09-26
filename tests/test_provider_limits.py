@@ -15,9 +15,6 @@ class _StubProvider(BaseExchangeProvider):
     ):  # pragma: no cover - unused
         raise NotImplementedError
 
-    async def stream_candles(self, symbol: str, timeframe: Timeframe):  # pragma: no cover - unused
-        raise NotImplementedError
-
     async def get_symbols(self):  # pragma: no cover - unused
         raise NotImplementedError
 
