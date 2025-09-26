@@ -13,7 +13,6 @@ except ImportError:  # pragma: no cover
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
-from ...utils.logging import get_logger
 from ..models import (
     BinanceBalance,
     BinanceBalancesPayload,
@@ -67,7 +66,6 @@ class BinanceFuturesProvider(BaseExchangeProvider):
         self._session: _HttpClient | None = session or (
             httpx.AsyncClient(timeout=10.0) if httpx else None
         )
-        self._logger = get_logger(self.__class__.__name__)
         self._api_key = api_key
         self._api_secret = api_secret
 
