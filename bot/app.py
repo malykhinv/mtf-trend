@@ -93,9 +93,6 @@ class SymbolUniverse:
     assignments: Dict[str, str]
     pipelines: Dict[str, tuple[str, ...]]
 
-    def provider_for(self, symbol: str) -> str | None:
-        return self.assignments.get(symbol)
-
     def symbols_for_provider(self, provider: str) -> tuple[str, ...]:
         return self.pipelines.get(provider, tuple())
 
