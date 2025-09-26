@@ -59,7 +59,6 @@ def _create_binance_provider(
 ) -> BinanceFuturesProvider:
     return BinanceFuturesProvider(
         config.api_base,
-        config.ws_base,
         config.rate_limit_per_minute,
         config.min_quote_volume,
         api_key=api_key,
@@ -74,7 +73,6 @@ def _create_bybit_provider(
 ) -> BybitPerpetualProvider:
     return BybitPerpetualProvider(
         config.api_base,
-        config.ws_base,
         config.rate_limit_per_minute,
         config.min_quote_volume,
         api_key=api_key,

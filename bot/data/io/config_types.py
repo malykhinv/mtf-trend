@@ -257,7 +257,6 @@ class ProviderCredentialPayload:
 class ProviderConfigPayload:
     name: str
     api_base: str = ""
-    ws_base: str = ""
     rate_limit_per_minute: int | None = None
     min_quote_volume: float | None = None
     api_key: ProviderCredentialPayload = field(default_factory=ProviderCredentialPayload)
@@ -679,7 +678,6 @@ def _parse_provider_credentials(
 def _parse_provider_section(name: str, value: object) -> ProviderConfigPayload:
     mapping = _as_mapping(value or {}, f"providers.{name}")
     api_base = _stringify(mapping.get("api_base")) if mapping.get("api_base") is not None else ""
-    ws_base = _stringify(mapping.get("ws_base")) if mapping.get("ws_base") is not None else ""
     rate_limit = _optional_int(mapping.get("rate_limit_per_minute"))
     min_quote_volume = _optional_float(mapping.get("min_quote_volume"))
     prefix = name.upper()
@@ -688,7 +686,6 @@ def _parse_provider_section(name: str, value: object) -> ProviderConfigPayload:
     return ProviderConfigPayload(
         name=name,
         api_base=api_base,
-        ws_base=ws_base,
         rate_limit_per_minute=rate_limit,
         min_quote_volume=min_quote_volume,
         api_key=api_key,

@@ -135,7 +135,6 @@ class ProviderKind(str, Enum):
 class ExchangeProviderConfig:
     name: str
     api_base: str
-    ws_base: str
     rate_limit_per_minute: int
     min_quote_volume: float
     api_key: ProviderCredential = field(default_factory=ProviderCredential)
@@ -147,7 +146,6 @@ class ExchangeProviderConfig:
         cls, name: str, payload: ProviderConfigPayload
     ) -> "ExchangeProviderConfig":
         api_base = payload.api_base.strip() if payload.api_base else ""
-        ws_base = payload.ws_base.strip() if payload.ws_base else ""
         rate_limit = _coerce_positive_int(payload.rate_limit_per_minute, 60)
         min_quote_volume = _coerce_non_negative_float(payload.min_quote_volume)
         api_key = ProviderCredential.from_payload(payload.api_key)
@@ -155,7 +153,6 @@ class ExchangeProviderConfig:
         instance = cls(
             name=name,
             api_base=api_base,
-            ws_base=ws_base,
             rate_limit_per_minute=rate_limit,
             min_quote_volume=min_quote_volume,
             api_key=api_key,
