@@ -35,8 +35,3 @@ class ConfigLoader:
         for variable in payload.env.variables:
             os.environ.setdefault(variable.key, variable.value)
         return AppConfig(payload=payload)
-
-
-def build_app_config(raw: Mapping[str, object]) -> AppConfig:
-    payload = parse_app_config_payload(raw)
-    return AppConfig(payload=payload)
