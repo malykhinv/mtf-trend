@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from bot.app import SymbolUniverse, run_backtest
 from bot.data.io.config_loader import AppConfig
+from bot.data.io.config_types import parse_app_config_payload
 from bot.domain.enums import Exchange, Timeframe
 from bot.domain.models.entities import Candle, Thresholds
 
@@ -24,8 +25,12 @@ class _StubProvider:
         return []
 
 
+def _make_config(raw: dict[str, object]) -> AppConfig:
+    return AppConfig(parse_app_config_payload(raw))
+
+
 def test_run_backtest_iterates_over_timeframes(monkeypatch):
-    config = AppConfig(raw={"backtest": {"enabled": True, "history_batches": 1}})
+    config = _make_config({"backtest": {"enabled": True, "history_batches": 1}})
     assert config.backtest.enabled is True
     assert config.backtest.history_batches == 1
     assert config.backtest.timeframes == (
@@ -118,8 +123,8 @@ def test_run_backtest_fetches_batched_history(monkeypatch):
             return list(self._mapping.get(since or 0, []))
 
     provider = _BatchProvider(data_by_since)
-    config = AppConfig(
-        raw={
+    config = _make_config(
+        {
             "backtest": {
                 "enabled": True,
                 "limit": limit,

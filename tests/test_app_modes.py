@@ -5,6 +5,7 @@ import pytest
 from bot.app import main_async, resolve_mode
 from bot.app_modes import AppMode
 from bot.data.io.config_loader import AppConfig
+from bot.data.io.config_types import parse_app_config_payload
 
 
 class _DummyProvider:
@@ -15,9 +16,13 @@ class _DummyProvider:
         self.closed = True
 
 
+def _make_config(raw: dict[str, object]) -> AppConfig:
+    return AppConfig(parse_app_config_payload(raw))
+
+
 def test_main_async_runs_backtest_only(monkeypatch):
-    config = AppConfig(
-        raw={
+    config = _make_config(
+        {
             "mode": "backtest",
             "logging": {"level": "INFO"},
             "backtest": {"enabled": True},
@@ -49,8 +54,8 @@ def test_main_async_runs_backtest_only(monkeypatch):
 
 
 def test_main_async_runs_live_only(monkeypatch):
-    config = AppConfig(
-        raw={
+    config = _make_config(
+        {
             "mode": "backtest",
             "logging": {"level": "INFO"},
             "backtest": {"enabled": True},
@@ -82,15 +87,15 @@ def test_main_async_runs_live_only(monkeypatch):
 
 
 def test_resolve_mode_precedence():
-    config = AppConfig(raw={"mode": "live"})
+    config = _make_config({"mode": "live"})
     assert resolve_mode(config, ["--mode", "backtest"]) == AppMode.BACKTEST
     assert resolve_mode(config, []) == AppMode.LIVE
 
 
 def test_resolve_mode_invalid():
-    config = AppConfig(raw={"mode": "demo"})
     with pytest.raises(ValueError):
-        resolve_mode(config, [])
+        _make_config({"mode": "demo"})
 
+    config = _make_config({})
     with pytest.raises(ValueError):
-        resolve_mode(AppConfig(raw={}), ["--mode", "invalid"])
+        resolve_mode(config, ["--mode", "invalid"])

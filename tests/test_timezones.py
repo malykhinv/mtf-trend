@@ -1,6 +1,7 @@
 from zoneinfo import ZoneInfo
 
 from bot.data.io.config_loader import AppConfig
+from bot.data.io.config_types import parse_app_config_payload
 from bot.data.mappers.ohlcv_mapper import map_ohlcv
 from bot.data.models import BinanceKline, BinanceKlineData
 from bot.domain.enums import Exchange, Timeframe
@@ -8,7 +9,7 @@ from bot.utils.clock import get_timezone, init_clock
 
 
 def test_app_config_timezone_defaults_to_utc() -> None:
-    config = AppConfig(raw={})
+    config = AppConfig(parse_app_config_payload({}))
     assert config.time.zone == "UTC"
 
 
