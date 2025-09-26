@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import Any, AsyncGenerator, AsyncIterator, Dict, Iterable, List, Sequence, cast
+from typing import Dict, Iterable, List, Sequence
 
 from ...domain.enums import Exchange, Timeframe
 from ...domain.models.entities import Candle
@@ -71,12 +71,6 @@ class BaseExchangeProvider:
         if requested_limit is None or requested_limit <= 0:
             return max_limit
         return min(requested_limit, max_limit)
-
-    async def stream_candles(
-        self, symbol: str, timeframe: Timeframe
-    ) -> AsyncGenerator[Candle, None]:
-        raise NotImplementedError
-        yield cast(Candle, None)
 
     async def get_symbols(self) -> Iterable[str]:
         raise NotImplementedError
