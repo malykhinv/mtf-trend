@@ -9,6 +9,7 @@ from typing import Callable, Protocol
 
 import requests
 
+from bot import config
 from bot.domain.models.signal import Signal
 from bot.domain.models.trade import Trade
 from bot.domain.models.trade_status import TradeStatus
@@ -102,12 +103,8 @@ class TelegramNotifier(Notifier):
         bar = signal.bar
         thresholds = signal.thresholds
         levels = signal.levels
-        open_time = bar.open_time
-        if open_time.tzinfo is not None:
-            open_time = open_time.astimezone()
-        close_time = bar.close_time
-        if close_time.tzinfo is not None:
-            close_time = close_time.astimezone()
+        open_time = _to_timezone(bar.open_time)
+        close_time = _to_timezone(bar.close_time)
         direction = "Лонг" if signal.direction.is_long else "Шорт"
         lines = [
             "🚨 Новый торговый сигнал",
@@ -142,12 +139,12 @@ class TelegramNotifier(Notifier):
             TradeStatus.CANCELLED: "⚪️ Сделка отменена",
         }
         title = status_titles.get(trade.status, "ℹ️ Статус сделки обновлён")
-        open_time = trade.timestamp_open
-        if open_time.tzinfo is not None:
-            open_time = open_time.astimezone()
-        close_time = trade.timestamp_close
-        if close_time is not None and close_time.tzinfo is not None:
-            close_time = close_time.astimezone()
+        open_time = _to_timezone(trade.timestamp_open)
+        close_time = (
+            _to_timezone(trade.timestamp_close)
+            if trade.timestamp_close is not None
+            else None
+        )
         direction = "Лонг" if trade.side.is_long else "Шорт"
         lines = [
             title,
@@ -170,9 +167,15 @@ class TelegramNotifier(Notifier):
         if trade.reason_close is not None:
             lines.append(f"Причина закрытия: {trade.reason_close.value}")
         if trade.sl_be_at is not None:
-            sl_time = trade.sl_be_at
-            if sl_time.tzinfo is not None:
-                sl_time = sl_time.astimezone()
+            sl_time = _to_timezone(trade.sl_be_at)
             lines.append(f"SL в безубытке с: {sl_time:%Y-%m-%d %H:%M}")
         return "\n".join(lines)
 
+
+
+def _to_timezone(value: datetime) -> datetime:
+    """Return ``value`` converted to the configured timezone."""
+
+    if value.tzinfo is None:
+        return value.replace(tzinfo=config.TIMEZONE)
+    return value.astimezone(config.TIMEZONE)
