@@ -21,10 +21,7 @@ from bot.utils.logging import get_logger
 from bot.utils.prints_aggregator import PrintsAggregator, TradePrint
 
 _TIMEFRAME_TO_DELTA: dict[Timeframe, timedelta] = {
-    Timeframe.M1: timedelta(minutes=1),
-    Timeframe.M3: timedelta(minutes=3),
-    Timeframe.M5: timedelta(minutes=5),
-    Timeframe.M15: timedelta(minutes=15),
+    timeframe: timedelta(minutes=timeframe.minutes) for timeframe in Timeframe
 }
 
 _EMPTY_METRICS = BarMetrics(
@@ -249,8 +246,17 @@ class CcxtMarketDataLoader(MarketDataLoader):
     def __init__(self, *, logger=None) -> None:
         self._logger = logger or get_logger(__name__)
         self._clients: dict[Exchange, object] = {
-            Exchange.BINANCE: ccxt.binance({"enableRateLimit": True}),
-            Exchange.BYBIT: ccxt.bybit({"enableRateLimit": True}),
+            Exchange.BINANCE: ccxt.binanceusdm({"enableRateLimit": True}),
+            Exchange.BYBIT: ccxt.bybit(
+                {
+                    "enableRateLimit": True,
+                    "options": {
+                        "defaultType": "swap",
+                        "defaultSubType": "linear",
+                        "defaultSettle": "USDT",
+                    },
+                }
+            ),
         }
 
     def load(self, request: HistoricalRequest) -> Iterable[Bar]:
@@ -319,8 +325,8 @@ class CcxtMarketDataLoader(MarketDataLoader):
 class WsLiveDataStream(LiveDataStream):
     """Live websocket data stream with reconnection and subscription capping."""
 
-    _BINANCE_WS = "wss://stream.binance.com:9443/stream"
-    _BYBIT_WS = "wss://stream.bybit.com/v5/public/spot"
+    _BINANCE_WS = "wss://fstream.binance.com/stream"
+    _BYBIT_WS = "wss://stream.bybit.com/v5/public/linear"
 
     def __init__(
         self,
@@ -338,8 +344,17 @@ class WsLiveDataStream(LiveDataStream):
         self._threads: list[threading.Thread] = []
         self._apps: list[WebSocketApp] = []
         self._market_clients: dict[Exchange, object] = {
-            Exchange.BINANCE: ccxt.binance({"enableRateLimit": True}),
-            Exchange.BYBIT: ccxt.bybit({"enableRateLimit": True}),
+            Exchange.BINANCE: ccxt.binanceusdm({"enableRateLimit": True}),
+            Exchange.BYBIT: ccxt.bybit(
+                {
+                    "enableRateLimit": True,
+                    "options": {
+                        "defaultType": "swap",
+                        "defaultSubType": "linear",
+                        "defaultSettle": "USDT",
+                    },
+                }
+            ),
         }
 
     def subscribe(self, listener: Callable[[LiveBarEvent], None]) -> None:
@@ -377,10 +392,28 @@ class WsLiveDataStream(LiveDataStream):
         tickers = client.fetch_tickers()  # type: ignore[attr-defined]
         ranked: list[tuple[str, float]] = []
         for symbol, ticker in tickers.items():
-            if not symbol.endswith("/USDT"):
+            base_symbol = symbol.split(":")[0]
+            if not base_symbol.endswith("/USDT"):
                 continue
-            quote_volume = float(ticker.get("quoteVolume") or 0.0)
-            ranked.append((symbol, quote_volume))
+            volume_candidates = [
+                ticker.get("quoteVolume"),
+                ticker.get("info", {}).get("quoteVolume"),
+                ticker.get("info", {}).get("turnover"),
+                ticker.get("info", {}).get("turnover24h"),
+                ticker.get("info", {}).get("turnoverUsd24h"),
+                ticker.get("info", {}).get("volume24h"),
+            ]
+            quote_volume = 0.0
+            for candidate in volume_candidates:
+                if candidate in (None, ""):
+                    continue
+                try:
+                    quote_volume = float(candidate)
+                except (TypeError, ValueError):
+                    continue
+                else:
+                    break
+            ranked.append((base_symbol, quote_volume))
         ranked.sort(key=lambda item: item[1], reverse=True)
         symbols = [symbol for symbol, _ in ranked[: self._top_n]]
         self._logger.info(
@@ -488,7 +521,11 @@ class WsLiveDataStream(LiveDataStream):
             self._logger.warning("Нет доступных символов Bybit для подписки")
             return
 
-        topic_kline = [f"kline.{self._timeframe.value}.{symbol.replace('/', '')}" for symbol in symbols]
+        bybit_interval = self._to_bybit_interval(self._timeframe)
+        topic_kline = [
+            f"kline.{bybit_interval}.{symbol.replace('/', '')}"
+            for symbol in symbols
+        ]
         topic_trade = [f"publicTrade.{symbol.replace('/', '')}" for symbol in symbols]
         aggregators: dict[str, PrintsAggregator] = {
             symbol.replace("/", "").upper(): PrintsAggregator() for symbol in symbols
@@ -607,6 +644,10 @@ class WsLiveDataStream(LiveDataStream):
                 RECONNECT_DELAY_SEC,
             )
             time.sleep(RECONNECT_DELAY_SEC)
+
+    @staticmethod
+    def _to_bybit_interval(timeframe: Timeframe) -> str:
+        return str(timeframe.minutes)
 
 
 def _bar_from_ohlcv(
