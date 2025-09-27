@@ -25,7 +25,9 @@ class PrintsAggregator:
         self._prints.append(trade_print)
         self._drop_expired(trade_print.timestamp)
 
-    def imbalance(self) -> float:
+    def imbalance(self, now: datetime | None = None) -> float:
+        reference_time = now or datetime.now(tz=config.UTC)
+        self._drop_expired(reference_time)
         total_qty = sum(p.quantity for p in self._prints)
         if total_qty == 0:
             return 0.0

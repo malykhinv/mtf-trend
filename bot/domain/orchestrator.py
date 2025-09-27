@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from bot import config
 from bot.data.accounting import BalanceProvider
 from bot.data.diary import WorkbookDiary
-from bot.data.loader import LiveDataStream, MarketDataLoader
+from bot.data.loader import LiveBarEvent, LiveDataStream, MarketDataLoader
 from bot.data.notifier import Notifier
 from bot.utils.logging import get_logger
 from .analyzer import SignalAnalyzer
@@ -32,6 +32,8 @@ class Orchestrator:
     def __init__(self, dependencies: OrchestratorDependencies) -> None:
         self._deps = dependencies
         self._symbol_cooldown: dict[str, datetime] = {}
+        self._latest_imbalance: dict[str, float] = {}
+        self._symbols_above_threshold: set[str] = set()
         self._logger = get_logger(__name__)
 
     def start(self) -> None:
@@ -44,7 +46,15 @@ class Orchestrator:
         for bar in self._deps.market_loader.load(request):
             self._handle_bar(bar)
 
-    def _on_bar(self, bar: Bar) -> None:
+    def _on_bar(self, event: LiveBarEvent) -> None:
+        bar = event.bar
+        symbol_key = self._cooldown_key(bar)
+        self._latest_imbalance[symbol_key] = event.imbalance
+        if event.imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
+            self._symbols_above_threshold.add(symbol_key)
+        else:
+            self._symbols_above_threshold.discard(symbol_key)
+        self._deps.execution.record_imbalance(symbol_key, event.imbalance)
         if self._is_on_cooldown(bar):
             return
         self._handle_bar(bar)
