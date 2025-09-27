@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Callable, Optional, TypeVar
+from typing import Callable, Literal, Optional, TypeVar
 
 from bot import config
 from bot.utils.logging import get_logger
@@ -15,6 +15,8 @@ from .exchange_client import (
     ExchangeClientError,
     OrderExecutionSnapshot,
     OrderStatus,
+    PositionStatus,
+    SymbolPositionSnapshot,
 )
 from .models.close_reason import CloseReason
 from .models.signal import Signal
@@ -39,6 +41,8 @@ class ExecutionService:
 
     RETRY_ATTEMPTS = 3
     RETRY_DELAY_SEC = 0.5
+    POSITION_POLL_ATTEMPTS = 3
+    POSITION_POLL_INTERVAL_SEC = 0.5
 
     def __init__(
         self,
@@ -212,6 +216,35 @@ class ExecutionService:
             close_order_id=close_order_id,
         )
 
+    def poll_trade_state(
+        self,
+        trade: Trade,
+        *,
+        awaiting_close: bool = False,
+        poll_attempts: int | None = None,
+        poll_interval_sec: float | None = None,
+    ) -> "TradePollingResult | None":
+        """Poll exchange state and return a result if trade status changed."""
+
+        attempts = max(1, poll_attempts or self.POSITION_POLL_ATTEMPTS)
+        interval = poll_interval_sec or self.POSITION_POLL_INTERVAL_SEC
+
+        for _ in range(attempts):
+            try:
+                snapshot = self._with_retry(
+                    lambda: self._exchange.fetch_position(exchange=trade.exchange, symbol=trade.symbol),
+                    context=f"fetch position for {trade.exchange.value}:{trade.symbol}",
+                )
+            except ExchangeClientError:
+                return None
+
+            result = self._interpret_position_snapshot(trade, snapshot, awaiting_close=awaiting_close)
+            if result is not None:
+                return result
+            time.sleep(interval)
+
+        return None
+
     def should_move_to_breakeven(self, entry_price: float, last_price: float, side: SignalDirection) -> bool:
         """Return True when price progress warrants moving the stop to break-even."""
 
@@ -318,3 +351,115 @@ class ExecutionService:
         if reason in (CloseReason.AGGRESSION, CloseReason.MANUAL):
             return TradeStatus.CLOSED_MANUAL
         return TradeStatus.CANCELLED
+
+    def _interpret_position_snapshot(
+        self,
+        trade: Trade,
+        snapshot: SymbolPositionSnapshot,
+        *,
+        awaiting_close: bool,
+    ) -> "TradePollingResult | None":
+        if snapshot.status is PositionStatus.NONE:
+            if trade.status is TradeStatus.CANCELLED:
+                return None
+            cancelled_trade = replace(
+                trade,
+                status=TradeStatus.CANCELLED,
+                executed_qty=0.0,
+                reason_close=trade.reason_close or CloseReason.MANUAL,
+                timestamp_close=snapshot.updated_at or datetime.now(tz=config.TIMEZONE),
+            )
+            return TradePollingResult(trade=cancelled_trade, outcome="cancelled")
+
+        if snapshot.status is PositionStatus.OPEN:
+            entry = snapshot.entry
+            if entry is None:
+                return None
+            updates: dict[str, object] = {}
+            new_status = self._map_order_status_to_trade_status(entry.status)
+            if entry.filled_qty != trade.executed_qty:
+                updates["executed_qty"] = entry.filled_qty
+            if entry.avg_fill_price is not None and entry.avg_fill_price != trade.avg_fill_price:
+                updates["avg_fill_price"] = entry.avg_fill_price
+            if entry.updated_at and entry.updated_at != trade.timestamp_open:
+                updates["timestamp_open"] = entry.updated_at
+            if new_status != trade.status:
+                updates["status"] = new_status
+
+            if not updates:
+                return None
+
+            updated_trade = replace(trade, **updates)
+            if new_status is TradeStatus.OPENED:
+                return TradePollingResult(trade=updated_trade, outcome="filled")
+            if new_status is TradeStatus.CANCELLED:
+                return TradePollingResult(trade=updated_trade, outcome="cancelled")
+            return None
+
+        close_snapshot, reason = self._resolve_close_snapshot(trade, snapshot)
+        final_status = self._map_reason_to_status(reason)
+        updates = {
+            "reason_close": reason,
+        }
+
+        if final_status != trade.status:
+            updates["status"] = final_status
+
+        if close_snapshot and close_snapshot.filled_qty != trade.executed_qty:
+            updates["executed_qty"] = close_snapshot.filled_qty
+
+        if close_snapshot and close_snapshot.avg_fill_price is not None and close_snapshot.avg_fill_price != trade.avg_fill_price:
+            updates["avg_fill_price"] = close_snapshot.avg_fill_price
+
+        if close_snapshot and close_snapshot.order_id != trade.close_order_id:
+            updates["close_order_id"] = close_snapshot.order_id
+
+        timestamp_close = (
+            (close_snapshot.updated_at if close_snapshot and close_snapshot.updated_at else snapshot.updated_at)
+            or trade.timestamp_close
+            or datetime.now(tz=config.TIMEZONE)
+        )
+
+        if trade.timestamp_close != timestamp_close:
+            updates["timestamp_close"] = timestamp_close
+
+        updated_trade = replace(trade, **updates) if updates else trade
+
+        if awaiting_close or updates:
+            return TradePollingResult(trade=updated_trade, outcome="closed")
+        return None
+
+    def _resolve_close_snapshot(
+        self,
+        trade: Trade,
+        snapshot: SymbolPositionSnapshot,
+    ) -> tuple[OrderExecutionSnapshot | None, CloseReason]:
+        take_snapshot = snapshot.take
+        stop_snapshot = snapshot.stop
+        close_snapshot = snapshot.close
+
+        if take_snapshot and take_snapshot.status is OrderStatus.FILLED:
+            return take_snapshot, CloseReason.TAKE_PROFIT
+
+        if stop_snapshot and stop_snapshot.status is OrderStatus.FILLED:
+            return stop_snapshot, CloseReason.STOP_LOSS
+
+        if close_snapshot and close_snapshot.status is OrderStatus.FILLED:
+            return close_snapshot, trade.reason_close or CloseReason.MANUAL
+
+        if close_snapshot:
+            return close_snapshot, trade.reason_close or CloseReason.MANUAL
+
+        if take_snapshot and take_snapshot.status is OrderStatus.CANCELLED and trade.reason_close is CloseReason.TAKE_PROFIT:
+            return take_snapshot, CloseReason.TAKE_PROFIT
+
+        if stop_snapshot and stop_snapshot.status is OrderStatus.CANCELLED and trade.reason_close is CloseReason.STOP_LOSS:
+            return stop_snapshot, CloseReason.STOP_LOSS
+
+        return snapshot.entry, trade.reason_close or CloseReason.MANUAL
+
+
+@dataclass(frozen=True)
+class TradePollingResult:
+    trade: Trade
+    outcome: Literal["filled", "closed", "cancelled"]

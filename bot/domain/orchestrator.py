@@ -28,6 +28,7 @@ class ActiveTrade:
     trade: Trade
     highs: Deque[float]
     lows: Deque[float]
+    awaiting_close_confirmation: bool = False
 
     def record_bar(self, bar: Bar) -> None:
         self.highs.append(bar.high)
@@ -186,6 +187,26 @@ class Orchestrator:
             self._active_trades.pop(trade_key, None)
             return
 
+        poll_result = self._deps.execution.poll_trade_state(
+            trade,
+            awaiting_close=state.awaiting_close_confirmation,
+        )
+        if poll_result is not None:
+            state.trade = poll_result.trade
+            trade = state.trade
+            if poll_result.outcome == "filled":
+                self._deps.diary.append_trades([trade])
+            elif poll_result.outcome in {"closed", "cancelled"}:
+                symbol_key = self._cooldown_key(bar)
+                last_imbalance = self._latest_imbalance.get(symbol_key)
+                if last_imbalance is None:
+                    last_imbalance = self._deps.execution.last_recorded_imbalance(symbol_key)
+                self._finalize_trade(trade_key, trade, poll_result.outcome, last_imbalance)
+                return
+
+        if state.awaiting_close_confirmation:
+            return
+
         symbol_key = self._cooldown_key(bar)
         last_imbalance = self._latest_imbalance.get(symbol_key)
         if last_imbalance is None:
@@ -206,59 +227,13 @@ class Orchestrator:
                 price=close_price,
                 timestamp=bar.close_time,
             )
-            self._active_trades.pop(trade_key, None)
-            self._deps.diary.append_trades([closed_trade])
+            state.trade = closed_trade
+            state.awaiting_close_confirmation = True
             self._logger.info(
-                "Сделка %s закрыта из-за агрессии против позиции (дисбаланс %.2f)",
+                "Инициировано закрытие сделки %s из-за агрессии против позиции (дисбаланс %.2f)",
                 trade.trade_id,
                 last_imbalance,
             )
-
-            try:
-                self._deps.notifier.send_trade(closed_trade)
-            except Exception:
-                self._logger.exception(
-                    "Ошибка отправки уведомления о закрытии сделки %s",
-                    trade.trade_id,
-                )
-            return
-
-        close_reason = self._detect_close_reason(trade, bar)
-        if close_reason is not None:
-            close_price = (
-                trade.take_profit_price
-                if close_reason is CloseReason.TAKE_PROFIT
-                else trade.stop_loss_price
-            )
-            closed_trade = self._deps.execution.close_trade(
-                trade,
-                reason=close_reason,
-                price=close_price,
-                timestamp=bar.close_time,
-            )
-            self._active_trades.pop(trade_key, None)
-            self._deps.diary.append_trades([closed_trade])
-
-            if close_reason is CloseReason.TAKE_PROFIT:
-                self._logger.info(
-                    "Сделка %s закрыта по тейк-профиту на уровне %.4f",
-                    trade.trade_id,
-                    close_price,
-                )
-            else:
-                self._logger.info(
-                    "Сделка %s закрыта по стоп-лоссу на уровне %.4f",
-                    trade.trade_id,
-                    close_price,
-                )
-
-            try:
-                self._deps.notifier.send_trade(closed_trade)
-            except Exception:
-                self._logger.exception(
-                    "Ошибка отправки уведомления о закрытии сделки %s",
-                    trade.trade_id,
-                )
             return
 
         if trade.executed_qty <= 0:
@@ -318,16 +293,53 @@ class Orchestrator:
             return self._swing_detector.detect_swing_low(tuple(state.lows))
         return self._swing_detector.detect_swing_high(tuple(state.highs))
 
-    @staticmethod
-    def _detect_close_reason(trade: Trade, bar: Bar) -> CloseReason | None:
-        if trade.side.is_long:
-            if bar.low <= trade.stop_loss_price:
-                return CloseReason.STOP_LOSS
-            if bar.high >= trade.take_profit_price:
-                return CloseReason.TAKE_PROFIT
+    def _finalize_trade(
+        self,
+        trade_key: str,
+        trade: Trade,
+        outcome: str,
+        last_imbalance: float | None,
+    ) -> None:
+        self._active_trades.pop(trade_key, None)
+        self._deps.diary.append_trades([trade])
+
+        if outcome == "closed":
+            self._log_trade_closure(trade, last_imbalance)
         else:
-            if bar.high >= trade.stop_loss_price:
-                return CloseReason.STOP_LOSS
-            if bar.low <= trade.take_profit_price:
-                return CloseReason.TAKE_PROFIT
-        return None
+            self._logger.info("Сделка %s отменена биржей", trade.trade_id)
+
+        try:
+            self._deps.notifier.send_trade(trade)
+        except Exception:
+            self._logger.exception("Ошибка отправки уведомления о сделке %s", trade.trade_id)
+
+    def _log_trade_closure(self, trade: Trade, last_imbalance: float | None) -> None:
+        reason = trade.reason_close
+        if reason is CloseReason.TAKE_PROFIT:
+            price = trade.avg_fill_price or trade.take_profit_price
+            self._logger.info(
+                "Сделка %s закрыта по тейк-профиту на уровне %.4f",
+                trade.trade_id,
+                price,
+            )
+        elif reason is CloseReason.STOP_LOSS:
+            price = trade.avg_fill_price or trade.stop_loss_price
+            self._logger.info(
+                "Сделка %s закрыта по стоп-лоссу на уровне %.4f",
+                trade.trade_id,
+                price,
+            )
+        elif reason is CloseReason.AGGRESSION:
+            if last_imbalance is not None:
+                self._logger.info(
+                    "Сделка %s закрыта из-за агрессии против позиции (дисбаланс %.2f)",
+                    trade.trade_id,
+                    last_imbalance,
+                )
+            else:
+                self._logger.info(
+                    "Сделка %s закрыта из-за агрессии против позиции",
+                    trade.trade_id,
+                )
+        else:
+            self._logger.info("Сделка %s закрыта вручную", trade.trade_id)

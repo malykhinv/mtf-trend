@@ -59,6 +59,30 @@ class BracketOrderExecution:
     take_order_id: str | None
 
 
+class PositionStatus(str, Enum):
+    """High-level status of a symbol position returned by the exchange."""
+
+    NONE = "NONE"
+    OPEN = "OPEN"
+    CLOSED = "CLOSED"
+
+
+@dataclass(frozen=True, slots=True)
+class SymbolPositionSnapshot:
+    """Snapshot describing position and linked orders for a symbol."""
+
+    exchange: Exchange
+    symbol: str
+    status: PositionStatus
+    side: SignalDirection | None
+    quantity: float
+    entry: OrderExecutionSnapshot | None
+    stop: OrderExecutionSnapshot | None
+    take: OrderExecutionSnapshot | None
+    close: OrderExecutionSnapshot | None
+    updated_at: datetime | None = None
+
+
 class ExchangeClient(Protocol):
     """Interface used by :class:`ExecutionService` to talk to an exchange."""
 
@@ -82,6 +106,14 @@ class ExchangeClient(Protocol):
     ) -> OrderExecutionSnapshot:
         ...  # pragma: no cover - interface definition
 
+    def fetch_position(
+        self,
+        *,
+        exchange: Exchange,
+        symbol: str,
+    ) -> SymbolPositionSnapshot:
+        ...  # pragma: no cover - interface definition
+
 
 @dataclass(slots=True)
 class InMemoryExchangeClient(ExchangeClient):
@@ -89,6 +121,8 @@ class InMemoryExchangeClient(ExchangeClient):
 
     def __post_init__(self) -> None:
         self._orders: dict[str, OrderExecutionSnapshot] = {}
+        self._positions: dict[tuple[str, str], dict[str, object]] = {}
+        self._order_to_symbol: dict[str, tuple[str, str]] = {}
 
     def submit_bracket_order(self, request: BracketOrderRequest) -> BracketOrderExecution:
         order_id = f"{request.client_trade_id}-entry-{uuid4().hex[:8]}"
@@ -104,20 +138,36 @@ class InMemoryExchangeClient(ExchangeClient):
 
         stop_id = f"{request.client_trade_id}-stop-{uuid4().hex[:8]}"
         take_id = f"{request.client_trade_id}-take-{uuid4().hex[:8]}"
-        self._orders[stop_id] = OrderExecutionSnapshot(
+        stop_snapshot = OrderExecutionSnapshot(
             order_id=stop_id,
             status=OrderStatus.NEW,
             filled_qty=0.0,
             avg_fill_price=None,
             updated_at=now,
         )
-        self._orders[take_id] = OrderExecutionSnapshot(
+        take_snapshot = OrderExecutionSnapshot(
             order_id=take_id,
             status=OrderStatus.NEW,
             filled_qty=0.0,
             avg_fill_price=None,
             updated_at=now,
         )
+        self._orders[stop_id] = stop_snapshot
+        self._orders[take_id] = take_snapshot
+
+        key = (request.exchange.value, request.symbol)
+        self._positions[key] = {
+            "status": PositionStatus.OPEN,
+            "side": request.side,
+            "quantity": request.quantity,
+            "entry_id": order_id,
+            "stop_id": stop_id,
+            "take_id": take_id,
+            "close_id": None,
+            "updated_at": now,
+        }
+        for oid in (order_id, stop_id, take_id):
+            self._order_to_symbol[oid] = key
 
         return BracketOrderExecution(entry=entry_snapshot, stop_order_id=stop_id, take_order_id=take_id)
 
@@ -137,6 +187,7 @@ class InMemoryExchangeClient(ExchangeClient):
             updated_at=datetime.now(tz=config.TIMEZONE),
         )
         self._orders[order_id] = cancelled
+        self._update_position_for_order(order_id, cancelled)
         return cancelled
 
     def close_position_market(
@@ -157,4 +208,105 @@ class InMemoryExchangeClient(ExchangeClient):
             updated_at=datetime.now(tz=config.TIMEZONE),
         )
         self._orders[order_id] = snapshot
+        key = (exchange.value, symbol)
+        position = self._positions.setdefault(
+            key,
+            {
+                "status": PositionStatus.CLOSED,
+                "side": side,
+                "quantity": 0.0,
+                "entry_id": None,
+                "stop_id": None,
+                "take_id": None,
+                "close_id": None,
+                "updated_at": snapshot.updated_at,
+            },
+        )
+        position["close_id"] = order_id
+        position["status"] = PositionStatus.CLOSED
+        position["quantity"] = 0.0
+        position["updated_at"] = snapshot.updated_at
+        if "side" not in position or position["side"] is None:
+            position["side"] = side
+        self._order_to_symbol[order_id] = key
         return snapshot
+
+    def fetch_position(
+        self,
+        *,
+        exchange: Exchange,
+        symbol: str,
+    ) -> SymbolPositionSnapshot:
+        key = (exchange.value, symbol)
+        position = self._positions.get(key)
+        if position is None:
+            return SymbolPositionSnapshot(
+                exchange=exchange,
+                symbol=symbol,
+                status=PositionStatus.NONE,
+                side=None,
+                quantity=0.0,
+                entry=None,
+                stop=None,
+                take=None,
+                close=None,
+            )
+
+        entry_id = position.get("entry_id")
+        stop_id = position.get("stop_id")
+        take_id = position.get("take_id")
+        close_id = position.get("close_id")
+
+        entry_snapshot = self._orders.get(entry_id) if isinstance(entry_id, str) else None
+        stop_snapshot = self._orders.get(stop_id) if isinstance(stop_id, str) else None
+        take_snapshot = self._orders.get(take_id) if isinstance(take_id, str) else None
+        close_snapshot = self._orders.get(close_id) if isinstance(close_id, str) else None
+
+        status: PositionStatus = position.get("status", PositionStatus.NONE)  # type: ignore[assignment]
+        if status is not PositionStatus.CLOSED:
+            if stop_snapshot and stop_snapshot.status is OrderStatus.FILLED:
+                status = PositionStatus.CLOSED
+            elif take_snapshot and take_snapshot.status is OrderStatus.FILLED:
+                status = PositionStatus.CLOSED
+            elif close_snapshot and close_snapshot.status is OrderStatus.FILLED:
+                status = PositionStatus.CLOSED
+            elif entry_snapshot and entry_snapshot.status is OrderStatus.CANCELLED:
+                status = PositionStatus.NONE
+
+        timestamps = [position.get("updated_at")]
+        for snapshot in (entry_snapshot, stop_snapshot, take_snapshot, close_snapshot):
+            if snapshot and snapshot.updated_at is not None:
+                timestamps.append(snapshot.updated_at)
+        updated_at = max((ts for ts in timestamps if isinstance(ts, datetime)), default=None)
+
+        position["status"] = status
+        position["updated_at"] = updated_at
+
+        return SymbolPositionSnapshot(
+            exchange=exchange,
+            symbol=symbol,
+            status=status,
+            side=position.get("side"),  # type: ignore[arg-type]
+            quantity=float(position.get("quantity", 0.0)),
+            entry=entry_snapshot,
+            stop=stop_snapshot,
+            take=take_snapshot,
+            close=close_snapshot,
+            updated_at=updated_at,
+        )
+
+    def _update_position_for_order(
+        self, order_id: str, snapshot: OrderExecutionSnapshot
+    ) -> None:
+        key = self._order_to_symbol.get(order_id)
+        if key is None:
+            return
+        position = self._positions.get(key)
+        if position is None:
+            return
+        position["updated_at"] = snapshot.updated_at
+        if order_id == position.get("entry_id") and snapshot.status is OrderStatus.CANCELLED:
+            position["status"] = PositionStatus.NONE
+            position["quantity"] = 0.0
+        if order_id == position.get("close_id") and snapshot.status is OrderStatus.FILLED:
+            position["status"] = PositionStatus.CLOSED
