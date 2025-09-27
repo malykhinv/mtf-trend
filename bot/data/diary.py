@@ -54,11 +54,16 @@ class TradeRow(Row):
     entry_price: float
     take_profit_price: float
     stop_loss_price: float
+    requested_qty: float
     executed_qty: float
     status: TradeStatus
     avg_fill_price: Optional[float]
     reason_close: Optional[CloseReason]
     sl_be_at: Optional[datetime]
+    order_id: Optional[str]
+    stop_order_id: Optional[str]
+    take_order_id: Optional[str]
+    close_order_id: Optional[str]
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,11 +139,16 @@ class WorkbookDiaryBackend(DiaryBackend):
         "entry_price",
         "take_profit_price",
         "stop_loss_price",
+        "requested_qty",
         "executed_qty",
         "status",
         "avg_fill_price",
         "reason_close",
         "sl_be_at",
+        "order_id",
+        "stop_order_id",
+        "take_order_id",
+        "close_order_id",
     ]
 
     _ANOMALIES_HEADERS = [
@@ -291,11 +301,16 @@ class WorkbookDiaryBackend(DiaryBackend):
             row.entry_price,
             row.take_profit_price,
             row.stop_loss_price,
+            row.requested_qty,
             row.executed_qty,
             row.status.value,
             row.avg_fill_price,
             row.reason_close.value if row.reason_close else None,
             self._format_dt(row.sl_be_at),
+            row.order_id,
+            row.stop_order_id,
+            row.take_order_id,
+            row.close_order_id,
         ]
 
     def _anomaly_values(self, row: AnomalyRow) -> list[object]:
@@ -387,11 +402,16 @@ class WorkbookDiary:
             entry_price=trade.entry_price,
             take_profit_price=trade.take_profit_price,
             stop_loss_price=trade.stop_loss_price,
+            requested_qty=trade.requested_qty,
             executed_qty=trade.executed_qty,
             status=trade.status,
             avg_fill_price=trade.avg_fill_price,
             reason_close=trade.reason_close,
             sl_be_at=trade.sl_be_at,
+            order_id=trade.order_id,
+            stop_order_id=trade.stop_order_id,
+            take_order_id=trade.take_order_id,
+            close_order_id=trade.close_order_id,
         )
 
     @staticmethod

@@ -17,6 +17,7 @@ from .execution_service import ExecutionService
 from .models.bar import Bar
 from .models.close_reason import CloseReason
 from .models.trade import Trade
+from .models.trade_status import TradeStatus
 from .swing_detector import SwingDetector
 
 
@@ -128,7 +129,8 @@ class Orchestrator:
         quantity = order_size / signal.levels.entry_price if signal.levels.entry_price else 0.0
         trade = self._deps.execution.open_trade(signal, quantity=quantity)
         self._deps.diary.append_trades([trade])
-        self._register_active_trade(trade, bar)
+        if trade.status is not TradeStatus.CANCELLED:
+            self._register_active_trade(trade, bar)
 
         try:
             self._deps.notifier.send_trade(trade)
@@ -179,6 +181,10 @@ class Orchestrator:
 
         state.record_bar(bar)
         trade = state.trade
+
+        if trade.status is TradeStatus.CANCELLED:
+            self._active_trades.pop(trade_key, None)
+            return
 
         symbol_key = self._cooldown_key(bar)
         last_imbalance = self._latest_imbalance.get(symbol_key)
@@ -253,6 +259,9 @@ class Orchestrator:
                     "Ошибка отправки уведомления о закрытии сделки %s",
                     trade.trade_id,
                 )
+            return
+
+        if trade.executed_qty <= 0:
             return
 
         updated_trade = trade
