@@ -180,6 +180,43 @@ class Orchestrator:
         state.record_bar(bar)
         trade = state.trade
 
+        symbol_key = self._cooldown_key(bar)
+        last_imbalance = self._latest_imbalance.get(symbol_key)
+        if last_imbalance is None:
+            last_imbalance = self._deps.execution.last_recorded_imbalance(symbol_key)
+
+        aggression_detected = False
+        if last_imbalance is not None:
+            if trade.side.is_long and last_imbalance <= -config.AGGR_IMBALANCE_THRESHOLD:
+                aggression_detected = True
+            elif trade.side.is_short and last_imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
+                aggression_detected = True
+
+        if aggression_detected:
+            close_price = bar.close
+            closed_trade = self._deps.execution.close_trade(
+                trade,
+                reason=CloseReason.AGGRESSION,
+                price=close_price,
+                timestamp=bar.close_time,
+            )
+            self._active_trades.pop(trade_key, None)
+            self._deps.diary.append_trades([closed_trade])
+            self._logger.info(
+                "Сделка %s закрыта из-за агрессии против позиции (дисбаланс %.2f)",
+                trade.trade_id,
+                last_imbalance,
+            )
+
+            try:
+                self._deps.notifier.send_trade(closed_trade)
+            except Exception:
+                self._logger.exception(
+                    "Ошибка отправки уведомления о закрытии сделки %s",
+                    trade.trade_id,
+                )
+            return
+
         close_reason = self._detect_close_reason(trade, bar)
         if close_reason is not None:
             close_price = (
