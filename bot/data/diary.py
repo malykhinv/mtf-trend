@@ -7,6 +7,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Iterable, Optional, Protocol
 
+from bot.domain.models.anomaly import Anomaly, AnomalyThresholdSnapshot
 from bot.domain.models.bar import BarMetrics
 from bot.domain.models.close_reason import CloseReason
 from bot.domain.models.exchange import Exchange
@@ -58,9 +59,28 @@ class TradeRow(Row):
     sl_be_at: Optional[datetime]
 
 
+@dataclass(frozen=True, slots=True)
+class AnomalyRow(Row):
+    timestamp: datetime
+    exchange: Exchange
+    symbol: str
+    timeframe: Timeframe
+    bar_id: str
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    metrics: BarMetrics
+    thresholds: AnomalyThresholdSnapshot
+
+
 class DiaryBackend(Protocol):
     def append_rows(self, rows: Iterable[Row]) -> None:  # pragma: no cover - interface definition
         # TODO: implement concrete persistence for diary rows.
+        ...
+
+    def append_anomalies(self, rows: Iterable[AnomalyRow]) -> None:  # pragma: no cover - interface definition
         ...
 
 
@@ -79,6 +99,11 @@ class WorkbookDiary:
         with self._lock:
             rows = [self._trade_to_row(trade) for trade in trades]
             self.backend.append_rows(rows)
+
+    def append_anomalies(self, anomalies: Iterable[Anomaly]) -> None:
+        with self._lock:
+            rows = [self._anomaly_to_row(anomaly) for anomaly in anomalies]
+            self.backend.append_anomalies(rows)
 
     @staticmethod
     def _signal_to_row(signal: Signal) -> SignalRow:
@@ -116,4 +141,21 @@ class WorkbookDiary:
             avg_fill_price=trade.avg_fill_price,
             reason_close=trade.reason_close,
             sl_be_at=trade.sl_be_at,
+        )
+
+    @staticmethod
+    def _anomaly_to_row(anomaly: Anomaly) -> AnomalyRow:
+        return AnomalyRow(
+            timestamp=anomaly.timestamp,
+            exchange=anomaly.exchange,
+            symbol=anomaly.symbol,
+            timeframe=anomaly.timeframe,
+            bar_id=anomaly.bar_id,
+            open=anomaly.open,
+            high=anomaly.high,
+            low=anomaly.low,
+            close=anomaly.close,
+            volume=anomaly.volume,
+            metrics=anomaly.metrics,
+            thresholds=anomaly.thresholds,
         )

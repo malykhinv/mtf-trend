@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Tuple
 from uuid import uuid4
 
 from bot import config
+from .models.anomaly import Anomaly, AnomalyThresholdSnapshot
 from .models.bar import Bar
 from .models.signal import Signal, SignalLevels, ThresholdSnapshot
 from .models.signal_direction import SignalDirection
@@ -16,6 +17,8 @@ from .models.signal_direction import SignalDirection
 class AnalyzerSettings:
     min_green_move_pct: float = config.ANOMALY_MIN_GROWTH_PCT
     min_volume_spike: float = config.ANOMALY_MIN_VOLUME_SPIKE
+    min_anomaly_atr_mult: float = config.ANOMALY_MIN_ATR_MULT
+    min_anomaly_relative_volume: float = config.ANOMALY_MIN_RELATIVE_VOLUME
     min_relative_volume: float = config.MIN_REL_VOL
     max_relative_volume: float = config.MAX_REL_VOL
     min_atr_mult: float = config.MIN_ATR_MULT
@@ -37,6 +40,14 @@ class AnalyzerSettings:
             max_lower_wick_pct=self.max_lower_wick_pct,
         )
 
+    def anomaly_snapshot(self) -> AnomalyThresholdSnapshot:
+        return AnomalyThresholdSnapshot(
+            min_green_move_pct=self.min_green_move_pct,
+            min_volume_spike=self.min_volume_spike,
+            min_relative_volume=self.min_anomaly_relative_volume,
+            min_atr_mult=self.min_anomaly_atr_mult,
+        )
+
 
 class SignalAnalyzer:
     """Evaluates bars and produces strategy signals."""
@@ -44,7 +55,10 @@ class SignalAnalyzer:
     def __init__(self) -> None:
         self._settings = AnalyzerSettings()
 
-    def analyze_bar(self, bar: Bar, timestamp: Optional[datetime] = None) -> Optional[Signal]:
+    def analyze_bar(
+        self, bar: Bar, timestamp: Optional[datetime] = None
+    ) -> Tuple[Optional[Signal], Optional[Anomaly]]:
+        anomaly = self.detect_anomaly(bar)
         metrics = bar.metrics
         thresholds = self._settings
 
@@ -87,7 +101,7 @@ class SignalAnalyzer:
         )
 
         if not allow_long and not allow_short:
-            return None
+            return None, anomaly
 
         if allow_long:
             direction = SignalDirection.LONG
@@ -104,7 +118,7 @@ class SignalAnalyzer:
                 stop_loss_price=bar.high,
             )
 
-        return Signal(
+        signal = Signal(
             signal_id=self._generate_signal_id(bar),
             bar=bar,
             timestamp=timestamp or bar.close_time,
@@ -116,7 +130,44 @@ class SignalAnalyzer:
             levels=levels,
         )
 
+        return signal, anomaly
+
     @staticmethod
     def _generate_signal_id(bar: Bar) -> str:
         return f"{bar.bar_id}:{uuid4().hex}"
+
+    def detect_anomaly(self, bar: Bar) -> Optional[Anomaly]:
+        metrics = bar.metrics
+        thresholds = self._settings
+
+        if bar.close <= bar.open:
+            return None
+
+        if metrics.pct_move < thresholds.min_green_move_pct:
+            return None
+
+        if metrics.atr_mult < thresholds.min_anomaly_atr_mult:
+            return None
+
+        relative_volume = metrics.relative_volume
+        if relative_volume < thresholds.min_anomaly_relative_volume:
+            return None
+
+        if relative_volume < thresholds.min_volume_spike:
+            return None
+
+        return Anomaly(
+            bar_id=bar.bar_id,
+            exchange=bar.exchange,
+            symbol=bar.symbol,
+            timeframe=bar.timeframe,
+            timestamp=bar.close_time,
+            open=bar.open,
+            high=bar.high,
+            low=bar.low,
+            close=bar.close,
+            volume=bar.volume,
+            metrics=metrics,
+            thresholds=thresholds.anomaly_snapshot(),
+        )
 
