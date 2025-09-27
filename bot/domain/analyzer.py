@@ -59,6 +59,9 @@ class SignalAnalyzer:
         self, bar: Bar, timestamp: Optional[datetime] = None
     ) -> Tuple[Optional[Signal], Optional[Anomaly]]:
         anomaly = self.detect_anomaly(bar)
+        if anomaly is None:
+            return None, anomaly
+
         metrics = bar.metrics
         thresholds = self._settings
 
