@@ -17,6 +17,7 @@ from bot.domain.models.bar import Bar, BarMetrics
 from bot.domain.models.exchange import Exchange
 from bot.domain.models.timeframe import Timeframe
 from bot.utils.logging import get_logger
+from bot.utils.prints_aggregator import PrintsAggregator, TradePrint
 
 _TIMEFRAME_TO_DELTA: dict[Timeframe, timedelta] = {
     Timeframe.M1: timedelta(minutes=1),
@@ -58,10 +59,16 @@ class MarketDataLoader:
         raise NotImplementedError
 
 
+@dataclass(frozen=True, slots=True)
+class LiveBarEvent:
+    bar: Bar
+    imbalance: float
+
+
 class LiveDataStream:
     """Streaming interface that delivers closed bars to listeners."""
 
-    def subscribe(self, listener: Callable[[Bar], None]) -> None:  # pragma: no cover - interface definition
+    def subscribe(self, listener: Callable[[LiveBarEvent], None]) -> None:  # pragma: no cover - interface definition
         raise NotImplementedError
 
     def close(self) -> None:  # pragma: no cover - interface definition
@@ -149,7 +156,7 @@ class WsLiveDataStream(LiveDataStream):
         self._timeframe = timeframe
         self._top_n = top_n
         self._logger = logger or get_logger(__name__)
-        self._listeners: list[Callable[[Bar], None]] = []
+        self._listeners: list[Callable[[LiveBarEvent], None]] = []
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._threads: list[threading.Thread] = []
@@ -159,7 +166,7 @@ class WsLiveDataStream(LiveDataStream):
             Exchange.BYBIT: ccxt.bybit({"enableRateLimit": True}),
         }
 
-    def subscribe(self, listener: Callable[[Bar], None]) -> None:
+    def subscribe(self, listener: Callable[[LiveBarEvent], None]) -> None:
         with self._lock:
             self._listeners.append(listener)
             if self._threads:
@@ -181,13 +188,13 @@ class WsLiveDataStream(LiveDataStream):
         for thread in self._threads:
             thread.join(timeout=1.0)
 
-    def _notify(self, bar: Bar) -> None:
+    def _notify(self, event: LiveBarEvent) -> None:
         listeners_snapshot = list(self._listeners)
         for listener in listeners_snapshot:
             try:
-                listener(bar)
+                listener(event)
             except Exception:  # pragma: no cover - defensive logging
-                self._logger.exception("Ошибка обработчика бара %s", bar.bar_id)
+                self._logger.exception("Ошибка обработчика бара %s", event.bar.bar_id)
 
     def _load_top_symbols(self, exchange: Exchange) -> list[str]:
         client = self._market_clients[exchange]
@@ -215,8 +222,11 @@ class WsLiveDataStream(LiveDataStream):
             return
 
         symbol_streams: list[str] = []
+        aggregators: dict[str, PrintsAggregator] = {}
         for symbol in symbols:
             stream_symbol = symbol.replace("/", "").lower()
+            raw_symbol = symbol.replace("/", "")
+            aggregators[raw_symbol.upper()] = PrintsAggregator()
             symbol_streams.append(f"{stream_symbol}@kline_{self._timeframe.value}")
             symbol_streams.append(f"{stream_symbol}@aggTrade")
         url = f"{self._BINANCE_WS}?streams={'/'.join(symbol_streams)}"
@@ -235,6 +245,18 @@ class WsLiveDataStream(LiveDataStream):
                 if last_id == trade_id:
                     return
                 state_last_trade[symbol] = trade_id
+                aggregator = aggregators.get(symbol)
+                if aggregator is None:
+                    return
+                timestamp_ms = int(data.get("T", 0))
+                quantity = float(data.get("q", 0.0))
+                if timestamp_ms == 0 or quantity <= 0.0:
+                    return
+                timestamp = _from_millis(timestamp_ms)
+                is_buy = not bool(data.get("m", False))
+                aggregator.add_print(
+                    TradePrint(timestamp=timestamp, is_buy=is_buy, quantity=quantity)
+                )
                 return
 
             event = data.get("e")
@@ -266,7 +288,11 @@ class WsLiveDataStream(LiveDataStream):
                 close_ts=close_ts,
                 ohlcv=ohlcv,
             )
-            self._notify(bar)
+            aggregator = aggregators.get(symbol)
+            imbalance = aggregator.imbalance(now=bar.close_time) if aggregator else 0.0
+            if aggregator:
+                aggregator.clear()
+            self._notify(LiveBarEvent(bar=bar, imbalance=imbalance))
 
         def _on_error(_: WebSocketApp, error: Exception) -> None:
             self._logger.error("Ошибка Binance WS: %s", error)
@@ -284,6 +310,9 @@ class WsLiveDataStream(LiveDataStream):
 
         topic_kline = [f"kline.{self._timeframe.value}.{symbol.replace('/', '')}" for symbol in symbols]
         topic_trade = [f"publicTrade.{symbol.replace('/', '')}" for symbol in symbols]
+        aggregators: dict[str, PrintsAggregator] = {
+            symbol.replace("/", "").upper(): PrintsAggregator() for symbol in symbols
+        }
         subscribe_message = json.dumps({
             "op": "subscribe",
             "args": topic_kline + topic_trade,
@@ -302,11 +331,26 @@ class WsLiveDataStream(LiveDataStream):
                 data = payload.get("data", [])
                 if not data:
                     return
-                trade_id = data[0].get("i")
-                symbol = payload.get("topic", "").split(".")[-1]
-                if state_last_trade.get(symbol) == trade_id:
+                symbol = payload.get("topic", "").split(".")[-1].upper()
+                aggregator = aggregators.get(symbol)
+                if aggregator is None:
                     return
-                state_last_trade[symbol] = trade_id
+                for trade in data:
+                    trade_id = trade.get("i")
+                    if trade_id is None:
+                        continue
+                    if state_last_trade.get(symbol) == trade_id:
+                        continue
+                    state_last_trade[symbol] = trade_id
+                    quantity = float(trade.get("v", 0.0))
+                    timestamp_ms = int(float(trade.get("T", 0.0)))
+                    if quantity <= 0.0 or timestamp_ms == 0:
+                        continue
+                    timestamp = _from_millis(timestamp_ms)
+                    is_buy = str(trade.get("S", "")).lower() == "buy"
+                    aggregator.add_print(
+                        TradePrint(timestamp=timestamp, is_buy=is_buy, quantity=quantity)
+                    )
                 return
 
             if not topic.startswith("kline"):
@@ -317,7 +361,7 @@ class WsLiveDataStream(LiveDataStream):
             kline = data[0]
             if not bool(kline.get("confirm", False)):
                 return
-            symbol = topic.split(".")[-1]
+            symbol = topic.split(".")[-1].upper()
             open_ts = int(float(kline.get("start", 0.0)) * 1000)
             if state_last_bar[symbol] == open_ts:
                 return
@@ -339,7 +383,11 @@ class WsLiveDataStream(LiveDataStream):
                 close_ts=close_ts,
                 ohlcv=ohlcv,
             )
-            self._notify(bar)
+            aggregator = aggregators.get(symbol)
+            imbalance = aggregator.imbalance(now=bar.close_time) if aggregator else 0.0
+            if aggregator:
+                aggregator.clear()
+            self._notify(LiveBarEvent(bar=bar, imbalance=imbalance))
 
         def _on_error(_: WebSocketApp, error: Exception) -> None:
             self._logger.error("Ошибка Bybit WS: %s", error)
@@ -410,6 +458,10 @@ def _to_millis(moment: datetime) -> int:
     else:
         aware = moment.astimezone(config.UTC)
     return int(aware.timestamp() * 1000)
+
+
+def _from_millis(timestamp_ms: int) -> datetime:
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=config.UTC)
 
 
 def _format_usdt_symbol(symbol: str) -> str:

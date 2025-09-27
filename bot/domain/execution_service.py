@@ -26,6 +26,7 @@ class ExecutionService:
 
     def __init__(self) -> None:
         self._settings = ExecutionSettings()
+        self._latest_imbalance: dict[str, float] = {}
 
     def calc_order_size_usdt(self, deposit_usdt: float) -> float:
         base_size = deposit_usdt * self._settings.order_pct_of_deposit
@@ -93,6 +94,16 @@ class ExecutionService:
         if side.is_long:
             return entry_price * (1 + offset_pct)
         return entry_price * (1 - offset_pct)
+
+    def record_imbalance(self, symbol_key: str, imbalance: float) -> None:
+        """Store the latest computed imbalance for a symbol."""
+
+        self._latest_imbalance[symbol_key] = imbalance
+
+    def last_recorded_imbalance(self, symbol_key: str) -> float | None:
+        """Return last recorded imbalance if available."""
+
+        return self._latest_imbalance.get(symbol_key)
 
     @staticmethod
     def _map_reason_to_status(reason: CloseReason) -> TradeStatus:
