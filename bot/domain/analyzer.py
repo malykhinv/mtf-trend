@@ -27,8 +27,8 @@ class AnalyzerSettings:
 class SignalAnalyzer:
     """Evaluates bars and produces strategy signals."""
 
-    def __init__(self, settings: AnalyzerSettings | None = None) -> None:
-        self._settings = settings or AnalyzerSettings()
+    def __init__(self) -> None:
+        self._settings = AnalyzerSettings()
 
     def analyze_bar(self, bar: Bar, timestamp: Optional[datetime] = None) -> Optional[Signal]:
         if not self._is_green(bar):
