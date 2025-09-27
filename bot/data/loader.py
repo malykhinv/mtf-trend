@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import threading
 import time
-from collections import defaultdict
+import bisect
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Callable, Iterable
@@ -37,6 +38,138 @@ _EMPTY_METRICS = BarMetrics(
     pct_to_high_break=0.0,
     break_direction=0,
 )
+
+
+class _BarMetricsHelper:
+    """Maintain rolling statistics to calculate bar metrics."""
+
+    def __init__(
+        self,
+        *,
+        vol_window: int = config.VOL_WINDOW,
+        atr_window: int = config.ATR_WINDOW,
+    ) -> None:
+        self._vol_window = max(1, vol_window)
+        self._atr_window = max(1, atr_window)
+        self._volumes: deque[float] = deque()
+        self._sorted_volumes: list[float] = []
+        self._true_ranges: deque[float] = deque()
+        self._true_range_sum: float = 0.0
+        self._prev_close: float | None = None
+
+    def calculate(
+        self,
+        *,
+        open_price: float,
+        high: float,
+        low: float,
+        close: float,
+        volume: float,
+    ) -> BarMetrics:
+        pct_move = self._calc_pct_move(open_price=open_price, high=high)
+        median_volume = self._update_volume(volume)
+        relative_volume = volume / median_volume if median_volume > 0.0 else 0.0
+        atr = self._update_atr(high=high, low=low, close=close)
+        range_value = max(high - low, 0.0)
+        atr_mult = range_value / atr if atr > 0.0 else 0.0
+        upper_wick_pct, body_pct, lower_wick_pct = self._calc_wicks(
+            open_price=open_price,
+            close=close,
+            high=high,
+            low=low,
+            range_value=range_value,
+        )
+        pct_to_low_break, pct_to_high_break = self._calc_break_distances(
+            close=close,
+            high=high,
+            low=low,
+        )
+        break_direction = self._calc_break_direction(open_price=open_price, close=close)
+        return BarMetrics(
+            pct_move=pct_move,
+            relative_volume=relative_volume,
+            atr_mult=atr_mult,
+            upper_wick_pct=upper_wick_pct,
+            body_pct=body_pct,
+            lower_wick_pct=lower_wick_pct,
+            pct_to_low_break=pct_to_low_break,
+            pct_to_high_break=pct_to_high_break,
+            break_direction=break_direction,
+        )
+
+    def _update_volume(self, volume: float) -> float:
+        if len(self._volumes) == self._vol_window:
+            removed = self._volumes.popleft()
+            idx = bisect.bisect_left(self._sorted_volumes, removed)
+            if idx < len(self._sorted_volumes) and self._sorted_volumes[idx] == removed:
+                self._sorted_volumes.pop(idx)
+        self._volumes.append(volume)
+        bisect.insort(self._sorted_volumes, volume)
+        count = len(self._sorted_volumes)
+        if count == 0:
+            return 0.0
+        mid = count // 2
+        if count % 2 == 1:
+            return self._sorted_volumes[mid]
+        return (self._sorted_volumes[mid - 1] + self._sorted_volumes[mid]) / 2.0
+
+    def _update_atr(self, *, high: float, low: float, close: float) -> float:
+        range_value = max(high - low, 0.0)
+        if self._prev_close is None:
+            true_range = range_value
+        else:
+            true_range = max(
+                range_value,
+                abs(high - self._prev_close),
+                abs(low - self._prev_close),
+            )
+        if len(self._true_ranges) == self._atr_window:
+            removed = self._true_ranges.popleft()
+            self._true_range_sum -= removed
+        self._true_ranges.append(true_range)
+        self._true_range_sum += true_range
+        self._prev_close = close
+        if not self._true_ranges:
+            return 0.0
+        return self._true_range_sum / len(self._true_ranges)
+
+    @staticmethod
+    def _calc_pct_move(*, open_price: float, high: float) -> float:
+        if open_price == 0.0:
+            return 0.0
+        return (high - open_price) / open_price * 100.0
+
+    @staticmethod
+    def _calc_wicks(
+        *,
+        open_price: float,
+        close: float,
+        high: float,
+        low: float,
+        range_value: float,
+    ) -> tuple[float, float, float]:
+        if range_value <= 0.0:
+            return 0.0, 0.0, 0.0
+        upper_wick = (high - max(open_price, close)) / range_value * 100.0
+        body = abs(close - open_price) / range_value * 100.0
+        lower_wick = (min(open_price, close) - low) / range_value * 100.0
+        return upper_wick, body, lower_wick
+
+    @staticmethod
+    def _calc_break_distances(*, close: float, high: float, low: float) -> tuple[float, float]:
+        if close == 0.0:
+            return 0.0, 0.0
+        pct_to_low = (close - low) / close * 100.0 if close > 0.0 else 0.0
+        pct_to_high = (high - close) / close * 100.0 if close > 0.0 else 0.0
+        return pct_to_low, pct_to_high
+
+    @staticmethod
+    def _calc_break_direction(*, open_price: float, close: float) -> int:
+        if close > open_price:
+            return 1
+        if close < open_price:
+            return -1
+        return 0
 
 
 RECONNECT_DELAY_SEC: int = 5
@@ -90,6 +223,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
         if client is None:
             raise ValueError(f"Unsupported exchange: {request.exchange}")
 
+        metrics_helper = _BarMetricsHelper()
         timeframe = request.timeframe.value
         since = _to_millis(request.start)
         end_ts = _to_millis(request.end)
@@ -131,6 +265,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
                     open_ts=open_ts,
                     close_ts=close_ts,
                     ohlcv=candle,
+                    metrics_helper=metrics_helper,
                 )
                 yield bar
 
@@ -223,10 +358,12 @@ class WsLiveDataStream(LiveDataStream):
 
         symbol_streams: list[str] = []
         aggregators: dict[str, PrintsAggregator] = {}
+        metrics_helpers: dict[str, _BarMetricsHelper] = {}
         for symbol in symbols:
             stream_symbol = symbol.replace("/", "").lower()
             raw_symbol = symbol.replace("/", "")
             aggregators[raw_symbol.upper()] = PrintsAggregator()
+            metrics_helpers[raw_symbol.upper()] = _BarMetricsHelper()
             symbol_streams.append(f"{stream_symbol}@kline_{self._timeframe.value}")
             symbol_streams.append(f"{stream_symbol}@aggTrade")
         url = f"{self._BINANCE_WS}?streams={'/'.join(symbol_streams)}"
@@ -280,6 +417,7 @@ class WsLiveDataStream(LiveDataStream):
                 float(kline.get("c", 0.0)),
                 float(kline.get("v", 0.0)),
             ]
+            metrics_helper = metrics_helpers.get(symbol)
             bar = _bar_from_ohlcv(
                 exchange=Exchange.BINANCE,
                 symbol=_format_usdt_symbol(symbol),
@@ -287,6 +425,7 @@ class WsLiveDataStream(LiveDataStream):
                 open_ts=open_ts,
                 close_ts=close_ts,
                 ohlcv=ohlcv,
+                metrics_helper=metrics_helper,
             )
             aggregator = aggregators.get(symbol)
             imbalance = aggregator.imbalance(now=bar.close_time) if aggregator else 0.0
@@ -312,6 +451,9 @@ class WsLiveDataStream(LiveDataStream):
         topic_trade = [f"publicTrade.{symbol.replace('/', '')}" for symbol in symbols]
         aggregators: dict[str, PrintsAggregator] = {
             symbol.replace("/", "").upper(): PrintsAggregator() for symbol in symbols
+        }
+        metrics_helpers: dict[str, _BarMetricsHelper] = {
+            symbol.replace("/", "").upper(): _BarMetricsHelper() for symbol in symbols
         }
         subscribe_message = json.dumps({
             "op": "subscribe",
@@ -375,6 +517,7 @@ class WsLiveDataStream(LiveDataStream):
                 float(kline.get("close", 0.0)),
                 float(kline.get("volume", 0.0)),
             ]
+            metrics_helper = metrics_helpers.get(symbol)
             bar = _bar_from_ohlcv(
                 exchange=Exchange.BYBIT,
                 symbol=_format_usdt_symbol(symbol),
@@ -382,6 +525,7 @@ class WsLiveDataStream(LiveDataStream):
                 open_ts=open_ts,
                 close_ts=close_ts,
                 ohlcv=ohlcv,
+                metrics_helper=metrics_helper,
             )
             aggregator = aggregators.get(symbol)
             imbalance = aggregator.imbalance(now=bar.close_time) if aggregator else 0.0
@@ -432,10 +576,27 @@ def _bar_from_ohlcv(
     open_ts: int,
     close_ts: int,
     ohlcv: list[float],
+    metrics_helper: _BarMetricsHelper | None = None,
 ) -> Bar:
     open_time = datetime.fromtimestamp(open_ts / 1000, tz=config.UTC)
     close_time = datetime.fromtimestamp(close_ts / 1000, tz=config.UTC)
     bar_id = f"{exchange.value}:{symbol}:{timeframe.value}:{int(open_time.timestamp())}"
+    open_price = float(ohlcv[1])
+    high = float(ohlcv[2])
+    low = float(ohlcv[3])
+    close = float(ohlcv[4])
+    volume = float(ohlcv[5])
+    metrics = (
+        metrics_helper.calculate(
+            open_price=open_price,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+        )
+        if metrics_helper
+        else _EMPTY_METRICS
+    )
     return Bar(
         bar_id=bar_id,
         exchange=exchange,
@@ -443,12 +604,12 @@ def _bar_from_ohlcv(
         timeframe=timeframe,
         open_time=open_time,
         close_time=close_time,
-        open=float(ohlcv[1]),
-        high=float(ohlcv[2]),
-        low=float(ohlcv[3]),
-        close=float(ohlcv[4]),
-        volume=float(ohlcv[5]),
-        metrics=_EMPTY_METRICS,
+        open=open_price,
+        high=high,
+        low=low,
+        close=close,
+        volume=volume,
+        metrics=metrics,
     )
 
 
