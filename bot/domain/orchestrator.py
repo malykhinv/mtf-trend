@@ -48,7 +48,11 @@ class Orchestrator:
         self._handle_bar(bar)
 
     def _handle_bar(self, bar: Bar) -> None:
-        signal = self._deps.analyzer.analyze_bar(bar)
+        signal, anomaly = self._deps.analyzer.analyze_bar(bar)
+
+        if anomaly is not None:
+            self._deps.diary.append_anomalies([anomaly])
+
         if signal is None:
             return
 
