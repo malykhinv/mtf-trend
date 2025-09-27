@@ -3,9 +3,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import IntEnum
 
 from .exchange import Exchange
 from .timeframe import Timeframe
+
+
+class BreakDirection(IntEnum):
+    """Describe which side of the bar was broken first."""
+
+    NONE = 0
+    HIGH_FIRST = 1
+    LOW_FIRST = -1
+    BOTH = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,7 +28,7 @@ class BarMetrics:
     lower_wick_pct: float
     pct_to_low_break: float
     pct_to_high_break: float
-    break_direction: int
+    break_direction: BreakDirection
 
 
 @dataclass(frozen=True, slots=True)
