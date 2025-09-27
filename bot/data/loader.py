@@ -165,11 +165,7 @@ class _BarMetricsHelper:
 
     @staticmethod
     def _calc_break_direction(*, open_price: float, close: float) -> int:
-        if close > open_price:
-            return 1
-        if close < open_price:
-            return -1
-        return 0
+        raise NotImplementedError
 
 
 RECONNECT_DELAY_SEC: int = 5
