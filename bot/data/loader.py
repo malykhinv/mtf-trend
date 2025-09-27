@@ -6,7 +6,7 @@ import threading
 import time
 import bisect
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Callable, Iterable
 
@@ -14,7 +14,7 @@ import ccxt
 from websocket import WebSocketApp
 
 from bot import config
-from bot.domain.models.bar import Bar, BarMetrics
+from bot.domain.models.bar import Bar, BarMetrics, BreakDirection
 from bot.domain.models.exchange import Exchange
 from bot.domain.models.timeframe import Timeframe
 from bot.utils.logging import get_logger
@@ -36,7 +36,7 @@ _EMPTY_METRICS = BarMetrics(
     lower_wick_pct=0.0,
     pct_to_low_break=0.0,
     pct_to_high_break=0.0,
-    break_direction=0,
+    break_direction=BreakDirection.NONE,
 )
 
 
@@ -48,6 +48,7 @@ class _BarMetricsHelper:
         *,
         vol_window: int = config.VOL_WINDOW,
         atr_window: int = config.ATR_WINDOW,
+        enable_break_direction: bool = False,
     ) -> None:
         self._vol_window = max(1, vol_window)
         self._atr_window = max(1, atr_window)
@@ -56,6 +57,7 @@ class _BarMetricsHelper:
         self._true_ranges: deque[float] = deque()
         self._true_range_sum: float = 0.0
         self._prev_close: float | None = None
+        self._enable_break_direction = enable_break_direction
 
     def calculate(
         self,
@@ -84,7 +86,6 @@ class _BarMetricsHelper:
             high=high,
             low=low,
         )
-        break_direction = self._calc_break_direction(open_price=open_price, close=close)
         return BarMetrics(
             pct_move=pct_move,
             relative_volume=relative_volume,
@@ -94,7 +95,7 @@ class _BarMetricsHelper:
             lower_wick_pct=lower_wick_pct,
             pct_to_low_break=pct_to_low_break,
             pct_to_high_break=pct_to_high_break,
-            break_direction=break_direction,
+            break_direction=BreakDirection.NONE,
         )
 
     def _update_volume(self, volume: float) -> float:
@@ -163,9 +164,47 @@ class _BarMetricsHelper:
         pct_to_high = (high - close) / close * 100.0 if close > 0.0 else 0.0
         return pct_to_low, pct_to_high
 
+
+class BreakDirectionResolver:
+    """Resolve the first breakout direction for closed bars."""
+
+    def __init__(self) -> None:
+        self._pending: deque[Bar] = deque()
+
+    def process(self, bar: Bar) -> list[Bar]:
+        resolved: list[Bar] = []
+        next_pending: deque[Bar] = deque()
+        for pending_bar in self._pending:
+            direction = self._detect_direction(pending_bar, bar)
+            if direction is BreakDirection.NONE:
+                next_pending.append(pending_bar)
+                continue
+            resolved.append(self._apply_direction(pending_bar, direction))
+        self._pending = next_pending
+        self._pending.append(bar)
+        return resolved
+
+    def flush(self) -> list[Bar]:
+        remaining = list(self._pending)
+        self._pending.clear()
+        return remaining
+
     @staticmethod
-    def _calc_break_direction(*, open_price: float, close: float) -> int:
-        raise NotImplementedError
+    def _detect_direction(source: Bar, candidate: Bar) -> BreakDirection:
+        broke_high = candidate.high >= source.high
+        broke_low = candidate.low <= source.low
+        if broke_high and broke_low:
+            return BreakDirection.BOTH
+        if broke_high:
+            return BreakDirection.HIGH_FIRST
+        if broke_low:
+            return BreakDirection.LOW_FIRST
+        return BreakDirection.NONE
+
+    @staticmethod
+    def _apply_direction(bar: Bar, direction: BreakDirection) -> Bar:
+        metrics = replace(bar.metrics, break_direction=direction)
+        return replace(bar, metrics=metrics)
 
 
 RECONNECT_DELAY_SEC: int = 5
@@ -219,7 +258,8 @@ class CcxtMarketDataLoader(MarketDataLoader):
         if client is None:
             raise ValueError(f"Unsupported exchange: {request.exchange}")
 
-        metrics_helper = _BarMetricsHelper()
+        metrics_helper = _BarMetricsHelper(enable_break_direction=True)
+        direction_resolver = BreakDirectionResolver()
         timeframe = request.timeframe.value
         since = _to_millis(request.start)
         end_ts = _to_millis(request.end)
@@ -239,6 +279,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
         timeframe_delta = _TIMEFRAME_TO_DELTA[request.timeframe]
         timeframe_ms = int(timeframe_delta.total_seconds() * 1000)
 
+        should_stop = False
         while True:
             batch = client.fetch_ohlcv(  # type: ignore[attr-defined]
                 request.symbol,
@@ -252,7 +293,8 @@ class CcxtMarketDataLoader(MarketDataLoader):
             for candle in batch:
                 open_ts = int(candle[0])
                 if open_ts >= end_ts:
-                    return
+                    should_stop = True
+                    break
                 close_ts = open_ts + timeframe_ms
                 bar = _bar_from_ohlcv(
                     exchange=request.exchange,
@@ -263,12 +305,15 @@ class CcxtMarketDataLoader(MarketDataLoader):
                     ohlcv=candle,
                     metrics_helper=metrics_helper,
                 )
-                yield bar
+                for resolved in direction_resolver.process(bar):
+                    yield resolved
 
             last_ts = int(batch[-1][0])
             cursor = last_ts + timeframe_ms
-            if cursor >= end_ts:
+            if should_stop or cursor >= end_ts:
                 break
+        for remaining in direction_resolver.flush():
+            yield remaining
 
 
 class WsLiveDataStream(LiveDataStream):

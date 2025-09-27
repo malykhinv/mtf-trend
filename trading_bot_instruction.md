@@ -73,7 +73,7 @@ LOG_TIME_FMT = "%H:%M:%S"
 - `upper_wick_pct = (h - max(o, c)) / rng * 100`
 - `body_pct = abs(c - o) / rng * 100`
 - `lower_wick_pct = (min(o, c) - l) / rng * 100` → `upper+body+lower = 100±0.01`
-- Для бэктеста: `pct_to_low_break`, `pct_to_high_break`, `break_direction ∈ {-1,0,1}`.
+- Для бэктеста: `pct_to_low_break`, `pct_to_high_break`, `break_direction ∈ {-1,0,1,2}` (`BOTH=2` означает, что последующий бар выбил и high, и low, что трактуется как срабатывание стоп-лосса).
 
 ---
 
