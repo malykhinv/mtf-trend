@@ -5,6 +5,8 @@ from enum import Enum
 
 
 class TradeStatus(str, Enum):
+    PENDING = "PENDING"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
     OPENED = "OPENED"
     CLOSED_TP = "CLOSED_TP"
     CLOSED_SL = "CLOSED_SL"

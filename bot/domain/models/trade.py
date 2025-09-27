@@ -24,9 +24,14 @@ class Trade:
     entry_price: float
     take_profit_price: float
     stop_loss_price: float
+    requested_qty: float
     executed_qty: float
     status: TradeStatus
     timestamp_close: Optional[datetime] = None
     avg_fill_price: Optional[float] = None
     reason_close: Optional[CloseReason] = None
     sl_be_at: Optional[datetime] = None
+    order_id: Optional[str] = None
+    stop_order_id: Optional[str] = None
+    take_order_id: Optional[str] = None
+    close_order_id: Optional[str] = None

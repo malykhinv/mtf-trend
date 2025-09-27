@@ -132,6 +132,8 @@ class TelegramNotifier(Notifier):
 
     def _format_trade(self, trade: Trade) -> str:
         status_titles = {
+            TradeStatus.PENDING: "🕒 Ордер размещён",
+            TradeStatus.PARTIALLY_FILLED: "🟡 Сделка частично исполнена",
             TradeStatus.OPENED: "🟢 Открыта сделка",
             TradeStatus.CLOSED_TP: "🎯 Сделка закрыта по тейк-профиту",
             TradeStatus.CLOSED_SL: "🛑 Сделка закрыта по стоп-лоссу",
@@ -154,7 +156,8 @@ class TelegramNotifier(Notifier):
             f"Инструмент: {trade.symbol}",
             f"Таймфрейм: {trade.timeframe.value}",
             f"Направление: {direction}",
-            f"Объём: {trade.executed_qty:.4f}",
+            f"Запрошенный объём: {trade.requested_qty:.4f}",
+            f"Исполненный объём: {trade.executed_qty:.4f}",
             f"Вход: {trade.entry_price:.4f}",
             f"TP: {trade.take_profit_price:.4f}",
             f"SL: {trade.stop_loss_price:.4f}",
@@ -169,6 +172,14 @@ class TelegramNotifier(Notifier):
         if trade.sl_be_at is not None:
             sl_time = _to_timezone(trade.sl_be_at)
             lines.append(f"SL в безубытке с: {sl_time:%Y-%m-%d %H:%M}")
+        if trade.order_id is not None:
+            lines.append(f"Ордер входа: {trade.order_id}")
+        if trade.stop_order_id is not None:
+            lines.append(f"Стоп-ордер: {trade.stop_order_id}")
+        if trade.take_order_id is not None:
+            lines.append(f"Тейк-ордер: {trade.take_order_id}")
+        if trade.close_order_id is not None:
+            lines.append(f"Ордер закрытия: {trade.close_order_id}")
         return "\n".join(lines)
 
 
