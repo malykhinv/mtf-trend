@@ -44,7 +44,7 @@ class Orchestrator:
 
     def backfill(self, request) -> None:  # type: ignore[no-untyped-def]
         for bar in self._deps.market_loader.load(request):
-            self._handle_bar(bar)
+            self._handle_bar(bar, ignore_imbalance_checks=True)
 
     def _on_bar(self, event: LiveBarEvent) -> None:
         bar = event.bar
@@ -59,25 +59,26 @@ class Orchestrator:
             return
         self._handle_bar(bar)
 
-    def _handle_bar(self, bar: Bar) -> None:
+    def _handle_bar(self, bar: Bar, *, ignore_imbalance_checks: bool = False) -> None:
         symbol_key = self._cooldown_key(bar)
-        last_imbalance = self._latest_imbalance.get(symbol_key)
-        if last_imbalance is None:
-            last_imbalance = self._deps.execution.last_recorded_imbalance(symbol_key)
+        if not ignore_imbalance_checks:
+            last_imbalance = self._latest_imbalance.get(symbol_key)
+            if last_imbalance is None:
+                last_imbalance = self._deps.execution.last_recorded_imbalance(symbol_key)
 
-        if last_imbalance is None:
-            self._symbols_above_threshold.discard(symbol_key)
-        elif last_imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
-            self._symbols_above_threshold.add(symbol_key)
-        else:
-            self._symbols_above_threshold.discard(symbol_key)
+            if last_imbalance is None:
+                self._symbols_above_threshold.discard(symbol_key)
+            elif last_imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
+                self._symbols_above_threshold.add(symbol_key)
+            else:
+                self._symbols_above_threshold.discard(symbol_key)
 
-        if (
-            symbol_key not in self._symbols_above_threshold
-            or last_imbalance is None
-            or last_imbalance < config.AGGR_IMBALANCE_THRESHOLD
-        ):
-            return
+            if (
+                symbol_key not in self._symbols_above_threshold
+                or last_imbalance is None
+                or last_imbalance < config.AGGR_IMBALANCE_THRESHOLD
+            ):
+                return
 
         signal, anomaly = self._deps.analyzer.analyze_bar(bar)
 
