@@ -14,6 +14,13 @@ from .timeframe import Timeframe
 class ThresholdSnapshot:
     min_green_move_pct: float
     min_volume_spike: float
+    min_relative_volume: float
+    max_relative_volume: float
+    min_atr_mult: float
+    min_pct_move: float
+    max_pct_move: float
+    max_upper_wick_pct: float
+    max_lower_wick_pct: float
 
 
 @dataclass(frozen=True, slots=True)
