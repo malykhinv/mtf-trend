@@ -7,10 +7,10 @@ from typing import Optional, Tuple
 from uuid import uuid4
 
 from bot import config
-from .models.anomaly import Anomaly, AnomalyThresholdSnapshot
-from .models.bar import Bar
-from .models.signal import Signal, SignalLevels, ThresholdSnapshot
-from .models.signal_direction import SignalDirection
+from models.anomaly import Anomaly, AnomalyThresholdSnapshot
+from models.bar import Bar
+from models.signal import Signal, SignalLevels, ThresholdSnapshot
+from models.signal_direction import SignalDirection
 
 
 @dataclass(frozen=True)

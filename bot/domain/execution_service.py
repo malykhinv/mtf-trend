@@ -8,8 +8,7 @@ from typing import Callable, Literal, Optional, TypeVar
 
 from bot import config
 from bot.utils.logging import get_logger
-from .exchange_client import (
-    BracketOrderExecution,
+from exchange_client import (
     BracketOrderRequest,
     ExchangeClient,
     ExchangeClientError,
@@ -18,11 +17,11 @@ from .exchange_client import (
     PositionStatus,
     SymbolPositionSnapshot,
 )
-from .models.close_reason import CloseReason
-from .models.signal import Signal
-from .models.signal_direction import SignalDirection
-from .models.trade import Trade
-from .models.trade_status import TradeStatus
+from models.close_reason import CloseReason
+from models.signal import Signal
+from models.signal_direction import SignalDirection
+from models.trade import Trade
+from models.trade_status import TradeStatus
 
 
 @dataclass(frozen=True)
@@ -429,9 +428,9 @@ class ExecutionService:
             return TradePollingResult(trade=updated_trade, outcome="closed")
         return None
 
+    @staticmethod
     def _resolve_close_snapshot(
-        self,
-        trade: Trade,
+            trade: Trade,
         snapshot: SymbolPositionSnapshot,
     ) -> tuple[OrderExecutionSnapshot | None, CloseReason]:
         take_snapshot = snapshot.take

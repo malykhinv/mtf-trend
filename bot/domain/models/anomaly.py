@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .bar import BarMetrics
-from .exchange import Exchange
-from .timeframe import Timeframe
+from bar import BarMetrics
+from exchange import Exchange
+from timeframe import Timeframe
 
 
 @dataclass(frozen=True, slots=True)

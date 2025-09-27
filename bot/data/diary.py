@@ -238,7 +238,8 @@ class WorkbookDiaryBackend(DiaryBackend):
         first_row = sheet[1]
         return all(cell.value is None for cell in first_row)
 
-    def _append(self, path: Path, rows: Iterable[Row], mapper) -> None:
+    @staticmethod
+    def _append(path: Path, rows: Iterable[Row], mapper) -> None:
         workbook = load_workbook(path)
         try:
             sheet = workbook.active

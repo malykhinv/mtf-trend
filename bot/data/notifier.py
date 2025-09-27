@@ -99,7 +99,8 @@ class TelegramNotifier(Notifier):
 
         self._logger.info("Отправлено уведомление для %s", context)
 
-    def _format_signal(self, signal: Signal) -> str:
+    @staticmethod
+    def _format_signal(signal: Signal) -> str:
         bar = signal.bar
         thresholds = signal.thresholds
         levels = signal.levels
@@ -130,7 +131,8 @@ class TelegramNotifier(Notifier):
         ]
         return "\n".join(lines)
 
-    def _format_trade(self, trade: Trade) -> str:
+    @staticmethod
+    def _format_trade(trade: Trade) -> str:
         status_titles = {
             TradeStatus.PENDING: "🕒 Ордер размещён",
             TradeStatus.PARTIALLY_FILLED: "🟡 Сделка частично исполнена",

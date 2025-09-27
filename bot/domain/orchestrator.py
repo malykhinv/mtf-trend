@@ -12,13 +12,13 @@ from bot.data.diary import WorkbookDiary
 from bot.data.loader import LiveBarEvent, LiveDataStream, MarketDataLoader
 from bot.data.notifier import Notifier
 from bot.utils.logging import get_logger
-from .analyzer import SignalAnalyzer
-from .execution_service import ExecutionService
-from .models.bar import Bar
-from .models.close_reason import CloseReason
-from .models.trade import Trade
-from .models.trade_status import TradeStatus
-from .swing_detector import SwingDetector
+from analyzer import SignalAnalyzer
+from execution_service import ExecutionService
+from models.bar import Bar
+from models.close_reason import CloseReason
+from models.trade import Trade
+from models.trade_status import TradeStatus
+from swing_detector import SwingDetector
 
 
 @dataclass(slots=True)

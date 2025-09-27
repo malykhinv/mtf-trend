@@ -4,10 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .bar import Bar
-from .exchange import Exchange
-from .signal_direction import SignalDirection
-from .timeframe import Timeframe
+from bar import Bar
+from exchange import Exchange
+from signal_direction import SignalDirection
+from timeframe import Timeframe
 
 
 @dataclass(frozen=True, slots=True)
