@@ -78,6 +78,7 @@ LOG_TIME_FMT = "%H:%M:%S"
 ---
 
 ## 5) Пороговые параметры
+- `min_green_move_pct`, `min_volume_spike`
 - `min_relative_volume`, `max_relative_volume`
 - `min_atr_mult`
 - `min_pct_move`, `max_pct_move`
@@ -85,25 +86,31 @@ LOG_TIME_FMT = "%H:%M:%S"
 
 ---
 
-## 6) Правила входа
+## 6) Правила входа и аномалии
 
-### SHORT — войти, если одновременно
-- `relative_volume < min_relative_volume` **или** `relative_volume > max_relative_volume`
-- `atr_mult < min_atr_mult`
-- `pct_move > max_pct_move` **или** `pct_move < min_pct_move`
-- `upper_wick_pct < max_upper_wick_pct`
-- `lower_wick_pct < max_lower_wick_pct`
+1. Сначала бар должен пройти фильтр «зелёной аномалии»:
+   - `close > open`;
+   - `pct_move ≥ min_green_move_pct`;
+   - `atr_mult ≥ min_anomaly_atr_mult`;
+   - `relative_volume ≥ min_anomaly_relative_volume` и `relative_volume ≥ min_volume_spike`.
+   При выполнении условий фиксируем `Anomaly` со снапшотом порогов (`min_green_move_pct`, `min_volume_spike`, `min_relative_volume`, `min_atr_mult`).
+2. Если аномалия подтверждена, строим торговый сигнал. Возможны два сценария:
+   - **LONG** — одновременно:
+     - `min_relative_volume ≤ relative_volume ≤ max_relative_volume`;
+     - `atr_mult > min_atr_mult`;
+     - `min_pct_move ≤ pct_move ≤ max_pct_move`;
+     - `upper_wick_pct < max_upper_wick_pct`;
+     - `lower_wick_pct < max_lower_wick_pct`.
+     Уровни: `entry=c`, `tp=h`, `sl=l`.
+   - **SHORT** — одновременно:
+     - `relative_volume < min_relative_volume` **или** `relative_volume > max_relative_volume`;
+     - `atr_mult < min_atr_mult`;
+     - `pct_move > max_pct_move` **или** `pct_move < min_pct_move`;
+     - `upper_wick_pct < max_upper_wick_pct`;
+     - `lower_wick_pct < max_lower_wick_pct`.
+     Уровни: `entry=c`, `tp=l`, `sl=h`.
 
-Уровни: `entry=c`, `tp=l`, `sl=h`.
-
-### LONG — войти, если одновременно
-- `min_relative_volume ≤ relative_volume ≤ max_relative_volume`
-- `atr_mult > min_atr_mult`
-- `min_pct_move ≤ pct_move ≤ max_pct_move`
-- `upper_wick_pct < max_upper_wick_pct`
-- `lower_wick_pct < max_lower_wick_pct`
-
-Уровни: `entry=c`, `tp=h`, `sl=l`.
+Если условия лонга и шорта не выполняются, сигнал не создаётся, но аномалия записывается в дневник.
 
 ---
 
@@ -113,15 +120,10 @@ LOG_TIME_FMT = "%H:%M:%S"
 ---
 
 ## 8) Сопровождение (лайв)
-- **Break-even**: при `BREAKEVEN_TRIGGER_PCT` перенос `sl := entry * (1 ± BREAKEVEN_OFFSET_PCT/100)`
-  - LONG → `sl = entry*(1+0.003)`, SHORT → `sl = entry*(1-0.003)`
-- **Трейлинг по свингам** — отдельный класс `SwingDetector`:
-  - ищет свинг-лоу/свинг-хай с окнами `TRAIL_SWING_WINDOW` и `TRAIL_SWING_CONFIRM`,
-  - `ExecutionService` подтягивает SL по свингам (только в сторону уменьшения риска).
-- **Агрессия принтов**: по потоку trades/agg-trades за `AGGR_WINDOW_SEC` вычисляем долю агрессивных buy/sell.
-  - LONG: если доля sell ≥ `AGGR_IMBALANCE_THRESHOLD` — закрыть.
-  - SHORT: если доля buy ≥ `AGGR_IMBALANCE_THRESHOLD` — закрыть.
-- Частичные исполнения, отмены, проскальзывание — **логируем**.
+- **Break-even**: при достижении `BREAKEVEN_TRIGGER_PCT` (в абсолютных % от цены входа) возможен перенос стопа на `entry * (1 ± BREAKEVEN_OFFSET_PCT/100)`.
+- `ExecutionService` предоставляет утилиты `should_move_to_breakeven` и `breakeven_stop`; управление трейлингом и агрессией возлагается на вызывающий код.
+- `SwingDetector` представляет собой статическую утилиту: методы `detect_swing_high`/`detect_swing_low` принимают последовательность экстремумов и возвращают подтверждённый свинг по окнам `TRAIL_SWING_WINDOW` и `TRAIL_SWING_CONFIRM`.
+- `PrintsAggregator` аккумулирует сделки через `add_print` и возвращает долю покупок `imbalance()` в скользящем окне `AGGR_WINDOW_SEC`.
 
 ---
 
@@ -134,39 +136,59 @@ LOG_TIME_FMT = "%H:%M:%S"
 
 ## 10) Анти-дубликаты
 - Обрабатываем только **закрытые** бары.
-- **Throttle применяется ТОЛЬКО после возникновения setup под ордер** на конкретном `(symbol,timeframe,bar_id)`: повторная обработка этого бара не ранее, чем через `BAR_REPROCESS_THROTTLE_SEC`. На прочие бары ограничение не распространяется.
+- Для каждого `(exchange, symbol, timeframe, bar_id)` допускается повторная обработка не чаще, чем раз в `BAR_REPROCESS_THROTTLE_SEC` секунд; значение хранится в памяти оркестратора.
 
 ---
 
 ## 11) Дневник (xlsx)
-`signals.xlsx` и `trades.xlsx` (append + upsert строки по id). Атомарно под lock. При блокировке/ошибке — лог + повтор позже.
+`WorkbookDiary` ведёт `signals.xlsx`, `trades.xlsx` и журнал аномалий. Запись построчная, операции защищены lock'ом.
 
 ### signals.xlsx
-- `signal_id, timestamp(tz), exchange, symbol, timeframe`
-- Метрики: `pct_move, relative_volume, atr_mult, upper_wick_pct, body_pct, lower_wick_pct, pct_to_low_break, pct_to_high_break, break_direction`
-- Thresholds snapshot: все из §5
-- Решение: `allow_long, allow_short`
-- Уровни: `entry_price, tp_price, sl_price`
-- `bar_id, version, notes`
+- `signal_id, timestamp(tz), exchange, symbol, timeframe, direction`
+- Уровни: `entry_price, take_profit_price, stop_loss_price`
+- `bar_id`
+- Полный набор метрик бара (`BarMetrics`)
+- Threshold snapshot с полями из §5.
 
 ### trades.xlsx
 - `trade_id, source_signal_id`
 - `timestamp_open(tz), timestamp_close(tz?)`
 - `exchange, symbol, timeframe, side`
-- `entry_price, tp_price, sl_price`
-- Сопровождение: `sl_be_at(tz?), trail_params`
+- `entry_price, take_profit_price, stop_loss_price`
+- `executed_qty`
 - `status ∈ {OPENED, CLOSED_TP, CLOSED_SL, CLOSED_MANUAL, CANCELLED}`
-- Факт: `executed_qty, avg_fill_price`
-- `reason_close ∈ {tp, sl, aggression, manual}`, `log_ref`
+- `avg_fill_price?`, `reason_close?`, `sl_be_at?`
+
+### anomalies.xlsx (или аналогичный лист)
+- Полная копия данных бара и метрик
+- Пороговый снапшот `min_green_move_pct`, `min_volume_spike`, `min_relative_volume`, `min_atr_mult`.
+
+Публичные методы дневника: `append_signals`, `append_trades`, `append_anomalies`.
+
+## 12) Analyzer API
+`SignalAnalyzer.analyze_bar(bar, timestamp=None)` → `(Signal | None, Anomaly | None)`. Сначала оценивает аномалию, затем — возможность лонга/шорта. `ThresholdSnapshot` хранит пороги из §5, а `SignalLevels` включает `entry/tp/sl`.
+
+## 13) Execution API
+- `calc_order_size_usdt(deposit_usdt)` — выдаёт размер позиции в USDT с учётом `MIN_ORDER_USDT` и `ORDER_PCT_OF_DEPOSIT`.
+- `open_trade(signal, quantity, timestamp=None)` — создаёт объект `Trade` со статусом `OPENED`.
+- `close_trade(trade, reason, price, timestamp)` — возвращает закрытую копию сделки с маппингом причины в статус.
+- Вспомогательные методы: `should_move_to_breakeven(entry_price, last_price, side)` и `breakeven_stop(entry_price, side)`.
+
+## 14) Notifier
+Протокол уведомителя определяет метод `send_signal(signal)`.
+
+## 15) Market data
+- `MarketDataLoader.load(request)` — итерируется по историческим барам (`HistoricalRequest`).
+- `LiveDataStream.subscribe(callback)`/`close()` — стрим закрытых баров для оркестратора.
 
 ---
 
-## 12) Логирование
-Единый логгер: время `чч:мм:сс`, текст на грамотном русском. Логируем: ошибки, этапы загрузки/переподключения, сигналы, постановку ордеров, BE/трейлинг SL, закрытия, частичные/отмены, проскальзывания. Не спамим.
+## 16) Логирование
+Единый логгер: время `чч:мм:сс`, текст на грамотном русском. Логируем: ошибки, этапы загрузки/переподключения, сигналы, расчёт и открытие сделок, запись в дневник. Не спамим.
 
 ---
 
-## 13) Архитектура и слои
+## 17) Архитектура и слои
 
 ```
 bot/
@@ -200,50 +222,35 @@ bot/
 - `run_live()`, `run_backtest()`
 
 **data.loader**
-- `create_ccxt_clients() -> list[ExchangeClient]`   # строго типизировано, без Dict/Any
-- `load_markets(exchange: Exchange) -> list[str]`
-- `fetch_ohlcv(exchange: Exchange, symbol: str, timeframe: str, limit: int) -> list[Bar]`
-- `subscribe_klines(exchange: Exchange, symbols: list[str], timeframe: str, on_bar_closed) -> None`
-- `subscribe_trades(exchange: Exchange, symbols: list[str], on_trade) -> None`
-- `fetch_deposit_usdt(exchange: Exchange) -> float`
+- `HistoricalRequest` (датакласс запроса), абстракции `MarketDataLoader` и `LiveDataStream`.
 
 **data.diary**
-- `write_signal(signal: Signal) -> None`
-- `upsert_trade(trade: Trade) -> None`
+- `WorkbookDiary.append_signals/append_trades/append_anomalies`, протокол `DiaryBackend`.
 
 **data.notifier**
-- `notify_signal(signal: Signal) -> None`
+- Протокол `Notifier.send_signal(signal)`.
 
 **domain.analyzer**
-- `analyze_bar(bar: Bar) -> Signal | None`
+- `SignalAnalyzer.analyze_bar(bar, timestamp=None) -> tuple[Signal | None, Anomaly | None]`.
 
 **domain.swing_detector**
-- `update(bar: Bar) -> None`
-- `last_swing_low() -> float | None`
-- `last_swing_high() -> float | None`
+- `SwingDetector.detect_swing_high(highs)` / `detect_swing_low(lows)`.
 
 **utils.prints_aggregator**
-- `on_trade(event) -> None`
-- `imbalance_against(side: Side) -> float`  # 0..1 доля агрессоров против позиции
+- `PrintsAggregator.add_print(trade_print)` / `imbalance()` / `clear()`.
 
 **domain.execution_service**
-- `place_order(signal: Signal, size_usdt: float) -> Trade`
-- `track_trade(trade: Trade) -> Trade`
-- `close_trade(trade: Trade, reason: str) -> Trade`
+- `calc_order_size_usdt`, `open_trade`, `close_trade`, `should_move_to_breakeven`, `breakeven_stop`.
 
 **domain.orchestrator**
-- `start() -> None`
-- `on_bar_closed(bar: Bar) -> None`
-- `process_signal(signal: Signal) -> None`
+- `start`, `stop`, `backfill`; потоковые обработчики `_on_bar`, `_handle_bar`.
 
 ---
 
-## 14) Приёмка
+## 18) Приёмка
 - Константы вместо магических чисел.
 - Бэктест: `pnl_net% = pnl_gross% - fee_entry - fee_exit`.
-- BE со сдвигом `BREAKEVEN_OFFSET_PCT`.
-- Трейлинг SL через `SwingDetector`.
-- Агрессия — имбаланс принтов за `AGGR_WINDOW_SEC`.
-- Throttle — только после setup под ордер.
+- Breakeven рассчитывается через `ExecutionService`.
+- Throttle — в оркестраторе, общий на бар.
 - Записи — моментально, под mutex.
 - Логи — единый логгер, русский текст, время `чч:мм:сс`.
