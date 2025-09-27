@@ -9,6 +9,7 @@ from bot.data.accounting import BalanceProvider
 from bot.data.diary import WorkbookDiary
 from bot.data.loader import LiveDataStream, MarketDataLoader
 from bot.data.notifier import Notifier
+from bot.utils.logging import get_logger
 from .analyzer import SignalAnalyzer
 from .execution_service import ExecutionService
 from .models.bar import Bar
@@ -31,6 +32,7 @@ class Orchestrator:
     def __init__(self, dependencies: OrchestratorDependencies) -> None:
         self._deps = dependencies
         self._symbol_cooldown: dict[str, datetime] = {}
+        self._logger = get_logger(__name__)
 
     def start(self) -> None:
         self._deps.live_stream.subscribe(self._on_bar)
@@ -56,7 +58,11 @@ class Orchestrator:
         if signal is None:
             return
 
-        self._deps.notifier.send_signal(signal)
+        try:
+            self._deps.notifier.send_signal(signal)
+        except Exception:
+            self._logger.exception("Ошибка отправки уведомления по сигналу %s", signal.signal_id)
+
         self._deps.diary.append_signals([signal])
 
         deposit = self._deps.balance_provider.current_deposit()
@@ -64,6 +70,11 @@ class Orchestrator:
         quantity = order_size / signal.levels.entry_price if signal.levels.entry_price else 0.0
         trade = self._deps.execution.open_trade(signal, quantity=quantity)
         self._deps.diary.append_trades([trade])
+
+        try:
+            self._deps.notifier.send_trade(trade)
+        except Exception:
+            self._logger.exception("Ошибка отправки уведомления по сделке %s", trade.trade_id)
 
         if anomaly is not None:
             self._activate_cooldown(bar)
