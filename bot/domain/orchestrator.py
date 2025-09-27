@@ -30,7 +30,7 @@ class Orchestrator:
 
     def __init__(self, dependencies: OrchestratorDependencies) -> None:
         self._deps = dependencies
-        self._last_processed: dict[str, datetime] = {}
+        self._symbol_cooldown: dict[str, datetime] = {}
 
     def start(self) -> None:
         self._deps.live_stream.subscribe(self._on_bar)
@@ -43,7 +43,7 @@ class Orchestrator:
             self._handle_bar(bar)
 
     def _on_bar(self, bar: Bar) -> None:
-        if not self._should_process(bar):
+        if self._is_on_cooldown(bar):
             return
         self._handle_bar(bar)
 
@@ -64,18 +64,26 @@ class Orchestrator:
         quantity = order_size / signal.levels.entry_price if signal.levels.entry_price else 0.0
         trade = self._deps.execution.open_trade(signal, quantity=quantity)
         self._deps.diary.append_trades([trade])
-        self._register_processed(bar)
 
-    def _should_process(self, bar: Bar) -> bool:
-        key = self._bar_key(bar)
-        last = self._last_processed.get(key)
-        if last is None:
-            return True
-        return (datetime.now(tz=config.TIMEZONE) - last) >= timedelta(seconds=config.BAR_REPROCESS_THROTTLE_SEC)
+        if anomaly is not None:
+            self._activate_cooldown(bar)
 
-    def _register_processed(self, bar: Bar) -> None:
-        self._last_processed[self._bar_key(bar)] = datetime.now(tz=config.TIMEZONE)
+    def _is_on_cooldown(self, bar: Bar) -> bool:
+        key = self._cooldown_key(bar)
+        until = self._symbol_cooldown.get(key)
+        if until is None:
+            return False
+        now = datetime.now(tz=config.TIMEZONE)
+        if now >= until:
+            self._symbol_cooldown.pop(key, None)
+            return False
+        return True
+
+    def _activate_cooldown(self, bar: Bar) -> None:
+        self._symbol_cooldown[self._cooldown_key(bar)] = datetime.now(tz=config.TIMEZONE) + timedelta(
+            seconds=config.SYMBOL_COOLDOWN_SEC
+        )
 
     @staticmethod
-    def _bar_key(bar: Bar) -> str:
-        return f"{bar.exchange.value}:{bar.symbol}:{bar.timeframe.value}:{bar.bar_id}"
+    def _cooldown_key(bar: Bar) -> str:
+        return f"{bar.exchange.value}:{bar.symbol}"
