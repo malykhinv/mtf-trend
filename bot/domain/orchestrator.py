@@ -1,8 +1,10 @@
 """Orchestrator ties together data, analysis and execution layers."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
+from typing import Deque
 
 from bot import config
 from bot.data.accounting import BalanceProvider
@@ -13,6 +15,22 @@ from bot.utils.logging import get_logger
 from .analyzer import SignalAnalyzer
 from .execution_service import ExecutionService
 from .models.bar import Bar
+from .models.close_reason import CloseReason
+from .models.trade import Trade
+from .swing_detector import SwingDetector
+
+
+@dataclass(slots=True)
+class ActiveTrade:
+    """Track an opened trade together with history required for trailing."""
+
+    trade: Trade
+    highs: Deque[float]
+    lows: Deque[float]
+
+    def record_bar(self, bar: Bar) -> None:
+        self.highs.append(bar.high)
+        self.lows.append(bar.low)
 
 
 @dataclass(slots=True)
@@ -34,6 +52,9 @@ class Orchestrator:
         self._symbol_cooldown: dict[str, datetime] = {}
         self._latest_imbalance: dict[str, float] = {}
         self._symbols_above_threshold: set[str] = set()
+        self._active_trades: dict[str, ActiveTrade] = {}
+        self._swing_detector = SwingDetector()
+        self._trail_history = config.TRAIL_SWING_WINDOW + config.TRAIL_SWING_CONFIRM + 5
         self._logger = get_logger(__name__)
 
     def start(self) -> None:
@@ -61,6 +82,13 @@ class Orchestrator:
 
     def _handle_bar(self, bar: Bar, *, ignore_imbalance_checks: bool = False) -> None:
         symbol_key = self._cooldown_key(bar)
+        trade_key = self._trade_key(bar.exchange.value, bar.symbol, bar.timeframe.value)
+
+        self._manage_active_trade(trade_key, bar)
+
+        if trade_key in self._active_trades:
+            return
+
         if not ignore_imbalance_checks:
             last_imbalance = self._latest_imbalance.get(symbol_key)
             if last_imbalance is None:
@@ -100,6 +128,7 @@ class Orchestrator:
         quantity = order_size / signal.levels.entry_price if signal.levels.entry_price else 0.0
         trade = self._deps.execution.open_trade(signal, quantity=quantity)
         self._deps.diary.append_trades([trade])
+        self._register_active_trade(trade, bar)
 
         try:
             self._deps.notifier.send_trade(trade)
@@ -128,3 +157,131 @@ class Orchestrator:
     @staticmethod
     def _cooldown_key(bar: Bar) -> str:
         return f"{bar.exchange.value}:{bar.symbol}"
+
+    @staticmethod
+    def _trade_key(exchange: str, symbol: str, timeframe: str) -> str:
+        return f"{exchange}:{symbol}:{timeframe}"
+
+    def _register_active_trade(self, trade: Trade, bar: Bar) -> None:
+        key = self._trade_key(trade.exchange.value, trade.symbol, trade.timeframe.value)
+        history = ActiveTrade(
+            trade=trade,
+            highs=deque(maxlen=self._trail_history),
+            lows=deque(maxlen=self._trail_history),
+        )
+        history.record_bar(bar)
+        self._active_trades[key] = history
+
+    def _manage_active_trade(self, trade_key: str, bar: Bar) -> None:
+        state = self._active_trades.get(trade_key)
+        if state is None:
+            return
+
+        state.record_bar(bar)
+        trade = state.trade
+
+        close_reason = self._detect_close_reason(trade, bar)
+        if close_reason is not None:
+            close_price = (
+                trade.take_profit_price
+                if close_reason is CloseReason.TAKE_PROFIT
+                else trade.stop_loss_price
+            )
+            closed_trade = self._deps.execution.close_trade(
+                trade,
+                reason=close_reason,
+                price=close_price,
+                timestamp=bar.close_time,
+            )
+            self._active_trades.pop(trade_key, None)
+            self._deps.diary.append_trades([closed_trade])
+
+            if close_reason is CloseReason.TAKE_PROFIT:
+                self._logger.info(
+                    "Сделка %s закрыта по тейк-профиту на уровне %.4f",
+                    trade.trade_id,
+                    close_price,
+                )
+            else:
+                self._logger.info(
+                    "Сделка %s закрыта по стоп-лоссу на уровне %.4f",
+                    trade.trade_id,
+                    close_price,
+                )
+
+            try:
+                self._deps.notifier.send_trade(closed_trade)
+            except Exception:
+                self._logger.exception(
+                    "Ошибка отправки уведомления о закрытии сделки %s",
+                    trade.trade_id,
+                )
+            return
+
+        updated_trade = trade
+        trade_updated = False
+
+        trigger_price = bar.high if trade.side.is_long else bar.low
+        if trade.sl_be_at is None and self._deps.execution.should_move_to_breakeven(
+            trade.entry_price,
+            trigger_price,
+            trade.side,
+        ):
+            new_stop = self._deps.execution.breakeven_stop(trade.entry_price, trade.side)
+            if (trade.side.is_long and new_stop > trade.stop_loss_price) or (
+                trade.side.is_short and new_stop < trade.stop_loss_price
+            ):
+                updated_trade = replace(
+                    updated_trade,
+                    stop_loss_price=new_stop,
+                    sl_be_at=bar.close_time,
+                )
+                trade_updated = True
+                self._logger.info(
+                    "Сделка %s переведена в безубыток, новый стоп %.4f",
+                    trade.trade_id,
+                    new_stop,
+                )
+
+        swing_stop = self._calculate_trailing_stop(state)
+        if swing_stop is not None:
+            if trade.side.is_long and swing_stop > updated_trade.stop_loss_price:
+                updated_trade = replace(updated_trade, stop_loss_price=swing_stop)
+                trade_updated = True
+                self._logger.info(
+                    "Сделка %s: трейлинг-стоп обновлён до %.4f",
+                    trade.trade_id,
+                    swing_stop,
+                )
+            elif trade.side.is_short and swing_stop < updated_trade.stop_loss_price:
+                updated_trade = replace(updated_trade, stop_loss_price=swing_stop)
+                trade_updated = True
+                self._logger.info(
+                    "Сделка %s: трейлинг-стоп обновлён до %.4f",
+                    trade.trade_id,
+                    swing_stop,
+                )
+
+        if trade_updated and updated_trade != trade:
+            state.trade = updated_trade
+            self._deps.diary.append_trades([updated_trade])
+
+    def _calculate_trailing_stop(self, state: ActiveTrade) -> float | None:
+        trade = state.trade
+        if trade.side.is_long:
+            return self._swing_detector.detect_swing_low(tuple(state.lows))
+        return self._swing_detector.detect_swing_high(tuple(state.highs))
+
+    @staticmethod
+    def _detect_close_reason(trade: Trade, bar: Bar) -> CloseReason | None:
+        if trade.side.is_long:
+            if bar.low <= trade.stop_loss_price:
+                return CloseReason.STOP_LOSS
+            if bar.high >= trade.take_profit_price:
+                return CloseReason.TAKE_PROFIT
+        else:
+            if bar.high >= trade.stop_loss_price:
+                return CloseReason.STOP_LOSS
+            if bar.low <= trade.take_profit_price:
+                return CloseReason.TAKE_PROFIT
+        return None
