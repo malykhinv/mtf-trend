@@ -159,6 +159,7 @@ def create_backtest_request(exchange: Exchange, settings: BacktestSettings) -> H
         start=settings.start,
         end=settings.end,
         limit=settings.limit,
+        backtest=True,
     )
 
 
