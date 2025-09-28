@@ -165,7 +165,7 @@ def create_backtest_request(exchange: Exchange, settings: BacktestSettings) -> H
 def read_runtime_mode(env: Mapping[str, str]) -> RuntimeMode:
     raw = env.get("BOT_MODE")
     if raw is None:
-        return RuntimeMode.LIVE
+        raise ValueError("Missing runtime mode: set the BOT_MODE environment variable")
     try:
         return RuntimeMode(raw.lower())
     except ValueError as exc:
@@ -175,7 +175,7 @@ def read_runtime_mode(env: Mapping[str, str]) -> RuntimeMode:
 def read_exchange(env: Mapping[str, str]) -> Exchange:
     raw = env.get("BOT_EXCHANGE")
     if raw is None:
-        return Exchange.BINANCE
+        raise ValueError("Missing exchange: set the BOT_EXCHANGE environment variable")
     try:
         return Exchange(raw.lower())
     except ValueError as exc:
