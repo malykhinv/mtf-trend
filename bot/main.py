@@ -24,7 +24,7 @@ from bot.domain.models.exchange import Exchange
 from bot.domain.models.runtime import BacktestSettings, RuntimeMode
 from bot.domain.models.timeframe import Timeframe
 from bot.domain.orchestrator import Orchestrator, OrchestratorDependencies
-from bot.utils.datetime import parse_iso_datetime
+from bot.utils.datetime_parser import parse_iso_datetime
 from bot.utils.logger import get_logger, setup_logging
 
 if TYPE_CHECKING:
@@ -121,7 +121,6 @@ def _create_ccxt_client(exchange: Exchange) -> object:
         if config.BYBIT_API_KEY and config.BYBIT_API_SECRET:
             params.update({"apiKey": config.BYBIT_API_KEY, "secret": config.BYBIT_API_SECRET})
         return ccxt.bybit(params)
-    raise ValueError(f"Unsupported exchange: {exchange}")
 
 
 def create_balance_provider(exchange: Exchange) -> CcxtBalanceProvider:
@@ -239,7 +238,6 @@ def run() -> None:
         request = create_backtest_request(exchange, settings)
         run_backtest(dependencies, request)
         return
-    raise ValueError(f"Unsupported runtime mode: {mode}")
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
