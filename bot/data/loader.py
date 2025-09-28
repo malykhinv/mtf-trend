@@ -8,10 +8,10 @@ import bisect
 from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Callable, Iterable
+from typing import Any, Callable, Iterable
 
 import ccxt
-from websocket import WebSocketApp
+from websocket import WebSocket, WebSocketApp
 
 from bot import config
 from bot.domain.models.bar import Bar, BarMetrics, BreakDirection
@@ -454,7 +454,7 @@ class WsLiveDataStream(LiveDataStream):
         state_last_bar: dict[str, int] = defaultdict(int)
         state_last_trade: dict[str, int] = defaultdict(int)
 
-        def _on_message(_: WebSocketApp, message: str) -> None:
+        def _on_message(_: WebSocket, message: Any) -> None:
             payload = json.loads(message)
             data = payload.get("data", {})
             stream = payload.get("stream", "")
@@ -516,7 +516,7 @@ class WsLiveDataStream(LiveDataStream):
                 aggregator.clear()
             self._notify(LiveBarEvent(bar=bar, imbalance=imbalance))
 
-        def _on_error(_: WebSocketApp, error: Exception) -> None:
+        def _on_error(_: WebSocket, error: Any) -> None:
             self._logger.error("Ошибка Binance WS: %s", error)
 
         def _create_app() -> WebSocketApp:
@@ -550,10 +550,10 @@ class WsLiveDataStream(LiveDataStream):
         state_last_bar: dict[str, int] = defaultdict(int)
         state_last_trade: dict[str, str] = {}
 
-        def _on_open(ws: WebSocketApp) -> None:
+        def _on_open(ws: WebSocket) -> None:
             ws.send(subscribe_message)
 
-        def _on_message(_: WebSocketApp, message: str) -> None:
+        def _on_message(_: WebSocket, message: Any) -> None:
             payload = json.loads(message)
             topic = payload.get("topic", "")
             if topic.startswith("publicTrade"):
@@ -620,7 +620,7 @@ class WsLiveDataStream(LiveDataStream):
                 aggregator.clear()
             self._notify(LiveBarEvent(bar=bar, imbalance=imbalance))
 
-        def _on_error(_: WebSocketApp, error: Exception) -> None:
+        def _on_error(_: WebSocket, error: Any) -> None:
             self._logger.error("Ошибка Bybit WS: %s", error)
 
         def _create_app() -> WebSocketApp:
