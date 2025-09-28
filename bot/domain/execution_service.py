@@ -70,6 +70,14 @@ class ExecutionService:
     ) -> Trade:
         levels = signal.levels
         trade_id = f"trade-{signal.signal_id}"
+        direction_name = "лонг" if signal.direction.is_long else "шорт"
+        self._logger.info(
+            "Выставляем ордера для %s %s %s: количество %.4f",
+            signal.exchange.value,
+            signal.symbol,
+            direction_name,
+            quantity,
+        )
         request = BracketOrderRequest(
             client_trade_id=trade_id,
             exchange=signal.exchange,
@@ -89,6 +97,12 @@ class ExecutionService:
         entry = execution.entry
         trade_timestamp = entry.updated_at or timestamp or signal.timestamp
         trade_status = self._map_order_status_to_trade_status(entry.status)
+        self._logger.info(
+            "Заявка %s принята: статус %s, исполнено %.4f",
+            trade_id,
+            entry.status.value,
+            entry.filled_qty,
+        )
 
         return Trade(
             trade_id=trade_id,
@@ -121,6 +135,12 @@ class ExecutionService:
         executed_qty = trade.executed_qty
         avg_entry_price = trade.avg_fill_price
 
+        self._logger.info(
+            "Закрываем сделку %s по причине %s, цена %.4f",
+            trade.trade_id,
+            reason.value,
+            price,
+        )
         if entry_snapshot is not None:
             executed_qty = entry_snapshot.filled_qty
             if entry_snapshot.avg_fill_price is not None:
@@ -190,6 +210,13 @@ class ExecutionService:
         )
 
         final_status = self._derive_close_status(reason, close_snapshot, final_qty)
+        self._logger.info(
+            "Результат закрытия %s: статус %s, объём %.4f, цена %.4f",
+            trade.trade_id,
+            final_status.value,
+            final_qty,
+            avg_fill_price if avg_fill_price is not None else 0.0,
+        )
 
         return Trade(
             trade_id=trade.trade_id,

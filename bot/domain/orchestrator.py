@@ -81,29 +81,47 @@ class Orchestrator:
         self._logger = get_logger(__name__)
 
     def start(self) -> None:
+        self._logger.info("Запускаем оркестратор: подписываемся на поток баров")
         self._deps.live_stream.subscribe(self._on_bar)
 
     def stop(self) -> None:
+        self._logger.info("Останавливаем оркестратор и поток данных")
         self._deps.live_stream.close()
 
     def backfill(self, request) -> None:  # type: ignore[no-untyped-def]
+        self._logger.info(
+            "Старт бэктеста: %s %s %s с %s по %s",
+            request.exchange.value,
+            request.symbol,
+            request.timeframe.value,
+            request.start,
+            request.end,
+        )
         simulated_trades: dict[str, SimulatedTrade] = {}
         last_bar: Bar | None = None
+        bars_processed = 0
+        signals_found = 0
+        trades_closed = 0
+        anomalies_found = 0
         for bar in self._deps.market_loader.load(request):
             last_bar = bar
+            bars_processed += 1
             closed = self._update_simulated_trades(simulated_trades, bar)
             if closed:
                 self._deps.diary.append_trades(closed)
+                trades_closed += len(closed)
 
             signal, anomaly = self._deps.analyzer.analyze_bar(bar)
 
             if anomaly is not None:
                 self._deps.diary.append_anomalies([anomaly])
+                anomalies_found += 1
 
             if signal is None:
                 continue
 
             self._deps.diary.append_signals([signal])
+            signals_found += 1
             simulated_trade = SimulatedTrade(
                 trade_id=f"backtest-{signal.signal_id}",
                 signal=signal,
@@ -119,6 +137,15 @@ class Orchestrator:
                 for state in simulated_trades.values()
             ]
             self._deps.diary.append_trades(expired)
+            trades_closed += len(expired)
+
+        self._logger.info(
+            "Бэктест завершён: баров %s, сигналов %s, закрытых сделок %s, аномалий %s",
+            bars_processed,
+            signals_found,
+            trades_closed,
+            anomalies_found,
+        )
 
     def _on_bar(self, event: LiveBarEvent) -> None:
         bar = event.bar
@@ -169,6 +196,12 @@ class Orchestrator:
         if signal is None:
             return
 
+        self._logger.info(
+            "Получен сигнал %s по %s %s",
+            signal.signal_id,
+            signal.exchange.value,
+            signal.symbol,
+        )
         try:
             self._deps.notifier.send_signal(signal)
         except Exception:
@@ -179,7 +212,27 @@ class Orchestrator:
         deposit = self._deps.balance_provider.current_deposit()
         order_size = self._deps.execution.calc_order_size_usdt(deposit_usdt=deposit)
         quantity = order_size / signal.levels.entry_price if signal.levels.entry_price else 0.0
+        self._logger.info(
+            "Депозит %.2f USDT, размер заявки %.2f USDT, количество %.4f",
+            deposit,
+            order_size,
+            quantity,
+        )
+        trade_id = f"trade-{signal.signal_id}"
+        self._logger.info(
+            "Открываем сделку %s: %s %s %s",
+            trade_id,
+            signal.exchange.value,
+            signal.symbol,
+            "лонг" if signal.direction.is_long else "шорт",
+        )
         trade = self._deps.execution.open_trade(signal, quantity=quantity)
+        self._logger.info(
+            "Сделка %s отправлена, статус %s, исполнено %.4f",
+            trade.trade_id,
+            trade.status.value,
+            trade.executed_qty,
+        )
         self._deps.diary.append_trades([trade])
         if trade.status is not TradeStatus.CANCELLED:
             self._register_active_trade(trade, bar)
@@ -207,6 +260,11 @@ class Orchestrator:
         self._symbol_cooldown[self._cooldown_key(bar)] = datetime.now(tz=config.TIMEZONE) + timedelta(
             seconds=config.SYMBOL_COOLDOWN_SEC
         )
+        self._logger.info(
+            "Кулдаун для %s включён на %s секунд",
+            self._cooldown_key(bar),
+            config.SYMBOL_COOLDOWN_SEC,
+        )
 
     @staticmethod
     def _cooldown_key(bar: Bar) -> str:
@@ -225,6 +283,7 @@ class Orchestrator:
         )
         history.record_bar(bar)
         self._active_trades[key] = history
+        self._logger.info("Сделка %s взята на сопровождение", trade.trade_id)
 
     def _manage_active_trade(self, trade_key: str, bar: Bar) -> None:
         state = self._active_trades.get(trade_key)
@@ -247,6 +306,9 @@ class Orchestrator:
             trade = state.trade
             if poll_result.outcome == "filled":
                 self._deps.diary.append_trades([trade])
+                self._logger.info(
+                    "Сделка %s исполнена, объём %.4f", trade.trade_id, trade.executed_qty
+                )
             elif poll_result.outcome in {"closed", "cancelled"}:
                 symbol_key = self._cooldown_key(bar)
                 last_imbalance = self._latest_imbalance.get(symbol_key)

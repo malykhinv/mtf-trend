@@ -271,6 +271,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
         end_ts = _to_millis(request.end)
         limit = request.limit or 1000
         cursor = since
+        bars_loaded = 0
 
         self._logger.info(
             "Загружаем OHLCV: %s %s %s с %s по %s (лимит %s)",
@@ -286,40 +287,45 @@ class CcxtMarketDataLoader(MarketDataLoader):
         timeframe_ms = int(timeframe_delta.total_seconds() * 1000)
 
         should_stop = False
-        while True:
-            batch = client.fetch_ohlcv(  # type: ignore[attr-defined]
-                request.symbol,
-                timeframe=timeframe,
-                since=cursor,
-                limit=limit,
-            )
-            if not batch:
-                break
-
-            for candle in batch:
-                open_ts = int(candle[0])
-                if open_ts >= end_ts:
-                    should_stop = True
-                    break
-                close_ts = open_ts + timeframe_ms
-                bar = _bar_from_ohlcv(
-                    exchange=request.exchange,
-                    symbol=request.symbol,
-                    timeframe=request.timeframe,
-                    open_ts=open_ts,
-                    close_ts=close_ts,
-                    ohlcv=candle,
-                    metrics_helper=metrics_helper,
+        try:
+            while True:
+                batch = client.fetch_ohlcv(  # type: ignore[attr-defined]
+                    request.symbol,
+                    timeframe=timeframe,
+                    since=cursor,
+                    limit=limit,
                 )
-                for resolved in direction_resolver.process(bar):
-                    yield resolved
+                if not batch:
+                    break
 
-            last_ts = int(batch[-1][0])
-            cursor = last_ts + timeframe_ms
-            if should_stop or cursor >= end_ts:
-                break
-        for remaining in direction_resolver.flush():
-            yield remaining
+                for candle in batch:
+                    open_ts = int(candle[0])
+                    if open_ts >= end_ts:
+                        should_stop = True
+                        break
+                    close_ts = open_ts + timeframe_ms
+                    bar = _bar_from_ohlcv(
+                        exchange=request.exchange,
+                        symbol=request.symbol,
+                        timeframe=request.timeframe,
+                        open_ts=open_ts,
+                        close_ts=close_ts,
+                        ohlcv=candle,
+                        metrics_helper=metrics_helper,
+                    )
+                    for resolved in direction_resolver.process(bar):
+                        bars_loaded += 1
+                        yield resolved
+
+                last_ts = int(batch[-1][0])
+                cursor = last_ts + timeframe_ms
+                if should_stop or cursor >= end_ts:
+                    break
+            for remaining in direction_resolver.flush():
+                bars_loaded += 1
+                yield remaining
+        finally:
+            self._logger.info("Загрузка OHLCV завершена, получено %s баров", bars_loaded)
 
 
 class WsLiveDataStream(LiveDataStream):
@@ -360,6 +366,7 @@ class WsLiveDataStream(LiveDataStream):
     def subscribe(self, listener: Callable[[LiveBarEvent], None]) -> None:
         with self._lock:
             self._listeners.append(listener)
+            self._logger.info("Добавлен слушатель потока, всего %s", len(self._listeners))
             if self._threads:
                 return
 
@@ -369,8 +376,10 @@ class WsLiveDataStream(LiveDataStream):
             ]
             for thread in self._threads:
                 thread.start()
+            self._logger.info("Запущены потоки подписки на Binance и Bybit")
 
     def close(self) -> None:
+        self._logger.info("Останавливаем поток котировок")
         self._stop_event.set()
         for app in list(self._apps):
             close = getattr(app, "close", None)
