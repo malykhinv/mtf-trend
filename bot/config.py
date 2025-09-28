@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 from bot.domain.models.timeframe import Timeframe
 
-TIMEZONE_NAME = "Europe/Belgrade"
+TIMEZONE_NAME = 'Europe/Belgrade'
 TIMEZONE = ZoneInfo(TIMEZONE_NAME)
 UTC = timezone.utc
 
@@ -46,20 +46,20 @@ AGGR_IMBALANCE_THRESHOLD = 0.62
 
 SYMBOL_COOLDOWN_SEC = 3600
 
-LOG_TIME_FMT = "%H:%M:%S"
+LOG_TIME_FMT = '%H:%M:%S'
 
 ANOMALY_MIN_GROWTH_PCT = 3.0
 ANOMALY_MIN_ATR_MULT = 3.0
 ANOMALY_MIN_RELATIVE_VOLUME = 3.0
 ANOMALY_MIN_VOLUME_SPIKE = 3.0
 
-BINANCE_API_URL = os.environ.get("BINANCE_API_URL", "https://fapi.binance.com")
+BINANCE_API_URL = 'https://fapi.binance.com'
 BINANCE_API_KEY: str | None = os.environ.get("BINANCE_API_KEY")
 BINANCE_API_SECRET: str | None = os.environ.get("BINANCE_API_SECRET")
-BINANCE_RECV_WINDOW: int = int(os.getenv("BINANCE_RECV_WINDOW", "5000"))
+BINANCE_RECV_WINDOW: int = 5000
 
-BYBIT_API_URL = os.environ.get("BYBIT_API_URL", "https://api.bybit.com")
+BYBIT_API_URL = 'https://api.bybit.com'
 BYBIT_API_KEY: str | None = os.environ.get("BYBIT_API_KEY")
 BYBIT_API_SECRET: str | None = os.environ.get("BYBIT_API_SECRET")
-BYBIT_RECV_WINDOW: int = int(os.getenv("BYBIT_RECV_WINDOW", "5000"))
-BYBIT_TIMEOUT: float = float(os.getenv("BYBIT_TIMEOUT", "10.0"))
+BYBIT_RECV_WINDOW: int = 5000
+BYBIT_TIMEOUT: float = 10.0

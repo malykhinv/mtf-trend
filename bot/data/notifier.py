@@ -42,11 +42,11 @@ class TelegramNotifier(Notifier):
     def __post_init__(self) -> None:
         token = self.token or os.getenv("TELEGRAM_BOT_TOKEN")
         if not token:
-            raise ValueError("Не задан TELEGRAM_BOT_TOKEN ни в окружении, ни в .env")
+            raise ValueError("Не задан телеграм-токен")
         self.token = token
         chat_id = self.chat_id or os.getenv("TELEGRAM_CHAT_ID")
         if not chat_id:
-            raise ValueError("Не задан TELEGRAM_CHAT_ID ни в окружении, ни в .env")
+            raise ValueError("Не задан идентификатор телеграм-чата")
         self.chat_id = chat_id
         self._endpoint = f"{self.base_url}/bot{token}/sendMessage"
         self._request = self._request or self._default_request
