@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Callable, Literal, Optional, TypeVar
 
 from bot import config
-from bot.utils.logging import get_logger
+from bot.utils.logger import get_logger
 from exchange_client import (
     BracketOrderRequest,
     ExchangeClient,
@@ -368,6 +368,7 @@ class ExecutionService:
             return self._map_reason_to_status(reason)
         return mapped
 
+    # noinspection PyUnreachableCode
     @staticmethod
     def _map_reason_to_status(reason: CloseReason) -> TradeStatus:
         if reason is CloseReason.TAKE_PROFIT:

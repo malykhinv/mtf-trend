@@ -218,7 +218,6 @@ class WorkbookDiaryBackend(DiaryBackend):
                     workbook.save(path)
             finally:
                 workbook.close()
-            return
 
         workbook = Workbook()
         try:

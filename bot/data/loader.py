@@ -17,7 +17,7 @@ from bot import config
 from bot.domain.models.bar import Bar, BarMetrics, BreakDirection
 from bot.domain.models.exchange import Exchange
 from bot.domain.models.timeframe import Timeframe
-from bot.utils.logging import get_logger
+from bot.utils.logger import get_logger
 from bot.utils.prints_aggregator import PrintsAggregator, TradePrint
 
 _TIMEFRAME_TO_DELTA: dict[Timeframe, timedelta] = {
@@ -460,12 +460,12 @@ class WsLiveDataStream(LiveDataStream):
             stream = payload.get("stream", "")
             if stream.endswith("aggTrade"):
                 trade_id = int(data.get("a", 0))
-                symbol = data.get("s", "")
-                last_id = state_last_trade.get(symbol)
+                sym = data.get("s", "")
+                last_id = state_last_trade.get(sym)
                 if last_id == trade_id:
                     return
-                state_last_trade[symbol] = trade_id
-                aggregator = aggregators.get(symbol)
+                state_last_trade[sym] = trade_id
+                aggregator = aggregators.get(sym)
                 if aggregator is None:
                     return
                 timestamp_ms = int(data.get("T", 0))
@@ -486,11 +486,11 @@ class WsLiveDataStream(LiveDataStream):
             is_closed = bool(kline.get("x"))
             if not is_closed:
                 return
-            symbol = kline.get("s", "")
+            sym = kline.get("s", "")
             open_ts = int(kline.get("t", 0))
-            if state_last_bar[symbol] == open_ts:
+            if state_last_bar[sym] == open_ts:
                 return
-            state_last_bar[symbol] = open_ts
+            state_last_bar[sym] = open_ts
             close_ts = int(kline.get("T", 0))
             ohlcv = [
                 open_ts,
@@ -500,17 +500,17 @@ class WsLiveDataStream(LiveDataStream):
                 float(kline.get("c", 0.0)),
                 float(kline.get("v", 0.0)),
             ]
-            metrics_helper = metrics_helpers.get(symbol)
+            metrics_helper = metrics_helpers.get(sym)
             bar = _bar_from_ohlcv(
                 exchange=Exchange.BINANCE,
-                symbol=_format_usdt_symbol(symbol),
+                symbol=_format_usdt_symbol(sym),
                 timeframe=self._timeframe,
                 open_ts=open_ts,
                 close_ts=close_ts,
                 ohlcv=ohlcv,
                 metrics_helper=metrics_helper,
             )
-            aggregator = aggregators.get(symbol)
+            aggregator = aggregators.get(sym)
             imbalance = aggregator.imbalance(now=bar.close_time) if aggregator else 0.0
             if aggregator:
                 aggregator.clear()

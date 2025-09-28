@@ -13,7 +13,7 @@ from bot import config
 from bot.domain.models.signal import Signal
 from bot.domain.models.trade import Trade
 from bot.domain.models.trade_status import TradeStatus
-from bot.utils.logging import get_logger
+from bot.utils.logger import get_logger
 
 
 class Notifier(Protocol):

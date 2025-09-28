@@ -11,7 +11,7 @@ from bot.data.accounting import BalanceProvider
 from bot.data.diary import WorkbookDiary
 from bot.data.loader import LiveBarEvent, LiveDataStream, MarketDataLoader
 from bot.data.notifier import Notifier
-from bot.utils.logging import get_logger
+from bot.utils.logger import get_logger
 from analyzer import SignalAnalyzer
 from execution_service import ExecutionService
 from models.bar import Bar, BreakDirection
@@ -414,9 +414,9 @@ class Orchestrator:
             registry.pop(trade_id, None)
         return closed_trades
 
+    @staticmethod
     def _resolve_simulated_outcome(
-        self,
-        trade_state: SimulatedTrade,
+            trade_state: SimulatedTrade,
         bar: Bar,
     ) -> CloseReason | None:
         levels = trade_state.levels

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from bot import config
-from bot.utils.logging import get_logger
+from bot.utils.logger import get_logger
 
 
 class BalanceProvider(Protocol):
