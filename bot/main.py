@@ -4,7 +4,7 @@ from __future__ import annotations
 import datetime
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping
+from typing import TYPE_CHECKING
 
 from bot import config
 from bot.config import BACKTEST_MIN_COVERAGE
@@ -25,7 +25,6 @@ from bot.domain.models.exchange import Exchange
 from bot.domain.models.timeframe import Timeframe
 from bot.domain.models.runtime import BacktestSettings, RuntimeMode
 from bot.domain.orchestrator import Orchestrator, OrchestratorDependencies
-from bot.utils.datetime_parser import parse_iso_datetime
 from bot.utils.logger import get_logger, setup_logging
 
 if TYPE_CHECKING:
@@ -144,8 +143,14 @@ def run() -> None:
         run_live(dependencies)
         return
     if mode is RuntimeMode.BACKTEST:
-        start = datetime.time(config.TIMEZONE) - BACKTEST_MIN_COVERAGE
-        settings = BacktestSettings(start=start, timeframes=config.DEFAULT_TIMEFRAMES)
+        end = datetime.datetime.now(tz=config.TIMEZONE)
+        start = end - BACKTEST_MIN_COVERAGE
+        settings = BacktestSettings(
+            start=start,
+            end=end,
+            limit=None,
+            timeframes=config.DEFAULT_TIMEFRAMES,
+        )
         symbols = fetch_linear_usdt_symbols(exchange)
         if not symbols:
             logger.warning(
