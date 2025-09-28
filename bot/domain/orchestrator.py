@@ -327,7 +327,7 @@ class Orchestrator:
 
         aggression_detected = False
         if last_imbalance is not None:
-            if trade.side.is_long and last_imbalance <= -config.AGGR_IMBALANCE_THRESHOLD:
+            if trade.side.is_long and (1 - last_imbalance) >= config.AGGR_IMBALANCE_THRESHOLD:
                 aggression_detected = True
             elif trade.side.is_short and last_imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
                 aggression_detected = True
