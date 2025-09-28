@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from bot import config
 from bot.data.loader import HistoricalRequest
-from bot.domain.exchange_client import BinanceExchangeClient, ExchangeClient, InMemoryExchangeClient
+from bot.domain.exchange_client import (
+    BinanceExchangeClient,
+    BybitExchangeClient,
+    ExchangeClient,
+    InMemoryExchangeClient,
+)
 from bot.domain.execution_service import ExecutionService
 from bot.domain.orchestrator import Orchestrator, OrchestratorDependencies
 
@@ -28,6 +33,14 @@ def create_exchange_client() -> ExchangeClient:
             api_secret=config.BINANCE_API_SECRET,
             base_url=config.BINANCE_API_URL,
             recv_window=config.BINANCE_RECV_WINDOW,
+        )
+    if config.BYBIT_API_KEY and config.BYBIT_API_SECRET:
+        return BybitExchangeClient(
+            api_key=config.BYBIT_API_KEY,
+            api_secret=config.BYBIT_API_SECRET,
+            base_url=config.BYBIT_API_URL,
+            recv_window=config.BYBIT_RECV_WINDOW,
+            timeout=config.BYBIT_TIMEOUT,
         )
     return InMemoryExchangeClient()
 
