@@ -9,18 +9,18 @@ from typing import Deque
 from bot import config
 from bot.data.accounting import BalanceProvider
 from bot.data.diary import WorkbookDiary
-from bot.data.loader import LiveBarEvent, LiveDataStream, MarketDataLoader
+from bot.data.loader import MarketDataLoader, LiveDataStream, LiveBarEvent
 from bot.data.notifier import Notifier
+from bot.domain.analyzer import SignalAnalyzer
+from bot.domain.execution_service import ExecutionService
+from bot.domain.models.bar import Bar, BreakDirection
+from bot.domain.models.close_reason import CloseReason
+from bot.domain.models.exchange import Exchange
+from bot.domain.models.signal import Signal
+from bot.domain.models.trade import Trade
+from bot.domain.models.trade_status import TradeStatus
+from bot.domain.swing_detector import SwingDetector
 from bot.utils.logger import get_logger
-from analyzer import SignalAnalyzer
-from execution_service import ExecutionService
-from models.bar import Bar, BreakDirection
-from models.exchange import Exchange
-from models.close_reason import CloseReason
-from models.signal import Signal
-from models.trade import Trade
-from models.trade_status import TradeStatus
-from swing_detector import SwingDetector
 
 
 @dataclass(slots=True)

@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from bot.domain.models.bar import BarMetrics
-from exchange import Exchange
-from timeframe import Timeframe
+from bot.domain.models.exchange import Exchange
+from bot.domain.models.timeframe import Timeframe
 
 
 @dataclass(frozen=True, slots=True)

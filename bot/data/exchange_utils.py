@@ -29,7 +29,6 @@ def create_ccxt_client(exchange: Exchange) -> ccxt.Exchange:
         if config.BYBIT_API_KEY and config.BYBIT_API_SECRET:
             params.update({"apiKey": config.BYBIT_API_KEY, "secret": config.BYBIT_API_SECRET})
         return ccxt.bybit(params)
-    raise ValueError(f"Unsupported exchange for CCXT client: {exchange.value}")
 
 
 def fetch_linear_usdt_symbols(exchange: Exchange) -> tuple[str, ...]:

@@ -22,8 +22,8 @@ from bot.domain.exchange_client import (
 )
 from bot.domain.execution_service import ExecutionService
 from bot.domain.models.exchange import Exchange
-from bot.domain.models.timeframe import Timeframe
 from bot.domain.models.runtime import BacktestSettings, RuntimeMode
+from bot.domain.models.timeframe import Timeframe
 from bot.domain.orchestrator import Orchestrator, OrchestratorDependencies
 from bot.utils.logger import get_logger, setup_logging
 

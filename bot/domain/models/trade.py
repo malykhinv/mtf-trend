@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
-from close_reason import CloseReason
-from exchange import Exchange
-from signal_direction import SignalDirection
-from timeframe import Timeframe
-from trade_status import TradeStatus
+from bot.domain.models.close_reason import CloseReason
+from bot.domain.models.exchange import Exchange
+from bot.domain.models.signal_direction import SignalDirection
+from bot.domain.models.timeframe import Timeframe
+from bot.domain.models.trade_status import TradeStatus
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,10 +4,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from bar import Bar
-from exchange import Exchange
-from signal_direction import SignalDirection
-from timeframe import Timeframe
+from bot.domain.models.bar import Bar
+from bot.domain.models.exchange import Exchange
+from bot.domain.models.signal_direction import SignalDirection
+from bot.domain.models.timeframe import Timeframe
 
 
 @dataclass(frozen=True, slots=True)

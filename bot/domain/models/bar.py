@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import IntEnum
 
-from exchange import Exchange
-from timeframe import Timeframe
+from bot.domain.models.exchange import Exchange
+from bot.domain.models.timeframe import Timeframe
 
 
 class BreakDirection(IntEnum):

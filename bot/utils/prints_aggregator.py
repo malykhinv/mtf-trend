@@ -9,7 +9,6 @@ from typing import Deque
 
 from bot import config
 
-
 _EPSILON = 1e-9
 
 

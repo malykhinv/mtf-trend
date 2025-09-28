@@ -7,21 +7,14 @@ from datetime import datetime
 from typing import Callable, Literal, Optional, TypeVar
 
 from bot import config
+from bot.domain.exchange_client import ExchangeClient, BracketOrderRequest, OrderExecutionSnapshot, OrderStatus, \
+    ExchangeClientError, SymbolPositionSnapshot, PositionStatus
+from bot.domain.models.close_reason import CloseReason
+from bot.domain.models.signal import Signal
+from bot.domain.models.signal_direction import SignalDirection
+from bot.domain.models.trade import Trade
+from bot.domain.models.trade_status import TradeStatus
 from bot.utils.logger import get_logger
-from exchange_client import (
-    BracketOrderRequest,
-    ExchangeClient,
-    ExchangeClientError,
-    OrderExecutionSnapshot,
-    OrderStatus,
-    PositionStatus,
-    SymbolPositionSnapshot,
-)
-from models.close_reason import CloseReason
-from models.signal import Signal
-from models.signal_direction import SignalDirection
-from models.trade import Trade
-from models.trade_status import TradeStatus
 
 
 @dataclass(frozen=True)

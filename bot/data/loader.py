@@ -1,10 +1,10 @@
 """Market data loader abstractions and concrete implementations."""
 from __future__ import annotations
 
+import bisect
 import json
 import threading
 import time
-import bisect
 from collections import defaultdict, deque
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
@@ -386,15 +386,10 @@ class WsLiveDataStream(LiveDataStream):
                 self._threads.append(
                     threading.Thread(target=self._run_binance, name="binance-ws", daemon=True)
                 )
-            elif self._exchange is Exchange.BYBIT:
+            if self._exchange is Exchange.BYBIT:
                 self._threads.append(
                     threading.Thread(target=self._run_bybit, name="bybit-ws", daemon=True)
                 )
-            else:  # pragma: no cover - defensive branch for unsupported exchanges
-                self._logger.error(
-                    "Неизвестная биржа для подписки: %s", self._exchange.value
-                )
-                return
             for thread in self._threads:
                 thread.start()
             self._logger.info(
