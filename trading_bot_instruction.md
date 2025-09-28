@@ -27,6 +27,7 @@ MIN_PCT_MOVE = 5.0
 MAX_PCT_MOVE = 10.0
 MAX_UPPER_WICK_PCT = 100.0
 MAX_LOWER_WICK_PCT = 50.0
+MIN_RR = 0.0  # TODO: подобрать оптимальное значение
 
 # Размер позиции
 MIN_ORDER_USDT = 10.0
@@ -109,6 +110,11 @@ LOG_TIME_FMT = "%H:%M:%S"
      - `upper_wick_pct < max_upper_wick_pct`;
      - `lower_wick_pct < max_lower_wick_pct`.
      Уровни: `entry=c`, `tp=l`, `sl=h`.
+
+   Во всех случаях сигнал формируется только при `RR ≥ MIN_RR`, где:
+   - Для **LONG**: `RR = (tp - entry) / (entry - sl)`;
+   - Для **SHORT**: `RR = (entry - tp) / (sl - entry)`.
+   Деление на ноль блокирует создание сигнала.
 
 Если условия лонга и шорта не выполняются, сигнал не создаётся, но аномалия записывается в дневник.
 
