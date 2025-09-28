@@ -6,7 +6,12 @@ from datetime import timedelta, timezone
 from typing import Final
 from zoneinfo import ZoneInfo
 
+from bot.domain.models.exchange import Exchange
+from bot.domain.models.runtime import RuntimeMode
 from bot.domain.models.timeframe import Timeframe
+
+MODE = RuntimeMode.BACKTEST
+EXCHANGE = Exchange.BINANCE
 
 TIMEZONE_NAME = 'Europe/Belgrade'
 TIMEZONE = ZoneInfo(TIMEZONE_NAME)
@@ -48,7 +53,7 @@ AGGR_IMBALANCE_THRESHOLD = 0.62
 
 SYMBOL_COOLDOWN_SEC = 3600
 
-BACKTEST_MIN_COVERAGE: Final[timedelta] = timedelta(days=30)
+BACKTEST_MIN_COVERAGE = timedelta(days=30)
 
 LOG_TIME_FMT = '%H:%M:%S'
 

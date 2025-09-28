@@ -1,11 +1,13 @@
 """Entry points for running the trading bot in different modes."""
 from __future__ import annotations
 
+import datetime
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
 from bot import config
+from bot.config import BACKTEST_MIN_COVERAGE
 from bot.data.accounting import CcxtBalanceProvider
 from bot.data.diary import WorkbookDiary
 from bot.data.exchange_utils import create_ccxt_client, fetch_linear_usdt_symbols
@@ -130,61 +132,10 @@ def create_orchestrator_dependencies(
     )
 
 
-def read_runtime_mode(env: Mapping[str, str]) -> RuntimeMode:
-    raw = env.get("BOT_MODE")
-    if raw is None:
-        raise ValueError("Missing runtime mode: set the BOT_MODE environment variable")
-    try:
-        return RuntimeMode(raw.lower())
-    except ValueError as exc:
-        raise ValueError(f"Unsupported runtime mode: {raw}") from exc
-
-
-def read_exchange(env: Mapping[str, str]) -> Exchange:
-    raw = env.get("BOT_EXCHANGE")
-    if raw is None:
-        raise ValueError("Missing exchange: set the BOT_EXCHANGE environment variable")
-    try:
-        return Exchange(raw.lower())
-    except ValueError as exc:
-        raise ValueError(f"Unsupported exchange: {raw}") from exc
-
-
-def read_backtest_settings(env: Mapping[str, str]) -> BacktestSettings:
-    start_raw = env.get("BOT_BACKTEST_START")
-    end_raw = env.get("BOT_BACKTEST_END")
-
-    missing = [
-        name
-        for name, value in {
-            "BOT_BACKTEST_START": start_raw,
-            "BOT_BACKTEST_END": end_raw,
-        }.items()
-        if not value
-    ]
-    if missing:
-        missing_vars = ", ".join(missing)
-        raise ValueError(f"Missing backtest configuration: {missing_vars}")
-
-    limit_raw = env.get("BOT_BACKTEST_LIMIT")
-    limit = int(limit_raw) if limit_raw else None
-
-    start = parse_iso_datetime(start_raw or "", timezone=config.TIMEZONE)
-    end = parse_iso_datetime(end_raw or "", timezone=config.TIMEZONE)
-
-    return BacktestSettings(
-        start=start,
-        end=end,
-        limit=limit,
-        timeframes=config.DEFAULT_TIMEFRAMES,
-    )
-
-
 def run() -> None:
     logger = setup_logging()
-    env = os.environ
-    mode = read_runtime_mode(env)
-    exchange = read_exchange(env)
+    mode = config.MODE
+    exchange = config.EXCHANGE
     logger.info(
         "Инициализация режима %s для биржи %s", mode.value, exchange.value
     )
@@ -193,7 +144,8 @@ def run() -> None:
         run_live(dependencies)
         return
     if mode is RuntimeMode.BACKTEST:
-        settings = read_backtest_settings(env)
+        start = datetime.time(config.TIMEZONE) - BACKTEST_MIN_COVERAGE
+        settings = BacktestSettings(start=start, timeframes=config.DEFAULT_TIMEFRAMES)
         symbols = fetch_linear_usdt_symbols(exchange)
         if not symbols:
             logger.warning(
@@ -220,5 +172,5 @@ def run() -> None:
         return
 
 
-if __name__ == "__main__":  # pragma: no cover - CLI entry point
+if __name__ == "__main__":
     run()
