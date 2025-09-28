@@ -20,24 +20,32 @@ class PrintsAggregator:
     def __init__(self) -> None:
         self._window = timedelta(seconds=config.AGGR_WINDOW_SEC)
         self._prints: Deque[TradePrint] = deque()
+        self._total_qty: float = 0.0
+        self._buy_qty: float = 0.0
 
     def add_print(self, trade_print: TradePrint) -> None:
         self._prints.append(trade_print)
+        self._total_qty += trade_print.quantity
+        if trade_print.is_buy:
+            self._buy_qty += trade_print.quantity
         self._drop_expired(trade_print.timestamp)
 
     def imbalance(self, now: datetime | None = None) -> float:
         reference_time = now or datetime.now(tz=config.UTC)
         self._drop_expired(reference_time)
-        total_qty = sum(p.quantity for p in self._prints)
-        if total_qty == 0:
+        if self._total_qty == 0:
             return 0.0
-        buy_qty = sum(p.quantity for p in self._prints if p.is_buy)
-        return buy_qty / total_qty
+        return self._buy_qty / self._total_qty
 
     def clear(self) -> None:
         self._prints.clear()
+        self._total_qty = 0.0
+        self._buy_qty = 0.0
 
     def _drop_expired(self, now: datetime) -> None:
         cutoff = now - self._window
         while self._prints and self._prints[0].timestamp < cutoff:
-            self._prints.popleft()
+            expired = self._prints.popleft()
+            self._total_qty -= expired.quantity
+            if expired.is_buy:
+                self._buy_qty -= expired.quantity
