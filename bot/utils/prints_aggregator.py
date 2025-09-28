@@ -34,7 +34,7 @@ class PrintsAggregator:
         reference_time = now or datetime.now(tz=config.UTC)
         self._drop_expired(reference_time)
         if self._total_qty == 0:
-            return 0.0
+            return 0.5
         return self._buy_qty / self._total_qty
 
     def clear(self) -> None:
