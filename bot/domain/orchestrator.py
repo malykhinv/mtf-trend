@@ -15,6 +15,7 @@ from bot.utils.logger import get_logger
 from analyzer import SignalAnalyzer
 from execution_service import ExecutionService
 from models.bar import Bar, BreakDirection
+from models.exchange import Exchange
 from models.close_reason import CloseReason
 from models.signal import Signal
 from models.trade import Trade
@@ -65,6 +66,7 @@ class OrchestratorDependencies:
     analyzer: SignalAnalyzer
     execution: ExecutionService
     balance_provider: BalanceProvider
+    exchange: Exchange
 
 
 class Orchestrator:
@@ -72,6 +74,7 @@ class Orchestrator:
 
     def __init__(self, dependencies: OrchestratorDependencies) -> None:
         self._deps = dependencies
+        self._exchange = dependencies.exchange
         self._symbol_cooldown: dict[str, datetime] = {}
         self._latest_imbalance: dict[str, float] = {}
         self._symbols_above_threshold: set[str] = set()
@@ -82,7 +85,10 @@ class Orchestrator:
         self._logger = get_logger(__name__)
 
     def start(self) -> None:
-        self._logger.info("Запускаем оркестратор: подписываемся на поток баров")
+        self._logger.info(
+            "Запускаем оркестратор для биржи %s: подписываемся на поток баров",
+            self._exchange.value,
+        )
         self._deps.live_stream.subscribe(self._on_bar)
 
     def stop(self) -> None:
@@ -150,6 +156,14 @@ class Orchestrator:
 
     def _on_bar(self, event: LiveBarEvent) -> None:
         bar = event.bar
+        if bar.exchange is not self._exchange:
+            self._logger.debug(
+                "Пропускаем бар %s: биржа %s не соответствует %s",
+                bar.bar_id,
+                bar.exchange.value,
+                self._exchange.value,
+            )
+            return
         symbol_key = self._cooldown_key(bar)
         self._latest_imbalance[symbol_key] = event.imbalance
         if event.imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
@@ -167,6 +181,14 @@ class Orchestrator:
         self._handle_bar(bar)
 
     def _handle_bar(self, bar: Bar, *, ignore_imbalance_checks: bool = False) -> None:
+        if bar.exchange is not self._exchange:
+            self._logger.debug(
+                "Пропускаем обработку бара %s: биржа %s не соответствует %s",
+                bar.bar_id,
+                bar.exchange.value,
+                self._exchange.value,
+            )
+            return
         symbol_key = self._cooldown_key(bar)
         trade_key = self._trade_key(bar.exchange.value, bar.symbol, bar.timeframe.value)
 

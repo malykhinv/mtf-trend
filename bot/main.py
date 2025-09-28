@@ -74,8 +74,8 @@ def create_market_data_loader() -> CcxtMarketDataLoader:
     return CcxtMarketDataLoader()
 
 
-def create_live_stream(timeframe: Timeframe) -> WsLiveDataStream:
-    return WsLiveDataStream(timeframe=timeframe)
+def create_live_stream(exchange: Exchange, timeframe: Timeframe) -> WsLiveDataStream:
+    return WsLiveDataStream(exchange=exchange, timeframe=timeframe)
 
 
 def create_diary(base_path: Path | None = None) -> WorkbookDiary:
@@ -112,7 +112,7 @@ def create_orchestrator_dependencies(
 ) -> OrchestratorDependencies:
     primary_timeframe = config.DEFAULT_TIMEFRAMES[0]
     market_loader = create_market_data_loader()
-    live_stream = create_live_stream(primary_timeframe)
+    live_stream = create_live_stream(exchange, primary_timeframe)
     diary = create_diary()
     notifier = create_notifier(mode)
     analyzer = SignalAnalyzer()
@@ -126,6 +126,7 @@ def create_orchestrator_dependencies(
         analyzer=analyzer,
         execution=execution,
         balance_provider=balance_provider,
+        exchange=exchange,
     )
 
 
