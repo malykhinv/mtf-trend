@@ -121,6 +121,26 @@ class SignalAnalyzer:
                 stop_loss_price=bar.high,
             )
 
+        entry_price = levels.entry_price
+        take_profit_price = levels.take_profit_price
+        stop_loss_price = levels.stop_loss_price
+
+        if direction is SignalDirection.LONG:
+            risk = entry_price - stop_loss_price
+            if risk == 0:
+                return None, anomaly
+            reward = take_profit_price - entry_price
+        else:
+            risk = stop_loss_price - entry_price
+            if risk == 0:
+                return None, anomaly
+            reward = entry_price - take_profit_price
+
+        rr = reward / risk
+
+        if rr < config.MIN_RR:
+            return None, anomaly
+
         signal = Signal(
             signal_id=self._generate_signal_id(bar),
             bar=bar,
