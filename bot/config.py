@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import os
 from datetime import timezone
+from typing import Final
 from zoneinfo import ZoneInfo
 
+from bot.domain.models.exchange import Exchange
 from bot.domain.models.timeframe import Timeframe
 
 TIMEZONE_NAME = 'Europe/Belgrade'
