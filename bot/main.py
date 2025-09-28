@@ -5,11 +5,10 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Mapping
 
-import ccxt
-
 from bot import config
 from bot.data.accounting import CcxtBalanceProvider
 from bot.data.diary import WorkbookDiary
+from bot.data.exchange_utils import create_ccxt_client, fetch_linear_usdt_symbols
 from bot.data.loader import CcxtMarketDataLoader, HistoricalRequest, WsLiveDataStream
 from bot.data.notifier import Notifier, TelegramNotifier
 from bot.domain.analyzer import SignalAnalyzer
@@ -21,8 +20,8 @@ from bot.domain.exchange_client import (
 )
 from bot.domain.execution_service import ExecutionService
 from bot.domain.models.exchange import Exchange
-from bot.domain.models.runtime import BacktestSettings, RuntimeMode
 from bot.domain.models.timeframe import Timeframe
+from bot.domain.models.runtime import BacktestSettings, RuntimeMode
 from bot.domain.orchestrator import Orchestrator, OrchestratorDependencies
 from bot.utils.datetime_parser import parse_iso_datetime
 from bot.utils.logger import get_logger, setup_logging
@@ -103,28 +102,8 @@ def create_notifier(mode: RuntimeMode) -> Notifier:
     return _NullNotifier()
 
 
-def _create_ccxt_client(exchange: Exchange) -> object:
-    if exchange is Exchange.BINANCE:
-        params: dict[str, object] = {"enableRateLimit": True}
-        if config.BINANCE_API_KEY and config.BINANCE_API_SECRET:
-            params.update({"apiKey": config.BINANCE_API_KEY, "secret": config.BINANCE_API_SECRET})
-        return ccxt.binanceusdm(params)
-    if exchange is Exchange.BYBIT:
-        params: dict[str, object] = {
-            "enableRateLimit": True,
-            "options": {
-                "defaultType": "swap",
-                "defaultSubType": "linear",
-                "defaultSettle": "USDT",
-            },
-        }
-        if config.BYBIT_API_KEY and config.BYBIT_API_SECRET:
-            params.update({"apiKey": config.BYBIT_API_KEY, "secret": config.BYBIT_API_SECRET})
-        return ccxt.bybit(params)
-
-
 def create_balance_provider(exchange: Exchange) -> CcxtBalanceProvider:
-    client = _create_ccxt_client(exchange)
+    client = create_ccxt_client(exchange)
     return CcxtBalanceProvider(client)
 
 
@@ -150,18 +129,6 @@ def create_orchestrator_dependencies(
     )
 
 
-def create_backtest_request(exchange: Exchange, settings: BacktestSettings) -> HistoricalRequest:
-    return HistoricalRequest(
-        exchange=exchange,
-        symbol=settings.symbol,
-        timeframe=settings.timeframe,
-        start=settings.start,
-        end=settings.end,
-        limit=settings.limit,
-        backtest=True,
-    )
-
-
 def read_runtime_mode(env: Mapping[str, str]) -> RuntimeMode:
     raw = env.get("BOT_MODE")
     if raw is None:
@@ -183,16 +150,12 @@ def read_exchange(env: Mapping[str, str]) -> Exchange:
 
 
 def read_backtest_settings(env: Mapping[str, str]) -> BacktestSettings:
-    symbol = env.get("BOT_BACKTEST_SYMBOL")
-    timeframe_raw = env.get("BOT_BACKTEST_TIMEFRAME")
     start_raw = env.get("BOT_BACKTEST_START")
     end_raw = env.get("BOT_BACKTEST_END")
 
     missing = [
         name
         for name, value in {
-            "BOT_BACKTEST_SYMBOL": symbol,
-            "BOT_BACKTEST_TIMEFRAME": timeframe_raw,
             "BOT_BACKTEST_START": start_raw,
             "BOT_BACKTEST_END": end_raw,
         }.items()
@@ -204,20 +167,15 @@ def read_backtest_settings(env: Mapping[str, str]) -> BacktestSettings:
 
     limit_raw = env.get("BOT_BACKTEST_LIMIT")
     limit = int(limit_raw) if limit_raw else None
-    try:
-        timeframe = Timeframe((timeframe_raw or "").lower())
-    except ValueError as exc:
-        raise ValueError(f"Unsupported backtest timeframe: {timeframe_raw}") from exc
 
     start = parse_iso_datetime(start_raw or "", timezone=config.TIMEZONE)
     end = parse_iso_datetime(end_raw or "", timezone=config.TIMEZONE)
 
     return BacktestSettings(
-        symbol=symbol or "",
-        timeframe=timeframe,
         start=start,
         end=end,
         limit=limit,
+        timeframes=config.DEFAULT_TIMEFRAMES,
     )
 
 
@@ -235,8 +193,29 @@ def run() -> None:
         return
     if mode is RuntimeMode.BACKTEST:
         settings = read_backtest_settings(env)
-        request = create_backtest_request(exchange, settings)
-        run_backtest(dependencies, request)
+        symbols = fetch_linear_usdt_symbols(exchange)
+        if not symbols:
+            logger.warning(
+                "Не найдены линейные фьючерсы в USDT для биржи %s", exchange.value
+            )
+            return
+        logger.info(
+            "Запускаем бэктест для %s символов и %s таймфреймов",
+            len(symbols),
+            len(settings.timeframes),
+        )
+        for symbol in symbols:
+            for timeframe in settings.timeframes:
+                request = HistoricalRequest(
+                    exchange=exchange,
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    start=settings.start,
+                    end=settings.end,
+                    limit=settings.limit,
+                    backtest=True,
+                )
+                run_backtest(dependencies, request)
         return
 
 

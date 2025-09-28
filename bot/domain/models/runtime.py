@@ -19,8 +19,7 @@ class RuntimeMode(str, Enum):
 class BacktestSettings:
     """Runtime settings required to launch a historical backtest."""
 
-    symbol: str
-    timeframe: Timeframe
     start: datetime
     end: datetime
     limit: int | None = None
+    timeframes: tuple[Timeframe, ...] = ()
