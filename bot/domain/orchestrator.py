@@ -14,8 +14,9 @@ from bot.data.notifier import Notifier
 from bot.utils.logging import get_logger
 from analyzer import SignalAnalyzer
 from execution_service import ExecutionService
-from models.bar import Bar
+from models.bar import Bar, BreakDirection
 from models.close_reason import CloseReason
+from models.signal import Signal
 from models.trade import Trade
 from models.trade_status import TradeStatus
 from swing_detector import SwingDetector
@@ -33,6 +34,26 @@ class ActiveTrade:
     def record_bar(self, bar: Bar) -> None:
         self.highs.append(bar.high)
         self.lows.append(bar.low)
+
+
+@dataclass(slots=True)
+class SimulatedTrade:
+    """Representation of a simulated trade during backfill."""
+
+    trade_id: str
+    signal: Signal
+
+    @property
+    def levels(self):  # pragma: no cover - simple delegation
+        return self.signal.levels
+
+    @property
+    def timestamp_open(self) -> datetime:  # pragma: no cover - simple delegation
+        return self.signal.timestamp
+
+    @property
+    def side(self):  # pragma: no cover - simple delegation
+        return self.signal.direction
 
 
 @dataclass(slots=True)
@@ -66,8 +87,38 @@ class Orchestrator:
         self._deps.live_stream.close()
 
     def backfill(self, request) -> None:  # type: ignore[no-untyped-def]
+        simulated_trades: dict[str, SimulatedTrade] = {}
+        last_bar: Bar | None = None
         for bar in self._deps.market_loader.load(request):
-            self._handle_bar(bar, ignore_imbalance_checks=True)
+            last_bar = bar
+            closed = self._update_simulated_trades(simulated_trades, bar)
+            if closed:
+                self._deps.diary.append_trades(closed)
+
+            signal, anomaly = self._deps.analyzer.analyze_bar(bar)
+
+            if anomaly is not None:
+                self._deps.diary.append_anomalies([anomaly])
+
+            if signal is None:
+                continue
+
+            self._deps.diary.append_signals([signal])
+            simulated_trade = SimulatedTrade(
+                trade_id=f"backtest-{signal.signal_id}",
+                signal=signal,
+            )
+            simulated_trades[simulated_trade.trade_id] = simulated_trade
+
+        if simulated_trades:
+            closing_timestamp = (
+                last_bar.close_time if last_bar is not None else datetime.now(tz=config.TIMEZONE)
+            )
+            expired = [
+                self._expire_simulated_trade(state, closing_timestamp)
+                for state in simulated_trades.values()
+            ]
+            self._deps.diary.append_trades(expired)
 
     def _on_bar(self, event: LiveBarEvent) -> None:
         bar = event.bar
@@ -286,6 +337,132 @@ class Orchestrator:
         if trade_updated and updated_trade != trade:
             state.trade = updated_trade
             self._deps.diary.append_trades([updated_trade])
+
+    def _update_simulated_trades(
+        self,
+        registry: dict[str, SimulatedTrade],
+        bar: Bar,
+    ) -> list[Trade]:
+        closed_trades: list[Trade] = []
+        for trade_id, trade_state in list(registry.items()):
+            outcome = self._resolve_simulated_outcome(trade_state, bar)
+            if outcome is None:
+                continue
+            closed_trades.append(self._close_simulated_trade(trade_state, bar, outcome))
+            registry.pop(trade_id, None)
+        return closed_trades
+
+    def _resolve_simulated_outcome(
+        self,
+        trade_state: SimulatedTrade,
+        bar: Bar,
+    ) -> CloseReason | None:
+        levels = trade_state.levels
+        if trade_state.side.is_long:
+            tp_hit = bar.high >= levels.take_profit_price
+            sl_hit = bar.low <= levels.stop_loss_price
+        else:
+            tp_hit = bar.low <= levels.take_profit_price
+            sl_hit = bar.high >= levels.stop_loss_price
+
+        if not tp_hit and not sl_hit:
+            return None
+        if tp_hit and not sl_hit:
+            return CloseReason.TAKE_PROFIT
+        if sl_hit and not tp_hit:
+            return CloseReason.STOP_LOSS
+
+        direction = bar.metrics.break_direction
+        if trade_state.side.is_long:
+            if direction is BreakDirection.HIGH_FIRST:
+                return CloseReason.TAKE_PROFIT
+            return CloseReason.STOP_LOSS
+
+        if direction is BreakDirection.LOW_FIRST:
+            return CloseReason.TAKE_PROFIT
+        return CloseReason.STOP_LOSS
+
+    def _close_simulated_trade(
+        self,
+        trade_state: SimulatedTrade,
+        bar: Bar,
+        reason: CloseReason,
+    ) -> Trade:
+        levels = trade_state.levels
+        if reason is CloseReason.TAKE_PROFIT:
+            exit_price = levels.take_profit_price
+            status = TradeStatus.CLOSED_TP
+        else:
+            exit_price = levels.stop_loss_price
+            status = TradeStatus.CLOSED_SL
+
+        result_pct = self._calc_simulated_result_pct(
+            entry_price=levels.entry_price,
+            exit_price=exit_price,
+            is_long=trade_state.side.is_long,
+        )
+        self._logger.info(
+            "Симуляция сделки %s закрыта по %s: результат %.2f%%",
+            trade_state.trade_id,
+            "тейк-профиту" if reason is CloseReason.TAKE_PROFIT else "стоп-лоссу",
+            result_pct,
+        )
+
+        return Trade(
+            trade_id=trade_state.trade_id,
+            source_signal_id=trade_state.signal.signal_id,
+            exchange=trade_state.signal.exchange,
+            symbol=trade_state.signal.symbol,
+            timeframe=trade_state.signal.timeframe,
+            side=trade_state.side,
+            timestamp_open=trade_state.timestamp_open,
+            timestamp_close=bar.close_time,
+            entry_price=levels.entry_price,
+            take_profit_price=levels.take_profit_price,
+            stop_loss_price=levels.stop_loss_price,
+            requested_qty=1.0,
+            executed_qty=1.0,
+            status=status,
+            avg_fill_price=exit_price,
+            reason_close=reason,
+        )
+
+    @staticmethod
+    def _calc_simulated_result_pct(
+        *, entry_price: float, exit_price: float, is_long: bool
+    ) -> float:
+        if entry_price == 0.0:
+            return 0.0
+        if is_long:
+            return (exit_price - entry_price) / entry_price * 100.0
+        return (entry_price - exit_price) / entry_price * 100.0
+
+    def _expire_simulated_trade(
+        self,
+        trade_state: SimulatedTrade,
+        timestamp_close: datetime,
+    ) -> Trade:
+        levels = trade_state.levels
+        self._logger.info(
+            "Симуляция сделки %s завершена без достижения уровней — помечена как отменённая",
+            trade_state.trade_id,
+        )
+        return Trade(
+            trade_id=trade_state.trade_id,
+            source_signal_id=trade_state.signal.signal_id,
+            exchange=trade_state.signal.exchange,
+            symbol=trade_state.signal.symbol,
+            timeframe=trade_state.signal.timeframe,
+            side=trade_state.side,
+            timestamp_open=trade_state.timestamp_open,
+            timestamp_close=timestamp_close,
+            entry_price=levels.entry_price,
+            take_profit_price=levels.take_profit_price,
+            stop_loss_price=levels.stop_loss_price,
+            requested_qty=1.0,
+            executed_qty=0.0,
+            status=TradeStatus.CANCELLED,
+        )
 
     def _calculate_trailing_stop(self, state: ActiveTrade) -> float | None:
         trade = state.trade
