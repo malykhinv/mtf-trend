@@ -215,6 +215,7 @@ class HistoricalRequest:
     start: datetime
     end: datetime
     limit: int | None = None
+    backtest: bool = False
 
 
 class MarketDataLoader:
@@ -270,7 +271,15 @@ class CcxtMarketDataLoader(MarketDataLoader):
         since = _to_millis(request.start)
         end_ts = _to_millis(request.end)
         limit = request.limit or 1000
-        cursor = since
+        min_start_ts: int | None = None
+        if request.backtest:
+            coverage_ms = int(config.BACKTEST_MIN_COVERAGE.total_seconds() * 1000)
+            min_start_ts = max(0, end_ts - coverage_ms)
+        effective_start_ts = min(since, min_start_ts) if min_start_ts is not None else since
+        effective_start = datetime.fromtimestamp(
+            effective_start_ts / 1000, tz=request.start.tzinfo
+        )
+        cursor = effective_start_ts
         bars_loaded = 0
 
         self._logger.info(
@@ -278,7 +287,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
             request.exchange.value,
             request.symbol,
             timeframe,
-            request.start,
+            effective_start,
             request.end,
             limit,
         )

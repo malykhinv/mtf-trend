@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from datetime import timezone
+from datetime import timedelta, timezone
 from typing import Final
 from zoneinfo import ZoneInfo
 
@@ -47,6 +47,8 @@ AGGR_WINDOW_SEC = 15
 AGGR_IMBALANCE_THRESHOLD = 0.62
 
 SYMBOL_COOLDOWN_SEC = 3600
+
+BACKTEST_MIN_COVERAGE: Final[timedelta] = timedelta(days=30)
 
 LOG_TIME_FMT = '%H:%M:%S'
 
