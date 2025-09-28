@@ -346,10 +346,12 @@ class WsLiveDataStream(LiveDataStream):
     def __init__(
         self,
         *,
+        exchange: Exchange,
         timeframe: Timeframe,
         top_n: int = 50,
         logger=None,
     ) -> None:
+        self._exchange = exchange
         self._timeframe = timeframe
         self._top_n = top_n
         self._logger = logger or get_logger(__name__)
@@ -379,16 +381,30 @@ class WsLiveDataStream(LiveDataStream):
             if self._threads:
                 return
 
-            self._threads = [
-                threading.Thread(target=self._run_binance, name="binance-ws", daemon=True),
-                threading.Thread(target=self._run_bybit, name="bybit-ws", daemon=True),
-            ]
+            self._threads = []
+            if self._exchange is Exchange.BINANCE:
+                self._threads.append(
+                    threading.Thread(target=self._run_binance, name="binance-ws", daemon=True)
+                )
+            elif self._exchange is Exchange.BYBIT:
+                self._threads.append(
+                    threading.Thread(target=self._run_bybit, name="bybit-ws", daemon=True)
+                )
+            else:  # pragma: no cover - defensive branch for unsupported exchanges
+                self._logger.error(
+                    "Неизвестная биржа для подписки: %s", self._exchange.value
+                )
+                return
             for thread in self._threads:
                 thread.start()
-            self._logger.info("Запущены потоки подписки на Binance и Bybit")
+            self._logger.info(
+                "Запущен поток подписки на биржу %s", self._exchange.value
+            )
 
     def close(self) -> None:
-        self._logger.info("Останавливаем поток котировок")
+        self._logger.info(
+            "Останавливаем поток котировок для биржи %s", self._exchange.value
+        )
         self._stop_event.set()
         for app in list(self._apps):
             close = getattr(app, "close", None)
