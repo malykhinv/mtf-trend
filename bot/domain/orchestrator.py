@@ -75,6 +75,7 @@ class Orchestrator:
         self._symbol_cooldown: dict[str, datetime] = {}
         self._latest_imbalance: dict[str, float] = {}
         self._symbols_above_threshold: set[str] = set()
+        self._symbol_aggression_side: dict[str, str] = {}
         self._active_trades: dict[str, ActiveTrade] = {}
         self._swing_detector = SwingDetector()
         self._trail_history = config.TRAIL_SWING_WINDOW + config.TRAIL_SWING_CONFIRM + 5
@@ -153,8 +154,13 @@ class Orchestrator:
         self._latest_imbalance[symbol_key] = event.imbalance
         if event.imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
             self._symbols_above_threshold.add(symbol_key)
+            self._symbol_aggression_side[symbol_key] = "buyers"
+        elif event.imbalance <= 1 - config.AGGR_IMBALANCE_THRESHOLD:
+            self._symbols_above_threshold.add(symbol_key)
+            self._symbol_aggression_side[symbol_key] = "sellers"
         else:
             self._symbols_above_threshold.discard(symbol_key)
+            self._symbol_aggression_side.pop(symbol_key, None)
         self._deps.execution.record_imbalance(symbol_key, event.imbalance)
         if self._is_on_cooldown(bar):
             return
@@ -176,16 +182,18 @@ class Orchestrator:
 
             if last_imbalance is None:
                 self._symbols_above_threshold.discard(symbol_key)
+                self._symbol_aggression_side.pop(symbol_key, None)
             elif last_imbalance >= config.AGGR_IMBALANCE_THRESHOLD:
                 self._symbols_above_threshold.add(symbol_key)
+                self._symbol_aggression_side[symbol_key] = "buyers"
+            elif last_imbalance <= 1 - config.AGGR_IMBALANCE_THRESHOLD:
+                self._symbols_above_threshold.add(symbol_key)
+                self._symbol_aggression_side[symbol_key] = "sellers"
             else:
                 self._symbols_above_threshold.discard(symbol_key)
+                self._symbol_aggression_side.pop(symbol_key, None)
 
-            if (
-                symbol_key not in self._symbols_above_threshold
-                or last_imbalance is None
-                or last_imbalance < config.AGGR_IMBALANCE_THRESHOLD
-            ):
+            if symbol_key not in self._symbols_above_threshold or last_imbalance is None:
                 return
 
         signal, anomaly = self._deps.analyzer.analyze_bar(bar)
