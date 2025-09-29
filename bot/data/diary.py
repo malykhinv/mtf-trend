@@ -406,18 +406,18 @@ class WorkbookDiaryBackend(DiaryBackend):
             f")"
         )
         long_pnl_formula = (
-            f"=IF($I{row_index}=0,\"\",SWITCH($S{row_index},"
-            f"\"HIGH_FIRST\",(G{row_index}-I{row_index})/I{row_index}*100,"
-            f"\"LOW_FIRST\",(H{row_index}-I{row_index})/I{row_index}*100,"
-            f"\"BOTH\",(H{row_index}-I{row_index})/I{row_index}*100,"
-            f"\"NONE\",0,0))"
+            f"=IF($I{row_index}=0,\"\","
+            f"IF($S{row_index}=\"HIGH_FIRST\","
+            f"(G{row_index}-I{row_index})/I{row_index}*100,"
+            f"IF(OR($S{row_index}=\"LOW_FIRST\",$S{row_index}=\"BOTH\"),"
+            f"(H{row_index}-I{row_index})/I{row_index}*100,0)))"
         )
         short_pnl_formula = (
-            f"=IF($I{row_index}=0,\"\",SWITCH($S{row_index},"
-            f"\"LOW_FIRST\",(I{row_index}-H{row_index})/I{row_index}*100,"
-            f"\"HIGH_FIRST\",(I{row_index}-G{row_index})/I{row_index}*100,"
-            f"\"BOTH\",(I{row_index}-G{row_index})/I{row_index}*100,"
-            f"\"NONE\",0,0))"
+            f"=IF($I{row_index}=0,\"\","
+            f"IF($S{row_index}=\"LOW_FIRST\","
+            f"(I{row_index}-H{row_index})/I{row_index}*100,"
+            f"IF(OR($S{row_index}=\"HIGH_FIRST\",$S{row_index}=\"BOTH\"),"
+            f"(I{row_index}-G{row_index})/I{row_index}*100,0)))"
         )
         long_equity_formula = (
             f"=IF(ISNUMBER(AD{row_index-1}),"
