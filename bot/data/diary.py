@@ -536,11 +536,8 @@ class WorkbookDiaryBackend(DiaryBackend):
             if label_cell.value is None:
                 label_cell.value = label
             if value_cell.value is None:
-                column_range = f"'Anomalies'.$${column_letter}:$${column_letter}"
-                value_cell.value = (
-                    f"=IFERROR(LOOKUP(2,1/({column_range}<>\"\"),"
-                    f"{column_range}),'Thresholds'.$B$11)"
-                )
+                column_range = f"'Anomalies'!${column_letter}$2:${column_letter}$999"
+                value_cell.value = f"=AVERAGE({column_range})"
 
 
 @dataclass(slots=True)
