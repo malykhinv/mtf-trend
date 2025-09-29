@@ -100,32 +100,60 @@ class WorkbookDiaryBackend(DiaryBackend):
     """Persist diary rows into Excel workbooks under a target directory."""
 
     _ANOMALY_THRESHOLD_LAYOUT = [
-        ("Minimum anomaly growth (%)", "anomaly_min_growth_pct", config.ANOMALY_MIN_GROWTH_PCT),
-        ("Minimum anomaly ATR multiple", "anomaly_min_atr_mult", config.ANOMALY_MIN_ATR_MULT),
+        (
+            "Minimum anomaly growth (%)",
+            "thresholds_min_green_move_pct",
+            config.ANOMALY_MIN_GROWTH_PCT,
+        ),
+        (
+            "Minimum anomaly ATR multiple",
+            "thresholds_min_anomaly_atr_mult",
+            config.ANOMALY_MIN_ATR_MULT,
+        ),
         (
             "Minimum anomaly relative volume",
-            "anomaly_min_relative_volume",
+            "thresholds_min_anomaly_relative_volume",
             config.ANOMALY_MIN_RELATIVE_VOLUME,
         ),
         (
             "Minimum anomaly volume spike",
-            "anomaly_min_volume_spike",
+            "thresholds_min_volume_spike",
             config.ANOMALY_MIN_VOLUME_SPIKE,
         ),
-        ("Minimum relative volume", "min_relative_volume", config.MIN_REL_VOL),
-        ("Maximum relative volume", "max_relative_volume", config.MAX_REL_VOL),
-        ("Minimum ATR multiple", "min_atr_mult", config.MIN_ATR_MULT),
-        ("Minimum percent move", "min_pct_move", config.MIN_PCT_MOVE),
-        ("Maximum percent move", "max_pct_move", config.MAX_PCT_MOVE),
-        ("Initial deposit (USDT)", "initial_deposit", 100.0),
-        ("Position fraction", "position_fraction", 0.1),
-        ("Maximum upper wick (%)", "max_upper_wick_pct", config.MAX_UPPER_WICK_PCT),
-        ("Maximum lower wick (%)", "max_lower_wick_pct", config.MAX_LOWER_WICK_PCT),
-        ("Minimum risk/reward", "min_rr", config.MIN_RR),
-        ("Minimum order size (USDT)", "min_order_usdt", config.MIN_ORDER_USDT),
+        (
+            "Minimum relative volume",
+            "thresholds_min_relative_volume",
+            config.MIN_REL_VOL,
+        ),
+        (
+            "Maximum relative volume",
+            "thresholds_max_relative_volume",
+            config.MAX_REL_VOL,
+        ),
+        ("Minimum ATR multiple", "thresholds_min_atr_mult", config.MIN_ATR_MULT),
+        ("Minimum percent move", "thresholds_min_pct_move", config.MIN_PCT_MOVE),
+        ("Maximum percent move", "thresholds_max_pct_move", config.MAX_PCT_MOVE),
+        ("Initial deposit (USDT)", "thresholds_initial_deposit", 100.0),
+        ("Position fraction", "thresholds_position_fraction", 0.1),
+        (
+            "Maximum upper wick (%)",
+            "thresholds_max_upper_wick_pct",
+            config.MAX_UPPER_WICK_PCT,
+        ),
+        (
+            "Maximum lower wick (%)",
+            "thresholds_max_lower_wick_pct",
+            config.MAX_LOWER_WICK_PCT,
+        ),
+        ("Minimum risk/reward", "thresholds_min_rr", config.MIN_RR),
+        (
+            "Minimum order size (USDT)",
+            "thresholds_min_order_usdt",
+            config.MIN_ORDER_USDT,
+        ),
         (
             "Order fraction of deposit",
-            "order_pct_of_deposit",
+            "thresholds_order_pct_of_deposit",
             config.ORDER_PCT_OF_DEPOSIT,
         ),
     ]
@@ -388,28 +416,40 @@ class WorkbookDiaryBackend(DiaryBackend):
         )
         long_filter_formula = (
             f"=AND("
-            f"L{row_index}>={threshold_cells['min_relative_volume']};"
-            f"L{row_index}<={threshold_cells['max_relative_volume']};"
-            f"M{row_index}>{threshold_cells['min_atr_mult']};"
-            f"K{row_index}>={threshold_cells['min_pct_move']};"
-            f"K{row_index}<={threshold_cells['max_pct_move']};"
-            f"N{row_index}<{threshold_cells['max_upper_wick_pct']};"
-            f"P{row_index}<{threshold_cells['max_lower_wick_pct']};"
-            f"X{row_index}>{threshold_cells['min_rr']}"
+            f"K{row_index}>={threshold_cells['thresholds_min_green_move_pct']};"
+            f"L{row_index}>={threshold_cells['thresholds_min_volume_spike']};"
+            f"L{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']};"
+            f"L{row_index}>={threshold_cells['thresholds_min_relative_volume']};"
+            f"L{row_index}<={threshold_cells['thresholds_max_relative_volume']};"
+            f"M{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']};"
+            f"M{row_index}>{threshold_cells['thresholds_min_atr_mult']};"
+            f"K{row_index}>={threshold_cells['thresholds_min_pct_move']};"
+            f"K{row_index}<={threshold_cells['thresholds_max_pct_move']};"
+            f"N{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']};"
+            f"P{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']};"
+            f"X{row_index}>{threshold_cells['thresholds_min_rr']}"
             f")"
         )
         short_filter_formula = (
             f"=AND("
-            f"OR(L{row_index}<{threshold_cells['min_relative_volume']},"
-            f"L{row_index}>{threshold_cells['max_relative_volume']});"
-            f"M{row_index}<{threshold_cells['min_atr_mult']};"
-            f"OR(K{row_index}>{threshold_cells['max_pct_move']};"
-            f"K{row_index}<{threshold_cells['min_pct_move']});"
-            f"N{row_index}<{threshold_cells['max_upper_wick_pct']};"
-            f"P{row_index}<{threshold_cells['max_lower_wick_pct']};"
-            f"Y{row_index}>={threshold_cells['min_rr']}"
+            f"K{row_index}>={threshold_cells['thresholds_min_green_move_pct']};"
+            f"L{row_index}>={threshold_cells['thresholds_min_volume_spike']};"
+            f"L{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']};"
+            f"OR(L{row_index}<{threshold_cells['thresholds_min_relative_volume']},"
+            f"L{row_index}>{threshold_cells['thresholds_max_relative_volume']});"
+            f"M{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']};"
+            f"M{row_index}<{threshold_cells['thresholds_min_atr_mult']};"
+            f"OR(K{row_index}>{threshold_cells['thresholds_max_pct_move']};"
+            f"K{row_index}<{threshold_cells['thresholds_min_pct_move']});"
+            f"N{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']};"
+            f"P{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']};"
+            f"Y{row_index}>={threshold_cells['thresholds_min_rr']}"
             f")"
         )
+        thresholds_min_green_formula = f"={threshold_cells['thresholds_min_green_move_pct']}"
+        thresholds_min_volume_formula = f"={threshold_cells['thresholds_min_volume_spike']}"
+        thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_anomaly_relative_volume']}"
+        thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_anomaly_atr_mult']}"
         long_pnl_formula = (
             f"=IF($I{row_index}=0,\"\","
             f"IF($S{row_index}=\"HIGH_FIRST\","
@@ -426,13 +466,13 @@ class WorkbookDiaryBackend(DiaryBackend):
         )
         long_equity_formula = (
             f"=IF(ISNUMBER(AD{row_index-1});"
-            f"IF($Z{row_index};AD{row_index-1}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100);AD{row_index-1});"
-            f"IF($Z{row_index};{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100);{threshold_cells['initial_deposit']}))"
+            f"IF($Z{row_index};AD{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AB{row_index}/100);AD{row_index-1});"
+            f"IF($Z{row_index};{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AB{row_index}/100);{threshold_cells['thresholds_initial_deposit']}))"
         )
         short_equity_formula = (
             f"=IF(ISNUMBER(AE{row_index-1});"
-            f"IF($AA{row_index};AE{row_index-1}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100);AE{row_index-1});"
-            f"IF($AA{row_index};{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100);{threshold_cells['initial_deposit']}))"
+            f"IF($AA{row_index};AE{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AC{row_index}/100);AE{row_index-1});"
+            f"IF($AA{row_index};{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AC{row_index}/100);{threshold_cells['thresholds_initial_deposit']}))"
         )
         return [
             self._format_dt(row.timestamp),
@@ -454,10 +494,10 @@ class WorkbookDiaryBackend(DiaryBackend):
             metrics.pct_to_low_break,
             metrics.pct_to_high_break,
             metrics.break_direction.name,
-            thresholds.min_green_move_pct,
-            thresholds.min_volume_spike,
-            thresholds.min_relative_volume,
-            thresholds.min_atr_mult,
+            thresholds_min_green_formula,
+            thresholds_min_volume_formula,
+            thresholds_min_relative_formula,
+            thresholds_min_atr_formula,
             long_rr_formula,
             short_rr_formula,
             long_filter_formula,
