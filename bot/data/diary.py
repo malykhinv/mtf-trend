@@ -8,6 +8,7 @@ from threading import Lock
 from typing import Iterable, Optional, Protocol
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.workbook.defined_name import DefinedName
 
 from bot.domain.models.anomaly import Anomaly, AnomalyThresholdSnapshot
 from bot.domain.models.bar import BarMetrics
@@ -18,6 +19,7 @@ from bot.domain.models.signal_direction import SignalDirection
 from bot.domain.models.timeframe import Timeframe
 from bot.domain.models.trade import Trade
 from bot.domain.models.trade_status import TradeStatus
+from bot import config
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +97,43 @@ class DiaryBackend(Protocol):
 
 class WorkbookDiaryBackend(DiaryBackend):
     """Persist diary rows into Excel workbooks under a target directory."""
+
+    _ANOMALY_THRESHOLD_LAYOUT = [
+        ("Minimum anomaly growth (%)", "anomaly_min_growth_pct", config.ANOMALY_MIN_GROWTH_PCT),
+        ("Minimum anomaly ATR multiple", "anomaly_min_atr_mult", config.ANOMALY_MIN_ATR_MULT),
+        (
+            "Minimum anomaly relative volume",
+            "anomaly_min_relative_volume",
+            config.ANOMALY_MIN_RELATIVE_VOLUME,
+        ),
+        (
+            "Minimum anomaly volume spike",
+            "anomaly_min_volume_spike",
+            config.ANOMALY_MIN_VOLUME_SPIKE,
+        ),
+        ("Minimum relative volume", "min_relative_volume", config.MIN_REL_VOL),
+        ("Maximum relative volume", "max_relative_volume", config.MAX_REL_VOL),
+        ("Minimum ATR multiple", "min_atr_mult", config.MIN_ATR_MULT),
+        ("Minimum percent move", "min_pct_move", config.MIN_PCT_MOVE),
+        ("Maximum percent move", "max_pct_move", config.MAX_PCT_MOVE),
+        ("Initial deposit (USDT)", "initial_deposit", 100.0),
+        ("Position fraction", "position_fraction", 0.1),
+        ("Maximum upper wick (%)", "max_upper_wick_pct", config.MAX_UPPER_WICK_PCT),
+        ("Maximum lower wick (%)", "max_lower_wick_pct", config.MAX_LOWER_WICK_PCT),
+        ("Minimum risk/reward", "min_rr", config.MIN_RR),
+        ("Minimum order size (USDT)", "min_order_usdt", config.MIN_ORDER_USDT),
+        (
+            "Order fraction of deposit",
+            "order_pct_of_deposit",
+            config.ORDER_PCT_OF_DEPOSIT,
+        ),
+    ]
+
+    # Mapping is used by formulas in the ``Anomalies`` sheet.
+    _ANOMALY_THRESHOLD_CELL_MAP = {
+        name: f"Thresholds!$B${row_index}"
+        for row_index, (_, name, _) in enumerate(_ANOMALY_THRESHOLD_LAYOUT, start=2)
+    }
 
     _SIGNALS_HEADERS = [
         "signal_id",
@@ -188,6 +227,12 @@ class WorkbookDiaryBackend(DiaryBackend):
         self._ensure_workbook(self._signals_path, self._SIGNALS_HEADERS, sheet_name="Signals")
         self._ensure_workbook(self._trades_path, self._TRADES_HEADERS, sheet_name="Trades")
         self._ensure_workbook(self._anomalies_path, self._ANOMALIES_HEADERS, sheet_name="Anomalies")
+        workbook = load_workbook(self._anomalies_path)
+        try:
+            self._ensure_anomaly_threshold_sheet(workbook)
+            workbook.save(self._anomalies_path)
+        finally:
+            workbook.close()
 
     def append_signals(self, rows: Iterable[SignalRow]) -> None:
         materialized = list(rows)
@@ -341,6 +386,48 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds.min_relative_volume,
             thresholds.min_atr_mult,
         ]
+
+    @staticmethod
+    def _set_named_range(workbook: Workbook, *, name: str, sheet_title: str, column_letter: str, row: int) -> None:
+        """Ensure a workbook defined name points at the requested cell."""
+
+        attr_text = f"'{sheet_title}'!${column_letter}${row}"
+        if name in workbook.defined_names:
+            workbook.defined_names.delete(name)
+        workbook.defined_names.append(DefinedName(name=name, attr_text=attr_text))
+
+    def _ensure_anomaly_threshold_sheet(self, workbook: Workbook) -> None:
+        """Create the ``Thresholds`` sheet with default values when missing."""
+
+        if "Thresholds" in workbook.sheetnames:
+            sheet = workbook["Thresholds"]
+        else:
+            sheet = workbook.create_sheet("Thresholds")
+
+        # Header row for readability.
+        if sheet["A1"].value is None:
+            sheet["A1"].value = "Parameter"
+        if sheet["B1"].value is None:
+            sheet["B1"].value = "Value"
+
+        for row_index, (label, name, default_value) in enumerate(
+            self._ANOMALY_THRESHOLD_LAYOUT, start=2
+        ):
+            label_cell = sheet.cell(row=row_index, column=1)
+            value_cell = sheet.cell(row=row_index, column=2)
+
+            if label_cell.value is None:
+                label_cell.value = label
+            if value_cell.value is None:
+                value_cell.value = default_value
+
+            self._set_named_range(
+                workbook,
+                name=name,
+                sheet_title=sheet.title,
+                column_letter=value_cell.column_letter,
+                row=value_cell.row,
+            )
 
 
 @dataclass(slots=True)
