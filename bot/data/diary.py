@@ -388,25 +388,25 @@ class WorkbookDiaryBackend(DiaryBackend):
         )
         long_filter_formula = (
             f"=AND("
-            f"L{row_index}>={threshold_cells['min_relative_volume']},"
-            f"L{row_index}<={threshold_cells['max_relative_volume']},"
-            f"M{row_index}>{threshold_cells['min_atr_mult']},"
-            f"K{row_index}>={threshold_cells['min_pct_move']},"
-            f"K{row_index}<={threshold_cells['max_pct_move']},"
-            f"N{row_index}<{threshold_cells['max_upper_wick_pct']},"
-            f"P{row_index}<{threshold_cells['max_lower_wick_pct']},"
+            f"L{row_index}>={threshold_cells['min_relative_volume']};"
+            f"L{row_index}<={threshold_cells['max_relative_volume']};"
+            f"M{row_index}>{threshold_cells['min_atr_mult']};"
+            f"K{row_index}>={threshold_cells['min_pct_move']};"
+            f"K{row_index}<={threshold_cells['max_pct_move']};"
+            f"N{row_index}<{threshold_cells['max_upper_wick_pct']};"
+            f"P{row_index}<{threshold_cells['max_lower_wick_pct']};"
             f"X{row_index}>={threshold_cells['min_rr']}"
             f")"
         )
         short_filter_formula = (
             f"=AND("
-            f"OR(L{row_index}<{threshold_cells['min_relative_volume']},"
-            f"L{row_index}>{threshold_cells['max_relative_volume']}),"
-            f"M{row_index}<{threshold_cells['min_atr_mult']},"
-            f"OR(K{row_index}>{threshold_cells['max_pct_move']},"
-            f"K{row_index}<{threshold_cells['min_pct_move']}),"
-            f"N{row_index}<{threshold_cells['max_upper_wick_pct']},"
-            f"P{row_index}<{threshold_cells['max_lower_wick_pct']},"
+            f"OR(L{row_index}<{threshold_cells['min_relative_volume']};"
+            f"L{row_index}>{threshold_cells['max_relative_volume']});"
+            f"M{row_index}<{threshold_cells['min_atr_mult']};"
+            f"OR(K{row_index}>{threshold_cells['max_pct_move']};"
+            f"K{row_index}<{threshold_cells['min_pct_move']});"
+            f"N{row_index}<{threshold_cells['max_upper_wick_pct']};"
+            f"P{row_index}<{threshold_cells['max_lower_wick_pct']};"
             f"Y{row_index}>={threshold_cells['min_rr']}"
             f")"
         )
@@ -425,14 +425,14 @@ class WorkbookDiaryBackend(DiaryBackend):
             f"(I{row_index}-G{row_index})/I{row_index}*100,0)))"
         )
         long_equity_formula = (
-            f"=IF(ISNUMBER(AD{row_index-1}),"
-            f"IF($Z{row_index},AD{row_index-1}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100),AD{row_index-1}),"
-            f"IF($Z{row_index},{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100),{threshold_cells['initial_deposit']}))"
+            f"=IF(ISNUMBER(AD{row_index-1});"
+            f"IF($Z{row_index};AD{row_index-1}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100);AD{row_index-1});"
+            f"IF($Z{row_index};{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100);{threshold_cells['initial_deposit']}))"
         )
         short_equity_formula = (
-            f"=IF(ISNUMBER(AE{row_index-1}),"
-            f"IF($AA{row_index},AE{row_index-1}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100),AE{row_index-1}),"
-            f"IF($AA{row_index},{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100),{threshold_cells['initial_deposit']}))"
+            f"=IF(ISNUMBER(AE{row_index-1});"
+            f"IF($AA{row_index};AE{row_index-1}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100);AE{row_index-1});"
+            f"IF($AA{row_index};{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100);{threshold_cells['initial_deposit']}))"
         )
         return [
             self._format_dt(row.timestamp),
