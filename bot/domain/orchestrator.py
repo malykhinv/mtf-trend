@@ -147,11 +147,11 @@ class Orchestrator:
             trades_closed += len(expired)
 
         self._logger.info(
-            "Бэктест завершён: баров %s, сигналов %s, закрытых сделок %s, аномалий %s",
+            "Бэктест завершён: баров %s, аномалий %s, сигналов %s, закрытых сделок %s",
             bars_processed,
-            signals_found,
-            trades_closed,
             anomalies_found,
+            signals_found,
+            trades_closed
         )
 
     def _on_bar(self, event: LiveBarEvent) -> None:

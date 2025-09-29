@@ -316,6 +316,14 @@ class CcxtMarketDataLoader(MarketDataLoader):
                 )
                 time.sleep(delay)
                 delay = max(delay * 2, self._retry_delay_sec)
+            except Exception as exc:
+                self._logger.error(
+                    "Не удалось получить OHLCV %s %s: %s",
+                    symbol,
+                    timeframe,
+                    exc,
+                )
+                return []
 
     def load(self, request: HistoricalRequest) -> Iterable[Bar]:
         client = self._clients.get(request.exchange)
@@ -339,69 +347,56 @@ class CcxtMarketDataLoader(MarketDataLoader):
         cursor = effective_start_ts
         bars_loaded = 0
 
-        self._logger.info(
-            "Загружаем OHLCV: %s %s %s с %s по %s (лимит %s)",
-            request.exchange.value,
-            request.symbol,
-            timeframe,
-            effective_start,
-            request.end,
-            limit,
-        )
-
         timeframe_delta = _TIMEFRAME_TO_DELTA[request.timeframe]
         timeframe_ms = int(timeframe_delta.total_seconds() * 1000)
 
         should_stop = False
-        try:
-            while True:
-                try:
-                    batch = self._fetch_ohlcv_with_retry(
-                        client,
-                        symbol=request.symbol,
-                        timeframe=timeframe,
-                        since=cursor,
-                        limit=limit,
-                    )
-                except Exception:
-                    self._logger.exception(
-                        "Загрузка OHLCV %s %s не удалась после %s попыток",
-                        request.symbol,
-                        timeframe,
-                        self._retry_attempts,
-                    )
-                    raise
-                if not batch:
-                    break
+        while True:
+            try:
+                batch = self._fetch_ohlcv_with_retry(
+                    client,
+                    symbol=request.symbol,
+                    timeframe=timeframe,
+                    since=cursor,
+                    limit=limit,
+                )
+            except Exception:
+                self._logger.exception(
+                    "Загрузка OHLCV %s %s не удалась после %s попыток",
+                    request.symbol,
+                    timeframe,
+                    self._retry_attempts,
+                )
+                raise
+            if not batch:
+                break
 
-                for candle in batch:
-                    open_ts = int(candle[0])
-                    if open_ts >= end_ts:
-                        should_stop = True
-                        break
-                    close_ts = open_ts + timeframe_ms
-                    bar = _bar_from_ohlcv(
-                        exchange=request.exchange,
-                        symbol=request.symbol,
-                        timeframe=request.timeframe,
-                        open_ts=open_ts,
-                        close_ts=close_ts,
-                        ohlcv=candle,
-                        metrics_helper=metrics_helper,
-                    )
-                    for resolved in direction_resolver.process(bar):
-                        bars_loaded += 1
-                        yield resolved
-
-                last_ts = int(batch[-1][0])
-                cursor = last_ts + timeframe_ms
-                if should_stop or cursor >= end_ts:
+            for candle in batch:
+                open_ts = int(candle[0])
+                if open_ts >= end_ts:
+                    should_stop = True
                     break
-            for remaining in direction_resolver.flush():
-                bars_loaded += 1
-                yield remaining
-        finally:
-            self._logger.info("Загрузка OHLCV завершена, получено %s баров", bars_loaded)
+                close_ts = open_ts + timeframe_ms
+                bar = _bar_from_ohlcv(
+                    exchange=request.exchange,
+                    symbol=request.symbol,
+                    timeframe=request.timeframe,
+                    open_ts=open_ts,
+                    close_ts=close_ts,
+                    ohlcv=candle,
+                    metrics_helper=metrics_helper,
+                )
+                for resolved in direction_resolver.process(bar):
+                    bars_loaded += 1
+                    yield resolved
+
+            last_ts = int(batch[-1][0])
+            cursor = last_ts + timeframe_ms
+            if should_stop or cursor >= end_ts:
+                break
+        for remaining in direction_resolver.flush():
+            bars_loaded += 1
+            yield remaining
 
 
 class WsLiveDataStream(LiveDataStream):
