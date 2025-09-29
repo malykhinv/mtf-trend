@@ -272,15 +272,16 @@ class WorkbookDiaryBackend(DiaryBackend):
                     workbook.save(path)
             finally:
                 workbook.close()
-
-        workbook = Workbook()
-        try:
-            sheet = workbook.active
-            sheet.title = sheet_name
-            sheet.append(headers)
-            workbook.save(path)
-        finally:
-            workbook.close()
+            return
+        else:
+            workbook = Workbook()
+            try:
+                sheet = workbook.active
+                sheet.title = sheet_name
+                sheet.append(headers)
+                workbook.save(path)
+            finally:
+                workbook.close()
 
     @staticmethod
     def _needs_header(sheet) -> bool:  # type: ignore[no-any-unimported]
