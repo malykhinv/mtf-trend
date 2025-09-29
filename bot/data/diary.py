@@ -301,7 +301,12 @@ class WorkbookDiaryBackend(DiaryBackend):
             sheet = workbook.active
             for row in rows:
                 next_row = sheet.max_row + 1
-                sheet.append(mapper(row, next_row))
+                values = mapper(row, next_row)
+                sheet.append(values)
+                appended_row = sheet[next_row]
+                for value, cell in zip(values, appended_row):
+                    if isinstance(value, float):
+                        cell.number_format = "0.00"
             workbook.save(path)
         finally:
             workbook.close()
