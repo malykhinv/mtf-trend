@@ -244,8 +244,16 @@ class LiveDataStream:
 class CcxtMarketDataLoader(MarketDataLoader):
     """Historical market data loader that relies on synchronous ccxt clients."""
 
-    def __init__(self, *, logger=None) -> None:
+    def __init__(
+        self,
+        *,
+        logger=None,
+        retry_attempts: int = 5,
+        retry_delay_sec: float = 1.0,
+    ) -> None:
         self._logger = logger or get_logger(__name__)
+        self._retry_attempts = max(1, retry_attempts)
+        self._retry_delay_sec = max(0.0, retry_delay_sec)
         self._clients: dict[Exchange, object] = {
             Exchange.BINANCE: ccxt.binanceusdm({"enableRateLimit": True}),
             Exchange.BYBIT: ccxt.bybit(
@@ -259,6 +267,55 @@ class CcxtMarketDataLoader(MarketDataLoader):
                 }
             ),
         }
+
+    def _fetch_ohlcv_with_retry(
+        self,
+        client: object,
+        *,
+        symbol: str,
+        timeframe: str,
+        since: int,
+        limit: int,
+    ) -> list[list[Any]]:
+        attempt = 0
+        delay = self._retry_delay_sec
+        network_errors = (
+            ccxt.NetworkError,
+            ccxt.RequestTimeout,
+            ccxt.ExchangeNotAvailable,
+            ccxt.DDoSProtection,
+        )
+        while True:
+            try:
+                return client.fetch_ohlcv(  # type: ignore[attr-defined]
+                    symbol,
+                    timeframe=timeframe,
+                    since=since,
+                    limit=limit,
+                )
+            except network_errors as exc:  # type: ignore[misc]
+                attempt += 1
+                if attempt >= self._retry_attempts:
+                    self._logger.error(
+                        "Не удалось получить OHLCV %s %s после %s попыток: %s",
+                        symbol,
+                        timeframe,
+                        self._retry_attempts,
+                        exc,
+                    )
+                    raise
+                self._logger.warning(
+                    "Ошибка сети при получении OHLCV %s %s (попытка %s/%s): %s. "
+                    "Повтор через %.2f с",
+                    symbol,
+                    timeframe,
+                    attempt,
+                    self._retry_attempts,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+                delay = max(delay * 2, self._retry_delay_sec)
 
     def load(self, request: HistoricalRequest) -> Iterable[Bar]:
         client = self._clients.get(request.exchange)
@@ -298,12 +355,22 @@ class CcxtMarketDataLoader(MarketDataLoader):
         should_stop = False
         try:
             while True:
-                batch = client.fetch_ohlcv(  # type: ignore[attr-defined]
-                    request.symbol,
-                    timeframe=timeframe,
-                    since=cursor,
-                    limit=limit,
-                )
+                try:
+                    batch = self._fetch_ohlcv_with_retry(
+                        client,
+                        symbol=request.symbol,
+                        timeframe=timeframe,
+                        since=cursor,
+                        limit=limit,
+                    )
+                except Exception:
+                    self._logger.exception(
+                        "Загрузка OHLCV %s %s не удалась после %s попыток",
+                        request.symbol,
+                        timeframe,
+                        self._retry_attempts,
+                    )
+                    raise
                 if not batch:
                     break
 
