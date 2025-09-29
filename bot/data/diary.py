@@ -230,6 +230,36 @@ class WorkbookDiaryBackend(DiaryBackend):
         "low",
         "close",
         "volume",
+        "long_filters_pass",
+        "short_filters_pass",
+        "long_filter_green_move_pass",
+        "long_filter_volume_spike_pass",
+        "long_filter_anomaly_relative_volume_pass",
+        "long_filter_relative_volume_min_pass",
+        "long_filter_relative_volume_max_pass",
+        "long_filter_anomaly_atr_pass",
+        "long_filter_atr_pass",
+        "long_filter_pct_move_min_pass",
+        "long_filter_pct_move_max_pass",
+        "long_filter_upper_wick_pass",
+        "long_filter_lower_wick_pass",
+        "long_filter_rr_pass",
+        "short_filter_green_move_pass",
+        "short_filter_volume_spike_pass",
+        "short_filter_anomaly_relative_volume_pass",
+        "short_filter_relative_volume_pass",
+        "short_filter_anomaly_atr_pass",
+        "short_filter_atr_pass",
+        "short_filter_pct_move_pass",
+        "short_filter_upper_wick_pass",
+        "short_filter_lower_wick_pass",
+        "short_filter_rr_pass",
+        "long_rr",
+        "short_rr",
+        "long_pnl_pct",
+        "short_pnl_pct",
+        "long_equity_pct",
+        "short_equity_pct",
         "metrics_pct_move",
         "metrics_relative_volume",
         "metrics_atr_mult",
@@ -243,14 +273,6 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_volume_spike",
         "thresholds_min_relative_volume",
         "thresholds_min_atr_mult",
-        "long_rr",
-        "short_rr",
-        "long_filters_pass",
-        "short_filters_pass",
-        "long_pnl_pct",
-        "short_pnl_pct",
-        "long_equity_pct",
-        "short_equity_pct",
     ]
 
     def __init__(self, base_path: Path) -> None:
@@ -409,41 +431,89 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds = row.thresholds
         threshold_cells = self._ANOMALY_THRESHOLD_CELL_MAP
         long_rr_formula = (
-            f"=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}), \"\")"
+            f"=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}), "")"
         )
         short_rr_formula = (
-            f"=IFERROR((I{row_index}-H{row_index})/(G{row_index}-I{row_index}), \"\")"
+            f"=IFERROR((I{row_index}-H{row_index})/(G{row_index}-I{row_index}), "")"
         )
-        long_filter_formula = (
+        long_filter_green_move_formula = (
+            f"=IF($AO{row_index}>={threshold_cells['thresholds_min_green_move_pct']};TRUE;FALSE)"
+        )
+        long_filter_volume_spike_formula = (
+            f"=IF($AP{row_index}>={threshold_cells['thresholds_min_volume_spike']};TRUE;FALSE)"
+        )
+        long_filter_anomaly_relative_volume_formula = (
+            f"=IF($AP{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']};TRUE;FALSE)"
+        )
+        long_filter_relative_volume_min_formula = (
+            f"=IF($AP{row_index}>={threshold_cells['thresholds_min_relative_volume']};TRUE;FALSE)"
+        )
+        long_filter_relative_volume_max_formula = (
+            f"=IF($AP{row_index}<={threshold_cells['thresholds_max_relative_volume']};TRUE;FALSE)"
+        )
+        long_filter_anomaly_atr_formula = (
+            f"=IF($AQ{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']};TRUE;FALSE)"
+        )
+        long_filter_atr_formula = (
+            f"=IF($AQ{row_index}>{threshold_cells['thresholds_min_atr_mult']};TRUE;FALSE)"
+        )
+        long_filter_pct_move_min_formula = (
+            f"=IF($AO{row_index}>={threshold_cells['thresholds_min_pct_move']};TRUE;FALSE)"
+        )
+        long_filter_pct_move_max_formula = (
+            f"=IF($AO{row_index}<={threshold_cells['thresholds_max_pct_move']};TRUE;FALSE)"
+        )
+        long_filter_upper_wick_formula = (
+            f"=IF($AR{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']};TRUE;FALSE)"
+        )
+        long_filter_lower_wick_formula = (
+            f"=IF($AT{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']};TRUE;FALSE)"
+        )
+        long_filter_rr_formula = (
+            f"=IF($AI{row_index}>{threshold_cells['thresholds_min_rr']};TRUE;FALSE)"
+        )
+        short_filter_green_move_formula = (
+            f"=IF($AO{row_index}>={threshold_cells['thresholds_min_green_move_pct']};TRUE;FALSE)"
+        )
+        short_filter_volume_spike_formula = (
+            f"=IF($AP{row_index}>={threshold_cells['thresholds_min_volume_spike']};TRUE;FALSE)"
+        )
+        short_filter_anomaly_relative_volume_formula = (
+            f"=IF($AP{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']};TRUE;FALSE)"
+        )
+        short_filter_relative_volume_formula = (
+            f"=IF(OR($AP{row_index}<{threshold_cells['thresholds_min_relative_volume']};"
+            f"$AP{row_index}>{threshold_cells['thresholds_max_relative_volume']});TRUE;FALSE)"
+        )
+        short_filter_anomaly_atr_formula = (
+            f"=IF($AQ{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']};TRUE;FALSE)"
+        )
+        short_filter_atr_formula = (
+            f"=IF($AQ{row_index}<{threshold_cells['thresholds_min_atr_mult']};TRUE;FALSE)"
+        )
+        short_filter_pct_move_formula = (
+            f"=IF(OR($AO{row_index}>{threshold_cells['thresholds_max_pct_move']};"
+            f"$AO{row_index}<{threshold_cells['thresholds_min_pct_move']});TRUE;FALSE)"
+        )
+        short_filter_upper_wick_formula = (
+            f"=IF($AR{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']};TRUE;FALSE)"
+        )
+        short_filter_lower_wick_formula = (
+            f"=IF($AT{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']};TRUE;FALSE)"
+        )
+        short_filter_rr_formula = (
+            f"=IF($AJ{row_index}>={threshold_cells['thresholds_min_rr']};TRUE;FALSE)"
+        )
+        long_filters_pass_formula = (
             f"=AND("
-            f"K{row_index}>={threshold_cells['thresholds_min_green_move_pct']};"
-            f"L{row_index}>={threshold_cells['thresholds_min_volume_spike']};"
-            f"L{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']};"
-            f"L{row_index}>={threshold_cells['thresholds_min_relative_volume']};"
-            f"L{row_index}<={threshold_cells['thresholds_max_relative_volume']};"
-            f"M{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']};"
-            f"M{row_index}>{threshold_cells['thresholds_min_atr_mult']};"
-            f"K{row_index}>={threshold_cells['thresholds_min_pct_move']};"
-            f"K{row_index}<={threshold_cells['thresholds_max_pct_move']};"
-            f"N{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']};"
-            f"P{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']};"
-            f"X{row_index}>{threshold_cells['thresholds_min_rr']}"
+            f"M{row_index};N{row_index};O{row_index};P{row_index};Q{row_index};R{row_index};"
+            f"S{row_index};T{row_index};U{row_index};V{row_index};W{row_index};X{row_index}"
             f")"
         )
-        short_filter_formula = (
+        short_filters_pass_formula = (
             f"=AND("
-            f"K{row_index}>={threshold_cells['thresholds_min_green_move_pct']};"
-            f"L{row_index}>={threshold_cells['thresholds_min_volume_spike']};"
-            f"L{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']};"
-            f"OR(L{row_index}<{threshold_cells['thresholds_min_relative_volume']},"
-            f"L{row_index}>{threshold_cells['thresholds_max_relative_volume']});"
-            f"M{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']};"
-            f"M{row_index}<{threshold_cells['thresholds_min_atr_mult']};"
-            f"OR(K{row_index}>{threshold_cells['thresholds_max_pct_move']};"
-            f"K{row_index}<{threshold_cells['thresholds_min_pct_move']});"
-            f"N{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']};"
-            f"P{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']};"
-            f"Y{row_index}>={threshold_cells['thresholds_min_rr']}"
+            f"Y{row_index};Z{row_index};AA{row_index};AB{row_index};AC{row_index};AD{row_index};"
+            f"AE{row_index};AF{row_index};AG{row_index};AH{row_index}"
             f")"
         )
         thresholds_min_green_formula = f"={threshold_cells['thresholds_min_green_move_pct']}"
@@ -451,28 +521,28 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_anomaly_relative_volume']}"
         thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_anomaly_atr_mult']}"
         long_pnl_formula = (
-            f"=IF($I{row_index}=0,\"\","
-            f"IF($S{row_index}=\"HIGH_FIRST\","
+            f"=IF($I{row_index}=0,\"\",\""
+            f"IF($AW{row_index}=\"HIGH_FIRST\","
             f"(G{row_index}-I{row_index})/I{row_index}*100,"
-            f"IF(OR($S{row_index}=\"LOW_FIRST\",$S{row_index}=\"BOTH\"),"
+            f"IF(OR($AW{row_index}=\"LOW_FIRST\",$AW{row_index}=\"BOTH\"),"
             f"(H{row_index}-I{row_index})/I{row_index}*100,0)))"
         )
         short_pnl_formula = (
-            f"=IF($I{row_index}=0,\"\","
-            f"IF($S{row_index}=\"LOW_FIRST\","
+            f"=IF($I{row_index}=0,\"\",\""
+            f"IF($AW{row_index}=\"LOW_FIRST\","
             f"(I{row_index}-H{row_index})/I{row_index}*100,"
-            f"IF(OR($S{row_index}=\"HIGH_FIRST\",$S{row_index}=\"BOTH\"),"
+            f"IF(OR($AW{row_index}=\"HIGH_FIRST\",$AW{row_index}=\"BOTH\"),"
             f"(I{row_index}-G{row_index})/I{row_index}*100,0)))"
         )
         long_equity_formula = (
-            f"=IF(ISNUMBER(AD{row_index-1});"
-            f"IF($Z{row_index};AD{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AB{row_index}/100);AD{row_index-1});"
-            f"IF($Z{row_index};{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AB{row_index}/100);{threshold_cells['thresholds_initial_deposit']}))"
+            f"=IF(ISNUMBER(AM{row_index-1});"
+            f"IF($K{row_index};AM{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AK{row_index}/100);AM{row_index-1});"
+            f"IF($K{row_index};{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AK{row_index}/100);{threshold_cells['thresholds_initial_deposit']}))"
         )
         short_equity_formula = (
-            f"=IF(ISNUMBER(AE{row_index-1});"
-            f"IF($AA{row_index};AE{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AC{row_index}/100);AE{row_index-1});"
-            f"IF($AA{row_index};{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AC{row_index}/100);{threshold_cells['thresholds_initial_deposit']}))"
+            f"=IF(ISNUMBER(AN{row_index-1});"
+            f"IF($L{row_index};AN{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AL{row_index}/100);AN{row_index-1});"
+            f"IF($L{row_index};{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AL{row_index}/100);{threshold_cells['thresholds_initial_deposit']}))"
         )
         return [
             self._format_dt(row.timestamp),
@@ -485,6 +555,36 @@ class WorkbookDiaryBackend(DiaryBackend):
             row.low,
             row.close,
             row.volume,
+            long_filters_pass_formula,
+            short_filters_pass_formula,
+            long_filter_green_move_formula,
+            long_filter_volume_spike_formula,
+            long_filter_anomaly_relative_volume_formula,
+            long_filter_relative_volume_min_formula,
+            long_filter_relative_volume_max_formula,
+            long_filter_anomaly_atr_formula,
+            long_filter_atr_formula,
+            long_filter_pct_move_min_formula,
+            long_filter_pct_move_max_formula,
+            long_filter_upper_wick_formula,
+            long_filter_lower_wick_formula,
+            long_filter_rr_formula,
+            short_filter_green_move_formula,
+            short_filter_volume_spike_formula,
+            short_filter_anomaly_relative_volume_formula,
+            short_filter_relative_volume_formula,
+            short_filter_anomaly_atr_formula,
+            short_filter_atr_formula,
+            short_filter_pct_move_formula,
+            short_filter_upper_wick_formula,
+            short_filter_lower_wick_formula,
+            short_filter_rr_formula,
+            long_rr_formula,
+            short_rr_formula,
+            long_pnl_formula,
+            short_pnl_formula,
+            long_equity_formula,
+            short_equity_formula,
             metrics.pct_move,
             metrics.relative_volume,
             metrics.atr_mult,
@@ -498,16 +598,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds_min_volume_formula,
             thresholds_min_relative_formula,
             thresholds_min_atr_formula,
-            long_rr_formula,
-            short_rr_formula,
-            long_filter_formula,
-            short_filter_formula,
-            long_pnl_formula,
-            short_pnl_formula,
-            long_equity_formula,
-            short_equity_formula,
         ]
-
     @staticmethod
     def _set_named_range(workbook: Workbook, *, name: str, sheet_title: str, column_letter: str, row: int) -> None:
         """Ensure a workbook defined name points at the requested cell."""
