@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from threading import Lock
-from typing import Iterable, Optional, Protocol
+from typing import Callable, Iterable, Optional, Protocol
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
@@ -214,6 +214,14 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_volume_spike",
         "thresholds_min_relative_volume",
         "thresholds_min_atr_mult",
+        "long_rr",
+        "short_rr",
+        "long_filters_pass",
+        "short_filters_pass",
+        "long_pnl_pct",
+        "short_pnl_pct",
+        "long_equity_pct",
+        "short_equity_pct",
     ]
 
     def __init__(self, base_path: Path) -> None:
@@ -283,12 +291,15 @@ class WorkbookDiaryBackend(DiaryBackend):
         return all(cell.value is None for cell in first_row)
 
     @staticmethod
-    def _append(path: Path, rows: Iterable[Row], mapper) -> None:
+    def _append(
+        path: Path, rows: Iterable[Row], mapper: Callable[[Row, int], list[object]]
+    ) -> None:
         workbook = load_workbook(path)
         try:
             sheet = workbook.active
             for row in rows:
-                sheet.append(mapper(row))
+                next_row = sheet.max_row + 1
+                sheet.append(mapper(row, next_row))
             workbook.save(path)
         finally:
             workbook.close()
@@ -299,7 +310,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             return None
         return value.isoformat()
 
-    def _signal_values(self, row: SignalRow) -> list[object]:
+    def _signal_values(self, row: SignalRow, row_index: int) -> list[object]:
         metrics = row.metrics
         thresholds = row.thresholds
         return [
@@ -321,7 +332,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             metrics.lower_wick_pct,
             metrics.pct_to_low_break,
             metrics.pct_to_high_break,
-            metrics.break_direction.value,
+            metrics.break_direction.name,
             thresholds.min_green_move_pct,
             thresholds.min_volume_spike,
             thresholds.min_relative_volume,
@@ -333,7 +344,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds.max_lower_wick_pct,
         ]
 
-    def _trade_values(self, row: TradeRow) -> list[object]:
+    def _trade_values(self, row: TradeRow, row_index: int) -> list[object]:
         return [
             row.trade_id,
             row.source_signal_id,
@@ -358,9 +369,64 @@ class WorkbookDiaryBackend(DiaryBackend):
             row.close_order_id,
         ]
 
-    def _anomaly_values(self, row: AnomalyRow) -> list[object]:
+    def _anomaly_values(self, row: AnomalyRow, row_index: int) -> list[object]:
         metrics = row.metrics
         thresholds = row.thresholds
+        threshold_cells = self._ANOMALY_THRESHOLD_CELL_MAP
+        long_rr_formula = (
+            f"=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}), \"\")"
+        )
+        short_rr_formula = (
+            f"=IFERROR((I{row_index}-H{row_index})/(G{row_index}-I{row_index}), \"\")"
+        )
+        long_filter_formula = (
+            f"=AND("
+            f"L{row_index}>={threshold_cells['min_relative_volume']},"
+            f"L{row_index}<={threshold_cells['max_relative_volume']},"
+            f"M{row_index}>{threshold_cells['min_atr_mult']},"
+            f"K{row_index}>={threshold_cells['min_pct_move']},"
+            f"K{row_index}<={threshold_cells['max_pct_move']},"
+            f"N{row_index}<{threshold_cells['max_upper_wick_pct']},"
+            f"P{row_index}<{threshold_cells['max_lower_wick_pct']},"
+            f"X{row_index}>={threshold_cells['min_rr']}"
+            f")"
+        )
+        short_filter_formula = (
+            f"=AND("
+            f"OR(L{row_index}<{threshold_cells['min_relative_volume']},"
+            f"L{row_index}>{threshold_cells['max_relative_volume']}),"
+            f"M{row_index}<{threshold_cells['min_atr_mult']},"
+            f"OR(K{row_index}>{threshold_cells['max_pct_move']},"
+            f"K{row_index}<{threshold_cells['min_pct_move']}),"
+            f"N{row_index}<{threshold_cells['max_upper_wick_pct']},"
+            f"P{row_index}<{threshold_cells['max_lower_wick_pct']},"
+            f"Y{row_index}>={threshold_cells['min_rr']}"
+            f")"
+        )
+        long_pnl_formula = (
+            f"=IF($I{row_index}=0,\"\",SWITCH($S{row_index},"
+            f"\"HIGH_FIRST\",(G{row_index}-I{row_index})/I{row_index}*100,"
+            f"\"LOW_FIRST\",(H{row_index}-I{row_index})/I{row_index}*100,"
+            f"\"BOTH\",(H{row_index}-I{row_index})/I{row_index}*100,"
+            f"\"NONE\",0,0))"
+        )
+        short_pnl_formula = (
+            f"=IF($I{row_index}=0,\"\",SWITCH($S{row_index},"
+            f"\"LOW_FIRST\",(I{row_index}-H{row_index})/I{row_index}*100,"
+            f"\"HIGH_FIRST\",(I{row_index}-G{row_index})/I{row_index}*100,"
+            f"\"BOTH\",(I{row_index}-G{row_index})/I{row_index}*100,"
+            f"\"NONE\",0,0))"
+        )
+        long_equity_formula = (
+            f"=IF(ISNUMBER(AD{row_index-1}),"
+            f"IF($Z{row_index},AD{row_index-1}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100),AD{row_index-1}),"
+            f"IF($Z{row_index},{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AB{row_index}/100),{threshold_cells['initial_deposit']}))"
+        )
+        short_equity_formula = (
+            f"=IF(ISNUMBER(AE{row_index-1}),"
+            f"IF($AA{row_index},AE{row_index-1}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100),AE{row_index-1}),"
+            f"IF($AA{row_index},{threshold_cells['initial_deposit']}*(1+{threshold_cells['position_fraction']}*AC{row_index}/100),{threshold_cells['initial_deposit']}))"
+        )
         return [
             self._format_dt(row.timestamp),
             row.exchange.value,
@@ -380,11 +446,19 @@ class WorkbookDiaryBackend(DiaryBackend):
             metrics.lower_wick_pct,
             metrics.pct_to_low_break,
             metrics.pct_to_high_break,
-            metrics.break_direction.value,
+            metrics.break_direction.name,
             thresholds.min_green_move_pct,
             thresholds.min_volume_spike,
             thresholds.min_relative_volume,
             thresholds.min_atr_mult,
+            long_rr_formula,
+            short_rr_formula,
+            long_filter_formula,
+            short_filter_formula,
+            long_pnl_formula,
+            short_pnl_formula,
+            long_equity_formula,
+            short_equity_formula,
         ]
 
     @staticmethod
