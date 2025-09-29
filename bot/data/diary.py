@@ -9,6 +9,7 @@ from typing import Callable, Iterable, Optional, Protocol
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
+from openpyxl.utils.cell import get_column_letter
 
 from bot.domain.models.anomaly import Anomaly, AnomalyThresholdSnapshot
 from bot.domain.models.bar import BarMetrics
@@ -502,6 +503,37 @@ class WorkbookDiaryBackend(DiaryBackend):
                 column_letter=value_cell.column_letter,
                 row=value_cell.row,
             )
+
+        summary_row_start = len(self._ANOMALY_THRESHOLD_LAYOUT) + 2
+        long_equity_column_letter = get_column_letter(
+            self._ANOMALIES_HEADERS.index("long_equity_pct") + 1
+        )
+        short_equity_column_letter = get_column_letter(
+            self._ANOMALIES_HEADERS.index("short_equity_pct") + 1
+        )
+
+        # The summary formulas below depend on the columns used in the ``Anomalies``
+        # sheet. We specifically read ``long_equity_pct`` and ``short_equity_pct``
+        # columns, so changes to ``_ANOMALIES_HEADERS`` that move these fields must
+        # also update the calculated column letters above.
+        for offset, (label, column_letter) in enumerate(
+            (
+                ("Итог лонг (сложный процент)", long_equity_column_letter),
+                ("Итог шорт (сложный процент)", short_equity_column_letter),
+            ),
+            start=0,
+        ):
+            row_index = summary_row_start + offset
+            label_cell = sheet.cell(row=row_index, column=1)
+            value_cell = sheet.cell(row=row_index, column=2)
+
+            if label_cell.value is None:
+                label_cell.value = label
+            if value_cell.value is None:
+                value_cell.value = (
+                    f"=IFERROR(LOOKUP(2,1/(Anomalies!${column_letter}:${column_letter}<>""),"
+                    f"Anomalies!${column_letter}:${column_letter}),Thresholds!$B$11)"
+                )
 
 
 @dataclass(slots=True)
