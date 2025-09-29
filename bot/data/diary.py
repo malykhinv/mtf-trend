@@ -433,10 +433,10 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds = row.thresholds
         threshold_cells = self._ANOMALY_THRESHOLD_CELL_MAP
         long_rr_formula = (
-            f"=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}), "")"
+            f'=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index});"")'
         )
         short_rr_formula = (
-            f"=IFERROR((I{row_index}-H{row_index})/(G{row_index}-I{row_index}), "")"
+            f'=IFERROR((I{row_index}-H{row_index})/(G{row_index}-I{row_index});"")'
         )
         long_filter_green_move_formula = (
             f"=IF($AQ{row_index}>={threshold_cells['thresholds_min_green_move_pct']};TRUE;FALSE)"
@@ -521,18 +521,18 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_anomaly_relative_volume']}"
         thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_anomaly_atr_mult']}"
         long_pnl_formula = (
-            f"=IF($M{row_index},"
-            f"IF($I{row_index}=0,\"\","
-            f"IF($AY{row_index}=\"HIGH_FIRST\",(G{row_index}-I{row_index})/I{row_index}*100,"
-            f"IF(OR($AY{row_index}=\"LOW_FIRST\",$AY{row_index}=\"BOTH\"),(H{row_index}-I{row_index})/I{row_index}*100,0))),"
-            f"\"\")"
+            f'=IF($M{row_index};'
+            f'IF($I{row_index}=0;"";'
+            f'IF($AY{row_index}="HIGH_FIRST";(G{row_index}-I{row_index})/I{row_index}*100;'
+            f'IF(OR($AY{row_index}="LOW_FIRST";$AY{row_index}="BOTH");(H{row_index}-I{row_index})/I{row_index}*100;0)));'
+            f'"")'
         )
         short_pnl_formula = (
-            f"=IF($N{row_index},"
-            f"IF($I{row_index}=0,\"\","
-            f"IF($AY{row_index}=\"LOW_FIRST\",(I{row_index}-H{row_index})/I{row_index}*100,"
-            f"IF(OR($AY{row_index}=\"HIGH_FIRST\",$AY{row_index}=\"BOTH\"),(I{row_index}-G{row_index})/I{row_index}*100,0))),"
-            f"\"\")"
+            f'=IF($N{row_index};'
+            f'IF($I{row_index}=0;"";'
+            f'IF($AY{row_index}="LOW_FIRST";(I{row_index}-H{row_index})/I{row_index}*100;'
+            f'IF(OR($AY{row_index}="HIGH_FIRST";$AY{row_index}="BOTH");(I{row_index}-G{row_index})/I{row_index}*100;0)));'
+            f'"")'
         )
         long_equity_formula = (
             f"=IF(ISNUMBER(AO{row_index-1});"
