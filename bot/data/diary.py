@@ -130,9 +130,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         ),
     ]
 
-    # Mapping is used by formulas in the ``Anomalies`` sheet.
+    # Mapping is used by formulas in the ``anomalies`` sheet.
     _ANOMALY_THRESHOLD_CELL_MAP = {
-        name: "'Thresholds'.$B$%d" % row_index
+        name: "thresholds.$B$%d" % row_index
         for row_index, (_, name, _) in enumerate(_ANOMALY_THRESHOLD_LAYOUT, start=2)
     }
 
@@ -233,9 +233,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         self._trades_path = self._base_path / "trades.xlsx"
         self._anomalies_path = self._base_path / "anomalies.xlsx"
 
-        self._ensure_workbook(self._signals_path, self._SIGNALS_HEADERS, sheet_name="Signals")
-        self._ensure_workbook(self._trades_path, self._TRADES_HEADERS, sheet_name="Trades")
-        self._ensure_workbook(self._anomalies_path, self._ANOMALIES_HEADERS, sheet_name="Anomalies")
+        self._ensure_workbook(self._signals_path, self._SIGNALS_HEADERS, sheet_name="signals")
+        self._ensure_workbook(self._trades_path, self._TRADES_HEADERS, sheet_name="trades")
+        self._ensure_workbook(self._anomalies_path, self._ANOMALIES_HEADERS, sheet_name="anomalies")
         workbook = load_workbook(self._anomalies_path)
         try:
             self._ensure_anomaly_threshold_sheet(workbook)
@@ -395,12 +395,12 @@ class WorkbookDiaryBackend(DiaryBackend):
             f"K{row_index}<={threshold_cells['max_pct_move']};"
             f"N{row_index}<{threshold_cells['max_upper_wick_pct']};"
             f"P{row_index}<{threshold_cells['max_lower_wick_pct']};"
-            f"X{row_index}>={threshold_cells['min_rr']}"
+            f"X{row_index}>{threshold_cells['min_rr']}"
             f")"
         )
         short_filter_formula = (
             f"=AND("
-            f"OR(L{row_index}<{threshold_cells['min_relative_volume']};"
+            f"OR(L{row_index}<{threshold_cells['min_relative_volume']},"
             f"L{row_index}>{threshold_cells['max_relative_volume']});"
             f"M{row_index}<{threshold_cells['min_atr_mult']};"
             f"OR(K{row_index}>{threshold_cells['max_pct_move']};"
@@ -472,18 +472,18 @@ class WorkbookDiaryBackend(DiaryBackend):
     def _set_named_range(workbook: Workbook, *, name: str, sheet_title: str, column_letter: str, row: int) -> None:
         """Ensure a workbook defined name points at the requested cell."""
 
-        attr_text = f"'{sheet_title}'!${column_letter}${row}"
+        attr_text = f"{sheet_title}.${column_letter.upper()}${row}"
         if name in workbook.defined_names:
-            workbook.defined_names.delete(name)
-        workbook.defined_names.append(DefinedName(name=name, attr_text=attr_text))
+            del workbook.defined_names[name]
+        workbook.defined_names[name] = DefinedName(name=name, attr_text=attr_text)
 
     def _ensure_anomaly_threshold_sheet(self, workbook: Workbook) -> None:
         """Create the ``Thresholds`` sheet with default values when missing."""
 
         if "Thresholds" in workbook.sheetnames:
-            sheet = workbook["Thresholds"]
+            sheet = workbook["thresholds"]
         else:
-            sheet = workbook.create_sheet("Thresholds")
+            sheet = workbook.create_sheet("thresholds")
 
         # Header row for readability.
         if sheet["A1"].value is None:
@@ -518,14 +518,14 @@ class WorkbookDiaryBackend(DiaryBackend):
             self._ANOMALIES_HEADERS.index("short_equity_pct") + 1
         )
 
-        # The summary formulas below depend on the columns used in the ``Anomalies``
+        # The summary formulas below depend on the columns used in the ``anomalies``
         # sheet. We specifically read ``long_equity_pct`` and ``short_equity_pct``
         # columns, so changes to ``_ANOMALIES_HEADERS`` that move these fields must
         # also update the calculated column letters above.
         for offset, (label, column_letter) in enumerate(
             (
-                ("Итог лонг (сложный процент)", long_equity_column_letter),
-                ("Итог шорт (сложный процент)", short_equity_column_letter),
+                ("Итог лонг", long_equity_column_letter),
+                ("Итог шорт", short_equity_column_letter),
             ),
             start=0,
         ):
@@ -536,7 +536,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             if label_cell.value is None:
                 label_cell.value = label
             if value_cell.value is None:
-                column_range = f"'Anomalies'!${column_letter}$2:${column_letter}$999"
+                column_range = f"anomalies.${column_letter.upper()}$2:${column_letter.upper()}$999"
                 value_cell.value = f"=AVERAGE({column_range})"
 
 
