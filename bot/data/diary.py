@@ -736,7 +736,9 @@ class WorkbookDiaryBackend(DiaryBackend):
             if label_cell.value is None:
                 label_cell.value = label
             if value_cell.value is None:
-                column_range = f"anomalies!${column_letter.upper()}$2:${column_letter.upper()}$999"
+                column_range = (
+                    f"anomalies!${column_letter.upper()}$2:${column_letter.upper()}$1048576"
+                )
                 value_cell.value = f"=AVERAGE({column_range})"
 
 

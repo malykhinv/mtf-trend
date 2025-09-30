@@ -24,7 +24,11 @@ def _install_openpyxl_stub() -> None:
     cell_module = types.ModuleType("openpyxl.utils.cell")
 
     def get_column_letter(index: int) -> str:  # pragma: no cover - stub not used in tests
-        return chr(ord("A") + index - 1)
+        letters = []
+        while index:
+            index, remainder = divmod(index - 1, 26)
+            letters.append(chr(ord("A") + remainder))
+        return "".join(reversed(letters))
 
     cell_module.get_column_letter = get_column_letter
     utils_module.cell = cell_module
@@ -130,3 +134,95 @@ def test_anomaly_threshold_columns_reference_expected_cells(tmp_path: Path) -> N
             assert (
                 header_to_value[header] == f"={cell}"
             ), f"Header {header} should reference {cell}"
+
+
+class _DummyCell:
+    def __init__(self, row: int, column: int) -> None:
+        self.row = row
+        self._column = column
+        self.value = None
+
+    @property
+    def column_letter(self) -> str:
+        column = self._column
+        letters = []
+        while column:
+            column, remainder = divmod(column - 1, 26)
+            letters.append(chr(ord("A") + remainder))
+        return "".join(reversed(letters))
+
+
+class _DummySheet:
+    def __init__(self, title: str) -> None:
+        self.title = title
+        self._cells: dict[tuple[int, int], _DummyCell] = {}
+
+    def _column_index_from_letter(self, letters: str) -> int:
+        index = 0
+        for letter in letters.upper():
+            index = index * 26 + (ord(letter) - ord("A") + 1)
+        return index
+
+    def cell(self, row: int, column: int) -> _DummyCell:
+        key = (row, column)
+        if key not in self._cells:
+            self._cells[key] = _DummyCell(row, column)
+        return self._cells[key]
+
+    def __getitem__(self, key: str) -> _DummyCell:
+        letters = "".join(filter(str.isalpha, key))
+        numbers = "".join(filter(str.isdigit, key))
+        return self.cell(row=int(numbers), column=self._column_index_from_letter(letters))
+
+
+class _DummyWorkbook:
+    def __init__(self) -> None:
+        self._sheets: dict[str, _DummySheet] = {}
+        self.defined_names: dict[str, object] = {}
+
+    @property
+    def sheetnames(self) -> list[str]:
+        return list(self._sheets.keys())
+
+    def __getitem__(self, key: str) -> _DummySheet:
+        return self._sheets[key]
+
+    def create_sheet(self, title: str) -> _DummySheet:
+        sheet = _DummySheet(title)
+        self._sheets[title] = sheet
+        return sheet
+
+
+def _column_letter_from_index(index: int) -> str:
+    letters = []
+    while index:
+        index, remainder = divmod(index - 1, 26)
+        letters.append(chr(ord("A") + remainder))
+    return "".join(reversed(letters))
+
+
+def test_anomaly_threshold_summary_formulas_cover_full_column() -> None:
+    backend = DummyWorkbookDiaryBackend()
+    workbook = _DummyWorkbook()
+
+    backend._ensure_anomaly_threshold_sheet(workbook)
+
+    sheet = workbook[backend._ANOMALY_THRESHOLD_SHEET_NAME]
+    summary_row_start = len(backend._ANOMALY_THRESHOLD_LAYOUT) + 2
+
+    long_column_letter = _column_letter_from_index(
+        backend._ANOMALIES_HEADERS.index("long_equity_pct") + 1
+    )
+    short_column_letter = _column_letter_from_index(
+        backend._ANOMALIES_HEADERS.index("short_equity_pct") + 1
+    )
+
+    long_value_cell = sheet.cell(row=summary_row_start, column=2)
+    short_value_cell = sheet.cell(row=summary_row_start + 1, column=2)
+
+    assert long_value_cell.value == (
+        f"=AVERAGE(anomalies!${long_column_letter}$2:${long_column_letter}$1048576)"
+    )
+    assert short_value_cell.value == (
+        f"=AVERAGE(anomalies!${short_column_letter}$2:${short_column_letter}$1048576)"
+    )
