@@ -93,7 +93,13 @@ class Orchestrator:
 
     def stop(self) -> None:
         self._logger.info("Останавливаем оркестратор и поток данных")
-        self._deps.live_stream.close()
+        try:
+            self._deps.live_stream.close()
+        finally:
+            try:
+                self._deps.diary.flush()
+            finally:
+                self._deps.diary.close()
 
     def backfill(self, request) -> None:  # type: ignore[no-untyped-def]
         self._logger.info(
@@ -104,68 +110,76 @@ class Orchestrator:
             request.start,
             request.end,
         )
-        simulated_trades: dict[str, SimulatedTrade] = {}
-        cooldown_registry: dict[str, datetime] = {}
-        last_bar: Bar | None = None
-        bars_processed = 0
-        signals_found = 0
-        trades_closed = 0
-        anomalies_found = 0
-        for bar in self._deps.market_loader.load(request):
-            last_bar = bar
-            bars_processed += 1
-            closed = self._update_simulated_trades(simulated_trades, bar)
-            if closed:
-                self._deps.diary.append_trades(closed)
-                trades_closed += len(closed)
+        try:
+            simulated_trades: dict[str, SimulatedTrade] = {}
+            cooldown_registry: dict[str, datetime] = {}
+            last_bar: Bar | None = None
+            bars_processed = 0
+            signals_found = 0
+            trades_closed = 0
+            anomalies_found = 0
+            for bar in self._deps.market_loader.load(request):
+                last_bar = bar
+                bars_processed += 1
+                closed = self._update_simulated_trades(simulated_trades, bar)
+                if closed:
+                    self._deps.diary.append_trades(closed)
+                    trades_closed += len(closed)
 
-            cooldown_key = self._backfill_cooldown_key(bar)
-            cooldown_until = cooldown_registry.get(cooldown_key)
-            if cooldown_until is not None:
-                if bar.close_time < cooldown_until:
+                cooldown_key = self._backfill_cooldown_key(bar)
+                cooldown_until = cooldown_registry.get(cooldown_key)
+                if cooldown_until is not None:
+                    if bar.close_time < cooldown_until:
+                        continue
+                    cooldown_registry.pop(cooldown_key, None)
+
+                signal, anomaly = self._deps.analyzer.analyze_bar(bar)
+
+                if anomaly is not None:
+                    self._deps.diary.append_anomalies([anomaly])
+                    anomalies_found += 1
+
+                if signal is None:
                     continue
-                cooldown_registry.pop(cooldown_key, None)
 
-            signal, anomaly = self._deps.analyzer.analyze_bar(bar)
+                expiry = bar.close_time + timedelta(seconds=config.SYMBOL_COOLDOWN_SEC)
+                current_expiry = cooldown_registry.get(cooldown_key)
+                if current_expiry is None or expiry > current_expiry:
+                    cooldown_registry[cooldown_key] = expiry
 
-            if anomaly is not None:
-                self._deps.diary.append_anomalies([anomaly])
-                anomalies_found += 1
+                self._deps.diary.append_signals([signal])
+                signals_found += 1
+                simulated_trade = SimulatedTrade(
+                    trade_id=f"backtest-{signal.signal_id}",
+                    signal=signal,
+                )
+                simulated_trades[simulated_trade.trade_id] = simulated_trade
 
-            if signal is None:
-                continue
+            if simulated_trades:
+                closing_timestamp = (
+                    last_bar.close_time
+                    if last_bar is not None
+                    else datetime.now(tz=config.TIMEZONE)
+                )
+                expired = [
+                    self._expire_simulated_trade(state, closing_timestamp)
+                    for state in simulated_trades.values()
+                ]
+                self._deps.diary.append_trades(expired)
+                trades_closed += len(expired)
 
-            expiry = bar.close_time + timedelta(seconds=config.SYMBOL_COOLDOWN_SEC)
-            current_expiry = cooldown_registry.get(cooldown_key)
-            if current_expiry is None or expiry > current_expiry:
-                cooldown_registry[cooldown_key] = expiry
-
-            self._deps.diary.append_signals([signal])
-            signals_found += 1
-            simulated_trade = SimulatedTrade(
-                trade_id=f"backtest-{signal.signal_id}",
-                signal=signal,
+            self._logger.info(
+                "Бэктест завершён: баров %s, аномалий %s, сигналов %s, закрытых сделок %s",
+                bars_processed,
+                anomalies_found,
+                signals_found,
+                trades_closed,
             )
-            simulated_trades[simulated_trade.trade_id] = simulated_trade
-
-        if simulated_trades:
-            closing_timestamp = (
-                last_bar.close_time if last_bar is not None else datetime.now(tz=config.TIMEZONE)
-            )
-            expired = [
-                self._expire_simulated_trade(state, closing_timestamp)
-                for state in simulated_trades.values()
-            ]
-            self._deps.diary.append_trades(expired)
-            trades_closed += len(expired)
-
-        self._logger.info(
-            "Бэктест завершён: баров %s, аномалий %s, сигналов %s, закрытых сделок %s",
-            bars_processed,
-            anomalies_found,
-            signals_found,
-            trades_closed
-        )
+        finally:
+            try:
+                self._deps.diary.flush()
+            finally:
+                self._deps.diary.close()
 
     def _on_bar(self, event: LiveBarEvent) -> None:
         bar = event.bar

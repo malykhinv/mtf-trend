@@ -138,9 +138,14 @@ def run() -> None:
     logger.info(
         "Инициализация режима %s для биржи %s", mode.value, exchange.value
     )
-    dependencies = create_orchestrator_dependencies(exchange, mode)
     if mode is RuntimeMode.LIVE:
-        run_live(dependencies)
+        dependencies = create_orchestrator_dependencies(exchange, mode)
+        try:
+            run_live(dependencies)
+        except KeyboardInterrupt:
+            raise
+        finally:
+            dependencies.diary.close()
         return
     if mode is RuntimeMode.BACKTEST:
         end = datetime.datetime.now(tz=config.TIMEZONE)
@@ -164,6 +169,7 @@ def run() -> None:
         )
         for symbol in symbols:
             for timeframe in settings.timeframes:
+                dependencies = create_orchestrator_dependencies(exchange, mode)
                 request = HistoricalRequest(
                     exchange=exchange,
                     symbol=symbol,
@@ -173,7 +179,12 @@ def run() -> None:
                     limit=settings.limit,
                     backtest=True,
                 )
-                run_backtest(dependencies, request)
+                try:
+                    run_backtest(dependencies, request)
+                except KeyboardInterrupt:
+                    raise
+                finally:
+                    dependencies.diary.close()
         return
 
 
