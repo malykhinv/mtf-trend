@@ -578,8 +578,8 @@ class WorkbookDiaryBackend(DiaryBackend):
         short_trade_executed_formula = f"=IF($L{row_index},TRUE,FALSE)"
         thresholds_min_green_formula = f"={threshold_cells['thresholds_min_green_move_pct']}"
         thresholds_min_volume_formula = f"={threshold_cells['thresholds_min_volume_spike']}"
-        thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_anomaly_relative_volume']}"
-        thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_anomaly_atr_mult']}"
+        thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_relative_volume']}"
+        thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_atr_mult']}"
         thresholds_min_anomaly_upper_wick_formula = (
             f"={threshold_cells['thresholds_min_anomaly_upper_wick_pct']}"
         )
