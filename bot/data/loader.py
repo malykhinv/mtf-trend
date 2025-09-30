@@ -126,15 +126,18 @@ class _BarMetricsHelper:
                 abs(high - self._prev_close),
                 abs(low - self._prev_close),
             )
-        if len(self._true_ranges) == self._atr_window:
-            removed = self._true_ranges.popleft()
-            self._true_range_sum -= removed
+        if self._true_ranges:
+            atr = self._true_range_sum / len(self._true_ranges)
+        else:
+            atr = 0.0
+
         self._true_ranges.append(true_range)
         self._true_range_sum += true_range
+        if len(self._true_ranges) > self._atr_window:
+            removed = self._true_ranges.popleft()
+            self._true_range_sum -= removed
         self._prev_close = close
-        if not self._true_ranges:
-            return 0.0
-        return self._true_range_sum / len(self._true_ranges)
+        return atr
 
     @staticmethod
     def _calc_pct_move(*, open_price: float, high: float) -> float:
