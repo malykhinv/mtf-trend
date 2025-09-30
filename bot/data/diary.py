@@ -1,12 +1,16 @@
 """Workbook writers for signals and trades diaries."""
 from __future__ import annotations
 
+import atexit
+import signal
+import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Queue
-from threading import Event, Thread
+from threading import Event, Lock, Thread
+from types import FrameType
 from typing import Callable, Iterable, Literal, Optional, Protocol, Union
 
 from openpyxl import Workbook, load_workbook
@@ -755,6 +759,13 @@ class WorkbookDiary:
     _worker: Thread = field(init=False, repr=False)
     _batch_size: int = field(init=False, repr=False)
     _flush_timeout: float = field(init=False, repr=False)
+    _close_lock: Lock = field(init=False, repr=False)
+    _closed: bool = field(default=False, init=False, repr=False)
+    _closing: bool = field(default=False, init=False, repr=False)
+    _previous_signal_handlers: dict[int, object] = field(init=False, repr=False)
+    _signal_handlers: dict[int, Callable[[int, FrameType | None], None]] = field(
+        init=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.backend is None:
@@ -766,8 +777,12 @@ class WorkbookDiary:
         self._flush_event = Event()
         self._flush_complete = Event()
         self._stop_event = Event()
+        self._close_lock = Lock()
         self._worker = Thread(target=self._worker_loop, name="WorkbookDiaryWorker", daemon=False)
         self._worker.start()
+        self._previous_signal_handlers = {}
+        self._signal_handlers = {}
+        self._register_shutdown_hooks()
 
     def append_signals(self, signals: Iterable[Signal]) -> None:
         rows = [self._signal_to_row(signal) for signal in signals]
@@ -783,24 +798,86 @@ class WorkbookDiary:
 
     def flush(self) -> None:
         self._raise_if_worker_failed()
-        if not self._worker.is_alive():
+        if self._closed:
+            return
+        worker = self._worker
+        if not worker.is_alive():
             return
         self._queue.join()
         self._flush_complete.clear()
         self._flush_event.set()
-        while self._worker.is_alive():
+        while worker.is_alive():
             if self._flush_complete.wait(timeout=self._flush_timeout):
                 break
         self._raise_if_worker_failed()
 
     def close(self) -> None:
+        if self._closed:
+            return
+        with self._close_lock:
+            if self._closed or self._closing:
+                return
+            self._closing = True
         try:
-            self.flush()
-        finally:
-            self._stop_event.set()
-            self._flush_event.set()
-            self._worker.join()
+            worker = self._worker
+            try:
+                self.flush()
+            finally:
+                self._stop_event.set()
+                self._flush_event.set()
+                if worker.is_alive() and worker is not threading.current_thread():
+                    worker.join()
             self._raise_if_worker_failed()
+        finally:
+            with self._close_lock:
+                self._closed = True
+                self._closing = False
+
+    def _register_shutdown_hooks(self) -> None:
+        atexit.register(self.close)
+        for signum in (getattr(signal, "SIGINT", None), getattr(signal, "SIGTERM", None)):
+            if signum is None:
+                continue
+            try:
+                previous = signal.getsignal(signum)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            handler = self._make_signal_handler(signum)
+            try:
+                signal.signal(signum, handler)
+            except (OSError, RuntimeError, ValueError):
+                continue
+            self._previous_signal_handlers[signum] = previous
+            self._signal_handlers[signum] = handler
+
+    def _make_signal_handler(
+        self, signum: int
+    ) -> Callable[[int, FrameType | None], None]:
+        def handler(received: int, frame: FrameType | None) -> None:
+            try:
+                self.close()
+            finally:
+                previous = self._previous_signal_handlers.get(signum)
+                if callable(previous):
+                    previous(received, frame)
+                else:
+                    if previous in (signal.SIG_DFL, None):
+                        try:
+                            signal.signal(signum, signal.SIG_DFL)
+                        except (OSError, RuntimeError, ValueError):
+                            pass
+                        sigint = getattr(signal, "SIGINT", None)
+                        if sigint is not None and received == sigint:
+                            raise KeyboardInterrupt
+                        if hasattr(signal, "raise_signal"):
+                            signal.raise_signal(signum)
+                        else:
+                            raise SystemExit(0)
+                        return
+                    if previous is signal.SIG_IGN:
+                        return
+
+        return handler
 
     def _enqueue_rows(self, sheet_key: SheetKey, rows: Iterable[DiaryRow]) -> None:
         if not rows:
