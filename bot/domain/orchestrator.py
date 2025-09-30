@@ -509,7 +509,15 @@ class Orchestrator:
         if sl_hit and not tp_hit:
             return CloseReason.STOP_LOSS
 
-        direction = bar.metrics.break_direction
+        direction = trade_state.signal.bar.metrics.break_direction
+        if direction is BreakDirection.BOTH:
+            # При пробое обоих экстремумов считаем, что стоп-лосс был задет
+            # раньше тейк-профита.
+            return CloseReason.STOP_LOSS
+        if direction is BreakDirection.NONE:
+            # Консервативно предполагаем, что стоп сработал раньше, если
+            # направление пробоя в сигнальном баре не определено.
+            return CloseReason.STOP_LOSS
         if trade_state.side.is_long:
             if direction is BreakDirection.HIGH_FIRST:
                 return CloseReason.TAKE_PROFIT
