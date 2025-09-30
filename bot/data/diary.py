@@ -160,7 +160,7 @@ class WorkbookDiaryBackend(DiaryBackend):
 
     # Mapping is used by formulas in the ``anomalies`` sheet.
     _ANOMALY_THRESHOLD_CELL_MAP = {
-        name: "thresholds.$B$%d" % row_index
+        name: "thresholds!$B$%d" % row_index
         for row_index, (_, name, _) in enumerate(_ANOMALY_THRESHOLD_LAYOUT, start=2)
     }
 
@@ -669,7 +669,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             if label_cell.value is None:
                 label_cell.value = label
             if value_cell.value is None:
-                column_range = f"anomalies.${column_letter.upper()}$2:${column_letter.upper()}$999"
+                column_range = f"anomalies!${column_letter.upper()}$2:${column_letter.upper()}$999"
                 value_cell.value = f"=AVERAGE({column_range})"
 
 
