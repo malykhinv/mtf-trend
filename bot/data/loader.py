@@ -285,8 +285,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
         since: int,
         limit: int,
     ) -> list[list[Any]]:
-        attempt = 0
-        delay = self._retry_delay_sec
+        consecutive_failures = 0
         network_errors = (
             ccxt.NetworkError,
             ccxt.RequestTimeout,
@@ -295,35 +294,30 @@ class CcxtMarketDataLoader(MarketDataLoader):
         )
         while True:
             try:
-                return client.fetch_ohlcv(  # type: ignore[attr-defined]
+                data = client.fetch_ohlcv(  # type: ignore[attr-defined]
                     symbol,
                     timeframe=timeframe,
                     since=since,
                     limit=limit,
                 )
+                consecutive_failures = 0
+                return data
             except network_errors as exc:  # type: ignore[misc]
-                attempt += 1
-                if attempt >= self._retry_attempts:
-                    self._logger.error(
-                        "Не удалось получить OHLCV %s %s после %s попыток: %s",
-                        symbol,
-                        timeframe,
-                        self._retry_attempts,
-                        exc,
-                    )
-                    raise
+                consecutive_failures += 1
+                fast_retry = consecutive_failures <= 5
+                delay = self._retry_delay_sec if fast_retry else 30.0
+                retry_type = "быстрый" if fast_retry else "с задержкой"
+                err_name = exc.__class__.__name__
                 self._logger.warning(
-                    "Ошибка сети при получении OHLCV %s %s (попытка %s/%s): %s. "
-                    "Повтор через %.2f с",
+                    "Сетевая ошибка OHLCV %s %s (%s), %s ретрай #%d",
                     symbol,
                     timeframe,
-                    attempt,
-                    self._retry_attempts,
-                    exc,
-                    delay,
+                    err_name,
+                    retry_type,
+                    consecutive_failures,
                 )
-                time.sleep(delay)
-                delay = max(delay * 2, self._retry_delay_sec)
+                if delay > 0.0:
+                    time.sleep(delay)
             except Exception as exc:
                 self._logger.error(
                     "Не удалось получить OHLCV %s %s: %s",
@@ -331,7 +325,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
                     timeframe,
                     exc,
                 )
-                return []
+                raise
 
     def load(self, request: HistoricalRequest) -> Iterable[Bar]:
         client = self._clients.get(request.exchange)
@@ -370,10 +364,9 @@ class CcxtMarketDataLoader(MarketDataLoader):
                 )
             except Exception:
                 self._logger.exception(
-                    "Загрузка OHLCV %s %s не удалась после %s попыток",
+                    "Загрузка OHLCV %s %s не удалась",
                     request.symbol,
                     timeframe,
-                    self._retry_attempts,
                 )
                 raise
             if not batch:
