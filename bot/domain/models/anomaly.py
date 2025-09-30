@@ -17,6 +17,7 @@ class AnomalyThresholdSnapshot:
     min_volume_spike: float
     min_relative_volume: float
     min_atr_mult: float
+    min_upper_wick_pct: float
 
 
 @dataclass(frozen=True, slots=True)

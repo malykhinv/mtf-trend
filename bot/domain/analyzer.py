@@ -19,6 +19,7 @@ class AnalyzerSettings:
     min_volume_spike: float = config.ANOMALY_MIN_VOLUME_SPIKE
     min_anomaly_atr_mult: float = config.ANOMALY_MIN_ATR_MULT
     min_anomaly_relative_volume: float = config.ANOMALY_MIN_RELATIVE_VOLUME
+    min_anomaly_upper_wick_pct: float = config.ANOMALY_MIN_UPPER_WICK_PCT
     min_relative_volume: float = config.MIN_REL_VOL
     max_relative_volume: float = config.MAX_REL_VOL
     min_atr_mult: float = config.MIN_ATR_MULT
@@ -46,6 +47,7 @@ class AnalyzerSettings:
             min_volume_spike=self.min_volume_spike,
             min_relative_volume=self.min_anomaly_relative_volume,
             min_atr_mult=self.min_anomaly_atr_mult,
+            min_upper_wick_pct=self.min_anomaly_upper_wick_pct,
         )
 
 
@@ -170,6 +172,9 @@ class SignalAnalyzer:
             return None
 
         if metrics.atr_mult < thresholds.min_anomaly_atr_mult:
+            return None
+
+        if metrics.upper_wick_pct < thresholds.min_anomaly_upper_wick_pct:
             return None
 
         relative_volume = metrics.relative_volume

@@ -116,6 +116,11 @@ class WorkbookDiaryBackend(DiaryBackend):
             config.ANOMALY_MIN_RELATIVE_VOLUME,
         ),
         (
+            "Minimum anomaly upper wick (%)",
+            "thresholds_min_anomaly_upper_wick_pct",
+            config.ANOMALY_MIN_UPPER_WICK_PCT,
+        ),
+        (
             "Minimum anomaly volume spike",
             "thresholds_min_volume_spike",
             config.ANOMALY_MIN_VOLUME_SPIKE,
@@ -275,6 +280,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_volume_spike",
         "thresholds_min_relative_volume",
         "thresholds_min_atr_mult",
+        "thresholds_min_anomaly_upper_wick_pct",
     ]
 
     def __init__(self, base_path: Path) -> None:
@@ -322,6 +328,16 @@ class WorkbookDiaryBackend(DiaryBackend):
                 if WorkbookDiaryBackend._needs_header(sheet):
                     sheet.append(headers)
                     workbook.save(path)
+                else:
+                    existing_header = [cell.value for cell in sheet[1]]
+                    header_needs_update = existing_header[: len(headers)] != headers
+                    header_needs_update = header_needs_update or len(existing_header) != len(
+                        headers
+                    )
+                    if header_needs_update:
+                        for column, header in enumerate(headers, start=1):
+                            sheet.cell(row=1, column=column).value = header
+                        workbook.save(path)
             finally:
                 workbook.close()
             return
@@ -520,6 +536,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_min_volume_formula = f"={threshold_cells['thresholds_min_volume_spike']}"
         thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_anomaly_relative_volume']}"
         thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_anomaly_atr_mult']}"
+        thresholds_min_anomaly_upper_wick_formula = (
+            f"={threshold_cells['thresholds_min_anomaly_upper_wick_pct']}"
+        )
         long_pnl_formula = (
             f'=IF($M{row_index},'
             f'IF($I{row_index}=0,"",'
@@ -600,6 +619,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds_min_volume_formula,
             thresholds_min_relative_formula,
             thresholds_min_atr_formula,
+            thresholds_min_anomaly_upper_wick_formula,
         ]
     @staticmethod
     def _set_named_range(workbook: Workbook, *, name: str, sheet_title: str, column_letter: str, row: int) -> None:
