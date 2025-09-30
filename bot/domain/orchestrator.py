@@ -105,6 +105,7 @@ class Orchestrator:
             request.end,
         )
         simulated_trades: dict[str, SimulatedTrade] = {}
+        cooldown_registry: dict[str, datetime] = {}
         last_bar: Bar | None = None
         bars_processed = 0
         signals_found = 0
@@ -118,6 +119,13 @@ class Orchestrator:
                 self._deps.diary.append_trades(closed)
                 trades_closed += len(closed)
 
+            cooldown_key = self._backfill_cooldown_key(bar)
+            cooldown_until = cooldown_registry.get(cooldown_key)
+            if cooldown_until is not None:
+                if bar.close_time < cooldown_until:
+                    continue
+                cooldown_registry.pop(cooldown_key, None)
+
             signal, anomaly = self._deps.analyzer.analyze_bar(bar)
 
             if anomaly is not None:
@@ -126,6 +134,11 @@ class Orchestrator:
 
             if signal is None:
                 continue
+
+            expiry = bar.close_time + timedelta(seconds=config.SYMBOL_COOLDOWN_SEC)
+            current_expiry = cooldown_registry.get(cooldown_key)
+            if current_expiry is None or expiry > current_expiry:
+                cooldown_registry[cooldown_key] = expiry
 
             self._deps.diary.append_signals([signal])
             signals_found += 1
@@ -303,6 +316,10 @@ class Orchestrator:
     @staticmethod
     def _trade_key(exchange: str, symbol: str, timeframe: str) -> str:
         return f"{exchange}:{symbol}:{timeframe}"
+
+    @staticmethod
+    def _backfill_cooldown_key(bar: Bar) -> str:
+        return f"{bar.exchange.value}:{bar.symbol}:{bar.timeframe.value}"
 
     def _register_active_trade(self, trade: Trade, bar: Bar) -> None:
         key = self._trade_key(trade.exchange.value, trade.symbol, trade.timeframe.value)
