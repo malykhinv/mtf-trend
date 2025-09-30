@@ -674,13 +674,15 @@ class WorkbookDiaryBackend(DiaryBackend):
             del workbook.defined_names[name]
         workbook.defined_names[name] = DefinedName(name=name, attr_text=attr_text)
 
-    def _ensure_anomaly_threshold_sheet(self, workbook: Workbook) -> None:
-        """Create the ``Thresholds`` sheet with default values when missing."""
+    _ANOMALY_THRESHOLD_SHEET_NAME = "thresholds"
 
-        if "Thresholds" in workbook.sheetnames:
-            sheet = workbook["thresholds"]
+    def _ensure_anomaly_threshold_sheet(self, workbook: Workbook) -> None:
+        """Create the ``thresholds`` sheet with default values when missing."""
+
+        if self._ANOMALY_THRESHOLD_SHEET_NAME in workbook.sheetnames:
+            sheet = workbook[self._ANOMALY_THRESHOLD_SHEET_NAME]
         else:
-            sheet = workbook.create_sheet("thresholds")
+            sheet = workbook.create_sheet(self._ANOMALY_THRESHOLD_SHEET_NAME)
 
         # Header row for readability.
         if sheet["A1"].value is None:
