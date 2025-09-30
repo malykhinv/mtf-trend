@@ -1,15 +1,18 @@
 """Workbook writers for signals and trades diaries."""
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from threading import Lock
-from typing import Callable, Iterable, Optional, Protocol
+from queue import Empty, Queue
+from threading import Event, Thread
+from typing import Callable, Iterable, Literal, Optional, Protocol, Union
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.utils.cell import get_column_letter
+from openpyxl.worksheet.worksheet import Worksheet
 
 from bot.domain.models.anomaly import Anomaly, AnomalyThresholdSnapshot
 from bot.domain.models.bar import BarMetrics
@@ -85,6 +88,9 @@ class AnomalyRow(Row):
     thresholds: AnomalyThresholdSnapshot
 
 
+SheetKey = Literal["signals", "trades", "anomalies"]
+
+
 class DiaryBackend(Protocol):
     def append_signals(self, rows: Iterable[SignalRow]) -> None:  # pragma: no cover - interface definition
         ...
@@ -93,6 +99,12 @@ class DiaryBackend(Protocol):
         ...
 
     def append_anomalies(self, rows: Iterable[AnomalyRow]) -> None:  # pragma: no cover - interface definition
+        ...
+
+    def append_batch(self, sheet_key: SheetKey, rows: Iterable[Row]) -> None:  # pragma: no cover - interface definition
+        ...
+
+    def flush(self, sheet_keys: Optional[Iterable[SheetKey]] = None) -> None:  # pragma: no cover - interface definition
         ...
 
 
@@ -291,6 +303,13 @@ class WorkbookDiaryBackend(DiaryBackend):
         self._trades_path = self._base_path / "trades.xlsx"
         self._anomalies_path = self._base_path / "anomalies.xlsx"
 
+        self._sheet_configs: dict[SheetKey, tuple[Path, Callable[[Row, int], list[object]]]] = {
+            "signals": (self._signals_path, self._signal_values),
+            "trades": (self._trades_path, self._trade_values),
+            "anomalies": (self._anomalies_path, self._anomaly_values),
+        }
+        self._open_workbooks: dict[SheetKey, tuple[Workbook, Worksheet]] = {}
+
         self._ensure_workbook(self._signals_path, self._SIGNALS_HEADERS, sheet_name="signals")
         self._ensure_workbook(self._trades_path, self._TRADES_HEADERS, sheet_name="trades")
         self._ensure_workbook(self._anomalies_path, self._ANOMALIES_HEADERS, sheet_name="anomalies")
@@ -305,19 +324,48 @@ class WorkbookDiaryBackend(DiaryBackend):
         materialized = list(rows)
         if not materialized:
             return
-        self._append(self._signals_path, materialized, self._signal_values)
+        self.append_batch("signals", materialized)
+        self.flush(["signals"])
 
     def append_trades(self, rows: Iterable[TradeRow]) -> None:
         materialized = list(rows)
         if not materialized:
             return
-        self._append(self._trades_path, materialized, self._trade_values)
+        self.append_batch("trades", materialized)
+        self.flush(["trades"])
 
     def append_anomalies(self, rows: Iterable[AnomalyRow]) -> None:
         materialized = list(rows)
         if not materialized:
             return
-        self._append(self._anomalies_path, materialized, self._anomaly_values)
+        self.append_batch("anomalies", materialized)
+        self.flush(["anomalies"])
+
+    def append_batch(self, sheet_key: SheetKey, rows: Iterable[Row]) -> None:
+        materialized = list(rows)
+        if not materialized:
+            return
+        path, mapper = self._sheet_configs[sheet_key]
+        workbook, sheet = self._ensure_workbook_open(sheet_key, path)
+        for row in materialized:
+            next_row = sheet.max_row + 1
+            values = mapper(row, next_row)
+            sheet.append(values)
+            appended_row = sheet[next_row]
+            for value, cell in zip(values, appended_row):
+                if isinstance(value, float):
+                    cell.number_format = "0.00"
+
+    def flush(self, sheet_keys: Optional[Iterable[SheetKey]] = None) -> None:
+        keys = list(sheet_keys) if sheet_keys is not None else list(self._open_workbooks.keys())
+        for key in keys:
+            workbook_entry = self._open_workbooks.pop(key, None)
+            if workbook_entry is None:
+                continue
+            workbook, _ = workbook_entry
+            path, _ = self._sheet_configs[key]
+            workbook.save(path)
+            workbook.close()
 
     @staticmethod
     def _ensure_workbook(path: Path, headers: list[str], *, sheet_name: str) -> None:
@@ -360,24 +408,16 @@ class WorkbookDiaryBackend(DiaryBackend):
         first_row = sheet[1]
         return all(cell.value is None for cell in first_row)
 
-    @staticmethod
-    def _append(
-        path: Path, rows: Iterable[Row], mapper: Callable[[Row, int], list[object]]
-    ) -> None:
+    def _ensure_workbook_open(self, sheet_key: SheetKey, path: Path) -> tuple[Workbook, Worksheet]:
+        workbook_entry = self._open_workbooks.get(sheet_key)
+        if workbook_entry is not None:
+            return workbook_entry
+
         workbook = load_workbook(path)
-        try:
-            sheet = workbook.active
-            for row in rows:
-                next_row = sheet.max_row + 1
-                values = mapper(row, next_row)
-                sheet.append(values)
-                appended_row = sheet[next_row]
-                for value, cell in zip(values, appended_row):
-                    if isinstance(value, float):
-                        cell.number_format = "0.00"
-            workbook.save(path)
-        finally:
-            workbook.close()
+        sheet = workbook.active
+        workbook_entry = (workbook, sheet)
+        self._open_workbooks[sheet_key] = workbook_entry
+        return workbook_entry
 
     @staticmethod
     def _format_dt(value: Optional[datetime]) -> Optional[str]:
@@ -694,32 +734,167 @@ class WorkbookDiaryBackend(DiaryBackend):
 
 
 @dataclass(slots=True)
+class _QueuedRow:
+    sheet_key: SheetKey
+    row: Row
+
+
+DiaryRow = Union[SignalRow, TradeRow, AnomalyRow]
+
+
+@dataclass(slots=True)
 class WorkbookDiary:
     path: Path
     backend: Optional[DiaryBackend] = None
-    _lock: Lock = field(default_factory=Lock)
+
+    _queue: Queue[_QueuedRow] = field(init=False, repr=False)
+    _flush_event: Event = field(init=False, repr=False)
+    _flush_complete: Event = field(init=False, repr=False)
+    _stop_event: Event = field(init=False, repr=False)
+    _worker_exception: Optional[BaseException] = field(default=None, init=False, repr=False)
+    _worker: Thread = field(init=False, repr=False)
+    _batch_size: int = field(init=False, repr=False)
+    _flush_timeout: float = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.backend is None:
             self.backend = WorkbookDiaryBackend(self.path)
 
+        self._batch_size = config.DIARY_BATCH_SIZE
+        self._flush_timeout = config.DIARY_FLUSH_TIMEOUT
+        self._queue = Queue()
+        self._flush_event = Event()
+        self._flush_complete = Event()
+        self._stop_event = Event()
+        self._worker = Thread(target=self._worker_loop, name="WorkbookDiaryWorker", daemon=False)
+        self._worker.start()
+
     def append_signals(self, signals: Iterable[Signal]) -> None:
-        with self._lock:
-            assert self.backend is not None
-            rows = [self._signal_to_row(signal) for signal in signals]
-            self.backend.append_signals(rows)
+        rows = [self._signal_to_row(signal) for signal in signals]
+        self._enqueue_rows("signals", rows)
 
     def append_trades(self, trades: Iterable[Trade]) -> None:
-        with self._lock:
-            assert self.backend is not None
-            rows = [self._trade_to_row(trade) for trade in trades]
-            self.backend.append_trades(rows)
+        rows = [self._trade_to_row(trade) for trade in trades]
+        self._enqueue_rows("trades", rows)
 
     def append_anomalies(self, anomalies: Iterable[Anomaly]) -> None:
-        with self._lock:
-            assert self.backend is not None
-            rows = [self._anomaly_to_row(anomaly) for anomaly in anomalies]
-            self.backend.append_anomalies(rows)
+        rows = [self._anomaly_to_row(anomaly) for anomaly in anomalies]
+        self._enqueue_rows("anomalies", rows)
+
+    def flush(self) -> None:
+        self._raise_if_worker_failed()
+        if not self._worker.is_alive():
+            return
+        self._queue.join()
+        self._flush_complete.clear()
+        self._flush_event.set()
+        while self._worker.is_alive():
+            if self._flush_complete.wait(timeout=self._flush_timeout):
+                break
+        self._raise_if_worker_failed()
+
+    def close(self) -> None:
+        try:
+            self.flush()
+        finally:
+            self._stop_event.set()
+            self._flush_event.set()
+            self._worker.join()
+            self._raise_if_worker_failed()
+
+    def _enqueue_rows(self, sheet_key: SheetKey, rows: Iterable[DiaryRow]) -> None:
+        if not rows:
+            return
+        self._raise_if_worker_failed()
+        for row in rows:
+            self._queue.put(_QueuedRow(sheet_key=sheet_key, row=row))
+
+    def _worker_loop(self) -> None:
+        assert self.backend is not None
+        backend = self.backend
+        buffers: defaultdict[SheetKey, list[Row]] = defaultdict(list)
+        pending_backend_flush = False
+
+        try:
+            while True:
+                if self._stop_event.is_set():
+                    self._drain_queue(buffers)
+                    pending_backend_flush |= self._flush_buffers(backend, buffers)
+                    if pending_backend_flush:
+                        backend.flush()
+                        pending_backend_flush = False
+                    break
+
+                if self._flush_event.is_set():
+                    pending_backend_flush |= self._flush_buffers(backend, buffers)
+                    if pending_backend_flush:
+                        backend.flush()
+                        pending_backend_flush = False
+                    self._flush_event.clear()
+                    self._flush_complete.set()
+                    continue
+
+                try:
+                    queued_row = self._queue.get(timeout=self._flush_timeout)
+                except Empty:
+                    pending_backend_flush |= self._flush_buffers(backend, buffers)
+                    if pending_backend_flush:
+                        backend.flush()
+                        pending_backend_flush = False
+                    continue
+
+                try:
+                    buffers[queued_row.sheet_key].append(queued_row.row)
+                    buffer = buffers[queued_row.sheet_key]
+                    if len(buffer) >= self._batch_size:
+                        backend.append_batch(queued_row.sheet_key, buffer)
+                        buffer.clear()
+                        pending_backend_flush = True
+                finally:
+                    self._queue.task_done()
+
+        except BaseException as exc:  # pragma: no cover - defensive programming
+            if self._worker_exception is None:
+                self._worker_exception = exc
+            self._stop_event.set()
+            try:
+                self._drain_queue(buffers)
+                pending_backend_flush |= self._flush_buffers(backend, buffers)
+                if pending_backend_flush:
+                    backend.flush()
+                    pending_backend_flush = False
+            except Exception:
+                pass
+        finally:
+            try:
+                backend.flush()
+            except Exception:
+                pass
+
+    def _flush_buffers(
+        self, backend: DiaryBackend, buffers: dict[SheetKey, list[Row]]
+    ) -> bool:
+        flushed = False
+        for sheet_key, rows in list(buffers.items()):
+            if not rows:
+                continue
+            backend.append_batch(sheet_key, rows)
+            rows.clear()
+            flushed = True
+        return flushed
+
+    def _drain_queue(self, buffers: dict[SheetKey, list[Row]]) -> None:
+        while True:
+            try:
+                queued_row = self._queue.get_nowait()
+            except Empty:
+                return
+            buffers[queued_row.sheet_key].append(queued_row.row)
+            self._queue.task_done()
+
+    def _raise_if_worker_failed(self) -> None:
+        if self._worker_exception is not None:
+            raise self._worker_exception
 
     @staticmethod
     def _signal_to_row(signal: Signal) -> SignalRow:
