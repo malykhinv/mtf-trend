@@ -96,20 +96,25 @@ class _BarMetricsHelper:
         )
 
     def _update_volume(self, volume: float) -> float:
-        if len(self._volumes) == self._vol_window:
+        count = len(self._sorted_volumes)
+        if count == 0:
+            median = 0.0
+        else:
+            mid = count // 2
+            if count % 2 == 1:
+                median = self._sorted_volumes[mid]
+            else:
+                median = (self._sorted_volumes[mid - 1] + self._sorted_volumes[mid]) / 2.0
+
+        self._volumes.append(volume)
+        bisect.insort(self._sorted_volumes, volume)
+        if len(self._volumes) > self._vol_window:
             removed = self._volumes.popleft()
             idx = bisect.bisect_left(self._sorted_volumes, removed)
             if idx < len(self._sorted_volumes) and self._sorted_volumes[idx] == removed:
                 self._sorted_volumes.pop(idx)
-        self._volumes.append(volume)
-        bisect.insort(self._sorted_volumes, volume)
-        count = len(self._sorted_volumes)
-        if count == 0:
-            return 0.0
-        mid = count // 2
-        if count % 2 == 1:
-            return self._sorted_volumes[mid]
-        return (self._sorted_volumes[mid - 1] + self._sorted_volumes[mid]) / 2.0
+
+        return median
 
     def _update_atr(self, *, high: float, low: float, close: float) -> float:
         range_value = max(high - low, 0.0)
