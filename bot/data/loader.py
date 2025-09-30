@@ -343,7 +343,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
         timeframe = request.timeframe.value
         since = _to_millis(request.start)
         end_ts = _to_millis(request.end)
-        limit = request.limit or 1000
+        limit = request.limit or 1500
         min_start_ts: int | None = None
         if request.backtest:
             coverage_ms = int(config.BACKTEST_MIN_COVERAGE.total_seconds() * 1000)
