@@ -84,6 +84,14 @@ class Orchestrator:
         self._trail_history = config.TRAIL_SWING_WINDOW + config.TRAIL_SWING_CONFIRM + 5
         self._logger = get_logger(__name__)
 
+    def _should_analyze_bar(self, bar: Bar) -> bool:
+        if bar.close <= bar.open:
+            return False
+        if bar.open <= 0:
+            return False
+        growth_pct = ((bar.high - bar.open) / bar.open) * 100
+        return growth_pct >= config.ANOMALY_MIN_GROWTH_PCT
+
     def start(self) -> None:
         self._logger.info(
             "Запускаем оркестратор для биржи %s: подписываемся на поток баров",
@@ -132,6 +140,9 @@ class Orchestrator:
                     if bar.close_time < cooldown_until:
                         continue
                     cooldown_registry.pop(cooldown_key, None)
+
+                if not self._should_analyze_bar(bar):
+                    continue
 
                 signal, anomaly = self._deps.analyzer.analyze_bar(bar)
 
@@ -244,6 +255,9 @@ class Orchestrator:
 
             if symbol_key not in self._symbols_above_threshold or last_imbalance is None:
                 return
+
+        if not self._should_analyze_bar(bar):
+            return
 
         signal, anomaly = self._deps.analyzer.analyze_bar(bar)
 
