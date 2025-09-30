@@ -669,7 +669,8 @@ class WorkbookDiaryBackend(DiaryBackend):
     def _set_named_range(workbook: Workbook, *, name: str, sheet_title: str, column_letter: str, row: int) -> None:
         """Ensure a workbook defined name points at the requested cell."""
 
-        attr_text = f"{sheet_title}.${column_letter.upper()}${row}"
+        escaped_sheet_title = sheet_title.replace("'", "''")
+        attr_text = f"'{escaped_sheet_title}'!${column_letter.upper()}${row}"
         if name in workbook.defined_names:
             del workbook.defined_names[name]
         workbook.defined_names[name] = DefinedName(name=name, attr_text=attr_text)
