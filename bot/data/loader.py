@@ -325,7 +325,7 @@ class CcxtMarketDataLoader(MarketDataLoader):
                     timeframe,
                     exc,
                 )
-                return []
+                raise
 
     def load(self, request: HistoricalRequest) -> Iterable[Bar]:
         client = self._clients.get(request.exchange)
