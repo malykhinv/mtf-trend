@@ -79,8 +79,11 @@ def create_live_stream(exchange: Exchange, timeframe: Timeframe) -> WsLiveDataSt
     return WsLiveDataStream(exchange=exchange, timeframe=timeframe)
 
 
-def create_diary(base_path: Path | None = None) -> WorkbookDiary:
-    path = base_path or Path(os.getenv("BOT_DIARY_PATH", "var/diary"))
+def create_diary(exchange: Exchange, base_path: Path | None = None) -> WorkbookDiary:
+    base = Path(base_path) if base_path is not None else Path(
+        os.getenv("BOT_DIARY_PATH", "var/diary")
+    )
+    path = base / exchange.value
     return WorkbookDiary(path=path)
 
 
@@ -114,7 +117,7 @@ def create_orchestrator_dependencies(
     primary_timeframe = config.DEFAULT_TIMEFRAMES[0]
     market_loader = create_market_data_loader()
     live_stream = create_live_stream(exchange, primary_timeframe)
-    diary = create_diary()
+    diary = create_diary(exchange)
     notifier = create_notifier(mode)
     analyzer = SignalAnalyzer()
     execution = create_execution_service(exchange)
