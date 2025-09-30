@@ -248,8 +248,12 @@ def test_anomaly_threshold_summary_formulas_cover_full_column() -> None:
     long_trade_executed_range = _column_range(long_trade_executed_letter)
     short_trade_executed_range = _column_range(short_trade_executed_letter)
 
-    assert long_value_cell.value == f"=AVERAGE({long_equity_range})"
-    assert short_value_cell.value == f"=AVERAGE({short_equity_range})"
+    assert long_value_cell.value == (
+        f"=AVERAGE({long_equity_range})-thresholds_initial_deposit"
+    )
+    assert short_value_cell.value == (
+        f"=AVERAGE({short_equity_range})-thresholds_initial_deposit"
+    )
     assert long_wins_cell.value == (
         f"=COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")"
     )

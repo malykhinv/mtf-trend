@@ -744,8 +744,14 @@ class WorkbookDiaryBackend(DiaryBackend):
         # sheet. We read several columns, so changes to ``_ANOMALIES_HEADERS`` that
         # move these fields must also update the calculated column letters above.
         summary_rows = [
-            ("Итог лонг", f"=AVERAGE({long_equity_range})"),
-            ("Итог шорт", f"=AVERAGE({short_equity_range})"),
+            (
+                "Средний результат лонг",
+                f"=AVERAGE({long_equity_range})-thresholds_initial_deposit",
+            ),
+            (
+                "Средний результат шорт",
+                f"=AVERAGE({short_equity_range})-thresholds_initial_deposit",
+            ),
             (
                 "Выигрыши лонг",
                 f"=COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")",
