@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import atexit
 import signal
+import time
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -815,6 +816,7 @@ class WorkbookDiary:
     _worker: Thread = field(init=False, repr=False)
     _batch_size: int = field(init=False, repr=False)
     _flush_timeout: float = field(init=False, repr=False)
+    _event_poll_interval: float = field(init=False, repr=False)
     _close_lock: Lock = field(init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _closing: bool = field(default=False, init=False, repr=False)
@@ -829,6 +831,7 @@ class WorkbookDiary:
 
         self._batch_size = config.DIARY_BATCH_SIZE
         self._flush_timeout = config.DIARY_FLUSH_TIMEOUT
+        self._event_poll_interval = min(0.1, self._flush_timeout)
         self._queue = Queue()
         self._flush_event = Event()
         self._flush_complete = Event()
@@ -947,6 +950,8 @@ class WorkbookDiary:
         backend = self.backend
         buffers: defaultdict[SheetKey, list[Row]] = defaultdict(list)
         pending_backend_flush = False
+        poll_interval = max(self._event_poll_interval, 0.01)
+        next_flush_deadline = time.monotonic() + self._flush_timeout
 
         try:
             while True:
@@ -965,20 +970,29 @@ class WorkbookDiary:
                         pending_backend_flush = False
                     self._flush_event.clear()
                     self._flush_complete.set()
+                    next_flush_deadline = time.monotonic() + self._flush_timeout
                     continue
 
+                remaining_until_flush = max(0.0, next_flush_deadline - time.monotonic())
+                timeout = min(poll_interval, remaining_until_flush) if remaining_until_flush > 0 else 0.0
                 try:
-                    queued_row = self._queue.get(timeout=self._flush_timeout)
+                    if timeout == 0.0:
+                        queued_row = self._queue.get_nowait()
+                    else:
+                        queued_row = self._queue.get(timeout=timeout)
                 except Empty:
-                    pending_backend_flush |= self._flush_buffers(backend, buffers)
-                    if pending_backend_flush:
-                        backend.flush()
-                        pending_backend_flush = False
+                    if time.monotonic() >= next_flush_deadline:
+                        pending_backend_flush |= self._flush_buffers(backend, buffers)
+                        if pending_backend_flush:
+                            backend.flush()
+                            pending_backend_flush = False
+                        next_flush_deadline = time.monotonic() + self._flush_timeout
                     continue
 
                 try:
                     buffers[queued_row.sheet_key].append(queued_row.row)
                     buffer = buffers[queued_row.sheet_key]
+                    next_flush_deadline = time.monotonic() + self._flush_timeout
                     if len(buffer) >= self._batch_size:
                         backend.append_batch(queued_row.sheet_key, buffer)
                         buffer.clear()
