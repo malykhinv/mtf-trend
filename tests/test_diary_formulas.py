@@ -216,13 +216,59 @@ def test_anomaly_threshold_summary_formulas_cover_full_column() -> None:
     short_column_letter = _column_letter_from_index(
         backend._ANOMALIES_HEADERS.index("short_equity_pct") + 1
     )
+    long_pnl_column_letter = _column_letter_from_index(
+        backend._ANOMALIES_HEADERS.index("long_pnl_pct") + 1
+    )
+    short_pnl_column_letter = _column_letter_from_index(
+        backend._ANOMALIES_HEADERS.index("short_pnl_pct") + 1
+    )
+    long_trade_executed_letter = _column_letter_from_index(
+        backend._ANOMALIES_HEADERS.index("long_trade_executed") + 1
+    )
+    short_trade_executed_letter = _column_letter_from_index(
+        backend._ANOMALIES_HEADERS.index("short_trade_executed") + 1
+    )
 
     long_value_cell = sheet.cell(row=summary_row_start, column=2)
     short_value_cell = sheet.cell(row=summary_row_start + 1, column=2)
+    long_wins_cell = sheet.cell(row=summary_row_start + 2, column=2)
+    long_losses_cell = sheet.cell(row=summary_row_start + 3, column=2)
+    long_winrate_cell = sheet.cell(row=summary_row_start + 4, column=2)
+    short_wins_cell = sheet.cell(row=summary_row_start + 5, column=2)
+    short_losses_cell = sheet.cell(row=summary_row_start + 6, column=2)
+    short_winrate_cell = sheet.cell(row=summary_row_start + 7, column=2)
 
-    assert long_value_cell.value == (
-        f"=AVERAGE(anomalies!${long_column_letter}$2:${long_column_letter}$1048576)"
+    def _column_range(column_letter: str) -> str:
+        return f"anomalies!${column_letter}$2:${column_letter}$1048576"
+
+    long_equity_range = _column_range(long_column_letter)
+    short_equity_range = _column_range(short_column_letter)
+    long_pnl_range = _column_range(long_pnl_column_letter)
+    short_pnl_range = _column_range(short_pnl_column_letter)
+    long_trade_executed_range = _column_range(long_trade_executed_letter)
+    short_trade_executed_range = _column_range(short_trade_executed_letter)
+
+    assert long_value_cell.value == f"=AVERAGE({long_equity_range})"
+    assert short_value_cell.value == f"=AVERAGE({short_equity_range})"
+    assert long_wins_cell.value == (
+        f"=COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")"
     )
-    assert short_value_cell.value == (
-        f"=AVERAGE(anomalies!${short_column_letter}$2:${short_column_letter}$1048576)"
+    assert long_losses_cell.value == (
+        f"=COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\"<0\")"
+    )
+    assert long_winrate_cell.value == (
+        f"=IFERROR(COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")/"
+        f"(COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")+"
+        f"COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\"<0\")),0)"
+    )
+    assert short_wins_cell.value == (
+        f"=COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\">0\")"
+    )
+    assert short_losses_cell.value == (
+        f"=COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\"<0\")"
+    )
+    assert short_winrate_cell.value == (
+        f"=IFERROR(COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\">0\")/"
+        f"(COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\">0\")+"
+        f"COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\"<0\")),0)"
     )

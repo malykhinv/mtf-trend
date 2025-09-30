@@ -717,18 +717,66 @@ class WorkbookDiaryBackend(DiaryBackend):
         short_equity_column_letter = get_column_letter(
             self._ANOMALIES_HEADERS.index("short_equity_pct") + 1
         )
+        long_pnl_column_letter = get_column_letter(
+            self._ANOMALIES_HEADERS.index("long_pnl_pct") + 1
+        )
+        short_pnl_column_letter = get_column_letter(
+            self._ANOMALIES_HEADERS.index("short_pnl_pct") + 1
+        )
+        long_trade_executed_column_letter = get_column_letter(
+            self._ANOMALIES_HEADERS.index("long_trade_executed") + 1
+        )
+        short_trade_executed_column_letter = get_column_letter(
+            self._ANOMALIES_HEADERS.index("short_trade_executed") + 1
+        )
+
+        def _column_range(column_letter: str) -> str:
+            return f"anomalies!${column_letter.upper()}$2:${column_letter.upper()}$1048576"
+
+        long_equity_range = _column_range(long_equity_column_letter)
+        short_equity_range = _column_range(short_equity_column_letter)
+        long_pnl_range = _column_range(long_pnl_column_letter)
+        short_pnl_range = _column_range(short_pnl_column_letter)
+        long_trade_executed_range = _column_range(long_trade_executed_column_letter)
+        short_trade_executed_range = _column_range(short_trade_executed_column_letter)
 
         # The summary formulas below depend on the columns used in the ``anomalies``
-        # sheet. We specifically read ``long_equity_pct`` and ``short_equity_pct``
-        # columns, so changes to ``_ANOMALIES_HEADERS`` that move these fields must
-        # also update the calculated column letters above.
-        for offset, (label, column_letter) in enumerate(
+        # sheet. We read several columns, so changes to ``_ANOMALIES_HEADERS`` that
+        # move these fields must also update the calculated column letters above.
+        summary_rows = [
+            ("Итог лонг", f"=AVERAGE({long_equity_range})"),
+            ("Итог шорт", f"=AVERAGE({short_equity_range})"),
             (
-                ("Итог лонг", long_equity_column_letter),
-                ("Итог шорт", short_equity_column_letter),
+                "Выигрыши лонг",
+                f"=COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")",
             ),
-            start=0,
-        ):
+            (
+                "Проигрыши лонг",
+                f"=COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\"<0\")",
+            ),
+            (
+                "Winrate лонг",
+                f"=IFERROR(COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")/"
+                f"(COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\">0\")+"
+                f"COUNTIFS({long_trade_executed_range},TRUE,{long_pnl_range},\"<0\")),0)",
+            ),
+            (
+                "Выигрыши шорт",
+                f"=COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\">0\")",
+            ),
+            (
+                "Проигрыши шорт",
+                f"=COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\"<0\")",
+            ),
+            (
+                "Winrate шорт",
+                f"=IFERROR(COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\">0\")/"
+                f"(COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\">0\")+"
+                f"COUNTIFS({short_trade_executed_range},TRUE,{short_pnl_range},\"<0\")),0)",
+            ),
+        ]
+
+        for offset, (label, formula) in enumerate(summary_rows, start=0):
             row_index = summary_row_start + offset
             label_cell = sheet.cell(row=row_index, column=1)
             value_cell = sheet.cell(row=row_index, column=2)
@@ -736,10 +784,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             if label_cell.value is None:
                 label_cell.value = label
             if value_cell.value is None:
-                column_range = (
-                    f"anomalies!${column_letter.upper()}$2:${column_letter.upper()}$1048576"
-                )
-                value_cell.value = f"=AVERAGE({column_range})"
+                value_cell.value = formula
 
 
 @dataclass(slots=True)
