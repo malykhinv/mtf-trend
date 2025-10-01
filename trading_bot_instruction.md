@@ -12,8 +12,15 @@
 
 ## 2) Константы (config.py)
 ```python
-TIMEZONE = "Europe/Belgrade"
-TF_LIST = ["1m","3m","5m","15m"]
+TIMEZONE_NAME = "Europe/Belgrade"
+TIMEZONE = ZoneInfo(TIMEZONE_NAME)
+
+DEFAULT_TIMEFRAMES = (
+    Timeframe.M1,
+    Timeframe.M3,
+    Timeframe.M5,
+    Timeframe.M15,
+)
 
 # Окна метрик
 VOL_WINDOW = 20
@@ -31,16 +38,17 @@ MIN_RR = 0.0  # TODO: подобрать оптимальное значение
 
 # Размер позиции
 MIN_ORDER_USDT = 10.0
-ORDER_PCT_OF_DEPOSIT = 0.0005
+ORDER_PCT_OF_DEPOSIT = 0.05
 DEPOSIT_REFRESH_MIN = 60
 
 # Бэктест (PNL в %)
-TAKER_FEE_ENTRY_PCT = 0.04   # пример
-TAKER_FEE_EXIT_PCT  = 0.04   # пример
+TAKER_FEE_ENTRY_PCT = 0.04
+TAKER_FEE_EXIT_PCT = 0.04
+BACKTEST_MIN_COVERAGE = timedelta(days=30)
 
 # Сопровождение позиции
 BREAKEVEN_TRIGGER_PCT = 0.5
-BREAKEVEN_OFFSET_PCT  = 0.3  # перенос SL за entry на 0.3%
+BREAKEVEN_OFFSET_PCT = 0.3
 TRAIL_SWING_WINDOW = 5
 TRAIL_SWING_CONFIRM = 2
 
@@ -49,13 +57,35 @@ AGGR_WINDOW_SEC = 15
 AGGR_IMBALANCE_THRESHOLD = 0.62
 
 # Анти-дубликаты
-BAR_REPROCESS_THROTTLE_SEC = 3600  # применяется ТОЛЬКО после setup под ордер
+SYMBOL_COOLDOWN_SEC = 3600
 
 # Логи
 LOG_TIME_FMT = "%H:%M:%S"
+
+# Дневник
+DIARY_BATCH_SIZE = 100
+DIARY_FLUSH_TIMEOUT = 600.0
+
+# Аномалии
+ANOMALY_MIN_GROWTH_PCT = 2.5
+ANOMALY_MIN_ATR_MULT = 2.5
+ANOMALY_MIN_RELATIVE_VOLUME = 3.0
+ANOMALY_MIN_VOLUME_SPIKE = 3.0
+ANOMALY_MIN_UPPER_WICK_PCT = 20.0
+
+# Настройки API
+BINANCE_API_URL = "https://fapi.binance.com"
+BINANCE_API_KEY = os.environ.get("BINANCE_API_KEY")
+BINANCE_API_SECRET = os.environ.get("BINANCE_API_SECRET")
+BINANCE_RECV_WINDOW = 5000
+BYBIT_API_URL = "https://api.bybit.com"
+BYBIT_API_KEY = os.environ.get("BYBIT_API_KEY")
+BYBIT_API_SECRET = os.environ.get("BYBIT_API_SECRET")
+BYBIT_RECV_WINDOW = 5000
+BYBIT_TIMEOUT = 10.0
 ```
 
-Секреты и токены — в `.env`.
+API-ключи и токены передаются через переменные окружения (например, через `.env`).
 
 ---
 
