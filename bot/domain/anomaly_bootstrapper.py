@@ -446,22 +446,27 @@ class AnomalyLiveBootstrapper:
 
     @staticmethod
     def _compute_grid_deltas(candidate: ThresholdCandidate) -> dict[str, float]:
-        adjustable_fields = [
+        # Baseline filters remain fixed; the optimizer should only explore
+        # secondary thresholds derived from the grid deltas below.
+        baseline_fields = {
             "min_green_move_pct",
             "min_volume_spike",
             "min_anomaly_relative_volume",
+            "min_anomaly_upper_wick_pct",
+            "min_anomaly_atr_mult",
+        }
+        adjustable_fields = [
             "min_relative_volume",
             "max_relative_volume",
-            "min_anomaly_atr_mult",
             "min_atr_mult",
             "min_pct_move",
             "max_pct_move",
-            "min_anomaly_upper_wick_pct",
             "max_upper_wick_pct",
             "max_lower_wick_pct",
             "min_rr",
         ]
         deltas: dict[str, float] = {}
+        assert not baseline_fields.intersection(adjustable_fields)
         for field in adjustable_fields:
             baseline = getattr(candidate, field)
             step = abs(baseline) * 0.1
