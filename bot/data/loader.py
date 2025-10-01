@@ -319,13 +319,12 @@ class CcxtMarketDataLoader(MarketDataLoader):
                 if delay > 0.0:
                     time.sleep(delay)
             except Exception as exc:
-                self._logger.error(
-                    "Не удалось получить OHLCV %s %s: %s",
+                self._logger.exception(
+                    "Не удалось получить OHLCV %s %s",
                     symbol,
                     timeframe,
-                    exc,
                 )
-                raise
+                return []
 
     def load(self, request: HistoricalRequest) -> Iterable[Bar]:
         client = self._clients.get(request.exchange)
@@ -354,21 +353,13 @@ class CcxtMarketDataLoader(MarketDataLoader):
 
         should_stop = False
         while True:
-            try:
-                batch = self._fetch_ohlcv_with_retry(
-                    client,
-                    symbol=request.symbol,
-                    timeframe=timeframe,
-                    since=cursor,
-                    limit=limit,
-                )
-            except Exception:
-                self._logger.exception(
-                    "Загрузка OHLCV %s %s не удалась",
-                    request.symbol,
-                    timeframe,
-                )
-                raise
+            batch = self._fetch_ohlcv_with_retry(
+                client,
+                symbol=request.symbol,
+                timeframe=timeframe,
+                since=cursor,
+                limit=limit,
+            )
             if not batch:
                 break
 
