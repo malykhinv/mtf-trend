@@ -6,6 +6,7 @@ import signal
 import time
 import threading
 from collections import defaultdict
+from logging import Logger
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +30,7 @@ from bot.domain.models.timeframe import Timeframe
 from bot.domain.models.trade import Trade
 from bot.domain.models.trade_status import TradeStatus
 from bot import config
+from bot.utils.logger import get_logger
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +303,7 @@ class WorkbookDiaryBackend(DiaryBackend):
     ]
 
     def __init__(self, base_path: Path) -> None:
+        self._logger = get_logger(__name__)
         self._base_path = base_path
         self._base_path.mkdir(parents=True, exist_ok=True)
 
@@ -360,6 +363,12 @@ class WorkbookDiaryBackend(DiaryBackend):
             for value, cell in zip(values, appended_row):
                 if isinstance(value, float):
                     cell.number_format = "0.00"
+        self._logger.info(
+            "Appended %d rows to diary sheet '%s' (%s)",
+            len(materialized),
+            sheet_key,
+            path,
+        )
 
     def flush(self, sheet_keys: Optional[Iterable[SheetKey]] = None) -> None:
         keys = list(sheet_keys) if sheet_keys is not None else list(self._open_workbooks.keys())
@@ -371,9 +380,13 @@ class WorkbookDiaryBackend(DiaryBackend):
             path, _ = self._sheet_configs[key]
             workbook.save(path)
             workbook.close()
+            self._logger.info(
+                "Saved and closed diary workbook '%s' for sheet '%s'",
+                path,
+                key,
+            )
 
-    @staticmethod
-    def _ensure_workbook(path: Path, headers: list[str], *, sheet_name: str) -> None:
+    def _ensure_workbook(self, path: Path, headers: list[str], *, sheet_name: str) -> None:
         if path.exists():
             workbook = load_workbook(path)
             try:
@@ -393,6 +406,11 @@ class WorkbookDiaryBackend(DiaryBackend):
                         workbook.save(path)
             finally:
                 workbook.close()
+            self._logger.info(
+                "Opened existing diary workbook '%s' for sheet '%s'",
+                path,
+                sheet_name,
+            )
             return
         else:
             workbook = Workbook()
@@ -403,6 +421,11 @@ class WorkbookDiaryBackend(DiaryBackend):
                 workbook.save(path)
             finally:
                 workbook.close()
+            self._logger.info(
+                "Created diary workbook '%s' for sheet '%s'",
+                path,
+                sheet_name,
+            )
 
     @staticmethod
     def _needs_header(sheet) -> bool:  # type: ignore[no-any-unimported]
@@ -416,12 +439,22 @@ class WorkbookDiaryBackend(DiaryBackend):
     def _ensure_workbook_open(self, sheet_key: SheetKey, path: Path) -> tuple[Workbook, Worksheet]:
         workbook_entry = self._open_workbooks.get(sheet_key)
         if workbook_entry is not None:
+            self._logger.info(
+                "Workbook for sheet '%s' already open at '%s'",
+                sheet_key,
+                path,
+            )
             return workbook_entry
 
         workbook = load_workbook(path)
         sheet = workbook.active
         workbook_entry = (workbook, sheet)
         self._open_workbooks[sheet_key] = workbook_entry
+        self._logger.info(
+            "Opened diary workbook '%s' for sheet '%s'",
+            path,
+            sheet_key,
+        )
         return workbook_entry
 
     @staticmethod
@@ -820,6 +853,7 @@ class WorkbookDiary:
     _close_lock: Lock = field(init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _closing: bool = field(default=False, init=False, repr=False)
+    _logger: Logger = field(default_factory=lambda: get_logger(__name__), init=False, repr=False)
     _previous_signal_handlers: dict[int, object] = field(init=False, repr=False)
     _signal_handlers: dict[int, Callable[[int, FrameType | None], None]] = field(
         init=False, repr=False
@@ -881,6 +915,7 @@ class WorkbookDiary:
             worker = self._worker
             try:
                 self.flush()
+                self._logger.info("Workbook diary flush complete; stopping writes")
             finally:
                 self._stop_event.set()
                 self._flush_event.set()
