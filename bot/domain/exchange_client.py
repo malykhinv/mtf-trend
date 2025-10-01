@@ -451,14 +451,51 @@ class BinanceExchangeClient(ExchangeClient):
             take_data_raw = self._signed_request("POST", self._ORDER_ENDPOINT, take_payload)
             stop_data = self._expect_dict(stop_data_raw)
             take_data = self._expect_dict(take_data_raw)
-        except ExchangeClientError:
-            try:
-                self.cancel_order(entry_snapshot.order_id)
-            except ExchangeClientError:
-                self._logger.exception(
-                    "Не удалось отменить входной ордер %s после ошибки", entry_snapshot.order_id
-                )
-            raise
+        except ExchangeClientError as exc:
+            close_attempted = False
+            close_failed = False
+            close_qty = entry_snapshot.filled_qty or request.quantity
+            if (
+                entry_snapshot.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
+                and close_qty > 0
+            ):
+                close_attempted = True
+                try:
+                    self._logger.error(
+                        "Аварийное закрытие позиции %s после ошибки стоп/тейк: статус входа=%s, qty=%s",
+                        symbol_display,
+                        entry_snapshot.status.value,
+                        close_qty,
+                        exc_info=True,
+                    )
+                    self.close_position_market(
+                        exchange=request.exchange,
+                        symbol=request.symbol,
+                        side=request.side,
+                        quantity=close_qty,
+                        price_hint=entry_snapshot.avg_fill_price,
+                    )
+                except ExchangeClientError:
+                    close_failed = True
+                    self._logger.exception(
+                        "Не удалось аварийно закрыть позицию %s после ошибки стоп/тейк",
+                        symbol_display,
+                    )
+            if entry_snapshot.status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+                try:
+                    self.cancel_order(entry_snapshot.order_id)
+                except ExchangeClientError:
+                    self._logger.exception(
+                        "Не удалось отменить входной ордер %s после ошибки", entry_snapshot.order_id
+                    )
+            message = "Binance: не удалось выставить стоп/тейк после входа"
+            if close_attempted and not close_failed:
+                message += "; позиция закрыта по рынку"
+            elif close_attempted and close_failed:
+                message += "; аварийное закрытие не удалось"
+            else:
+                message += "; вход отменен"
+            raise ExchangeClientError(message) from exc
 
         stop_snapshot = self._snapshot_from_payload(stop_data)
         take_snapshot = self._snapshot_from_payload(take_data)
@@ -979,14 +1016,51 @@ class BybitExchangeClient(ExchangeClient):
         try:
             stop_result = self._signed_request("POST", self._ORDER_CREATE, stop_payload)
             take_result = self._signed_request("POST", self._ORDER_CREATE, take_payload)
-        except ExchangeClientError:
-            try:
-                self.cancel_order(entry_snapshot.order_id)
-            except ExchangeClientError:
-                self._logger.exception(
-                    "Не удалось отменить входной ордер %s после ошибки", entry_snapshot.order_id
-                )
-            raise
+        except ExchangeClientError as exc:
+            close_attempted = False
+            close_failed = False
+            close_qty = entry_snapshot.filled_qty or request.quantity
+            if (
+                entry_snapshot.status in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED)
+                and close_qty > 0
+            ):
+                close_attempted = True
+                try:
+                    self._logger.error(
+                        "Аварийное закрытие позиции %s после ошибки стоп/тейк: статус входа=%s, qty=%s",
+                        symbol_display,
+                        entry_snapshot.status.value,
+                        close_qty,
+                        exc_info=True,
+                    )
+                    self.close_position_market(
+                        exchange=request.exchange,
+                        symbol=request.symbol,
+                        side=request.side,
+                        quantity=close_qty,
+                        price_hint=entry_snapshot.avg_fill_price,
+                    )
+                except ExchangeClientError:
+                    close_failed = True
+                    self._logger.exception(
+                        "Не удалось аварийно закрыть позицию %s после ошибки стоп/тейк",
+                        symbol_display,
+                    )
+            if entry_snapshot.status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+                try:
+                    self.cancel_order(entry_snapshot.order_id)
+                except ExchangeClientError:
+                    self._logger.exception(
+                        "Не удалось отменить входной ордер %s после ошибки", entry_snapshot.order_id
+                    )
+            message = "Bybit: не удалось выставить стоп/тейк после входа"
+            if close_attempted and not close_failed:
+                message += "; позиция закрыта по рынку"
+            elif close_attempted and close_failed:
+                message += "; аварийное закрытие не удалось"
+            else:
+                message += "; вход отменен"
+            raise ExchangeClientError(message) from exc
 
         stop_id = self._extract_order_id(stop_result)
         take_id = self._extract_order_id(take_result)
