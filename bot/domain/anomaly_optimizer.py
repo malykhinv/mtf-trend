@@ -104,6 +104,42 @@ class CandidateEvaluation:
     short_final_equity: float
 
 
+@dataclass(frozen=True, slots=True)
+class GridFieldMetadata:
+    """Describe step and bounds applied during grid exploration."""
+
+    step: float
+    minimum: float | None = None
+    maximum: float | None = None
+
+    def clamp(self, value: float) -> float:
+        if self.minimum is not None and value < self.minimum:
+            value = self.minimum
+        if self.maximum is not None and value > self.maximum:
+            value = self.maximum
+        return value
+
+    def apply(self, value: float) -> float:
+        clamped = self.clamp(value)
+        if self.step > 0:
+            snapped = round(clamped / self.step) * self.step
+        else:
+            snapped = clamped
+        return self.clamp(snapped)
+
+
+THRESHOLD_GRID_METADATA: dict[str, GridFieldMetadata] = {
+    "min_rr": GridFieldMetadata(step=0.5, minimum=0.0, maximum=3.0),
+}
+
+
+def _apply_grid_constraints(field: str, value: float) -> float:
+    metadata = THRESHOLD_GRID_METADATA.get(field)
+    if metadata is None:
+        return value
+    return metadata.apply(value)
+
+
 _ANOMALIES_SHEET = "anomalies"
 _THRESHOLDS_SHEET = "thresholds"
 
@@ -521,8 +557,10 @@ def optimize_thresholds(
         baseline = getattr(base_candidate, field)
         delta = grid_deltas[field]
         for offset in directional_offsets:
+            adjusted = baseline + delta * offset
+            adjusted = _apply_grid_constraints(field, adjusted)
             updates = {
-                field: _quantize_threshold(baseline + delta * offset),
+                field: _quantize_threshold(adjusted),
             }
             candidate = base_candidate.updated(**updates)
             evaluation = evaluate_candidate(samples, candidate)
@@ -541,13 +579,19 @@ def optimize_thresholds(
             secondary_delta = grid_deltas[secondary_field]
             for primary_offset in directional_offsets:
                 for secondary_offset in directional_offsets:
+                    primary_adjusted = primary_baseline + primary_delta * primary_offset
+                    primary_adjusted = _apply_grid_constraints(
+                        primary_field, primary_adjusted
+                    )
+                    secondary_adjusted = (
+                        secondary_baseline + secondary_delta * secondary_offset
+                    )
+                    secondary_adjusted = _apply_grid_constraints(
+                        secondary_field, secondary_adjusted
+                    )
                     updates = {
-                        primary_field: _quantize_threshold(
-                            primary_baseline + primary_delta * primary_offset
-                        ),
-                        secondary_field: _quantize_threshold(
-                            secondary_baseline + secondary_delta * secondary_offset
-                        ),
+                        primary_field: _quantize_threshold(primary_adjusted),
+                        secondary_field: _quantize_threshold(secondary_adjusted),
                     }
                     candidate = base_candidate.updated(**updates)
                     evaluation = evaluate_candidate(samples, candidate)
@@ -559,9 +603,9 @@ def optimize_thresholds(
         for field, delta in grid_deltas.items():
             baseline = getattr(best_evaluation.candidate, field)
             span = delta * random_scale
-            updates[field] = _quantize_threshold(
-                baseline + rng.uniform(-span, span)
-            )
+            value = baseline + rng.uniform(-span, span)
+            value = _apply_grid_constraints(field, value)
+            updates[field] = _quantize_threshold(value)
         candidate = best_evaluation.candidate.updated(**updates)
         evaluation = evaluate_candidate(samples, candidate)
         if evaluation.score > best_evaluation.score:
