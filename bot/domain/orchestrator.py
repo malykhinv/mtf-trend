@@ -24,6 +24,9 @@ from bot.domain.swing_detector import SwingDetector
 from bot.utils.logger import get_logger
 
 
+WIN_RATE_THRESHOLD = 0.3
+
+
 @dataclass(slots=True)
 class ActiveTrade:
     """Track an opened trade together with history required for trailing."""
@@ -273,6 +276,38 @@ class Orchestrator:
             self._logger.exception("Ошибка отправки уведомления по сигналу %s", signal.signal_id)
 
         self._deps.diary.append_signals([signal])
+
+        performance = self._deps.diary.get_anomaly_performance()
+        if signal.direction.is_long:
+            if performance.long_profit <= 0:
+                self._logger.info(
+                    "Пропускаем лонг %s: средний результат лонгов %.2f", signal.signal_id, performance.long_profit
+                )
+                return
+            if performance.long_win_rate <= WIN_RATE_THRESHOLD:
+                self._logger.info(
+                    "Пропускаем лонг %s: winrate лонгов %.2f ниже порога %.2f",
+                    signal.signal_id,
+                    performance.long_win_rate,
+                    WIN_RATE_THRESHOLD,
+                )
+                return
+        else:
+            if performance.short_profit <= 0:
+                self._logger.info(
+                    "Пропускаем шорт %s: средний результат шортов %.2f",
+                    signal.signal_id,
+                    performance.short_profit,
+                )
+                return
+            if performance.short_win_rate <= WIN_RATE_THRESHOLD:
+                self._logger.info(
+                    "Пропускаем шорт %s: winrate шортов %.2f ниже порога %.2f",
+                    signal.signal_id,
+                    performance.short_win_rate,
+                    WIN_RATE_THRESHOLD,
+                )
+                return
 
         deposit = self._deps.balance_provider.current_deposit()
         order_size = self._deps.execution.calc_order_size_usdt(deposit_usdt=deposit)

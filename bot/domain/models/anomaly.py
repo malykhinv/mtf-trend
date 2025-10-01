@@ -37,3 +37,19 @@ class Anomaly:
     metrics: BarMetrics
     thresholds: AnomalyThresholdSnapshot
 
+
+@dataclass(frozen=True, slots=True)
+class AnomalyPerformance:
+    """Aggregated performance metrics used to gate future trades."""
+
+    long_profit: float
+    long_win_rate: float
+    short_profit: float
+    short_win_rate: float
+
+    @classmethod
+    def permissive(cls) -> "AnomalyPerformance":
+        """Return a performance snapshot that never blocks new trades."""
+
+        return cls(long_profit=1.0, long_win_rate=1.0, short_profit=1.0, short_win_rate=1.0)
+
