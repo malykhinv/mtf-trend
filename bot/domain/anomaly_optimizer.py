@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -574,7 +575,51 @@ def optimize_thresholds(
     best_evaluation = evaluate_candidate(samples, base_candidate)
 
     fields = list(grid_deltas.keys())
-    directional_offsets = (-1, 1)
+
+    def _compute_field_offsets(
+        field: str, baseline: float, delta: float
+    ) -> list[int]:
+        metadata = THRESHOLD_GRID_METADATA.get(field)
+        offsets: set[int] = set()
+
+        if metadata and metadata.step > 0:
+            step = metadata.step
+            if metadata.minimum is not None:
+                down_steps = int(
+                    math.floor((baseline - metadata.minimum) / step + 1e-9)
+                )
+                offsets.update(-index for index in range(1, down_steps + 1))
+            if metadata.maximum is not None:
+                up_steps = int(
+                    math.floor((metadata.maximum - baseline) / step + 1e-9)
+                )
+                offsets.update(index for index in range(1, up_steps + 1))
+
+        if not offsets and delta != 0:
+            offsets.update((-1, 1))
+
+        return sorted(offsets)
+
+    def _limited_offsets(offsets: list[int]) -> list[int]:
+        if not offsets:
+            return [0]
+        negatives = [offset for offset in offsets if offset < 0]
+        positives = [offset for offset in offsets if offset > 0]
+        limited: set[int] = {0}
+        if negatives:
+            limited.add(min(negatives))
+        if positives:
+            limited.add(max(positives))
+        return sorted(limited)
+
+    field_offsets: dict[str, list[int]] = {}
+    pair_offsets: dict[str, list[int]] = {}
+    for field in fields:
+        baseline = getattr(base_candidate, field)
+        delta = grid_deltas[field]
+        offsets = _compute_field_offsets(field, baseline, delta)
+        field_offsets[field] = offsets
+        pair_offsets[field] = _limited_offsets(offsets)
 
     # Evaluate single-field adjustments first. This keeps the grid search
     # focused on directional nudges instead of the full cartesian product of
@@ -582,7 +627,7 @@ def optimize_thresholds(
     for field in fields:
         baseline = getattr(base_candidate, field)
         delta = grid_deltas[field]
-        for offset in directional_offsets:
+        for offset in field_offsets[field]:
             adjusted = baseline + delta * offset
             adjusted = _apply_grid_constraints(field, adjusted)
             updates = {
@@ -603,8 +648,10 @@ def optimize_thresholds(
         for secondary_field in fields[index + 1 :]:
             secondary_baseline = getattr(base_candidate, secondary_field)
             secondary_delta = grid_deltas[secondary_field]
-            for primary_offset in directional_offsets:
-                for secondary_offset in directional_offsets:
+            for primary_offset in pair_offsets[primary_field]:
+                for secondary_offset in pair_offsets[secondary_field]:
+                    if primary_offset == 0 and secondary_offset == 0:
+                        continue
                     primary_adjusted = primary_baseline + primary_delta * primary_offset
                     primary_adjusted = _apply_grid_constraints(
                         primary_field, primary_adjusted
@@ -628,8 +675,24 @@ def optimize_thresholds(
         updates = {}
         for field, delta in grid_deltas.items():
             baseline = getattr(best_evaluation.candidate, field)
-            span = delta * random_scale
-            value = baseline + rng.uniform(-span, span)
+            metadata = THRESHOLD_GRID_METADATA.get(field)
+            span: float
+            if (
+                metadata
+                and metadata.minimum is not None
+                and metadata.maximum is not None
+            ):
+                span = (metadata.maximum - metadata.minimum) / 2 * random_scale
+            elif metadata and metadata.maximum is not None:
+                span = abs(metadata.maximum - baseline) * random_scale
+            elif metadata and metadata.minimum is not None:
+                span = abs(baseline - metadata.minimum) * random_scale
+            else:
+                span = abs(delta) * random_scale
+            if span == 0:
+                value = baseline
+            else:
+                value = baseline + rng.uniform(-span, span)
             value = _apply_grid_constraints(field, value)
             updates[field] = _quantize_threshold(value)
         candidate = best_evaluation.candidate.updated(**updates)
