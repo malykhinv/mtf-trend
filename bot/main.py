@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import os
+from time import sleep
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -212,12 +213,18 @@ def run() -> None:
                     "Не удалось отправить уведомление с рабочими порогами: %s",
                     exc,
                 )
+        orchestrator: Orchestrator | None = None
         try:
-            run_live(dependencies)
+            orchestrator = run_live(dependencies)
+            logger.info("Live-режим запущен. Нажмите Ctrl+C для остановки.")
+            while True:
+                sleep(1)
         except KeyboardInterrupt:
-            raise
+            logger.info("Получен сигнал остановки: завершаем live-режим")
         finally:
-            dependencies.diary.close()
+            if orchestrator is not None:
+                orchestrator.stop()
+                logger.info("Live-режим завершён корректно")
         return
     if mode is RuntimeMode.BACKTEST:
         end = datetime.datetime.now(tz=config.TIMEZONE)
