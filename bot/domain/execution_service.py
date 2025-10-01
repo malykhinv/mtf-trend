@@ -28,6 +28,10 @@ class ExecutionSettings:
 _T = TypeVar("_T")
 
 
+class QuantityTooSmallError(RuntimeError):
+    """Raised when order quantity becomes zero after exchange quantization."""
+
+
 class ExecutionService:
     """Translate domain signals into concrete exchange operations."""
 
@@ -64,19 +68,39 @@ class ExecutionService:
         levels = signal.levels
         trade_id = f"trade-{signal.signal_id}"
         direction_name = "лонг" if signal.direction.is_long else "шорт"
+        quantized_quantity = self._exchange.quantize_quantity(signal.symbol, quantity)
+        if quantized_quantity <= 0:
+            self._logger.warning(
+                "Пропускаем сделку %s %s %s: рассчитанное количество %.8f стало 0 после округления",
+                signal.exchange.value,
+                signal.symbol,
+                direction_name,
+                quantity,
+            )
+            raise QuantityTooSmallError(
+                f"Quantity {quantity} is below the lot size step for {signal.symbol}"
+            )
+
+        if abs(quantized_quantity - quantity) > 1e-12:
+            self._logger.info(
+                "Количество заявки округлено шагом лота: было %.8f, стало %.8f",
+                quantity,
+                quantized_quantity,
+            )
+
         self._logger.info(
             "Выставляем ордера для %s %s %s: количество %.4f",
             signal.exchange.value,
             signal.symbol,
             direction_name,
-            quantity,
+            quantized_quantity,
         )
         request = BracketOrderRequest(
             client_trade_id=trade_id,
             exchange=signal.exchange,
             symbol=signal.symbol,
             side=signal.direction,
-            quantity=quantity,
+            quantity=quantized_quantity,
             entry_price=levels.entry_price,
             take_profit_price=levels.take_profit_price,
             stop_loss_price=levels.stop_loss_price,
@@ -108,7 +132,7 @@ class ExecutionService:
             entry_price=levels.entry_price,
             take_profit_price=levels.take_profit_price,
             stop_loss_price=levels.stop_loss_price,
-            requested_qty=quantity,
+            requested_qty=quantized_quantity,
             executed_qty=entry.filled_qty,
             status=trade_status,
             avg_fill_price=entry.avg_fill_price,

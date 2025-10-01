@@ -12,7 +12,7 @@ from bot.data.diary import WorkbookDiary
 from bot.data.loader import MarketDataLoader, LiveDataStream, LiveBarEvent
 from bot.data.notifier import Notifier
 from bot.domain.analyzer import SignalAnalyzer
-from bot.domain.execution_service import ExecutionService
+from bot.domain.execution_service import ExecutionService, QuantityTooSmallError
 from bot.domain.models.bar import Bar, BreakDirection
 from bot.domain.models.close_reason import CloseReason
 from bot.domain.models.exchange import Exchange
@@ -335,7 +335,15 @@ class Orchestrator:
                     self._live_trade_cooldown_until.strftime(config.LOG_TIME_FMT),
                 )
                 return
-        trade = self._deps.execution.open_trade(signal, quantity=quantity)
+        try:
+            trade = self._deps.execution.open_trade(signal, quantity=quantity)
+        except QuantityTooSmallError:
+            self._logger.warning(
+                "Сделка %s не отправлена: количество %.8f меньше минимального шага лота",
+                trade_id,
+                quantity,
+            )
+            return
         self._logger.info(
             "Сделка %s отправлена, статус %s, исполнено %.4f",
             trade.trade_id,
