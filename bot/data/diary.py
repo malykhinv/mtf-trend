@@ -20,7 +20,11 @@ from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.utils.cell import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
-from bot.domain.models.anomaly import Anomaly, AnomalyThresholdSnapshot
+from bot.domain.models.anomaly import (
+    Anomaly,
+    AnomalyPerformance,
+    AnomalyThresholdSnapshot,
+)
 from bot.domain.models.bar import BarMetrics
 from bot.domain.models.close_reason import CloseReason
 from bot.domain.models.exchange import Exchange
@@ -31,6 +35,9 @@ from bot.domain.models.trade import Trade
 from bot.domain.models.trade_status import TradeStatus
 from bot import config
 from bot.utils.logger import get_logger
+
+
+_PERMISSIVE_PERFORMANCE = AnomalyPerformance.permissive()
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +119,9 @@ class DiaryBackend(Protocol):
         ...
 
     def flush(self, sheet_keys: Optional[Iterable[SheetKey]] = None) -> None:  # pragma: no cover - interface definition
+        ...
+
+    def get_anomaly_performance(self) -> AnomalyPerformance:  # pragma: no cover - interface definition
         ...
 
 
@@ -348,6 +358,53 @@ class WorkbookDiaryBackend(DiaryBackend):
             return
         self.append_batch("anomalies", materialized)
         self.flush(["anomalies"])
+
+    def get_anomaly_performance(self) -> AnomalyPerformance:
+        if not self._anomalies_path.exists():
+            return _PERMISSIVE_PERFORMANCE
+
+        try:
+            workbook = load_workbook(self._anomalies_path, data_only=True)
+        except Exception:
+            self._logger.exception(
+                "Не удалось открыть файл аномалий %s для чтения показателей",
+                self._anomalies_path,
+            )
+            return _PERMISSIVE_PERFORMANCE
+
+        try:
+            if self._ANOMALY_THRESHOLD_SHEET_NAME not in workbook.sheetnames:
+                self._logger.warning(
+                    "В файле %s отсутствует лист '%s' с показателями",
+                    self._anomalies_path,
+                    self._ANOMALY_THRESHOLD_SHEET_NAME,
+                )
+                return _PERMISSIVE_PERFORMANCE
+
+            sheet = workbook[self._ANOMALY_THRESHOLD_SHEET_NAME]
+            label_to_attr = {
+                "Средний результат лонг": "long_profit",
+                "Winrate лонг": "long_win_rate",
+                "Средний результат шорт": "short_profit",
+                "Winrate шорт": "short_win_rate",
+            }
+            values: dict[str, float] = {}
+            for label, value in sheet.iter_rows(min_row=2, max_col=2, values_only=True):
+                if label in label_to_attr and isinstance(value, (int, float)):
+                    values[label_to_attr[label]] = float(value)
+
+            if not values:
+                return _PERMISSIVE_PERFORMANCE
+
+            performance = _PERMISSIVE_PERFORMANCE
+            return AnomalyPerformance(
+                long_profit=values.get("long_profit", performance.long_profit),
+                long_win_rate=values.get("long_win_rate", performance.long_win_rate),
+                short_profit=values.get("short_profit", performance.short_profit),
+                short_win_rate=values.get("short_win_rate", performance.short_win_rate),
+            )
+        finally:
+            workbook.close()
 
     def append_batch(self, sheet_key: SheetKey, rows: Iterable[Row]) -> None:
         materialized = list(rows)
@@ -891,6 +948,17 @@ class WorkbookDiary:
     def append_anomalies(self, anomalies: Iterable[Anomaly]) -> None:
         rows = [self._anomaly_to_row(anomaly) for anomaly in anomalies]
         self._enqueue_rows("anomalies", rows)
+
+    def get_anomaly_performance(self) -> AnomalyPerformance:
+        backend = self.backend
+        if backend is None:
+            return AnomalyPerformance.permissive()
+
+        try:
+            return backend.get_anomaly_performance()
+        except Exception:
+            self._logger.exception("Ошибка чтения показателей аномалий из дневника")
+            return AnomalyPerformance.permissive()
 
     def flush(self) -> None:
         self._raise_if_worker_failed()
