@@ -75,8 +75,17 @@ class AnomalyLiveBootstrapper:
         self._loader = loader
         self._analyzer = analyzer or SignalAnalyzer()
         self._logger = get_logger(__name__)
-        self._diary_root = diary_root or Path("var") / "diary" / exchange.value
-        self._diary_root.mkdir(parents=True, exist_ok=True)
+
+        base_diary_root = Path(diary_root) if diary_root is not None else Path("var") / "diary"
+        if base_diary_root.name == exchange.value:
+            exchange_diary_root = base_diary_root
+        else:
+            exchange_diary_root = base_diary_root / exchange.value
+
+        exchange_diary_root.mkdir(parents=True, exist_ok=True)
+
+        self._base_diary_root = base_diary_root
+        self._diary_root = exchange_diary_root
         self._backtest_path = self._diary_root / self._BACKTEST_FILENAME
         self._live_path = self._diary_root / self._LIVE_FILENAME
 
@@ -179,6 +188,7 @@ class AnomalyLiveBootstrapper:
         if self._live_path.exists():
             return
         if self._backtest_path.exists():
+            self._live_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(self._backtest_path, self._live_path)
             self._logger.info(
                 "Initialized live anomalies workbook from %s", self._backtest_path
