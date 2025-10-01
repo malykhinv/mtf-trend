@@ -84,7 +84,8 @@ class Orchestrator:
         self._trail_history = config.TRAIL_SWING_WINDOW + config.TRAIL_SWING_CONFIRM + 5
         self._logger = get_logger(__name__)
 
-    def _should_analyze_bar(self, bar: Bar) -> bool:
+    @staticmethod
+    def _should_analyze_bar(bar: Bar) -> bool:
         if bar.close <= bar.open:
             return False
         if bar.open <= 0:
@@ -130,7 +131,6 @@ class Orchestrator:
             bars_processed += 1
             closed = self._update_simulated_trades(simulated_trades, bar)
             if closed:
-                self._deps.diary.append_trades(closed)
                 trades_closed += len(closed)
 
             cooldown_key = self._backfill_cooldown_key(bar)
@@ -157,7 +157,6 @@ class Orchestrator:
             if current_expiry is None or expiry > current_expiry:
                 cooldown_registry[cooldown_key] = expiry
 
-            self._deps.diary.append_signals([signal])
             signals_found += 1
             simulated_trade = SimulatedTrade(
                 trade_id=f"backtest-{signal.signal_id}",
@@ -175,7 +174,6 @@ class Orchestrator:
                 self._expire_simulated_trade(state, closing_timestamp)
                 for state in simulated_trades.values()
             ]
-            self._deps.diary.append_trades(expired)
             trades_closed += len(expired)
 
         self._logger.info(
