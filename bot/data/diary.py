@@ -302,14 +302,14 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_anomaly_upper_wick_pct",
     ]
 
-    def __init__(self, base_path: Path) -> None:
+    def __init__(self, base_path: Path, *, anomalies_filename: str = "anomalies.xlsx") -> None:
         self._logger = get_logger(__name__)
         self._base_path = base_path
         self._base_path.mkdir(parents=True, exist_ok=True)
 
         self._signals_path = self._base_path / "signals.xlsx"
         self._trades_path = self._base_path / "trades.xlsx"
-        self._anomalies_path = self._base_path / "anomalies.xlsx"
+        self._anomalies_path = self._base_path / anomalies_filename
 
         self._sheet_configs: dict[SheetKey, tuple[Path, Callable[[Row, int], list[object]]]] = {
             "signals": (self._signals_path, self._signal_values),
@@ -840,6 +840,7 @@ DiaryRow = Union[SignalRow, TradeRow, AnomalyRow]
 class WorkbookDiary:
     path: Path
     backend: Optional[DiaryBackend] = None
+    anomalies_filename: str = "anomalies.xlsx"
 
     _queue: Queue[_QueuedRow] = field(init=False, repr=False)
     _flush_event: Event = field(init=False, repr=False)
@@ -861,7 +862,9 @@ class WorkbookDiary:
 
     def __post_init__(self) -> None:
         if self.backend is None:
-            self.backend = WorkbookDiaryBackend(self.path)
+            self.backend = WorkbookDiaryBackend(
+                self.path, anomalies_filename=self.anomalies_filename
+            )
 
         self._batch_size = config.DIARY_BATCH_SIZE
         self._flush_timeout = config.DIARY_FLUSH_TIMEOUT
