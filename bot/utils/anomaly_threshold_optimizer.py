@@ -15,6 +15,7 @@ from bot.domain.anomaly_bootstrapper import AnomalyLiveBootstrapper
 from bot.domain.anomaly_optimizer import (
     AnomalySample,
     CandidateEvaluation,
+    ParseDiagnostics,
     ThresholdCandidate,
     load_threshold_candidate,
     optimize_thresholds,
@@ -87,8 +88,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     workbook_path = Path(args.workbook)
     LOGGER.info("Loading anomaly samples from %s", workbook_path)
+    diagnostics = ParseDiagnostics()
     try:
-        samples = parse_anomaly_samples(workbook_path)
+        samples = parse_anomaly_samples(workbook_path, diagnostics=diagnostics)
     except FileNotFoundError:
         LOGGER.warning("Workbook %s not found; aborting", workbook_path)
         return 1
@@ -97,10 +99,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
 
     if not samples:
-        LOGGER.warning(
-            "Anomaly sample workbook %s does not contain any rows; nothing to optimize",
-            workbook_path,
-        )
+        if diagnostics.total_skipped:
+            LOGGER.warning(
+                (
+                    "Anomaly sample workbook %s does not contain any valid rows; "
+                    "skipped %d rows. Details: %s"
+                ),
+                workbook_path,
+                diagnostics.total_skipped,
+                diagnostics.summarize(),
+            )
+        else:
+            LOGGER.warning(
+                "Anomaly sample workbook %s does not contain any rows; nothing to optimize",
+                workbook_path,
+            )
         return 0
 
     try:
