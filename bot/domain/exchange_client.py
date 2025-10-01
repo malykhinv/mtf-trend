@@ -20,6 +20,15 @@ from bot.domain.models.exchange import Exchange
 from bot.domain.models.signal_direction import SignalDirection
 
 
+def _normalize_symbol_for_api(symbol: str) -> str:
+    """Return symbol formatted without separators for REST API requests."""
+
+    normalized = symbol.strip().upper()
+    for separator in ("/", "-"):
+        normalized = normalized.replace(separator, "")
+    return normalized
+
+
 class ExchangeClientError(RuntimeError):
     """Raised when an exchange operation fails or the network is unavailable."""
 
@@ -368,14 +377,15 @@ class BinanceExchangeClient(ExchangeClient):
         self._symbol_orders: dict[tuple[str, str], dict[str, object]] = {}
 
     def submit_bracket_order(self, request: BracketOrderRequest) -> BracketOrderExecution:
-        symbol = request.symbol.upper()
+        symbol_display = request.symbol.upper()
+        symbol_api = _normalize_symbol_for_api(request.symbol)
         side = self._direction_to_side(request.side)
         entry_client_id = self._client_order_id(request.client_trade_id, "entry")
         stop_client_id = self._client_order_id(request.client_trade_id, "stop")
         take_client_id = self._client_order_id(request.client_trade_id, "take")
 
         entry_payload = {
-            "symbol": symbol,
+            "symbol": symbol_api,
             "side": side,
             "type": "MARKET",
             "quantity": self._format_decimal(request.quantity),
@@ -385,11 +395,11 @@ class BinanceExchangeClient(ExchangeClient):
         entry_data_raw = self._signed_request("POST", self._ORDER_ENDPOINT, entry_payload)
         entry_data = self._expect_dict(entry_data_raw)
         entry_snapshot = self._snapshot_from_payload(entry_data)
-        self._cache_order(entry_snapshot, symbol)
+        self._cache_order(entry_snapshot, symbol_display)
 
         opposing_side = self._opposite_side(request.side)
         stop_payload = {
-            "symbol": symbol,
+            "symbol": symbol_api,
             "side": opposing_side,
             "type": "STOP_MARKET",
             "stopPrice": self._format_decimal(request.stop_loss_price),
@@ -399,7 +409,7 @@ class BinanceExchangeClient(ExchangeClient):
         }
 
         take_payload = {
-            "symbol": symbol,
+            "symbol": symbol_api,
             "side": opposing_side,
             "type": "TAKE_PROFIT_MARKET",
             "stopPrice": self._format_decimal(request.take_profit_price),
@@ -425,10 +435,10 @@ class BinanceExchangeClient(ExchangeClient):
         stop_snapshot = self._snapshot_from_payload(stop_data)
         take_snapshot = self._snapshot_from_payload(take_data)
 
-        self._cache_order(stop_snapshot, symbol)
-        self._cache_order(take_snapshot, symbol)
+        self._cache_order(stop_snapshot, symbol_display)
+        self._cache_order(take_snapshot, symbol_display)
 
-        key = (request.exchange.value, symbol)
+        key = (request.exchange.value, symbol_display)
         self._symbol_orders[key] = {
             "entry": entry_snapshot.order_id,
             "stop": stop_snapshot.order_id,
@@ -447,14 +457,14 @@ class BinanceExchangeClient(ExchangeClient):
         return self._fetch_order_remote(order_id)
 
     def cancel_order(self, order_id: str) -> OrderExecutionSnapshot:
-        symbol = self._order_symbol.get(order_id)
-        if symbol is None:
+        symbol_display = self._order_symbol.get(order_id)
+        if symbol_display is None:
             raise ExchangeClientError(f"Неизвестен символ ордера {order_id}")
-        payload = {"symbol": symbol, "orderId": order_id}
+        payload = {"symbol": _normalize_symbol_for_api(symbol_display), "orderId": order_id}
         data_raw = self._signed_request("DELETE", self._ORDER_ENDPOINT, payload)
         data = self._expect_dict(data_raw)
         snapshot = self._snapshot_from_payload(data)
-        self._cache_order(snapshot, symbol)
+        self._cache_order(snapshot, symbol_display)
         self._update_symbol_order(order_id, snapshot.status)
         return snapshot
 
@@ -471,10 +481,11 @@ class BinanceExchangeClient(ExchangeClient):
             raise ExchangeClientError("Поддерживается только Binance Futures")
 
         symbol_fmt = symbol.upper()
+        symbol_api = _normalize_symbol_for_api(symbol)
         opposing_side = self._opposite_side(side)
         close_client_id = self._client_order_id(f"close-{symbol_fmt}", uuid4().hex[:6])
         payload = {
-            "symbol": symbol_fmt,
+            "symbol": symbol_api,
             "side": opposing_side,
             "type": "MARKET",
             "quantity": self._format_decimal(quantity),
@@ -509,7 +520,8 @@ class BinanceExchangeClient(ExchangeClient):
             raise ExchangeClientError("Поддерживается только Binance Futures")
 
         symbol_fmt = symbol.upper()
-        params = {"symbol": symbol_fmt}
+        symbol_api = _normalize_symbol_for_api(symbol)
+        params = {"symbol": symbol_api}
         data = self._signed_request("GET", self._POSITION_ENDPOINT, params)
         position_info = data[0] if isinstance(data, list) and data else None
         return self._build_position_snapshot(exchange, symbol_fmt, position_info)
@@ -522,10 +534,11 @@ class BinanceExchangeClient(ExchangeClient):
         snapshots: list[SymbolPositionSnapshot] = []
         if isinstance(data, list):
             for item in data:
-                symbol = str(item.get("symbol", ""))
-                if not symbol:
+                symbol_raw = str(item.get("symbol", ""))
+                if not symbol_raw:
                     continue
-                snapshots.append(self._build_position_snapshot(exchange, symbol.upper(), item))
+                display_symbol = self._resolve_display_symbol(exchange, symbol_raw)
+                snapshots.append(self._build_position_snapshot(exchange, display_symbol, item))
         return snapshots
 
     def _build_position_snapshot(
@@ -598,15 +611,30 @@ class BinanceExchangeClient(ExchangeClient):
             updated_at=updated_at,
         )
 
+    def _resolve_display_symbol(self, exchange: Exchange, symbol: str) -> str:
+        if not symbol:
+            return symbol
+
+        normalized = _normalize_symbol_for_api(symbol)
+        for stored_symbol in self._order_symbol.values():
+            if _normalize_symbol_for_api(stored_symbol) == normalized:
+                return stored_symbol
+
+        for exchange_value, stored_symbol in self._symbol_orders.keys():
+            if exchange_value == exchange.value and _normalize_symbol_for_api(stored_symbol) == normalized:
+                return stored_symbol
+
+        return symbol.strip().upper()
+
     def _fetch_order_remote(self, order_id: str) -> OrderExecutionSnapshot:
-        symbol = self._order_symbol.get(order_id)
-        if symbol is None:
+        symbol_display = self._order_symbol.get(order_id)
+        if symbol_display is None:
             raise ExchangeClientError(f"Неизвестен символ ордера {order_id}")
-        payload = {"symbol": symbol, "orderId": order_id}
+        payload = {"symbol": _normalize_symbol_for_api(symbol_display), "orderId": order_id}
         data_raw = self._signed_request("GET", self._ORDER_ENDPOINT, payload)
         data = self._expect_dict(data_raw)
         snapshot = self._snapshot_from_payload(data)
-        self._cache_order(snapshot, symbol)
+        self._cache_order(snapshot, symbol_display)
         return snapshot
 
     def _refresh_order_if_known(self, order_id: str | None) -> OrderExecutionSnapshot | None:
@@ -787,7 +815,8 @@ class BybitExchangeClient(ExchangeClient):
         if request.exchange is not Exchange.BYBIT:
             raise ExchangeClientError("Поддерживается только Bybit Perpetual")
 
-        symbol = request.symbol.upper()
+        symbol_display = request.symbol.upper()
+        symbol_api = _normalize_symbol_for_api(request.symbol)
         side = self._direction_to_side(request.side)
         entry_client_id = self._client_order_id(request.client_trade_id, "entry")
         stop_client_id = self._client_order_id(request.client_trade_id, "stop")
@@ -795,7 +824,7 @@ class BybitExchangeClient(ExchangeClient):
 
         entry_payload = {
             "category": self._CATEGORY,
-            "symbol": symbol,
+            "symbol": symbol_api,
             "side": side,
             "orderType": "Market",
             "qty": self._format_decimal(request.quantity),
@@ -804,13 +833,13 @@ class BybitExchangeClient(ExchangeClient):
 
         entry_result = self._signed_request("POST", self._ORDER_CREATE, entry_payload)
         entry_id = self._extract_order_id(entry_result)
-        self._order_symbol[entry_id] = symbol
-        entry_snapshot = self._fetch_order_remote(entry_id, symbol_hint=symbol)
+        self._order_symbol[entry_id] = symbol_display
+        entry_snapshot = self._fetch_order_remote(entry_id, symbol_hint=symbol_display)
 
         opposing_side = self._opposite_side(request.side)
         stop_payload = {
             "category": self._CATEGORY,
-            "symbol": symbol,
+            "symbol": symbol_api,
             "side": opposing_side,
             "orderType": "Market",
             "qty": self._format_decimal(request.quantity),
@@ -825,7 +854,7 @@ class BybitExchangeClient(ExchangeClient):
 
         take_payload = {
             "category": self._CATEGORY,
-            "symbol": symbol,
+            "symbol": symbol_api,
             "side": opposing_side,
             "orderType": "Market",
             "qty": self._format_decimal(request.quantity),
@@ -852,17 +881,17 @@ class BybitExchangeClient(ExchangeClient):
 
         stop_id = self._extract_order_id(stop_result)
         take_id = self._extract_order_id(take_result)
-        self._order_symbol[stop_id] = symbol
-        self._order_symbol[take_id] = symbol
+        self._order_symbol[stop_id] = symbol_display
+        self._order_symbol[take_id] = symbol_display
 
-        stop_snapshot = self._fetch_order_remote(stop_id, symbol_hint=symbol)
-        take_snapshot = self._fetch_order_remote(take_id, symbol_hint=symbol)
+        stop_snapshot = self._fetch_order_remote(stop_id, symbol_hint=symbol_display)
+        take_snapshot = self._fetch_order_remote(take_id, symbol_hint=symbol_display)
 
-        self._cache_order(entry_snapshot, symbol)
-        self._cache_order(stop_snapshot, symbol)
-        self._cache_order(take_snapshot, symbol)
+        self._cache_order(entry_snapshot, symbol_display)
+        self._cache_order(stop_snapshot, symbol_display)
+        self._cache_order(take_snapshot, symbol_display)
 
-        key = (request.exchange.value, symbol)
+        key = (request.exchange.value, symbol_display)
         self._symbol_orders[key] = {
             "entry": entry_snapshot.order_id,
             "stop": stop_snapshot.order_id,
@@ -881,16 +910,16 @@ class BybitExchangeClient(ExchangeClient):
         return self._fetch_order_remote(order_id)
 
     def cancel_order(self, order_id: str) -> OrderExecutionSnapshot:
-        symbol = self._order_symbol.get(order_id)
-        if symbol is None:
+        symbol_display = self._order_symbol.get(order_id)
+        if symbol_display is None:
             raise ExchangeClientError(f"Неизвестен символ ордера {order_id}")
         payload = {
             "category": self._CATEGORY,
-            "symbol": symbol,
+            "symbol": _normalize_symbol_for_api(symbol_display),
             "orderId": order_id,
         }
         self._signed_request("POST", self._ORDER_CANCEL, payload)
-        snapshot = self._fetch_order_remote(order_id, symbol_hint=symbol)
+        snapshot = self._fetch_order_remote(order_id, symbol_hint=symbol_display)
         self._update_symbol_order(order_id, snapshot.status)
         return snapshot
 
@@ -907,11 +936,12 @@ class BybitExchangeClient(ExchangeClient):
             raise ExchangeClientError("Поддерживается только Bybit Perpetual")
 
         symbol_fmt = symbol.upper()
+        symbol_api = _normalize_symbol_for_api(symbol)
         opposing_side = self._opposite_side(side)
         close_client_id = self._client_order_id(f"close-{symbol_fmt}", uuid4().hex[:6])
         payload = {
             "category": self._CATEGORY,
-            "symbol": symbol_fmt,
+            "symbol": symbol_api,
             "side": opposing_side,
             "orderType": "Market",
             "qty": self._format_decimal(quantity),
@@ -945,7 +975,8 @@ class BybitExchangeClient(ExchangeClient):
             raise ExchangeClientError("Поддерживается только Bybit Perpetual")
 
         symbol_fmt = symbol.upper()
-        params = {"category": self._CATEGORY, "symbol": symbol_fmt}
+        symbol_api = _normalize_symbol_for_api(symbol)
+        params = {"category": self._CATEGORY, "symbol": symbol_api}
         result = self._signed_request("GET", self._POSITION_LIST, params)
         position_info = None
         if isinstance(result, dict):
@@ -965,10 +996,11 @@ class BybitExchangeClient(ExchangeClient):
             items = result.get("list")
             if isinstance(items, list):
                 for item in items:
-                    symbol = str(item.get("symbol", "")).upper()
-                    if not symbol:
+                    symbol_raw = str(item.get("symbol", ""))
+                    if not symbol_raw:
                         continue
-                    snapshots.append(self._build_position_snapshot(exchange, symbol, item))
+                    display_symbol = self._resolve_display_symbol(exchange, symbol_raw)
+                    snapshots.append(self._build_position_snapshot(exchange, display_symbol, item))
         return snapshots
 
     def _fetch_order_remote(
@@ -977,15 +1009,15 @@ class BybitExchangeClient(ExchangeClient):
         *,
         symbol_hint: str | None = None,
     ) -> OrderExecutionSnapshot:
-        symbol = self._order_symbol.get(order_id)
-        if symbol is None:
-            symbol = symbol_hint
-        if symbol is None:
+        symbol_display = self._order_symbol.get(order_id)
+        if symbol_display is None:
+            symbol_display = symbol_hint
+        if symbol_display is None:
             raise ExchangeClientError(f"Неизвестен символ ордера {order_id}")
 
         params = {
             "category": self._CATEGORY,
-            "symbol": symbol,
+            "symbol": _normalize_symbol_for_api(symbol_display),
             "orderId": order_id,
         }
         result = self._signed_request("GET", self._ORDER_QUERY, params)
@@ -998,7 +1030,7 @@ class BybitExchangeClient(ExchangeClient):
             raise ExchangeClientError(f"Bybit не вернул данные по ордеру {order_id}")
 
         snapshot = self._snapshot_from_payload(order_info)
-        self._cache_order(snapshot, symbol)
+        self._cache_order(snapshot, symbol_display)
         return snapshot
 
     def _build_position_snapshot(
@@ -1072,6 +1104,21 @@ class BybitExchangeClient(ExchangeClient):
             close=close_snapshot,
             updated_at=updated_at,
         )
+
+    def _resolve_display_symbol(self, exchange: Exchange, symbol: str) -> str:
+        if not symbol:
+            return symbol
+
+        normalized = _normalize_symbol_for_api(symbol)
+        for stored_symbol in self._order_symbol.values():
+            if _normalize_symbol_for_api(stored_symbol) == normalized:
+                return stored_symbol
+
+        for exchange_value, stored_symbol in self._symbol_orders.keys():
+            if exchange_value == exchange.value and _normalize_symbol_for_api(stored_symbol) == normalized:
+                return stored_symbol
+
+        return symbol.strip().upper()
 
     def _signed_request(
         self,
