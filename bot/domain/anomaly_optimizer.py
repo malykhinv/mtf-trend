@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import datetime
-from itertools import product
 from pathlib import Path
 from random import Random
 from typing import Sequence
@@ -396,20 +395,47 @@ def optimize_thresholds(
     best_evaluation = evaluate_candidate(samples, base_candidate)
 
     fields = list(grid_deltas.keys())
-    offsets = [-1, 0, 1]
+    directional_offsets = (-1, 1)
 
-    for combination in product(offsets, repeat=len(fields)):
-        if all(offset == 0 for offset in combination):
-            continue
-        updates = {}
-        for field, offset in zip(fields, combination):
-            baseline = getattr(base_candidate, field)
-            delta = grid_deltas[field] * offset
-            updates[field] = _ensure_non_negative(baseline + delta)
-        candidate = base_candidate.updated(**updates)
-        evaluation = evaluate_candidate(samples, candidate)
-        if evaluation.score > best_evaluation.score:
-            best_evaluation = evaluation
+    # Evaluate single-field adjustments first. This keeps the grid search
+    # focused on directional nudges instead of the full cartesian product of
+    # offsets which previously produced millions of candidates.
+    for field in fields:
+        baseline = getattr(base_candidate, field)
+        delta = grid_deltas[field]
+        for offset in directional_offsets:
+            updates = {
+                field: _ensure_non_negative(baseline + delta * offset),
+            }
+            candidate = base_candidate.updated(**updates)
+            evaluation = evaluate_candidate(samples, candidate)
+            if evaluation.score > best_evaluation.score:
+                best_evaluation = evaluation
+
+    # Explore limited multi-field perturbations by pairing neighbouring
+    # adjustments. Restricting to pairs keeps the number of grid candidates in
+    # the hundreds while still allowing the optimizer to discover interactions
+    # between important thresholds.
+    for index, primary_field in enumerate(fields):
+        primary_baseline = getattr(base_candidate, primary_field)
+        primary_delta = grid_deltas[primary_field]
+        for secondary_field in fields[index + 1 :]:
+            secondary_baseline = getattr(base_candidate, secondary_field)
+            secondary_delta = grid_deltas[secondary_field]
+            for primary_offset in directional_offsets:
+                for secondary_offset in directional_offsets:
+                    updates = {
+                        primary_field: _ensure_non_negative(
+                            primary_baseline + primary_delta * primary_offset
+                        ),
+                        secondary_field: _ensure_non_negative(
+                            secondary_baseline + secondary_delta * secondary_offset
+                        ),
+                    }
+                    candidate = base_candidate.updated(**updates)
+                    evaluation = evaluate_candidate(samples, candidate)
+                    if evaluation.score > best_evaluation.score:
+                        best_evaluation = evaluation
 
     for _ in range(random_iterations):
         updates = {}
