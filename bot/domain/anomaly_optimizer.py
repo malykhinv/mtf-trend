@@ -128,8 +128,33 @@ class GridFieldMetadata:
         return self.clamp(snapped)
 
 
+def _percentage_metadata(
+    step: float, *,
+    minimum: float | None = 0.0,
+    maximum: float | None = 100.0,
+) -> GridFieldMetadata:
+    """Helper for percentage-based thresholds with common bounds."""
+
+    return GridFieldMetadata(step=step, minimum=minimum, maximum=maximum)
+
+
+def _bounded_metadata(
+    *, step: float, minimum: float, maximum: float
+) -> GridFieldMetadata:
+    """Helper for thresholds constrained to a numeric range."""
+
+    return GridFieldMetadata(step=step, minimum=minimum, maximum=maximum)
+
+
 THRESHOLD_GRID_METADATA: dict[str, GridFieldMetadata] = {
-    "min_rr": GridFieldMetadata(step=0.5, minimum=0.0, maximum=3.0),
+    "min_relative_volume": _bounded_metadata(step=1.0, minimum=5.0, maximum=20.0),
+    "max_relative_volume": _bounded_metadata(step=10.0, minimum=100.0, maximum=200.0),
+    "min_atr_mult": _bounded_metadata(step=0.1, minimum=3.0, maximum=5.0),
+    "min_pct_move": _bounded_metadata(step=1.0, minimum=0.0, maximum=20.0),
+    "max_pct_move": _bounded_metadata(step=1.0, minimum=10.0, maximum=30.0),
+    "max_upper_wick_pct": _percentage_metadata(step=10.0, minimum=50.0, maximum=100.0),
+    "max_lower_wick_pct": _percentage_metadata(step=10.0, maximum=100.0),
+    "min_rr": _bounded_metadata(step=0.5, minimum=0.0, maximum=3.0),
 }
 
 
@@ -408,7 +433,8 @@ def load_threshold_candidate(workbook_path: Path) -> ThresholdCandidate:
                     cell_value = sheet.cell(row=layout_index[named_range], column=2).value
             if cell_value is None:
                 cell_value = lookup.get(named_range)
-            values[field] = float(cell_value)
+            value = float(cell_value)
+            values[field] = _apply_grid_constraints(field, value)
 
         return ThresholdCandidate(**values)
     finally:
