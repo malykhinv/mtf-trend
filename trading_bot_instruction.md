@@ -224,10 +224,20 @@ API-ключи и токены передаются через переменн�
 - `calc_order_size_usdt(deposit_usdt)` — выдаёт размер позиции в USDT с учётом `MIN_ORDER_USDT` и `ORDER_PCT_OF_DEPOSIT`.
 - `open_trade(signal, quantity, timestamp=None)` — создаёт объект `Trade` со статусом `OPENED`.
 - `close_trade(trade, reason, price, timestamp)` — возвращает закрытую копию сделки с маппингом причины в статус.
+- `poll_trade_state(trade_id, *, retries=None, retry_delay=None)` — опрашивает биржевого клиента до получения финального статуса сделки и переводит его в доменную модель.
+- `record_imbalance(trade_print)` / `last_recorded_imbalance()` — фиксирует и возвращает последнюю диспропорцию принтов, чтобы синхронизировать расчёты с биржей.
+- Параметры ретраев (`RETRY_COUNT`, `RETRY_DELAY_SEC`) контролируют, сколько попыток обращения к биржевому клиенту делается перед возвратом ошибки.
+- `ExecutionSettings` включает `exchange_client`, `notifier`, `diary`, лимиты размера позиции и задержки между ретраями; используется для создания `ExecutionService`.
 - Вспомогательные методы: `should_move_to_breakeven(entry_price, last_price, side)` и `breakeven_stop(entry_price, side)`.
+- Все операции над сделками обязаны использовать биржевой клиент и корректно обрабатывать обновление статусов `OPENED/CLOSED_*`.
 
 ## 14) Notifier
-Протокол уведомителя определяет метод `send_signal(signal)`.
+Протокол уведомителя определяет методы:
+- `send_signal(signal)` — отправка торгового сигнала (с уровнями и метаданными).
+- `send_trade(trade)` — публикация статуса сделки после обновления от биржи.
+- `send_message(text)` — произвольное уведомление (ошибка, перезапуск, диагностика).
+
+`TelegramNotifier` форматирует сообщения в человекочитаемый Markdown, использует Telegram Bot API и переиспользует чат из конфигурации. Метод `send_trade` подчёркивает итоговый статус сделки (`OPENED`, `CLOSED_TP`, `CLOSED_SL`, `CLOSED_MANUAL`, `CANCELLED`) и последнюю цену с биржи.
 
 ## 15) Market data
 - `MarketDataLoader.load(request)` — итерируется по историческим барам (`HistoricalRequest`).
