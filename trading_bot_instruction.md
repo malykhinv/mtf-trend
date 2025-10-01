@@ -123,8 +123,9 @@ API-ключи и токены передаются через переменн�
    - `close > open`;
    - `pct_move ≥ min_green_move_pct`;
    - `atr_mult ≥ min_anomaly_atr_mult`;
+   - `upper_wick_pct ≥ min_anomaly_upper_wick_pct` (порог из `config.ANOMALY_MIN_UPPER_WICK_PCT`);
    - `relative_volume ≥ min_anomaly_relative_volume` и `relative_volume ≥ min_volume_spike`.
-   При выполнении условий фиксируем `Anomaly` со снапшотом порогов (`min_green_move_pct`, `min_volume_spike`, `min_relative_volume`, `min_atr_mult`).
+   При выполнении условий фиксируем `Anomaly` со снапшотом порогов (`min_green_move_pct`, `min_volume_spike`, `min_relative_volume`, `min_atr_mult`, `min_anomaly_upper_wick_pct`).
 2. Если аномалия подтверждена, строим торговый сигнал. Возможны два сценария:
    - **LONG** — одновременно:
      - `min_relative_volume ≤ relative_volume ≤ max_relative_volume`;
@@ -205,7 +206,7 @@ API-ключи и токены передаются через переменн�
 
 ### anomalies.xlsx (или аналогичный лист)
 - Полная копия данных бара и метрик
-- Пороговый снапшот `min_green_move_pct`, `min_volume_spike`, `min_relative_volume`, `min_atr_mult`.
+- Пороговый снапшот `min_green_move_pct`, `min_volume_spike`, `min_relative_volume`, `min_atr_mult`, `min_anomaly_upper_wick_pct`.
 
 Публичные методы дневника: `append_signals`, `append_trades`, `append_anomalies`.
 
