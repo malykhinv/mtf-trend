@@ -16,6 +16,7 @@ from bot.domain.analyzer import AnalyzerSettings, SignalAnalyzer
 from bot.domain.anomaly_optimizer import (
     AnomalySample,
     CandidateEvaluation,
+    THRESHOLD_GRID_METADATA,
     ThresholdCandidate,
     load_threshold_candidate,
     optimize_thresholds,
@@ -468,6 +469,10 @@ class AnomalyLiveBootstrapper:
         deltas: dict[str, float] = {}
         assert not baseline_fields.intersection(adjustable_fields)
         for field in adjustable_fields:
+            metadata = THRESHOLD_GRID_METADATA.get(field)
+            if metadata is not None and metadata.step > 0:
+                deltas[field] = metadata.step
+                continue
             baseline = getattr(candidate, field)
             step = abs(baseline) * 0.1
             if step <= 0:
