@@ -522,7 +522,7 @@ def optimize_thresholds(
         delta = grid_deltas[field]
         for offset in directional_offsets:
             updates = {
-                field: _ensure_non_negative(baseline + delta * offset),
+                field: _quantize_threshold(baseline + delta * offset),
             }
             candidate = base_candidate.updated(**updates)
             evaluation = evaluate_candidate(samples, candidate)
@@ -542,10 +542,10 @@ def optimize_thresholds(
             for primary_offset in directional_offsets:
                 for secondary_offset in directional_offsets:
                     updates = {
-                        primary_field: _ensure_non_negative(
+                        primary_field: _quantize_threshold(
                             primary_baseline + primary_delta * primary_offset
                         ),
-                        secondary_field: _ensure_non_negative(
+                        secondary_field: _quantize_threshold(
                             secondary_baseline + secondary_delta * secondary_offset
                         ),
                     }
@@ -559,7 +559,9 @@ def optimize_thresholds(
         for field, delta in grid_deltas.items():
             baseline = getattr(best_evaluation.candidate, field)
             span = delta * random_scale
-            updates[field] = _ensure_non_negative(baseline + rng.uniform(-span, span))
+            updates[field] = _quantize_threshold(
+                baseline + rng.uniform(-span, span)
+            )
         candidate = best_evaluation.candidate.updated(**updates)
         evaluation = evaluate_candidate(samples, candidate)
         if evaluation.score > best_evaluation.score:
@@ -588,7 +590,9 @@ def write_threshold_candidate(workbook_path: Path, candidate: ThresholdCandidate
             if named_range not in layout_index:
                 continue
             row_index = layout_index[named_range]
-            sheet.cell(row=row_index, column=2).value = getattr(candidate, field)
+            sheet.cell(row=row_index, column=2).value = _quantize_threshold(
+                getattr(candidate, field)
+            )
 
         workbook.save(workbook_path)
     finally:
@@ -633,8 +637,10 @@ def _compute_short_pnl(sample: AnomalySample) -> float | None:
     return 0.0
 
 
-def _ensure_non_negative(value: float) -> float:
-    return value if value >= 0 else 0.0
+def _quantize_threshold(value: float) -> float:
+    """Clamp negative values and round to one decimal place."""
+
+    return round(value if value >= 0 else 0.0, 1)
 
 
 def _parse_timestamp(value: object) -> datetime | None:
