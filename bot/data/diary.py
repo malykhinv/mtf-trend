@@ -13,7 +13,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import Event, Lock, Thread
 from types import FrameType
-from typing import Callable, Iterable, Literal, Optional, Protocol, Union
+from typing import Callable, Iterable, Literal, Optional, Protocol, Sequence, Union
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.workbook.defined_name import DefinedName
@@ -122,6 +122,9 @@ class DiaryBackend(Protocol):
         ...
 
     def get_anomaly_performance(self) -> AnomalyPerformance:  # pragma: no cover - interface definition
+        ...
+
+    def rewrite_anomalies(self, rows: Sequence[AnomalyRow]) -> None:  # pragma: no cover - interface definition
         ...
 
 
@@ -442,6 +445,38 @@ class WorkbookDiaryBackend(DiaryBackend):
                 path,
                 key,
             )
+
+    def rewrite_anomalies(self, rows: Sequence[AnomalyRow]) -> None:
+        sorted_rows = sorted(rows, key=lambda row: row.timestamp)
+        self._logger.info(
+            "Перезаписываем %d строк аномалий в отсортированном порядке по времени",
+            len(sorted_rows),
+        )
+
+        workbook = load_workbook(self._anomalies_path)
+        try:
+            if "anomalies" in workbook.sheetnames:
+                sheet = workbook["anomalies"]
+            else:
+                sheet = workbook.active
+
+            existing_rows = max(0, sheet.max_row - 1)
+            if existing_rows > 0:
+                sheet.delete_rows(2, existing_rows)
+
+            next_row_index = sheet.max_row + 1
+            for row in sorted_rows:
+                values = self._anomaly_values(row, next_row_index)
+                sheet.append(values)
+                appended_row = sheet[next_row_index]
+                for value, cell in zip(values, appended_row):
+                    if isinstance(value, float):
+                        cell.number_format = "0.00"
+                next_row_index += 1
+
+            workbook.save(self._anomalies_path)
+        finally:
+            workbook.close()
 
     def _ensure_workbook(self, path: Path, headers: list[str], *, sheet_name: str) -> None:
         if path.exists():
@@ -916,6 +951,7 @@ class WorkbookDiary:
     _signal_handlers: dict[int, Callable[[int, FrameType | None], None]] = field(
         init=False, repr=False
     )
+    _anomaly_rows: list[AnomalyRow] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.backend is None:
@@ -935,6 +971,7 @@ class WorkbookDiary:
         self._worker.start()
         self._previous_signal_handlers = {}
         self._signal_handlers = {}
+        self._anomaly_rows = []
         self._register_shutdown_hooks()
 
     def append_signals(self, signals: Iterable[Signal]) -> None:
@@ -986,6 +1023,15 @@ class WorkbookDiary:
             worker = self._worker
             try:
                 self.flush()
+                backend = self.backend
+                if backend is not None:
+                    try:
+                        backend.rewrite_anomalies(self._anomaly_rows)
+                    except Exception:
+                        self._logger.exception(
+                            "Не удалось пересортировать аномалии перед закрытием дневника",
+                        )
+                self._anomaly_rows.clear()
                 self._logger.info("Сброс данных дневника завершён; останавливаем запись")
             finally:
                 self._stop_event.set()
@@ -1045,10 +1091,13 @@ class WorkbookDiary:
         return handler
 
     def _enqueue_rows(self, sheet_key: SheetKey, rows: Iterable[DiaryRow]) -> None:
-        if not rows:
+        materialized_rows = list(rows)
+        if not materialized_rows:
             return
         self._raise_if_worker_failed()
-        for row in rows:
+        if sheet_key == "anomalies":
+            self._anomaly_rows.extend(row for row in materialized_rows if isinstance(row, AnomalyRow))
+        for row in materialized_rows:
             self._queue.put(_QueuedRow(sheet_key=sheet_key, row=row))
 
     def _worker_loop(self) -> None:
