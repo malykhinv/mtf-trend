@@ -106,6 +106,9 @@ class _NullNotifier(Notifier):
     def send_trade(self, trade: Trade) -> None:  # pragma: no cover - simple no-op
         return None
 
+    def send_message(self, text: str) -> None:  # pragma: no cover - simple no-op
+        return None
+
 
 def create_notifier(mode: RuntimeMode) -> Notifier:
     if mode is RuntimeMode.LIVE:
@@ -175,9 +178,24 @@ def run() -> None:
             diary_root=diary.path,
         )
         preparation = bootstrapper.prepare()
+        thresholds_message: str | None = None
         if preparation.candidate is not None and preparation.settings is not None:
             analyzer.apply_settings(preparation.settings)
             write_threshold_candidate(preparation.workbook_path, preparation.candidate)
+            candidate = preparation.candidate
+            thresholds_message = "\n".join(
+                [
+                    "Обновлены рабочие пороги анализа:",
+                    f"- Минимальное движение: {candidate.min_pct_move:.2f}",
+                    f"- Максимальное движение: {candidate.max_pct_move:.2f}",
+                    f"- Минимальный ATR-множитель: {candidate.min_atr_mult:.2f}",
+                    f"- Минимальный относительный объём: {candidate.min_relative_volume:.2f}",
+                    f"- Максимальный относительный объём: {candidate.max_relative_volume:.2f}",
+                    f"- Минимальное R/R: {candidate.min_rr:.2f}",
+                    f"- Доля позиции: {candidate.position_fraction:.0%}",
+                ]
+            )
+            logger.info("Подготовлено уведомление о порогах:\n%s", thresholds_message)
         dependencies = create_orchestrator_dependencies(
             exchange,
             mode,
@@ -186,6 +204,14 @@ def run() -> None:
             market_loader=market_loader,
             anomalies_filename=anomalies_filename,
         )
+        if thresholds_message is not None:
+            try:
+                dependencies.notifier.send_message(thresholds_message)
+            except Exception as exc:  # pragma: no cover - network failure
+                logger.warning(
+                    "Не удалось отправить уведомление с рабочими порогами: %s",
+                    exc,
+                )
         try:
             run_live(dependencies)
         except KeyboardInterrupt:

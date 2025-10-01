@@ -25,6 +25,9 @@ class Notifier(Protocol):
     def send_trade(self, trade: Trade) -> None:  # pragma: no cover - interface definition
         ...
 
+    def send_message(self, text: str) -> None:  # pragma: no cover - interface definition
+        ...
+
 
 SendRequest = Callable[[str, dict[str, object], float], requests.Response]
 
@@ -63,6 +66,9 @@ class TelegramNotifier(Notifier):
     def send_trade(self, trade: Trade) -> None:
         text = self._format_trade(trade)
         self._send_text(text, f"сделки {trade.trade_id}")
+
+    def send_message(self, text: str) -> None:
+        self._send_text(text, "произвольного сообщения")
 
     def _send_text(self, text: str, context: str) -> None:
         payload: dict[str, object] = {"chat_id": self.chat_id, "text": text}
