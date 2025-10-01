@@ -429,23 +429,41 @@ class WsLiveDataStream(LiveDataStream):
         }
 
     def subscribe(self, listener: Callable[[LiveBarEvent], None]) -> None:
-        with self._lock:
-            self._listeners.append(listener)
-            self._logger.info("Добавлен слушатель потока, всего %s", len(self._listeners))
-            if self._threads:
-                return
+        threads_to_start: list[threading.Thread] = []
+        should_start = False
 
-            self._threads = []
-            if self._exchange is Exchange.BINANCE:
-                self._threads.append(
-                    threading.Thread(target=self._run_binance, name="binance-ws", daemon=True)
+        with self._lock:
+            if listener not in self._listeners:
+                self._listeners.append(listener)
+                self._logger.info(
+                    "Добавлен слушатель потока, всего %s", len(self._listeners)
                 )
-            if self._exchange is Exchange.BYBIT:
-                self._threads.append(
-                    threading.Thread(target=self._run_bybit, name="bybit-ws", daemon=True)
-                )
-            for thread in self._threads:
-                thread.start()
+
+            # Очистить завершившиеся потоки перед возможным перезапуском
+            self._threads = [thread for thread in self._threads if thread.is_alive()]
+            if not self._threads:
+                if self._stop_event.is_set():
+                    self._stop_event.clear()
+
+                if self._exchange is Exchange.BINANCE:
+                    threads_to_start.append(
+                        threading.Thread(
+                            target=self._run_binance, name="binance-ws", daemon=True
+                        )
+                    )
+                if self._exchange is Exchange.BYBIT:
+                    threads_to_start.append(
+                        threading.Thread(
+                            target=self._run_bybit, name="bybit-ws", daemon=True
+                        )
+                    )
+                self._threads = list(threads_to_start)
+                should_start = bool(self._threads)
+
+        for thread in threads_to_start:
+            thread.start()
+
+        if should_start and threads_to_start:
             self._logger.info(
                 "Запущен поток подписки на биржу %s", self._exchange.value
             )
@@ -454,13 +472,16 @@ class WsLiveDataStream(LiveDataStream):
         self._logger.info(
             "Останавливаем поток котировок для биржи %s", self._exchange.value
         )
-        self._stop_event.set()
-        for app in list(self._apps):
-            close = getattr(app, "close", None)
-            if callable(close):
-                close()
-        for thread in self._threads:
-            thread.join(timeout=1.0)
+        with self._lock:
+            self._stop_event.set()
+            for app in list(self._apps):
+                close = getattr(app, "close", None)
+                if callable(close):
+                    close()
+            for thread in self._threads:
+                thread.join(timeout=1.0)
+            self._threads = []
+            self._apps = []
 
     def _notify(self, event: LiveBarEvent) -> None:
         listeners_snapshot = list(self._listeners)
