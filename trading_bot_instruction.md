@@ -192,21 +192,28 @@ API-ключи и токены передаются через переменн�
 - `signal_id, timestamp(tz), exchange, symbol, timeframe, direction`
 - Уровни: `entry_price, take_profit_price, stop_loss_price`
 - `bar_id`
-- Полный набор метрик бара (`BarMetrics`)
-- Threshold snapshot с полями из §5.
+- Метрики бара: `metrics_pct_move, metrics_relative_volume, metrics_atr_mult, metrics_upper_wick_pct, metrics_body_pct, metrics_lower_wick_pct, metrics_pct_to_low_break, metrics_pct_to_high_break, metrics_break_direction`
+- Снимок порогов: `thresholds_min_green_move_pct, thresholds_min_volume_spike, thresholds_min_relative_volume, thresholds_max_relative_volume, thresholds_min_atr_mult, thresholds_min_pct_move, thresholds_max_pct_move, thresholds_max_upper_wick_pct, thresholds_max_lower_wick_pct`.
 
 ### trades.xlsx
 - `trade_id, source_signal_id`
 - `timestamp_open(tz), timestamp_close(tz?)`
 - `exchange, symbol, timeframe, side`
-- `entry_price, take_profit_price, stop_loss_price`
-- `executed_qty`
+- Уровни: `entry_price, take_profit_price, stop_loss_price`
+- Количества: `requested_qty, executed_qty`
 - `status ∈ {OPENED, CLOSED_TP, CLOSED_SL, CLOSED_MANUAL, CANCELLED}`
-- `avg_fill_price?`, `reason_close?`, `sl_be_at?`
+- Дополнительно: `avg_fill_price?`, `reason_close?`, `sl_be_at?`
+- Идентификаторы заявок: `order_id?`, `stop_order_id?`, `take_order_id?`, `close_order_id?`.
 
 ### anomalies.xlsx (или аналогичный лист)
-- Полная копия данных бара и метрик
-- Пороговый снапшот `min_green_move_pct`, `min_volume_spike`, `min_relative_volume`, `min_atr_mult`, `min_anomaly_upper_wick_pct`.
+- Полная копия данных бара: `timestamp, exchange, symbol, timeframe, bar_id, open, high, low, close, volume`.
+- Флаги фильтров и исполнения: `long_filters_pass, short_filters_pass, long_trade_executed, short_trade_executed`.
+- Декомпозиция фильтров LONG: `long_filter_green_move_pass, long_filter_volume_spike_pass, long_filter_anomaly_relative_volume_pass, long_filter_relative_volume_min_pass, long_filter_relative_volume_max_pass, long_filter_anomaly_atr_pass, long_filter_atr_pass, long_filter_pct_move_min_pass, long_filter_pct_move_max_pass, long_filter_upper_wick_pass, long_filter_lower_wick_pass, long_filter_rr_pass`.
+- Декомпозиция фильтров SHORT: `short_filter_green_move_pass, short_filter_volume_spike_pass, short_filter_anomaly_relative_volume_pass, short_filter_relative_volume_pass, short_filter_anomaly_atr_pass, short_filter_atr_pass, short_filter_pct_move_pass, short_filter_upper_wick_pass, short_filter_lower_wick_pass, short_filter_rr_pass`.
+- Оценка сделки: `long_rr, short_rr, long_pnl_pct, short_pnl_pct, long_equity_pct, short_equity_pct`.
+- Метрики бара: `metrics_pct_move, metrics_relative_volume, metrics_atr_mult, metrics_upper_wick_pct, metrics_body_pct, metrics_lower_wick_pct, metrics_pct_to_low_break, metrics_pct_to_high_break, metrics_break_direction`.
+- Снимок порогов: `thresholds_min_green_move_pct, thresholds_min_volume_spike, thresholds_min_relative_volume, thresholds_min_atr_mult, thresholds_min_anomaly_upper_wick_pct`.
+- В рабочей книге аномалий автоматически формируется вспомогательный лист `thresholds` с раскладкой из `_ANOMALY_THRESHOLD_LAYOUT` (поле → ячейка) для формул на основном листе.
 
 Публичные методы дневника: `append_signals`, `append_trades`, `append_anomalies`.
 
