@@ -16,7 +16,10 @@ from bot.data.loader import CcxtMarketDataLoader, HistoricalRequest, WsLiveDataS
 from bot.data.notifier import Notifier, TelegramNotifier
 from bot.domain.analyzer import SignalAnalyzer
 from bot.domain.anomaly_bootstrapper import AnomalyLiveBootstrapper
-from bot.domain.anomaly_optimizer import write_threshold_candidate
+from bot.domain.anomaly_optimizer import (
+    iter_candidate_thresholds,
+    write_threshold_candidate,
+)
 from bot.domain.exchange_client import (
     BinanceExchangeClient,
     BybitExchangeClient,
@@ -33,6 +36,33 @@ from bot.utils.logger import get_logger, setup_logging
 if TYPE_CHECKING:
     from bot.domain.models.signal import Signal
     from bot.domain.models.trade import Trade
+
+
+_THRESHOLD_MESSAGE_LABELS: dict[str, str] = {
+    "min_green_move_pct": "Мин. рост аномалии (%)",
+    "min_anomaly_atr_mult": "Мин. ATR аномалии",
+    "min_anomaly_relative_volume": "Мин. относительный объём аномалии",
+    "min_anomaly_upper_wick_pct": "Мин. верхняя тень аномалии (%)",
+    "min_volume_spike": "Мин. всплеск объёма",
+    "min_relative_volume": "Мин. относительный объём",
+    "max_relative_volume": "Макс. относительный объём",
+    "min_atr_mult": "Мин. ATR множитель",
+    "min_pct_move": "Мин. движение (%)",
+    "max_pct_move": "Макс. движение (%)",
+    "initial_deposit": "Начальный депозит (USDT)",
+    "position_fraction": "Доля позиции",
+    "max_upper_wick_pct": "Макс. верхняя тень (%)",
+    "max_lower_wick_pct": "Макс. нижняя тень (%)",
+    "min_rr": "Мин. R/R",
+}
+
+
+def _format_threshold_value(field: str, value: float) -> str:
+    if field == "position_fraction":
+        return f"{value:.0%}"
+    if field == "initial_deposit":
+        return f"{value:.2f}"
+    return f"{value:.2f}"
 
 
 def run_live(dependencies: OrchestratorDependencies) -> Orchestrator:
@@ -184,18 +214,12 @@ def run() -> None:
             analyzer.apply_settings(preparation.settings)
             write_threshold_candidate(preparation.workbook_path, preparation.candidate)
             candidate = preparation.candidate
-            thresholds_message = "\n".join(
-                [
-                    "Обновлены рабочие пороги анализа:",
-                    f"- Минимальное движение: {candidate.min_pct_move:.2f}",
-                    f"- Максимальное движение: {candidate.max_pct_move:.2f}",
-                    f"- Минимальный ATR-множитель: {candidate.min_atr_mult:.2f}",
-                    f"- Минимальный относительный объём: {candidate.min_relative_volume:.2f}",
-                    f"- Максимальный относительный объём: {candidate.max_relative_volume:.2f}",
-                    f"- Минимальное R/R: {candidate.min_rr:.2f}",
-                    f"- Доля позиции: {candidate.position_fraction:.0%}",
-                ]
-            )
+            threshold_lines = ["Обновлены рабочие пороги анализа:"]
+            for field, value in iter_candidate_thresholds(candidate):
+                label = _THRESHOLD_MESSAGE_LABELS.get(field, field)
+                formatted_value = _format_threshold_value(field, value)
+                threshold_lines.append(f"- {label}: {formatted_value}")
+            thresholds_message = "\n".join(threshold_lines)
             logger.info("Подготовлено уведомление о порогах:\n%s", thresholds_message)
         dependencies = create_orchestrator_dependencies(
             exchange,

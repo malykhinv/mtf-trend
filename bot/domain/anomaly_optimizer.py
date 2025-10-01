@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from random import Random
-from typing import DefaultDict, Sequence
+from typing import DefaultDict, Iterator, Sequence
 
 from openpyxl import load_workbook
 
@@ -200,6 +201,30 @@ _THRESHOLD_FIELD_TO_NAME = {
     "initial_deposit": "thresholds_initial_deposit",
     "position_fraction": "thresholds_position_fraction",
 }
+
+
+def _build_threshold_field_order() -> tuple[str, ...]:
+    reverse_lookup = {
+        named_range: field for field, named_range in _THRESHOLD_FIELD_TO_NAME.items()
+    }
+    order: list[str] = []
+    for _, named_range, _ in WorkbookDiaryBackend._ANOMALY_THRESHOLD_LAYOUT:
+        field = reverse_lookup.get(named_range)
+        if field is not None:
+            order.append(field)
+    return tuple(order)
+
+
+THRESHOLD_FIELD_ORDER: tuple[str, ...] = _build_threshold_field_order()
+
+
+def iter_candidate_thresholds(
+    candidate: ThresholdCandidate,
+) -> Iterator[tuple[str, float]]:
+    """Yield threshold fields and values following the workbook layout order."""
+
+    for field in THRESHOLD_FIELD_ORDER:
+        yield field, getattr(candidate, field)
 
 
 _SKIP_REASON_LABELS = {
@@ -574,19 +599,21 @@ def evaluate_candidate(
     )
 
 
-def optimize_thresholds(
+def _optimize_iteration(
     samples: Sequence[AnomalySample],
-    base_candidate: ThresholdCandidate,
-    *,
-    grid_deltas: dict[str, float],
-    random_iterations: int = 50,
-    random_scale: float = 0.5,
-    rng: Random | None = None,
+    base_evaluation: CandidateEvaluation,
+    grid_deltas: Mapping[str, float],
+    random_iterations: int,
+    random_scale: float,
+    rng: Random,
 ) -> CandidateEvaluation:
-    """Run a coarse grid search followed by random perturbations."""
+    """Perform a single grid/random exploration step starting from ``base_evaluation``."""
 
-    rng = rng or Random()
-    best_evaluation = evaluate_candidate(samples, base_candidate)
+    best_evaluation = base_evaluation
+    base_candidate = base_evaluation.candidate
+
+    if not grid_deltas:
+        return best_evaluation
 
     fields = list(grid_deltas.keys())
 
@@ -635,9 +662,6 @@ def optimize_thresholds(
         field_offsets[field] = offsets
         pair_offsets[field] = _limited_offsets(offsets)
 
-    # Evaluate single-field adjustments first. This keeps the grid search
-    # focused on directional nudges instead of the full cartesian product of
-    # offsets which previously produced millions of candidates.
     for field in fields:
         baseline = getattr(base_candidate, field)
         delta = grid_deltas[field]
@@ -652,10 +676,6 @@ def optimize_thresholds(
             if evaluation.score > best_evaluation.score:
                 best_evaluation = evaluation
 
-    # Explore limited multi-field perturbations by pairing neighbouring
-    # adjustments. Restricting to pairs keeps the number of grid candidates in
-    # the hundreds while still allowing the optimizer to discover interactions
-    # between important thresholds.
     for index, primary_field in enumerate(fields):
         primary_baseline = getattr(base_candidate, primary_field)
         primary_delta = grid_deltas[primary_field]
@@ -714,6 +734,96 @@ def optimize_thresholds(
         if evaluation.score > best_evaluation.score:
             best_evaluation = evaluation
 
+    return best_evaluation
+
+
+def optimize_thresholds(
+    samples: Sequence[AnomalySample],
+    base_candidate: ThresholdCandidate,
+    *,
+    grid_deltas: Mapping[str, float],
+    random_iterations: int = 50,
+    random_scale: float = 0.5,
+    rng: Random | None = None,
+    improvement_tolerance: float = 0.01,
+    min_absolute_improvement: float = 0.01,
+) -> CandidateEvaluation:
+    """Iteratively explore the search space until improvements plateau."""
+
+    rng = rng or Random()
+    delta_map = dict(grid_deltas)
+
+    current_evaluation = evaluate_candidate(samples, base_candidate)
+    best_evaluation = current_evaluation
+    iterations = 0
+
+    while True:
+        iterations += 1
+        LOGGER.info(
+            "Starting threshold optimization iteration %d (score %.2f).",
+            iterations,
+            current_evaluation.score,
+        )
+        iteration_evaluation = _optimize_iteration(
+            samples,
+            current_evaluation,
+            delta_map,
+            random_iterations,
+            random_scale,
+            rng,
+        )
+        improvement = iteration_evaluation.score - current_evaluation.score
+        if improvement <= 0:
+            LOGGER.info(
+                "Iteration %d did not improve the score (Δ=%.2f); stopping.",
+                iterations,
+                improvement,
+            )
+            break
+
+        reference = abs(current_evaluation.score)
+        if not math.isclose(reference, 0.0, abs_tol=1e-9):
+            relative_improvement = improvement / reference
+            LOGGER.info(
+                "Iteration %d improved score to %.2f (Δ=%.2f, %+.2f%%).",
+                iterations,
+                iteration_evaluation.score,
+                improvement,
+                relative_improvement * 100,
+            )
+        else:
+            relative_improvement = float("inf")
+            LOGGER.info(
+                "Iteration %d improved score to %.2f (Δ=%.2f).",
+                iterations,
+                iteration_evaluation.score,
+                improvement,
+            )
+
+        best_evaluation = iteration_evaluation
+        current_evaluation = iteration_evaluation
+
+        if math.isfinite(relative_improvement):
+            if relative_improvement < improvement_tolerance:
+                LOGGER.info(
+                    "Relative improvement %.2f%% below %.2f%% threshold; stopping.",
+                    relative_improvement * 100,
+                    improvement_tolerance * 100,
+                )
+                break
+        elif improvement < min_absolute_improvement:
+            LOGGER.info(
+                "Absolute improvement %.2f below %.2f threshold; stopping.",
+                improvement,
+                min_absolute_improvement,
+            )
+            break
+
+    LOGGER.info(
+        "Completed threshold optimization after %d iteration(s); best score %.2f.",
+        iterations,
+        best_evaluation.score,
+    )
     return best_evaluation
 
 

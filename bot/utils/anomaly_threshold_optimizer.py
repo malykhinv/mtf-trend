@@ -7,7 +7,6 @@ sample workbook and optionally persist optimized thresholds back to it.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -18,6 +17,7 @@ from bot.domain.anomaly_optimizer import (
     ParseDiagnostics,
     ThresholdCandidate,
     load_threshold_candidate,
+    iter_candidate_thresholds,
     optimize_thresholds,
     parse_anomaly_samples,
     write_threshold_candidate,
@@ -58,7 +58,7 @@ def _log_candidate_metrics(evaluation: CandidateEvaluation) -> None:
         short_return_pct,
     )
     LOGGER.info("Selected thresholds:")
-    for field, value in sorted(asdict(candidate).items()):
+    for field, value in iter_candidate_thresholds(candidate):
         LOGGER.info("  %s: %.6f", field, value)
 
 
