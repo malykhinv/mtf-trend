@@ -364,7 +364,7 @@ class WorkbookDiaryBackend(DiaryBackend):
                 if isinstance(value, float):
                     cell.number_format = "0.00"
         self._logger.info(
-            "Appended %d rows to diary sheet '%s' (%s)",
+            "Добавлено %d строк в лист дневника '%s' (%s)",
             len(materialized),
             sheet_key,
             path,
@@ -381,7 +381,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             workbook.save(path)
             workbook.close()
             self._logger.info(
-                "Saved and closed diary workbook '%s' for sheet '%s'",
+                "Сохранён и закрыт файл дневника '%s' для листа '%s'",
                 path,
                 key,
             )
@@ -407,7 +407,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             finally:
                 workbook.close()
             self._logger.info(
-                "Opened existing diary workbook '%s' for sheet '%s'",
+                "Открыт существующий файл дневника '%s' для листа '%s'",
                 path,
                 sheet_name,
             )
@@ -422,7 +422,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             finally:
                 workbook.close()
             self._logger.info(
-                "Created diary workbook '%s' for sheet '%s'",
+                "Создан файл дневника '%s' для листа '%s'",
                 path,
                 sheet_name,
             )
@@ -440,7 +440,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         workbook_entry = self._open_workbooks.get(sheet_key)
         if workbook_entry is not None:
             self._logger.info(
-                "Workbook for sheet '%s' already open at '%s'",
+                "Файл для листа '%s' уже открыт по пути '%s'",
                 sheet_key,
                 path,
             )
@@ -451,7 +451,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         workbook_entry = (workbook, sheet)
         self._open_workbooks[sheet_key] = workbook_entry
         self._logger.info(
-            "Opened diary workbook '%s' for sheet '%s'",
+            "Открыт файл дневника '%s' для листа '%s'",
             path,
             sheet_key,
         )
@@ -915,7 +915,7 @@ class WorkbookDiary:
             worker = self._worker
             try:
                 self.flush()
-                self._logger.info("Workbook diary flush complete; stopping writes")
+                self._logger.info("Сброс данных дневника завершён; останавливаем запись")
             finally:
                 self._stop_event.set()
                 self._flush_event.set()
