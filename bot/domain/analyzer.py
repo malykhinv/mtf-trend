@@ -54,8 +54,13 @@ class AnalyzerSettings:
 class SignalAnalyzer:
     """Evaluates bars and produces strategy signals."""
 
-    def __init__(self) -> None:
-        self._settings = AnalyzerSettings()
+    def __init__(self, settings: AnalyzerSettings | None = None) -> None:
+        self._settings = settings or AnalyzerSettings()
+
+    def apply_settings(self, settings: AnalyzerSettings) -> None:
+        """Replace the analyzer thresholds with a new configuration."""
+
+        self._settings = settings
 
     def analyze_bar(
         self, bar: Bar, timestamp: Optional[datetime] = None

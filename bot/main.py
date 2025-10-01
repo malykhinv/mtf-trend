@@ -14,6 +14,8 @@ from bot.data.exchange_utils import create_ccxt_client, fetch_linear_usdt_symbol
 from bot.data.loader import CcxtMarketDataLoader, HistoricalRequest, WsLiveDataStream
 from bot.data.notifier import Notifier, TelegramNotifier
 from bot.domain.analyzer import SignalAnalyzer
+from bot.domain.anomaly_bootstrapper import AnomalyLiveBootstrapper
+from bot.domain.anomaly_optimizer import write_threshold_candidate
 from bot.domain.exchange_client import (
     BinanceExchangeClient,
     BybitExchangeClient,
@@ -79,12 +81,20 @@ def create_live_stream(exchange: Exchange, timeframe: Timeframe) -> WsLiveDataSt
     return WsLiveDataStream(exchange=exchange, timeframe=timeframe)
 
 
-def create_diary(exchange: Exchange, base_path: Path | None = None) -> WorkbookDiary:
+def create_diary(
+    exchange: Exchange,
+    base_path: Path | None = None,
+    *,
+    anomalies_filename: str | None = None,
+) -> WorkbookDiary:
     base = Path(base_path) if base_path is not None else Path(
         os.getenv("BOT_DIARY_PATH", "var/diary")
     )
     path = base / exchange.value
-    return WorkbookDiary(path=path)
+    kwargs = {"path": path}
+    if anomalies_filename is not None:
+        kwargs["anomalies_filename"] = anomalies_filename
+    return WorkbookDiary(**kwargs)
 
 
 class _NullNotifier(Notifier):
@@ -114,22 +124,32 @@ def create_balance_provider(exchange: Exchange) -> CcxtBalanceProvider:
 def create_orchestrator_dependencies(
     exchange: Exchange,
     mode: RuntimeMode,
+    *,
     diary: WorkbookDiary | None = None,
+    analyzer: SignalAnalyzer | None = None,
+    market_loader: CcxtMarketDataLoader | None = None,
+    anomalies_filename: str | None = None,
 ) -> OrchestratorDependencies:
     primary_timeframe = config.DEFAULT_TIMEFRAMES[0]
-    market_loader = create_market_data_loader()
+    market_loader_instance = (
+        market_loader if market_loader is not None else create_market_data_loader()
+    )
     live_stream = create_live_stream(exchange, primary_timeframe)
-    diary_instance = diary if diary is not None else create_diary(exchange)
+    diary_instance = (
+        diary
+        if diary is not None
+        else create_diary(exchange, anomalies_filename=anomalies_filename)
+    )
     notifier = create_notifier(mode)
-    analyzer = SignalAnalyzer()
+    analyzer_instance = analyzer if analyzer is not None else SignalAnalyzer()
     execution = create_execution_service(exchange)
     balance_provider = create_balance_provider(exchange)
     return OrchestratorDependencies(
-        market_loader=market_loader,
+        market_loader=market_loader_instance,
         live_stream=live_stream,
         diary=diary_instance,
         notifier=notifier,
-        analyzer=analyzer,
+        analyzer=analyzer_instance,
         execution=execution,
         balance_provider=balance_provider,
         exchange=exchange,
@@ -144,7 +164,28 @@ def run() -> None:
         "Инициализация режима %s для биржи %s", mode.value, exchange.value
     )
     if mode is RuntimeMode.LIVE:
-        dependencies = create_orchestrator_dependencies(exchange, mode)
+        anomalies_filename = "anomalies_live.xlsx"
+        diary = create_diary(exchange, anomalies_filename=anomalies_filename)
+        market_loader = create_market_data_loader()
+        analyzer = SignalAnalyzer()
+        bootstrapper = AnomalyLiveBootstrapper(
+            exchange=exchange,
+            loader=market_loader,
+            analyzer=analyzer,
+            diary_root=diary.path,
+        )
+        preparation = bootstrapper.prepare()
+        if preparation.candidate is not None and preparation.settings is not None:
+            analyzer.apply_settings(preparation.settings)
+            write_threshold_candidate(preparation.workbook_path, preparation.candidate)
+        dependencies = create_orchestrator_dependencies(
+            exchange,
+            mode,
+            diary=diary,
+            analyzer=analyzer,
+            market_loader=market_loader,
+            anomalies_filename=anomalies_filename,
+        )
         try:
             run_live(dependencies)
         except KeyboardInterrupt:

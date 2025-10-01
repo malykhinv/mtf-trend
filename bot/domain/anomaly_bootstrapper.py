@@ -12,7 +12,14 @@ from openpyxl import load_workbook
 from bot import config
 from bot.data.diary import AnomalyRow, WorkbookDiaryBackend
 from bot.data.loader import HistoricalRequest, MarketDataLoader
-from bot.domain.analyzer import SignalAnalyzer
+from bot.domain.analyzer import AnalyzerSettings, SignalAnalyzer
+from bot.domain.anomaly_optimizer import (
+    AnomalySample,
+    CandidateEvaluation,
+    ThresholdCandidate,
+    load_threshold_candidate,
+    optimize_thresholds,
+)
 from bot.domain.models.anomaly import Anomaly
 from bot.domain.models.bar import BarMetrics, BreakDirection
 from bot.domain.models.exchange import Exchange
@@ -35,6 +42,18 @@ class LoggedAnomaly:
     close: float
     volume: float
     metrics: BarMetrics
+
+
+@dataclass(frozen=True, slots=True)
+class BootstrapPreparationResult:
+    """Artifacts gathered while preparing the live anomalies log."""
+
+    anomalies: list[LoggedAnomaly]
+    samples: list[AnomalySample]
+    evaluation: CandidateEvaluation | None
+    candidate: ThresholdCandidate | None
+    settings: AnalyzerSettings | None
+    workbook_path: Path
 
 
 class AnomalyLiveBootstrapper:
@@ -78,6 +97,83 @@ class AnomalyLiveBootstrapper:
             )
         self._trim_outdated_rows()
         return self._parse_workbook()
+
+    def prepare(self) -> BootstrapPreparationResult:
+        """Synchronize the live workbook and derive optimized thresholds."""
+
+        anomalies = self.bootstrap()
+        samples = self._to_samples(anomalies)
+        evaluation: CandidateEvaluation | None = None
+        candidate: ThresholdCandidate | None = None
+        settings: AnalyzerSettings | None = None
+
+        if not samples:
+            self._logger.info(
+                "No anomaly samples available in %s; skipping optimization", self._live_path
+            )
+            return BootstrapPreparationResult(
+                anomalies=anomalies,
+                samples=samples,
+                evaluation=evaluation,
+                candidate=candidate,
+                settings=settings,
+                workbook_path=self._live_path,
+            )
+
+        try:
+            base_candidate = load_threshold_candidate(self._live_path)
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._logger.warning(
+                "Failed to load baseline thresholds from %s: %s",
+                self._live_path,
+                exc,
+            )
+            return BootstrapPreparationResult(
+                anomalies=anomalies,
+                samples=samples,
+                evaluation=evaluation,
+                candidate=candidate,
+                settings=settings,
+                workbook_path=self._live_path,
+            )
+
+        try:
+            grid_deltas = self._compute_grid_deltas(base_candidate)
+            evaluation = optimize_thresholds(
+                samples,
+                base_candidate,
+                grid_deltas=grid_deltas,
+            )
+        except Exception as exc:  # pragma: no cover - defensive logging
+            self._logger.warning(
+                "Threshold optimization failed using %d samples: %s",
+                len(samples),
+                exc,
+            )
+            return BootstrapPreparationResult(
+                anomalies=anomalies,
+                samples=samples,
+                evaluation=evaluation,
+                candidate=candidate,
+                settings=settings,
+                workbook_path=self._live_path,
+            )
+
+        candidate = evaluation.candidate
+        settings = self._candidate_to_settings(candidate)
+        self._logger.info(
+            "Optimized thresholds using %d anomaly samples; score %.2f",
+            len(samples),
+            evaluation.score,
+        )
+        return BootstrapPreparationResult(
+            anomalies=anomalies,
+            samples=samples,
+            evaluation=evaluation,
+            candidate=candidate,
+            settings=settings,
+            workbook_path=self._live_path,
+        )
 
     def _ensure_live_workbook(self) -> None:
         if self._live_path.exists():
@@ -301,6 +397,68 @@ class AnomalyLiveBootstrapper:
             )
             for anomaly in anomalies
         ]
+
+    @staticmethod
+    def _to_samples(anomalies: Iterable[LoggedAnomaly]) -> list[AnomalySample]:
+        return [
+            AnomalySample(
+                timestamp=anomaly.timestamp,
+                exchange=anomaly.exchange,
+                symbol=anomaly.symbol,
+                timeframe=anomaly.timeframe,
+                bar_id=anomaly.bar_id,
+                open=anomaly.open,
+                high=anomaly.high,
+                low=anomaly.low,
+                close=anomaly.close,
+                volume=anomaly.volume,
+                metrics=anomaly.metrics,
+            )
+            for anomaly in anomalies
+        ]
+
+    @staticmethod
+    def _candidate_to_settings(candidate: ThresholdCandidate) -> AnalyzerSettings:
+        return AnalyzerSettings(
+            min_green_move_pct=candidate.min_green_move_pct,
+            min_volume_spike=candidate.min_volume_spike,
+            min_anomaly_relative_volume=candidate.min_anomaly_relative_volume,
+            min_anomaly_atr_mult=candidate.min_anomaly_atr_mult,
+            min_anomaly_upper_wick_pct=candidate.min_anomaly_upper_wick_pct,
+            min_relative_volume=candidate.min_relative_volume,
+            max_relative_volume=candidate.max_relative_volume,
+            min_atr_mult=candidate.min_atr_mult,
+            min_pct_move=candidate.min_pct_move,
+            max_pct_move=candidate.max_pct_move,
+            max_upper_wick_pct=candidate.max_upper_wick_pct,
+            max_lower_wick_pct=candidate.max_lower_wick_pct,
+        )
+
+    @staticmethod
+    def _compute_grid_deltas(candidate: ThresholdCandidate) -> dict[str, float]:
+        adjustable_fields = [
+            "min_green_move_pct",
+            "min_volume_spike",
+            "min_anomaly_relative_volume",
+            "min_relative_volume",
+            "max_relative_volume",
+            "min_anomaly_atr_mult",
+            "min_atr_mult",
+            "min_pct_move",
+            "max_pct_move",
+            "min_anomaly_upper_wick_pct",
+            "max_upper_wick_pct",
+            "max_lower_wick_pct",
+            "min_rr",
+        ]
+        deltas: dict[str, float] = {}
+        for field in adjustable_fields:
+            baseline = getattr(candidate, field)
+            step = abs(baseline) * 0.1
+            if step <= 0:
+                step = 0.1
+            deltas[field] = step
+        return deltas
 
     @staticmethod
     def _parse_timestamp(value: object) -> datetime | None:
