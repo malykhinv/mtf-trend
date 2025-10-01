@@ -11,10 +11,12 @@ from typing import DefaultDict, Sequence
 
 from openpyxl import load_workbook
 
+from bot import config
 from bot.data.diary import WorkbookDiaryBackend
 from bot.domain.models.bar import BarMetrics, BreakDirection
 from bot.domain.models.exchange import Exchange
 from bot.domain.models.timeframe import Timeframe
+from bot.utils.datetime_parser import parse_iso_datetime
 from bot.utils.logger import get_logger
 
 
@@ -231,12 +233,13 @@ def parse_anomaly_samples(
         for row_number, row in enumerate(
             sheet.iter_rows(min_row=2, values_only=True), start=2
         ):
-            timestamp = row[index["timestamp"]]
-            if not isinstance(timestamp, datetime):
+            timestamp_value = row[index["timestamp"]]
+            timestamp = _parse_timestamp(timestamp_value)
+            if timestamp is None:
                 diagnostics_collector.add(
                     "timestamp_not_datetime",
                     row_number,
-                    f"value={timestamp!r}",
+                    f"value={timestamp_value!r}",
                 )
                 continue
             exchange_value = row[index["exchange"]]
@@ -632,6 +635,19 @@ def _compute_short_pnl(sample: AnomalySample) -> float | None:
 
 def _ensure_non_negative(value: float) -> float:
     return value if value >= 0 else 0.0
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=config.TIMEZONE)
+    if isinstance(value, str):
+        try:
+            return parse_iso_datetime(value, timezone=config.TIMEZONE)
+        except ValueError:
+            return None
+    return None
 
 
 def _float(value: object) -> float:
