@@ -8,6 +8,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal, InvalidOperation, ROUND_DOWN, localcontext
 from enum import Enum
 from typing import Protocol
 from urllib.parse import urlencode
@@ -27,6 +28,26 @@ def _normalize_symbol_for_api(symbol: str) -> str:
     for separator in ("/", "-"):
         normalized = normalized.replace(separator, "")
     return normalized
+
+
+def _round_down_quantity(quantity: float, step: Decimal) -> float:
+    """Round ``quantity`` down to the nearest ``step`` using decimal arithmetic."""
+
+    if quantity <= 0 or step <= 0:
+        return 0.0
+
+    with localcontext() as context:
+        context.prec = 28
+        context.rounding = ROUND_DOWN
+        qty_dec = Decimal(str(quantity))
+        step_dec = step
+        steps = (qty_dec / step_dec).to_integral_value(rounding=ROUND_DOWN)
+        quantized = steps * step_dec
+
+    if quantized <= 0:
+        return 0.0
+
+    return float(quantized)
 
 
 class ExchangeClientError(RuntimeError):
@@ -132,6 +153,9 @@ class ExchangeClient(Protocol):
         ...  # pragma: no cover - interface definition
 
     def fetch_positions(self, *, exchange: Exchange) -> list[SymbolPositionSnapshot]:
+        ...  # pragma: no cover - interface definition
+
+    def quantize_quantity(self, symbol: str, quantity: float) -> float:
         ...  # pragma: no cover - interface definition
 
 
@@ -323,6 +347,9 @@ class InMemoryExchangeClient(ExchangeClient):
             snapshots.append(self.fetch_position(exchange=exchange, symbol=symbol))
         return snapshots
 
+    def quantize_quantity(self, symbol: str, quantity: float) -> float:  # noqa: ARG002 - interface
+        return max(0.0, quantity)
+
     def _update_position_for_order(
         self, order_id: str, snapshot: OrderExecutionSnapshot
     ) -> None:
@@ -375,6 +402,7 @@ class BinanceExchangeClient(ExchangeClient):
         self._order_cache: dict[str, OrderExecutionSnapshot] = {}
         self._order_symbol: dict[str, str] = {}
         self._symbol_orders: dict[tuple[str, str], dict[str, object]] = {}
+        self._symbol_lot_step: dict[str, Decimal | None] = {}
 
     def submit_bracket_order(self, request: BracketOrderRequest) -> BracketOrderExecution:
         symbol_display = request.symbol.upper()
@@ -541,6 +569,12 @@ class BinanceExchangeClient(ExchangeClient):
                 snapshots.append(self._build_position_snapshot(exchange, display_symbol, item))
         return snapshots
 
+    def quantize_quantity(self, symbol: str, quantity: float) -> float:
+        step = self._get_symbol_lot_step(symbol)
+        if step is None:
+            return max(0.0, quantity)
+        return _round_down_quantity(quantity, step)
+
     def _build_position_snapshot(
         self,
         exchange: Exchange,
@@ -610,6 +644,80 @@ class BinanceExchangeClient(ExchangeClient):
             close=close_snapshot,
             updated_at=updated_at,
         )
+
+    def _get_symbol_lot_step(self, symbol: str) -> Decimal | None:
+        symbol_key = symbol.strip().upper()
+        if not symbol_key:
+            return None
+        if symbol_key in self._symbol_lot_step:
+            return self._symbol_lot_step[symbol_key]
+
+        step = self._fetch_symbol_lot_step(symbol_key)
+        self._symbol_lot_step[symbol_key] = step
+        return step
+
+    def _fetch_symbol_lot_step(self, symbol: str) -> Decimal | None:
+        symbol_api = _normalize_symbol_for_api(symbol)
+        url = f"{self._base_url}/fapi/v1/exchangeInfo"
+        params = {"symbol": symbol_api}
+
+        try:
+            response = self._session.get(url, params=params, timeout=self._timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:  # pragma: no cover - network errors
+            self._logger.warning(
+                "Не удалось получить exchangeInfo для %s: %s", symbol, exc
+            )
+            return None
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            self._logger.warning(
+                "Binance exchangeInfo вернул некорректный JSON для %s: %s", symbol, exc
+            )
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        symbols_data = data.get("symbols")
+        if not isinstance(symbols_data, list):
+            return None
+
+        for info in symbols_data:
+            if not isinstance(info, dict):
+                continue
+            raw_symbol = str(info.get("symbol", ""))
+            if raw_symbol.upper() != symbol_api.upper():
+                continue
+            filters = info.get("filters")
+            if not isinstance(filters, list):
+                continue
+            for filter_info in filters:
+                if not isinstance(filter_info, dict):
+                    continue
+                filter_type = str(filter_info.get("filterType", ""))
+                if filter_type.upper() != "LOT_SIZE":
+                    continue
+                step_size = filter_info.get("stepSize")
+                if not isinstance(step_size, str):
+                    continue
+                try:
+                    step_decimal = Decimal(step_size)
+                except (InvalidOperation, ValueError):
+                    self._logger.warning(
+                        "Не удалось преобразовать шаг лота %s для %s", step_size, symbol
+                    )
+                    return None
+                if step_decimal <= 0:
+                    self._logger.warning(
+                        "Получен некорректный шаг лота %s для %s", step_decimal, symbol
+                    )
+                    return None
+                return step_decimal
+
+        return None
 
     def _resolve_display_symbol(self, exchange: Exchange, symbol: str) -> str:
         if not symbol:
@@ -810,6 +918,7 @@ class BybitExchangeClient(ExchangeClient):
         self._order_cache: dict[str, OrderExecutionSnapshot] = {}
         self._order_symbol: dict[str, str] = {}
         self._symbol_orders: dict[tuple[str, str], dict[str, object]] = {}
+        self._symbol_lot_step: dict[str, Decimal | None] = {}
 
     def submit_bracket_order(self, request: BracketOrderRequest) -> BracketOrderExecution:
         if request.exchange is not Exchange.BYBIT:
@@ -1002,6 +1111,89 @@ class BybitExchangeClient(ExchangeClient):
                     display_symbol = self._resolve_display_symbol(exchange, symbol_raw)
                     snapshots.append(self._build_position_snapshot(exchange, display_symbol, item))
         return snapshots
+
+    def _get_symbol_lot_step(self, symbol: str) -> Decimal | None:
+        symbol_key = symbol.strip().upper()
+        if not symbol_key:
+            return None
+        if symbol_key in self._symbol_lot_step:
+            return self._symbol_lot_step[symbol_key]
+
+        step = self._fetch_symbol_lot_step(symbol_key)
+        self._symbol_lot_step[symbol_key] = step
+        return step
+
+    def _fetch_symbol_lot_step(self, symbol: str) -> Decimal | None:
+        symbol_api = _normalize_symbol_for_api(symbol)
+        url = f"{self._base_url}/v5/market/instruments-info"
+        params = {"category": self._CATEGORY, "symbol": symbol_api}
+
+        try:
+            response = self._session.get(url, params=params, timeout=self._timeout)
+            response.raise_for_status()
+        except requests.RequestException as exc:  # pragma: no cover - network errors
+            self._logger.warning(
+                "Не удалось получить instrument_info для %s: %s", symbol, exc
+            )
+            return None
+
+        try:
+            data = response.json()
+        except ValueError as exc:
+            self._logger.warning(
+                "Bybit instrument_info вернул некорректный JSON для %s: %s", symbol, exc
+            )
+            return None
+
+        if not isinstance(data, dict):
+            return None
+
+        ret_code = data.get("retCode")
+        if ret_code not in (0, "0"):
+            message = data.get("retMsg") or str(data)
+            self._logger.warning(
+                "Bybit instrument_info для %s завершился ошибкой: %s", symbol, message
+            )
+            return None
+
+        result = data.get("result")
+        if not isinstance(result, dict):
+            return None
+
+        instruments = result.get("list")
+        if not isinstance(instruments, list):
+            return None
+
+        for instrument in instruments:
+            if not isinstance(instrument, dict):
+                continue
+            lot_filter = instrument.get("lotSizeFilter")
+            if not isinstance(lot_filter, dict):
+                continue
+            step_size = lot_filter.get("qtyStep")
+            if not isinstance(step_size, str):
+                continue
+            try:
+                step_decimal = Decimal(step_size)
+            except (InvalidOperation, ValueError):
+                self._logger.warning(
+                    "Не удалось преобразовать шаг лота %s для %s", step_size, symbol
+                )
+                return None
+            if step_decimal <= 0:
+                self._logger.warning(
+                    "Получен некорректный шаг лота %s для %s", step_decimal, symbol
+                )
+                return None
+            return step_decimal
+
+        return None
+
+    def quantize_quantity(self, symbol: str, quantity: float) -> float:
+        step = self._get_symbol_lot_step(symbol)
+        if step is None:
+            return max(0.0, quantity)
+        return _round_down_quantity(quantity, step)
 
     def _fetch_order_remote(
         self,
