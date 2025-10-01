@@ -258,24 +258,36 @@ bot/
   config.py
   .env
   data/
-    loader.py
+    accounting.py
     diary.py
+    exchange_utils.py
+    loader.py
     notifier.py
   domain/
     models/
+      anomaly.py
       bar.py
+      close_reason.py
+      exchange.py
+      runtime.py
       signal.py
+      signal_direction.py
+      timeframe.py
       trade.py
-      enums.py
+      trade_status.py
     analyzer.py
-    swing_detector.py
+    anomaly_bootstrapper.py
+    anomaly_optimizer.py
     execution_service.py
+    exchange_client.py
     orchestrator.py
+    swing_detector.py
   utils/
+    datetime_parser.py
     math_ops.py
     prints_aggregator.py
     locks.py
-    logging.py
+    logger.py
 ```
 
 ### Интерфейсы
@@ -292,14 +304,32 @@ bot/
 **data.notifier**
 - Протокол `Notifier.send_signal(signal)`.
 
+**data.accounting**
+- Протокол `BalanceProvider.current_deposit()`, реализация `CcxtBalanceProvider` с авто-обновлением депозита.
+
+**data.exchange_utils**
+- Фабрика `create_ccxt_client(exchange)` и фильтр `fetch_linear_usdt_symbols(exchange)`.
+
 **domain.analyzer**
 - `SignalAnalyzer.analyze_bar(bar, timestamp=None) -> tuple[Signal | None, Anomaly | None]`.
+
+**domain.anomaly_bootstrapper**
+- `AnomalyLiveBootstrapper.bootstrap()` / `prepare()` для синхронизации live-журнала и подготовки оптимизации порогов.
+
+**domain.anomaly_optimizer**
+- `parse_anomaly_samples(path)`, `optimize_thresholds(samples, candidate, grid_deltas)` и `load_threshold_candidate(path)`.
 
 **domain.swing_detector**
 - `SwingDetector.detect_swing_high(highs)` / `detect_swing_low(lows)`.
 
+**domain.exchange_client**
+- Протокол `ExchangeClient` (`submit_bracket_order`, `fetch_order`, `cancel_order`, `close_position_market`, `fetch_position(s)`), `BracketOrderRequest`, `SymbolPositionSnapshot`.
+
 **utils.prints_aggregator**
 - `PrintsAggregator.add_print(trade_print)` / `imbalance()` / `clear()`.
+
+**utils.datetime_parser**
+- `parse_iso_datetime(value, timezone=...)` — нормализация ISO-дат в целевую таймзону.
 
 **domain.execution_service**
 - `calc_order_size_usdt`, `open_trade`, `close_trade`, `should_move_to_breakeven`, `breakeven_stop`.
