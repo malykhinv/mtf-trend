@@ -414,6 +414,8 @@ class WsLiveDataStream(LiveDataStream):
         self._lock = threading.Lock()
         self._threads: list[threading.Thread] = []
         self._apps: list[WebSocketApp] = []
+        self._cached_symbols: dict[Exchange, list[str]] = {}
+        self._symbol_retry_delay = 5.0
         self._market_clients: dict[Exchange, object] = {
             Exchange.BINANCE: ccxt.binanceusdm({"enableRateLimit": True}),
             Exchange.BYBIT: ccxt.bybit(
@@ -493,45 +495,93 @@ class WsLiveDataStream(LiveDataStream):
 
     def _load_top_symbols(self, exchange: Exchange) -> list[str]:
         client = self._market_clients[exchange]
-        tickers = client.fetch_tickers()  # type: ignore[attr-defined]
-        ranked: list[tuple[str, float]] = []
-        for symbol, ticker in tickers.items():
-            base_symbol = symbol.split(":")[0]
-            if not base_symbol.endswith("/USDT"):
-                continue
-            volume_candidates = [
-                ticker.get("quoteVolume"),
-                ticker.get("info", {}).get("quoteVolume"),
-                ticker.get("info", {}).get("turnover"),
-                ticker.get("info", {}).get("turnover24h"),
-                ticker.get("info", {}).get("turnoverUsd24h"),
-                ticker.get("info", {}).get("volume24h"),
-            ]
-            quote_volume = 0.0
-            for candidate in volume_candidates:
-                if candidate in (None, ""):
-                    continue
-                try:
-                    quote_volume = float(candidate)
-                except (TypeError, ValueError):
-                    continue
+        cached_symbols = self._cached_symbols.get(exchange, [])
+
+        while not self._stop_event.is_set():
+            try:
+                tickers = client.fetch_tickers()  # type: ignore[attr-defined]
+            except ccxt.BaseError as exc:
+                self._logger.warning(
+                    "Ошибка получения тикеров %s: %s", exchange.value, exc, exc_info=True
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                self._logger.exception(
+                    "Неизвестная ошибка получения тикеров %s", exchange.value
+                )
+            else:
+                if not tickers:
+                    self._logger.warning(
+                        "Пустой ответ с тикерами %s", exchange.value
+                    )
                 else:
-                    break
-            ranked.append((base_symbol, quote_volume))
-        ranked.sort(key=lambda item: item[1], reverse=True)
-        symbols = [symbol for symbol, _ in ranked[: self._top_n]]
-        self._logger.info(
-            "Выбраны пары %s (топ %s по объёму на %s)",
-            symbols,
-            self._top_n,
-            exchange.value,
-        )
-        return symbols
+                    ranked: list[tuple[str, float]] = []
+                    for symbol, ticker in tickers.items():
+                        base_symbol = symbol.split(":")[0]
+                        if not base_symbol.endswith("/USDT"):
+                            continue
+                        volume_candidates = [
+                            ticker.get("quoteVolume"),
+                            ticker.get("info", {}).get("quoteVolume"),
+                            ticker.get("info", {}).get("turnover"),
+                            ticker.get("info", {}).get("turnover24h"),
+                            ticker.get("info", {}).get("turnoverUsd24h"),
+                            ticker.get("info", {}).get("volume24h"),
+                        ]
+                        quote_volume = 0.0
+                        for candidate in volume_candidates:
+                            if candidate in (None, ""):
+                                continue
+                            try:
+                                quote_volume = float(candidate)
+                            except (TypeError, ValueError):
+                                continue
+                            else:
+                                break
+                        ranked.append((base_symbol, quote_volume))
+                    ranked.sort(key=lambda item: item[1], reverse=True)
+                    symbols = [symbol for symbol, _ in ranked[: self._top_n]]
+                    self._cached_symbols[exchange] = symbols
+                    self._logger.info(
+                        "Выбраны пары %s (топ %s по объёму на %s)",
+                        symbols,
+                        self._top_n,
+                        exchange.value,
+                    )
+                    return symbols
+
+            if cached_symbols:
+                self._logger.info(
+                    "Используем сохранённые пары %s после ошибки", exchange.value
+                )
+                return cached_symbols
+
+            if self._symbol_retry_delay > 0.0:
+                self._logger.info(
+                    "Повторная попытка получить тикеры %s через %.1f с",
+                    exchange.value,
+                    self._symbol_retry_delay,
+                )
+                self._stop_event.wait(self._symbol_retry_delay)
+
+        return cached_symbols
 
     def _run_binance(self) -> None:
-        symbols = self._load_top_symbols(Exchange.BINANCE)
+        symbols: list[str] = []
+        while not symbols and not self._stop_event.is_set():
+            symbols = self._load_top_symbols(Exchange.BINANCE)
+            if symbols:
+                break
+            self._logger.warning(
+                "Нет доступных символов Binance для подписки, пробуем снова"
+            )
+            if self._symbol_retry_delay <= 0.0:
+                break
+            self._stop_event.wait(self._symbol_retry_delay)
+
         if not symbols:
-            self._logger.warning("Нет доступных символов Binance для подписки")
+            self._logger.warning(
+                "Не удалось получить символы Binance для подписки, поток не запущен"
+            )
             return
 
         symbol_streams: list[str] = []
@@ -620,9 +670,22 @@ class WsLiveDataStream(LiveDataStream):
         self._run_with_reconnect("Binance", url, _create_app)
 
     def _run_bybit(self) -> None:
-        symbols = self._load_top_symbols(Exchange.BYBIT)
+        symbols: list[str] = []
+        while not symbols and not self._stop_event.is_set():
+            symbols = self._load_top_symbols(Exchange.BYBIT)
+            if symbols:
+                break
+            self._logger.warning(
+                "Нет доступных символов Bybit для подписки, пробуем снова"
+            )
+            if self._symbol_retry_delay <= 0.0:
+                break
+            self._stop_event.wait(self._symbol_retry_delay)
+
         if not symbols:
-            self._logger.warning("Нет доступных символов Bybit для подписки")
+            self._logger.warning(
+                "Не удалось получить символы Bybit для подписки, поток не запущен"
+            )
             return
 
         bybit_interval = self._to_bybit_interval(self._timeframe)
