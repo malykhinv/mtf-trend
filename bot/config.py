@@ -10,7 +10,7 @@ from bot.domain.models.runtime import RuntimeMode
 from bot.domain.models.timeframe import Timeframe
 
 MODE = RuntimeMode.BACKTEST
-EXCHANGE = Exchange.BINANCE
+EXCHANGE = Exchange.BYBIT
 
 TIMEZONE_NAME = 'Europe/Belgrade'
 TIMEZONE = ZoneInfo(TIMEZONE_NAME)
@@ -20,7 +20,7 @@ DEFAULT_TIMEFRAMES: tuple[Timeframe, ...] = (
     Timeframe.M1,
     Timeframe.M3,
     Timeframe.M5,
-    # Timeframe.M15,
+    Timeframe.M15,
 )
 
 VOL_WINDOW = 20
@@ -52,12 +52,12 @@ AGGR_IMBALANCE_THRESHOLD = 0.62
 
 SYMBOL_COOLDOWN_SEC = 3600
 
-BACKTEST_MIN_COVERAGE = timedelta(days=14)
+BACKTEST_MIN_COVERAGE = timedelta(days=30)
 
 LOG_TIME_FMT = '%H:%M:%S'
 
-DIARY_BATCH_SIZE = 50
-DIARY_FLUSH_TIMEOUT = 30.0
+DIARY_BATCH_SIZE = 100
+DIARY_FLUSH_TIMEOUT = 300.0
 
 ANOMALY_MIN_GROWTH_PCT = 2.5
 ANOMALY_MIN_ATR_MULT = 2.5
