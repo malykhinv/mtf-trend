@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from random import Random
-from typing import Sequence
+from typing import DefaultDict, Sequence
 
 from openpyxl import load_workbook
 
@@ -14,6 +15,10 @@ from bot.data.diary import WorkbookDiaryBackend
 from bot.domain.models.bar import BarMetrics, BreakDirection
 from bot.domain.models.exchange import Exchange
 from bot.domain.models.timeframe import Timeframe
+from bot.utils.logger import get_logger
+
+
+LOGGER = get_logger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,9 +124,76 @@ _THRESHOLD_FIELD_TO_NAME = {
 }
 
 
-def parse_anomaly_samples(workbook_path: Path) -> list[AnomalySample]:
+_SKIP_REASON_LABELS = {
+    "timestamp_not_datetime": "Timestamp is not a datetime",
+    "missing_required_fields": "Missing required fields",
+    "invalid_exchange_or_timeframe": "Invalid exchange or timeframe",
+}
+
+
+class ParseDiagnostics:
+    """Collect and format diagnostic information while parsing anomalies."""
+
+    __slots__ = ("_entries",)
+
+    def __init__(self) -> None:
+        self._entries: DefaultDict[str, list[tuple[int, str | None]]] = defaultdict(list)
+
+    def add(self, reason: str, row_number: int, detail: str | None = None) -> None:
+        self._entries[reason].append((row_number, detail))
+
+    @property
+    def total_skipped(self) -> int:
+        return sum(len(entries) for entries in self._entries.values())
+
+    @property
+    def entries(self) -> dict[str, list[tuple[int, str | None]]]:
+        return dict(self._entries)
+
+    def summarize(self, *, max_examples: int = 5) -> str:
+        """Return a human readable summary of skipped rows."""
+
+        if not self._entries:
+            return ""
+
+        parts: list[str] = []
+        processed_keys: set[str] = set()
+
+        def _append_reason(reason: str, entries: list[tuple[int, str | None]]) -> None:
+            processed_keys.add(reason)
+            label = _SKIP_REASON_LABELS.get(reason, reason)
+            sample_entries = []
+            for row, detail in entries[:max_examples]:
+                if detail:
+                    sample_entries.append(f"row {row} ({detail})")
+                else:
+                    sample_entries.append(f"row {row}")
+            if len(entries) > max_examples:
+                sample_entries.append("...")
+            if sample_entries:
+                formatted_samples = ", ".join(sample_entries)
+                parts.append(f"{label}: {len(entries)} skipped [{formatted_samples}]")
+            else:
+                parts.append(f"{label}: {len(entries)} skipped")
+
+        for reason in _SKIP_REASON_LABELS:
+            entries = self._entries.get(reason)
+            if entries:
+                _append_reason(reason, entries)
+
+        for reason, entries in self._entries.items():
+            if reason not in processed_keys:
+                _append_reason(reason, entries)
+
+        return "; ".join(parts)
+
+
+def parse_anomaly_samples(
+    workbook_path: Path, *, diagnostics: ParseDiagnostics | None = None
+) -> list[AnomalySample]:
     """Load anomaly samples from a workbook for offline optimization."""
 
+    diagnostics_collector = diagnostics if diagnostics is not None else ParseDiagnostics()
     workbook = load_workbook(workbook_path, data_only=True)
     try:
         try:
@@ -156,15 +228,36 @@ def parse_anomaly_samples(workbook_path: Path) -> list[AnomalySample]:
                 raise KeyError(f"Missing '{column}' column in anomalies workbook")
 
         samples: list[AnomalySample] = []
-        for row in sheet.iter_rows(min_row=2, values_only=True):
+        for row_number, row in enumerate(
+            sheet.iter_rows(min_row=2, values_only=True), start=2
+        ):
             timestamp = row[index["timestamp"]]
             if not isinstance(timestamp, datetime):
+                diagnostics_collector.add(
+                    "timestamp_not_datetime",
+                    row_number,
+                    f"value={timestamp!r}",
+                )
                 continue
             exchange_value = row[index["exchange"]]
             symbol = row[index["symbol"]]
             timeframe_value = row[index["timeframe"]]
             bar_id = row[index["bar_id"]]
-            if exchange_value is None or symbol is None or timeframe_value is None or bar_id is None:
+            required_values = {
+                "exchange": exchange_value,
+                "symbol": symbol,
+                "timeframe": timeframe_value,
+                "bar_id": bar_id,
+            }
+            missing_fields = [
+                field for field, value in required_values.items() if value in (None, "")
+            ]
+            if missing_fields:
+                diagnostics_collector.add(
+                    "missing_required_fields",
+                    row_number,
+                    f"fields: {', '.join(missing_fields)}",
+                )
                 continue
             open_price = _float(row[index["open"]])
             high_price = _float(row[index["high"]])
@@ -182,9 +275,22 @@ def parse_anomaly_samples(workbook_path: Path) -> list[AnomalySample]:
             break_direction_value = row[index["metrics_break_direction"]]
 
             try:
-                exchange = exchange_value if isinstance(exchange_value, Exchange) else Exchange(str(exchange_value))
-                timeframe = timeframe_value if isinstance(timeframe_value, Timeframe) else Timeframe(str(timeframe_value))
-            except ValueError:
+                exchange = (
+                    exchange_value
+                    if isinstance(exchange_value, Exchange)
+                    else Exchange(str(exchange_value))
+                )
+                timeframe = (
+                    timeframe_value
+                    if isinstance(timeframe_value, Timeframe)
+                    else Timeframe(str(timeframe_value))
+                )
+            except ValueError as exc:
+                diagnostics_collector.add(
+                    "invalid_exchange_or_timeframe",
+                    row_number,
+                    f"values: exchange={exchange_value!r}, timeframe={timeframe_value!r}, error={exc}",
+                )
                 continue
 
             try:
@@ -218,6 +324,14 @@ def parse_anomaly_samples(workbook_path: Path) -> list[AnomalySample]:
                     volume=volume,
                     metrics=metrics,
                 )
+            )
+
+        if diagnostics_collector.total_skipped:
+            LOGGER.warning(
+                "Skipped %d rows while parsing anomalies from %s: %s",
+                diagnostics_collector.total_skipped,
+                workbook_path,
+                diagnostics_collector.summarize(),
             )
 
         return samples
