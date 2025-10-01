@@ -112,12 +112,14 @@ def create_balance_provider(exchange: Exchange) -> CcxtBalanceProvider:
 
 
 def create_orchestrator_dependencies(
-    exchange: Exchange, mode: RuntimeMode
+    exchange: Exchange,
+    mode: RuntimeMode,
+    diary: WorkbookDiary | None = None,
 ) -> OrchestratorDependencies:
     primary_timeframe = config.DEFAULT_TIMEFRAMES[0]
     market_loader = create_market_data_loader()
     live_stream = create_live_stream(exchange, primary_timeframe)
-    diary = create_diary(exchange)
+    diary_instance = diary if diary is not None else create_diary(exchange)
     notifier = create_notifier(mode)
     analyzer = SignalAnalyzer()
     execution = create_execution_service(exchange)
@@ -125,7 +127,7 @@ def create_orchestrator_dependencies(
     return OrchestratorDependencies(
         market_loader=market_loader,
         live_stream=live_stream,
-        diary=diary,
+        diary=diary_instance,
         notifier=notifier,
         analyzer=analyzer,
         execution=execution,
@@ -170,24 +172,25 @@ def run() -> None:
             len(symbols),
             len(settings.timeframes),
         )
-        for symbol in symbols:
-            for timeframe in settings.timeframes:
-                dependencies = create_orchestrator_dependencies(exchange, mode)
-                request = HistoricalRequest(
-                    exchange=exchange,
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    start=settings.start,
-                    end=settings.end,
-                    limit=settings.limit,
-                    backtest=True,
-                )
-                try:
+        diary = create_diary(exchange)
+        try:
+            for symbol in symbols:
+                for timeframe in settings.timeframes:
+                    dependencies = create_orchestrator_dependencies(
+                        exchange, mode, diary=diary
+                    )
+                    request = HistoricalRequest(
+                        exchange=exchange,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        start=settings.start,
+                        end=settings.end,
+                        limit=settings.limit,
+                        backtest=True,
+                    )
                     run_backtest(dependencies, request)
-                except KeyboardInterrupt:
-                    raise
-                finally:
-                    dependencies.diary.close()
+        finally:
+            diary.close()
         return
 
 
