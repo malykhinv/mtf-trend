@@ -158,6 +158,20 @@ THRESHOLD_GRID_METADATA: dict[str, GridFieldMetadata] = {
     "min_rr": _bounded_metadata(step=0.5, minimum=0.0, maximum=3.0),
 }
 
+# These fields mirror the baseline-only thresholds in
+# ``AnomalyLiveBootstrapper._compute_grid_deltas``. They are not adjusted during
+# grid exploration and should retain their original precision when written back
+# to the workbook.
+BASELINE_THRESHOLD_FIELDS: frozenset[str] = frozenset(
+    {
+        "min_green_move_pct",
+        "min_volume_spike",
+        "min_anomaly_relative_volume",
+        "min_anomaly_upper_wick_pct",
+        "min_anomaly_atr_mult",
+    }
+)
+
 
 def _apply_grid_constraints(field: str, value: float) -> float:
     metadata = THRESHOLD_GRID_METADATA.get(field)
@@ -723,9 +737,11 @@ def write_threshold_candidate(workbook_path: Path, candidate: ThresholdCandidate
             if named_range not in layout_index:
                 continue
             row_index = layout_index[named_range]
-            sheet.cell(row=row_index, column=2).value = _quantize_threshold(
-                getattr(candidate, field)
-            )
+            value = getattr(candidate, field)
+            if field not in BASELINE_THRESHOLD_FIELDS:
+                value = _apply_grid_constraints(field, value)
+                value = _quantize_threshold(value)
+            sheet.cell(row=row_index, column=2).value = value
 
         workbook.save(workbook_path)
     finally:
