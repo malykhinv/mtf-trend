@@ -16,6 +16,7 @@ from bot.domain.execution_service import ExecutionService
 from bot.domain.models.bar import Bar, BreakDirection
 from bot.domain.models.close_reason import CloseReason
 from bot.domain.models.exchange import Exchange
+from bot.domain.models.runtime import RuntimeMode
 from bot.domain.models.signal import Signal
 from bot.domain.models.trade import Trade
 from bot.domain.models.trade_status import TradeStatus
@@ -83,6 +84,7 @@ class Orchestrator:
         self._swing_detector = SwingDetector()
         self._trail_history = config.TRAIL_SWING_WINDOW + config.TRAIL_SWING_CONFIRM + 5
         self._logger = get_logger(__name__)
+        self._live_trade_cooldown_until = datetime.min.replace(tzinfo=config.TIMEZONE)
 
     @staticmethod
     def _should_analyze_bar(bar: Bar) -> bool:
@@ -289,6 +291,15 @@ class Orchestrator:
             signal.symbol,
             "лонг" if signal.direction.is_long else "шорт",
         )
+        if config.MODE is RuntimeMode.LIVE:
+            now = datetime.now(tz=config.TIMEZONE)
+            if now < self._live_trade_cooldown_until:
+                self._logger.info(
+                    "Пропускаем открытие сделки %s: глобальный кулдаун активен до %s",
+                    trade_id,
+                    self._live_trade_cooldown_until.strftime(config.LOG_TIME_FMT),
+                )
+                return
         trade = self._deps.execution.open_trade(signal, quantity=quantity)
         self._logger.info(
             "Сделка %s отправлена, статус %s, исполнено %.4f",
@@ -299,6 +310,10 @@ class Orchestrator:
         self._deps.diary.append_trades([trade])
         if trade.status is not TradeStatus.CANCELLED:
             self._register_active_trade(trade, bar)
+            if config.MODE is RuntimeMode.LIVE:
+                self._live_trade_cooldown_until = datetime.now(tz=config.TIMEZONE) + timedelta(
+                    minutes=config.COMMON_COOLDOWN_MIN
+                )
 
         try:
             self._deps.notifier.send_trade(trade)
