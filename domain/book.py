@@ -5,7 +5,7 @@ from __future__ import annotations
 from bisect import bisect_left
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Iterable, Iterator, List, Optional, Tuple
 
 from .models.enums import Side
 from .models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
@@ -62,14 +62,22 @@ class _RecentBandEntry:
 class RecentBand:
     """Ring buffer tracking recently touched price levels."""
 
-    __slots__ = ("_capacity", "_entries", "_next", "_count", "_price_to_slot")
+    __slots__ = (
+        "_capacity",
+        "_entries",
+        "_next",
+        "_count",
+        "_index_prices",
+        "_index_slots",
+    )
 
     def __init__(self, capacity: int) -> None:
         self._capacity = max(0, capacity)
         self._entries: List[Optional[_RecentBandEntry]] = [None] * self._capacity
         self._next = 0
         self._count = 0
-        self._price_to_slot: Dict[float, int] = {}
+        self._index_prices: List[float] = []
+        self._index_slots: List[int] = []
 
     def __len__(self) -> int:
         return self._count
@@ -80,7 +88,39 @@ class RecentBand:
         self._entries = [None] * self._capacity
         self._next = 0
         self._count = 0
-        self._price_to_slot.clear()
+        self._index_prices.clear()
+        self._index_slots.clear()
+
+    def _locate_price(self, price: float) -> Tuple[int, Optional[int]]:
+        """Return index buffer location and stored slot for the price."""
+
+        index_pos = bisect_left(self._index_prices, price)
+        if (
+            index_pos < len(self._index_prices)
+            and self._index_prices[index_pos] == price
+        ):
+            return index_pos, self._index_slots[index_pos]
+        return index_pos, None
+
+    def _remove_from_index(self, price: float) -> Optional[int]:
+        """Remove price from index buffers and return previous slot if any."""
+
+        index_pos, slot = self._locate_price(price)
+        if slot is None:
+            return None
+        del self._index_prices[index_pos]
+        del self._index_slots[index_pos]
+        return slot
+
+    def _store_in_index(self, price: float, slot: int) -> None:
+        """Insert or update slot reference for the provided price."""
+
+        index_pos, existing_slot = self._locate_price(price)
+        if existing_slot is None:
+            self._index_prices.insert(index_pos, price)
+            self._index_slots.insert(index_pos, slot)
+        else:
+            self._index_slots[index_pos] = slot
 
     def record(self, price: float, level_index: int, timestamp: datetime) -> None:
         """Store the latest state for the provided price level."""
@@ -89,7 +129,7 @@ class RecentBand:
             return
         ensure_current_timezone(timestamp)
 
-        previous_slot = self._price_to_slot.pop(price, None)
+        previous_slot = self._remove_from_index(price)
         if previous_slot is not None:
             if self._entries[previous_slot] is not None:
                 self._entries[previous_slot] = None
@@ -100,21 +140,19 @@ class RecentBand:
 
         evicted = self._entries[slot]
         if evicted is not None:
-            current_slot = self._price_to_slot.get(evicted.price)
-            if current_slot == slot:
-                del self._price_to_slot[evicted.price]
+            self._remove_from_index(evicted.price)
             self._count -= 1
 
         self._entries[slot] = _RecentBandEntry(
             price=price, level_index=level_index, timestamp=timestamp
         )
-        self._price_to_slot[price] = slot
+        self._store_in_index(price, slot)
         self._count += 1
 
     def discard(self, price: float) -> None:
         """Remove a price level from the recent band if it exists."""
 
-        slot = self._price_to_slot.pop(price, None)
+        slot = self._remove_from_index(price)
         if slot is None:
             return
         entry = self._entries[slot]
@@ -125,7 +163,8 @@ class RecentBand:
     def contains(self, price: float) -> bool:
         """Check if the price is currently tracked in the recent band."""
 
-        return price in self._price_to_slot
+        _, slot = self._locate_price(price)
+        return slot is not None
 
     def iter_newest_first(self) -> Iterator[_RecentBandEntry]:
         """Iterate over entries starting from the newest one."""
@@ -162,7 +201,7 @@ class RecentBand:
     def latest_level_index(self, price: float) -> Optional[int]:
         """Return the last recorded position for the provided price."""
 
-        slot = self._price_to_slot.get(price)
+        _, slot = self._locate_price(price)
         if slot is None:
             return None
         entry = self._entries[slot]
@@ -176,7 +215,8 @@ class _BookSide:
         "_side",
         "_levels",
         "_sort_keys",
-        "_price_to_index",
+        "_index_prices",
+        "_index_positions",
         "_recent_band",
     )
 
@@ -184,7 +224,8 @@ class _BookSide:
         self._side = side
         self._levels: List[_StoredLevel] = []
         self._sort_keys: List[float] = []
-        self._price_to_index: Dict[float, int] = {}
+        self._index_prices: List[float] = []
+        self._index_positions: List[int] = []
         self._recent_band = RecentBand(recent_band_capacity)
 
     @property
@@ -198,10 +239,34 @@ class _BookSide:
         key = self._sort_key(price)
         return bisect_left(self._sort_keys, key)
 
+    def _locate_price(self, price: float) -> Tuple[int, Optional[int]]:
+        index_pos = bisect_left(self._index_prices, price)
+        if (
+            index_pos < len(self._index_prices)
+            and self._index_prices[index_pos] == price
+        ):
+            return index_pos, self._index_positions[index_pos]
+        return index_pos, None
+
+    def _assign_index(self, price: float, level_index: int) -> None:
+        index_pos, existing_index = self._locate_price(price)
+        if existing_index is None:
+            self._index_prices.insert(index_pos, price)
+            self._index_positions.insert(index_pos, level_index)
+        else:
+            self._index_positions[index_pos] = level_index
+
+    def _remove_index(self, price: float) -> None:
+        index_pos, existing_index = self._locate_price(price)
+        if existing_index is None:
+            return
+        del self._index_prices[index_pos]
+        del self._index_positions[index_pos]
+
     def _reindex(self, start: int) -> None:
         for index in range(start, len(self._levels)):
             level = self._levels[index]
-            self._price_to_index[level.price] = index
+            self._assign_index(level.price, index)
 
     def _create_level(self, level: OrderBookLevel) -> _StoredLevel:
         ensure_current_timezone(
@@ -226,11 +291,12 @@ class _BookSide:
             self.remove_level(price)
             return
 
-        index = self._price_to_index.get(price)
+        _, existing_index = self._locate_price(price)
         timestamp = level.last_update_at
         ensure_current_timezone(timestamp)
 
-        if index is not None:
+        if existing_index is not None:
+            index = existing_index
             stored = self._levels[index]
             stored.update(quantity=level.quantity, timestamp=timestamp)
             stored.notional = level.notional
@@ -245,7 +311,7 @@ class _BookSide:
             insert_at = self._find_insertion_index(price)
             self._levels.insert(insert_at, stored)
             self._sort_keys.insert(insert_at, self._sort_key(price))
-            self._price_to_index[price] = insert_at
+            self._assign_index(price, insert_at)
             self._reindex(insert_at + 1)
             index = insert_at
 
@@ -254,11 +320,12 @@ class _BookSide:
     def remove_level(self, price: float) -> None:
         """Remove a level from the side if present."""
 
-        index = self._price_to_index.pop(price, None)
+        _, index = self._locate_price(price)
         if index is None:
             return
         del self._levels[index]
         del self._sort_keys[index]
+        self._remove_index(price)
         self._reindex(index)
         self._recent_band.discard(price)
 
@@ -267,14 +334,15 @@ class _BookSide:
 
         self._levels = []
         self._sort_keys = []
-        self._price_to_index = {}
+        self._index_prices = []
+        self._index_positions = []
         self._recent_band.clear()
 
         for position, level in enumerate(levels):
             stored = self._create_level(level)
             self._levels.append(stored)
             self._sort_keys.append(self._sort_key(level.price))
-            self._price_to_index[level.price] = position
+            self._assign_index(level.price, position)
             self._recent_band.record(level.price, position, level.last_update_at)
 
     def iter_levels(self) -> Iterator[_StoredLevel]:
