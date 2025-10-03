@@ -172,7 +172,8 @@ class Application:
             resync=self._handle_resync,
         )
 
-    def _exchange_credentials(self) -> tuple[str | None, str | None]:
+    @staticmethod
+    def _exchange_credentials() -> tuple[str | None, str | None]:
         if CONFIG.general.exchange is ExchangeName.BINANCE:
             return SECRETS.binance_api_key, SECRETS.binance_api_secret
         if CONFIG.general.exchange is ExchangeName.BYBIT:
@@ -293,7 +294,8 @@ class Application:
         context.last_update_id = update.last_update_id
         self._update_best_from_book(context)
 
-    def _update_best_from_book(self, context: SymbolContext) -> None:
+    @staticmethod
+    def _update_best_from_book(context: SymbolContext) -> None:
         bid_level = context.order_book.best_bid()
         ask_level = context.order_book.best_ask()
         context.best_bid = None if bid_level is None else bid_level.price
@@ -323,14 +325,16 @@ class Application:
                 timestamp,
             )
 
-    def _process_trade_stream(self, context: SymbolContext) -> None:
+    @staticmethod
+    def _process_trade_stream(context: SymbolContext) -> None:
         event = next(context.trade_stream)
         if event.type is StreamEventType.DATA:
             trade = cast(Trade, event.data)
             if trade is not None:
                 context.last_trade_price = trade.price
 
-    def _process_ticker_stream(self, context: SymbolContext) -> None:
+    @staticmethod
+    def _process_ticker_stream(context: SymbolContext) -> None:
         event = next(context.ticker_stream)
         if event.type is StreamEventType.DATA:
             ticker = cast(BestBidAsk, event.data)
@@ -338,14 +342,16 @@ class Application:
                 context.best_bid = ticker.bid_price
                 context.best_ask = ticker.ask_price
 
-    def _resolve_last_price(self, context: SymbolContext) -> float:
+    @staticmethod
+    def _resolve_last_price(context: SymbolContext) -> float:
         if context.last_trade_price is not None and context.last_trade_price > 0.0:
             return context.last_trade_price
         if context.best_bid is not None and context.best_ask is not None:
             return (context.best_bid + context.best_ask) / 2.0
         return 0.0
 
-    def _assign_symbol(self, context: SymbolContext, wall: Wall) -> Wall:
+    @staticmethod
+    def _assign_symbol(context: SymbolContext, wall: Wall) -> Wall:
         return Wall(
             exchange=wall.exchange,
             symbol=context.symbol,

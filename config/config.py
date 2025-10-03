@@ -80,7 +80,7 @@ CONFIG: Final[Config] = Config(
         block_min=5,
     ),
     telegram=TelegramSettings(
-        chat_id=None,
+        chat_id=739865715,
         silent=False,
         uptick_cooldown_min=5,
     ),
