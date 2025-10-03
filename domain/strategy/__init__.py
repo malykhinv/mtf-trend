@@ -1,5 +1,6 @@
 from .event_logger import EventLogger
 from .focus import FocusController
+from .kill_switch import KillSwitch
 from .observation import MarketObservation
 from .position import PositionController
 from .resync import FeedStatus, ResyncReason
@@ -22,6 +23,7 @@ from .types import (
 __all__ = [
     "EventLogger",
     "FocusController",
+    "KillSwitch",
     "MarketObservation",
     "PositionController",
     "FeedStatus",

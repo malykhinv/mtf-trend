@@ -8,6 +8,7 @@ from domain.models import Pressure, Signal, Side, Wall
 
 from .event_logger import EventLogger
 from .focus import FocusController
+from .kill_switch import KillSwitch
 from .observation import MarketObservation
 from .position import PositionController
 from .resync import ResyncReason
@@ -28,6 +29,7 @@ class Strategy:
         notifier: TelegramNotifier,
         logger: EventLogger,
         resync: ResyncHandler,
+        safety: KillSwitch,
     ) -> None:
         self._subscriptions = subscriptions
         self._focus = focus
@@ -35,6 +37,7 @@ class Strategy:
         self._notifier = notifier
         self._logger = logger
         self._resync = resync
+        self._safety = safety
         self._state = StrategyState.SCANNING
         self._previous_state = StrategyState.SCANNING
         self._focused_signal = Signal.NONE
@@ -48,6 +51,7 @@ class Strategy:
         self._position_symbol: Optional[str] = None
         self._position_signal = Signal.NONE
         self._position_wall: Optional[Wall] = None
+        self._position_entry_price: Optional[float] = None
         self._odr_neutral_since: Optional[datetime] = None
         self._wall_drop_since: Optional[datetime] = None
         self._shift_candidate_price: Optional[float] = None
@@ -132,10 +136,20 @@ class Strategy:
             return
         if self._focused_signal is Signal.LONG and wall.side is Side.BID:
             if pressure.imbalance_ratio <= CONFIG.odr.odr_in_long:
-                self._enter_position(observation.symbol, wall, timestamp)
+                self._enter_position(
+                    observation.symbol,
+                    wall,
+                    timestamp,
+                    observation.last_price,
+                )
         elif self._focused_signal is Signal.SHORT and wall.side is Side.ASK:
             if pressure.imbalance_ratio >= CONFIG.odr.odr_in_short:
-                self._enter_position(observation.symbol, wall, timestamp)
+                self._enter_position(
+                    observation.symbol,
+                    wall,
+                    timestamp,
+                    observation.last_price,
+                )
 
     def _handle_in_position(self, observation: MarketObservation) -> None:
         if self._position_symbol != observation.symbol:
@@ -150,7 +164,11 @@ class Strategy:
         if self._odr_neutral_since is not None:
             hold = timedelta(milliseconds=CONFIG.odr.odr_neutral_hold_ms)
             if timestamp - self._odr_neutral_since >= hold:
-                self._exit_position("ODR нейтрален", timestamp)
+                self._exit_position(
+                    "ODR нейтрален",
+                    timestamp,
+                    observation.last_price,
+                )
                 return
         wall = observation.near_wall
         if wall is not None:
@@ -160,7 +178,11 @@ class Strategy:
             if self._wall_drop_since is None:
                 self._wall_drop_since = timestamp
             elif timestamp - self._wall_drop_since >= grace:
-                self._exit_position("Стена исчезла", timestamp)
+                self._exit_position(
+                    "Стена исчезла",
+                    timestamp,
+                    observation.last_price,
+                )
         else:
             self._wall_drop_since = None
 
@@ -212,33 +234,56 @@ class Strategy:
         timeout = timedelta(seconds=CONFIG.focus.defocus_timeout_s)
         return timestamp - self._last_focus_signal_at >= timeout
 
-    def _enter_position(self, symbol: str, wall: Wall, timestamp: datetime) -> None:
+    def _enter_position(
+        self,
+        symbol: str,
+        wall: Wall,
+        timestamp: datetime,
+        last_price: float,
+    ) -> None:
         signal = self._focused_signal
         if signal is Signal.NONE:
             return
+        if self._safety.is_blocked(timestamp):
+            blocked_until = self._safety.blocked_until()
+            if blocked_until is not None:
+                self._logger.log(
+                    (
+                        f"{timestamp:%H:%M:%S} Вход в {symbol} заблокирован до "
+                        f"{blocked_until:%H:%M:%S}."
+                    ),
+                    timestamp,
+                )
+            return
         self._position.enter(symbol, signal, wall, timestamp)
+        self._safety.record_entry(timestamp)
         self._last_trade_at = timestamp
         self._notifier.notify_entry(symbol, signal, timestamp)
         self._state = StrategyState.IN_POSITION
         self._position_symbol = symbol
         self._position_signal = signal
         self._position_wall = wall
+        self._position_entry_price = last_price if last_price > 0.0 else None
         self._odr_neutral_since = None
         self._wall_drop_since = None
         self._shift_candidate_price = None
         self._shift_candidate_since = None
 
-    def _exit_position(self, reason: str, timestamp: datetime) -> None:
+    def _exit_position(self, reason: str, timestamp: datetime, price: float) -> None:
         symbol = self._position_symbol
         if symbol is None:
             return
         self._position.exit(symbol, reason, timestamp)
+        pnl_fraction = self._compute_pnl_fraction(price)
+        is_stop = "стоп" in reason.lower() or "stop" in reason.lower()
+        self._safety.record_exit(timestamp, is_stop, pnl_fraction)
         self._last_trade_at = timestamp
         self._notifier.notify_exit(symbol, reason, timestamp)
         self._state = StrategyState.SCANNING
         self._position_symbol = None
         self._position_signal = Signal.NONE
         self._position_wall = None
+        self._position_entry_price = None
         self._odr_neutral_since = None
         self._wall_drop_since = None
         self._shift_candidate_price = None
@@ -335,6 +380,7 @@ class Strategy:
             f"{timestamp:%H:%M:%S} Ресинк книги. Причина: {reason.value}.", timestamp
         )
         self._track_resync_summary(timestamp)
+        self._safety.handle_resync(timestamp)
 
     def _track_resync_summary(self, timestamp: datetime) -> None:
         if self._resync_summary_start is None:
@@ -348,6 +394,19 @@ class Strategy:
             self._resync_summary_start = timestamp
             self._resync_summary_count = 0
         self._resync_summary_count += 1
+
+    def _compute_pnl_fraction(self, exit_price: float) -> float:
+        entry_price = self._position_entry_price
+        signal = self._position_signal
+        if entry_price is None or entry_price <= 0.0:
+            return 0.0
+        if exit_price <= 0.0:
+            return 0.0
+        if signal is Signal.LONG:
+            return (exit_price - entry_price) / entry_price
+        if signal is Signal.SHORT:
+            return (entry_price - exit_price) / entry_price
+        return 0.0
 
 
 __all__ = ["Strategy"]

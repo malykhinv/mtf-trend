@@ -44,6 +44,7 @@ from domain.models import (
 from domain.strategy import (
     EventLogger,
     FocusController,
+    KillSwitch,
     MarketObservation,
     PositionController,
     Strategy,
@@ -165,6 +166,16 @@ class Application:
             move_stop=move_stop,
             logger=self._event_logger,
         )
+        ks_settings = CONFIG.funding_ks
+        self._kill_switch = KillSwitch(
+            logger=self._event_logger,
+            funding_block=timedelta(seconds=ks_settings.funding_block_s),
+            block_duration=timedelta(minutes=ks_settings.block_min),
+            stop_interval=timedelta(minutes=1),
+            max_stops=ks_settings.max_stops_per_min,
+            max_drawdown=ks_settings.max_drawdown_frac,
+            position_fraction=CONFIG.position.position_fraction,
+        )
         self._strategy = Strategy(
             subscriptions=self._subscription_manager,
             focus=self._focus_controller,
@@ -172,6 +183,7 @@ class Application:
             notifier=self._telegram_notifier,
             logger=self._event_logger,
             resync=self._handle_resync,
+            safety=self._kill_switch,
         )
 
     @staticmethod
