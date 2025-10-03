@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from ._timezone import ensure_belgrade_timezone
+from ._timezone import ensure_current_timezone
 from .enums import Exchange, Side
 
 
@@ -23,7 +23,7 @@ class Wall:
     last_seen_at: datetime
 
     def __post_init__(self) -> None:
-        ensure_belgrade_timezone(self.first_seen_at, self.last_seen_at)
+        ensure_current_timezone(self.first_seen_at, self.last_seen_at)
 
 
 __all__ = ["Wall"]

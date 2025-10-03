@@ -9,7 +9,7 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 from .models.enums import Side
 from .models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
-from .models._timezone import ensure_belgrade_timezone
+from .models._timezone import ensure_current_timezone
 
 
 @dataclass(slots=True)
@@ -27,7 +27,7 @@ class _StoredLevel:
     def update(self, *, quantity: float, timestamp: datetime) -> None:
         """Update statistics for the level with the latest values."""
 
-        ensure_belgrade_timezone(timestamp)
+        ensure_current_timezone(timestamp)
         self.quantity = quantity
         self.notional = self.price * quantity
         self.last_update_at = timestamp
@@ -87,7 +87,7 @@ class RecentBand:
 
         if self._capacity == 0:
             return
-        ensure_belgrade_timezone(timestamp)
+        ensure_current_timezone(timestamp)
 
         previous_slot = self._price_to_slot.pop(price, None)
         if previous_slot is not None:
@@ -204,7 +204,7 @@ class _BookSide:
             self._price_to_index[level.price] = index
 
     def _create_level(self, level: OrderBookLevel) -> _StoredLevel:
-        ensure_belgrade_timezone(
+        ensure_current_timezone(
             level.first_seen_at,
             level.last_update_at,
         )
@@ -228,7 +228,7 @@ class _BookSide:
 
         index = self._price_to_index.get(price)
         timestamp = level.last_update_at
-        ensure_belgrade_timezone(timestamp)
+        ensure_current_timezone(timestamp)
 
         if index is not None:
             stored = self._levels[index]

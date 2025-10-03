@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from ._timezone import ensure_belgrade_timezone
+from ._timezone import ensure_current_timezone
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,7 +22,7 @@ class Candle:
     quote_volume: float
 
     def __post_init__(self) -> None:
-        ensure_belgrade_timezone(self.open_time, self.close_time)
+        ensure_current_timezone(self.open_time, self.close_time)
 
 
 __all__ = ["Candle"]

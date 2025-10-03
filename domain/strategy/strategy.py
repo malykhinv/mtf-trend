@@ -2,206 +2,27 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta
-from enum import Enum
-from typing import Callable, Optional, Tuple
+from typing import Optional
 
 from config.config import CONFIG
 
-from .models import LogLine, Pressure, Signal, Side, Wall
-from .models._timezone import ensure_belgrade_timezone
+from domain.models import Pressure, Signal, Side, Wall
 
-
-class StrategyState(str, Enum):
-    SCANNING = "scanning"
-    FOCUSED = "focused"
-    IN_POSITION = "in_position"
-    RESYNC = "resync"
-
-
-class ResyncReason(str, Enum):
-    SEQUENCE_GAP = "пропуск последовательности"
-    SILENCE = "тишина канала"
-    BACKPRESSURE = "переполнение очереди"
-
-
-@dataclass(frozen=True)
-class FeedStatus:
-    has_sequence_gap: bool = False
-    has_silence_timeout: bool = False
-    has_queue_overflow: bool = False
-
-    def resolve_reason(self) -> Optional[ResyncReason]:
-        if self.has_sequence_gap:
-            return ResyncReason.SEQUENCE_GAP
-        if self.has_silence_timeout:
-            return ResyncReason.SILENCE
-        if self.has_queue_overflow:
-            return ResyncReason.BACKPRESSURE
-        return None
-
-
-@dataclass(frozen=True)
-class MarketObservation:
-    timestamp: datetime
-    symbol: str
-    last_price: float
-    tick_size: float
-    pressure: Optional[Pressure]
-    near_wall: Optional[Wall]
-    opposite_wall_blocks: bool
-    available_symbols: Tuple[str, ...]
-    feed_status: FeedStatus
-
-    def __post_init__(self) -> None:
-        ensure_belgrade_timezone(self.timestamp)
-
-
-SubscriptionHandler = Callable[[str], None]
-FocusHandler = Callable[[str], None]
-DefocusHandler = Callable[[], None]
-PositionEntryHandler = Callable[[str, Signal, Wall], None]
-PositionExitHandler = Callable[[str, str], None]
-StopMoveHandler = Callable[[str, float], None]
-TelegramHandler = Callable[[str], None]
-LogWriter = Callable[[LogLine], None]
-ResyncHandler = Callable[[ResyncReason], None]
-
-
-@dataclass
-class EventLogger:
-    write: LogWriter
-
-    def log(self, message: str, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        entry = LogLine(timestamp=timestamp, message=message, level="INFO")
-        self.write(entry)
-
-
-@dataclass
-class SubscriptionManager:
-    subscribe: SubscriptionHandler
-    unsubscribe: SubscriptionHandler
-    logger: EventLogger
-    _active: Tuple[str, ...] = ()
-
-    def update(self, symbols: Tuple[str, ...], timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        additions: Tuple[str, ...] = self._compute_additions(symbols)
-        removals: Tuple[str, ...] = self._compute_removals(symbols)
-        for symbol in additions:
-            self.subscribe(symbol)
-            self.logger.log(f"{timestamp:%H:%M:%S} Подписка на {symbol}.", timestamp)
-        for symbol in removals:
-            self.unsubscribe(symbol)
-            self.logger.log(f"{timestamp:%H:%M:%S} Отписка от {symbol}.", timestamp)
-        self._active = tuple(symbols)
-
-    def _compute_additions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
-        missing: list[str] = []
-        for symbol in symbols:
-            if not self._contains(self._active, symbol):
-                missing.append(symbol)
-        return tuple(missing)
-
-    def _compute_removals(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
-        redundant: list[str] = []
-        for symbol in self._active:
-            if not self._contains(symbols, symbol):
-                redundant.append(symbol)
-        return tuple(redundant)
-
-    @staticmethod
-    def _contains(collection: Tuple[str, ...], item: str) -> bool:
-        for value in collection:
-            if value == item:
-                return True
-        return False
-
-
-@dataclass
-class FocusController:
-    focus_symbol: FocusHandler
-    defocus_symbol: DefocusHandler
-    logger: EventLogger
-    _current: Optional[str] = None
-
-    def focus(self, symbol: str, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        if self._current == symbol:
-            return
-        if self._current is not None:
-            self.defocus(timestamp)
-        self.focus_symbol(symbol)
-        self.logger.log(f"{timestamp:%H:%M:%S} Фокус на {symbol}.", timestamp)
-        self._current = symbol
-
-    def defocus(self, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        if self._current is None:
-            return
-        current = self._current
-        self.defocus_symbol()
-        self.logger.log(f"{timestamp:%H:%M:%S} Дефокус со {current}.", timestamp)
-        self._current = None
-
-    @property
-    def current(self) -> Optional[str]:
-        return self._current
-
-
-@dataclass
-class PositionController:
-    enter_position: PositionEntryHandler
-    exit_position: PositionExitHandler
-    move_stop: StopMoveHandler
-    logger: EventLogger
-
-    def enter(self, symbol: str, signal: Signal, wall: Wall, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        self.enter_position(symbol, signal, wall)
-        direction = "лонг" if signal is Signal.LONG else "шорт"
-        self.logger.log(
-            f"{timestamp:%H:%M:%S} Вход {direction} {symbol} по стене {wall.price:g}.",
-            timestamp,
-        )
-
-    def exit(self, symbol: str, reason: str, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        self.exit_position(symbol, reason)
-        self.logger.log(
-            f"{timestamp:%H:%M:%S} Выход {symbol}. Причина: {reason}.", timestamp
-        )
-
-    def adjust_stop(self, symbol: str, price: float, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        self.move_stop(symbol, price)
-        self.logger.log(
-            f"{timestamp:%H:%M:%S} Перенос стопа {symbol} на {price:g}.", timestamp
-        )
-
-
-@dataclass
-class TelegramNotifier:
-    send_message: TelegramHandler
-
-    def notify_uptick(self, symbol: str, signal: Signal, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        direction = "лонг" if signal is Signal.LONG else "шорт"
-        self.send_message(f"{timestamp:%H:%M:%S} Обнаружен аптик {symbol} {direction}.")
-
-    def notify_entry(self, symbol: str, signal: Signal, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        direction = "лонг" if signal is Signal.LONG else "шорт"
-        self.send_message(f"{timestamp:%H:%M:%S} Открыт {direction} {symbol}.")
-
-    def notify_exit(self, symbol: str, reason: str, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
-        self.send_message(f"{timestamp:%H:%M:%S} Закрыт {symbol}. {reason}.")
+from .event_logger import EventLogger
+from .focus import FocusController
+from .observation import MarketObservation
+from .position import PositionController
+from .resync import ResyncReason
+from .state import StrategyState
+from .subscription import SubscriptionManager
+from .telegram import TelegramNotifier
+from .types import ResyncHandler
 
 
 class Strategy:
+    """Coordinates market observations with position management actions."""
+
     def __init__(
         self,
         *,
@@ -257,11 +78,9 @@ class Strategy:
         return self._state
 
     def complete_resync(self, timestamp: datetime) -> StrategyState:
-        ensure_belgrade_timezone(timestamp)
         if self._state is not StrategyState.RESYNC:
             return self._state
-        message = f"{timestamp:%H:%M:%S} Ресинк завершён."
-        self._logger.log(message, timestamp)
+        self._logger.log(f"{timestamp:%H:%M:%S} Ресинк завершён.", timestamp)
         self._state = self._previous_state
         self._resync_reason = None
         return self._state
@@ -332,7 +151,7 @@ class Strategy:
         wall = observation.near_wall
         if wall is not None:
             self._consider_wall_shift(wall, observation.tick_size, timestamp)
-        if self._detect_wall_drop(wall, observation.tick_size, timestamp):
+        if self._detect_wall_drop(wall, observation.tick_size):
             grace = timedelta(milliseconds=CONFIG.wall_shift.vanish_grace_ms)
             if self._wall_drop_since is None:
                 self._wall_drop_since = timestamp
@@ -408,9 +227,7 @@ class Strategy:
         self,
         wall: Optional[Wall],
         tick_size: float,
-        timestamp: datetime,
     ) -> bool:
-        ensure_belgrade_timezone(timestamp)
         reference = self._position_wall
         signal = self._position_signal
         if reference is None or signal is Signal.NONE:
@@ -478,7 +295,6 @@ class Strategy:
         return False
 
     def _enter_resync(self, reason: ResyncReason, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
         self._resync(reason)
         self._previous_state = self._state
         self._state = StrategyState.RESYNC
@@ -489,7 +305,6 @@ class Strategy:
         self._track_resync_summary(timestamp)
 
     def _track_resync_summary(self, timestamp: datetime) -> None:
-        ensure_belgrade_timezone(timestamp)
         if self._resync_summary_start is None:
             self._resync_summary_start = timestamp
         elapsed = timestamp - self._resync_summary_start
@@ -503,15 +318,4 @@ class Strategy:
         self._resync_summary_count += 1
 
 
-__all__ = [
-    "StrategyState",
-    "ResyncReason",
-    "FeedStatus",
-    "MarketObservation",
-    "SubscriptionManager",
-    "FocusController",
-    "PositionController",
-    "TelegramNotifier",
-    "EventLogger",
-    "Strategy",
-]
+__all__ = ["Strategy"]

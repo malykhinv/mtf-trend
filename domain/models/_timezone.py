@@ -7,8 +7,8 @@ from datetime import datetime
 from config.timezone import BELGRADE_TIMEZONE
 
 
-def ensure_belgrade_timezone(*values: datetime) -> None:
-    """Ensure that all provided datetimes use the Europe/Belgrade timezone."""
+def ensure_current_timezone(*values: datetime) -> None:
+    """Ensure that all provided datetimes use the configured timezone."""
 
     for value in values:
         if value.tzinfo is None:
@@ -21,4 +21,4 @@ def ensure_belgrade_timezone(*values: datetime) -> None:
             raise ValueError("datetime must use Europe/Belgrade timezone")
 
 
-__all__ = ["ensure_belgrade_timezone"]
+__all__ = ["ensure_current_timezone"]

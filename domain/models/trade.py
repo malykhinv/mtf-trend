@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from ._timezone import ensure_belgrade_timezone
+from ._timezone import ensure_current_timezone
 from .enums import Exchange, Side
 
 
@@ -22,7 +22,7 @@ class Trade:
     side: Side
 
     def __post_init__(self) -> None:
-        ensure_belgrade_timezone(self.executed_at)
+        ensure_current_timezone(self.executed_at)
 
 
 __all__ = ["Trade"]
