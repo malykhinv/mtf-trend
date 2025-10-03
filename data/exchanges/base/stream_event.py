@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Generic, Optional, TypeVar
 
 from .resync_reason import ResyncReason
 from .stream_event_type import StreamEventType
+from utils.timez import get_current_time
 
 T = TypeVar("T")
 
@@ -14,7 +15,7 @@ class StreamEvent(Generic[T]):
     data: Optional[T] = None
     reason: Optional[ResyncReason] = None
     details: Optional[str] = None
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = field(default_factory=get_current_time)
 
     @classmethod
     def data_event(cls, payload: T) -> "StreamEvent[T]":

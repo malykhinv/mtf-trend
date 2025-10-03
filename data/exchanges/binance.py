@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable, Iterable, Iterator, Optional, Protocol
 from urllib import parse
 from urllib.request import Request, urlopen
@@ -28,6 +28,7 @@ from .base import (
     StreamBuffer,
     StreamEvent,
 )
+from utils.timez import from_exchange_timestamp, get_current_time
 
 
 @dataclass(slots=True)
@@ -111,7 +112,7 @@ class BinanceExchangeData:
             {"symbol": self.symbol, "limit": self._depth_limit},
         )
         last_update_id = int(data["lastUpdateId"])
-        now = datetime.now(timezone.utc)
+        now = get_current_time()
         bids = tuple(
             self._build_level(float(price), float(qty), now)
             for price, qty in data.get("bids", [])
@@ -199,7 +200,7 @@ class BinanceExchangeData:
         first_update = int(message.get("U", 0))
         last_update = int(message.get("u", 0))
         prev_update = int(message.get("pu", first_update - 1))
-        event_time = datetime.fromtimestamp(message.get("E", 0) / 1000.0, tz=timezone.utc)
+        event_time = from_exchange_timestamp(message.get("E", 0) / 1000.0)
 
         with self._lock:
             expected = None if self._depth_last_update is None else self._depth_last_update + 1
@@ -378,7 +379,7 @@ class BinanceExchangeData:
     def _parse_book_ticker(self, message: dict[str, Any]) -> Iterable[BestBidAsk]:
         if message.get("s") != self.symbol:
             return ()
-        event_time = datetime.fromtimestamp(message.get("E", 0) / 1000.0, tz=timezone.utc)
+        event_time = from_exchange_timestamp(message.get("E", 0) / 1000.0)
         return (
             BestBidAsk(
                 exchange=Exchange.BINANCE.value,
@@ -394,7 +395,7 @@ class BinanceExchangeData:
     def _parse_trade(self, message: dict[str, Any]) -> Iterable[Trade]:
         if message.get("s") != self.symbol:
             return ()
-        event_time = datetime.fromtimestamp(message.get("T", 0) / 1000.0, tz=timezone.utc)
+        event_time = from_exchange_timestamp(message.get("T", 0) / 1000.0)
         side = Side.ASK if message.get("m", False) else Side.BID
         return (
             Trade(
@@ -414,8 +415,8 @@ class BinanceExchangeData:
         payload = message.get("k") or {}
         if payload.get("s") != self.symbol:
             return ()
-        open_time = datetime.fromtimestamp(payload.get("t", 0) / 1000.0, tz=timezone.utc)
-        close_time = datetime.fromtimestamp(payload.get("T", 0) / 1000.0, tz=timezone.utc)
+        open_time = from_exchange_timestamp(payload.get("t", 0) / 1000.0)
+        close_time = from_exchange_timestamp(payload.get("T", 0) / 1000.0)
         return (
             Candle(
                 open_time=open_time,

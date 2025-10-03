@@ -5,7 +5,7 @@ from datetime import datetime
 from decimal import Decimal, DecimalException
 from typing import Union
 
-from config.timezone import BELGRADE_TIMEZONE
+from config.timezone import CURRENT_TIMEZONE
 
 NumberLike = Union[int, float, str, Decimal]
 
@@ -15,13 +15,13 @@ _MILLI_THRESHOLD: Decimal = Decimal("1000000000000")
 
 
 def get_current_time() -> datetime:
-    current: datetime = datetime.now(BELGRADE_TIMEZONE)
+    current: datetime = datetime.now(CURRENT_TIMEZONE)
     return current
 
 
 def from_exchange_timestamp(timestamp: NumberLike) -> datetime:
     seconds: Decimal = _normalize_to_seconds(timestamp)
-    return datetime.fromtimestamp(float(seconds), BELGRADE_TIMEZONE)
+    return datetime.fromtimestamp(float(seconds), CURRENT_TIMEZONE)
 
 
 def _normalize_to_seconds(timestamp: NumberLike) -> Decimal:

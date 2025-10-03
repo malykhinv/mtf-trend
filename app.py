@@ -8,7 +8,7 @@ from typing import Optional, Sequence, Tuple, cast
 from config.config import CONFIG
 from config.models.exchange_name import ExchangeName
 from config.secrets import SECRETS
-from config.timezone import BELGRADE_TIMEZONE
+from config.timezone import CURRENT_TIMEZONE
 from data.exchanges import (
     BestBidAsk,
     BinanceExchangeData,
@@ -150,7 +150,7 @@ class Application:
     def _handle_resync(self, reason: StrategyResyncReason) -> None:
         snapshot = self._exchange_data.fetch_orderbook_snapshot()
         self._apply_snapshot(snapshot)
-        timestamp = snapshot.received_at.astimezone(BELGRADE_TIMEZONE)
+        timestamp = snapshot.received_at.astimezone(CURRENT_TIMEZONE)
         self._feed_monitor.clear()
         self._strategy.complete_resync(timestamp)
 
