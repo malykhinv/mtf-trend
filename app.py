@@ -14,7 +14,9 @@ from config.timezone import CURRENT_TIMEZONE
 from data.exchanges import (
     BestBidAsk,
     BinanceExchangeData,
+    BinanceTradingAdapter,
     BybitExchangeData,
+    BybitTradingAdapter,
     DepthStreamData,
     IExchangeData,
     ResyncReason as StreamResyncReason,
@@ -51,7 +53,7 @@ from domain.strategy import (
 from domain.strategy.resync import ResyncReason as StrategyResyncReason
 from domain.strategy.state import StrategyState
 from utils import get_current_time
-from application import FeedMonitor, GUARDS, NoopTradingAdapter
+from application import FeedMonitor, GUARDS
 from application.market_scanner import MarketScanner
 from domain.trading_adapter import TradingAdapter
 
@@ -66,7 +68,7 @@ class SymbolContext:
     trade_stream: Iterator[StreamEvent[Trade]]
     ticker_stream: Iterator[StreamEvent[BestBidAsk]]
     filters: SymbolFilters
-    trading_adapter: NoopTradingAdapter
+    trading_adapter: TradingAdapter
     last_update_id: Optional[int] = None
     last_trade_price: Optional[float] = None
     best_bid: Optional[float] = None
@@ -83,7 +85,7 @@ class TradingAdapterRouter(TradingAdapter):
     def set_current_symbol(self, symbol: str) -> None:
         self._current_symbol = symbol.upper()
 
-    def _resolve(self) -> NoopTradingAdapter:
+    def _resolve(self) -> TradingAdapter:
         if self._current_symbol is None:
             raise RuntimeError("trading symbol is not selected")
         context = self._contexts.get(self._current_symbol)
@@ -438,7 +440,8 @@ class Application:
 
     def _create_context(self, symbol: str) -> SymbolContext:
         exchange_data = self._create_exchange_data(symbol)
-        api_key, api_secret = self._exchange_credentials()
+        filters = exchange_data.fetch_symbol_filters()
+        trading_adapter = self._create_trading_adapter(symbol, filters)
         context = SymbolContext(
             symbol=symbol,
             exchange_data=exchange_data,
@@ -447,13 +450,8 @@ class Application:
             depth_stream=exchange_data.stream_depth(),
             trade_stream=exchange_data.stream_trades(),
             ticker_stream=exchange_data.stream_book_ticker(),
-            filters=exchange_data.fetch_symbol_filters(),
-            trading_adapter=NoopTradingAdapter(
-                self._exchange,
-                symbol,
-                api_key=api_key,
-                api_secret=api_secret,
-            ),
+            filters=filters,
+            trading_adapter=trading_adapter,
         )
         startup_timestamp = get_current_time()
         self._event_logger.log(
@@ -476,6 +474,26 @@ class Application:
         )
         self._initialize_order_book(context)
         return context
+
+    def _create_trading_adapter(self, symbol: str, filters: SymbolFilters) -> TradingAdapter:
+        api_key, api_secret = self._exchange_credentials()
+        if not api_key or not api_secret:
+            raise RuntimeError("API credentials are required for trading operations")
+        if self._exchange is Exchange.BINANCE:
+            return BinanceTradingAdapter(
+                symbol=symbol,
+                quote_asset=filters.quote_asset,
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+        if self._exchange is Exchange.BYBIT:
+            return BybitTradingAdapter(
+                symbol=symbol,
+                settle_coin=filters.quote_asset,
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+        raise RuntimeError("unsupported exchange")
 
     def _log_scanner_message(self, message: str) -> None:
         timestamp = get_current_time()
