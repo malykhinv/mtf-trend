@@ -15,6 +15,7 @@ from typing import (
     Sequence,
     TypeAlias,
     TypedDict,
+    cast,
 )
 from urllib import parse
 from urllib.request import Request, urlopen
@@ -307,8 +308,8 @@ class BybitExchangeData:
                 return None
 
         match candidate:
-            case dict() as payload:
-                pass
+            case dict() as payload_dict:
+                payload = cast(DepthUpdatePayload, payload_dict)
             case _:
                 return None
 
@@ -573,7 +574,7 @@ class BybitExchangeData:
         return normalized
 
     def _build_snapshot_from_ws(
-        self, payload: dict[str, Any], event_time: datetime
+        self, payload: DepthUpdatePayload, event_time: datetime
     ) -> OrderBookSnapshot:
         bids_raw = payload.get("b") or payload.get("bids") or []
         asks_raw = payload.get("a") or payload.get("asks") or []
@@ -596,7 +597,7 @@ class BybitExchangeData:
         )
 
     def _build_update_from_ws(
-        self, payload: dict[str, Any], event_time: datetime
+        self, payload: DepthUpdatePayload, event_time: datetime
     ) -> OrderBookUpdate:
         bids_raw = payload.get("b") or payload.get("bids") or []
         asks_raw = payload.get("a") or payload.get("asks") or []
