@@ -1,7 +1,8 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Callable, Optional
 
 from .resync_reason import ResyncReason
+from utils.timez import get_current_time
 
 
 class ExchangeLogger:
@@ -14,7 +15,7 @@ class ExchangeLogger:
         self._writer = writer
 
     def log(self, message: str) -> None:
-        timestamp = datetime.now(timezone.utc).astimezone()
+        timestamp = get_current_time().astimezone()
         formatted = f"{timestamp:%H:%M:%S} {message}"
         if self._writer:
             self._writer(formatted)

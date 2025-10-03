@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from config.timezone import BELGRADE_TIMEZONE
+from config.timezone import CURRENT_TIMEZONE
 
 
 def ensure_current_timezone(*values: datetime) -> None:
@@ -13,11 +13,15 @@ def ensure_current_timezone(*values: datetime) -> None:
         tzinfo = value.tzinfo
         match tzinfo:
             case ZoneInfo(key=key):
-                if key != BELGRADE_TIMEZONE.key:
-                    raise ValueError("datetime must use Europe/Belgrade timezone")
+                if key != CURRENT_TIMEZONE.key:
+                    raise ValueError(
+                        f"datetime must use {CURRENT_TIMEZONE.key} timezone"
+                    )
             case _:
-                if tzinfo != BELGRADE_TIMEZONE:
-                    raise ValueError("datetime must use Europe/Belgrade timezone")
+                if tzinfo != CURRENT_TIMEZONE:
+                    raise ValueError(
+                        f"datetime must use {CURRENT_TIMEZONE.key} timezone"
+                    )
 
 
 __all__ = ["ensure_current_timezone"]

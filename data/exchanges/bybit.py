@@ -4,7 +4,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import (
     Any,
     Callable,
@@ -38,6 +38,7 @@ from .base import (
     StreamBuffer,
     StreamEvent,
 )
+from utils.timez import from_exchange_timestamp, get_current_time
 
 
 @dataclass(slots=True)
@@ -169,7 +170,7 @@ class BybitExchangeData:
         bids_raw = result.get("b") or result.get("bids") or []
         asks_raw = result.get("a") or result.get("asks") or []
         seq = int(result.get("u") or result.get("seq") or 0)
-        now = datetime.now(timezone.utc)
+        now = get_current_time()
         bids = tuple(
             self._build_level(price, quantity, now)
             for price, quantity in self._normalize_levels(bids_raw)
@@ -326,7 +327,7 @@ class BybitExchangeData:
             message.get("ts"),
             payload.get("ts"),
         )
-        event_time = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+        event_time = from_exchange_timestamp(timestamp_ms / 1000.0)
         return DepthEnvelope(
             payload=payload,
             sequence=sequence,
@@ -626,9 +627,8 @@ class BybitExchangeData:
             entries = list(data)
         results: list[BestBidAsk] = []
         for payload in entries:
-            event_time = datetime.fromtimestamp(
-                (payload.get("ts") or message.get("ts") or 0) / 1000.0,
-                tz=timezone.utc,
+            event_time = from_exchange_timestamp(
+                (payload.get("ts") or message.get("ts") or 0) / 1000.0
             )
             results.append(
                 BestBidAsk(
@@ -651,7 +651,7 @@ class BybitExchangeData:
             entries = list(data)
         trades: list[Trade] = []
         for payload in entries:
-            event_time = datetime.fromtimestamp(payload.get("T", 0) / 1000.0, tz=timezone.utc)
+            event_time = from_exchange_timestamp(payload.get("T", 0) / 1000.0)
             side_value = payload.get("S") or payload.get("side")
             side = Side.BID if str(side_value).lower() in ("buy", "bid", "true") else Side.ASK
             trades.append(
@@ -677,8 +677,8 @@ class BybitExchangeData:
         for payload in entries:
             open_raw = payload.get("start") or payload.get("t") or payload.get("openTime") or 0
             close_raw = payload.get("end") or payload.get("T") or payload.get("closeTime") or 0
-            open_time = datetime.fromtimestamp(open_raw / 1000.0, tz=timezone.utc)
-            close_time = datetime.fromtimestamp(close_raw / 1000.0, tz=timezone.utc)
+            open_time = from_exchange_timestamp(open_raw / 1000.0)
+            close_time = from_exchange_timestamp(close_raw / 1000.0)
             candles.append(
                 Candle(
                     open_time=open_time,
