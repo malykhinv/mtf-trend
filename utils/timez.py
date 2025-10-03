@@ -9,7 +9,7 @@ from typing import Union
 
 from config.timezone import BELGRADE_TIMEZONE
 
-NumberLike = Union[int, float, str]
+NumberLike = Union[int, float, str, Decimal]
 
 _NANO_THRESHOLD: Decimal = Decimal("1000000000000000000")
 _MICRO_THRESHOLD: Decimal = Decimal("1000000000000000")
@@ -67,7 +67,10 @@ def _coerce_to_decimal(timestamp: NumberLike) -> Decimal:
         if math.isnan(timestamp) or math.isinf(timestamp):
             raise ValueError("timestamp must be a finite number")
         return Decimal(str(timestamp))
-    raise TypeError("timestamp must be int, float, or str")
+    if isinstance(timestamp, Decimal):
+        _validate_decimal(timestamp)
+        return timestamp
+    raise TypeError("timestamp must be int, float, str, or Decimal")
 
 
 def _validate_decimal(value: Decimal) -> None:
@@ -75,5 +78,10 @@ def _validate_decimal(value: Decimal) -> None:
         raise ValueError("timestamp must be a finite number")
 
 
-__all__ = ["NumberLike", "now_belgrade", "get_current_time", "from_exchange_timestamp"]
+__all__ = [
+    "NumberLike",
+    "now_belgrade",
+    "get_current_time",
+    "from_exchange_timestamp",
+]
 
