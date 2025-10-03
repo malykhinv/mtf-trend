@@ -46,6 +46,9 @@ class Strategy:
         self._last_scan_at: Optional[datetime] = None
         self._last_focus_signal_at: Optional[datetime] = None
         self._last_uptick_at: Optional[datetime] = None
+        self._last_trade_at: Optional[datetime] = None
+        self._last_stop_move_at: Optional[datetime] = None
+        self._last_uptick_loss_at: Optional[datetime] = None
         self._position_symbol: Optional[str] = None
         self._position_signal = Signal.NONE
         self._position_wall: Optional[Wall] = None
@@ -121,6 +124,7 @@ class Strategy:
             self._focused_signal = Signal.NONE
             self._focused_wall = None
             self._state = StrategyState.SCANNING
+            self._last_uptick_loss_at = timestamp
             return
         if pressure is None or wall is None:
             return
@@ -176,7 +180,23 @@ class Strategy:
         cooldown = timedelta(minutes=CONFIG.telegram.uptick_cooldown_min)
         if self._last_uptick_at is None:
             return True
-        return timestamp - self._last_uptick_at >= cooldown
+        if timestamp - self._last_uptick_at >= cooldown:
+            return True
+        return self._has_recent_activity(timestamp, cooldown)
+
+    def _has_recent_activity(self, timestamp: datetime, window: timedelta) -> bool:
+        lower_bound = timestamp - window
+        if self._last_uptick_at is not None and self._last_uptick_at > lower_bound:
+            lower_bound = self._last_uptick_at
+        events = (
+            self._last_trade_at,
+            self._last_stop_move_at,
+            self._last_uptick_loss_at,
+        )
+        for moment in events:
+            if moment is not None and lower_bound <= moment <= timestamp:
+                return True
+        return False
 
     def _should_defocus(self, timestamp: datetime) -> bool:
         if self._last_focus_signal_at is None:
@@ -189,6 +209,7 @@ class Strategy:
         if signal is Signal.NONE:
             return
         self._position.enter(symbol, signal, wall, timestamp)
+        self._last_trade_at = timestamp
         self._notifier.notify_entry(symbol, signal, timestamp)
         self._state = StrategyState.IN_POSITION
         self._position_symbol = symbol
@@ -204,6 +225,7 @@ class Strategy:
         if symbol is None:
             return
         self._position.exit(symbol, reason, timestamp)
+        self._last_trade_at = timestamp
         self._notifier.notify_exit(symbol, reason, timestamp)
         self._state = StrategyState.SCANNING
         self._position_symbol = None
@@ -282,6 +304,7 @@ class Strategy:
         if self._position_symbol is None:
             return
         self._position.adjust_stop(self._position_symbol, wall.price, timestamp)
+        self._last_stop_move_at = timestamp
         self._position_wall = wall
         self._shift_candidate_price = None
         self._shift_candidate_since = None
