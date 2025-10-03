@@ -1,5 +1,3 @@
-"""Log writing utilities for the data layer."""
-
 from __future__ import annotations
 
 from typing import Callable, TextIO, TYPE_CHECKING
@@ -16,8 +14,6 @@ def _print_sink(message: str) -> None:
 
 
 def create_text_log_sink(stream: TextIO | None = None) -> LogSink:
-    """Create a simple text sink that writes log strings to the given stream."""
-
     if stream is None:
         return _print_sink
 
@@ -29,8 +25,6 @@ def create_text_log_sink(stream: TextIO | None = None) -> LogSink:
 
 
 def create_log_writer(sink: LogSink | None = None) -> LogLineWriter:
-    """Create a writer that emits log entries in the ``HH:MM:SS Message`` format."""
-
     text_sink = sink or _print_sink
 
     def _write(entry: LogLine) -> None:

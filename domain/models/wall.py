@@ -1,5 +1,3 @@
-"""Models describing large order book walls."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,8 +9,6 @@ from .enums import Exchange, Side
 
 @dataclass(frozen=True, slots=True)
 class Wall:
-    """Order book wall representation tracked by the strategy."""
-
     exchange: Exchange
     symbol: str
     side: Side

@@ -1,5 +1,3 @@
-"""Exchange data adapters exposed by the data layer."""
-
 from .base import (
     BestBidAsk,
     DepthStreamData,

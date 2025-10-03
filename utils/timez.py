@@ -1,5 +1,3 @@
-"""Timezone-aware datetime helpers."""
-
 from __future__ import annotations
 
 import math
@@ -17,15 +15,11 @@ _MILLI_THRESHOLD: Decimal = Decimal("1000000000000")
 
 
 def get_current_time() -> datetime:
-    """Return the current time in the configured timezone."""
-
     current: datetime = datetime.now(BELGRADE_TIMEZONE)
     return current
 
 
 def from_exchange_timestamp(timestamp: NumberLike) -> datetime:
-    """Convert a raw exchange timestamp to a timezone-aware datetime."""
-
     seconds: Decimal = _normalize_to_seconds(timestamp)
     return datetime.fromtimestamp(float(seconds), BELGRADE_TIMEZONE)
 

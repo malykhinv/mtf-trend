@@ -1,5 +1,3 @@
-"""Interface describing public data interactions with an exchange."""
-
 from typing import Iterator, Protocol
 
 from domain.models import Candle, OrderBookSnapshot, SymbolFilters, Trade
@@ -10,8 +8,6 @@ from .stream_event import StreamEvent
 
 
 class IExchangeData(Protocol):
-    """Interface describing public data interactions with an exchange."""
-
     def fetch_symbol_filters(self) -> SymbolFilters:
         ...
 

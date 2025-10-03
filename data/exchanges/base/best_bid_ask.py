@@ -1,13 +1,9 @@
-"""Best bid/ask quote snapshot emitted by exchanges."""
-
 from dataclasses import dataclass
 from datetime import datetime
 
 
 @dataclass(slots=True)
 class BestBidAsk:
-    """Best bid/ask quote snapshot emitted by exchanges."""
-
     exchange: str
     symbol: str
     bid_price: float

@@ -1,5 +1,3 @@
-"""Order book related domain models."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,8 +10,6 @@ from .enums import Exchange
 
 @dataclass(frozen=True, slots=True)
 class OrderBookLevel:
-    """Represents a single price level in the order book."""
-
     price: float
     quantity: float
     notional: float
@@ -28,8 +24,6 @@ class OrderBookLevel:
 
 @dataclass(frozen=True, slots=True)
 class OrderBookSnapshot:
-    """Full snapshot of the order book provided by the exchange."""
-
     exchange: Exchange
     symbol: str
     last_update_id: int
@@ -43,8 +37,6 @@ class OrderBookSnapshot:
 
 @dataclass(frozen=True, slots=True)
 class OrderBookUpdate:
-    """Incremental order book update event."""
-
     exchange: Exchange
     symbol: str
     first_update_id: int

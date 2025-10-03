@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-"""Order execution helpers coordinating trades with the adapter."""
-
 from typing import Callable, Optional, Tuple
 
 from config.config import CONFIG

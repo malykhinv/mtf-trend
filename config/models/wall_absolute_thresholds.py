@@ -1,4 +1,3 @@
-"""Configuration model for absolute wall thresholds."""
 from dataclasses import dataclass
 
 

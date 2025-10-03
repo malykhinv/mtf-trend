@@ -1,5 +1,3 @@
-"""Telegram notifications for the strategy."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,8 +10,6 @@ from .types import TelegramHandler
 
 @dataclass
 class TelegramNotifier:
-    """Sends strategy updates via Telegram."""
-
     send_message: TelegramHandler
 
     def notify_uptick(self, symbol: str, signal: Signal, timestamp: datetime) -> None:

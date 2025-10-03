@@ -1,5 +1,3 @@
-"""Mathematical helpers for the trading domain."""
-
 from __future__ import annotations
 
 import math
@@ -7,8 +5,6 @@ from typing import Sequence, Tuple
 
 
 def median_filter_of_three(values: Sequence[float]) -> Tuple[float, ...]:
-    """Return a sequence smoothed by a median-of-three filter."""
-
     length: int = len(values)
     if length == 0:
         return ()
@@ -28,8 +24,6 @@ def median_filter_of_three(values: Sequence[float]) -> Tuple[float, ...]:
 
 
 def compute_odr_weight(price: float, reference_price: float, tick_size: float) -> float:
-    """Return a decay weight based on distance between two prices."""
-
     if tick_size <= 0.0:
         raise ValueError("tick_size must be positive")
     distance_ticks: float = abs(price - reference_price) / tick_size

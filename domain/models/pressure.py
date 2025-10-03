@@ -1,5 +1,3 @@
-"""Models capturing order book pressure metrics."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,8 +8,6 @@ from ._timezone import ensure_current_timezone
 
 @dataclass(frozen=True, slots=True)
 class Pressure:
-    """Pressure metrics derived from the order book."""
-
     computed_at: datetime
     buy_pressure: float
     sell_pressure: float

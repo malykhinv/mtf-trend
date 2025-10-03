@@ -1,4 +1,3 @@
-"""Configuration model for funding kill switch settings."""
 from dataclasses import dataclass
 
 

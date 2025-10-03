@@ -1,5 +1,3 @@
-"""Simple logger producing `HH:MM:SS message` formatted strings."""
-
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
@@ -7,8 +5,6 @@ from .resync_reason import ResyncReason
 
 
 class ExchangeLogger:
-    """Simple logger producing `HH:MM:SS message` formatted strings."""
-
     def __init__(
         self,
         name: str,

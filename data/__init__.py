@@ -1,5 +1,3 @@
-"""Data layer modules for exchange interaction and integrations."""
-
 from .exchanges import (
     BestBidAsk,
     DepthStreamData,

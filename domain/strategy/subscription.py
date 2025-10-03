@@ -1,5 +1,3 @@
-"""Subscription management for the strategy."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -12,8 +10,6 @@ from .types import SubscriptionHandler
 
 @dataclass
 class SubscriptionManager:
-    """Keeps external data feed subscriptions in sync with strategy needs."""
-
     subscribe: SubscriptionHandler
     unsubscribe: SubscriptionHandler
     logger: EventLogger

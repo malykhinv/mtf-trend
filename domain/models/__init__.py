@@ -1,5 +1,3 @@
-"""Domain models exposed by the trading bot."""
-
 from .candle import Candle
 from .enums import BalanceSource, Exchange, MarginMode, Side, Signal, StopTrigger
 from .execution import ExecutionReport

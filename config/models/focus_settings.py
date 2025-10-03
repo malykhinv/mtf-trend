@@ -1,4 +1,3 @@
-"""Configuration model for focus settings."""
 from dataclasses import dataclass
 
 

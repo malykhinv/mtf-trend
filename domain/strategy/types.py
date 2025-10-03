@@ -1,5 +1,3 @@
-"""Callable type aliases used by the strategy components."""
-
 from __future__ import annotations
 
 from typing import Callable

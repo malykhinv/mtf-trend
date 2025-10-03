@@ -1,5 +1,3 @@
-"""Models related to order execution reporting."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,8 +9,6 @@ from .enums import Exchange, Side
 
 @dataclass(frozen=True, slots=True)
 class ExecutionReport:
-    """Execution result for a placed order."""
-
     exchange: Exchange
     symbol: str
     order_id: str

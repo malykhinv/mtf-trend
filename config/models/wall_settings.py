@@ -1,4 +1,3 @@
-"""Configuration model for wall settings."""
 from dataclasses import dataclass
 
 from .wall_absolute_thresholds import WallAbsoluteThresholds

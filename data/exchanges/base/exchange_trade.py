@@ -1,13 +1,9 @@
-"""Interface describing trading specific interaction with an exchange."""
-
 from typing import Protocol
 
 from domain.models import BalanceSource, ExecutionReport, MarginMode, Side, StopTrigger
 
 
 class IExchangeTrade(Protocol):
-    """Interface describing trading specific interaction with an exchange."""
-
     def get_balance(self, source: BalanceSource) -> float:
         ...
 

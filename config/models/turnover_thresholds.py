@@ -1,4 +1,3 @@
-"""Configuration model for turnover thresholds."""
 from dataclasses import dataclass
 
 

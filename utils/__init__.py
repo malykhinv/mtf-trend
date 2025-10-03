@@ -1,5 +1,3 @@
-"""Utility helpers used by the trading bot."""
-
 from .formatting import format_money, format_number
 from .mathx import (
     ceil_to_step,

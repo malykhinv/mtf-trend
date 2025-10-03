@@ -1,4 +1,3 @@
-"""Secrets configuration model."""
 from dataclasses import dataclass
 
 

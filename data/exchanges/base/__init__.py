@@ -1,5 +1,3 @@
-"""Exchange base interfaces and streaming helpers."""
-
 from .best_bid_ask import BestBidAsk
 from .depth_stream_data import DepthStreamData
 from .exchange_data import IExchangeData

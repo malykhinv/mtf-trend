@@ -1,5 +1,3 @@
-"""In-memory order book representation with recent band tracking."""
-
 from __future__ import annotations
 
 from bisect import bisect_left
@@ -14,8 +12,6 @@ from .models._timezone import ensure_current_timezone
 
 @dataclass(slots=True)
 class _StoredLevel:
-    """Mutable storage for a single order book level."""
-
     price: float
     quantity: float
     notional: float
@@ -25,8 +21,6 @@ class _StoredLevel:
     max_quantity_seen: float
 
     def update(self, *, quantity: float, timestamp: datetime) -> None:
-        """Update statistics for the level with the latest values."""
-
         ensure_current_timezone(timestamp)
         self.quantity = quantity
         self.notional = self.price * quantity
@@ -37,8 +31,6 @@ class _StoredLevel:
             self.max_quantity_seen = quantity
 
     def to_dataclass(self) -> OrderBookLevel:
-        """Convert mutable storage back to an immutable domain model."""
-
         return OrderBookLevel(
             price=self.price,
             quantity=self.quantity,
@@ -52,16 +44,12 @@ class _StoredLevel:
 
 @dataclass(slots=True)
 class _RecentBandEntry:
-    """Single entry in the recent band ring buffer."""
-
     price: float
     level_index: int
     timestamp: datetime
 
 
 class RecentBand:
-    """Ring buffer tracking recently touched price levels."""
-
     __slots__ = (
         "_capacity",
         "_entries",
@@ -83,8 +71,6 @@ class RecentBand:
         return self._count
 
     def clear(self) -> None:
-        """Remove all entries from the ring buffer."""
-
         self._entries = [None] * self._capacity
         self._next = 0
         self._count = 0
@@ -92,8 +78,6 @@ class RecentBand:
         self._index_slots.clear()
 
     def _locate_price(self, price: float) -> Tuple[int, Optional[int]]:
-        """Return index buffer location and stored slot for the price."""
-
         index_pos = bisect_left(self._index_prices, price)
         if (
             index_pos < len(self._index_prices)
@@ -103,8 +87,6 @@ class RecentBand:
         return index_pos, None
 
     def _remove_from_index(self, price: float) -> Optional[int]:
-        """Remove price from index buffers and return previous slot if any."""
-
         index_pos, slot = self._locate_price(price)
         if slot is None:
             return None
@@ -113,8 +95,6 @@ class RecentBand:
         return slot
 
     def _store_in_index(self, price: float, slot: int) -> None:
-        """Insert or update slot reference for the provided price."""
-
         index_pos, existing_slot = self._locate_price(price)
         if existing_slot is None:
             self._index_prices.insert(index_pos, price)
@@ -123,8 +103,6 @@ class RecentBand:
             self._index_slots[index_pos] = slot
 
     def record(self, price: float, level_index: int, timestamp: datetime) -> None:
-        """Store the latest state for the provided price level."""
-
         if self._capacity == 0:
             return
         ensure_current_timezone(timestamp)
@@ -150,8 +128,6 @@ class RecentBand:
         self._count += 1
 
     def discard(self, price: float) -> None:
-        """Remove a price level from the recent band if it exists."""
-
         slot = self._remove_from_index(price)
         if slot is None:
             return
@@ -161,14 +137,10 @@ class RecentBand:
             self._count -= 1
 
     def contains(self, price: float) -> bool:
-        """Check if the price is currently tracked in the recent band."""
-
         _, slot = self._locate_price(price)
         return slot is not None
 
     def iter_newest_first(self) -> Iterator[_RecentBandEntry]:
-        """Iterate over entries starting from the newest one."""
-
         if self._capacity == 0 or self._count == 0:
             return
         remaining = self._count
@@ -183,8 +155,6 @@ class RecentBand:
             visited += 1
 
     def iter_oldest_first(self) -> Iterator[_RecentBandEntry]:
-        """Iterate over entries starting from the oldest one."""
-
         if self._capacity == 0 or self._count == 0:
             return
         remaining = self._count
@@ -199,8 +169,6 @@ class RecentBand:
             visited += 1
 
     def latest_level_index(self, price: float) -> Optional[int]:
-        """Return the last recorded position for the provided price."""
-
         _, slot = self._locate_price(price)
         if slot is None:
             return None
@@ -209,8 +177,6 @@ class RecentBand:
 
 
 class _BookSide:
-    """Order book side with sorted levels and recent band membership."""
-
     __slots__ = (
         "_side",
         "_levels",
@@ -284,8 +250,6 @@ class _BookSide:
         )
 
     def update_level(self, level: OrderBookLevel) -> None:
-        """Insert or update a single level based on an incremental event."""
-
         price = level.price
         if level.quantity <= 0:
             self.remove_level(price)
@@ -318,8 +282,6 @@ class _BookSide:
         self._recent_band.record(price, index, timestamp)
 
     def remove_level(self, price: float) -> None:
-        """Remove a level from the side if present."""
-
         _, index = self._locate_price(price)
         if index is None:
             return
@@ -330,8 +292,6 @@ class _BookSide:
         self._recent_band.discard(price)
 
     def replace_levels(self, levels: Iterable[OrderBookLevel]) -> None:
-        """Replace current side state with provided levels (snapshot)."""
-
         self._levels = []
         self._sort_keys = []
         self._index_prices = []
@@ -349,15 +309,11 @@ class _BookSide:
         return iter(self._levels)
 
     def iter_recent_levels(self) -> Iterator[_StoredLevel]:
-        """Yield levels that are currently inside the recent band."""
-
         for level in self._levels:
             if self._recent_band.contains(level.price):
                 yield level
 
     def find_nearest_wall(self, *, min_notional: float) -> Optional[_StoredLevel]:
-        """Return first level inside the recent band exceeding the threshold."""
-
         for level in self._levels:
             if not self._recent_band.contains(level.price):
                 continue
@@ -370,8 +326,6 @@ class _BookSide:
 
 
 class OrderBook:
-    """Aggregated bid/ask sides with helpers for recent band operations."""
-
     __slots__ = ("_bids", "_asks")
 
     def __init__(self, *, recent_band_capacity: int = 128) -> None:
@@ -387,29 +341,21 @@ class OrderBook:
         return self._asks
 
     def apply_snapshot(self, snapshot: OrderBookSnapshot) -> None:
-        """Reset the order book using a full snapshot."""
-
         self._bids.replace_levels(snapshot.bids)
         self._asks.replace_levels(snapshot.asks)
 
     def apply_update(self, update: OrderBookUpdate) -> None:
-        """Apply incremental changes to both sides of the order book."""
-
         for level in update.bids:
             self._bids.update_level(level)
         for level in update.asks:
             self._asks.update_level(level)
 
     def iter_recent_band(self, side: Side) -> Iterator[OrderBookLevel]:
-        """Iterate over levels inside the recent band for the requested side."""
-
         book_side = self._bids if side is Side.BID else self._asks
         for level in book_side.iter_recent_levels():
             yield level.to_dataclass()
 
     def find_nearest_wall(self, *, side: Side, min_notional: float) -> Optional[OrderBookLevel]:
-        """Return nearest wall candidate on provided side within recent band."""
-
         book_side = self._bids if side is Side.BID else self._asks
         level = book_side.find_nearest_wall(min_notional=min_notional)
         return None if level is None else level.to_dataclass()

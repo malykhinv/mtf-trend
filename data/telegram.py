@@ -1,5 +1,3 @@
-"""Telegram messaging client."""
-
 from __future__ import annotations
 
 import json
@@ -13,8 +11,6 @@ from config.secrets import SECRETS
 
 @dataclass(slots=True)
 class TelegramClient:
-    """Minimal client for sending messages via Telegram Bot API."""
-
     token: str
     chat_id: Optional[int]
     silent: bool

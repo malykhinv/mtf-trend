@@ -1,5 +1,3 @@
-"""Thread-safe queue wrapper with heartbeat and timeout handling."""
-
 from __future__ import annotations
 
 import queue
@@ -16,8 +14,6 @@ T = TypeVar("T")
 
 
 class StreamBuffer(Generic[T]):
-    """Thread-safe queue wrapper with heartbeat and timeout handling."""
-
     def __init__(
         self,
         name: str,

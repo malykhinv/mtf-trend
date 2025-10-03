@@ -1,5 +1,3 @@
-"""Models representing structured log entries."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,8 +8,6 @@ from ._timezone import ensure_current_timezone
 
 @dataclass(frozen=True, slots=True)
 class LogLine:
-    """Structured log line produced by the application."""
-
     timestamp: datetime
     message: str
     level: str

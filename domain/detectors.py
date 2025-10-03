@@ -1,5 +1,3 @@
-"""Business logic for detecting pressure and wall conditions."""
-
 from __future__ import annotations
 
 from collections import deque
@@ -20,8 +18,6 @@ from utils import compute_odr_weight, get_current_time, median_filter_of_three
 
 
 def compute_odr(book: OrderBook, last_price: float, tick_size: float) -> Pressure:
-    """Compute order book pressure metrics using weighted levels."""
-
     bid_levels: Tuple[OrderBookLevel, ...] = _collect_levels(
         book.iter_recent_band(Side.BID),
         book.best_bid(),
@@ -43,16 +39,12 @@ def compute_odr(book: OrderBook, last_price: float, tick_size: float) -> Pressur
 
 
 def check_if_has_pressure(pressure: Pressure, want_long: bool) -> bool:
-    """Check if pressure conditions satisfy desired trade direction."""
-
     if want_long:
         return pressure.imbalance_ratio <= CONFIG.odr.odr_in_long
     return pressure.imbalance_ratio >= CONFIG.odr.odr_in_short
 
 
 def check_if_price_recent(level_price: float, recent_low: float, recent_high: float) -> bool:
-    """Return True if price stays within the recent traded band."""
-
     return recent_low <= level_price <= recent_high
 
 
@@ -64,8 +56,6 @@ def check_if_is_large_wall(
     persist_s: float,
     now: datetime,
 ) -> bool:
-    """Validate if an order book level qualifies as a large wall."""
-
     lifetime: timedelta = now - level.first_seen_at
     if lifetime < timedelta(seconds=persist_s):
         return False
@@ -77,8 +67,6 @@ def check_if_is_large_wall(
 
 
 def check_if_has_near_wall(book: OrderBook, side_stop: Side) -> Optional[Wall]:
-    """Return nearest significant wall on the stop side if present."""
-
     abs_threshold: float = _resolve_absolute_threshold(CONFIG.general.profile)
     level: Optional[OrderBookLevel] = book.find_nearest_wall(
         side=side_stop,
@@ -111,8 +99,6 @@ def check_if_has_near_wall(book: OrderBook, side_stop: Side) -> Optional[Wall]:
 
 
 def check_if_has_opposite_wall(book: OrderBook, side_move: Side, our_wall: Wall) -> bool:
-    """Determine if an opposing wall blocks the intended move."""
-
     opposite_side: Side = Side.ASK if side_move is Side.BID else Side.BID
     abs_threshold: float = _resolve_absolute_threshold(CONFIG.general.profile)
     level: Optional[OrderBookLevel] = book.find_nearest_wall(

@@ -1,5 +1,3 @@
-"""Event logging helper for the strategy."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,8 +10,6 @@ from .types import LogWriter
 
 @dataclass
 class EventLogger:
-    """Wrapper that records strategy events via the configured log writer."""
-
     write: LogWriter
 
     def log(self, message: str, timestamp: datetime) -> None:

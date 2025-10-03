@@ -1,4 +1,3 @@
-"""Configuration model for general settings."""
 from dataclasses import dataclass
 
 from .exchange_name import ExchangeName

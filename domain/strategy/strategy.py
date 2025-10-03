@@ -1,7 +1,4 @@
-"""Finite state machine implementing the uptick trading strategy."""
-
 from __future__ import annotations
-
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -21,7 +18,6 @@ from .types import ResyncHandler
 
 
 class Strategy:
-    """Coordinates market observations with position management actions."""
 
     def __init__(
         self,
