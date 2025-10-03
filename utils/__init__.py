@@ -9,7 +9,7 @@ from .mathx import (
     median_filter_of_three,
     round_to_step,
 )
-from .timez import from_exchange_timestamp, get_current_time, now_belgrade
+from .timez import from_exchange_timestamp, get_current_time
 
 __all__ = [
     "ceil_to_step",
@@ -19,7 +19,6 @@ __all__ = [
     "format_money",
     "format_number",
     "median_filter_of_three",
-    "now_belgrade",
     "get_current_time",
     "round_to_step",
     "from_exchange_timestamp",

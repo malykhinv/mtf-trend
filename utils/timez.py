@@ -16,17 +16,11 @@ _MICRO_THRESHOLD: Decimal = Decimal("1000000000000000")
 _MILLI_THRESHOLD: Decimal = Decimal("1000000000000")
 
 
-def now_belgrade() -> datetime:
-    """Return the current time in the Europe/Belgrade timezone."""
+def get_current_time() -> datetime:
+    """Return the current time in the configured timezone."""
 
     current: datetime = datetime.now(BELGRADE_TIMEZONE)
     return current
-
-
-def get_current_time() -> datetime:
-    """Return the current Europe/Belgrade time for legacy callers."""
-
-    return now_belgrade()
 
 
 def from_exchange_timestamp(timestamp: NumberLike) -> datetime:
@@ -78,10 +72,5 @@ def _validate_decimal(value: Decimal) -> None:
         raise ValueError("timestamp must be a finite number")
 
 
-__all__ = [
-    "NumberLike",
-    "now_belgrade",
-    "get_current_time",
-    "from_exchange_timestamp",
-]
+__all__ = ["NumberLike", "get_current_time", "from_exchange_timestamp"]
 
