@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Mathematical helpers for the trading domain."""
 
+import math
 from typing import Sequence, Tuple
 
 
@@ -35,4 +36,44 @@ def price_weight(price: float, reference_price: float, tick_size: float) -> floa
     return 1.0 / (1.0 + ticks)
 
 
-__all__ = ["median_filter_of_three", "price_weight"]
+def floor_to_step(value: float, step: float) -> float:
+    if step <= 0.0:
+        raise ValueError("step must be positive")
+    scaled: float = value / step
+    floored: float = math.floor(scaled)
+    return floored * step
+
+
+def ceil_to_step(value: float, step: float) -> float:
+    if step <= 0.0:
+        raise ValueError("step must be positive")
+    scaled: float = value / step
+    ceiled: float = math.ceil(scaled)
+    return ceiled * step
+
+
+def compute_position_size(
+    balance: float,
+    fraction: float,
+    minimum_notional: float,
+    price: float,
+    step: float,
+) -> float:
+    if price <= 0.0:
+        raise ValueError("price must be positive")
+    if step <= 0.0:
+        raise ValueError("step must be positive")
+    target_notional: float = max(balance * fraction, minimum_notional)
+    raw_quantity: float = target_notional / price
+    if raw_quantity <= 0.0:
+        return 0.0
+    return floor_to_step(raw_quantity, step)
+
+
+__all__ = [
+    "median_filter_of_three",
+    "price_weight",
+    "floor_to_step",
+    "ceil_to_step",
+    "compute_position_size",
+]
