@@ -16,7 +16,7 @@ from .models.enums import Exchange, Side
 from .models.order_book import OrderBookLevel
 from .models.pressure import Pressure
 from .models.wall import Wall
-from utils import get_current_time, median_filter_of_three, price_weight
+from utils import compute_odr_weight, median_filter_of_three, now_belgrade
 
 
 def compute_odr(book: OrderBook, last_price: float, tick_size: float) -> Pressure:
@@ -35,7 +35,7 @@ def compute_odr(book: OrderBook, last_price: float, tick_size: float) -> Pressur
     raw_ratio: float = _compute_ratio(sell_pressure, buy_pressure)
     smoothed_ratio: float = _smooth_ratio(raw_ratio)
     return Pressure(
-        computed_at=get_current_time(),
+        computed_at=now_belgrade(),
         buy_pressure=buy_pressure,
         sell_pressure=sell_pressure,
         imbalance_ratio=smoothed_ratio,
@@ -86,7 +86,7 @@ def check_if_has_near_wall(book: OrderBook, side_stop: Side) -> Optional[Wall]:
     )
     if level is None:
         return None
-    now: datetime = get_current_time()
+    now: datetime = now_belgrade()
     persist_s: float = _resolve_persist(CONFIG.general.profile)
     median_qty: float = _compute_median_quantity(book.iter_recent_band(side_stop))
     if not check_if_is_large_wall(
@@ -121,7 +121,7 @@ def check_if_has_opposite_wall(book: OrderBook, side_move: Side, our_wall: Wall)
     )
     if level is None:
         return False
-    now: datetime = get_current_time()
+    now: datetime = now_belgrade()
     persist_s: float = _resolve_persist(CONFIG.general.profile)
     median_qty: float = _compute_median_quantity(book.iter_recent_band(opposite_side))
     if not check_if_is_large_wall(
@@ -152,7 +152,8 @@ def _sum_side_pressure(
     tick_size: float,
 ) -> float:
     contributions: list[float] = [
-        price_weight(level.price, last_price, tick_size) * level.notional for level in levels
+        compute_odr_weight(level.price, last_price, tick_size) * level.notional
+        for level in levels
     ]
     smoothed: Tuple[float, ...] = median_filter_of_three(contributions)
     return float(sum(smoothed))
