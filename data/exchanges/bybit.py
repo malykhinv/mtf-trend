@@ -5,8 +5,19 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, TypeAlias, TypedDict
-from urllib import parse, request
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    Iterator,
+    Optional,
+    Protocol,
+    Sequence,
+    TypeAlias,
+    TypedDict,
+)
+from urllib import parse
+from urllib.request import Request, urlopen
 
 from domain.models import (
     Candle,
@@ -75,6 +86,16 @@ class DepthEnvelope:
     event_time: datetime
 
 
+class WebSocketClient(Protocol):
+    def recv(self) -> str: ...
+
+    def send(self, data: str) -> None: ...
+
+    def close(self) -> None: ...
+
+    def settimeout(self, timeout: float) -> None: ...
+
+
 class BybitExchangeData:
     def __init__(
         self,
@@ -99,17 +120,14 @@ class BybitExchangeData:
         self._depth_last_seq: Optional[int] = None
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------
-    # REST helpers
-    # ------------------------------------------------------------------
     def _rest_get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         params = params or {}
         query = parse.urlencode(params)
         url = f"{self._endpoints.rest_base}{path}"
         if query:
             url = f"{url}?{query}"
-        req = request.Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
-        with request.urlopen(req, timeout=self._rest_timeout) as resp:  # type: ignore[arg-type]
+        req = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
+        with urlopen(req, timeout=self._rest_timeout) as resp:
             payload = resp.read().decode("utf-8")
         data = json.loads(payload)
         if data.get("retCode") not in (0, None):
@@ -172,9 +190,6 @@ class BybitExchangeData:
             self._depth_last_seq = seq
         return snapshot
 
-    # ------------------------------------------------------------------
-    # Streaming interfaces
-    # ------------------------------------------------------------------
     def stream_depth(self) -> Iterator[StreamEvent[DepthStreamData]]:
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(
             name="depth",
@@ -204,17 +219,16 @@ class BybitExchangeData:
         topic = f"orderbook.50.{self.symbol}"
         subscribe = json.dumps({"op": "subscribe", "args": [topic]})
         while not buffer.stopped():
-            ws = None
+            ws: WebSocketClient | None = None
+            timeout_exception: type[Exception] = Exception
             try:
-                from websocket import WebSocketTimeoutException, create_connection  # type: ignore
-
-                ws = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
+                ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
                 ws.send(subscribe)
                 while not buffer.stopped():
                     try:
                         raw = ws.recv()
-                    except WebSocketTimeoutException:
+                    except timeout_exception:
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
@@ -226,7 +240,7 @@ class BybitExchangeData:
                     if message.get("topic") != topic:
                         continue
                     self._handle_depth_message(message, buffer)
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 buffer.push_resync(
                     ResyncReason.CONNECTION_LOST,
                     details=f"Bybit depth stream: {exc}",
@@ -320,6 +334,14 @@ class BybitExchangeData:
             event_time=event_time,
         )
 
+    def _connect_websocket(
+        self, url: str
+    ) -> tuple[WebSocketClient, type[Exception]]:
+        from websocket import WebSocketTimeoutException, create_connection
+
+        connection = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
+        return connection, WebSocketTimeoutException
+
     def _coerce_sequence_number(
         self,
         message_value: Any,
@@ -377,7 +399,7 @@ class BybitExchangeData:
         buffer.push_resync(reason, details)
         try:
             snapshot = self.fetch_orderbook_snapshot()
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             buffer.push_resync(
                 ResyncReason.CONNECTION_LOST,
                 details=f"Ошибка получения снапшота: {exc}",
@@ -447,17 +469,16 @@ class BybitExchangeData:
     ) -> None:
         url = self._endpoints.ws_base
         while not buffer.stopped():
-            ws = None
+            ws: WebSocketClient | None = None
+            timeout_exception: type[Exception] = Exception
             try:
-                from websocket import WebSocketTimeoutException, create_connection  # type: ignore
-
-                ws = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
+                ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
                 ws.send(subscribe)
                 while not buffer.stopped():
                     try:
                         raw = ws.recv()
-                    except WebSocketTimeoutException:
+                    except timeout_exception:
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
@@ -470,7 +491,7 @@ class BybitExchangeData:
                         continue
                     for payload in parser(message):
                         buffer.push_data(payload)
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 buffer.push_resync(
                     ResyncReason.CONNECTION_LOST,
                     details=f"Bybit {name} stream: {exc}",
@@ -483,9 +504,6 @@ class BybitExchangeData:
                     except Exception:
                         pass
 
-    # ------------------------------------------------------------------
-    # Parsing helpers
-    # ------------------------------------------------------------------
     def _build_level(
         self, price: float, quantity: float, timestamp: datetime
     ) -> OrderBookLevel:
