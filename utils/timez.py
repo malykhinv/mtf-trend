@@ -23,6 +23,12 @@ def now_belgrade() -> datetime:
     return current
 
 
+def get_current_time() -> datetime:
+    """Return the current Europe/Belgrade time for legacy callers."""
+
+    return now_belgrade()
+
+
 def from_exchange_timestamp(timestamp: NumberLike) -> datetime:
     """Convert a raw exchange timestamp to a timezone-aware datetime."""
 
@@ -69,5 +75,5 @@ def _validate_decimal(value: Decimal) -> None:
         raise ValueError("timestamp must be a finite number")
 
 
-__all__ = ["NumberLike", "now_belgrade", "from_exchange_timestamp"]
+__all__ = ["NumberLike", "now_belgrade", "get_current_time", "from_exchange_timestamp"]
 
