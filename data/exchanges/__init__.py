@@ -10,7 +10,9 @@ from .base import (
     StreamEventType,
 )
 from .binance import BinanceExchangeData
+from .binance_trade import BinanceTradingAdapter
 from .bybit import BybitExchangeData
+from .bybit_trade import BybitTradingAdapter
 
 __all__ = [
     "BestBidAsk",
@@ -23,5 +25,7 @@ __all__ = [
     "StreamEvent",
     "StreamEventType",
     "BinanceExchangeData",
+    "BinanceTradingAdapter",
     "BybitExchangeData",
+    "BybitTradingAdapter",
 ]
