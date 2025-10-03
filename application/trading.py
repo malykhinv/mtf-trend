@@ -17,8 +17,17 @@ class NoopTradingAdapter(TradingAdapter):
     def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
         return
 
-    def place_market(self, side: Side, quantity: float) -> ExecutionReport:
+    def place_market(
+        self,
+        side: Side,
+        quantity: float,
+        *,
+        reason: str | None = None,
+    ) -> ExecutionReport:
         executed_at = get_current_time()
+        if reason:
+            # Preserve exit reason context for observability during development.
+            print(f"[noop] market order reason: {reason}")
         return ExecutionReport(
             exchange=self._exchange,
             symbol=self._symbol,
