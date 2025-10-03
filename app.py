@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from typing import Optional, Sequence, Tuple, cast
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Dict, Iterable, Iterator, Optional, Sequence, Tuple, cast
 
 from config.config import CONFIG
 from config.models.exchange_name import ExchangeName
@@ -13,8 +15,10 @@ from data.exchanges import (
     BestBidAsk,
     BinanceExchangeData,
     BybitExchangeData,
+    DepthStreamData,
     IExchangeData,
     ResyncReason as StreamResyncReason,
+    StreamEvent,
     StreamEventType,
 )
 from data.logger import LogSink, create_log_writer, create_text_log_sink
@@ -23,10 +27,14 @@ from domain.book import OrderBook
 from domain.detectors import check_if_has_near_wall, check_if_has_opposite_wall, compute_odr
 from domain.execution import create_execution_handlers, initialize_account
 from domain.models import (
+    BalanceSource,
     Exchange,
+    ExecutionReport,
+    MarginMode,
     OrderBookSnapshot,
     OrderBookUpdate,
     Side,
+    StopTrigger,
     SymbolFilters,
     Trade,
     Wall,
@@ -44,30 +52,87 @@ from domain.strategy.resync import ResyncReason as StrategyResyncReason
 from domain.strategy.state import StrategyState
 from utils import get_current_time
 from application import FeedMonitor, GUARDS, NoopTradingAdapter
+from application.market_scanner import MarketScanner
+from domain.trading_adapter import TradingAdapter
+
+
+@dataclass
+class SymbolContext:
+    symbol: str
+    exchange_data: IExchangeData
+    order_book: OrderBook
+    feed_monitor: FeedMonitor
+    depth_stream: Iterator[StreamEvent[DepthStreamData]]
+    trade_stream: Iterator[StreamEvent[Trade]]
+    ticker_stream: Iterator[StreamEvent[BestBidAsk]]
+    filters: SymbolFilters
+    trading_adapter: NoopTradingAdapter
+    last_update_id: Optional[int] = None
+    last_trade_price: Optional[float] = None
+    best_bid: Optional[float] = None
+    best_ask: Optional[float] = None
+    active: bool = False
+    cycle_started: bool = False
+
+
+class TradingAdapterRouter(TradingAdapter):
+    def __init__(self, contexts: Dict[str, SymbolContext]) -> None:
+        self._contexts = contexts
+        self._current_symbol: Optional[str] = None
+
+    def set_current_symbol(self, symbol: str) -> None:
+        self._current_symbol = symbol.upper()
+
+    def _resolve(self) -> NoopTradingAdapter:
+        if self._current_symbol is None:
+            raise RuntimeError("trading symbol is not selected")
+        context = self._contexts.get(self._current_symbol)
+        if context is None:
+            raise RuntimeError(f"unknown trading symbol {self._current_symbol}")
+        return context.trading_adapter
+
+    def get_balance(self, source: BalanceSource) -> float:
+        return self._resolve().get_balance(source)
+
+    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
+        self._resolve().set_leverage(leverage, margin_mode)
+
+    def place_market(
+        self,
+        side: Side,
+        quantity: float,
+        *,
+        reason: Optional[str] = None,
+    ) -> ExecutionReport:
+        return self._resolve().place_market(side, quantity, reason=reason)
+
+    def place_stop_market(
+        self,
+        side: Side,
+        stop_price: float,
+        quantity: float,
+        trigger: StopTrigger,
+    ) -> None:
+        self._resolve().place_stop_market(side, stop_price, quantity, trigger)
 
 
 class Application:
-    def __init__(self, symbol: str, sink: LogSink) -> None:
+    def __init__(self, sink: LogSink) -> None:
         GUARDS.set_exchange(CONFIG.general.exchange)
         GUARDS.set_profile(CONFIG.general.profile)
-        self._symbol = symbol.upper()
         self._sink = sink
         self._log_writer = create_log_writer(sink)
         self._event_logger = EventLogger(write=self._log_writer)
-        self._feed_monitor = FeedMonitor()
-        self._order_book = OrderBook(recent_band_capacity=256)
-        self._last_update_id: Optional[int] = None
-        self._last_trade_price: Optional[float] = None
-        self._best_bid: Optional[float] = None
-        self._best_ask: Optional[float] = None
         self._focused_symbol: Optional[str] = None
-        self._available_symbols: Tuple[str, ...] = (self._symbol,)
+        self._desired_symbols: Tuple[str, ...] = ()
         self._telegram_client = TelegramClient(
             token=SECRETS.tg_bot_token,
             chat_id=CONFIG.telegram.chat_id,
             silent=CONFIG.telegram.silent,
         )
         self._telegram_notifier = TelegramNotifier(send_message=self._send_telegram)
+        self._contexts: Dict[str, SymbolContext] = {}
+        self._trading_router = TradingAdapterRouter(self._contexts)
         self._subscription_manager = SubscriptionManager(
             subscribe=self._subscribe_symbol,
             unsubscribe=self._unsubscribe_symbol,
@@ -79,30 +144,17 @@ class Application:
             logger=self._event_logger,
         )
         self._exchange = Exchange(CONFIG.general.exchange.value)
-        startup_timestamp = get_current_time()
-        self._event_logger.log(
-            f"{startup_timestamp:%H:%M:%S} Старт бота для {self._symbol} на {self._exchange.value}.",
-            startup_timestamp,
+        self._scanner = MarketScanner(
+            CONFIG.general.exchange,
+            CONFIG.general.profile,
+            CONFIG.turnover,
+            log=self._log_scanner_message,
         )
-        self._exchange_data = self._create_exchange_data()
-        self._filters = self._exchange_data.fetch_symbol_filters()
-        filters_timestamp = get_current_time()
-        self._event_logger.log(
-            (
-                f"{filters_timestamp:%H:%M:%S} Получены фильтры {self._symbol}: "
-                f"шаг цены {self._filters.price_tick_size:g}."
-            ),
-            filters_timestamp,
-        )
-        self._trading_adapter = NoopTradingAdapter(self._exchange, self._symbol)
-        initialize_account(self._trading_adapter)
-        account_timestamp = get_current_time()
-        self._event_logger.log(
-            f"{account_timestamp:%H:%M:%S} Торговый адаптер инициализирован для {self._symbol}.",
-            account_timestamp,
-        )
+        self._last_scan_at: Optional[datetime] = None
+        self._scanner_interval = timedelta(seconds=CONFIG.turnover.market_scan_interval_s)
+        self._current_symbol: Optional[str] = None
         entry, exit_, move_stop = create_execution_handlers(
-            self._trading_adapter,
+            self._trading_router,
             self._provide_filters,
         )
         self._position_controller = PositionController(
@@ -119,45 +171,54 @@ class Application:
             logger=self._event_logger,
             resync=self._handle_resync,
         )
-        self._depth_stream = self._exchange_data.stream_depth()
-        self._trade_stream = self._exchange_data.stream_trades()
-        self._ticker_stream = self._exchange_data.stream_book_ticker()
-        self._initialize_order_book()
 
-    def _create_exchange_data(self) -> IExchangeData:
+    def _create_exchange_data(self, symbol: str) -> IExchangeData:
         if CONFIG.general.exchange is ExchangeName.BINANCE:
             return BinanceExchangeData(
-                symbol=self._symbol,
+                symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
                 log_writer=self._sink,
             )
         if CONFIG.general.exchange is ExchangeName.BYBIT:
             return BybitExchangeData(
-                symbol=self._symbol,
+                symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
                 log_writer=self._sink,
             )
         raise RuntimeError("unsupported exchange")
 
     def _provide_filters(self, symbol: str) -> SymbolFilters:
-        if symbol.upper() != self._symbol:
-            raise ValueError("unknown symbol")
-        return self._filters
+        symbol = symbol.upper()
+        context = self._contexts.get(symbol)
+        if context is None:
+            raise ValueError(f"unknown symbol {symbol}")
+        self._trading_router.set_current_symbol(symbol)
+        return context.filters
 
     def _subscribe_symbol(self, symbol: str) -> None:
-        if symbol.upper() != self._symbol:
-            return
-        self._available_symbols = (self._symbol,)
+        symbol = symbol.upper()
+        context = self._contexts.get(symbol)
+        if context is None:
+            context = self._create_context(symbol)
+            self._contexts[symbol] = context
+        context.active = True
+        context.cycle_started = False
 
     def _unsubscribe_symbol(self, symbol: str) -> None:
-        if symbol.upper() != self._symbol:
+        symbol = symbol.upper()
+        context = self._contexts.get(symbol)
+        if context is None:
             return
-        self._available_symbols = (self._symbol,)
+        context.active = False
+        if self._focus_controller.current == symbol:
+            timestamp = get_current_time()
+            self._focus_controller.defocus(timestamp)
 
     def _focus_symbol(self, symbol: str) -> None:
-        if symbol.upper() != self._symbol:
+        symbol = symbol.upper()
+        if symbol not in self._contexts:
             raise ValueError("focus symbol mismatch")
-        self._focused_symbol = symbol.upper()
+        self._focused_symbol = symbol
 
     def _defocus_symbol(self) -> None:
         self._focused_symbol = None
@@ -166,110 +227,116 @@ class Application:
         self._telegram_client.send_message(message)
 
     def _handle_resync(self, reason: StrategyResyncReason) -> None:
-        snapshot = self._exchange_data.fetch_orderbook_snapshot()
-        self._apply_snapshot(snapshot)
+        symbol = self._current_symbol
+        if symbol is None:
+            return
+        context = self._contexts.get(symbol)
+        if context is None:
+            return
+        snapshot = context.exchange_data.fetch_orderbook_snapshot()
+        self._apply_snapshot(context, snapshot)
         timestamp = snapshot.received_at.astimezone(CURRENT_TIMEZONE)
-        self._feed_monitor.clear()
+        context.feed_monitor.clear()
         self._strategy.complete_resync(timestamp)
 
-    def _initialize_order_book(self) -> None:
+    def _initialize_order_book(self, context: SymbolContext) -> None:
         while True:
-            event = next(self._depth_stream)
+            event = next(context.depth_stream)
             if event.type is StreamEventType.SNAPSHOT:
                 snapshot = cast(OrderBookSnapshot, event.data)
                 if snapshot is None:
                     continue
-                self._apply_snapshot(snapshot)
+                self._apply_snapshot(context, snapshot)
                 break
             if event.type is StreamEventType.RESYNC and event.reason is not None:
-                self._feed_monitor.flag(event.reason)
-                self._last_update_id = None
+                context.feed_monitor.flag(event.reason)
+                context.last_update_id = None
 
-    def _apply_snapshot(self, snapshot: OrderBookSnapshot) -> None:
-        self._order_book.apply_snapshot(snapshot)
-        self._last_update_id = snapshot.last_update_id
-        self._update_best_from_book()
+    def _apply_snapshot(self, context: SymbolContext, snapshot: OrderBookSnapshot) -> None:
+        context.order_book.apply_snapshot(snapshot)
+        context.last_update_id = snapshot.last_update_id
+        self._update_best_from_book(context)
         timestamp = snapshot.received_at
         self._event_logger.log(
             (
-                f"{timestamp:%H:%M:%S} Снимок стакана применён. "
+                f"{timestamp:%H:%M:%S} Снимок стакана {context.symbol} применён. "
                 f"ID {snapshot.last_update_id}."
             ),
             timestamp,
         )
 
-    def _apply_update(self, update: OrderBookUpdate) -> None:
-        if self._last_update_id is None:
+    def _apply_update(self, context: SymbolContext, update: OrderBookUpdate) -> None:
+        if context.last_update_id is None:
             return
-        if update.last_update_id <= self._last_update_id:
+        if update.last_update_id <= context.last_update_id:
             return
-        expected = self._last_update_id + 1
+        expected = context.last_update_id + 1
         if update.first_update_id > expected:
-            self._feed_monitor.flag(StreamResyncReason.SEQUENCE_GAP)
-            self._last_update_id = None
+            context.feed_monitor.flag(StreamResyncReason.SEQUENCE_GAP)
+            context.last_update_id = None
             return
         if expected > update.last_update_id:
             return
-        self._order_book.apply_update(update)
-        self._last_update_id = update.last_update_id
-        self._update_best_from_book()
+        context.order_book.apply_update(update)
+        context.last_update_id = update.last_update_id
+        self._update_best_from_book(context)
 
-    def _update_best_from_book(self) -> None:
-        bid_level = self._order_book.best_bid()
-        ask_level = self._order_book.best_ask()
-        self._best_bid = None if bid_level is None else bid_level.price
-        self._best_ask = None if ask_level is None else ask_level.price
+    def _update_best_from_book(self, context: SymbolContext) -> None:
+        bid_level = context.order_book.best_bid()
+        ask_level = context.order_book.best_ask()
+        context.best_bid = None if bid_level is None else bid_level.price
+        context.best_ask = None if ask_level is None else ask_level.price
 
-    def _process_depth_stream(self) -> None:
-        event = next(self._depth_stream)
+    def _process_depth_stream(self, context: SymbolContext) -> None:
+        event = next(context.depth_stream)
         if event.type is StreamEventType.DATA:
             update = cast(OrderBookUpdate, event.data)
             if update is not None:
-                self._apply_update(update)
+                self._apply_update(context, update)
         elif event.type is StreamEventType.SNAPSHOT:
             snapshot = cast(OrderBookSnapshot, event.data)
             if snapshot is not None:
-                self._apply_snapshot(snapshot)
-                self._feed_monitor.clear()
+                self._apply_snapshot(context, snapshot)
+                context.feed_monitor.clear()
         elif event.type is StreamEventType.RESYNC and event.reason is not None:
-            self._feed_monitor.flag(event.reason)
-            self._last_update_id = None
+            context.feed_monitor.flag(event.reason)
+            context.last_update_id = None
             timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
             details = f" {event.details}." if event.details else ""
             self._event_logger.log(
                 (
-                    f"{timestamp:%H:%M:%S} Поток стакана требует ресинк: "
+                    f"{timestamp:%H:%M:%S} Поток стакана {context.symbol} требует ресинк: "
                     f"{event.reason.value}.{details}"
                 ),
                 timestamp,
             )
 
-    def _process_trade_stream(self) -> None:
-        event = next(self._trade_stream)
+    def _process_trade_stream(self, context: SymbolContext) -> None:
+        event = next(context.trade_stream)
         if event.type is StreamEventType.DATA:
             trade = cast(Trade, event.data)
             if trade is not None:
-                self._last_trade_price = trade.price
+                context.last_trade_price = trade.price
 
-    def _process_ticker_stream(self) -> None:
-        event = next(self._ticker_stream)
+    def _process_ticker_stream(self, context: SymbolContext) -> None:
+        event = next(context.ticker_stream)
         if event.type is StreamEventType.DATA:
             ticker = cast(BestBidAsk, event.data)
             if ticker is not None:
-                self._best_bid = ticker.bid_price
-                self._best_ask = ticker.ask_price
+                context.best_bid = ticker.bid_price
+                context.best_ask = ticker.ask_price
 
-    def _resolve_last_price(self) -> float:
-        if self._last_trade_price is not None and self._last_trade_price > 0.0:
-            return self._last_trade_price
-        if self._best_bid is not None and self._best_ask is not None:
-            return (self._best_bid + self._best_ask) / 2.0
+    def _resolve_last_price(self, context: SymbolContext) -> float:
+        if context.last_trade_price is not None and context.last_trade_price > 0.0:
+            return context.last_trade_price
+        if context.best_bid is not None and context.best_ask is not None:
+            return (context.best_bid + context.best_ask) / 2.0
         return 0.0
 
-    def _assign_symbol(self, wall: Wall) -> Wall:
+    def _assign_symbol(self, context: SymbolContext, wall: Wall) -> Wall:
         return Wall(
             exchange=wall.exchange,
-            symbol=self._symbol,
+            symbol=context.symbol,
             side=wall.side,
             price=wall.price,
             quantity=wall.quantity,
@@ -278,9 +345,9 @@ class Application:
             last_seen_at=wall.last_seen_at,
         )
 
-    def _choose_wall(self) -> Optional[Wall]:
-        bid_wall = check_if_has_near_wall(self._order_book, Side.BID)
-        ask_wall = check_if_has_near_wall(self._order_book, Side.ASK)
+    def _choose_wall(self, context: SymbolContext) -> Optional[Wall]:
+        bid_wall = check_if_has_near_wall(context.order_book, Side.BID)
+        ask_wall = check_if_has_near_wall(context.order_book, Side.ASK)
         candidate: Optional[Wall] = None
         if bid_wall is not None and ask_wall is not None:
             candidate = bid_wall if bid_wall.notional >= ask_wall.notional else ask_wall
@@ -290,61 +357,141 @@ class Application:
             candidate = ask_wall
         if candidate is None:
             return None
-        return self._assign_symbol(candidate)
+        return self._assign_symbol(context, candidate)
 
-    def _build_observation(self) -> MarketObservation:
-        last_price = self._resolve_last_price()
-        tick_size = self._filters.price_tick_size
+    def _build_observation(self, context: SymbolContext) -> MarketObservation:
+        last_price = self._resolve_last_price(context)
+        tick_size = context.filters.price_tick_size
         pressure = None
         if last_price > 0.0 and tick_size > 0.0:
-            pressure = compute_odr(self._order_book, last_price, tick_size)
-        wall = self._choose_wall()
+            pressure = compute_odr(context.order_book, last_price, tick_size)
+        wall = self._choose_wall(context)
         opposite_blocks = False
         if wall is not None:
             move_side = Side.ASK if wall.side is Side.BID else Side.BID
-            opposite_blocks = check_if_has_opposite_wall(self._order_book, move_side, wall)
+            opposite_blocks = check_if_has_opposite_wall(context.order_book, move_side, wall)
         return MarketObservation(
             timestamp=get_current_time(),
-            symbol=self._symbol,
+            symbol=context.symbol,
             last_price=last_price,
             tick_size=tick_size,
             pressure=pressure,
             near_wall=wall,
             opposite_wall_blocks=opposite_blocks,
-            available_symbols=self._available_symbols,
-            feed_status=self._feed_monitor.snapshot(),
+            available_symbols=self._desired_symbols,
+            feed_status=context.feed_monitor.snapshot(),
+        )
+
+    def _refresh_symbol_scan(self, timestamp: Optional[datetime] = None, *, force: bool = False) -> None:
+        timestamp = timestamp or get_current_time()
+        if not force and self._last_scan_at is not None:
+            if timestamp - self._last_scan_at < self._scanner_interval:
+                return
+        symbols = self._scanner.scan()
+        self._desired_symbols = symbols
+        self._subscription_manager.update(symbols, timestamp)
+        self._last_scan_at = timestamp
+
+    def _iter_active_contexts(self) -> Iterable[SymbolContext]:
+        ordered: Tuple[str, ...] = self._desired_symbols
+        seen: set[str] = set()
+        for symbol in ordered:
+            context = self._contexts.get(symbol)
+            if context is None or not context.active:
+                continue
+            seen.add(symbol)
+            yield context
+        for symbol, context in self._contexts.items():
+            if not context.active:
+                continue
+            if symbol in seen:
+                continue
+            yield context
+
+    def _ensure_cycle_logged(self, context: SymbolContext) -> None:
+        if context.cycle_started:
+            return
+        timestamp = get_current_time()
+        self._event_logger.log(
+            f"{timestamp:%H:%M:%S} Запущен цикл обработки для {context.symbol}.",
+            timestamp,
+        )
+        context.cycle_started = True
+
+    def _create_context(self, symbol: str) -> SymbolContext:
+        exchange_data = self._create_exchange_data(symbol)
+        context = SymbolContext(
+            symbol=symbol,
+            exchange_data=exchange_data,
+            order_book=OrderBook(recent_band_capacity=256),
+            feed_monitor=FeedMonitor(),
+            depth_stream=exchange_data.stream_depth(),
+            trade_stream=exchange_data.stream_trades(),
+            ticker_stream=exchange_data.stream_book_ticker(),
+            filters=exchange_data.fetch_symbol_filters(),
+            trading_adapter=NoopTradingAdapter(self._exchange, symbol),
+        )
+        startup_timestamp = get_current_time()
+        self._event_logger.log(
+            f"{startup_timestamp:%H:%M:%S} Старт бота для {symbol} на {self._exchange.value}.",
+            startup_timestamp,
+        )
+        filters_timestamp = get_current_time()
+        self._event_logger.log(
+            (
+                f"{filters_timestamp:%H:%M:%S} Получены фильтры {symbol}: "
+                f"шаг цены {context.filters.price_tick_size:g}."
+            ),
+            filters_timestamp,
+        )
+        initialize_account(context.trading_adapter)
+        account_timestamp = get_current_time()
+        self._event_logger.log(
+            f"{account_timestamp:%H:%M:%S} Торговый адаптер инициализирован для {symbol}.",
+            account_timestamp,
+        )
+        self._initialize_order_book(context)
+        return context
+
+    def _log_scanner_message(self, message: str) -> None:
+        timestamp = get_current_time()
+        self._event_logger.log(
+            f"{timestamp:%H:%M:%S} Сканер рынка: {message}",
+            timestamp,
         )
 
     def run(self) -> None:
         interval = CONFIG.general.loop_interval_ms / 1000.0
-        start_timestamp = get_current_time()
-        self._event_logger.log(
-            f"{start_timestamp:%H:%M:%S} Запущен цикл обработки для {self._symbol}.",
-            start_timestamp,
-        )
+        self._refresh_symbol_scan(force=True)
         while True:
-            self._process_depth_stream()
-            self._process_trade_stream()
-            self._process_ticker_stream()
-            observation = self._build_observation()
-            state = self._strategy.process(observation)
-            if state is StrategyState.RESYNC:
-                time.sleep(interval)
-                continue
+            self._refresh_symbol_scan()
+            resync_triggered = False
+            for context in self._iter_active_contexts():
+                self._current_symbol = context.symbol
+                self._ensure_cycle_logged(context)
+                self._process_depth_stream(context)
+                self._process_trade_stream(context)
+                self._process_ticker_stream(context)
+                observation = self._build_observation(context)
+                state = self._strategy.process(observation)
+                if state is StrategyState.RESYNC:
+                    resync_triggered = True
+                    break
+            self._current_symbol = None
             time.sleep(interval)
+            if resync_triggered:
+                continue
 
 
-def parse_args(argv: Sequence[str]) -> str:
+def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("symbol")
-    parsed = parser.parse_args(list(argv))
-    return parsed.symbol
+    return parser.parse_args(list(argv))
 
 
 def main() -> None:
-    symbol = parse_args(sys.argv[1:])
+    parse_args(sys.argv[1:])
     sink = create_text_log_sink()
-    app = Application(symbol, sink)
+    app = Application(sink)
     app.run()
 
 
