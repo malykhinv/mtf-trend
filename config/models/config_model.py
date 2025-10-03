@@ -1,3 +1,5 @@
+"""Aggregated configuration dataclass wiring domain settings."""
+
 from dataclasses import dataclass
 
 from .focus_settings import FocusSettings
