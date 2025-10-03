@@ -109,6 +109,8 @@ class BybitExchangeData:
         reconnect_delay: float = 1.0,
         log_writer: Optional[Callable[[str], None]] = None,
         endpoints: Optional[BybitEndpoints] = None,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
     ) -> None:
         self.symbol = symbol.upper()
         self._endpoints = endpoints or BybitEndpoints()
@@ -121,6 +123,8 @@ class BybitExchangeData:
         self._heartbeat_interval = self._silence_timeout / 2
         self._depth_last_seq: Optional[int] = None
         self._lock = threading.Lock()
+        self._api_key = api_key
+        self._api_secret = api_secret
 
     def _rest_get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         params = params or {}
