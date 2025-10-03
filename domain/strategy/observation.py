@@ -1,0 +1,33 @@
+"""Market observation model used by the strategy."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, Tuple
+
+from domain.models import Pressure, Wall
+from domain.models._timezone import ensure_current_timezone
+
+from .resync import FeedStatus
+
+
+@dataclass(frozen=True)
+class MarketObservation:
+    """Aggregated market data snapshot for the strategy decision loop."""
+
+    timestamp: datetime
+    symbol: str
+    last_price: float
+    tick_size: float
+    pressure: Optional[Pressure]
+    near_wall: Optional[Wall]
+    opposite_wall_blocks: bool
+    available_symbols: Tuple[str, ...]
+    feed_status: FeedStatus
+
+    def __post_init__(self) -> None:
+        ensure_current_timezone(self.timestamp)
+
+
+__all__ = ["MarketObservation"]
