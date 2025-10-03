@@ -5,8 +5,9 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Iterator, Optional
-from urllib import parse, request
+from typing import Any, Callable, Iterable, Iterator, Optional, Protocol
+from urllib import parse
+from urllib.request import Request, urlopen
 
 from domain.models import (
     Candle,
@@ -35,6 +36,16 @@ class BinanceEndpoints:
     ws_base: str = "wss://fstream.binance.com/ws"
 
 
+class WebSocketClient(Protocol):
+    def recv(self) -> str: ...
+
+    def send(self, data: str) -> None: ...
+
+    def close(self) -> None: ...
+
+    def settimeout(self, timeout: float) -> None: ...
+
+
 class BinanceExchangeData:
     def __init__(
         self,
@@ -59,17 +70,14 @@ class BinanceExchangeData:
         self._depth_last_update: Optional[int] = None
         self._lock = threading.Lock()
 
-    # ------------------------------------------------------------------
-    # REST helpers
-    # ------------------------------------------------------------------
     def _rest_get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         params = params or {}
         query = parse.urlencode(params)
         url = f"{self._endpoints.rest_base}{path}"
         if query:
             url = f"{url}?{query}"
-        req = request.Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
-        with request.urlopen(req, timeout=self._rest_timeout) as resp:  # type: ignore[arg-type]
+        req = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
+        with urlopen(req, timeout=self._rest_timeout) as resp:
             payload = resp.read().decode("utf-8")
         return json.loads(payload)
 
@@ -124,9 +132,6 @@ class BinanceExchangeData:
             self._depth_last_update = last_update_id
         return snapshot
 
-    # ------------------------------------------------------------------
-    # Streaming interfaces
-    # ------------------------------------------------------------------
     def stream_depth(self) -> Iterator[StreamEvent[DepthStreamData]]:
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(
             name="depth",
@@ -154,23 +159,22 @@ class BinanceExchangeData:
     def _run_depth_stream(self, buffer: StreamBuffer[DepthStreamData]) -> None:
         url = f"{self._endpoints.ws_base}/{self.symbol.lower()}@depth@100ms"
         while not buffer.stopped():
-            ws = None
+            ws: WebSocketClient | None = None
+            timeout_exception: type[Exception] = Exception
             try:
-                from websocket import WebSocketTimeoutException, create_connection  # type: ignore
-
-                ws = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
+                ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
                 while not buffer.stopped():
                     try:
                         raw = ws.recv()
-                    except WebSocketTimeoutException:
+                    except timeout_exception:
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
                         continue
                     message = json.loads(raw)
                     self._handle_depth_message(message, buffer)
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 buffer.push_resync(
                     ResyncReason.CONNECTION_LOST,
                     details=f"Binance depth stream: {exc}",
@@ -233,7 +237,7 @@ class BinanceExchangeData:
         buffer.push_resync(reason, details)
         try:
             snapshot = self.fetch_orderbook_snapshot()
-        except Exception as exc:  # pragma: no cover - defensive
+        except Exception as exc:
             buffer.push_resync(
                 ResyncReason.CONNECTION_LOST,
                 details=f"Ошибка получения снапшота: {exc}",
@@ -297,16 +301,15 @@ class BinanceExchangeData:
         name: str,
     ) -> None:
         while not buffer.stopped():
-            ws = None
+            ws: WebSocketClient | None = None
+            timeout_exception: type[Exception] = Exception
             try:
-                from websocket import WebSocketTimeoutException, create_connection  # type: ignore
-
-                ws = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
+                ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
                 while not buffer.stopped():
                     try:
                         raw = ws.recv()
-                    except WebSocketTimeoutException:
+                    except timeout_exception:
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
@@ -314,7 +317,7 @@ class BinanceExchangeData:
                     message = json.loads(raw)
                     for payload in parser(message):
                         buffer.push_data(payload)
-            except Exception as exc:  # pragma: no cover - defensive
+            except Exception as exc:
                 buffer.push_resync(
                     ResyncReason.CONNECTION_LOST,
                     details=f"Binance {name} stream: {exc}",
@@ -327,9 +330,14 @@ class BinanceExchangeData:
                     except Exception:
                         pass
 
-    # ------------------------------------------------------------------
-    # Parsing helpers
-    # ------------------------------------------------------------------
+    def _connect_websocket(
+        self, url: str
+    ) -> tuple["WebSocketClient", type[Exception]]:
+        from websocket import WebSocketTimeoutException, create_connection
+
+        connection = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
+        return connection, WebSocketTimeoutException
+
     def _build_level(
         self, price: float, quantity: float, timestamp: datetime
     ) -> OrderBookLevel:
