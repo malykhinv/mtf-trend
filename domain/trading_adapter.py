@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Optional, Protocol
 
 from domain.models import BalanceSource, ExecutionReport, MarginMode, Side, StopTrigger
 
@@ -12,7 +12,13 @@ class TradingAdapter(Protocol):
     def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
         ...
 
-    def place_market(self, side: Side, quantity: float) -> ExecutionReport:
+    def place_market(
+        self,
+        side: Side,
+        quantity: float,
+        *,
+        reason: Optional[str] = None,
+    ) -> ExecutionReport:
         ...
 
     def place_stop_market(

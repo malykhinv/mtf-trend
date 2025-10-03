@@ -82,7 +82,7 @@ def create_execution_handlers(
             current_quantity = 0.0
             return
         side: Side = _signal_to_exit_side(current_signal)
-        trading.place_market(side, current_quantity)
+        trading.place_market(side, current_quantity, reason=reason)
         current_symbol = None
         current_signal = Signal.NONE
         current_quantity = 0.0
