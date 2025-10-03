@@ -15,6 +15,7 @@ from .turnover_thresholds import TurnoverThresholds
 from .wall_absolute_thresholds import WallAbsoluteThresholds
 from .wall_settings import WallSettings
 from .wall_shift_settings import WallShiftSettings
+from .secrets import Secrets
 
 __all__ = [
     "BalanceSource",
@@ -29,6 +30,7 @@ __all__ = [
     "StopTrigger",
     "TelegramSettings",
     "TradingProfile",
+    "Secrets",
     "TurnoverThresholds",
     "WallAbsoluteThresholds",
     "WallSettings",
