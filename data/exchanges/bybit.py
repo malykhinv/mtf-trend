@@ -7,7 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Iterator, Optional
+from typing import Any, Callable, Iterable, Iterator, Optional, Sequence, TypeAlias, TypedDict
 from urllib import parse, request
 
 from domain.models import (
@@ -35,6 +35,46 @@ from .base import (
 class BybitEndpoints:
     rest_base: str = "https://api.bybit.com"
     ws_base: str = "wss://stream.bybit.com/v5/public/linear"
+
+
+class DepthLevelMap(TypedDict, total=False):
+    price: float | str | int
+    p: float | str | int
+    px: float | str | int
+    Px: float | str | int
+    size: float | str | int
+    qty: float | str | int
+    v: float | str | int
+    quantity: float | str | int
+
+
+DepthLevelEntry: TypeAlias = DepthLevelMap | list[Any] | tuple[Any, ...]
+
+
+class DepthUpdatePayload(TypedDict, total=False):
+    b: Sequence[DepthLevelEntry]
+    bids: Sequence[DepthLevelEntry]
+    a: Sequence[DepthLevelEntry]
+    asks: Sequence[DepthLevelEntry]
+    seq: int | str | None
+    u: int | str | None
+    prevSeq: int | str | None
+    pu: int | str | None
+    ts: int | float | str | None
+
+
+class DepthStreamMessage(TypedDict, total=False):
+    type: str
+    ts: int | float | str | None
+    data: Sequence[DepthUpdatePayload] | DepthUpdatePayload | None
+
+
+@dataclass(slots=True)
+class DepthEnvelope:
+    payload: DepthUpdatePayload
+    sequence: int
+    previous_sequence: int
+    event_time: datetime
 
 
 class BybitExchangeData:
@@ -208,49 +248,128 @@ class BybitExchangeData:
                         pass
 
     def _handle_depth_message(
-        self, message: dict[str, Any], buffer: StreamBuffer[DepthStreamData]
+        self, message: DepthStreamMessage, buffer: StreamBuffer[DepthStreamData]
     ) -> None:
-        data = message.get("data") or []
-        if isinstance(data, dict):
-            entries = [data]
-        else:
-            entries = list(data)
-        if not entries:
+        envelope = self._parse_depth_envelope(message)
+        if envelope is None:
             return
-        payload = entries[0]
-        seq = int(payload.get("seq") or payload.get("u") or 0)
-        prev_seq = int(payload.get("prevSeq") or payload.get("pu") or seq - 1)
-        ts = message.get("ts") or payload.get("ts") or 0
-        event_time = datetime.fromtimestamp(ts / 1000.0, tz=timezone.utc)
         if message.get("type") == "snapshot":
-            snapshot = self._build_snapshot_from_ws(payload, event_time)
+            snapshot = self._build_snapshot_from_ws(envelope.payload, envelope.event_time)
             with self._lock:
-                self._depth_last_seq = seq
+                self._depth_last_seq = envelope.sequence
             buffer.push_snapshot(snapshot)
             return
         with self._lock:
             expected = None if self._depth_last_seq is None else self._depth_last_seq + 1
             if self._depth_last_seq is None:
                 return
-            if expected is not None and seq < expected:
+            if expected is not None and envelope.sequence < expected:
                 return
-            if expected is not None and seq > expected:
+            if expected is not None and envelope.sequence > expected:
                 self._trigger_depth_resync(
                     buffer,
                     reason=ResyncReason.SEQUENCE_GAP,
-                    details=f"Ожидали {expected}, получили {seq}",
+                    details=f"Ожидали {expected}, получили {envelope.sequence}",
                 )
                 return
-            if prev_seq and prev_seq != self._depth_last_seq:
+            if envelope.previous_sequence and envelope.previous_sequence != self._depth_last_seq:
                 self._trigger_depth_resync(
                     buffer,
                     reason=ResyncReason.SEQUENCE_GAP,
-                    details=f"Предыдущий seq {prev_seq} != {self._depth_last_seq}",
+                    details=f"Предыдущий seq {envelope.previous_sequence} != {self._depth_last_seq}",
                 )
                 return
-            update = self._build_update_from_ws(payload, event_time)
-            self._depth_last_seq = seq
+            update = self._build_update_from_ws(envelope.payload, envelope.event_time)
+            self._depth_last_seq = envelope.sequence
         buffer.push_data(update)
+
+    def _parse_depth_envelope(
+        self, message: DepthStreamMessage
+    ) -> DepthEnvelope | None:
+        match message.get("data"):
+            case list() as data if data:
+                candidate = data[0]
+            case tuple() as data if data:
+                candidate = data[0]
+            case dict() as candidate:
+                pass
+            case _:
+                return None
+
+        match candidate:
+            case dict() as payload:
+                pass
+            case _:
+                return None
+
+        sequence = self._coerce_sequence_number(
+            message_value=payload.get("seq"),
+            alternate_value=payload.get("u"),
+            default=0,
+        )
+        previous_sequence = self._coerce_sequence_number(
+            message_value=payload.get("prevSeq"),
+            alternate_value=payload.get("pu"),
+            default=sequence - 1,
+        )
+        timestamp_ms = self._resolve_timestamp_ms(
+            message.get("ts"),
+            payload.get("ts"),
+        )
+        event_time = datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
+        return DepthEnvelope(
+            payload=payload,
+            sequence=sequence,
+            previous_sequence=previous_sequence,
+            event_time=event_time,
+        )
+
+    def _coerce_sequence_number(
+        self,
+        message_value: Any,
+        alternate_value: Any,
+        default: int,
+    ) -> int:
+        for candidate in (message_value, alternate_value):
+            match candidate:
+                case int() as number:
+                    return number
+                case float() as number:
+                    return int(number)
+                case str() as text:
+                    stripped = text.strip()
+                    if not stripped:
+                        continue
+                    if stripped.isdigit():
+                        return int(stripped)
+                    try:
+                        return int(float(stripped))
+                    except ValueError:
+                        continue
+                case _:
+                    continue
+        return default
+
+    def _resolve_timestamp_ms(self, *candidates: Any) -> int:
+        for candidate in candidates:
+            match candidate:
+                case int() as number:
+                    return number
+                case float() as number:
+                    return int(number)
+                case str() as text:
+                    stripped = text.strip()
+                    if not stripped:
+                        continue
+                    if stripped.isdigit():
+                        return int(stripped)
+                    try:
+                        return int(float(stripped))
+                    except ValueError:
+                        continue
+                case _:
+                    continue
+        return 0
 
     def _trigger_depth_resync(
         self,
@@ -385,32 +504,54 @@ class BybitExchangeData:
             max_quantity_seen=quantity,
         )
 
-    def _normalize_levels(self, entries: Iterable[Any]) -> Iterable[tuple[float, float]]:
+    def _normalize_levels(
+        self, entries: Iterable[DepthLevelEntry]
+    ) -> Iterable[tuple[float, float]]:
         normalized: list[tuple[float, float]] = []
         for entry in entries:
-            price_value: Optional[Any] = None
-            qty_value: Optional[Any] = None
-            if isinstance(entry, (list, tuple)):
-                if len(entry) < 2:
+            price_value: Any | None = None
+            quantity_value: Any | None = None
+
+            match entry:
+                case str() | bytes():
                     continue
-                price_value, qty_value = entry[0], entry[1]
-            elif isinstance(entry, dict):
-                price_value = (
-                    entry.get("price")
-                    or entry.get("p")
-                    or entry.get("px")
-                    or entry.get("Px")
-                )
-                qty_value = (
-                    entry.get("size")
-                    or entry.get("qty")
-                    or entry.get("v")
-                    or entry.get("quantity")
-                )
-            if price_value is None or qty_value is None:
+                case [price, quantity, *rest]:
+                    price_value, quantity_value = price, quantity
+                case (price, quantity, *rest):
+                    price_value, quantity_value = price, quantity
+                case _:
+                    pass
+
+            if price_value is None:
+                match entry:
+                    case {"price": price}:
+                        price_value = price
+                    case {"p": price}:
+                        price_value = price
+                    case {"px": price}:
+                        price_value = price
+                    case {"Px": price}:
+                        price_value = price
+                    case _:
+                        pass
+
+            if quantity_value is None:
+                match entry:
+                    case {"size": quantity}:
+                        quantity_value = quantity
+                    case {"qty": quantity}:
+                        quantity_value = quantity
+                    case {"v": quantity}:
+                        quantity_value = quantity
+                    case {"quantity": quantity}:
+                        quantity_value = quantity
+                    case _:
+                        pass
+
+            if price_value is None or quantity_value is None:
                 continue
             try:
-                normalized.append((float(price_value), float(qty_value)))
+                normalized.append((float(price_value), float(quantity_value)))
             except (TypeError, ValueError):
                 continue
         return normalized

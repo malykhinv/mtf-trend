@@ -45,26 +45,28 @@ def _normalize_to_seconds(timestamp: NumberLike) -> Decimal:
 
 
 def _coerce_to_decimal(timestamp: NumberLike) -> Decimal:
-    if isinstance(timestamp, str):
-        stripped: str = timestamp.strip()
-        if not stripped:
-            raise ValueError("timestamp string must not be empty")
-        try:
-            decimal_value: Decimal = Decimal(stripped)
-        except (ArithmeticError, DecimalException, ValueError) as error:
-            raise ValueError("timestamp string must contain a numeric value") from error
-        _validate_decimal(decimal_value)
-        return decimal_value
-    if isinstance(timestamp, int):
-        return Decimal(timestamp)
-    if isinstance(timestamp, float):
-        if math.isnan(timestamp) or math.isinf(timestamp):
-            raise ValueError("timestamp must be a finite number")
-        return Decimal(str(timestamp))
-    if isinstance(timestamp, Decimal):
-        _validate_decimal(timestamp)
-        return timestamp
-    raise TypeError("timestamp must be int, float, str, or Decimal")
+    match timestamp:
+        case str() as text:
+            stripped = text.strip()
+            if not stripped:
+                raise ValueError("timestamp string must not be empty")
+            try:
+                decimal_value = Decimal(stripped)
+            except (ArithmeticError, DecimalException, ValueError) as error:
+                raise ValueError("timestamp string must contain a numeric value") from error
+            _validate_decimal(decimal_value)
+            return decimal_value
+        case int() as integer:
+            return Decimal(integer)
+        case float() as number:
+            if math.isnan(number) or math.isinf(number):
+                raise ValueError("timestamp must be a finite number")
+            return Decimal(str(number))
+        case Decimal() as decimal_value:
+            _validate_decimal(decimal_value)
+            return decimal_value
+        case _:
+            raise TypeError("timestamp must be int, float, str, or Decimal")
 
 
 def _validate_decimal(value: Decimal) -> None:
