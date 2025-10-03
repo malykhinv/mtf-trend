@@ -11,6 +11,7 @@ from .exchanges import (
     StreamEvent,
     StreamEventType,
 )
+from .logger import LogLineWriter, LogSink, create_log_writer, create_text_log_sink
 
 __all__ = [
     "BestBidAsk",
@@ -22,4 +23,8 @@ __all__ = [
     "StreamBuffer",
     "StreamEvent",
     "StreamEventType",
+    "LogSink",
+    "LogLineWriter",
+    "create_log_writer",
+    "create_text_log_sink",
 ]
