@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from domain.models import BalanceSource, Exchange, ExecutionReport, MarginMode, Side, StopTrigger
 from domain.trading_adapter import TradingAdapter
 from utils import get_current_time
 
 
 class NoopTradingAdapter(TradingAdapter):
-    def __init__(self, exchange: Exchange, symbol: str) -> None:
+    def __init__(
+        self,
+        exchange: Exchange,
+        symbol: str,
+        *,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+    ) -> None:
         self._exchange = exchange
         self._symbol = symbol
         self._balance = 1000.0
+        self._api_key = api_key
+        self._api_secret = api_secret
 
     def get_balance(self, source: BalanceSource) -> float:
         return self._balance

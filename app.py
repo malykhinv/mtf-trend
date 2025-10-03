@@ -172,18 +172,30 @@ class Application:
             resync=self._handle_resync,
         )
 
+    def _exchange_credentials(self) -> tuple[str | None, str | None]:
+        if CONFIG.general.exchange is ExchangeName.BINANCE:
+            return SECRETS.binance_api_key, SECRETS.binance_api_secret
+        if CONFIG.general.exchange is ExchangeName.BYBIT:
+            return SECRETS.bybit_api_key, SECRETS.bybit_api_secret
+        return None, None
+
     def _create_exchange_data(self, symbol: str) -> IExchangeData:
+        api_key, api_secret = self._exchange_credentials()
         if CONFIG.general.exchange is ExchangeName.BINANCE:
             return BinanceExchangeData(
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
                 log_writer=self._sink,
+                api_key=api_key,
+                api_secret=api_secret,
             )
         if CONFIG.general.exchange is ExchangeName.BYBIT:
             return BybitExchangeData(
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
                 log_writer=self._sink,
+                api_key=api_key,
+                api_secret=api_secret,
             )
         raise RuntimeError("unsupported exchange")
 
@@ -420,6 +432,7 @@ class Application:
 
     def _create_context(self, symbol: str) -> SymbolContext:
         exchange_data = self._create_exchange_data(symbol)
+        api_key, api_secret = self._exchange_credentials()
         context = SymbolContext(
             symbol=symbol,
             exchange_data=exchange_data,
@@ -429,7 +442,12 @@ class Application:
             trade_stream=exchange_data.stream_trades(),
             ticker_stream=exchange_data.stream_book_ticker(),
             filters=exchange_data.fetch_symbol_filters(),
-            trading_adapter=NoopTradingAdapter(self._exchange, symbol),
+            trading_adapter=NoopTradingAdapter(
+                self._exchange,
+                symbol,
+                api_key=api_key,
+                api_secret=api_secret,
+            ),
         )
         startup_timestamp = get_current_time()
         self._event_logger.log(
