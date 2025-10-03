@@ -116,6 +116,10 @@ class Strategy:
                     self._last_focus_signal_at = timestamp
                     self._focused_wall = wall
         if self._should_defocus(timestamp):
+            self._logger.log(
+                f"{timestamp:%H:%M:%S} Аптик {observation.symbol} потерян: таймаут сигнала.",
+                timestamp,
+            )
             self._focus.defocus(timestamp)
             self._focused_signal = Signal.NONE
             self._focused_wall = None
@@ -168,6 +172,14 @@ class Strategy:
         self._focused_signal = signal
         self._focused_wall = wall
         self._last_focus_signal_at = timestamp
+        direction = "лонг" if signal is Signal.LONG else "шорт"
+        self._logger.log(
+            (
+                f"{timestamp:%H:%M:%S} Аптик {symbol} {direction}. "
+                f"Стена {wall.price:g} объём {wall.notional:g}."
+            ),
+            timestamp,
+        )
         if self._should_notify_uptick(timestamp):
             self._notifier.notify_uptick(symbol, signal, timestamp)
             self._last_uptick_at = timestamp
