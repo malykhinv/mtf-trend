@@ -79,10 +79,28 @@ class Application:
             logger=self._event_logger,
         )
         self._exchange = Exchange(CONFIG.general.exchange.value)
+        startup_timestamp = get_current_time()
+        self._event_logger.log(
+            f"{startup_timestamp:%H:%M:%S} Старт бота для {self._symbol} на {self._exchange.value}.",
+            startup_timestamp,
+        )
         self._exchange_data = self._create_exchange_data()
         self._filters = self._exchange_data.fetch_symbol_filters()
+        filters_timestamp = get_current_time()
+        self._event_logger.log(
+            (
+                f"{filters_timestamp:%H:%M:%S} Получены фильтры {self._symbol}: "
+                f"шаг цены {self._filters.price_tick_size:g}."
+            ),
+            filters_timestamp,
+        )
         self._trading_adapter = NoopTradingAdapter(self._exchange, self._symbol)
         initialize_account(self._trading_adapter)
+        account_timestamp = get_current_time()
+        self._event_logger.log(
+            f"{account_timestamp:%H:%M:%S} Торговый адаптер инициализирован для {self._symbol}.",
+            account_timestamp,
+        )
         entry, exit_, move_stop = create_execution_handlers(
             self._trading_adapter,
             self._provide_filters,
@@ -171,6 +189,14 @@ class Application:
         self._order_book.apply_snapshot(snapshot)
         self._last_update_id = snapshot.last_update_id
         self._update_best_from_book()
+        timestamp = snapshot.received_at
+        self._event_logger.log(
+            (
+                f"{timestamp:%H:%M:%S} Снимок стакана применён. "
+                f"ID {snapshot.last_update_id}."
+            ),
+            timestamp,
+        )
 
     def _apply_update(self, update: OrderBookUpdate) -> None:
         if self._last_update_id is None:
@@ -208,6 +234,15 @@ class Application:
         elif event.type is StreamEventType.RESYNC and event.reason is not None:
             self._feed_monitor.flag(event.reason)
             self._last_update_id = None
+            timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
+            details = f" {event.details}." if event.details else ""
+            self._event_logger.log(
+                (
+                    f"{timestamp:%H:%M:%S} Поток стакана требует ресинк: "
+                    f"{event.reason.value}.{details}"
+                ),
+                timestamp,
+            )
 
     def _process_trade_stream(self) -> None:
         event = next(self._trade_stream)
@@ -282,6 +317,11 @@ class Application:
 
     def run(self) -> None:
         interval = CONFIG.general.loop_interval_ms / 1000.0
+        start_timestamp = get_current_time()
+        self._event_logger.log(
+            f"{start_timestamp:%H:%M:%S} Запущен цикл обработки для {self._symbol}.",
+            start_timestamp,
+        )
         while True:
             self._process_depth_stream()
             self._process_trade_stream()
