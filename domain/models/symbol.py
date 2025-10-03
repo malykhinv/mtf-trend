@@ -1,5 +1,3 @@
-"""Trading symbol configuration models."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -9,8 +7,6 @@ from .enums import Exchange
 
 @dataclass(frozen=True, slots=True)
 class SymbolFilters:
-    """Exchange-specific symbol filters and trading limits."""
-
     exchange: Exchange
     symbol: str
     base_asset: str

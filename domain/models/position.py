@@ -1,5 +1,3 @@
-"""Models representing trading positions."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,8 +9,6 @@ from .enums import Exchange, MarginMode, Side
 
 @dataclass(frozen=True, slots=True)
 class Position:
-    """Open derivatives position tracked by the bot."""
-
     exchange: Exchange
     symbol: str
     side: Side

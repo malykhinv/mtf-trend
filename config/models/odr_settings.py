@@ -1,4 +1,3 @@
-"""Configuration model for ODR settings."""
 from dataclasses import dataclass
 
 

@@ -1,5 +1,3 @@
-"""Timezone configuration used across the application."""
-
 from __future__ import annotations
 
 from typing import Final

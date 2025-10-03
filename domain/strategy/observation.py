@@ -1,5 +1,3 @@
-"""Market observation model used by the strategy."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,8 +12,6 @@ from .resync import FeedStatus
 
 @dataclass(frozen=True)
 class MarketObservation:
-    """Aggregated market data snapshot for the strategy decision loop."""
-
     timestamp: datetime
     symbol: str
     last_price: float

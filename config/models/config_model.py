@@ -1,4 +1,3 @@
-"""Top-level configuration dataclass."""
 from dataclasses import dataclass
 
 from .focus_settings import FocusSettings

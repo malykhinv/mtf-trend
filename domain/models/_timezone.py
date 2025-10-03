@@ -1,5 +1,3 @@
-"""Utilities for working with timezone-aware datetimes in domain models."""
-
 from __future__ import annotations
 
 from datetime import datetime
@@ -9,8 +7,6 @@ from config.timezone import BELGRADE_TIMEZONE
 
 
 def ensure_current_timezone(*values: datetime) -> None:
-    """Ensure that all provided datetimes use the configured timezone."""
-
     for value in values:
         if value.tzinfo is None:
             raise ValueError("datetime must be timezone-aware")

@@ -1,4 +1,3 @@
-"""Typed configuration models for the trading bot."""
 from .balance_source import BalanceSource
 from .config_model import Config
 from .exchange_name import ExchangeName

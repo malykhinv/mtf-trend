@@ -1,5 +1,3 @@
-"""Type alias describing order book streaming payloads."""
-
 from typing import Union
 
 from domain.models import OrderBookSnapshot, OrderBookUpdate

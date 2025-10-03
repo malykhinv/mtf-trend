@@ -1,5 +1,3 @@
-"""Wrapper describing data, heartbeat and resync events coming from streams."""
-
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Generic, Optional, TypeVar
@@ -12,8 +10,6 @@ T = TypeVar("T")
 
 @dataclass(frozen=True, slots=True)
 class StreamEvent(Generic[T]):
-    """Wrapper describing data, heartbeat and resync events coming from streams."""
-
     type: StreamEventType
     data: Optional[T] = None
     reason: Optional[ResyncReason] = None

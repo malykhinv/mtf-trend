@@ -1,5 +1,3 @@
-"""Binance exchange data adapter implementing REST and WebSocket flows."""
-
 from __future__ import annotations
 
 import json
@@ -38,8 +36,6 @@ class BinanceEndpoints:
 
 
 class BinanceExchangeData:
-    """Implementation of :class:`IExchangeData` for Binance Futures."""
-
     def __init__(
         self,
         symbol: str,

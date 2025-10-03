@@ -1,4 +1,3 @@
-"""Application configuration values."""
 from typing import Final
 
 from .models import (

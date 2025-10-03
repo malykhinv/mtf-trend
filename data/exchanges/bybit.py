@@ -1,5 +1,3 @@
-"""Bybit exchange data adapter with REST and streaming support."""
-
 from __future__ import annotations
 
 import json
@@ -78,8 +76,6 @@ class DepthEnvelope:
 
 
 class BybitExchangeData:
-    """Public data adapter for Bybit linear perpetual instruments."""
-
     def __init__(
         self,
         symbol: str,

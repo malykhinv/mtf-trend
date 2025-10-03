@@ -1,5 +1,3 @@
-"""Formatting helpers for logging numeric values."""
-
 from __future__ import annotations
 
 import math

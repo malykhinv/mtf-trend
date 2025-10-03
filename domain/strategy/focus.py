@@ -1,5 +1,3 @@
-"""Focus management for the strategy."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,8 +10,6 @@ from .types import DefocusHandler, FocusHandler
 
 @dataclass
 class FocusController:
-    """Controls which symbol the strategy is currently focused on."""
-
     focus_symbol: FocusHandler
     defocus_symbol: DefocusHandler
     logger: EventLogger

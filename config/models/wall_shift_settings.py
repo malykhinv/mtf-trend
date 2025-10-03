@@ -1,4 +1,3 @@
-"""Configuration model for wall shift settings."""
 from dataclasses import dataclass
 
 

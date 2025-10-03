@@ -1,4 +1,3 @@
-"""Configuration model for position settings."""
 from dataclasses import dataclass
 
 from .balance_source import BalanceSource

@@ -1,4 +1,3 @@
-"""Configuration model for Telegram settings."""
 from dataclasses import dataclass
 from typing import Optional
 

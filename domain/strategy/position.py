@@ -1,5 +1,3 @@
-"""Position management helpers."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -13,8 +11,6 @@ from .types import PositionEntryHandler, PositionExitHandler, StopMoveHandler
 
 @dataclass
 class PositionController:
-    """Encapsulates position entry, exit, and stop management."""
-
     enter_position: PositionEntryHandler
     exit_position: PositionExitHandler
     move_stop: StopMoveHandler

@@ -1,5 +1,3 @@
-"""Models describing candlestick data."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,8 +8,6 @@ from ._timezone import ensure_current_timezone
 
 @dataclass(frozen=True, slots=True)
 class Candle:
-    """Single OHLCV candle aggregated over a fixed interval."""
-
     open_time: datetime
     close_time: datetime
     open_price: float

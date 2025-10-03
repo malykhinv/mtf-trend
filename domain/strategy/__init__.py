@@ -1,5 +1,3 @@
-"""Strategy package exports."""
-
 from .event_logger import EventLogger
 from .focus import FocusController
 from .observation import MarketObservation
