@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Tuple
 
-from ._timezone import ensure_current_timezone
+from .timezone import ensure_current_timezone
 from .enums import Exchange
 
 

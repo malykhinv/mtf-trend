@@ -248,7 +248,8 @@ class Strategy:
         self._focused_wall = None
         self._last_focus_signal_at = None
 
-    def _is_odr_neutral(self, pressure: Pressure) -> bool:
+    @staticmethod
+    def _is_odr_neutral(pressure: Pressure) -> bool:
         low = CONFIG.odr.odr_neutral_low
         high = CONFIG.odr.odr_neutral_high
         return low <= pressure.imbalance_ratio <= high

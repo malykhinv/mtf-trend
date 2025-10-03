@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from .models import (
+from models import (
     BalanceSource,
     Config,
     ExchangeName,

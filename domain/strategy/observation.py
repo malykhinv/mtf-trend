@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 
 from domain.models import Pressure, Wall
-from domain.models._timezone import ensure_current_timezone
+from domain.models.timezone import ensure_current_timezone
 
 from .resync import FeedStatus
 

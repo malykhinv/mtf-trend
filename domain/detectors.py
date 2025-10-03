@@ -9,11 +9,11 @@ from config.config import CONFIG
 from config.models.trading_profile import TradingProfile
 from config.models.wall_absolute_thresholds import WallAbsoluteThresholds
 
-from .book import OrderBook
-from .models.enums import Exchange, Side
-from .models.order_book import OrderBookLevel
-from .models.pressure import Pressure
-from .models.wall import Wall
+from book import OrderBook
+from models.enums import Exchange, Side
+from models.order_book import OrderBookLevel
+from models.pressure import Pressure
+from models.wall import Wall
 from utils import compute_odr_weight, get_current_time, median_filter_of_three
 
 

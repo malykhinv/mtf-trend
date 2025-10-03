@@ -221,7 +221,6 @@ class BybitExchangeData:
         subscribe = json.dumps({"op": "subscribe", "args": [topic]})
         while not buffer.stopped():
             ws: WebSocketClient | None = None
-            timeout_exception: type[Exception] = Exception
             try:
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
@@ -343,9 +342,9 @@ class BybitExchangeData:
         connection = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
         return connection, WebSocketTimeoutException
 
+    @staticmethod
     def _coerce_sequence_number(
-        self,
-        message_value: Any,
+            message_value: Any,
         alternate_value: Any,
         default: int,
     ) -> int:
@@ -369,7 +368,8 @@ class BybitExchangeData:
                     continue
         return default
 
-    def _resolve_timestamp_ms(self, *candidates: Any) -> int:
+    @staticmethod
+    def _resolve_timestamp_ms(*candidates: Any) -> int:
         for candidate in candidates:
             match candidate:
                 case int() as number:
@@ -471,7 +471,6 @@ class BybitExchangeData:
         url = self._endpoints.ws_base
         while not buffer.stopped():
             ws: WebSocketClient | None = None
-            timeout_exception: type[Exception] = Exception
             try:
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
@@ -505,8 +504,9 @@ class BybitExchangeData:
                     except Exception:
                         pass
 
+    @staticmethod
     def _build_level(
-        self, price: float, quantity: float, timestamp: datetime
+            price: float, quantity: float, timestamp: datetime
     ) -> OrderBookLevel:
         notional = price * quantity
         return OrderBookLevel(
@@ -519,8 +519,9 @@ class BybitExchangeData:
             max_quantity_seen=quantity,
         )
 
+    @staticmethod
     def _normalize_levels(
-        self, entries: Iterable[DepthLevelEntry]
+            entries: Iterable[DepthLevelEntry]
     ) -> Iterable[tuple[float, float]]:
         normalized: list[tuple[float, float]] = []
         for entry in entries:
@@ -667,7 +668,8 @@ class BybitExchangeData:
             )
         return tuple(trades)
 
-    def _parse_kline(self, message: dict[str, Any]) -> Iterable[Candle]:
+    @staticmethod
+    def _parse_kline(message: dict[str, Any]) -> Iterable[Candle]:
         data = message.get("data") or []
         if isinstance(data, dict):
             entries = [data]

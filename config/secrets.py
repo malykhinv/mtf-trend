@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Final
 
-from .models.secrets import Secrets
+from models.secrets import Secrets
 
 
 def _require_env(name: str) -> str:

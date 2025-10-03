@@ -10,7 +10,7 @@ from domain.models import BalanceSource, MarginMode, Side, Signal, StopTrigger, 
 from domain.strategy.types import PositionEntryHandler, PositionExitHandler, StopMoveHandler
 from utils.mathx import ceil_to_step, compute_position_size, floor_to_step
 
-from .trading_adapter import TradingAdapter
+from trading_adapter import TradingAdapter
 
 SymbolFiltersProvider = Callable[[str], SymbolFilters]
 
@@ -138,7 +138,7 @@ def _clamp_price(price: float, filters: SymbolFilters) -> float:
     bounded: float = price
     if filters.min_price > 0.0 and bounded < filters.min_price:
         bounded = filters.min_price
-    if filters.max_price > 0.0 and bounded > filters.max_price:
+    if 0.0 < filters.max_price < bounded:
         bounded = filters.max_price
     return bounded
 

@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Iterator, List, Optional, Tuple
 
-from .models.enums import Side
-from .models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
-from .models._timezone import ensure_current_timezone
+from models.enums import Side
+from models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
+from models.timezone import ensure_current_timezone
 
 
 @dataclass(slots=True)
@@ -234,7 +234,8 @@ class _BookSide:
             level = self._levels[index]
             self._assign_index(level.price, index)
 
-    def _create_level(self, level: OrderBookLevel) -> _StoredLevel:
+    @staticmethod
+    def _create_level(level: OrderBookLevel) -> _StoredLevel:
         ensure_current_timezone(
             level.first_seen_at,
             level.last_update_at,

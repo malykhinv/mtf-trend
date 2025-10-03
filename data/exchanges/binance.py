@@ -161,7 +161,6 @@ class BinanceExchangeData:
         url = f"{self._endpoints.ws_base}/{self.symbol.lower()}@depth@100ms"
         while not buffer.stopped():
             ws: WebSocketClient | None = None
-            timeout_exception: type[Exception] = Exception
             try:
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
@@ -303,7 +302,6 @@ class BinanceExchangeData:
     ) -> None:
         while not buffer.stopped():
             ws: WebSocketClient | None = None
-            timeout_exception: type[Exception] = Exception
             try:
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
@@ -339,8 +337,9 @@ class BinanceExchangeData:
         connection = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
         return connection, WebSocketTimeoutException
 
+    @staticmethod
     def _build_level(
-        self, price: float, quantity: float, timestamp: datetime
+            price: float, quantity: float, timestamp: datetime
     ) -> OrderBookLevel:
         notional = price * quantity
         return OrderBookLevel(

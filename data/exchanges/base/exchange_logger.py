@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Callable, Optional
 
 from .resync_reason import ResyncReason

@@ -59,8 +59,6 @@ def _coerce_to_decimal(timestamp: NumberLike) -> Decimal:
         case Decimal() as decimal_value:
             _validate_decimal(decimal_value)
             return decimal_value
-        case _:
-            raise TypeError("timestamp must be int, float, str, or Decimal")
 
 
 def _validate_decimal(value: Decimal) -> None:
