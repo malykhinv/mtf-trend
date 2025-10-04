@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import socket
+import time
 from typing import Callable, Iterable, Optional, Sequence, Tuple
 from urllib import parse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from http.client import RemoteDisconnected
 
 from config.models.exchange_name import ExchangeName
 from config.models.trading_profile import TradingProfile
@@ -18,12 +22,18 @@ class MarketScanner:
         thresholds: TurnoverThresholds,
         *,
         timeout: float = 5.0,
+        retries: int = 3,
+        retry_delay: float = 0.5,
+        retry_backoff: float = 2.0,
         log: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._exchange = exchange
         self._profile = profile
         self._thresholds = thresholds
         self._timeout = timeout
+        self._retries = max(0, int(retries))
+        self._retry_delay = max(0.0, float(retry_delay))
+        self._retry_backoff = max(1.0, float(retry_backoff))
         self._log = log
         self._last_symbols: Tuple[str, ...] = ()
 
@@ -46,9 +56,7 @@ class MarketScanner:
     def _scan_binance(self) -> Tuple[str, ...]:
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
-        with urlopen(request, timeout=self._timeout) as response:
-            payload = response.read().decode("utf-8")
-        data = json.loads(payload)
+        data = self._request_json(request)
         entries = ((item.get("symbol", ""), item.get("quoteVolume", "0")) for item in data)
         return self._filter_and_sort(entries)
 
@@ -56,9 +64,7 @@ class MarketScanner:
         params = parse.urlencode({"category": "linear"})
         url = f"https://api.bybit.com/v5/market/tickers?{params}"
         request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
-        with urlopen(request, timeout=self._timeout) as response:
-            payload = response.read().decode("utf-8")
-        data = json.loads(payload)
+        data = self._request_json(request)
         if str(data.get("retCode")) not in {"0", "OK"}:
             raise RuntimeError(f"unexpected bybit response code: {data.get('retCode')}")
         result = data.get("result") or {}
@@ -71,6 +77,30 @@ class MarketScanner:
             for row in entries
         )
         return self._filter_and_sort(rows)
+
+    def _request_json(self, request: Request) -> dict[str, object] | list[object]:
+        retries_remaining = self._retries
+        delay = self._retry_delay
+        while True:
+            try:
+                with urlopen(request, timeout=self._timeout) as response:
+                    payload = response.read().decode("utf-8")
+                return json.loads(payload)
+            except HTTPError:
+                raise
+            except (
+                URLError,
+                RemoteDisconnected,
+                TimeoutError,
+                socket.timeout,
+                ConnectionError,
+            ):
+                if retries_remaining <= 0:
+                    raise
+                if delay > 0.0:
+                    time.sleep(delay)
+                retries_remaining -= 1
+                delay *= self._retry_backoff
 
     def _filter_and_sort(self, entries: Iterable[Tuple[object, object]]) -> Tuple[str, ...]:
         threshold = self._resolve_threshold()
