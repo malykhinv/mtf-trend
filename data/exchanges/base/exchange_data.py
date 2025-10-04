@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from threading import Thread
-from typing import Generic, Iterator, Optional, Protocol, TypeVar
+from typing import Callable, Generic, Iterator, Optional, Protocol, TypeVar
 
 from domain.models import Candle, OrderBookSnapshot, SymbolFilters, Trade
 from .best_bid_ask import BestBidAsk
@@ -18,11 +18,17 @@ T = TypeVar("T")
 class StreamSubscription(Generic[T]):
     events: Iterator[StreamEvent[T]]
     _buffer: StreamBuffer[T]
-    _worker: Thread
+    _stopper: Optional[Callable[[], None]] = None
+    _worker: Optional[Thread] = None
 
     def stop(self) -> None:
         self._buffer.stop()
-        if self._worker.is_alive():
+        if self._stopper is not None:
+            try:
+                self._stopper()
+            except Exception:
+                pass
+        if self._worker is not None and self._worker.is_alive():
             self._worker.join(timeout=1.0)
 
 

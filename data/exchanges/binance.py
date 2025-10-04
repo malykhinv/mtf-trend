@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from http.client import RemoteDisconnected
-from typing import Any, Callable, Iterable, Iterator, Optional, Protocol
+from typing import Any, Callable, ClassVar, Iterable, Iterator, Optional, Protocol
 from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -32,6 +32,7 @@ from .base import (
     StreamEvent,
     StreamSubscription,
 )
+from .binance_stream_pool import BinanceStreamPool
 
 
 @dataclass(slots=True)
@@ -55,6 +56,9 @@ MIN_STREAM_SILENCE_TIMEOUT_MS = 1500.0
 
 
 class BinanceExchangeData:
+    _pool_lock: ClassVar[threading.Lock] = threading.Lock()
+    _shared_stream_pool: ClassVar[BinanceStreamPool | None] = None
+
     def __init__(
         self,
         symbol: str,
@@ -81,6 +85,12 @@ class BinanceExchangeData:
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
         self._logger = ExchangeLogger(f"Binance:{self.symbol}", log_writer)
+        self._stream_pool = self._get_stream_pool(
+            endpoints=self._endpoints,
+            ws_timeout=self._ws_timeout,
+            reconnect_delay=self._reconnect_delay,
+            log_writer=log_writer,
+        )
         self._depth_limit = self._normalize_depth_limit(depth_limit)
         if silence_timeout_ms is not None:
             effective_silence_timeout_ms = max(
@@ -123,6 +133,25 @@ class BinanceExchangeData:
             f"Binance depth limit {requested_limit} is unsupported, using {normalized} instead"
         )
         return normalized
+
+    @classmethod
+    def _get_stream_pool(
+        cls,
+        *,
+        endpoints: BinanceEndpoints,
+        ws_timeout: float,
+        reconnect_delay: float,
+        log_writer: Optional[Callable[[str], None]],
+    ) -> BinanceStreamPool:
+        with cls._pool_lock:
+            if cls._shared_stream_pool is None:
+                cls._shared_stream_pool = BinanceStreamPool(
+                    endpoints_ws_base=endpoints.ws_base,
+                    ws_timeout=ws_timeout,
+                    reconnect_delay=reconnect_delay,
+                    log_writer=log_writer,
+                )
+            return cls._shared_stream_pool
 
     def _rest_get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         params = params or {}
@@ -237,14 +266,23 @@ class BinanceExchangeData:
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
         )
+        self._reset_depth_state()
 
-        worker = threading.Thread(
-            target=self._run_depth_stream,
-            args=(buffer,),
-            name=f"binance-depth-{self.symbol.lower()}",
-            daemon=True,
+        def handle_message(message: dict[str, Any]) -> None:
+            self._handle_depth_message(message, buffer)
+
+        def handle_error(reason: ResyncReason, details: str) -> None:
+            buffer.push_resync(reason, details)
+            self._logger.log(details)
+
+        release = self._stream_pool.register_depth(
+            self.symbol,
+            buffer,
+            handle_message,
+            handle_error,
         )
-        worker.start()
+
+        self._start_depth_snapshot(buffer)
 
         def iterator() -> Iterator[StreamEvent[DepthStreamData]]:
             try:
@@ -252,153 +290,33 @@ class BinanceExchangeData:
                     yield buffer.next()
             finally:
                 buffer.stop()
-                worker.join(timeout=1.0)
+                release()
 
-        return StreamSubscription(events=iterator(), _buffer=buffer, _worker=worker)
+        return StreamSubscription(events=iterator(), _buffer=buffer, _stopper=release)
 
-    def _run_depth_stream(self, buffer: StreamBuffer[DepthStreamData]) -> None:
-        url = f"{self._endpoints.ws_base}/{self.symbol.lower()}@depth@100ms"
-        reconnect_after_silence = False
-        while not buffer.stopped():
-            ws: WebSocketClient | None = None
-            try:
-                if reconnect_after_silence:
-                    self._logger.log(
-                        "Binance depth stream: перезапуск соединения после тайм-аута тишины"
-                    )
-                else:
-                    self._logger.log("Binance depth stream: открываем соединение")
-                ws, timeout_exception = self._connect_websocket(url)
-                ws.settimeout(self._ws_timeout)
-                if reconnect_after_silence:
-                    self._logger.log(
-                        "Binance depth stream: соединение успешно восстановлено"
-                    )
-                    reconnect_after_silence = False
-
-                with self._lock:
-                    initial_snapshot_needed = self._depth_last_update is None
-                    if initial_snapshot_needed:
-                        self._depth_buffered_messages.clear()
-                        self._depth_allow_skip = False
-
-                snapshot_applied = not initial_snapshot_needed
-                snapshot_ready = threading.Event()
-                snapshot_state: dict[str, Any] = {"snapshot": None, "error": None}
-
-                if initial_snapshot_needed:
-
-                    def load_initial_snapshot() -> None:
-                        try:
-                            snapshot = self.fetch_orderbook_snapshot()
-                        except Exception as exc:  # noqa: BLE001
-                            snapshot_state["error"] = exc
-                        else:
-                            snapshot_state["snapshot"] = snapshot
-                        finally:
-                            snapshot_ready.set()
-
-                    threading.Thread(
-                        target=load_initial_snapshot,
-                        name=f"binance-depth-snapshot-{self.symbol.lower()}",
-                        daemon=True,
-                    ).start()
-
-                def ensure_snapshot_applied() -> bool:
-                    nonlocal snapshot_applied
-                    if snapshot_applied:
-                        return True
-                    if not snapshot_ready.is_set():
-                        return True
-                    snapshot_applied = True
-                    snapshot = snapshot_state.get("snapshot")
-                    if snapshot is None:
-                        error = snapshot_state.get("error")
-                        details = (
-                            "Binance depth stream: не удалось получить начальный снапшот: "
-                            f"{error}"
-                        )
-                        buffer.push_resync(ResyncReason.CONNECTION_LOST, details)
-                        self._logger.log_resync(ResyncReason.CONNECTION_LOST, details)
-                        self._reset_depth_state()
-                        return False
-                    self._apply_depth_snapshot(snapshot, buffer)
-                    return True
-
-                def restart_requested(log_message: str) -> bool:
-                    nonlocal reconnect_after_silence
-                    if not buffer.consume_restart_request():
-                        return False
-                    if initial_snapshot_needed and (
-                        not snapshot_applied or not snapshot_ready.is_set()
-                    ):
-                        self._logger.log(
-                            "Binance depth stream: запрос перезапуска получен до применения"
-                            " начального снапшота, продолжаем ожидание",
-                        )
-                        return False
-                    reconnect_after_silence = True
-                    self._logger.log(log_message)
-                    return True
-
-                while not buffer.stopped():
-                    if not ensure_snapshot_applied():
-                        reconnect_after_silence = False
-                        break
-
-                    if restart_requested(
-                        "Binance depth stream: получен запрос перезапуска от буфера"
-                    ):
-                        break
-                    try:
-                        raw = ws.recv()
-                    except timeout_exception:
-                        if restart_requested(
-                            "Binance depth stream: перезапуск по запросу буфера после тайм-аута ожидания"
-                        ):
-                            break
-                        if not ensure_snapshot_applied():
-                            reconnect_after_silence = False
-                            break
-                        buffer.push(StreamEvent.heartbeat())
-                        continue
-                    if not raw:
-                        if restart_requested(
-                            "Binance depth stream: перезапуск по запросу буфера после пустого сообщения"
-                        ):
-                            break
-                        continue
-                    message = json.loads(raw)
-                    self._handle_depth_message(message, buffer)
-                    if restart_requested(
-                        "Binance depth stream: перезапуск по запросу буфера после обработки сообщения"
-                    ):
-                        break
-            except Exception as exc:
-                reason = (
-                    ResyncReason.SILENCE_TIMEOUT
-                    if reconnect_after_silence
-                    else ResyncReason.CONNECTION_LOST
-                )
-                if reason == ResyncReason.SILENCE_TIMEOUT:
+    def _start_depth_snapshot(self, buffer: StreamBuffer[DepthStreamData]) -> None:
+        def load_snapshot() -> None:
+            while not buffer.stopped():
+                try:
+                    snapshot = self.fetch_orderbook_snapshot()
+                except Exception as exc:  # noqa: BLE001
                     details = (
-                        "Binance depth stream: не удалось переподключиться после тайм-аута тишины: "
+                        "Binance depth stream: не удалось получить начальный снапшот: "
                         f"{exc}"
                     )
-                    buffer.push_resync(reason, details)
-                    self._logger.log(details)
+                    buffer.push_resync(ResyncReason.CONNECTION_LOST, details)
+                    self._logger.log_resync(ResyncReason.CONNECTION_LOST, details)
+                    self._reset_depth_state()
                     time.sleep(self._reconnect_delay)
-                else:
-                    details = f"Binance depth stream: {exc}"
-                    buffer.push_resync(reason, details)
-                    self._logger.log_resync(reason, details)
-                    time.sleep(self._reconnect_delay)
-            finally:
-                if ws is not None:
-                    try:
-                        ws.close()
-                    except Exception:
-                        pass
+                    continue
+                self._apply_depth_snapshot(snapshot, buffer)
+                break
+
+        threading.Thread(
+            target=load_snapshot,
+            name=f"binance-depth-snapshot-{self.symbol.lower()}",
+            daemon=True,
+        ).start()
 
     def _handle_depth_message(
         self,
@@ -506,21 +424,73 @@ class BinanceExchangeData:
             )
 
     def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
-        return self._run_simple_stream(
+        buffer: StreamBuffer[BestBidAsk] = StreamBuffer(
             name="book_ticker",
-            url=f"{self._endpoints.ws_base}/{self.symbol.lower()}@bookTicker",
-            parser=self._parse_book_ticker,
+            logger=self._logger,
+            silence_timeout=self._silence_timeout,
+            heartbeat_interval=self._heartbeat_interval,
             drop_oldest_on_overflow=True,
         )
 
-    def stream_trades(self) -> StreamSubscription[Trade]:
-        return self._run_simple_stream(
-            name="trades",
-            url=f"{self._endpoints.ws_base}/{self.symbol.lower()}@aggTrade",
-            parser=self._parse_trade,
-            drop_oldest_on_overflow=True,
-            maxsize=4096,
+        def handle_message(message: dict[str, Any]) -> None:
+            for payload in self._parse_book_ticker(message):
+                buffer.push_data(payload)
+
+        def handle_error(reason: ResyncReason, details: str) -> None:
+            buffer.push_resync(reason, details)
+            self._logger.log(details)
+
+        release = self._stream_pool.register_book_ticker(
+            self.symbol,
+            buffer,
+            handle_message,
+            handle_error,
         )
+
+        def iterator() -> Iterator[StreamEvent[BestBidAsk]]:
+            try:
+                while True:
+                    yield buffer.next()
+            finally:
+                buffer.stop()
+                release()
+
+        return StreamSubscription(events=iterator(), _buffer=buffer, _stopper=release)
+
+    def stream_trades(self) -> StreamSubscription[Trade]:
+        buffer: StreamBuffer[Trade] = StreamBuffer(
+            name="trades",
+            logger=self._logger,
+            silence_timeout=self._silence_timeout,
+            heartbeat_interval=self._heartbeat_interval,
+            maxsize=4096,
+            drop_oldest_on_overflow=True,
+        )
+
+        def handle_message(message: dict[str, Any]) -> None:
+            for payload in self._parse_trade(message):
+                buffer.push_data(payload)
+
+        def handle_error(reason: ResyncReason, details: str) -> None:
+            buffer.push_resync(reason, details)
+            self._logger.log(details)
+
+        release = self._stream_pool.register_trades(
+            self.symbol,
+            buffer,
+            handle_message,
+            handle_error,
+        )
+
+        def iterator() -> Iterator[StreamEvent[Trade]]:
+            try:
+                while True:
+                    yield buffer.next()
+            finally:
+                buffer.stop()
+                release()
+
+        return StreamSubscription(events=iterator(), _buffer=buffer, _stopper=release)
 
     def stream_kline_1m(self) -> StreamSubscription[Candle]:
         return self._run_simple_stream(
