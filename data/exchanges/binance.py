@@ -50,6 +50,9 @@ class WebSocketClient(Protocol):
     def settimeout(self, timeout: float) -> None: ...
 
 
+BINANCE_ALLOWED_DEPTH_LIMITS: frozenset[int] = frozenset({5, 10, 20, 50, 100, 500, 1000})
+
+
 class BinanceExchangeData:
     def __init__(
         self,
@@ -75,14 +78,40 @@ class BinanceExchangeData:
         self._rest_retry_backoff = max(1.0, float(rest_retry_backoff))
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
-        self._depth_limit = depth_limit
         self._logger = ExchangeLogger(f"Binance:{self.symbol}", log_writer)
+        self._depth_limit = self._normalize_depth_limit(depth_limit)
         self._silence_timeout = max(0.1, (loop_interval_ms * 5) / 1000.0)
         self._heartbeat_interval = self._silence_timeout / 2
         self._depth_last_update: Optional[int] = None
         self._lock = threading.Lock()
         self._api_key = api_key
         self._api_secret = api_secret
+
+    def _normalize_depth_limit(self, depth_limit: int) -> int:
+        default_limit = 500
+        allowed = sorted(BINANCE_ALLOWED_DEPTH_LIMITS)
+        try:
+            requested_limit = int(depth_limit)
+        except (TypeError, ValueError):
+            self._logger.log(
+                f"Binance depth limit {depth_limit!r} is invalid, using {default_limit} instead"
+            )
+            return default_limit
+
+        if requested_limit <= 0:
+            self._logger.log(
+                f"Binance depth limit {requested_limit} is unsupported, using {default_limit} instead"
+            )
+            return default_limit
+
+        if requested_limit in BINANCE_ALLOWED_DEPTH_LIMITS:
+            return requested_limit
+
+        normalized = min(allowed, key=lambda value: abs(value - requested_limit))
+        self._logger.log(
+            f"Binance depth limit {requested_limit} is unsupported, using {normalized} instead"
+        )
+        return normalized
 
     def _rest_get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         params = params or {}
