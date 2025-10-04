@@ -217,7 +217,7 @@ class _CombinedStreamWorker:
                 self._logger.log(
                     (
                         "Binance {stream} stream: открыто соединение для {count} "
-                        "символов из {limit}: {symbols}"
+                        "символов из {limit}"
                     ).format(
                         stream=self._name,
                         count=len(symbols),

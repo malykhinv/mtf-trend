@@ -645,11 +645,6 @@ class Application:
             filters_timestamp,
         )
         initialize_account(context.trading_adapter)
-        account_timestamp = get_current_time()
-        self._event_logger.log(
-            f"Торговый адаптер инициализирован для {symbol}.",
-            account_timestamp,
-        )
         self._update_context_balance(context)
         self._initialize_order_book(context)
         self._refresh_context_funding(context, force=True)
