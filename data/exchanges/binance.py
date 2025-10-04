@@ -325,25 +325,37 @@ class BinanceExchangeData:
                     self._apply_depth_snapshot(snapshot, buffer)
                     return True
 
+                def restart_requested(log_message: str) -> bool:
+                    nonlocal reconnect_after_silence
+                    if not buffer.consume_restart_request():
+                        return False
+                    if initial_snapshot_needed and (
+                        not snapshot_applied or not snapshot_ready.is_set()
+                    ):
+                        self._logger.log(
+                            "Binance depth stream: запрос перезапуска получен до применения"
+                            " начального снапшота, продолжаем ожидание",
+                        )
+                        return False
+                    reconnect_after_silence = True
+                    self._logger.log(log_message)
+                    return True
+
                 while not buffer.stopped():
                     if not ensure_snapshot_applied():
                         reconnect_after_silence = False
                         break
 
-                    if buffer.consume_restart_request():
-                        reconnect_after_silence = True
-                        self._logger.log(
-                            "Binance depth stream: получен запрос перезапуска от буфера"
-                        )
+                    if restart_requested(
+                        "Binance depth stream: получен запрос перезапуска от буфера"
+                    ):
                         break
                     try:
                         raw = ws.recv()
                     except timeout_exception:
-                        if buffer.consume_restart_request():
-                            reconnect_after_silence = True
-                            self._logger.log(
-                                "Binance depth stream: перезапуск по запросу буфера после тайм-аута ожидания"
-                            )
+                        if restart_requested(
+                            "Binance depth stream: перезапуск по запросу буфера после тайм-аута ожидания"
+                        ):
                             break
                         if not ensure_snapshot_applied():
                             reconnect_after_silence = False
@@ -351,20 +363,16 @@ class BinanceExchangeData:
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
-                        if buffer.consume_restart_request():
-                            reconnect_after_silence = True
-                            self._logger.log(
-                                "Binance depth stream: перезапуск по запросу буфера после пустого сообщения"
-                            )
+                        if restart_requested(
+                            "Binance depth stream: перезапуск по запросу буфера после пустого сообщения"
+                        ):
                             break
                         continue
                     message = json.loads(raw)
                     self._handle_depth_message(message, buffer)
-                    if buffer.consume_restart_request():
-                        reconnect_after_silence = True
-                        self._logger.log(
-                            "Binance depth stream: перезапуск по запросу буфера после обработки сообщения"
-                        )
+                    if restart_requested(
+                        "Binance depth stream: перезапуск по запросу буфера после обработки сообщения"
+                    ):
                         break
             except Exception as exc:
                 reason = (
