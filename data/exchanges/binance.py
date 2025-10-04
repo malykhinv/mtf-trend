@@ -220,31 +220,76 @@ class BinanceExchangeData:
 
     def _run_depth_stream(self, buffer: StreamBuffer[DepthStreamData]) -> None:
         url = f"{self._endpoints.ws_base}/{self.symbol.lower()}@depth@100ms"
+        reconnect_after_silence = False
         while not buffer.stopped():
             ws: WebSocketClient | None = None
             try:
+                if reconnect_after_silence:
+                    self._logger.log(
+                        "Binance depth stream: перезапуск соединения после тайм-аута тишины"
+                    )
+                else:
+                    self._logger.log("Binance depth stream: открываем соединение")
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
+                if reconnect_after_silence:
+                    self._logger.log(
+                        "Binance depth stream: соединение успешно восстановлено"
+                    )
+                    reconnect_after_silence = False
                 while not buffer.stopped():
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            "Binance depth stream: получен запрос перезапуска от буфера"
+                        )
+                        break
                     try:
                         raw = ws.recv()
                     except timeout_exception:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                "Binance depth stream: перезапуск по запросу буфера после тайм-аута ожидания"
+                            )
+                            break
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                "Binance depth stream: перезапуск по запросу буфера после пустого сообщения"
+                            )
+                            break
                         continue
                     message = json.loads(raw)
                     self._handle_depth_message(message, buffer)
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            "Binance depth stream: перезапуск по запросу буфера после обработки сообщения"
+                        )
+                        break
             except Exception as exc:
-                buffer.push_resync(
-                    ResyncReason.CONNECTION_LOST,
-                    details=f"Binance depth stream: {exc}",
+                reason = (
+                    ResyncReason.SILENCE_TIMEOUT
+                    if reconnect_after_silence
+                    else ResyncReason.CONNECTION_LOST
                 )
-                self._logger.log_resync(
-                    ResyncReason.CONNECTION_LOST,
-                    details=f"Binance depth stream: {exc}",
-                )
-                time.sleep(self._reconnect_delay)
+                if reason == ResyncReason.SILENCE_TIMEOUT:
+                    details = (
+                        "Binance depth stream: не удалось переподключиться после тайм-аута тишины: "
+                        f"{exc}"
+                    )
+                    buffer.push_resync(reason, details)
+                    self._logger.log(details)
+                    time.sleep(self._reconnect_delay)
+                else:
+                    details = f"Binance depth stream: {exc}"
+                    buffer.push_resync(reason, details)
+                    self._logger.log_resync(reason, details)
+                    time.sleep(self._reconnect_delay)
             finally:
                 if ws is not None:
                     try:
@@ -365,28 +410,76 @@ class BinanceExchangeData:
         buffer: StreamBuffer[Any],
         name: str,
     ) -> None:
+        reconnect_after_silence = False
         while not buffer.stopped():
             ws: WebSocketClient | None = None
             try:
+                if reconnect_after_silence:
+                    self._logger.log(
+                        f"Binance {name} stream: перезапуск соединения после тайм-аута тишины"
+                    )
+                else:
+                    self._logger.log(f"Binance {name} stream: открываем соединение")
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
+                if reconnect_after_silence:
+                    self._logger.log(
+                        f"Binance {name} stream: соединение успешно восстановлено"
+                    )
+                    reconnect_after_silence = False
                 while not buffer.stopped():
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            f"Binance {name} stream: получен запрос перезапуска от буфера"
+                        )
+                        break
                     try:
                         raw = ws.recv()
                     except timeout_exception:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                f"Binance {name} stream: перезапуск по запросу буфера после тайм-аута ожидания"
+                            )
+                            break
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                f"Binance {name} stream: перезапуск по запросу буфера после пустого сообщения"
+                            )
+                            break
                         continue
                     message = json.loads(raw)
                     for payload in parser(message):
                         buffer.push_data(payload)
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            f"Binance {name} stream: перезапуск по запросу буфера после обработки сообщения"
+                        )
+                        break
             except Exception as exc:
-                buffer.push_resync(
-                    ResyncReason.CONNECTION_LOST,
-                    details=f"Binance {name} stream: {exc}",
+                reason = (
+                    ResyncReason.SILENCE_TIMEOUT
+                    if reconnect_after_silence
+                    else ResyncReason.CONNECTION_LOST
                 )
-                time.sleep(self._reconnect_delay)
+                if reason == ResyncReason.SILENCE_TIMEOUT:
+                    details = (
+                        f"Binance {name} stream: не удалось переподключиться после тайм-аута тишины: {exc}"
+                    )
+                    buffer.push_resync(reason, details)
+                    self._logger.log(details)
+                    time.sleep(self._reconnect_delay)
+                else:
+                    details = f"Binance {name} stream: {exc}"
+                    buffer.push_resync(reason, details)
+                    self._logger.log(details)
+                    time.sleep(self._reconnect_delay)
             finally:
                 if ws is not None:
                     try:

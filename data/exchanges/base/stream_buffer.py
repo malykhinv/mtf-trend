@@ -30,6 +30,7 @@ class StreamBuffer(Generic[T]):
             heartbeat_interval if heartbeat_interval is not None else silence_timeout / 2
         )
         self._stop = Event()
+        self._restart_event = Event()
         now = time.monotonic()
         self._last_data = now
         self._last_heartbeat = now
@@ -45,6 +46,18 @@ class StreamBuffer(Generic[T]):
             except queue.Full:
                 self._drain()
                 self._queue.put_nowait(StreamEvent.stop())
+
+    def request_restart(self) -> None:
+        self._restart_event.set()
+
+    def consume_restart_request(self) -> bool:
+        if self._restart_event.is_set():
+            self._restart_event.clear()
+            return True
+        return False
+
+    def restart_requested(self) -> bool:
+        return self._restart_event.is_set()
 
     def push(self, event: StreamEvent[T]) -> None:
         if event.type in {StreamEventType.DATA, StreamEventType.SNAPSHOT}:
@@ -85,6 +98,7 @@ class StreamBuffer(Generic[T]):
                 now = time.monotonic()
                 if now - self._last_data >= self._silence_timeout:
                     self._last_data = now
+                    self.request_restart()
                     return StreamEvent.resync(
                         ResyncReason.SILENCE_TIMEOUT,
                         details=f"Стрим {self._name}: отсутствуют события {self._silence_timeout:.2f}с",

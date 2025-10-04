@@ -284,37 +284,92 @@ class BybitExchangeData:
         url = self._endpoints.ws_base
         topic = f"orderbook.50.{self.symbol}"
         subscribe = json.dumps({"op": "subscribe", "args": [topic]})
+        reconnect_after_silence = False
         while not buffer.stopped():
             ws: WebSocketClient | None = None
             try:
+                if reconnect_after_silence:
+                    self._logger.log(
+                        "Bybit depth stream: перезапуск соединения после тайм-аута тишины"
+                    )
+                else:
+                    self._logger.log("Bybit depth stream: открываем соединение")
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
                 ws.send(subscribe)
+                if reconnect_after_silence:
+                    self._logger.log("Bybit depth stream: соединение успешно восстановлено")
+                    reconnect_after_silence = False
                 while not buffer.stopped():
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            "Bybit depth stream: получен запрос перезапуска от буфера"
+                        )
+                        break
                     try:
                         raw = ws.recv()
                     except timeout_exception:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                "Bybit depth stream: перезапуск по запросу буфера после тайм-аута ожидания"
+                            )
+                            break
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                "Bybit depth stream: перезапуск по запросу буфера после пустого сообщения"
+                            )
+                            break
                         continue
                     message = json.loads(raw)
                     if message.get("op") == "ping":
                         ws.send(json.dumps({"op": "pong", "req_id": message.get("req_id")}))
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                "Bybit depth stream: перезапуск по запросу буфера после ответа на ping"
+                            )
+                            break
                         continue
                     if message.get("topic") != topic:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                "Bybit depth stream: перезапуск по запросу буфера при ожидании целевой темы"
+                            )
+                            break
                         continue
                     self._handle_depth_message(message, buffer)
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            "Bybit depth stream: перезапуск по запросу буфера после обработки сообщения"
+                        )
+                        break
             except Exception as exc:
-                buffer.push_resync(
-                    ResyncReason.CONNECTION_LOST,
-                    details=f"Bybit depth stream: {exc}",
+                reason = (
+                    ResyncReason.SILENCE_TIMEOUT
+                    if reconnect_after_silence
+                    else ResyncReason.CONNECTION_LOST
                 )
-                self._logger.log_resync(
-                    ResyncReason.CONNECTION_LOST,
-                    details=f"Bybit depth stream: {exc}",
-                )
-                time.sleep(self._reconnect_delay)
+                if reason == ResyncReason.SILENCE_TIMEOUT:
+                    details = (
+                        "Bybit depth stream: не удалось переподключиться после тайм-аута тишины: "
+                        f"{exc}"
+                    )
+                    buffer.push_resync(reason, details)
+                    self._logger.log(details)
+                    time.sleep(self._reconnect_delay)
+                else:
+                    details = f"Bybit depth stream: {exc}"
+                    buffer.push_resync(reason, details)
+                    self._logger.log_resync(reason, details)
+                    time.sleep(self._reconnect_delay)
             finally:
                 if ws is not None:
                     try:
@@ -538,34 +593,94 @@ class BybitExchangeData:
         subscribe: str,
     ) -> None:
         url = self._endpoints.ws_base
+        reconnect_after_silence = False
         while not buffer.stopped():
             ws: WebSocketClient | None = None
             try:
+                if reconnect_after_silence:
+                    self._logger.log(
+                        f"Bybit {name} stream: перезапуск соединения после тайм-аута тишины"
+                    )
+                else:
+                    self._logger.log(f"Bybit {name} stream: открываем соединение")
                 ws, timeout_exception = self._connect_websocket(url)
                 ws.settimeout(self._ws_timeout)
                 ws.send(subscribe)
+                if reconnect_after_silence:
+                    self._logger.log(
+                        f"Bybit {name} stream: соединение успешно восстановлено"
+                    )
+                    reconnect_after_silence = False
                 while not buffer.stopped():
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            f"Bybit {name} stream: получен запрос перезапуска от буфера"
+                        )
+                        break
                     try:
                         raw = ws.recv()
                     except timeout_exception:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                f"Bybit {name} stream: перезапуск по запросу буфера после тайм-аута ожидания"
+                            )
+                            break
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not raw:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                f"Bybit {name} stream: перезапуск по запросу буфера после пустого сообщения"
+                            )
+                            break
                         continue
                     message = json.loads(raw)
                     if message.get("op") == "ping":
                         ws.send(json.dumps({"op": "pong", "req_id": message.get("req_id")}))
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                f"Bybit {name} stream: перезапуск по запросу буфера после ответа на ping"
+                            )
+                            break
                         continue
                     if message.get("topic") != topic:
+                        if buffer.consume_restart_request():
+                            reconnect_after_silence = True
+                            self._logger.log(
+                                f"Bybit {name} stream: перезапуск по запросу буфера при ожидании целевой темы"
+                            )
+                            break
                         continue
                     for payload in parser(message):
                         buffer.push_data(payload)
+                    if buffer.consume_restart_request():
+                        reconnect_after_silence = True
+                        self._logger.log(
+                            f"Bybit {name} stream: перезапуск по запросу буфера после обработки сообщения"
+                        )
+                        break
             except Exception as exc:
-                buffer.push_resync(
-                    ResyncReason.CONNECTION_LOST,
-                    details=f"Bybit {name} stream: {exc}",
+                reason = (
+                    ResyncReason.SILENCE_TIMEOUT
+                    if reconnect_after_silence
+                    else ResyncReason.CONNECTION_LOST
                 )
-                time.sleep(self._reconnect_delay)
+                if reason == ResyncReason.SILENCE_TIMEOUT:
+                    details = (
+                        f"Bybit {name} stream: не удалось переподключиться после тайм-аута тишины: {exc}"
+                    )
+                    buffer.push_resync(reason, details)
+                    self._logger.log(details)
+                    time.sleep(self._reconnect_delay)
+                else:
+                    details = f"Bybit {name} stream: {exc}"
+                    buffer.push_resync(reason, details)
+                    self._logger.log(details)
+                    time.sleep(self._reconnect_delay)
             finally:
                 if ws is not None:
                     try:
