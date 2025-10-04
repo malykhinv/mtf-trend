@@ -36,6 +36,8 @@ class MarketScanner:
         self._retry_backoff = max(1.0, float(retry_backoff))
         self._log = log
         self._last_symbols: Tuple[Tuple[str, TradingProfile], ...] = ()
+        self._listing_dates: dict[str, int] = {}
+        self._recent_listing_cache: dict[str, bool] = {}
 
     def scan(self) -> Tuple[Tuple[str, TradingProfile], ...]:
         try:
@@ -57,6 +59,8 @@ class MarketScanner:
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
         data = self._request_json(request)
+        self._listing_dates = self._fetch_listing_dates()
+        self._recent_listing_cache.clear()
         entries = ((item.get("symbol", ""), item.get("quoteVolume", "0")) for item in data)
         return self._filter_and_sort(entries)
 
@@ -69,6 +73,8 @@ class MarketScanner:
             raise RuntimeError(f"unexpected bybit response code: {data.get('retCode')}")
         result = data.get("result") or {}
         entries: Sequence[dict[str, object]] = result.get("list") or []
+        self._listing_dates = self._fetch_listing_dates()
+        self._recent_listing_cache.clear()
         rows = (
             (
                 row.get("symbol", ""),
@@ -118,10 +124,18 @@ class MarketScanner:
                 continue
             turnover_per_minute = turnover_24h / minutes_per_day
             if turnover_per_minute >= threshold:
+                if self._profile is TradingProfile.LISTING and not self._is_recent_listing(symbol):
+                    continue
                 pairs.append((symbol, turnover_per_minute))
         pairs.sort(key=lambda item: item[1], reverse=True)
         if self._profile is TradingProfile.AUTO:
-            return tuple((symbol, self._classify_turnover(turnover)) for symbol, turnover in pairs)
+            classified: list[Tuple[str, TradingProfile]] = []
+            for symbol, turnover in pairs:
+                profile = self._classify_turnover(symbol, turnover)
+                if profile is TradingProfile.LISTING and not self._is_recent_listing(symbol):
+                    continue
+                classified.append((symbol, profile))
+            return tuple(classified)
         return tuple((symbol, self._profile) for symbol, _ in pairs)
 
     def _resolve_threshold(self) -> float:
@@ -144,7 +158,7 @@ class MarketScanner:
             return float(thresholds.listing_usd)
         return float(thresholds.top_usd)
 
-    def _classify_turnover(self, turnover: float) -> TradingProfile:
+    def _classify_turnover(self, symbol: str, turnover: float) -> TradingProfile:
         thresholds = self._thresholds
         top_threshold = float(thresholds.top_usd)
         listing_threshold = float(thresholds.listing_usd)
@@ -152,10 +166,94 @@ class MarketScanner:
         if turnover >= top_threshold:
             return TradingProfile.TOP
         if turnover >= listing_threshold:
-            return TradingProfile.LISTING
+            if self._is_recent_listing(symbol):
+                return TradingProfile.LISTING
+            if turnover >= alt_threshold:
+                return TradingProfile.ALT
+            return TradingProfile.ALT
         if turnover >= alt_threshold:
             return TradingProfile.ALT
         return TradingProfile.LISTING
+
+    def _is_recent_listing(self, symbol: str) -> bool:
+        normalized = symbol.upper()
+        cached = self._recent_listing_cache.get(normalized)
+        if cached is not None:
+            return cached
+        if normalized not in self._listing_dates:
+            listing_dates = self._fetch_listing_dates()
+            if listing_dates:
+                self._listing_dates.update(listing_dates)
+        timestamp_ms = self._listing_dates.get(normalized)
+        result = False
+        if timestamp_ms is not None:
+            try:
+                launch_ts = float(timestamp_ms)
+            except (TypeError, ValueError):
+                result = False
+            else:
+                now_ms = time.time() * 1000.0
+                thirty_days_ms = 30.0 * 24.0 * 3600.0 * 1000.0
+                result = now_ms - launch_ts <= thirty_days_ms
+        self._recent_listing_cache[normalized] = result
+        return result
+
+    def _fetch_listing_dates(self) -> dict[str, int]:
+        if self._exchange is ExchangeName.BINANCE:
+            return self._fetch_binance_listing_dates()
+        if self._exchange is ExchangeName.BYBIT:
+            return self._fetch_bybit_listing_dates()
+        return {}
+
+    def _fetch_binance_listing_dates(self) -> dict[str, int]:
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
+        data = self._request_json(request)
+        symbols: Sequence[dict[str, object]] = []
+        if isinstance(data, dict):
+            raw_symbols = data.get("symbols")
+            if isinstance(raw_symbols, Sequence):
+                symbols = [item for item in raw_symbols if isinstance(item, dict)]
+        mapping: dict[str, int] = {}
+        for item in symbols:
+            raw_symbol = item.get("symbol")
+            if not raw_symbol:
+                continue
+            symbol = str(raw_symbol).upper()
+            raw_onboard = item.get("onboardDate")
+            try:
+                onboard_ts = int(str(raw_onboard))
+            except (TypeError, ValueError):
+                continue
+            mapping[symbol] = onboard_ts
+        return mapping
+
+    def _fetch_bybit_listing_dates(self) -> dict[str, int]:
+        params = parse.urlencode({"category": "linear"})
+        url = f"https://api.bybit.com/v5/market/instruments-info?{params}"
+        request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
+        data = self._request_json(request)
+        if not isinstance(data, dict) or str(data.get("retCode")) not in {"0", "OK"}:
+            raise RuntimeError(f"unexpected bybit response code: {getattr(data, 'get', lambda *_: None)('retCode')}")
+        result = data.get("result")
+        entries: Sequence[dict[str, object]] = []
+        if isinstance(result, dict):
+            raw_entries = result.get("list")
+            if isinstance(raw_entries, Sequence):
+                entries = [row for row in raw_entries if isinstance(row, dict)]
+        mapping: dict[str, int] = {}
+        for row in entries:
+            raw_symbol = row.get("symbol")
+            if not raw_symbol:
+                continue
+            symbol = str(raw_symbol).upper()
+            raw_time = row.get("listTime")
+            try:
+                list_ts = int(str(raw_time))
+            except (TypeError, ValueError):
+                continue
+            mapping[symbol] = list_ts
+        return mapping
 
 
 __all__ = ["MarketScanner"]
