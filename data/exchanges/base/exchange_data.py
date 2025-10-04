@@ -1,11 +1,31 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterator, Optional, Protocol
+from threading import Thread
+from typing import Generic, Iterator, Optional, Protocol, TypeVar
 
 from domain.models import Candle, OrderBookSnapshot, SymbolFilters, Trade
 
 from .best_bid_ask import BestBidAsk
 from .depth_stream_data import DepthStreamData
+from .stream_buffer import StreamBuffer
 from .stream_event import StreamEvent
+
+
+T = TypeVar("T")
+
+
+@dataclass(slots=True)
+class StreamSubscription(Generic[T]):
+    events: Iterator[StreamEvent[T]]
+    _buffer: StreamBuffer[T]
+    _worker: Thread
+
+    def stop(self) -> None:
+        self._buffer.stop()
+        if self._worker.is_alive():
+            self._worker.join(timeout=1.0)
 
 
 class IExchangeData(Protocol):
@@ -15,20 +35,20 @@ class IExchangeData(Protocol):
     def fetch_orderbook_snapshot(self) -> OrderBookSnapshot:
         ...
 
-    def stream_depth(self) -> Iterator[StreamEvent[DepthStreamData]]:
+    def stream_depth(self) -> StreamSubscription[DepthStreamData]:
         ...
 
-    def stream_book_ticker(self) -> Iterator[StreamEvent[BestBidAsk]]:
+    def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
         ...
 
-    def stream_trades(self) -> Iterator[StreamEvent[Trade]]:
+    def stream_trades(self) -> StreamSubscription[Trade]:
         ...
 
-    def stream_kline_1m(self) -> Iterator[StreamEvent[Candle]]:
+    def stream_kline_1m(self) -> StreamSubscription[Candle]:
         ...
 
     def fetch_next_funding_time(self) -> Optional[datetime]:
         ...
 
 
-__all__ = ["IExchangeData"]
+__all__ = ["IExchangeData", "StreamSubscription"]

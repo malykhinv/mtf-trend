@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from collections import deque
-from typing import Deque, Dict, Iterable, Iterator, Optional, Sequence, Tuple, cast
+from typing import Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
 
 from config.config import CONFIG
 from config.models.balance_source import BalanceSource as ConfigBalanceSource
@@ -25,6 +25,7 @@ from data.exchanges import (
     ResyncReason as StreamResyncReason,
     StreamEvent,
     StreamEventType,
+    StreamSubscription,
 )
 from data.logger import LogSink, create_log_writer, create_text_log_sink
 from data.telegram import TelegramClient
@@ -109,9 +110,9 @@ class SymbolContext:
     exchange_data: IExchangeData
     order_book: OrderBook
     feed_monitor: FeedMonitor
-    depth_stream: Iterator[StreamEvent[DepthStreamData]]
-    trade_stream: Iterator[StreamEvent[Trade]]
-    ticker_stream: Iterator[StreamEvent[BestBidAsk]]
+    depth_subscription: StreamSubscription[DepthStreamData]
+    trade_subscription: StreamSubscription[Trade]
+    ticker_subscription: StreamSubscription[BestBidAsk]
     filters: SymbolFilters
     trading_adapter: TradingAdapter
     next_funding_at: Optional[datetime] = None
@@ -308,10 +309,20 @@ class Application:
 
     def _unsubscribe_symbol(self, symbol: str) -> None:
         symbol = symbol.upper()
-        context = self._contexts.get(symbol)
+        context = self._contexts.pop(symbol, None)
         if context is None:
             return
         context.active = False
+        subscriptions = (
+            context.depth_subscription,
+            context.trade_subscription,
+            context.ticker_subscription,
+        )
+        for subscription in subscriptions:
+            try:
+                subscription.stop()
+            except Exception:
+                pass
         if self._focus_controller.current == symbol:
             timestamp = get_current_time()
             self._focus_controller.defocus(timestamp)
@@ -343,7 +354,7 @@ class Application:
 
     def _initialize_order_book(self, context: SymbolContext) -> None:
         while True:
-            event = next(context.depth_stream)
+            event = next(context.depth_subscription.events)
             if event.type is StreamEventType.SNAPSHOT:
                 snapshot = cast(OrderBookSnapshot, event.data)
                 if snapshot is None:
@@ -391,7 +402,7 @@ class Application:
         context.best_ask = None if ask_level is None else ask_level.price
 
     def _process_depth_stream(self, context: SymbolContext) -> None:
-        event = next(context.depth_stream)
+        event = next(context.depth_subscription.events)
         if event.type is StreamEventType.DATA:
             update = cast(OrderBookUpdate, event.data)
             if update is not None:
@@ -416,7 +427,7 @@ class Application:
 
     @staticmethod
     def _process_trade_stream(context: SymbolContext) -> None:
-        event = next(context.trade_stream)
+        event = next(context.trade_subscription.events)
         if event.type is StreamEventType.DATA:
             trade = cast(Trade, event.data)
             if trade is not None:
@@ -429,7 +440,7 @@ class Application:
 
     @staticmethod
     def _process_ticker_stream(context: SymbolContext) -> None:
-        event = next(context.ticker_stream)
+        event = next(context.ticker_subscription.events)
         if event.type is StreamEventType.DATA:
             ticker = cast(BestBidAsk, event.data)
             if ticker is not None:
@@ -556,9 +567,9 @@ class Application:
                 recent_band_volume_boost=CONFIG.general.recent_band_s_vol_boost,
             ),
             feed_monitor=FeedMonitor(),
-            depth_stream=exchange_data.stream_depth(),
-            trade_stream=exchange_data.stream_trades(),
-            ticker_stream=exchange_data.stream_book_ticker(),
+            depth_subscription=exchange_data.stream_depth(),
+            trade_subscription=exchange_data.stream_trades(),
+            ticker_subscription=exchange_data.stream_book_ticker(),
             filters=filters,
             trading_adapter=trading_adapter,
             profile=self._symbol_profiles.get(symbol, CONFIG.general.profile),
