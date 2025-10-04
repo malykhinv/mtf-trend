@@ -25,6 +25,12 @@ def load_env(path: Path = Path(".env")) -> None:
                 key = key.strip()
                 value = value.strip()
 
+                if len(value) >= 2 and (
+                    (value.startswith("\"") and value.endswith("\""))
+                    or (value.startswith("'") and value.endswith("'"))
+                ):
+                    value = value[1:-1]
+
                 if key:
                     os.environ.setdefault(key, value)
     except FileNotFoundError:
