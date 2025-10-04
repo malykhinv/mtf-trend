@@ -83,6 +83,8 @@ class BinanceExchangeData:
         self._silence_timeout = max(0.1, (loop_interval_ms * 5) / 1000.0)
         self._heartbeat_interval = self._silence_timeout / 2
         self._depth_last_update: Optional[int] = None
+        self._depth_buffered_messages: list[dict[str, Any]] = []
+        self._depth_allow_skip = False
         self._lock = threading.Lock()
         self._api_key = api_key
         self._api_secret = api_secret
@@ -193,8 +195,6 @@ class BinanceExchangeData:
             asks=asks,
             received_at=now,
         )
-        with self._lock:
-            self._depth_last_update = last_update_id
         return snapshot
 
     def fetch_next_funding_time(self) -> Optional[datetime]:
@@ -225,8 +225,6 @@ class BinanceExchangeData:
             silence_timeout=self._silence_timeout,
             heartbeat_interval=self._heartbeat_interval,
         )
-        initial_snapshot = self.fetch_orderbook_snapshot()
-        buffer.push_snapshot(initial_snapshot)
 
         worker = threading.Thread(
             target=self._run_depth_stream,
@@ -265,7 +263,61 @@ class BinanceExchangeData:
                         "Binance depth stream: соединение успешно восстановлено"
                     )
                     reconnect_after_silence = False
+
+                with self._lock:
+                    initial_snapshot_needed = self._depth_last_update is None
+                    if initial_snapshot_needed:
+                        self._depth_buffered_messages.clear()
+                        self._depth_allow_skip = False
+
+                snapshot_applied = not initial_snapshot_needed
+                snapshot_ready = threading.Event()
+                snapshot_state: dict[str, Any] = {"snapshot": None, "error": None}
+
+                if initial_snapshot_needed:
+
+                    def load_initial_snapshot() -> None:
+                        try:
+                            snapshot = self.fetch_orderbook_snapshot()
+                        except Exception as exc:  # noqa: BLE001
+                            snapshot_state["error"] = exc
+                        else:
+                            snapshot_state["snapshot"] = snapshot
+                        finally:
+                            snapshot_ready.set()
+
+                    threading.Thread(
+                        target=load_initial_snapshot,
+                        name=f"binance-depth-snapshot-{self.symbol.lower()}",
+                        daemon=True,
+                    ).start()
+
+                def ensure_snapshot_applied() -> bool:
+                    nonlocal snapshot_applied
+                    if snapshot_applied:
+                        return True
+                    if not snapshot_ready.is_set():
+                        return True
+                    snapshot_applied = True
+                    snapshot = snapshot_state.get("snapshot")
+                    if snapshot is None:
+                        error = snapshot_state.get("error")
+                        details = (
+                            "Binance depth stream: не удалось получить начальный снапшот: "
+                            f"{error}"
+                        )
+                        buffer.push_resync(ResyncReason.CONNECTION_LOST, details)
+                        self._logger.log_resync(ResyncReason.CONNECTION_LOST, details)
+                        self._reset_depth_state()
+                        return False
+                    self._apply_depth_snapshot(snapshot, buffer)
+                    return True
+
                 while not buffer.stopped():
+                    if not ensure_snapshot_applied():
+                        reconnect_after_silence = False
+                        break
+
                     if buffer.consume_restart_request():
                         reconnect_after_silence = True
                         self._logger.log(
@@ -280,6 +332,9 @@ class BinanceExchangeData:
                             self._logger.log(
                                 "Binance depth stream: перезапуск по запросу буфера после тайм-аута ожидания"
                             )
+                            break
+                        if not ensure_snapshot_applied():
+                            reconnect_after_silence = False
                             break
                         buffer.push(StreamEvent.heartbeat())
                         continue
@@ -326,7 +381,12 @@ class BinanceExchangeData:
                         pass
 
     def _handle_depth_message(
-        self, message: dict[str, Any], buffer: StreamBuffer[DepthStreamData]
+        self,
+        message: dict[str, Any],
+        buffer: StreamBuffer[DepthStreamData],
+        *,
+        buffer_if_uninitialized: bool = True,
+        allow_skip: bool = False,
     ) -> None:
         if message.get("e") != "depthUpdate":
             return
@@ -335,31 +395,51 @@ class BinanceExchangeData:
         prev_update = int(message.get("pu", first_update - 1))
         event_time = from_exchange_timestamp(message.get("E", 0) / 1000.0)
 
+        update: Optional[OrderBookUpdate] = None
+        resync_reason: Optional[ResyncReason] = None
+        resync_details = ""
+
         with self._lock:
-            expected = None if self._depth_last_update is None else self._depth_last_update + 1
             if self._depth_last_update is None:
-                if last_update == 0:
+                if buffer_if_uninitialized and last_update != 0:
+                    self._depth_buffered_messages.append(message)
+                return
+
+            expected = self._depth_last_update + 1
+            allow_skip_current = allow_skip or self._depth_allow_skip
+
+            if last_update <= self._depth_last_update:
+                return
+
+            if first_update > expected:
+                if allow_skip_current:
                     return
-                self._depth_last_update = last_update
-            elif last_update <= self._depth_last_update:
-                return
-            elif expected is not None and first_update > expected:
-                self._trigger_depth_resync(
-                    buffer,
-                    reason=ResyncReason.SEQUENCE_GAP,
-                    details=f"Ожидали {expected}, получили диапазон {first_update}-{last_update}",
+                resync_reason = ResyncReason.SEQUENCE_GAP
+                resync_details = (
+                    f"Ожидали {expected}, получили диапазон {first_update}-{last_update}"
                 )
-                return
             elif prev_update != self._depth_last_update:
-                self._trigger_depth_resync(
-                    buffer,
-                    reason=ResyncReason.SEQUENCE_GAP,
-                    details=f"Предыдущий апдейт {prev_update} != {self._depth_last_update}",
+                if allow_skip_current:
+                    return
+                resync_reason = ResyncReason.SEQUENCE_GAP
+                resync_details = (
+                    f"Предыдущий апдейт {prev_update} != {self._depth_last_update}"
                 )
-                return
-            update = self._build_depth_update(message, event_time)
-            self._depth_last_update = last_update
-        buffer.push_data(update)
+            else:
+                update = self._build_depth_update(message, event_time)
+                self._depth_last_update = last_update
+                self._depth_allow_skip = False
+
+        if resync_reason is not None:
+            self._trigger_depth_resync(
+                buffer,
+                reason=resync_reason,
+                details=resync_details,
+            )
+            return
+
+        if update is not None:
+            buffer.push_data(update)
 
     def _trigger_depth_resync(
         self,
@@ -369,15 +449,41 @@ class BinanceExchangeData:
     ) -> None:
         self._logger.log_resync(reason, details)
         buffer.push_resync(reason, details)
+        self._reset_depth_state()
         try:
             snapshot = self.fetch_orderbook_snapshot()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             buffer.push_resync(
                 ResyncReason.CONNECTION_LOST,
                 details=f"Ошибка получения снапшота: {exc}",
             )
             return
+        self._apply_depth_snapshot(snapshot, buffer)
+
+    def _reset_depth_state(self) -> None:
+        with self._lock:
+            self._depth_last_update = None
+            self._depth_allow_skip = False
+            self._depth_buffered_messages.clear()
+
+    def _apply_depth_snapshot(
+        self, snapshot: OrderBookSnapshot, buffer: StreamBuffer[DepthStreamData]
+    ) -> None:
+        with self._lock:
+            self._depth_last_update = snapshot.last_update_id
+            self._depth_allow_skip = True
+            pending = tuple(self._depth_buffered_messages)
+            self._depth_buffered_messages.clear()
+
         buffer.push_snapshot(snapshot)
+
+        for message in pending:
+            self._handle_depth_message(
+                message,
+                buffer,
+                buffer_if_uninitialized=False,
+                allow_skip=True,
+            )
 
     def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
         return self._run_simple_stream(
