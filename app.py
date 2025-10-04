@@ -507,12 +507,13 @@ class Application:
             if timestamp - self._last_scan_at < self._scanner_interval:
                 return
         scan_result = self._scanner.scan()
-        self._symbol_profiles = {symbol: profile for symbol, profile in scan_result}
-        symbols = tuple(symbol for symbol, _ in scan_result)
+        profile_by_symbol = {symbol: profile for symbol, profile in scan_result}
+        self._symbol_profiles = profile_by_symbol
+        symbols = tuple(profile_by_symbol.keys())
         self._desired_symbols = symbols
-        for symbol, profile in self._symbol_profiles.items():
-            context = self._contexts.get(symbol)
-            if context is not None:
+        for symbol, context in self._contexts.items():
+            profile = profile_by_symbol.get(symbol)
+            if profile is not None:
                 context.profile = profile
         self._subscription_manager.update(symbols, timestamp)
         self._last_scan_at = timestamp
