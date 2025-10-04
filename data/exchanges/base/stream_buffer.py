@@ -99,10 +99,8 @@ class StreamBuffer(Generic[T]):
                 if now - self._last_data >= self._silence_timeout:
                     self._last_data = now
                     self.request_restart()
-                    return StreamEvent.resync(
-                        ResyncReason.SILENCE_TIMEOUT,
-                        details=f"Стрим {self._name}: отсутствуют события {self._silence_timeout:.2f}с",
-                    )
+                    self._last_heartbeat = now
+                    return StreamEvent.heartbeat()
                 if now - self._last_heartbeat >= self._heartbeat_interval:
                     self._last_heartbeat = now
                     return StreamEvent.heartbeat()
