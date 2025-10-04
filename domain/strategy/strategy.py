@@ -100,9 +100,23 @@ class Strategy:
         wall = observation.near_wall
         ratio = observation.pressure.imbalance_ratio
         if wall.side is Side.BID and ratio <= CONFIG.odr.focus_pre_odr_long:
-            self._focus_on_symbol(observation.symbol, Signal.LONG, wall, observation.timestamp)
+            if observation.volume_spike:
+                self._focus_on_symbol(
+                    observation.symbol,
+                    Signal.LONG,
+                    wall,
+                    observation.timestamp,
+                    observation.volume_ratio,
+                )
         elif wall.side is Side.ASK and ratio >= CONFIG.odr.focus_pre_odr_short:
-            self._focus_on_symbol(observation.symbol, Signal.SHORT, wall, observation.timestamp)
+            if observation.volume_spike:
+                self._focus_on_symbol(
+                    observation.symbol,
+                    Signal.SHORT,
+                    wall,
+                    observation.timestamp,
+                    observation.volume_ratio,
+                )
 
     def _handle_focused(self, observation: MarketObservation) -> None:
         if self._focus.current != observation.symbol:
@@ -110,7 +124,7 @@ class Strategy:
         pressure = observation.pressure
         wall = observation.near_wall
         timestamp = observation.timestamp
-        if pressure is not None and wall is not None:
+        if pressure is not None and wall is not None and observation.volume_spike:
             if self._focused_signal is Signal.LONG and wall.side is Side.BID:
                 if pressure.imbalance_ratio <= CONFIG.odr.focus_pre_odr_long:
                     self._last_focus_signal_at = timestamp
@@ -133,6 +147,8 @@ class Strategy:
         if pressure is None or wall is None:
             return
         if observation.opposite_wall_blocks:
+            return
+        if not observation.volume_spike:
             return
         if self._focused_signal is Signal.LONG and wall.side is Side.BID:
             if pressure.imbalance_ratio <= CONFIG.odr.odr_in_long:
@@ -187,7 +203,12 @@ class Strategy:
             self._wall_drop_since = None
 
     def _focus_on_symbol(
-        self, symbol: str, signal: Signal, wall: Wall, timestamp: datetime
+        self,
+        symbol: str,
+        signal: Signal,
+        wall: Wall,
+        timestamp: datetime,
+        volume_ratio: float,
     ) -> None:
         self._focus.focus(symbol, timestamp)
         self._state = StrategyState.FOCUSED
@@ -198,7 +219,8 @@ class Strategy:
         self._logger.log(
             (
                 f"{timestamp:%H:%M:%S} Аптик {symbol} {direction}. "
-                f"Стена {wall.price:g} объём {wall.notional:g}."
+                f"Стена {wall.price:g} объём {wall.notional:g}. "
+                f"Всплеск объёма x{volume_ratio:.2f}."
             ),
             timestamp,
         )

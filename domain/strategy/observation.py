@@ -21,6 +21,8 @@ class MarketObservation:
     opposite_wall_blocks: bool
     available_symbols: Tuple[str, ...]
     feed_status: FeedStatus
+    volume_ratio: float
+    volume_spike: bool
 
     def __post_init__(self) -> None:
         ensure_current_timezone(self.timestamp)
