@@ -402,51 +402,87 @@ class Application:
         context.best_bid = None if bid_level is None else bid_level.price
         context.best_ask = None if ask_level is None else ask_level.price
 
-    def _process_depth_stream(self, context: SymbolContext) -> None:
-        event = next(context.depth_subscription.events)
-        if event.type is StreamEventType.DATA:
-            update = cast(OrderBookUpdate, event.data)
-            if update is not None:
-                self._apply_update(context, update)
-        elif event.type is StreamEventType.SNAPSHOT:
-            snapshot = cast(OrderBookSnapshot, event.data)
-            if snapshot is not None:
-                self._apply_snapshot(context, snapshot)
-                context.feed_monitor.clear()
-        elif event.type is StreamEventType.RESYNC and event.reason is not None:
-            context.feed_monitor.flag(event.reason)
-            context.last_update_id = None
-            timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
-            details = f" {event.details}." if event.details else ""
-            self._event_logger.log(
-                (
-                    f"Поток стакана {context.symbol} требует ресинк: "
-                    f"{event.reason.value}.{details}"
-                ),
-                timestamp,
-            )
-
-    @staticmethod
-    def _process_trade_stream(context: SymbolContext) -> None:
-        event = next(context.trade_subscription.events)
-        if event.type is StreamEventType.DATA:
-            trade = cast(Trade, event.data)
-            if trade is not None:
-                context.last_trade_price = trade.price
-                _, _, ratio, ready = context.volume_tracker.observe(
-                    event.timestamp, trade.price, trade.quantity
+    def _process_depth_stream(self, context: SymbolContext) -> bool:
+        buffer = context.depth_subscription._buffer
+        events = buffer.drain_pending()
+        if not events:
+            try:
+                primary = next(context.depth_subscription.events)
+            except StopIteration:
+                return False
+            events = [primary]
+            events.extend(buffer.drain_pending())
+        processed = False
+        for event in events:
+            processed = True
+            if event.type is StreamEventType.DATA:
+                update = cast(OrderBookUpdate, event.data)
+                if update is not None:
+                    self._apply_update(context, update)
+            elif event.type is StreamEventType.SNAPSHOT:
+                snapshot = cast(OrderBookSnapshot, event.data)
+                if snapshot is not None:
+                    self._apply_snapshot(context, snapshot)
+                    context.feed_monitor.clear()
+            elif event.type is StreamEventType.RESYNC and event.reason is not None:
+                context.feed_monitor.flag(event.reason)
+                context.last_update_id = None
+                timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
+                details = f" {event.details}." if event.details else ""
+                self._event_logger.log(
+                    (
+                        f"Поток стакана {context.symbol} требует ресинк: "
+                        f"{event.reason.value}.{details}"
+                    ),
+                    timestamp,
                 )
-                context.volume_ratio = ratio
-                context.volume_spike = ready and ratio >= CONFIG.general.vol_spike_mult
+        return processed
 
     @staticmethod
-    def _process_ticker_stream(context: SymbolContext) -> None:
-        event = next(context.ticker_subscription.events)
-        if event.type is StreamEventType.DATA:
-            ticker = cast(BestBidAsk, event.data)
-            if ticker is not None:
-                context.best_bid = ticker.bid_price
-                context.best_ask = ticker.ask_price
+    def _process_trade_stream(context: SymbolContext) -> bool:
+        buffer = context.trade_subscription._buffer
+        events = buffer.drain_pending()
+        if not events:
+            try:
+                primary = next(context.trade_subscription.events)
+            except StopIteration:
+                return False
+            events = [primary]
+            events.extend(buffer.drain_pending())
+        processed = False
+        for event in events:
+            processed = True
+            if event.type is StreamEventType.DATA:
+                trade = cast(Trade, event.data)
+                if trade is not None:
+                    context.last_trade_price = trade.price
+                    _, _, ratio, ready = context.volume_tracker.observe(
+                        event.timestamp, trade.price, trade.quantity
+                    )
+                    context.volume_ratio = ratio
+                    context.volume_spike = ready and ratio >= CONFIG.general.vol_spike_mult
+        return processed
+
+    @staticmethod
+    def _process_ticker_stream(context: SymbolContext) -> bool:
+        buffer = context.ticker_subscription._buffer
+        events = buffer.drain_pending()
+        if not events:
+            try:
+                primary = next(context.ticker_subscription.events)
+            except StopIteration:
+                return False
+            events = [primary]
+            events.extend(buffer.drain_pending())
+        processed = False
+        for event in events:
+            processed = True
+            if event.type is StreamEventType.DATA:
+                ticker = cast(BestBidAsk, event.data)
+                if ticker is not None:
+                    context.best_bid = ticker.bid_price
+                    context.best_ask = ticker.ask_price
+        return processed
 
     @staticmethod
     def _resolve_last_price(context: SymbolContext) -> float:
@@ -757,22 +793,27 @@ class Application:
             self._refresh_symbol_scan()
             self._refresh_balances()
             resync_triggered = False
+            work_done = False
             for context in self._iter_active_contexts():
                 self._current_symbol = context.symbol
                 self._ensure_cycle_logged(context)
                 self._refresh_context_funding(context)
                 now = get_current_time()
                 self._handle_funding_window(context, now)
-                self._process_depth_stream(context)
-                self._process_trade_stream(context)
-                self._process_ticker_stream(context)
+                if self._process_depth_stream(context):
+                    work_done = True
+                if self._process_trade_stream(context):
+                    work_done = True
+                if self._process_ticker_stream(context):
+                    work_done = True
                 observation = self._build_observation(context)
                 state = self._strategy.process(observation)
                 if state is StrategyState.RESYNC:
                     resync_triggered = True
                     break
             self._current_symbol = None
-            time.sleep(interval)
+            if not work_done:
+                time.sleep(interval)
             if resync_triggered:
                 continue
 

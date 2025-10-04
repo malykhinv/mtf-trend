@@ -105,6 +105,19 @@ class StreamBuffer(Generic[T]):
                     self._last_heartbeat = now
                     return StreamEvent.heartbeat()
 
+    def drain_pending(self) -> list[StreamEvent[T]]:
+        events: list[StreamEvent[T]] = []
+        while True:
+            try:
+                event = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if event.type == StreamEventType.STOP:
+                self._stop.set()
+                break
+            events.append(event)
+        return events
+
     def _drain(self) -> None:
         while True:
             try:
