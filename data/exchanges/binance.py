@@ -59,7 +59,7 @@ class BinanceExchangeData:
         self,
         symbol: str,
         loop_interval_ms: int = 100,
-        depth_limit: int = 200,
+        depth_limit: int = 500,
         rest_timeout: float = 5.0,
         rest_retries: int = 3,
         rest_retry_delay: float = 0.5,
