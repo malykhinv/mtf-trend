@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Iterable, Iterator, Optional, Sequence, Tuple, cast
 
 from config.config import CONFIG
+from config.models.balance_source import BalanceSource as ConfigBalanceSource
 from config.models.exchange_name import ExchangeName
 from config.secrets import SECRETS
 from config.timezone import CURRENT_TIMEZONE
@@ -76,6 +77,8 @@ class SymbolContext:
     best_ask: Optional[float] = None
     active: bool = False
     cycle_started: bool = False
+    balance: float = 0.0
+    balance_updated_at: Optional[datetime] = None
 
 
 class TradingAdapterRouter(TradingAdapter):
@@ -136,6 +139,9 @@ class Application:
         self._telegram_notifier = TelegramNotifier(send_message=self._send_telegram)
         self._contexts: Dict[str, SymbolContext] = {}
         self._trading_router = TradingAdapterRouter(self._contexts)
+        self._balance_source = self._map_balance_source(CONFIG.position.balance_source)
+        self._balance_refresh_interval = timedelta(hours=CONFIG.position.balance_refresh_h)
+        self._last_balance_refresh_at: Optional[datetime] = None
         self._subscription_manager = SubscriptionManager(
             subscribe=self._subscribe_symbol,
             unsubscribe=self._unsubscribe_symbol,
@@ -159,6 +165,7 @@ class Application:
         entry, exit_, move_stop = create_execution_handlers(
             self._trading_router,
             self._provide_filters,
+            self._provide_balance,
         )
         self._position_controller = PositionController(
             enter_position=entry,
@@ -221,6 +228,21 @@ class Application:
             raise ValueError(f"unknown symbol {symbol}")
         self._trading_router.set_current_symbol(symbol)
         return context.filters
+
+    @staticmethod
+    def _map_balance_source(source: ConfigBalanceSource) -> BalanceSource:
+        if source is ConfigBalanceSource.AVAILABLE_BALANCE:
+            return BalanceSource.AVAILABLE
+        if source is ConfigBalanceSource.WALLET_BALANCE:
+            return BalanceSource.WALLET
+        raise ValueError("unsupported balance source")
+
+    def _provide_balance(self, symbol: str) -> float:
+        symbol = symbol.upper()
+        context = self._contexts.get(symbol)
+        if context is None:
+            raise ValueError(f"unknown symbol {symbol}")
+        return context.balance
 
     def _subscribe_symbol(self, symbol: str) -> None:
         symbol = symbol.upper()
@@ -484,6 +506,7 @@ class Application:
             f"{account_timestamp:%H:%M:%S} Торговый адаптер инициализирован для {symbol}.",
             account_timestamp,
         )
+        self._update_context_balance(context)
         self._initialize_order_book(context)
         return context
 
@@ -514,11 +537,40 @@ class Application:
             timestamp,
         )
 
+    def _update_context_balance(self, context: SymbolContext) -> None:
+        balance = context.trading_adapter.get_balance(self._balance_source)
+        timestamp = get_current_time()
+        context.balance = balance
+        context.balance_updated_at = timestamp
+        self._event_logger.log(
+            f"{timestamp:%H:%M:%S} Баланс {context.symbol} обновлён: {balance:g}.",
+            timestamp,
+        )
+
+    def _refresh_balances(self, *, force: bool = False) -> None:
+        if not self._contexts:
+            return
+        now = get_current_time()
+        if (
+            not force
+            and self._balance_refresh_interval.total_seconds() > 0.0
+            and self._last_balance_refresh_at is not None
+            and now - self._last_balance_refresh_at < self._balance_refresh_interval
+        ):
+            return
+        for context in self._contexts.values():
+            if not context.active:
+                continue
+            self._update_context_balance(context)
+        self._last_balance_refresh_at = now
+
     def run(self) -> None:
         interval = CONFIG.general.loop_interval_ms / 1000.0
         self._refresh_symbol_scan(force=True)
+        self._refresh_balances(force=True)
         while True:
             self._refresh_symbol_scan()
+            self._refresh_balances()
             resync_triggered = False
             for context in self._iter_active_contexts():
                 self._current_symbol = context.symbol
