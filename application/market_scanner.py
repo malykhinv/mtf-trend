@@ -106,17 +106,19 @@ class MarketScanner:
         self, entries: Iterable[Tuple[object, object]]
     ) -> Tuple[Tuple[str, TradingProfile], ...]:
         threshold = self._resolve_threshold()
+        minutes_per_day = 1440.0
         pairs: list[Tuple[str, float]] = []
         for raw_symbol, raw_turnover in entries:
             symbol = str(raw_symbol or "").upper()
             if not symbol.endswith("USDT"):
                 continue
             try:
-                turnover = float(raw_turnover or 0.0)
+                turnover_24h = float(raw_turnover or 0.0)
             except (TypeError, ValueError):
                 continue
-            if turnover >= threshold:
-                pairs.append((symbol, turnover))
+            turnover_per_minute = turnover_24h / minutes_per_day
+            if turnover_per_minute >= threshold:
+                pairs.append((symbol, turnover_per_minute))
         pairs.sort(key=lambda item: item[1], reverse=True)
         if self._profile is TradingProfile.AUTO:
             return tuple((symbol, self._classify_turnover(turnover)) for symbol, turnover in pairs)
