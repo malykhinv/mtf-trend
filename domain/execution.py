@@ -3,16 +3,16 @@ from __future__ import annotations
 from typing import Callable, Optional, Tuple
 
 from config.config import CONFIG
-from config.models import BalanceSource as ConfigBalanceSource
 from config.models import MarginMode as ConfigMarginMode
 from config.models import StopTrigger as ConfigStopTrigger
-from domain.models import BalanceSource, MarginMode, Side, Signal, StopTrigger, SymbolFilters, Wall
+from domain.models import MarginMode, Side, Signal, StopTrigger, SymbolFilters, Wall
 from domain.strategy.types import PositionEntryHandler, PositionExitHandler, StopMoveHandler
 from utils.mathx import ceil_to_step, compute_position_size, floor_to_step
 
 from trading_adapter import TradingAdapter
 
 SymbolFiltersProvider = Callable[[str], SymbolFilters]
+BalanceProvider = Callable[[str], float]
 
 
 def initialize_account(trading: TradingAdapter) -> None:
@@ -23,8 +23,8 @@ def initialize_account(trading: TradingAdapter) -> None:
 def create_execution_handlers(
     trading: TradingAdapter,
     filters_provider: SymbolFiltersProvider,
+    balance_provider: BalanceProvider,
 ) -> Tuple[PositionEntryHandler, PositionExitHandler, StopMoveHandler]:
-    balance_source: BalanceSource = _map_balance_source(CONFIG.position.balance_source)
     stop_trigger: StopTrigger = _map_stop_trigger(CONFIG.position.stop_trigger)
     current_symbol: Optional[str] = None
     current_signal: Signal = Signal.NONE
@@ -35,7 +35,7 @@ def create_execution_handlers(
         filters: SymbolFilters = filters_provider(symbol)
         quantity_step: float = filters.quantity_step_size
         price: float = _estimate_entry_price(signal, wall.price, filters)
-        balance: float = trading.get_balance(balance_source)
+        balance: float = balance_provider(symbol)
         quantity: float = compute_position_size(
             balance,
             CONFIG.position.position_fraction,
@@ -157,14 +157,6 @@ def _signal_to_exit_side(signal: Signal) -> Side:
     if signal is Signal.SHORT:
         return Side.BID
     raise ValueError("unsupported signal")
-
-
-def _map_balance_source(source: ConfigBalanceSource) -> BalanceSource:
-    if source is ConfigBalanceSource.AVAILABLE_BALANCE:
-        return BalanceSource.AVAILABLE
-    if source is ConfigBalanceSource.WALLET_BALANCE:
-        return BalanceSource.WALLET
-    raise ValueError("unsupported balance source")
 
 
 def _map_margin_mode(source: ConfigMarginMode) -> MarginMode:
