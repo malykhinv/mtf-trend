@@ -7,7 +7,7 @@ from config.models import MarginMode as ConfigMarginMode
 from config.models import StopTrigger as ConfigStopTrigger
 from domain.models import MarginMode, Side, Signal, StopTrigger, SymbolFilters, Wall
 from domain.strategy.types import PositionEntryHandler, PositionExitHandler, StopMoveHandler
-from trading_adapter import TradingAdapter
+from domain.trading_adapter import TradingAdapter
 from utils.mathx import ceil_to_step, compute_position_size, floor_to_step
 
 SymbolFiltersProvider = Callable[[str], SymbolFilters]

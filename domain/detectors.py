@@ -4,14 +4,14 @@ from datetime import datetime, timedelta
 from statistics import median
 from typing import Iterable, Optional, Sequence, Tuple
 
-from book import OrderBook
 from config.config import CONFIG
 from config.models.trading_profile import TradingProfile
 from config.models.wall_absolute_thresholds import WallAbsoluteThresholds
-from models.enums import Exchange, Side
-from models.order_book import OrderBookLevel
-from models.pressure import Pressure
-from models.wall import Wall
+from domain.book import OrderBook
+from domain.models.enums import Exchange, Side
+from domain.models.order_book import OrderBookLevel
+from domain.models.pressure import Pressure
+from domain.models.wall import Wall
 from utils import compute_odr_weight, get_current_time, median_filter_of_three
 
 

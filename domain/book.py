@@ -8,9 +8,9 @@ from statistics import median
 from typing import Deque, Iterable, Iterator, List, Optional, Tuple
 
 from config.config import CONFIG
-from models.enums import Side
-from models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
-from models.timezone import ensure_current_timezone
+from domain.models.enums import Side
+from domain.models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
+from domain.models.timezone import ensure_current_timezone
 from utils import get_current_time
 
 
