@@ -35,9 +35,9 @@ class MarketScanner:
         self._retry_delay = max(0.0, float(retry_delay))
         self._retry_backoff = max(1.0, float(retry_backoff))
         self._log = log
-        self._last_symbols: Tuple[str, ...] = ()
+        self._last_symbols: Tuple[Tuple[str, TradingProfile], ...] = ()
 
-    def scan(self) -> Tuple[str, ...]:
+    def scan(self) -> Tuple[Tuple[str, TradingProfile], ...]:
         try:
             if self._exchange is ExchangeName.BINANCE:
                 symbols = self._scan_binance()
@@ -53,14 +53,14 @@ class MarketScanner:
                 self._log(f"ошибка сканера: {exc}")
             return self._last_symbols
 
-    def _scan_binance(self) -> Tuple[str, ...]:
+    def _scan_binance(self) -> Tuple[Tuple[str, TradingProfile], ...]:
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
         data = self._request_json(request)
         entries = ((item.get("symbol", ""), item.get("quoteVolume", "0")) for item in data)
         return self._filter_and_sort(entries)
 
-    def _scan_bybit(self) -> Tuple[str, ...]:
+    def _scan_bybit(self) -> Tuple[Tuple[str, TradingProfile], ...]:
         params = parse.urlencode({"category": "linear"})
         url = f"https://api.bybit.com/v5/market/tickers?{params}"
         request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
@@ -102,7 +102,9 @@ class MarketScanner:
                 retries_remaining -= 1
                 delay *= self._retry_backoff
 
-    def _filter_and_sort(self, entries: Iterable[Tuple[object, object]]) -> Tuple[str, ...]:
+    def _filter_and_sort(
+        self, entries: Iterable[Tuple[object, object]]
+    ) -> Tuple[Tuple[str, TradingProfile], ...]:
         threshold = self._resolve_threshold()
         pairs: list[Tuple[str, float]] = []
         for raw_symbol, raw_turnover in entries:
@@ -116,10 +118,14 @@ class MarketScanner:
             if turnover >= threshold:
                 pairs.append((symbol, turnover))
         pairs.sort(key=lambda item: item[1], reverse=True)
-        return tuple(symbol for symbol, _ in pairs)
+        if self._profile is TradingProfile.AUTO:
+            return tuple((symbol, self._classify_turnover(turnover)) for symbol, turnover in pairs)
+        return tuple((symbol, self._profile) for symbol, _ in pairs)
 
     def _resolve_threshold(self) -> float:
         thresholds = self._thresholds
+        if self._profile is TradingProfile.AUTO:
+            return float(min(thresholds.top_usd, thresholds.alt_usd, thresholds.listing_usd))
         if self._profile is TradingProfile.TOP:
             return float(thresholds.top_usd)
         if self._profile is TradingProfile.ALT:
@@ -127,6 +133,14 @@ class MarketScanner:
         if self._profile is TradingProfile.LISTING:
             return float(thresholds.listing_usd)
         return float(thresholds.top_usd)
+
+    def _classify_turnover(self, turnover: float) -> TradingProfile:
+        thresholds = self._thresholds
+        if turnover >= float(thresholds.top_usd):
+            return TradingProfile.TOP
+        if turnover >= float(thresholds.alt_usd):
+            return TradingProfile.ALT
+        return TradingProfile.LISTING
 
 
 __all__ = ["MarketScanner"]

@@ -66,8 +66,12 @@ def check_if_is_large_wall(
     return True
 
 
-def check_if_has_near_wall(book: OrderBook, side_stop: Side) -> Optional[Wall]:
-    abs_threshold: float = _resolve_absolute_threshold(CONFIG.general.profile)
+def check_if_has_near_wall(
+    book: OrderBook,
+    side_stop: Side,
+    profile: TradingProfile,
+) -> Optional[Wall]:
+    abs_threshold: float = _resolve_absolute_threshold(profile)
     level: Optional[OrderBookLevel] = book.find_nearest_wall(
         side=side_stop,
         min_notional=abs_threshold,
@@ -75,7 +79,7 @@ def check_if_has_near_wall(book: OrderBook, side_stop: Side) -> Optional[Wall]:
     if level is None:
         return None
     now: datetime = get_current_time()
-    persist_s: float = _resolve_persist(CONFIG.general.profile)
+    persist_s: float = _resolve_persist(profile)
     median_qty: float = _compute_median_quantity(book.iter_recent_band(side_stop))
     if not check_if_is_large_wall(
         level,
@@ -98,9 +102,14 @@ def check_if_has_near_wall(book: OrderBook, side_stop: Side) -> Optional[Wall]:
     )
 
 
-def check_if_has_opposite_wall(book: OrderBook, side_move: Side, our_wall: Wall) -> bool:
+def check_if_has_opposite_wall(
+    book: OrderBook,
+    side_move: Side,
+    our_wall: Wall,
+    profile: TradingProfile,
+) -> bool:
     opposite_side: Side = Side.ASK if side_move is Side.BID else Side.BID
-    abs_threshold: float = _resolve_absolute_threshold(CONFIG.general.profile)
+    abs_threshold: float = _resolve_absolute_threshold(profile)
     level: Optional[OrderBookLevel] = book.find_nearest_wall(
         side=opposite_side,
         min_notional=abs_threshold,
@@ -108,7 +117,7 @@ def check_if_has_opposite_wall(book: OrderBook, side_move: Side, our_wall: Wall)
     if level is None:
         return False
     now: datetime = get_current_time()
-    persist_s: float = _resolve_persist(CONFIG.general.profile)
+    persist_s: float = _resolve_persist(profile)
     median_qty: float = _compute_median_quantity(book.iter_recent_band(opposite_side))
     if not check_if_is_large_wall(
         level,
