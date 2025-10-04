@@ -83,7 +83,7 @@ class Strategy:
     def complete_resync(self, timestamp: datetime) -> StrategyState:
         if self._state is not StrategyState.RESYNC:
             return self._state
-        self._logger.log(f"{timestamp:%H:%M:%S} Ресинк завершён.", timestamp)
+        self._logger.log("Ресинк завершён.", timestamp)
         self._state = self._previous_state
         self._resync_reason = None
         return self._state
@@ -136,7 +136,7 @@ class Strategy:
                     self._focused_wall = wall
         if self._should_defocus(timestamp):
             self._logger.log(
-                f"{timestamp:%H:%M:%S} Аптик {symbol} потерян: таймаут сигнала.",
+                f"Аптик {symbol} потерян: таймаут сигнала.",
                 timestamp,
             )
             self._focus.defocus(timestamp)
@@ -219,7 +219,7 @@ class Strategy:
         direction = "лонг" if signal is Signal.LONG else "шорт"
         self._logger.log(
             (
-                f"{timestamp:%H:%M:%S} Аптик {symbol} {direction}. "
+                f"Аптик {symbol} {direction}. "
                 f"Стена {wall.price:g} объём {wall.notional:g}. "
                 f"Всплеск объёма x{volume_ratio:.2f}."
             ),
@@ -275,10 +275,7 @@ class Strategy:
             blocked_until = self._safety.blocked_until()
             if blocked_until is not None:
                 self._logger.log(
-                    (
-                        f"{timestamp:%H:%M:%S} Вход в {symbol} заблокирован до "
-                        f"{blocked_until:%H:%M:%S}."
-                    ),
+                    f"Вход в {symbol} заблокирован до {blocked_until:%H:%M:%S}.",
                     timestamp,
                 )
             return
@@ -406,7 +403,7 @@ class Strategy:
         self._state = StrategyState.RESYNC
         self._resync_reason = reason
         self._logger.log(
-            f"{timestamp:%H:%M:%S} Ресинк книги. Причина: {reason.value}.", timestamp
+            f"Ресинк книги. Причина: {reason.value}.", timestamp
         )
         self._track_resync_summary(timestamp)
         self._safety.handle_resync(timestamp)
@@ -417,7 +414,7 @@ class Strategy:
         elapsed = timestamp - self._resync_summary_start
         if elapsed >= timedelta(hours=1):
             self._logger.log(
-                f"{timestamp:%H:%M:%S} Ресинков за час: {self._resync_summary_count}.",
+                f"Ресинков за час: {self._resync_summary_count}.",
                 timestamp,
             )
             self._resync_summary_start = timestamp

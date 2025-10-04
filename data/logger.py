@@ -27,9 +27,18 @@ def create_text_log_sink(stream: TextIO | None = None) -> LogSink:
 def create_log_writer(sink: LogSink | None = None) -> LogLineWriter:
     text_sink = sink or _print_sink
 
+    def _strip_prefix(message: str) -> str:
+        stripped = message.strip()
+        if len(stripped) >= 9 and stripped[2] == ":" and stripped[5] == ":":
+            if stripped[:2].isdigit() and stripped[3:5].isdigit() and stripped[6:8].isdigit():
+                if stripped[8] == " ":
+                    return stripped[9:]
+        return stripped
+
     def _write(entry: LogLine) -> None:
         timestamp = entry.timestamp.astimezone()
-        text_sink(f"{timestamp:%H:%M:%S} {entry.message}")
+        message = _strip_prefix(entry.message)
+        text_sink(f"{timestamp:%H:%M:%S} {message}")
 
     return _write
 

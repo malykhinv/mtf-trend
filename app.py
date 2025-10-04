@@ -356,7 +356,7 @@ class Application:
         timestamp = snapshot.received_at
         self._event_logger.log(
             (
-                f"{timestamp:%H:%M:%S} Снимок стакана {context.symbol} применён. "
+                f"Снимок стакана {context.symbol} применён. "
                 f"ID {snapshot.last_update_id}."
             ),
             timestamp,
@@ -403,7 +403,7 @@ class Application:
             details = f" {event.details}." if event.details else ""
             self._event_logger.log(
                 (
-                    f"{timestamp:%H:%M:%S} Поток стакана {context.symbol} требует ресинк: "
+                    f"Поток стакана {context.symbol} требует ресинк: "
                     f"{event.reason.value}.{details}"
                 ),
                 timestamp,
@@ -533,7 +533,7 @@ class Application:
             return
         timestamp = get_current_time()
         self._event_logger.log(
-            f"{timestamp:%H:%M:%S} Запущен цикл обработки для {context.symbol}.",
+            f"Запущен цикл обработки для {context.symbol}.",
             timestamp,
         )
         context.cycle_started = True
@@ -559,13 +559,13 @@ class Application:
         )
         startup_timestamp = get_current_time()
         self._event_logger.log(
-            f"{startup_timestamp:%H:%M:%S} Старт бота для {symbol} на {self._exchange.value}.",
+            f"Старт бота для {symbol} на {self._exchange.value}.",
             startup_timestamp,
         )
         filters_timestamp = get_current_time()
         self._event_logger.log(
             (
-                f"{filters_timestamp:%H:%M:%S} Получены фильтры {symbol}: "
+                f"Получены фильтры {symbol}: "
                 f"шаг цены {context.filters.price_tick_size:g}."
             ),
             filters_timestamp,
@@ -573,7 +573,7 @@ class Application:
         initialize_account(context.trading_adapter)
         account_timestamp = get_current_time()
         self._event_logger.log(
-            f"{account_timestamp:%H:%M:%S} Торговый адаптер инициализирован для {symbol}.",
+            f"Торговый адаптер инициализирован для {symbol}.",
             account_timestamp,
         )
         self._update_context_balance(context)
@@ -603,7 +603,7 @@ class Application:
     def _log_scanner_message(self, message: str) -> None:
         timestamp = get_current_time()
         self._event_logger.log(
-            f"{timestamp:%H:%M:%S} Сканер рынка: {message}",
+            f"Сканер рынка: {message}",
             timestamp,
         )
 
@@ -613,7 +613,7 @@ class Application:
         context.balance = balance
         context.balance_updated_at = timestamp
         self._event_logger.log(
-            f"{timestamp:%H:%M:%S} Баланс {context.symbol} обновлён: {balance:g}.",
+            f"Баланс {context.symbol} обновлён: {balance:g}.",
             timestamp,
         )
 

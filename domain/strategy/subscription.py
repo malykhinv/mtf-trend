@@ -20,10 +20,10 @@ class SubscriptionManager:
         removals = self._compute_removals(symbols)
         for symbol in additions:
             self.subscribe(symbol)
-            self.logger.log(f"{timestamp:%H:%M:%S} Подписка на {symbol}.", timestamp)
+            self.logger.log(f"Подписка на {symbol}.", timestamp)
         for symbol in removals:
             self.unsubscribe(symbol)
-            self.logger.log(f"{timestamp:%H:%M:%S} Отписка от {symbol}.", timestamp)
+            self.logger.log(f"Отписка от {symbol}.", timestamp)
         self._active = tuple(symbols)
 
     def _compute_additions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:

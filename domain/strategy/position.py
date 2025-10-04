@@ -20,21 +20,17 @@ class PositionController:
         self.enter_position(symbol, signal, wall)
         direction = "лонг" if signal is Signal.LONG else "шорт"
         self.logger.log(
-            f"{timestamp:%H:%M:%S} Вход {direction} {symbol} по стене {wall.price:g}.",
+            f"Вход {direction} {symbol} по стене {wall.price:g}.",
             timestamp,
         )
 
     def exit(self, symbol: str, reason: str, timestamp: datetime) -> None:
         self.exit_position(symbol, reason)
-        self.logger.log(
-            f"{timestamp:%H:%M:%S} Выход {symbol}. Причина: {reason}.", timestamp
-        )
+        self.logger.log(f"Выход {symbol}. Причина: {reason}.", timestamp)
 
     def adjust_stop(self, symbol: str, price: float, timestamp: datetime) -> None:
         self.move_stop(symbol, price)
-        self.logger.log(
-            f"{timestamp:%H:%M:%S} Перенос стопа {symbol} на {price:g}.", timestamp
-        )
+        self.logger.log(f"Перенос стопа {symbol} на {price:g}.", timestamp)
 
 
 __all__ = ["PositionController"]
