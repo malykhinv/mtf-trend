@@ -3,7 +3,11 @@ from __future__ import annotations
 import os
 from typing import Final
 
+from config.env_loader import load_env
+
 from config.models.secrets import Secrets
+
+load_env()
 
 
 def _require_env(name: str) -> str:
