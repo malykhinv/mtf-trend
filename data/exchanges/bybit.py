@@ -547,6 +547,7 @@ class BybitExchangeData:
             name="book_ticker",
             topic=topic,
             parser=self._parse_ticker,
+            drop_oldest_on_overflow=True,
         )
 
     def stream_trades(self) -> StreamSubscription[Trade]:
@@ -570,6 +571,8 @@ class BybitExchangeData:
         name: str,
         topic: str,
         parser: Callable[[dict[str, Any]], Iterable[Any]],
+        *,
+        drop_oldest_on_overflow: bool = False,
     ) -> StreamSubscription[Any]:
         silence_timeout = self._silence_timeout
         heartbeat_interval = self._heartbeat_interval
@@ -579,6 +582,7 @@ class BybitExchangeData:
             logger=self._logger,
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
+            drop_oldest_on_overflow=drop_oldest_on_overflow,
         )
         subscribe = json.dumps({"op": "subscribe", "args": [topic]})
 

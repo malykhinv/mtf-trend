@@ -502,6 +502,7 @@ class BinanceExchangeData:
             name="book_ticker",
             url=f"{self._endpoints.ws_base}/{self.symbol.lower()}@bookTicker",
             parser=self._parse_book_ticker,
+            drop_oldest_on_overflow=True,
         )
 
     def stream_trades(self) -> StreamSubscription[Trade]:
@@ -523,6 +524,8 @@ class BinanceExchangeData:
         name: str,
         url: str,
         parser: Callable[[dict[str, Any]], Iterable[Any]],
+        *,
+        drop_oldest_on_overflow: bool = False,
     ) -> StreamSubscription[Any]:
         silence_timeout = self._silence_timeout
         heartbeat_interval = self._heartbeat_interval
@@ -532,6 +535,7 @@ class BinanceExchangeData:
             logger=self._logger,
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
+            drop_oldest_on_overflow=drop_oldest_on_overflow,
         )
 
         worker = threading.Thread(
