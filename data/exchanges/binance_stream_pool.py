@@ -11,6 +11,9 @@ from websocket import WebSocketTimeoutException, create_connection
 from .base import ExchangeLogger, ResyncReason, StreamBuffer
 
 
+MAX_STREAMS_PER_CONNECTION = 200
+
+
 @dataclass(slots=True)
 class _Registration:
     symbol: str
@@ -29,12 +32,14 @@ class _CombinedStreamWorker:
         ws_timeout: float,
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]] = None,
+        max_streams: int,
     ) -> None:
         self._name = name
         self._combined_base = combined_base
         self._stream_suffix = stream_suffix
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
+        self._max_streams = max_streams
         self._lock = threading.Lock()
         self._update_event = threading.Event()
         self._stop_event = threading.Event()
@@ -72,8 +77,25 @@ class _CombinedStreamWorker:
         with self._lock:
             if symbol in self._registrations:
                 raise ValueError(f"Stream {self._name} already registered for {symbol}")
+            if len(self._registrations) >= self._max_streams:
+                raise ValueError(
+                    f"Stream {self._name} достиг предела в {self._max_streams} символов"
+                )
             self._registrations[symbol] = registration
+            current = len(self._registrations)
             self._update_event.set()
+
+        self._logger.log(
+            (
+                "Binance {stream} stream: добавлен символ {symbol}, "
+                "активных {count}/{limit}"
+            ).format(
+                stream=self._name,
+                symbol=symbol,
+                count=current,
+                limit=self._max_streams,
+            )
+        )
 
         released = threading.Event()
 
@@ -82,10 +104,39 @@ class _CombinedStreamWorker:
                 return
             with self._lock:
                 self._registrations.pop(symbol, None)
+                current = len(self._registrations)
                 self._update_event.set()
             released.set()
+            self._logger.log(
+                (
+                    "Binance {stream} stream: удален символ {symbol}, "
+                    "активных {count}/{limit}"
+                ).format(
+                    stream=self._name,
+                    symbol=symbol,
+                    count=current,
+                    limit=self._max_streams,
+                )
+            )
 
         return release
+
+    def has_capacity(self) -> bool:
+        with self._lock:
+            return len(self._registrations) < self._max_streams and not self._stop_event.is_set()
+
+    def is_empty(self) -> bool:
+        with self._lock:
+            return not self._registrations
+
+    def stop(self) -> None:
+        if self._stop_event.is_set():
+            return
+        self._logger.log(
+            f"Binance {self._name} stream: остановка, активных символов нет"
+        )
+        self._stop_event.set()
+        self._update_event.set()
 
     def _current_symbols(self) -> tuple[str, ...]:
         with self._lock:
@@ -163,7 +214,15 @@ class _CombinedStreamWorker:
                 )
                 ws.settimeout(self._ws_timeout)
                 self._logger.log(
-                    f"Binance {self._name} stream: открыто соединение для {len(symbols)} символов"
+                    (
+                        "Binance {stream} stream: открыто соединение для {count} "
+                        "символов из {limit}: {symbols}"
+                    ).format(
+                        stream=self._name,
+                        count=len(symbols),
+                        limit=self._max_streams,
+                        symbols=", ".join(symbols),
+                    )
                 )
                 while not self._stop_event.is_set():
                     if self._update_event.is_set():
@@ -217,6 +276,74 @@ class _CombinedStreamWorker:
                         pass
 
 
+class _StreamWorkerPool:
+    def __init__(
+        self,
+        *,
+        name: str,
+        combined_base: str,
+        stream_suffix: str,
+        ws_timeout: float,
+        reconnect_delay: float,
+        log_writer: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        self._name = name
+        self._combined_base = combined_base
+        self._stream_suffix = stream_suffix
+        self._ws_timeout = ws_timeout
+        self._reconnect_delay = reconnect_delay
+        self._log_writer = log_writer
+        self._lock = threading.Lock()
+        self._workers: list[_CombinedStreamWorker] = []
+        self._counter = 0
+
+    def _create_worker(self) -> _CombinedStreamWorker:
+        self._counter += 1
+        worker_name = f"{self._name}#{self._counter}"
+        worker = _CombinedStreamWorker(
+            worker_name,
+            self._combined_base,
+            self._stream_suffix,
+            ws_timeout=self._ws_timeout,
+            reconnect_delay=self._reconnect_delay,
+            log_writer=self._log_writer,
+            max_streams=MAX_STREAMS_PER_CONNECTION,
+        )
+        self._workers.append(worker)
+        return worker
+
+    def _acquire_worker(self) -> _CombinedStreamWorker:
+        for worker in self._workers:
+            if worker.has_capacity():
+                return worker
+        return self._create_worker()
+
+    def register(
+        self,
+        symbol: str,
+        buffer: StreamBuffer[Any],
+        on_message: Callable[[dict[str, Any]], None],
+        on_error: Optional[Callable[[ResyncReason, str], None]] = None,
+    ) -> Callable[[], None]:
+        with self._lock:
+            worker = self._acquire_worker()
+
+        release = worker.register(symbol, buffer, on_message, on_error)
+        released = threading.Event()
+
+        def _release_wrapper() -> None:
+            if released.is_set():
+                return
+            release()
+            with self._lock:
+                if worker.is_empty() and worker in self._workers:
+                    self._workers.remove(worker)
+                    worker.stop()
+            released.set()
+
+        return _release_wrapper
+
+
 class BinanceStreamPool:
     def __init__(
         self,
@@ -232,26 +359,26 @@ class BinanceStreamPool:
         if base.endswith("/"):
             base = base[:-1]
         self._combined_base = f"{base}/stream?streams="
-        self._depth_worker = _CombinedStreamWorker(
-            "depth",
-            self._combined_base,
-            "depth@100ms",
+        self._depth_worker = _StreamWorkerPool(
+            name="depth",
+            combined_base=self._combined_base,
+            stream_suffix="depth@100ms",
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
             log_writer=log_writer,
         )
-        self._trades_worker = _CombinedStreamWorker(
-            "trades",
-            self._combined_base,
-            "aggTrade",
+        self._trades_worker = _StreamWorkerPool(
+            name="trades",
+            combined_base=self._combined_base,
+            stream_suffix="aggTrade",
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
             log_writer=log_writer,
         )
-        self._book_worker = _CombinedStreamWorker(
-            "book_ticker",
-            self._combined_base,
-            "bookTicker",
+        self._book_worker = _StreamWorkerPool(
+            name="book_ticker",
+            combined_base=self._combined_base,
+            stream_suffix="bookTicker",
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
             log_writer=log_writer,
