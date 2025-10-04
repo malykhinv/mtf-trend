@@ -1,4 +1,5 @@
-from typing import Iterator, Protocol
+from datetime import datetime
+from typing import Iterator, Optional, Protocol
 
 from domain.models import Candle, OrderBookSnapshot, SymbolFilters, Trade
 
@@ -24,6 +25,9 @@ class IExchangeData(Protocol):
         ...
 
     def stream_kline_1m(self) -> Iterator[StreamEvent[Candle]]:
+        ...
+
+    def fetch_next_funding_time(self) -> Optional[datetime]:
         ...
 
 

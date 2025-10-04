@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Iterable, Iterator, Optional, Protocol
 from urllib import parse
 from urllib.error import HTTPError, URLError
@@ -167,6 +167,27 @@ class BinanceExchangeData:
         with self._lock:
             self._depth_last_update = last_update_id
         return snapshot
+
+    def fetch_next_funding_time(self) -> Optional[datetime]:
+        response = self._rest_get(
+            "/fapi/v1/fundingRate",
+            {"symbol": self.symbol, "limit": 1},
+        )
+        if not response:
+            return None
+        entry = response[0]
+        funding_time_raw = entry.get("fundingTime")
+        if funding_time_raw is None:
+            return None
+        last_funding = from_exchange_timestamp(funding_time_raw)
+        interval = timedelta(hours=8)
+        if interval <= timedelta(0):
+            return None
+        next_funding = last_funding + interval
+        now = get_current_time()
+        while next_funding <= now:
+            next_funding += interval
+        return next_funding
 
     def stream_depth(self) -> Iterator[StreamEvent[DepthStreamData]]:
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(

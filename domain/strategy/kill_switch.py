@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Deque, Optional
 
 from .event_logger import EventLogger
+from utils import get_current_time
 
 
 @dataclass
@@ -22,17 +23,24 @@ class KillSwitch:
     _stop_events: Deque[datetime] = field(default_factory=deque)
     _equity: float = 1.0
     _peak_equity: float = 1.0
+    _funding_event_at: Optional[datetime] = None
+    _block_reason: Optional[str] = None
 
     def is_blocked(self, timestamp: datetime) -> bool:
         if self._block_until is None:
             return False
         if timestamp >= self._block_until:
             self._block_until = None
+            self._block_reason = None
+            self._funding_event_at = None
             return False
         return True
 
     def blocked_until(self) -> Optional[datetime]:
         return self._block_until
+
+    def block_reason(self) -> Optional[str]:
+        return self._block_reason
 
     def record_entry(self, timestamp: datetime) -> None:
         self._purge_stops(timestamp)
@@ -53,7 +61,42 @@ class KillSwitch:
         if self._block_until is None or block_until > self._block_until:
             self._block_until = block_until
         self._last_block_at = timestamp
+        self._block_reason = "ожидание после ресинка"
+        self._funding_event_at = None
         self.logger.log("Блокировка торгов: ожидание после ресинка.", timestamp)
+
+    def handle_funding(self, funding_time: datetime) -> None:
+        if self.funding_block <= timedelta(0):
+            return
+        now = get_current_time()
+        start = funding_time - self.funding_block
+        end = funding_time + self.funding_block
+        if now < start or now > end:
+            return
+        if (
+            self._funding_event_at == funding_time
+            and self._block_until is not None
+            and self._block_until >= end
+        ):
+            return
+        if self._block_until is None or self._block_until < end:
+            self._block_until = end
+            update_reason = True
+        else:
+            update_reason = self._block_reason in (None, "окно фандинга")
+        self._last_block_at = now
+        self._funding_event_at = funding_time
+        if update_reason:
+            self._block_reason = "окно фандинга"
+        funding_str = funding_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+        release = (self._block_until or end).strftime("%Y-%m-%d %H:%M:%S %Z")
+        self.logger.log(
+            (
+                "Блокировка торгов: окно фандинга."
+                f" Фандинг в {funding_str}, блокировка до {release}."
+            ),
+            now,
+        )
 
     def _purge_stops(self, timestamp: datetime) -> None:
         if self.stop_interval <= timedelta(0):
@@ -84,6 +127,8 @@ class KillSwitch:
         if self._block_until is None or block_until > self._block_until:
             self._block_until = block_until
         self._last_block_at = timestamp
+        self._block_reason = reason
+        self._funding_event_at = None
         self.logger.log(f"Блокировка торгов: {reason}.", timestamp)
 
 

@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.client import RemoteDisconnected
 from typing import (
     Any,
@@ -226,6 +226,30 @@ class BybitExchangeData:
         with self._lock:
             self._depth_last_seq = seq
         return snapshot
+
+    def fetch_next_funding_time(self) -> Optional[datetime]:
+        response = self._rest_get(
+            "/v5/market/funding/history",
+            {"category": "linear", "symbol": self.symbol, "limit": 1},
+        )
+        result = response.get("result") if isinstance(response, dict) else None
+        records = [] if result is None else result.get("list") or []
+        if not records:
+            return None
+        entry = records[0]
+        next_funding_raw = entry.get("nextFundingTime") or entry.get("fundingRateTimestamp")
+        if next_funding_raw is None:
+            return None
+        candidate = from_exchange_timestamp(next_funding_raw)
+        interval = timedelta(hours=8)
+        if interval <= timedelta(0):
+            return None
+        now = get_current_time()
+        if candidate <= now:
+            candidate += interval
+            while candidate <= now:
+                candidate += interval
+        return candidate
 
     def stream_depth(self) -> Iterator[StreamEvent[DepthStreamData]]:
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(

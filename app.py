@@ -114,6 +114,9 @@ class SymbolContext:
     ticker_stream: Iterator[StreamEvent[BestBidAsk]]
     filters: SymbolFilters
     trading_adapter: TradingAdapter
+    next_funding_at: Optional[datetime] = None
+    next_funding_updated_at: Optional[datetime] = None
+    funding_block_logged: bool = False
     last_update_id: Optional[int] = None
     last_trade_price: Optional[float] = None
     best_bid: Optional[float] = None
@@ -231,6 +234,8 @@ class Application:
             max_drawdown=ks_settings.max_drawdown_frac,
             position_fraction=CONFIG.position.position_fraction,
         )
+        self._funding_block_window = timedelta(seconds=ks_settings.funding_block_s)
+        self._funding_refresh_interval = timedelta(minutes=5)
         self._strategy = Strategy(
             subscriptions=self._subscription_manager,
             focus=self._focus_controller,
@@ -578,6 +583,7 @@ class Application:
         )
         self._update_context_balance(context)
         self._initialize_order_book(context)
+        self._refresh_context_funding(context, force=True)
         return context
 
     def _create_trading_adapter(self, symbol: str, filters: SymbolFilters) -> TradingAdapter:
@@ -617,6 +623,91 @@ class Application:
             timestamp,
         )
 
+    def _refresh_context_funding(
+        self,
+        context: SymbolContext,
+        *,
+        force: bool = False,
+    ) -> None:
+        now = get_current_time()
+        needs_refresh = force
+        if not needs_refresh:
+            if context.next_funding_updated_at is None:
+                needs_refresh = True
+            elif context.next_funding_at is None:
+                needs_refresh = (
+                    now - context.next_funding_updated_at
+                    >= self._funding_refresh_interval
+                )
+            else:
+                if now - context.next_funding_updated_at >= self._funding_refresh_interval:
+                    needs_refresh = True
+                elif now > context.next_funding_at + self._funding_block_window:
+                    needs_refresh = True
+        if not needs_refresh:
+            return
+        try:
+            next_funding = context.exchange_data.fetch_next_funding_time()
+        except Exception as exc:
+            self._event_logger.log(
+                f"Не удалось обновить время фандинга для {context.symbol}: {exc}",
+                now,
+            )
+            context.next_funding_updated_at = now
+            return
+        previous = context.next_funding_at
+        context.next_funding_at = next_funding
+        context.next_funding_updated_at = now
+        context.funding_block_logged = False
+        if next_funding is None:
+            if previous is not None:
+                self._event_logger.log(
+                    f"Следующее время фандинга для {context.symbol} недоступно.",
+                    now,
+                )
+            return
+        if previous is None or next_funding != previous:
+            localized = next_funding.astimezone(CURRENT_TIMEZONE)
+            self._event_logger.log(
+                (
+                    f"Следующее время фандинга для {context.symbol}: "
+                    f"{localized:%Y-%m-%d %H:%M:%S %Z}."
+                ),
+                now,
+            )
+
+    def _handle_funding_window(self, context: SymbolContext, timestamp: datetime) -> None:
+        window = self._funding_block_window
+        if window <= timedelta(0):
+            return
+        next_funding = context.next_funding_at
+        if next_funding is None:
+            if context.funding_block_logged:
+                context.funding_block_logged = False
+            return
+        start = next_funding - window
+        end = next_funding + window
+        if start <= timestamp <= end:
+            self._kill_switch.handle_funding(next_funding)
+            if not context.funding_block_logged:
+                blocked_until = self._kill_switch.blocked_until()
+                funding_local = next_funding.astimezone(CURRENT_TIMEZONE)
+                if blocked_until is not None:
+                    block_local = blocked_until.astimezone(CURRENT_TIMEZONE)
+                    message = (
+                        f"{context.symbol}: блокировка из-за фандинга до "
+                        f"{block_local:%H:%M:%S %Z}. Фандинг в {funding_local:%H:%M:%S %Z}."
+                    )
+                else:
+                    message = (
+                        f"{context.symbol}: блокировка из-за фандинга. "
+                        f"Фандинг в {funding_local:%H:%M:%S %Z}."
+                    )
+                self._event_logger.log(message, timestamp)
+                context.funding_block_logged = True
+        elif context.funding_block_logged and timestamp > end:
+            context.funding_block_logged = False
+
     def _refresh_balances(self, *, force: bool = False) -> None:
         if not self._contexts:
             return
@@ -645,6 +736,9 @@ class Application:
             for context in self._iter_active_contexts():
                 self._current_symbol = context.symbol
                 self._ensure_cycle_logged(context)
+                self._refresh_context_funding(context)
+                now = get_current_time()
+                self._handle_funding_window(context, now)
                 self._process_depth_stream(context)
                 self._process_trade_stream(context)
                 self._process_ticker_stream(context)
