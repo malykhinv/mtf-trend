@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, Iterable, Iterator, Optional, Sequence, Tuple, cast
+from collections import deque
+from typing import Deque, Dict, Iterable, Iterator, Optional, Sequence, Tuple, cast
 
 from config.config import CONFIG
 from config.models.balance_source import BalanceSource as ConfigBalanceSource
@@ -60,6 +61,47 @@ from application import FeedMonitor, GUARDS
 from application.market_scanner import MarketScanner
 from domain.trading_adapter import TradingAdapter
 
+class VolumeSpikeTracker:
+    def __init__(
+        self,
+        *,
+        window: timedelta = timedelta(seconds=30),
+        smoothing: float = 0.2,
+        min_samples: int = 20,
+    ) -> None:
+        self._window = window
+        self._smoothing = smoothing
+        self._min_samples = min_samples
+        self._entries: Deque[Tuple[datetime, float]] = deque()
+        self._total = 0.0
+        self._average = 0.0
+        self._samples = 0
+
+    def observe(self, timestamp: datetime, price: float, quantity: float) -> Tuple[float, float, float, bool]:
+        volume = abs(price * quantity)
+        self._entries.append((timestamp, volume))
+        self._total += volume
+        self._trim(timestamp)
+        current = max(self._total, 0.0)
+        baseline = self._average if self._average > 0.0 else current
+        ratio = current / baseline if baseline > 0.0 else 0.0
+        self._samples += 1
+        if self._samples == 1:
+            self._average = current
+        else:
+            alpha = self._smoothing
+            self._average = (1.0 - alpha) * self._average + alpha * current
+        ready = self._samples >= self._min_samples and self._average > 0.0
+        return current, self._average, ratio, ready
+
+    def _trim(self, now: datetime) -> None:
+        cutoff = now - self._window
+        while self._entries and self._entries[0][0] < cutoff:
+            _, volume = self._entries.popleft()
+            self._total -= volume
+        if self._total < 0.0:
+            self._total = 0.0
+
 
 @dataclass
 class SymbolContext:
@@ -81,6 +123,9 @@ class SymbolContext:
     balance: float = 0.0
     balance_updated_at: Optional[datetime] = None
     profile: TradingProfile = CONFIG.general.profile
+    volume_tracker: VolumeSpikeTracker = field(default_factory=VolumeSpikeTracker)
+    volume_ratio: float = 0.0
+    volume_spike: bool = False
 
 
 class TradingAdapterRouter(TradingAdapter):
@@ -371,6 +416,11 @@ class Application:
             trade = cast(Trade, event.data)
             if trade is not None:
                 context.last_trade_price = trade.price
+                _, _, ratio, ready = context.volume_tracker.observe(
+                    event.timestamp, trade.price, trade.quantity
+                )
+                context.volume_ratio = ratio
+                context.volume_spike = ready and ratio >= CONFIG.general.vol_spike_mult
 
     @staticmethod
     def _process_ticker_stream(context: SymbolContext) -> None:
@@ -442,6 +492,8 @@ class Application:
             opposite_wall_blocks=opposite_blocks,
             available_symbols=self._desired_symbols,
             feed_status=context.feed_monitor.snapshot(),
+            volume_ratio=context.volume_ratio,
+            volume_spike=context.volume_spike,
         )
 
     def _refresh_symbol_scan(self, timestamp: Optional[datetime] = None, *, force: bool = False) -> None:
