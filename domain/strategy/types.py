@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Callable
 
 from domain.models import LogLine, Signal, Wall
-
 from .resync import ResyncReason
 
 SubscriptionHandler = Callable[[str], None]

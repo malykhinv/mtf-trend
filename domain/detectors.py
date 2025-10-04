@@ -4,11 +4,10 @@ from datetime import datetime, timedelta
 from statistics import median
 from typing import Iterable, Optional, Sequence, Tuple
 
+from book import OrderBook
 from config.config import CONFIG
 from config.models.trading_profile import TradingProfile
 from config.models.wall_absolute_thresholds import WallAbsoluteThresholds
-
-from book import OrderBook
 from models.enums import Exchange, Side
 from models.order_book import OrderBookLevel
 from models.pressure import Pressure

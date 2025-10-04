@@ -5,8 +5,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Deque, Optional
 
-from .event_logger import EventLogger
 from utils import get_current_time
+from .event_logger import EventLogger
 
 
 @dataclass

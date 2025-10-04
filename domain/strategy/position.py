@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from domain.models import Signal, Wall
-
 from .event_logger import EventLogger
 from .types import PositionEntryHandler, PositionExitHandler, StopMoveHandler
 

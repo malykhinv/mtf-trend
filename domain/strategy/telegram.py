@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from domain.models import Signal
-
 from .types import TelegramHandler
 
 

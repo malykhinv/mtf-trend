@@ -1,7 +1,7 @@
 from typing import Callable, Optional
 
-from .resync_reason import ResyncReason
 from utils.timez import get_current_time
+from .resync_reason import ResyncReason
 
 
 class ExchangeLogger:

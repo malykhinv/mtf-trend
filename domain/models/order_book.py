@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Tuple
 
-from .timezone import ensure_current_timezone
 from .enums import Exchange
+from .timezone import ensure_current_timezone
 
 
 @dataclass(frozen=True, slots=True)

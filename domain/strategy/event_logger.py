@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from domain.models import LogLine
-
 from .types import LogWriter
 
 

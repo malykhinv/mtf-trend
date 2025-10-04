@@ -1,11 +1,10 @@
 from __future__ import annotations
+
 from datetime import datetime, timedelta
 from typing import Optional
 
 from config.config import CONFIG
-
 from domain.models import Pressure, Signal, Wall
-
 from .event_logger import EventLogger
 from .focus import FocusController
 from .kill_switch import KillSwitch

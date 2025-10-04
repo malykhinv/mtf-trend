@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import sys
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from collections import deque
 from typing import Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
 
+from application import FeedMonitor, GUARDS
+from application.market_scanner import MarketScanner
 from config.config import CONFIG
 from config.models.balance_source import BalanceSource as ConfigBalanceSource
 from config.models.exchange_name import ExchangeName
@@ -23,7 +25,6 @@ from data.exchanges import (
     DepthStreamData,
     IExchangeData,
     ResyncReason as StreamResyncReason,
-    StreamEvent,
     StreamEventType,
     StreamSubscription,
 )
@@ -57,10 +58,9 @@ from domain.strategy import (
 )
 from domain.strategy.resync import ResyncReason as StrategyResyncReason
 from domain.strategy.state import StrategyState
-from utils import get_current_time
-from application import FeedMonitor, GUARDS
-from application.market_scanner import MarketScanner
 from domain.trading_adapter import TradingAdapter
+from utils import get_current_time
+
 
 class VolumeSpikeTracker:
     def __init__(

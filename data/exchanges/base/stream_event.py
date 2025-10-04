@@ -2,9 +2,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Generic, Optional, TypeVar
 
+from utils.timez import get_current_time
 from .resync_reason import ResyncReason
 from .stream_event_type import StreamEventType
-from utils.timez import get_current_time
 
 T = TypeVar("T")
 

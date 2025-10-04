@@ -4,10 +4,10 @@ import json
 import socket
 import time
 from dataclasses import dataclass
+from http.client import RemoteDisconnected
 from typing import Optional
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from http.client import RemoteDisconnected
 
 from config.models import TelegramSettings
 from config.secrets import SECRETS

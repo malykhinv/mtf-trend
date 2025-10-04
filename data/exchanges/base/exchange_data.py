@@ -6,12 +6,10 @@ from threading import Thread
 from typing import Generic, Iterator, Optional, Protocol, TypeVar
 
 from domain.models import Candle, OrderBookSnapshot, SymbolFilters, Trade
-
 from .best_bid_ask import BestBidAsk
 from .depth_stream_data import DepthStreamData
 from .stream_buffer import StreamBuffer
 from .stream_event import StreamEvent
-
 
 T = TypeVar("T")
 

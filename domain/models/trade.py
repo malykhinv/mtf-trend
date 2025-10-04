@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from .timezone import ensure_current_timezone
 from .enums import Exchange, Side
+from .timezone import ensure_current_timezone
 
 
 @dataclass(frozen=True, slots=True)

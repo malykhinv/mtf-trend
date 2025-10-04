@@ -33,7 +33,7 @@ from domain.models import (
     SymbolFilters,
     Trade,
 )
-
+from utils.timez import from_exchange_timestamp, get_current_time
 from .base import (
     BestBidAsk,
     DepthStreamData,
@@ -43,7 +43,6 @@ from .base import (
     StreamEvent,
     StreamSubscription,
 )
-from utils.timez import from_exchange_timestamp, get_current_time
 
 
 @dataclass(slots=True)

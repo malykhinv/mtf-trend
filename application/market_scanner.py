@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import socket
 import time
+from http.client import RemoteDisconnected
 from typing import Callable, Iterable, Optional, Sequence, Tuple
 from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from http.client import RemoteDisconnected
 
 from config.models.exchange_name import ExchangeName
 from config.models.trading_profile import TradingProfile

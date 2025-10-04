@@ -6,11 +6,11 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from http.client import RemoteDisconnected
 from typing import Any, Callable, Iterable, Iterator, Optional, Protocol
 from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from http.client import RemoteDisconnected
 
 from domain.models import (
     Candle,
@@ -22,7 +22,7 @@ from domain.models import (
     SymbolFilters,
     Trade,
 )
-
+from utils.timez import from_exchange_timestamp, get_current_time
 from .base import (
     BestBidAsk,
     DepthStreamData,
@@ -32,7 +32,6 @@ from .base import (
     StreamEvent,
     StreamSubscription,
 )
-from utils.timez import from_exchange_timestamp, get_current_time
 
 
 @dataclass(slots=True)
