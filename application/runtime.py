@@ -34,10 +34,13 @@ class FeedMonitor:
     has_sequence_gap: bool = False
     has_silence_timeout: bool = False
     has_queue_overflow: bool = False
+    has_connection_loss: bool = False
 
     def flag(self, reason: StreamResyncReason) -> None:
         if reason is StreamResyncReason.SEQUENCE_GAP:
             self.has_sequence_gap = True
+        elif reason is StreamResyncReason.CONNECTION_LOST:
+            self.has_connection_loss = True
         elif reason is StreamResyncReason.QUEUE_OVERFLOW:
             self.has_queue_overflow = True
         else:
@@ -46,12 +49,14 @@ class FeedMonitor:
     def snapshot(self) -> FeedStatus:
         return FeedStatus(
             has_sequence_gap=self.has_sequence_gap,
+            has_connection_loss=self.has_connection_loss,
             has_silence_timeout=self.has_silence_timeout,
             has_queue_overflow=self.has_queue_overflow,
         )
 
     def clear(self) -> None:
         self.has_sequence_gap = False
+        self.has_connection_loss = False
         self.has_silence_timeout = False
         self.has_queue_overflow = False
 
