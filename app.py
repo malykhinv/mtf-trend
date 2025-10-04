@@ -477,13 +477,16 @@ class Application:
             events = [primary]
             events.extend(buffer.drain_pending())
         processed = False
+        latest_ticker: BestBidAsk | None = None
         for event in events:
             processed = True
             if event.type is StreamEventType.DATA:
                 ticker = cast(BestBidAsk, event.data)
                 if ticker is not None:
-                    context.best_bid = ticker.bid_price
-                    context.best_ask = ticker.ask_price
+                    latest_ticker = ticker
+        if latest_ticker is not None:
+            context.best_bid = latest_ticker.bid_price
+            context.best_ask = latest_ticker.ask_price
         return processed
 
     @staticmethod

@@ -21,6 +21,7 @@ class StreamBuffer(Generic[T]):
         silence_timeout: float,
         heartbeat_interval: Optional[float] = None,
         maxsize: int = 1024,
+        drop_oldest_on_overflow: bool = False,
     ) -> None:
         self._name = name
         self._logger = logger
@@ -29,6 +30,7 @@ class StreamBuffer(Generic[T]):
         self._heartbeat_interval = (
             heartbeat_interval if heartbeat_interval is not None else silence_timeout / 2
         )
+        self._drop_oldest_on_overflow = drop_oldest_on_overflow
         self._stop = Event()
         self._restart_event = Event()
         now = time.monotonic()
@@ -65,6 +67,17 @@ class StreamBuffer(Generic[T]):
         try:
             self._queue.put_nowait(event)
         except queue.Full:
+            if self._drop_oldest_on_overflow:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    pass
+                else:
+                    try:
+                        self._queue.put_nowait(event)
+                        return
+                    except queue.Full:
+                        pass
             self._logger.log_resync(
                 ResyncReason.QUEUE_OVERFLOW,
                 details=f"Стрим {self._name}: очередь переполнена",
