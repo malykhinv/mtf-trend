@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable, Iterable, Iterator, Optional, Protocol
 from urllib import parse
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from http.client import RemoteDisconnected
 
 from domain.models import (
     Candle,
@@ -54,6 +57,9 @@ class BinanceExchangeData:
         loop_interval_ms: int = 100,
         depth_limit: int = 200,
         rest_timeout: float = 5.0,
+        rest_retries: int = 3,
+        rest_retry_delay: float = 0.5,
+        rest_retry_backoff: float = 2.0,
         ws_timeout: float = 10.0,
         reconnect_delay: float = 1.0,
         log_writer: Optional[Callable[[str], None]] = None,
@@ -64,6 +70,9 @@ class BinanceExchangeData:
         self.symbol = symbol.upper()
         self._endpoints = endpoints or BinanceEndpoints()
         self._rest_timeout = rest_timeout
+        self._rest_retries = max(0, int(rest_retries))
+        self._rest_retry_delay = max(0.0, float(rest_retry_delay))
+        self._rest_retry_backoff = max(1.0, float(rest_retry_backoff))
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
         self._depth_limit = depth_limit
@@ -82,9 +91,31 @@ class BinanceExchangeData:
         if query:
             url = f"{url}?{query}"
         req = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
-        with urlopen(req, timeout=self._rest_timeout) as resp:
-            payload = resp.read().decode("utf-8")
-        return json.loads(payload)
+        return self._execute_rest_request(req)
+
+    def _execute_rest_request(self, request: Request) -> Any:
+        retries_remaining = self._rest_retries
+        delay = self._rest_retry_delay
+        while True:
+            try:
+                with urlopen(request, timeout=self._rest_timeout) as resp:
+                    payload = resp.read().decode("utf-8")
+                return json.loads(payload)
+            except HTTPError:
+                raise
+            except (
+                URLError,
+                RemoteDisconnected,
+                TimeoutError,
+                socket.timeout,
+                ConnectionError,
+            ):
+                if retries_remaining <= 0:
+                    raise
+                if delay > 0.0:
+                    time.sleep(delay)
+                retries_remaining -= 1
+                delay *= self._rest_retry_backoff
 
     def fetch_symbol_filters(self) -> SymbolFilters:
         data = self._rest_get("/fapi/v1/exchangeInfo", {"symbol": self.symbol})

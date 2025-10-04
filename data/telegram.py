@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import socket
+import time
 from dataclasses import dataclass
 from typing import Optional
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+from http.client import RemoteDisconnected
 
 from config.models import TelegramSettings
 from config.secrets import SECRETS
@@ -15,6 +19,9 @@ class TelegramClient:
     chat_id: Optional[int]
     silent: bool
     request_timeout: float = 10.0
+    max_retries: int = 3
+    retry_delay: float = 0.5
+    retry_backoff: float = 2.0
 
     def send_message(self, message: str) -> None:
         if self.chat_id is None:
@@ -33,8 +40,28 @@ class TelegramClient:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urlopen(request, timeout=self.request_timeout):
-            pass
+        retries_remaining = self.max_retries
+        delay = max(0.0, float(self.retry_delay))
+        backoff = max(1.0, float(self.retry_backoff))
+        while True:
+            try:
+                with urlopen(request, timeout=self.request_timeout):
+                    return
+            except HTTPError:
+                raise
+            except (
+                URLError,
+                RemoteDisconnected,
+                TimeoutError,
+                socket.timeout,
+                ConnectionError,
+            ):
+                if retries_remaining <= 0:
+                    raise
+                if delay > 0.0:
+                    time.sleep(delay)
+                retries_remaining -= 1
+                delay *= backoff
 
 
 def create_client(settings: TelegramSettings) -> TelegramClient:

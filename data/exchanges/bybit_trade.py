@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import socket
 import time
 from dataclasses import dataclass
+from http.client import RemoteDisconnected
 from typing import Any, Mapping, Optional
 from urllib import parse
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from domain.models import BalanceSource, Exchange, ExecutionReport, MarginMode, Side, StopTrigger
@@ -38,6 +40,9 @@ class BybitTradingAdapter(TradingAdapter):
         recv_window: int = 5_000,
         timeout: float = 10.0,
         endpoints: Optional[BybitTradeEndpoints] = None,
+        max_retries: int = 3,
+        retry_delay: float = 0.5,
+        retry_backoff: float = 2.0,
     ) -> None:
         if not api_key or not api_secret:
             raise ValueError("Bybit trading adapter requires API credentials")
@@ -49,6 +54,9 @@ class BybitTradingAdapter(TradingAdapter):
         self._timeout = timeout
         self._endpoints = endpoints or BybitTradeEndpoints()
         self._category = "linear"
+        self._max_retries = max(0, int(max_retries))
+        self._retry_delay = max(0.0, float(retry_delay))
+        self._retry_backoff = max(1.0, float(retry_backoff))
 
     def get_balance(self, source: BalanceSource) -> float:
         params = {
@@ -246,12 +254,7 @@ class BybitTradingAdapter(TradingAdapter):
         }
         data_bytes = body.encode("utf-8") if body else None
         request = Request(url, data=data_bytes, headers=headers, method=method)
-        try:
-            with urlopen(request, timeout=self._timeout) as response:
-                payload = response.read().decode("utf-8")
-        except HTTPError as error:
-            payload = error.read().decode("utf-8")
-            raise self._translate_error(payload, status_code=error.code)
+        payload = self._perform_request(request)
         data = json.loads(payload)
         if isinstance(data, Mapping) and int(data.get("retCode", 0)) != 0:
             raise BybitAPIError(
@@ -259,6 +262,43 @@ class BybitTradingAdapter(TradingAdapter):
                 code=int(data.get("retCode", 0)),
             )
         return data
+
+    def _perform_request(self, request: Request) -> str:
+        retries_remaining = self._max_retries
+        delay = self._retry_delay
+        while True:
+            try:
+                with urlopen(request, timeout=self._timeout) as response:
+                    return response.read().decode("utf-8")
+            except HTTPError as error:
+                payload = error.read().decode("utf-8")
+                raise self._translate_error(payload, status_code=error.code)
+            except (
+                URLError,
+                RemoteDisconnected,
+                TimeoutError,
+                socket.timeout,
+                ConnectionError,
+            ) as error:
+                if retries_remaining <= 0:
+                    message = self._format_network_error(error)
+                    raise BybitAPIError(message, code=None) from error
+                if delay > 0.0:
+                    time.sleep(delay)
+                retries_remaining -= 1
+                delay *= self._retry_backoff
+
+    @staticmethod
+    def _format_network_error(error: BaseException) -> str:
+        reason = getattr(error, "reason", None)
+        if isinstance(reason, Exception):
+            text = str(reason)
+        elif reason is not None:
+            text = str(reason)
+        else:
+            text = str(error)
+        text = (text or "").strip() or error.__class__.__name__
+        return f"Connection error: {text}"
 
     @staticmethod
     def _translate_error(payload: str, *, status_code: Optional[int] = None) -> BybitAPIError:
