@@ -149,16 +149,32 @@ class _CombinedStreamWorker:
     def _restart_requested(self) -> bool:
         with self._lock:
             registrations = list(self._registrations.values())
-        restart_symbols: list[str] = []
+
+        processed_symbols: list[str] = []
         for registration in registrations:
-            if registration.buffer.consume_restart_request():
-                restart_symbols.append(registration.symbol)
-        if restart_symbols:
-            joined = ", ".join(restart_symbols)
+            if not registration.buffer.consume_restart_request():
+                continue
+
+            processed_symbols.append(registration.symbol)
+            details = (
+                "Binance {stream} stream: таймаут тишины для {symbol}, "
+                "запрос повторной синхронизации"
+            ).format(stream=self._name, symbol=registration.symbol)
+
+            try:
+                registration.on_error(ResyncReason.SILENCE_TIMEOUT, details)
+            except Exception:
+                pass
+
+        if processed_symbols:
+            joined = ", ".join(processed_symbols)
             self._logger.log(
-                f"Binance {self._name} stream: перезапуск по запросу буферов: {joined}"
+                (
+                    "Binance {stream} stream: обработан запрос повторной "
+                    "синхронизации из буферов: {symbols}"
+                ).format(stream=self._name, symbols=joined)
             )
-            return True
+
         return False
 
     def _notify_all(self, reason: ResyncReason, details: str) -> None:
