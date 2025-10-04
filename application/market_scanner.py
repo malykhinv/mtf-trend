@@ -125,7 +125,15 @@ class MarketScanner:
     def _resolve_threshold(self) -> float:
         thresholds = self._thresholds
         if self._profile is TradingProfile.AUTO:
-            return float(min(thresholds.top_usd, thresholds.alt_usd, thresholds.listing_usd))
+            values = (
+                float(thresholds.top_usd),
+                float(thresholds.listing_usd),
+                float(thresholds.alt_usd),
+            )
+            positives = [value for value in values if value > 0.0]
+            if not positives:
+                return 0.0
+            return min(positives)
         if self._profile is TradingProfile.TOP:
             return float(thresholds.top_usd)
         if self._profile is TradingProfile.ALT:
@@ -136,9 +144,14 @@ class MarketScanner:
 
     def _classify_turnover(self, turnover: float) -> TradingProfile:
         thresholds = self._thresholds
-        if turnover >= float(thresholds.top_usd):
+        top_threshold = float(thresholds.top_usd)
+        listing_threshold = float(thresholds.listing_usd)
+        alt_threshold = float(thresholds.alt_usd)
+        if turnover >= top_threshold:
             return TradingProfile.TOP
-        if turnover >= float(thresholds.alt_usd):
+        if turnover >= listing_threshold:
+            return TradingProfile.LISTING
+        if turnover >= alt_threshold:
             return TradingProfile.ALT
         return TradingProfile.LISTING
 
