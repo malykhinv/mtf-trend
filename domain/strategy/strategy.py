@@ -273,11 +273,16 @@ class Strategy:
             return
         if self._safety.is_blocked(timestamp):
             blocked_until = self._safety.blocked_until()
+            reason = self._safety.block_reason()
             if blocked_until is not None:
-                self._logger.log(
-                    f"Вход в {symbol} заблокирован до {blocked_until:%H:%M:%S}.",
-                    timestamp,
-                )
+                message = f"Вход в {symbol} заблокирован до {blocked_until:%H:%M:%S}"
+            else:
+                message = f"Вход в {symbol} заблокирован"
+            if reason:
+                message = f"{message} ({reason})."
+            else:
+                message = f"{message}."
+            self._logger.log(message, timestamp)
             return
         self._position.enter(symbol, signal, wall, timestamp)
         self._safety.record_entry(timestamp)
