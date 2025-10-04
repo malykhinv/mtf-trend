@@ -82,7 +82,7 @@ class BybitTradingAdapter(TradingAdapter):
             code=None,
         )
 
-    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
+    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> Optional[int]:
         trade_mode = 1 if margin_mode is MarginMode.ISOLATED else 0
         body = {
             "category": self._category,
@@ -103,6 +103,7 @@ class BybitTradingAdapter(TradingAdapter):
                 "sellLeverage": str(leverage),
             },
         )
+        return leverage
 
     def place_market(
         self,

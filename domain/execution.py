@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Callable, Optional, Tuple
 
 from config.config import CONFIG
@@ -16,7 +17,24 @@ BalanceProvider = Callable[[str], float]
 
 def initialize_account(trading: TradingAdapter) -> None:
     margin_mode: MarginMode = _map_margin_mode(CONFIG.position.margin_mode)
-    trading.set_leverage(CONFIG.position.leverage, margin_mode)
+    logger = logging.getLogger(__name__)
+    try:
+        actual_leverage = trading.set_leverage(CONFIG.position.leverage, margin_mode)
+    except Exception as exc:
+        logger.warning(
+            "Failed to set leverage %s in %s margin mode: %s",
+            CONFIG.position.leverage,
+            margin_mode.name,
+            exc,
+        )
+        return
+    if actual_leverage is not None and actual_leverage != CONFIG.position.leverage:
+        logger.warning(
+            "Leverage adjusted from %s to %s for margin mode %s.",
+            CONFIG.position.leverage,
+            actual_leverage,
+            margin_mode.name,
+        )
 
 
 def create_execution_handlers(

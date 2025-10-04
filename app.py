@@ -151,8 +151,8 @@ class TradingAdapterRouter(TradingAdapter):
     def get_balance(self, source: BalanceSource) -> float:
         return self._resolve().get_balance(source)
 
-    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
-        self._resolve().set_leverage(leverage, margin_mode)
+    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> Optional[int]:
+        return self._resolve().set_leverage(leverage, margin_mode)
 
     def place_market(
         self,

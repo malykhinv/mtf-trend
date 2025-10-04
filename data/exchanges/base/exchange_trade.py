@@ -7,7 +7,7 @@ class IExchangeTrade(Protocol):
     def get_balance(self, source: BalanceSource) -> float:
         ...
 
-    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
+    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> Optional[int]:
         ...
 
     def place_market(
