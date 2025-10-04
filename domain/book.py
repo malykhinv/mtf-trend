@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from bisect import bisect_left
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable, Iterator, List, Optional, Tuple
 
 from models.enums import Side
 from models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
 from models.timezone import ensure_current_timezone
+from utils import get_current_time
 
 
 @dataclass(slots=True)
@@ -51,21 +52,30 @@ class _RecentBandEntry:
 
 class RecentBand:
     __slots__ = (
+        "_base_capacity",
         "_capacity",
         "_entries",
         "_next",
         "_count",
         "_index_prices",
         "_index_slots",
+        "_window",
+        "_last_cleanup_at",
     )
 
-    def __init__(self, capacity: int) -> None:
-        self._capacity = max(0, capacity)
+    def __init__(self, *, capacity: int, window_s: int, volume_boost: int) -> None:
+        base_capacity = max(0, capacity)
+        boost = max(1, volume_boost)
+        self._base_capacity = base_capacity
+        self._capacity = max(0, base_capacity * boost)
         self._entries: List[Optional[_RecentBandEntry]] = [None] * self._capacity
         self._next = 0
         self._count = 0
         self._index_prices: List[float] = []
         self._index_slots: List[int] = []
+        window_seconds = max(0, window_s)
+        self._window = timedelta(seconds=window_seconds)
+        self._last_cleanup_at: Optional[datetime] = None
 
     def __len__(self) -> int:
         return self._count
@@ -76,6 +86,45 @@ class RecentBand:
         self._count = 0
         self._index_prices.clear()
         self._index_slots.clear()
+        self._last_cleanup_at = None
+
+    def _cleanup(self, current_time: datetime) -> None:
+        ensure_current_timezone(current_time)
+        if (
+            self._last_cleanup_at is not None
+            and current_time <= self._last_cleanup_at
+        ):
+            return
+        if self._capacity == 0:
+            self._last_cleanup_at = current_time
+            return
+        if self._count == 0:
+            self._last_cleanup_at = current_time
+            return
+        if self._window <= timedelta(0):
+            if self._count == 0:
+                self._last_cleanup_at = current_time
+                return
+            self.clear()
+            self._last_cleanup_at = current_time
+            return
+        cutoff = current_time - self._window
+        removed: List[Tuple[float, int]] = []
+        for index, entry in enumerate(self._entries):
+            if entry is None:
+                continue
+            if entry.timestamp < cutoff:
+                removed.append((entry.price, index))
+        if removed:
+            for price, index in removed:
+                self._entries[index] = None
+                self._count -= 1
+                self._remove_from_index(price)
+            if self._count == 0:
+                self._next = 0
+            else:
+                self._next %= self._capacity
+        self._last_cleanup_at = current_time
 
     def _locate_price(self, price: float) -> Tuple[int, Optional[int]]:
         index_pos = bisect_left(self._index_prices, price)
@@ -106,6 +155,7 @@ class RecentBand:
         if self._capacity == 0:
             return
         ensure_current_timezone(timestamp)
+        self._cleanup(timestamp)
 
         previous_slot = self._remove_from_index(price)
         if previous_slot is not None:
@@ -136,12 +186,17 @@ class RecentBand:
             self._entries[slot] = None
             self._count -= 1
 
-    def contains(self, price: float) -> bool:
+    def contains(self, price: float, *, now: Optional[datetime] = None) -> bool:
+        current_time = now or get_current_time()
+        self._cleanup(current_time)
         _, slot = self._locate_price(price)
-        return slot is not None
+        return slot is not None and slot < self._capacity and self._entries[slot] is not None
 
     def iter_newest_first(self) -> Iterator[_RecentBandEntry]:
         if self._capacity == 0 or self._count == 0:
+            return
+        self._cleanup(get_current_time())
+        if self._count == 0:
             return
         remaining = self._count
         index = (self._next - 1) % self._capacity
@@ -157,6 +212,9 @@ class RecentBand:
     def iter_oldest_first(self) -> Iterator[_RecentBandEntry]:
         if self._capacity == 0 or self._count == 0:
             return
+        self._cleanup(get_current_time())
+        if self._count == 0:
+            return
         remaining = self._count
         index = self._next
         visited = 0
@@ -169,11 +227,16 @@ class RecentBand:
             visited += 1
 
     def latest_level_index(self, price: float) -> Optional[int]:
+        current_time = get_current_time()
+        self._cleanup(current_time)
         _, slot = self._locate_price(price)
-        if slot is None:
+        if slot is None or slot >= self._capacity:
             return None
         entry = self._entries[slot]
         return None if entry is None else entry.level_index
+
+
+_RECENT_BAND_EVENTS_PER_SECOND: int = 64
 
 
 class _BookSide:
@@ -186,13 +249,24 @@ class _BookSide:
         "_recent_band",
     )
 
-    def __init__(self, side: Side, *, recent_band_capacity: int) -> None:
+    def __init__(
+        self,
+        side: Side,
+        *,
+        recent_band_capacity: int,
+        recent_band_window_s: int,
+        recent_band_volume_boost: int,
+    ) -> None:
         self._side = side
         self._levels: List[_StoredLevel] = []
         self._sort_keys: List[float] = []
         self._index_prices: List[float] = []
         self._index_positions: List[int] = []
-        self._recent_band = RecentBand(recent_band_capacity)
+        self._recent_band = RecentBand(
+            capacity=recent_band_capacity,
+            window_s=recent_band_window_s,
+            volume_boost=recent_band_volume_boost,
+        )
 
     @property
     def recent_band(self) -> RecentBand:
@@ -310,13 +384,15 @@ class _BookSide:
         return iter(self._levels)
 
     def iter_recent_levels(self) -> Iterator[_StoredLevel]:
+        now = get_current_time()
         for level in self._levels:
-            if self._recent_band.contains(level.price):
+            if self._recent_band.contains(level.price, now=now):
                 yield level
 
     def find_nearest_wall(self, *, min_notional: float) -> Optional[_StoredLevel]:
+        now = get_current_time()
         for level in self._levels:
-            if not self._recent_band.contains(level.price):
+            if not self._recent_band.contains(level.price, now=now):
                 continue
             if level.notional >= min_notional:
                 return level
@@ -329,9 +405,30 @@ class _BookSide:
 class OrderBook:
     __slots__ = ("_bids", "_asks")
 
-    def __init__(self, *, recent_band_capacity: int = 128) -> None:
-        self._bids = _BookSide(Side.BID, recent_band_capacity=recent_band_capacity)
-        self._asks = _BookSide(Side.ASK, recent_band_capacity=recent_band_capacity)
+    def __init__(
+        self,
+        *,
+        recent_band_window_s: int,
+        recent_band_volume_boost: int,
+        recent_band_capacity: Optional[int] = None,
+    ) -> None:
+        base_capacity = (
+            max(1, recent_band_capacity)
+            if recent_band_capacity is not None
+            else max(256, recent_band_window_s * _RECENT_BAND_EVENTS_PER_SECOND)
+        )
+        self._bids = _BookSide(
+            Side.BID,
+            recent_band_capacity=base_capacity,
+            recent_band_window_s=recent_band_window_s,
+            recent_band_volume_boost=recent_band_volume_boost,
+        )
+        self._asks = _BookSide(
+            Side.ASK,
+            recent_band_capacity=base_capacity,
+            recent_band_window_s=recent_band_window_s,
+            recent_band_volume_boost=recent_band_volume_boost,
+        )
 
     @property
     def bids(self) -> _BookSide:

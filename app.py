@@ -479,7 +479,10 @@ class Application:
         context = SymbolContext(
             symbol=symbol,
             exchange_data=exchange_data,
-            order_book=OrderBook(recent_band_capacity=256),
+            order_book=OrderBook(
+                recent_band_window_s=CONFIG.general.recent_band_s,
+                recent_band_volume_boost=CONFIG.general.recent_band_s_vol_boost,
+            ),
             feed_monitor=FeedMonitor(),
             depth_stream=exchange_data.stream_depth(),
             trade_stream=exchange_data.stream_trades(),
