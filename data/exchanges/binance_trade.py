@@ -8,7 +8,7 @@ import socket
 import time
 from dataclasses import dataclass
 from http.client import RemoteDisconnected
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -58,6 +58,7 @@ class BinanceTradingAdapter(TradingAdapter):
         self._retry_delay = max(0.0, float(retry_delay))
         self._retry_backoff = max(1.0, float(retry_backoff))
         self._logger = logging.getLogger(__name__)
+        self._time_offset_ms = 0
 
     def get_balance(self, source: BalanceSource) -> float:
         response = self._signed_request("GET", "/fapi/v2/balance")
@@ -220,21 +221,26 @@ class BinanceTradingAdapter(TradingAdapter):
         params: Optional[Mapping[str, Any]] = None,
     ) -> Any:
         params = dict(params or {})
-        params.setdefault("timestamp", int(time.time() * 1000))
         params.setdefault("recvWindow", self._recv_window)
-        query = parse.urlencode(params)
-        signature = hmac.new(self._api_secret, query.encode("utf-8"), hashlib.sha256).hexdigest()
-        signed_query = f"{query}&signature={signature}"
-        url = f"{self._endpoints.rest_base}{path}?{signed_query}"
-        request = Request(
-            url,
-            method=method.upper(),
-            headers={
-                "User-Agent": "mtf-trend/1.0",
-                "X-MBX-APIKEY": self._api_key,
-            },
-        )
-        raw = self._perform_request(request)
+
+        def build_request() -> Request:
+            final_params = dict(params)
+            final_params.setdefault("timestamp", self._current_timestamp_ms())
+            query = parse.urlencode(final_params)
+            signature = hmac.new(self._api_secret, query.encode("utf-8"), hashlib.sha256).hexdigest()
+            signed_query = f"{query}&signature={signature}"
+            url = f"{self._endpoints.rest_base}{path}?{signed_query}"
+            return Request(
+                url,
+                method=method.upper(),
+                headers={
+                    "User-Agent": "mtf-trend/1.0",
+                    "X-MBX-APIKEY": self._api_key,
+                },
+            )
+
+        request = build_request()
+        raw = self._perform_request(request, rebuild_signed_request=build_request)
         data = json.loads(raw)
         if isinstance(data, Mapping) and "code" in data and data.get("code") not in (0, 200):
             raise BinanceAPIError(
@@ -243,16 +249,39 @@ class BinanceTradingAdapter(TradingAdapter):
             )
         return data
 
-    def _perform_request(self, request: Request) -> str:
+    def _perform_request(
+        self,
+        request: Request,
+        *,
+        rebuild_signed_request: Optional[Callable[[], Request]] = None,
+    ) -> str:
         retries_remaining = self._max_retries
         delay = self._retry_delay
+        time_sync_attempted = False
         while True:
             try:
                 with urlopen(request, timeout=self._timeout) as response:
                     return response.read().decode("utf-8")
             except HTTPError as error:
                 payload = error.read().decode("utf-8")
-                raise self._translate_error(payload, status_code=error.code)
+                api_error = self._translate_error(payload, status_code=error.code)
+                if (
+                    not time_sync_attempted
+                    and rebuild_signed_request is not None
+                    and self._is_recv_window_error(api_error)
+                ):
+                    time_sync_attempted = True
+                    try:
+                        self._sync_server_time()
+                    except Exception as sync_error:  # pragma: no cover - defensive logging
+                        self._logger.warning(
+                            "Failed to synchronize Binance server time after recvWindow error: %s",
+                            sync_error,
+                        )
+                    else:
+                        request = rebuild_signed_request()
+                        continue
+                raise api_error
             except (
                 URLError,
                 RemoteDisconnected,
@@ -267,6 +296,31 @@ class BinanceTradingAdapter(TradingAdapter):
                     time.sleep(delay)
                 retries_remaining -= 1
                 delay *= self._retry_backoff
+
+    def _current_timestamp_ms(self) -> int:
+        return int(time.time() * 1000 + self._time_offset_ms)
+
+    def _sync_server_time(self) -> None:
+        request = Request(
+            f"{self._endpoints.rest_base}/fapi/v1/time",
+            method="GET",
+            headers={"User-Agent": "mtf-trend/1.0"},
+        )
+        raw = self._perform_request(request)
+        data = json.loads(raw)
+        server_time = data.get("serverTime") if isinstance(data, Mapping) else None
+        if server_time is None:
+            raise BinanceAPIError("Unable to fetch Binance server time", code=None)
+        try:
+            server_timestamp = int(server_time)
+        except (TypeError, ValueError) as error:
+            raise BinanceAPIError("Invalid Binance server time payload", code=None) from error
+        local_timestamp = int(time.time() * 1000)
+        self._time_offset_ms = server_timestamp - local_timestamp
+        self._logger.info(
+            "Synchronized Binance server time; applying offset %s ms.",
+            self._time_offset_ms,
+        )
 
     @staticmethod
     def _format_network_error(error: BaseException) -> str:
@@ -284,6 +338,11 @@ class BinanceTradingAdapter(TradingAdapter):
     def _is_invalid_leverage_error(error: BinanceAPIError) -> bool:
         message = (str(error) or "").lower()
         return "leverage" in message and "not valid" in message
+
+    @staticmethod
+    def _is_recv_window_error(error: BinanceAPIError) -> bool:
+        message = (str(error) or "").lower()
+        return "recvwindow" in message or (error.code == -1021)
 
     def _resolve_leverage_bounds(self) -> Optional[tuple[int, int]]:
         try:
