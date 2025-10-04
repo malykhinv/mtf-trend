@@ -70,7 +70,7 @@ CONFIG: Final[Config] = Config(
         balance_refresh_h=1,
         balance_source=BalanceSource.AVAILABLE_BALANCE,
         margin_mode=MarginMode.ISOLATED,
-        leverage=10,
+        leverage=1,
         stop_trigger=StopTrigger.MARK_PRICE,
     ),
     focus=FocusSettings(defocus_timeout_s=30),
