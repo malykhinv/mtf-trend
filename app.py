@@ -261,6 +261,7 @@ class Application:
             return BinanceExchangeData(
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
+                silence_timeout_ms=CONFIG.general.ws_silence_timeout_ms,
                 log_writer=self._sink,
                 api_key=api_key,
                 api_secret=api_secret,
@@ -269,6 +270,7 @@ class Application:
             return BybitExchangeData(
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
+                silence_timeout_ms=CONFIG.general.ws_silence_timeout_ms,
                 log_writer=self._sink,
                 api_key=api_key,
                 api_secret=api_secret,

@@ -51,6 +51,7 @@ class WebSocketClient(Protocol):
 
 
 BINANCE_ALLOWED_DEPTH_LIMITS: frozenset[int] = frozenset({5, 10, 20, 50, 100, 500, 1000})
+MIN_STREAM_SILENCE_TIMEOUT_MS = 1500.0
 
 
 class BinanceExchangeData:
@@ -69,6 +70,7 @@ class BinanceExchangeData:
         endpoints: Optional[BinanceEndpoints] = None,
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
+        silence_timeout_ms: float | None = None,
     ) -> None:
         self.symbol = symbol.upper()
         self._endpoints = endpoints or BinanceEndpoints()
@@ -80,8 +82,15 @@ class BinanceExchangeData:
         self._reconnect_delay = reconnect_delay
         self._logger = ExchangeLogger(f"Binance:{self.symbol}", log_writer)
         self._depth_limit = self._normalize_depth_limit(depth_limit)
-        self._silence_timeout = max(0.1, (loop_interval_ms * 5) / 1000.0)
-        self._heartbeat_interval = self._silence_timeout / 2
+        if silence_timeout_ms is not None:
+            effective_silence_timeout_ms = max(
+                float(silence_timeout_ms),
+                MIN_STREAM_SILENCE_TIMEOUT_MS,
+            )
+        else:
+            effective_silence_timeout_ms = MIN_STREAM_SILENCE_TIMEOUT_MS
+        self._silence_timeout = max(0.1, effective_silence_timeout_ms / 1000.0)
+        self._heartbeat_interval = max(self._silence_timeout / 2, 0.1)
         self._depth_last_update: Optional[int] = None
         self._depth_buffered_messages: list[dict[str, Any]] = []
         self._depth_allow_skip = False
@@ -219,11 +228,14 @@ class BinanceExchangeData:
         return next_funding
 
     def stream_depth(self) -> StreamSubscription[DepthStreamData]:
+        silence_timeout = self._silence_timeout
+        heartbeat_interval = self._heartbeat_interval
+
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(
             name="depth",
             logger=self._logger,
-            silence_timeout=self._silence_timeout,
-            heartbeat_interval=self._heartbeat_interval,
+            silence_timeout=silence_timeout,
+            heartbeat_interval=heartbeat_interval,
         )
 
         worker = threading.Thread(
@@ -512,11 +524,14 @@ class BinanceExchangeData:
         url: str,
         parser: Callable[[dict[str, Any]], Iterable[Any]],
     ) -> StreamSubscription[Any]:
+        silence_timeout = self._silence_timeout
+        heartbeat_interval = self._heartbeat_interval
+
         buffer: StreamBuffer[Any] = StreamBuffer(
             name=name,
             logger=self._logger,
-            silence_timeout=self._silence_timeout,
-            heartbeat_interval=self._heartbeat_interval,
+            silence_timeout=silence_timeout,
+            heartbeat_interval=heartbeat_interval,
         )
 
         worker = threading.Thread(

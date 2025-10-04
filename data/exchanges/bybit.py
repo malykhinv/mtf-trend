@@ -101,6 +101,9 @@ class WebSocketClient(Protocol):
     def settimeout(self, timeout: float) -> None: ...
 
 
+MIN_STREAM_SILENCE_TIMEOUT_MS = 1500.0
+
+
 class BybitExchangeData:
     def __init__(
         self,
@@ -117,6 +120,7 @@ class BybitExchangeData:
         endpoints: Optional[BybitEndpoints] = None,
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
+        silence_timeout_ms: float | None = None,
     ) -> None:
         self.symbol = symbol.upper()
         self._endpoints = endpoints or BybitEndpoints()
@@ -128,8 +132,15 @@ class BybitExchangeData:
         self._reconnect_delay = reconnect_delay
         self._depth_limit = depth_limit
         self._logger = ExchangeLogger(f"Bybit:{self.symbol}", log_writer)
-        self._silence_timeout = max(0.1, (loop_interval_ms * 5) / 1000.0)
-        self._heartbeat_interval = self._silence_timeout / 2
+        if silence_timeout_ms is not None:
+            effective_silence_timeout_ms = max(
+                float(silence_timeout_ms),
+                MIN_STREAM_SILENCE_TIMEOUT_MS,
+            )
+        else:
+            effective_silence_timeout_ms = MIN_STREAM_SILENCE_TIMEOUT_MS
+        self._silence_timeout = max(0.1, effective_silence_timeout_ms / 1000.0)
+        self._heartbeat_interval = max(self._silence_timeout / 2, 0.1)
         self._depth_last_seq: Optional[int] = None
         self._lock = threading.Lock()
         self._api_key = api_key
@@ -252,11 +263,14 @@ class BybitExchangeData:
         return candidate
 
     def stream_depth(self) -> StreamSubscription[DepthStreamData]:
+        silence_timeout = self._silence_timeout
+        heartbeat_interval = self._heartbeat_interval
+
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(
             name="depth",
             logger=self._logger,
-            silence_timeout=self._silence_timeout,
-            heartbeat_interval=self._heartbeat_interval,
+            silence_timeout=silence_timeout,
+            heartbeat_interval=heartbeat_interval,
         )
         initial_snapshot = self.fetch_orderbook_snapshot()
         buffer.push_snapshot(initial_snapshot)
@@ -557,11 +571,14 @@ class BybitExchangeData:
         topic: str,
         parser: Callable[[dict[str, Any]], Iterable[Any]],
     ) -> StreamSubscription[Any]:
+        silence_timeout = self._silence_timeout
+        heartbeat_interval = self._heartbeat_interval
+
         buffer: StreamBuffer[Any] = StreamBuffer(
             name=name,
             logger=self._logger,
-            silence_timeout=self._silence_timeout,
-            heartbeat_interval=self._heartbeat_interval,
+            silence_timeout=silence_timeout,
+            heartbeat_interval=heartbeat_interval,
         )
         subscribe = json.dumps({"op": "subscribe", "args": [topic]})
 
