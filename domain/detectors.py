@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections import deque
 from datetime import datetime, timedelta
 from statistics import median
-from typing import Deque, Iterable, Optional, Sequence, Tuple
+from typing import Iterable, Optional, Sequence, Tuple
 
 from config.config import CONFIG
 from config.models.trading_profile import TradingProfile
@@ -29,7 +28,7 @@ def compute_odr(book: OrderBook, last_price: float, tick_size: float) -> Pressur
     buy_pressure: float = _sum_side_pressure(bid_levels, last_price, tick_size)
     sell_pressure: float = _sum_side_pressure(ask_levels, last_price, tick_size)
     raw_ratio: float = _compute_ratio(sell_pressure, buy_pressure)
-    smoothed_ratio: float = _smooth_ratio(raw_ratio)
+    smoothed_ratio: float = book.update_odr_history(raw_ratio)
     return Pressure(
         computed_at=get_current_time(),
         buy_pressure=buy_pressure,
@@ -158,25 +157,6 @@ def _compute_ratio(sell_pressure: float, buy_pressure: float) -> float:
     if buy_pressure <= 0.0:
         return float("inf") if sell_pressure > 0.0 else 1.0
     return sell_pressure / buy_pressure
-
-
-_ODR_HISTORY: Deque[float] = deque(maxlen=max(1, CONFIG.general.odr_smooth_samples))
-
-
-def _smooth_ratio(raw_ratio: float) -> float:
-    maxlen: int = CONFIG.general.odr_smooth_samples
-    if maxlen <= 1:
-        return raw_ratio
-    if _ODR_HISTORY.maxlen != maxlen:
-        _resize_history(maxlen)
-    _ODR_HISTORY.append(raw_ratio)
-    return median(_ODR_HISTORY)
-
-
-def _resize_history(maxlen: int) -> None:
-    global _ODR_HISTORY
-    history: Deque[float] = deque(_ODR_HISTORY, maxlen=maxlen)
-    _ODR_HISTORY = history
 
 
 def _compute_median_quantity(levels: Iterable[OrderBookLevel]) -> float:

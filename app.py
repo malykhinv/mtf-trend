@@ -366,6 +366,7 @@ class Application:
                 context.last_update_id = None
 
     def _apply_snapshot(self, context: SymbolContext, snapshot: OrderBookSnapshot) -> None:
+        context.order_book.reset_odr_history()
         context.order_book.apply_snapshot(snapshot)
         context.last_update_id = snapshot.last_update_id
         self._update_best_from_book(context)
@@ -584,6 +585,7 @@ class Application:
             trading_adapter=trading_adapter,
             profile=self._symbol_profiles.get(symbol, CONFIG.general.profile),
         )
+        context.order_book.reset_odr_history()
         startup_timestamp = get_current_time()
         self._event_logger.log(
             f"Старт бота для {symbol} на {self._exchange.value}.",

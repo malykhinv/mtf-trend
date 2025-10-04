@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from bisect import bisect_left
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Iterable, Iterator, List, Optional, Tuple
+from statistics import median
+from typing import Deque, Iterable, Iterator, List, Optional, Tuple
 
+from config.config import CONFIG
 from models.enums import Side
 from models.order_book import OrderBookLevel, OrderBookSnapshot, OrderBookUpdate
 from models.timezone import ensure_current_timezone
@@ -403,7 +406,7 @@ class _BookSide:
 
 
 class OrderBook:
-    __slots__ = ("_bids", "_asks")
+    __slots__ = ("_bids", "_asks", "_odr_history")
 
     def __init__(
         self,
@@ -428,6 +431,9 @@ class OrderBook:
             recent_band_capacity=base_capacity,
             recent_band_window_s=recent_band_window_s,
             recent_band_volume_boost=recent_band_volume_boost,
+        )
+        self._odr_history: Deque[float] = deque(
+            maxlen=max(1, CONFIG.general.odr_smooth_samples)
         )
 
     @property
@@ -471,6 +477,22 @@ class OrderBook:
         except StopIteration:
             return None
         return level.to_dataclass()
+
+    def update_odr_history(self, raw_ratio: float) -> float:
+        maxlen = max(1, CONFIG.general.odr_smooth_samples)
+        history = self._odr_history
+        if history.maxlen != maxlen:
+            history = deque(history, maxlen=maxlen)
+            self._odr_history = history
+        if maxlen <= 1:
+            history.clear()
+            history.append(raw_ratio)
+            return raw_ratio
+        history.append(raw_ratio)
+        return float(median(history))
+
+    def reset_odr_history(self) -> None:
+        self._odr_history = deque(maxlen=max(1, CONFIG.general.odr_smooth_samples))
 
 
 __all__ = [
