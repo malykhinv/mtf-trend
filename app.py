@@ -6,7 +6,7 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
+from typing import Any, Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
 
 from application import FeedMonitor, GUARDS
 from application.market_scanner import MarketScanner
@@ -309,6 +309,13 @@ class Application:
         context.active = True
         context.cycle_started = False
 
+    @staticmethod
+    def _stop_stream_subscription(subscription: StreamSubscription[Any]) -> None:
+        try:
+            subscription.stop()
+        except Exception:
+            pass
+
     def _unsubscribe_symbol(self, symbol: str) -> None:
         symbol = symbol.upper()
         context = self._contexts.pop(symbol, None)
@@ -321,10 +328,7 @@ class Application:
             context.ticker_subscription,
         )
         for subscription in subscriptions:
-            try:
-                subscription.stop()
-            except Exception:
-                pass
+            self._stop_stream_subscription(subscription)
         if self._focus_controller.current == symbol:
             timestamp = get_current_time()
             self._focus_controller.defocus(timestamp)
