@@ -468,34 +468,42 @@ class Application:
             last_seen_at=wall.last_seen_at,
         )
 
-    def _choose_wall(self, context: SymbolContext) -> Optional[Wall]:
-        bid_wall = check_if_has_near_wall(context.order_book, Side.BID, context.profile)
-        ask_wall = check_if_has_near_wall(context.order_book, Side.ASK, context.profile)
-        candidate: Optional[Wall] = None
-        if bid_wall is not None and ask_wall is not None:
-            candidate = bid_wall if bid_wall.notional >= ask_wall.notional else ask_wall
-        elif bid_wall is not None:
-            candidate = bid_wall
-        elif ask_wall is not None:
-            candidate = ask_wall
-        if candidate is None:
-            return None
-        return self._assign_symbol(context, candidate)
-
     def _build_observation(self, context: SymbolContext) -> MarketObservation:
         last_price = self._resolve_last_price(context)
         tick_size = context.filters.price_tick_size
         pressure = None
         if last_price > 0.0 and tick_size > 0.0:
             pressure = compute_odr(context.order_book, last_price, tick_size)
-        wall = self._choose_wall(context)
-        opposite_blocks = False
-        if wall is not None:
-            move_side = Side.ASK if wall.side is Side.BID else Side.BID
-            opposite_blocks = check_if_has_opposite_wall(
+        bid_wall_candidate = check_if_has_near_wall(
+            context.order_book, Side.BID, context.profile
+        )
+        ask_wall_candidate = check_if_has_near_wall(
+            context.order_book, Side.ASK, context.profile
+        )
+        bid_wall = (
+            self._assign_symbol(context, bid_wall_candidate)
+            if bid_wall_candidate is not None
+            else None
+        )
+        ask_wall = (
+            self._assign_symbol(context, ask_wall_candidate)
+            if ask_wall_candidate is not None
+            else None
+        )
+        bid_opposite_blocks = False
+        if bid_wall is not None:
+            bid_opposite_blocks = check_if_has_opposite_wall(
                 context.order_book,
-                move_side,
-                wall,
+                Side.ASK,
+                bid_wall,
+                context.profile,
+            )
+        ask_opposite_blocks = False
+        if ask_wall is not None:
+            ask_opposite_blocks = check_if_has_opposite_wall(
+                context.order_book,
+                Side.BID,
+                ask_wall,
                 context.profile,
             )
         return MarketObservation(
@@ -504,8 +512,10 @@ class Application:
             last_price=last_price,
             tick_size=tick_size,
             pressure=pressure,
-            near_wall=wall,
-            opposite_wall_blocks=opposite_blocks,
+            bid_wall=bid_wall,
+            ask_wall=ask_wall,
+            bid_opposite_wall_blocks=bid_opposite_blocks,
+            ask_opposite_wall_blocks=ask_opposite_blocks,
             available_symbols=self._desired_symbols,
             feed_status=context.feed_monitor.snapshot(),
             volume_ratio=context.volume_ratio,

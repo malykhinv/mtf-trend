@@ -4,7 +4,7 @@ from typing import Optional
 
 from config.config import CONFIG
 
-from domain.models import Pressure, Signal, Side, Wall
+from domain.models import Pressure, Signal, Wall
 
 from .event_logger import EventLogger
 from .focus import FocusController
@@ -95,42 +95,51 @@ class Strategy:
             self._last_scan_at = observation.timestamp
 
     def _handle_scanning(self, observation: MarketObservation) -> None:
-        if observation.pressure is None or observation.near_wall is None:
+        if observation.pressure is None:
             return
-        wall = observation.near_wall
+        wall: Optional[Wall] = None
         ratio = observation.pressure.imbalance_ratio
-        if wall.side is Side.BID and ratio <= CONFIG.odr.focus_pre_odr_long:
-            if observation.volume_spike:
-                self._focus_on_symbol(
-                    observation.symbol,
-                    Signal.LONG,
-                    wall,
-                    observation.timestamp,
-                    observation.volume_ratio,
-                )
-        elif wall.side is Side.ASK and ratio >= CONFIG.odr.focus_pre_odr_short:
-            if observation.volume_spike:
-                self._focus_on_symbol(
-                    observation.symbol,
-                    Signal.SHORT,
-                    wall,
-                    observation.timestamp,
-                    observation.volume_ratio,
-                )
+        signal: Signal
+        if ratio <= CONFIG.odr.focus_pre_odr_long:
+            wall = observation.bid_wall
+            signal = Signal.LONG
+        elif ratio >= CONFIG.odr.focus_pre_odr_short:
+            wall = observation.ask_wall
+            signal = Signal.SHORT
+        else:
+            return
+        if wall is None or not observation.volume_spike:
+            return
+        self._focus_on_symbol(
+            observation.symbol,
+            signal,
+            wall,
+            observation.timestamp,
+            observation.volume_ratio,
+        )
 
     def _handle_focused(self, observation: MarketObservation) -> None:
         symbol = observation.symbol
         if self._focus.current != symbol:
             return
         pressure = observation.pressure
-        wall = observation.near_wall
+        wall: Optional[Wall]
+        opposite_blocks = False
+        if self._focused_signal is Signal.LONG:
+            wall = observation.bid_wall
+            opposite_blocks = observation.bid_opposite_wall_blocks
+        elif self._focused_signal is Signal.SHORT:
+            wall = observation.ask_wall
+            opposite_blocks = observation.ask_opposite_wall_blocks
+        else:
+            wall = None
         timestamp = observation.timestamp
         if pressure is not None and wall is not None and observation.volume_spike:
-            if self._focused_signal is Signal.LONG and wall.side is Side.BID:
+            if self._focused_signal is Signal.LONG:
                 if pressure.imbalance_ratio <= CONFIG.odr.focus_pre_odr_long:
                     self._last_focus_signal_at = timestamp
                     self._focused_wall = wall
-            elif self._focused_signal is Signal.SHORT and wall.side is Side.ASK:
+            elif self._focused_signal is Signal.SHORT:
                 if pressure.imbalance_ratio >= CONFIG.odr.focus_pre_odr_short:
                     self._last_focus_signal_at = timestamp
                     self._focused_wall = wall
@@ -147,11 +156,11 @@ class Strategy:
             return
         if pressure is None or wall is None:
             return
-        if observation.opposite_wall_blocks:
+        if opposite_blocks:
             return
         if not observation.volume_spike:
             return
-        if self._focused_signal is Signal.LONG and wall.side is Side.BID:
+        if self._focused_signal is Signal.LONG:
             if pressure.imbalance_ratio <= CONFIG.odr.odr_in_long:
                 self._enter_position(
                     observation.symbol,
@@ -159,7 +168,7 @@ class Strategy:
                     timestamp,
                     observation.last_price,
                 )
-        elif self._focused_signal is Signal.SHORT and wall.side is Side.ASK:
+        elif self._focused_signal is Signal.SHORT:
             if pressure.imbalance_ratio >= CONFIG.odr.odr_in_short:
                 self._enter_position(
                     observation.symbol,
@@ -187,7 +196,12 @@ class Strategy:
                     observation.last_price,
                 )
                 return
-        wall = observation.near_wall
+        if self._position_signal is Signal.LONG:
+            wall = observation.bid_wall
+        elif self._position_signal is Signal.SHORT:
+            wall = observation.ask_wall
+        else:
+            wall = None
         if wall is not None:
             self._consider_wall_shift(wall, observation.tick_size, timestamp)
         if self._detect_wall_drop(wall, observation.tick_size):

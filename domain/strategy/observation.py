@@ -17,8 +17,10 @@ class MarketObservation:
     last_price: float
     tick_size: float
     pressure: Optional[Pressure]
-    near_wall: Optional[Wall]
-    opposite_wall_blocks: bool
+    bid_wall: Optional[Wall]
+    ask_wall: Optional[Wall]
+    bid_opposite_wall_blocks: bool
+    ask_opposite_wall_blocks: bool
     available_symbols: Tuple[str, ...]
     feed_status: FeedStatus
     volume_ratio: float
