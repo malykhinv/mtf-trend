@@ -10,6 +10,7 @@ from typing import Dict, Iterable, Iterator, Optional, Sequence, Tuple, cast
 from config.config import CONFIG
 from config.models.balance_source import BalanceSource as ConfigBalanceSource
 from config.models.exchange_name import ExchangeName
+from config.models.trading_profile import TradingProfile
 from config.secrets import SECRETS
 from config.timezone import CURRENT_TIMEZONE
 from data.exchanges import (
@@ -79,6 +80,7 @@ class SymbolContext:
     cycle_started: bool = False
     balance: float = 0.0
     balance_updated_at: Optional[datetime] = None
+    profile: TradingProfile = CONFIG.general.profile
 
 
 class TradingAdapterRouter(TradingAdapter):
@@ -131,6 +133,7 @@ class Application:
         self._event_logger = EventLogger(write=self._log_writer)
         self._focused_symbol: Optional[str] = None
         self._desired_symbols: Tuple[str, ...] = ()
+        self._symbol_profiles: Dict[str, TradingProfile] = {}
         self._telegram_client = TelegramClient(
             token=SECRETS.tg_bot_token,
             chat_id=CONFIG.telegram.chat_id,
@@ -400,8 +403,8 @@ class Application:
         )
 
     def _choose_wall(self, context: SymbolContext) -> Optional[Wall]:
-        bid_wall = check_if_has_near_wall(context.order_book, Side.BID)
-        ask_wall = check_if_has_near_wall(context.order_book, Side.ASK)
+        bid_wall = check_if_has_near_wall(context.order_book, Side.BID, context.profile)
+        ask_wall = check_if_has_near_wall(context.order_book, Side.ASK, context.profile)
         candidate: Optional[Wall] = None
         if bid_wall is not None and ask_wall is not None:
             candidate = bid_wall if bid_wall.notional >= ask_wall.notional else ask_wall
@@ -423,7 +426,12 @@ class Application:
         opposite_blocks = False
         if wall is not None:
             move_side = Side.ASK if wall.side is Side.BID else Side.BID
-            opposite_blocks = check_if_has_opposite_wall(context.order_book, move_side, wall)
+            opposite_blocks = check_if_has_opposite_wall(
+                context.order_book,
+                move_side,
+                wall,
+                context.profile,
+            )
         return MarketObservation(
             timestamp=get_current_time(),
             symbol=context.symbol,
@@ -441,8 +449,14 @@ class Application:
         if not force and self._last_scan_at is not None:
             if timestamp - self._last_scan_at < self._scanner_interval:
                 return
-        symbols = self._scanner.scan()
+        scan_result = self._scanner.scan()
+        self._symbol_profiles = {symbol: profile for symbol, profile in scan_result}
+        symbols = tuple(symbol for symbol, _ in scan_result)
         self._desired_symbols = symbols
+        for symbol, profile in self._symbol_profiles.items():
+            context = self._contexts.get(symbol)
+            if context is not None:
+                context.profile = profile
         self._subscription_manager.update(symbols, timestamp)
         self._last_scan_at = timestamp
 
@@ -489,6 +503,7 @@ class Application:
             ticker_stream=exchange_data.stream_book_ticker(),
             filters=filters,
             trading_adapter=trading_adapter,
+            profile=self._symbol_profiles.get(symbol, CONFIG.general.profile),
         )
         startup_timestamp = get_current_time()
         self._event_logger.log(
