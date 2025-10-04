@@ -122,6 +122,9 @@ class SymbolContext:
     last_trade_price: Optional[float] = None
     best_bid: Optional[float] = None
     best_ask: Optional[float] = None
+    order_book_updated_at: Optional[datetime] = None
+    trade_updated_at: Optional[datetime] = None
+    ticker_updated_at: Optional[datetime] = None
     active: bool = False
     cycle_started: bool = False
     balance: float = 0.0
@@ -199,6 +202,10 @@ class Application:
             unsubscribe=self._unsubscribe_symbol,
             logger=self._event_logger,
         )
+        self._data_freshness_threshold = timedelta(
+            milliseconds=CONFIG.general.ws_silence_timeout_ms
+        )
+        self._stale_warnings: Dict[str, set[str]] = {}
         self._focus_controller = FocusController(
             focus_symbol=self._focus_symbol,
             defocus_symbol=self._defocus_symbol,
@@ -322,6 +329,7 @@ class Application:
         if context is None:
             return
         context.active = False
+        self._stale_warnings.pop(symbol, None)
         subscriptions = (
             context.depth_subscription,
             context.trade_subscription,
@@ -377,6 +385,7 @@ class Application:
         context.last_update_id = snapshot.last_update_id
         self._update_best_from_book(context)
         timestamp = snapshot.received_at
+        context.order_book_updated_at = timestamp
         self._event_logger.log(
             (
                 f"Снимок стакана {context.symbol} применён. "
@@ -394,11 +403,13 @@ class Application:
         if update.first_update_id > expected:
             context.feed_monitor.flag(StreamResyncReason.SEQUENCE_GAP)
             context.last_update_id = None
+            context.order_book_updated_at = None
             return
         if expected > update.last_update_id:
             return
         context.order_book.apply_update(update)
         context.last_update_id = update.last_update_id
+        context.order_book_updated_at = update.event_time
         self._update_best_from_book(context)
 
     @staticmethod
@@ -407,6 +418,16 @@ class Application:
         ask_level = context.order_book.best_ask()
         context.best_bid = None if bid_level is None else bid_level.price
         context.best_ask = None if ask_level is None else ask_level.price
+
+    def _is_data_fresh(
+        self, timestamp: Optional[datetime], now: Optional[datetime] = None
+    ) -> bool:
+        if timestamp is None:
+            return False
+        current = now or get_current_time()
+        if timestamp > current:
+            return True
+        return current - timestamp <= self._data_freshness_threshold
 
     def _process_depth_stream(self, context: SymbolContext) -> bool:
         buffer = context.depth_subscription._buffer
@@ -433,6 +454,7 @@ class Application:
             elif event.type is StreamEventType.RESYNC and event.reason is not None:
                 context.feed_monitor.flag(event.reason)
                 context.last_update_id = None
+                context.order_book_updated_at = None
                 timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
                 details = f" {event.details}." if event.details else ""
                 self._event_logger.log(
@@ -444,8 +466,7 @@ class Application:
                 )
         return processed
 
-    @staticmethod
-    def _process_trade_stream(context: SymbolContext) -> bool:
+    def _process_trade_stream(self, context: SymbolContext) -> bool:
         buffer = context.trade_subscription._buffer
         events = buffer.drain_pending()
         if not events:
@@ -461,12 +482,21 @@ class Application:
             if event.type is StreamEventType.DATA:
                 trade = cast(Trade, event.data)
                 if trade is not None:
+                    trade_time = trade.executed_at
+                    context.trade_updated_at = trade_time
                     context.last_trade_price = trade.price
-                    _, _, ratio, ready = context.volume_tracker.observe(
-                        event.timestamp, trade.price, trade.quantity
-                    )
-                    context.volume_ratio = ratio
-                    context.volume_spike = ready and ratio >= CONFIG.general.vol_spike_mult
+                    now = get_current_time()
+                    if self._is_data_fresh(trade_time, now):
+                        _, _, ratio, ready = context.volume_tracker.observe(
+                            trade_time, trade.price, trade.quantity
+                        )
+                        context.volume_ratio = ratio
+                        context.volume_spike = (
+                            ready and ratio >= CONFIG.general.vol_spike_mult
+                        )
+                    else:
+                        context.volume_ratio = 0.0
+                        context.volume_spike = False
         return processed
 
     @staticmethod
@@ -491,6 +521,7 @@ class Application:
         if latest_ticker is not None:
             context.best_bid = latest_ticker.bid_price
             context.best_ask = latest_ticker.ask_price
+            context.ticker_updated_at = latest_ticker.event_time
         return processed
 
     @staticmethod
@@ -515,6 +546,58 @@ class Application:
         )
 
     def _build_observation(self, context: SymbolContext) -> MarketObservation:
+        now = get_current_time()
+        stale_entries = []
+        if not self._is_data_fresh(context.order_book_updated_at, now):
+            order_book_updated_at = context.order_book_updated_at
+            if order_book_updated_at is None:
+                reason = "стакан не инициализирован"
+            else:
+                localized = order_book_updated_at.astimezone(CURRENT_TIMEZONE)
+                reason = (
+                    "стакан устарел (обновлён "
+                    f"{localized.isoformat(timespec='seconds')})"
+                )
+            stale_entries.append(("order_book", reason))
+        if not self._is_data_fresh(context.trade_updated_at, now):
+            trade_updated_at = context.trade_updated_at
+            if trade_updated_at is None:
+                reason = "нет свежих сделок"
+            else:
+                localized = trade_updated_at.astimezone(CURRENT_TIMEZONE)
+                reason = (
+                    "сделки устарели (последняя "
+                    f"{localized.isoformat(timespec='seconds')})"
+                )
+            stale_entries.append(("trade", reason))
+        if stale_entries:
+            recorded = self._stale_warnings.get(context.symbol, set())
+            current_keys = {key for key, _ in stale_entries}
+            new_messages = [message for key, message in stale_entries if key not in recorded]
+            if new_messages:
+                details = "; ".join(new_messages)
+                log_timestamp = now.astimezone(CURRENT_TIMEZONE)
+                self._event_logger.log(
+                    f"Пропуск наблюдения {context.symbol}: {details}.",
+                    log_timestamp,
+                )
+            self._stale_warnings[context.symbol] = current_keys
+            return MarketObservation(
+                timestamp=now,
+                symbol=context.symbol,
+                last_price=self._resolve_last_price(context),
+                tick_size=context.filters.price_tick_size,
+                pressure=None,
+                bid_wall=None,
+                ask_wall=None,
+                bid_opposite_wall_blocks=False,
+                ask_opposite_wall_blocks=False,
+                available_symbols=self._desired_symbols,
+                feed_status=context.feed_monitor.snapshot(),
+                volume_ratio=0.0,
+                volume_spike=False,
+            )
+        self._stale_warnings.pop(context.symbol, None)
         last_price = self._resolve_last_price(context)
         tick_size = context.filters.price_tick_size
         pressure = None
@@ -553,7 +636,7 @@ class Application:
                 context.profile,
             )
         return MarketObservation(
-            timestamp=get_current_time(),
+            timestamp=now,
             symbol=context.symbol,
             last_price=last_price,
             tick_size=tick_size,
