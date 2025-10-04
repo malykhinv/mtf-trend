@@ -9,6 +9,7 @@ class GeneralSettings:
     exchange: ExchangeName
     profile: TradingProfile
     loop_interval_ms: int
+    ws_silence_timeout_ms: int
     odr_smooth_samples: int
     recent_band_s: int
     recent_band_s_vol_boost: int
