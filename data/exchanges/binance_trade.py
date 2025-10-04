@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import socket
 import time
 from dataclasses import dataclass
@@ -56,6 +57,7 @@ class BinanceTradingAdapter(TradingAdapter):
         self._max_retries = max(0, int(max_retries))
         self._retry_delay = max(0.0, float(retry_delay))
         self._retry_backoff = max(1.0, float(retry_backoff))
+        self._logger = logging.getLogger(__name__)
 
     def get_balance(self, source: BalanceSource) -> float:
         response = self._signed_request("GET", "/fapi/v2/balance")
@@ -75,7 +77,7 @@ class BinanceTradingAdapter(TradingAdapter):
             code=None,
         )
 
-    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
+    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> Optional[int]:
         margin_type = "ISOLATED" if margin_mode is MarginMode.ISOLATED else "CROSSED"
         try:
             self._signed_request(
@@ -90,14 +92,64 @@ class BinanceTradingAdapter(TradingAdapter):
             # -4046 means the margin type is already set – ignore silently
             if error.code != -4046:
                 raise
-        self._signed_request(
-            "POST",
-            "/fapi/v1/leverage",
-            {
-                "symbol": self._symbol,
-                "leverage": leverage,
-            },
-        )
+        try:
+            self._signed_request(
+                "POST",
+                "/fapi/v1/leverage",
+                {
+                    "symbol": self._symbol,
+                    "leverage": leverage,
+                },
+            )
+            return leverage
+        except BinanceAPIError as error:
+            if not self._is_invalid_leverage_error(error):
+                raise
+            bounds = self._resolve_leverage_bounds()
+            if bounds is None:
+                self._logger.warning(
+                    "Binance rejected leverage %s for %s (%s). Unable to fetch leverage bounds.",
+                    leverage,
+                    self._symbol,
+                    error,
+                )
+                return None
+            min_leverage, max_leverage = bounds
+            adjusted = min(max(leverage, min_leverage), max_leverage)
+            if adjusted == leverage:
+                self._logger.warning(
+                    "Binance rejected leverage %s for %s despite being within bounds [%s, %s]: %s",
+                    leverage,
+                    self._symbol,
+                    min_leverage,
+                    max_leverage,
+                    error,
+                )
+                return None
+            try:
+                self._signed_request(
+                    "POST",
+                    "/fapi/v1/leverage",
+                    {
+                        "symbol": self._symbol,
+                        "leverage": adjusted,
+                    },
+                )
+                self._logger.warning(
+                    "Adjusted leverage for %s from %s to nearest supported value %s.",
+                    self._symbol,
+                    leverage,
+                    adjusted,
+                )
+                return adjusted
+            except BinanceAPIError as adjusted_error:
+                self._logger.warning(
+                    "Failed to set adjusted leverage %s for %s: %s",
+                    adjusted,
+                    self._symbol,
+                    adjusted_error,
+                )
+                return None
 
     def place_market(
         self,
@@ -227,6 +279,48 @@ class BinanceTradingAdapter(TradingAdapter):
             text = str(error)
         text = (text or "").strip() or error.__class__.__name__
         return f"Connection error: {text}"
+
+    @staticmethod
+    def _is_invalid_leverage_error(error: BinanceAPIError) -> bool:
+        message = (str(error) or "").lower()
+        return "leverage" in message and "not valid" in message
+
+    def _resolve_leverage_bounds(self) -> Optional[tuple[int, int]]:
+        try:
+            payload = self._signed_request(
+                "GET",
+                "/fapi/v2/leverageBracket",
+                {"symbol": self._symbol},
+            )
+        except BinanceAPIError as error:
+            self._logger.warning(
+                "Unable to fetch Binance leverage brackets for %s: %s",
+                self._symbol,
+                error,
+            )
+            return None
+        brackets: list[int] = []
+        entries = payload if isinstance(payload, list) else []
+        for entry in entries:
+            if not isinstance(entry, Mapping):
+                continue
+            if entry.get("symbol", "").upper() != self._symbol:
+                continue
+            raw_brackets = entry.get("brackets")
+            if isinstance(raw_brackets, list):
+                for bracket in raw_brackets:
+                    if not isinstance(bracket, Mapping):
+                        continue
+                    leverage_value = bracket.get("initialLeverage")
+                    try:
+                        parsed = int(float(leverage_value))
+                    except (TypeError, ValueError):
+                        continue
+                    if parsed > 0:
+                        brackets.append(parsed)
+        if not brackets:
+            return None
+        return min(brackets), max(brackets)
 
     @staticmethod
     def _translate_error(payload: str, *, status_code: Optional[int] = None) -> BinanceAPIError:

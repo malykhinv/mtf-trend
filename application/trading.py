@@ -25,8 +25,8 @@ class NoopTradingAdapter(TradingAdapter):
     def get_balance(self, source: BalanceSource) -> float:
         return self._balance
 
-    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> None:
-        return
+    def set_leverage(self, leverage: int, margin_mode: MarginMode) -> Optional[int]:
+        return leverage
 
     def place_market(
         self,
