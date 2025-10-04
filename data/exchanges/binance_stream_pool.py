@@ -166,7 +166,8 @@ class _CombinedStreamWorker:
             registrations = list(self._registrations.values())
         for registration in registrations:
             try:
-                registration.on_error(reason, details)
+                detailed_message = f"{details} (symbol {registration.symbol})"
+                registration.on_error(reason, detailed_message)
             except Exception:
                 pass
 
