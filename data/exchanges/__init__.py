@@ -8,6 +8,7 @@ from .base import (
     StreamBuffer,
     StreamEvent,
     StreamEventType,
+    StreamSubscription,
 )
 from .binance import BinanceExchangeData
 from .binance_trade import BinanceTradingAdapter
@@ -24,6 +25,7 @@ __all__ = [
     "StreamBuffer",
     "StreamEvent",
     "StreamEventType",
+    "StreamSubscription",
     "BinanceExchangeData",
     "BinanceTradingAdapter",
     "BybitExchangeData",

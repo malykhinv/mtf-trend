@@ -1,6 +1,6 @@
 from .best_bid_ask import BestBidAsk
 from .depth_stream_data import DepthStreamData
-from .exchange_data import IExchangeData
+from .exchange_data import IExchangeData, StreamSubscription
 from .exchange_logger import ExchangeLogger
 from .exchange_trade import IExchangeTrade
 from .resync_reason import ResyncReason
@@ -18,4 +18,5 @@ __all__ = [
     "StreamBuffer",
     "StreamEvent",
     "StreamEventType",
+    "StreamSubscription",
 ]

@@ -30,6 +30,7 @@ from .base import (
     ResyncReason,
     StreamBuffer,
     StreamEvent,
+    StreamSubscription,
 )
 from utils.timez import from_exchange_timestamp, get_current_time
 
@@ -189,7 +190,7 @@ class BinanceExchangeData:
             next_funding += interval
         return next_funding
 
-    def stream_depth(self) -> Iterator[StreamEvent[DepthStreamData]]:
+    def stream_depth(self) -> StreamSubscription[DepthStreamData]:
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(
             name="depth",
             logger=self._logger,
@@ -206,12 +207,16 @@ class BinanceExchangeData:
             daemon=True,
         )
         worker.start()
-        try:
-            while True:
-                yield buffer.next()
-        finally:
-            buffer.stop()
-            worker.join(timeout=1.0)
+
+        def iterator() -> Iterator[StreamEvent[DepthStreamData]]:
+            try:
+                while True:
+                    yield buffer.next()
+            finally:
+                buffer.stop()
+                worker.join(timeout=1.0)
+
+        return StreamSubscription(events=iterator(), _buffer=buffer, _worker=worker)
 
     def _run_depth_stream(self, buffer: StreamBuffer[DepthStreamData]) -> None:
         url = f"{self._endpoints.ws_base}/{self.symbol.lower()}@depth@100ms"
@@ -301,21 +306,21 @@ class BinanceExchangeData:
             return
         buffer.push_snapshot(snapshot)
 
-    def stream_book_ticker(self) -> Iterator[StreamEvent[BestBidAsk]]:
+    def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
         return self._run_simple_stream(
             name="book_ticker",
             url=f"{self._endpoints.ws_base}/{self.symbol.lower()}@bookTicker",
             parser=self._parse_book_ticker,
         )
 
-    def stream_trades(self) -> Iterator[StreamEvent[Trade]]:
+    def stream_trades(self) -> StreamSubscription[Trade]:
         return self._run_simple_stream(
             name="trades",
             url=f"{self._endpoints.ws_base}/{self.symbol.lower()}@aggTrade",
             parser=self._parse_trade,
         )
 
-    def stream_kline_1m(self) -> Iterator[StreamEvent[Candle]]:
+    def stream_kline_1m(self) -> StreamSubscription[Candle]:
         return self._run_simple_stream(
             name="kline_1m",
             url=f"{self._endpoints.ws_base}/{self.symbol.lower()}@kline_1m",
@@ -327,7 +332,7 @@ class BinanceExchangeData:
         name: str,
         url: str,
         parser: Callable[[dict[str, Any]], Iterable[Any]],
-    ) -> Iterator[StreamEvent[Any]]:
+    ) -> StreamSubscription[Any]:
         buffer: StreamBuffer[Any] = StreamBuffer(
             name=name,
             logger=self._logger,
@@ -342,12 +347,16 @@ class BinanceExchangeData:
             daemon=True,
         )
         worker.start()
-        try:
-            while True:
-                yield buffer.next()
-        finally:
-            buffer.stop()
-            worker.join(timeout=1.0)
+
+        def iterator() -> Iterator[StreamEvent[Any]]:
+            try:
+                while True:
+                    yield buffer.next()
+            finally:
+                buffer.stop()
+                worker.join(timeout=1.0)
+
+        return StreamSubscription(events=iterator(), _buffer=buffer, _worker=worker)
 
     def _stream_worker(
         self,
