@@ -518,6 +518,8 @@ class BinanceExchangeData:
             name="trades",
             url=f"{self._endpoints.ws_base}/{self.symbol.lower()}@aggTrade",
             parser=self._parse_trade,
+            drop_oldest_on_overflow=True,
+            maxsize=4096,
         )
 
     def stream_kline_1m(self) -> StreamSubscription[Candle]:
@@ -534,6 +536,7 @@ class BinanceExchangeData:
         parser: Callable[[dict[str, Any]], Iterable[Any]],
         *,
         drop_oldest_on_overflow: bool = False,
+        maxsize: int | None = None,
     ) -> StreamSubscription[Any]:
         silence_timeout = self._silence_timeout
         heartbeat_interval = self._heartbeat_interval
@@ -543,6 +546,7 @@ class BinanceExchangeData:
             logger=self._logger,
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
+            maxsize=maxsize,
             drop_oldest_on_overflow=drop_oldest_on_overflow,
         )
 

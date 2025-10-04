@@ -20,12 +20,13 @@ class StreamBuffer(Generic[T]):
         logger: ExchangeLogger,
         silence_timeout: float,
         heartbeat_interval: Optional[float] = None,
-        maxsize: int = 1024,
+        maxsize: int | None = None,
         drop_oldest_on_overflow: bool = False,
     ) -> None:
         self._name = name
         self._logger = logger
-        self._queue: "queue.Queue[StreamEvent[T]]" = queue.Queue(maxsize)
+        queue_size = 1024 if maxsize is None else int(maxsize)
+        self._queue: "queue.Queue[StreamEvent[T]]" = queue.Queue(queue_size)
         self._silence_timeout = silence_timeout
         self._heartbeat_interval = (
             heartbeat_interval if heartbeat_interval is not None else silence_timeout / 2
