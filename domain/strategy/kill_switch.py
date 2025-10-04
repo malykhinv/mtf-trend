@@ -53,10 +53,7 @@ class KillSwitch:
         if self._block_until is None or block_until > self._block_until:
             self._block_until = block_until
         self._last_block_at = timestamp
-        self.logger.log(
-            f"{timestamp:%H:%M:%S} Блокировка торгов: ожидание после ресинка.",
-            timestamp,
-        )
+        self.logger.log("Блокировка торгов: ожидание после ресинка.", timestamp)
 
     def _purge_stops(self, timestamp: datetime) -> None:
         if self.stop_interval <= timedelta(0):
@@ -87,10 +84,7 @@ class KillSwitch:
         if self._block_until is None or block_until > self._block_until:
             self._block_until = block_until
         self._last_block_at = timestamp
-        self.logger.log(
-            f"{timestamp:%H:%M:%S} Блокировка торгов: {reason}.",
-            timestamp,
-        )
+        self.logger.log(f"Блокировка торгов: {reason}.", timestamp)
 
 
 __all__ = ["KillSwitch"]
