@@ -274,8 +274,13 @@ class BinanceExchangeData:
         def handle_error(reason: ResyncReason, details: str) -> None:
             suffix = f"(symbol {self.symbol})"
             message = details if suffix in details else f"{details} {suffix}"
+            should_log = not (
+                reason == ResyncReason.CONNECTION_LOST
+                and "ошибка чтения сокета" in details
+            )
             buffer.push_resync(reason, message)
-            self._logger.log(message)
+            if should_log:
+                self._logger.log(message)
 
         release = self._stream_pool.register_depth(
             self.symbol,
@@ -441,8 +446,13 @@ class BinanceExchangeData:
         def handle_error(reason: ResyncReason, details: str) -> None:
             suffix = f"(symbol {self.symbol})"
             message = details if suffix in details else f"{details} {suffix}"
+            should_log = not (
+                reason == ResyncReason.CONNECTION_LOST
+                and "ошибка чтения сокета" in details
+            )
             buffer.push_resync(reason, message)
-            self._logger.log(message)
+            if should_log:
+                self._logger.log(message)
 
         release = self._stream_pool.register_book_ticker(
             self.symbol,
@@ -478,8 +488,13 @@ class BinanceExchangeData:
         def handle_error(reason: ResyncReason, details: str) -> None:
             suffix = f"(symbol {self.symbol})"
             message = details if suffix in details else f"{details} {suffix}"
+            should_log = not (
+                reason == ResyncReason.CONNECTION_LOST
+                and "ошибка чтения сокета" in details
+            )
             buffer.push_resync(reason, message)
-            self._logger.log(message)
+            if should_log:
+                self._logger.log(message)
 
         release = self._stream_pool.register_trades(
             self.symbol,
