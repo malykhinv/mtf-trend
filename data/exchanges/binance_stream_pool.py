@@ -1,9 +1,8 @@
-from __future__ import annotations
-
 import json
 import threading
 import time
 from dataclasses import dataclass
+from queue import Empty, Queue
 from typing import Any, Callable, Dict, Optional
 
 from websocket import WebSocketTimeoutException, create_connection
@@ -26,7 +25,7 @@ class _CombinedStreamWorker:
     def __init__(
         self,
         name: str,
-        combined_base: str,
+        ws_base: str,
         stream_suffix: str,
         *,
         ws_timeout: float,
@@ -35,7 +34,7 @@ class _CombinedStreamWorker:
         max_streams: int,
     ) -> None:
         self._name = name
-        self._combined_base = combined_base
+        self._ws_base = ws_base
         self._stream_suffix = stream_suffix
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
@@ -45,6 +44,8 @@ class _CombinedStreamWorker:
         self._stop_event = threading.Event()
         self._registrations: Dict[str, _Registration] = {}
         self._logger = ExchangeLogger(f"Binance pool:{name}", log_writer)
+        self._command_queue: "Queue[tuple[str, str]]" = Queue()
+        self._next_request_id = 1
         self._thread = threading.Thread(
             target=self._run,
             name=f"binance-pool-{name}",
@@ -98,6 +99,7 @@ class _CombinedStreamWorker:
         )
 
         released = threading.Event()
+        self._command_queue.put(("subscribe", symbol))
 
         def release() -> None:
             if released.is_set():
@@ -107,6 +109,7 @@ class _CombinedStreamWorker:
                 current = len(self._registrations)
                 self._update_event.set()
             released.set()
+            self._command_queue.put(("unsubscribe", symbol))
             self._logger.log(
                 (
                     "Binance {stream} stream: удален символ {symbol}, "
@@ -146,7 +149,7 @@ class _CombinedStreamWorker:
         with self._lock:
             return self._registrations.get(symbol)
 
-    def _restart_requested(self) -> bool:
+    def _restart_requested(self) -> None:
         with self._lock:
             registrations = list(self._registrations.values())
 
@@ -156,6 +159,7 @@ class _CombinedStreamWorker:
                 continue
 
             processed_symbols.append(registration.symbol)
+            self._command_queue.put(("resubscribe", registration.symbol))
             details = (
                 "Binance {stream} stream: таймаут тишины для {symbol}, "
                 "запрос повторной синхронизации"
@@ -174,8 +178,6 @@ class _CombinedStreamWorker:
                     "синхронизации из буферов: {symbols}"
                 ).format(stream=self._name, symbols=joined)
             )
-
-        return False
 
     def _notify_all(self, reason: ResyncReason, details: str) -> None:
         with self._lock:
@@ -196,9 +198,11 @@ class _CombinedStreamWorker:
             self._update_event.clear()
         return ()
 
-    def _build_url(self, symbols: tuple[str, ...]) -> str:
-        streams = "/".join(f"{symbol.lower()}@{self._stream_suffix}" for symbol in symbols)
-        return f"{self._combined_base}{streams}"
+    def _enqueue_all_symbols(self) -> None:
+        with self._lock:
+            symbols = tuple(self._registrations.keys())
+        for symbol in symbols:
+            self._command_queue.put(("subscribe", symbol))
 
     def _extract_symbol(self, payload: dict[str, Any]) -> Optional[str]:
         data = payload.get("data")
@@ -211,9 +215,74 @@ class _CombinedStreamWorker:
             raw_stream = payload.get("stream")
             if isinstance(raw_stream, str):
                 symbol = raw_stream.split("@", 1)[0]
+        if symbol is None and isinstance(payload.get("s"), str):
+            symbol = str(payload.get("s")).upper()
         if symbol is None:
             return None
         return symbol.upper()
+
+    def _stream_name(self, symbol: str) -> str:
+        return f"{symbol.lower()}@{self._stream_suffix}"
+
+    def _send_command(self, ws: Any, method: str, params: list[Any]) -> None:
+        request_id = self._next_request_id
+        self._next_request_id += 1
+        message = json.dumps({"method": method, "params": params, "id": request_id})
+        ws.send(message)
+
+    def _send_set_combined(self, ws: Any) -> None:
+        try:
+            self._send_command(ws, "SET_PROPERTY", ["combined", True])
+        except Exception:
+            pass
+
+    def _process_commands(self, ws: Any, active_symbols: set[str]) -> None:
+        while True:
+            try:
+                action, symbol = self._command_queue.get_nowait()
+            except Empty:
+                break
+            if action == "subscribe":
+                if self._get_registration(symbol) is None or symbol in active_symbols:
+                    continue
+                stream_name = self._stream_name(symbol)
+                try:
+                    self._send_command(ws, "SUBSCRIBE", [stream_name])
+                except Exception:
+                    continue
+                active_symbols.add(symbol)
+            elif action == "unsubscribe":
+                if symbol not in active_symbols:
+                    continue
+                stream_name = self._stream_name(symbol)
+                try:
+                    self._send_command(ws, "UNSUBSCRIBE", [stream_name])
+                except Exception:
+                    pass
+                active_symbols.discard(symbol)
+            elif action == "resubscribe":
+                if self._get_registration(symbol) is None:
+                    continue
+                stream_name = self._stream_name(symbol)
+                if symbol in active_symbols:
+                    try:
+                        self._send_command(ws, "UNSUBSCRIBE", [stream_name])
+                    except Exception:
+                        pass
+                    time.sleep(0.05)
+                    active_symbols.discard(symbol)
+                try:
+                    self._send_command(ws, "SUBSCRIBE", [stream_name])
+                except Exception:
+                    continue
+                active_symbols.add(symbol)
+
+    def _drain_pending_commands(self) -> None:
+        while True:
+            try:
+                self._command_queue.get_nowait()
+            except Empty:
+                break
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
@@ -221,15 +290,16 @@ class _CombinedStreamWorker:
             if not symbols:
                 continue
 
-            url = self._build_url(symbols)
+            self._enqueue_all_symbols()
             ws = None
             try:
                 ws = create_connection(
-                    url,
+                    self._ws_base,
                     timeout=self._ws_timeout,
                     enable_multithread=True,
                 )
                 ws.settimeout(self._ws_timeout)
+                self._next_request_id = 1
                 self._logger.log(
                     (
                         "Binance {stream} stream: открыто соединение для {count} "
@@ -241,29 +311,50 @@ class _CombinedStreamWorker:
                         symbols=", ".join(symbols),
                     )
                 )
+                active_symbols: set[str] = set()
+                self._send_set_combined(ws)
                 while not self._stop_event.is_set():
-                    if self._update_event.is_set():
-                        self._update_event.clear()
-                        break
-                    if self._restart_requested():
+                    self._process_commands(ws, active_symbols)
+                    self._restart_requested()
+                    if not self._current_symbols() and not active_symbols:
                         break
                     try:
                         raw = ws.recv()
                     except WebSocketTimeoutException:
                         continue
+                    except Exception as exc:  # noqa: BLE001
+                        if self._stop_event.is_set():
+                            break
+                        details = (
+                            "Binance {stream} stream: ошибка чтения сокета: {error}"
+                        ).format(stream=self._name, error=exc)
+                        self._logger.log(details)
+                        self._notify_all(ResyncReason.CONNECTION_LOST, details)
+                        break
+                    self._process_commands(ws, active_symbols)
                     if not raw:
                         continue
                     try:
                         payload = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
+                    if not isinstance(payload, dict):
+                        continue
+                    if "result" in payload:
+                        continue
                     symbol = self._extract_symbol(payload)
-                    if symbol is None:
+                    data = payload.get("data") if isinstance(payload.get("data"), dict) else None
+                    if symbol is None and isinstance(payload.get("s"), str):
+                        symbol = str(payload.get("s")).upper()
+                        if data is None:
+                            data = payload
+                    if symbol is None or data is None:
                         continue
                     registration = self._get_registration(symbol)
                     if registration is None:
                         continue
-                    data = payload.get("data")
+                    if symbol not in active_symbols:
+                        active_symbols.add(symbol)
                     if not isinstance(data, dict):
                         continue
                     try:
@@ -291,6 +382,7 @@ class _CombinedStreamWorker:
                         ws.close()
                     except Exception:
                         pass
+                self._drain_pending_commands()
 
 
 class _StreamWorkerPool:
@@ -298,14 +390,14 @@ class _StreamWorkerPool:
         self,
         *,
         name: str,
-        combined_base: str,
+        ws_base: str,
         stream_suffix: str,
         ws_timeout: float,
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._name = name
-        self._combined_base = combined_base
+        self._ws_base = ws_base
         self._stream_suffix = stream_suffix
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
@@ -319,7 +411,7 @@ class _StreamWorkerPool:
         worker_name = f"{self._name}#{self._counter}"
         worker = _CombinedStreamWorker(
             worker_name,
-            self._combined_base,
+            self._ws_base,
             self._stream_suffix,
             ws_timeout=self._ws_timeout,
             reconnect_delay=self._reconnect_delay,
@@ -371,14 +463,12 @@ class BinanceStreamPool:
         log_writer: Optional[Callable[[str], None]] = None,
     ) -> None:
         base = endpoints_ws_base.rstrip("/")
-        if base.endswith("ws"):
-            base = base[: -2]
-        if base.endswith("/"):
-            base = base[:-1]
-        self._combined_base = f"{base}/stream?streams="
+        if not base.endswith("/ws"):
+            base = f"{base}/ws"
+        self._ws_base = base
         self._depth_worker = _StreamWorkerPool(
             name="depth",
-            combined_base=self._combined_base,
+            ws_base=self._ws_base,
             stream_suffix="depth@100ms",
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
@@ -386,7 +476,7 @@ class BinanceStreamPool:
         )
         self._trades_worker = _StreamWorkerPool(
             name="trades",
-            combined_base=self._combined_base,
+            ws_base=self._ws_base,
             stream_suffix="aggTrade",
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
@@ -394,7 +484,7 @@ class BinanceStreamPool:
         )
         self._book_worker = _StreamWorkerPool(
             name="book_ticker",
-            combined_base=self._combined_base,
+            ws_base=self._ws_base,
             stream_suffix="bookTicker",
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
