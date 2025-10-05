@@ -133,6 +133,7 @@ class SymbolContext:
     volume_tracker: VolumeSpikeTracker = field(default_factory=VolumeSpikeTracker)
     volume_ratio: float = 0.0
     volume_spike: bool = False
+    last_depth_silence_recovery_at: Optional[datetime] = None
 
 
 class TradingAdapterRouter(TradingAdapter):
@@ -197,6 +198,7 @@ class Application:
         self._balance_source = self._map_balance_source(CONFIG.position.balance_source)
         self._balance_refresh_interval = timedelta(hours=CONFIG.position.balance_refresh_h)
         self._last_balance_refresh_at: Optional[datetime] = None
+        self._silence_recovery_cooldown = timedelta(seconds=5)
         self._subscription_manager = SubscriptionManager(
             subscribe=self._subscribe_symbol,
             unsubscribe=self._unsubscribe_symbol,
@@ -419,6 +421,37 @@ class Application:
         context.best_bid = None if bid_level is None else bid_level.price
         context.best_ask = None if ask_level is None else ask_level.price
 
+    def _recover_depth_from_silence(
+        self,
+        context: SymbolContext,
+        details: Optional[str],
+        occurred_at: datetime,
+    ) -> bool:
+        now = get_current_time()
+        last = context.last_depth_silence_recovery_at
+        if last is not None and now - last < self._silence_recovery_cooldown:
+            context.feed_monitor.has_silence_timeout = False
+            return True
+        try:
+            snapshot = context.exchange_data.fetch_orderbook_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            message = (
+                f"Не удалось восстановить стакан {context.symbol} после тишины: {exc}"
+            )
+            timestamp = occurred_at.astimezone(CURRENT_TIMEZONE)
+            self._event_logger.log(message, timestamp)
+            return False
+        self._apply_snapshot(context, snapshot)
+        context.feed_monitor.has_silence_timeout = False
+        context.last_depth_silence_recovery_at = now
+        timestamp = occurred_at.astimezone(CURRENT_TIMEZONE)
+        suffix = f" {details}" if details else ""
+        self._event_logger.log(
+            f"Стакан {context.symbol} восстановлен после тишины.{suffix}",
+            timestamp,
+        )
+        return True
+
     def _is_data_fresh(
         self, timestamp: Optional[datetime], now: Optional[datetime] = None
     ) -> bool:
@@ -452,6 +485,15 @@ class Application:
                     self._apply_snapshot(context, snapshot)
                     context.feed_monitor.clear()
             elif event.type is StreamEventType.RESYNC and event.reason is not None:
+                if (
+                    event.reason is StreamResyncReason.SILENCE_TIMEOUT
+                    and self._recover_depth_from_silence(
+                        context,
+                        event.details,
+                        event.timestamp,
+                    )
+                ):
+                    continue
                 context.feed_monitor.flag(event.reason)
                 context.last_update_id = None
                 context.order_book_updated_at = None
