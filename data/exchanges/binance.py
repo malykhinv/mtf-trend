@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from http.client import RemoteDisconnected
-from typing import Any, Callable, ClassVar, Iterable, Iterator, Optional, Protocol
+from typing import Any, Callable, ClassVar, Iterable, Iterator, Optional
 from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -22,7 +22,9 @@ from domain.models import (
     SymbolFilters,
     Trade,
 )
+from utils.async_websocket import ThreadedWebSocketClient, WebSocketTimeoutError
 from utils.timez import from_exchange_timestamp, get_current_time
+
 from .base import (
     BestBidAsk,
     DepthStreamData,
@@ -35,21 +37,13 @@ from .base import (
 from .binance_stream_pool import BinanceStreamPool
 
 
+WebSocketClient = ThreadedWebSocketClient
+
+
 @dataclass(slots=True)
 class BinanceEndpoints:
     rest_base: str = "https://fapi.binance.com"
     ws_base: str = "wss://fstream.binance.com/ws"
-
-
-class WebSocketClient(Protocol):
-    def recv(self) -> str: ...
-
-    def send(self, data: str) -> None: ...
-
-    def close(self) -> None: ...
-
-    def settimeout(self, timeout: float) -> None: ...
-
 
 BINANCE_ALLOWED_DEPTH_LIMITS: frozenset[int] = frozenset({5, 10, 20, 50, 100, 500, 1000})
 MIN_STREAM_SILENCE_TIMEOUT_MS = 1500.0
@@ -646,10 +640,13 @@ class BinanceExchangeData:
     def _connect_websocket(
         self, url: str
     ) -> tuple["WebSocketClient", type[Exception]]:
-        from websocket import WebSocketTimeoutException, create_connection
-
-        connection = create_connection(url, timeout=self._ws_timeout, enable_multithread=True)
-        return connection, WebSocketTimeoutException
+        connection = ThreadedWebSocketClient(
+            url,
+            timeout=self._ws_timeout,
+            heartbeat_interval=self._heartbeat_interval,
+            heartbeat_timeout=self._ws_timeout,
+        )
+        return connection, WebSocketTimeoutError
 
     @staticmethod
     def _build_level(
