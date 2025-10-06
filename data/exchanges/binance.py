@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from http.client import RemoteDisconnected
-from typing import Any, Callable, ClassVar, Iterable, Iterator, Optional
+from typing import Any, Callable, ClassVar, Iterable, Iterator, Optional, cast
 from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -562,7 +562,7 @@ class BinanceExchangeData:
     ) -> None:
         reconnect_after_silence = False
         while not buffer.stopped():
-            ws: WebSocketClient | None = None
+            client: WebSocketClient | None = None
             try:
                 if reconnect_after_silence:
                     self._logger.log(
@@ -570,8 +570,8 @@ class BinanceExchangeData:
                     )
                 else:
                     self._logger.log(f"Binance {name} stream: открываем соединение")
-                ws, timeout_exception = self._connect_websocket(url)
-                ws.settimeout(self._ws_timeout)
+                client = self._connect_websocket(url)
+                client.settimeout(self._ws_timeout)
                 if reconnect_after_silence:
                     self._logger.log(
                         f"Binance {name} stream: соединение успешно восстановлено"
@@ -585,8 +585,8 @@ class BinanceExchangeData:
                         )
                         break
                     try:
-                        raw = ws.recv()
-                    except timeout_exception:
+                        message = cast(dict[str, Any], client.recv_json())
+                    except WebSocketTimeoutError:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
                             self._logger.log(
@@ -595,7 +595,7 @@ class BinanceExchangeData:
                             break
                         buffer.push(StreamEvent.heartbeat())
                         continue
-                    if not raw:
+                    if not message:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
                             self._logger.log(
@@ -603,7 +603,6 @@ class BinanceExchangeData:
                             )
                             break
                         continue
-                    message = json.loads(raw)
                     for payload in parser(message):
                         buffer.push_data(payload)
                     if buffer.consume_restart_request():
@@ -631,22 +630,21 @@ class BinanceExchangeData:
                     self._logger.log(details)
                     time.sleep(self._reconnect_delay)
             finally:
-                if ws is not None:
+                if client is not None:
                     try:
-                        ws.close()
+                        client.close()
                     except Exception:
                         pass
 
     def _connect_websocket(
         self, url: str
-    ) -> tuple["WebSocketClient", type[Exception]]:
-        connection = ThreadedWebSocketClient(
+    ) -> "WebSocketClient":
+        return ThreadedWebSocketClient(
             url,
             timeout=self._ws_timeout,
             heartbeat_interval=self._heartbeat_interval,
             heartbeat_timeout=self._ws_timeout,
         )
-        return connection, WebSocketTimeoutError
 
     @staticmethod
     def _build_level(
