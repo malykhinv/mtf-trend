@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import socket
 import threading
@@ -32,7 +33,7 @@ from domain.models import (
     SymbolFilters,
     Trade,
 )
-from utils.async_websocket import ThreadedWebSocketClient, WebSocketTimeoutError
+from utils.async_websocket import AsyncWebSocketClient, WebSocketTimeoutError
 from utils.timez import from_exchange_timestamp, get_current_time
 from .base import (
     BestBidAsk,
@@ -91,7 +92,7 @@ class DepthEnvelope:
     event_time: datetime
 
 
-WebSocketClient = ThreadedWebSocketClient
+WebSocketClient = AsyncWebSocketClient
 
 
 MIN_STREAM_SILENCE_TIMEOUT_MS = 1500.0
@@ -289,10 +290,19 @@ class BybitExchangeData:
     def _run_depth_stream(self, buffer: StreamBuffer[DepthStreamData]) -> None:
         url = self._endpoints.ws_base
         topic = f"orderbook.50.{self.symbol}"
-        subscribe = json.dumps({"op": "subscribe", "args": [topic]})
+        subscribe_payload = {"op": "subscribe", "args": [topic]}
+        asyncio.run(self._depth_stream_worker(buffer, url, topic, subscribe_payload))
+
+    async def _depth_stream_worker(
+        self,
+        buffer: StreamBuffer[DepthStreamData],
+        url: str,
+        topic: str,
+        subscribe_payload: dict[str, Any],
+    ) -> None:
         reconnect_after_silence = False
         while not buffer.stopped():
-            ws: WebSocketClient | None = None
+            client: WebSocketClient | None = None
             try:
                 if reconnect_after_silence:
                     self._logger.log(
@@ -300,9 +310,9 @@ class BybitExchangeData:
                     )
                 else:
                     self._logger.log("Bybit depth stream: открываем соединение")
-                ws, timeout_exception = self._connect_websocket(url)
-                ws.settimeout(self._ws_timeout)
-                ws.send(subscribe)
+                client = await self._connect_websocket(url)
+                await client.set_timeout(self._ws_timeout)
+                await client.send_json(subscribe_payload)
                 if reconnect_after_silence:
                     self._logger.log("Bybit depth stream: соединение успешно восстановлено")
                     reconnect_after_silence = False
@@ -314,8 +324,8 @@ class BybitExchangeData:
                         )
                         break
                     try:
-                        raw = ws.recv()
-                    except timeout_exception:
+                        raw = await client.recv()
+                    except WebSocketTimeoutError:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
                             self._logger.log(
@@ -334,7 +344,7 @@ class BybitExchangeData:
                         continue
                     message = json.loads(raw)
                     if message.get("op") == "ping":
-                        ws.send(json.dumps({"op": "pong", "req_id": message.get("req_id")}))
+                        await client.send_json({"op": "pong", "req_id": message.get("req_id")})
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
                             self._logger.log(
@@ -370,16 +380,16 @@ class BybitExchangeData:
                     )
                     buffer.push_resync(reason, details)
                     self._logger.log(details)
-                    time.sleep(self._reconnect_delay)
+                    await asyncio.sleep(self._reconnect_delay)
                 else:
                     details = f"Bybit depth stream: {exc}"
                     buffer.push_resync(reason, details)
                     self._logger.log_resync(reason, details)
-                    time.sleep(self._reconnect_delay)
+                    await asyncio.sleep(self._reconnect_delay)
             finally:
-                if ws is not None:
+                if client is not None:
                     try:
-                        ws.close()
+                        await client.close()
                     except Exception:
                         pass
 
@@ -460,16 +470,15 @@ class BybitExchangeData:
             event_time=event_time,
         )
 
-    def _connect_websocket(
-        self, url: str
-    ) -> tuple[WebSocketClient, type[Exception]]:
-        connection = ThreadedWebSocketClient(
+    async def _connect_websocket(self, url: str) -> WebSocketClient:
+        client = WebSocketClient(
             url,
             timeout=self._ws_timeout,
             heartbeat_interval=self._heartbeat_interval,
             heartbeat_timeout=self._ws_timeout,
         )
-        return connection, WebSocketTimeoutError
+        await client.connect()
+        return client
 
     @staticmethod
     def _coerce_sequence_number(
@@ -580,11 +589,11 @@ class BybitExchangeData:
             heartbeat_interval=heartbeat_interval,
             drop_oldest_on_overflow=drop_oldest_on_overflow,
         )
-        subscribe = json.dumps({"op": "subscribe", "args": [topic]})
+        subscribe_payload = {"op": "subscribe", "args": [topic]}
 
         worker = threading.Thread(
             target=self._simple_worker,
-            args=(topic, parser, buffer, name, subscribe),
+            args=(topic, parser, buffer, name, subscribe_payload),
             name=f"bybit-{name}-{self.symbol.lower()}",
             daemon=True,
         )
@@ -606,12 +615,30 @@ class BybitExchangeData:
         parser: Callable[[dict[str, Any]], Iterable[Any]],
         buffer: StreamBuffer[Any],
         name: str,
-        subscribe: str,
+        subscribe_payload: dict[str, Any],
+    ) -> None:
+        asyncio.run(
+            self._simple_worker_async(
+                topic,
+                parser,
+                buffer,
+                name,
+                subscribe_payload,
+            )
+        )
+
+    async def _simple_worker_async(
+        self,
+        topic: str,
+        parser: Callable[[dict[str, Any]], Iterable[Any]],
+        buffer: StreamBuffer[Any],
+        name: str,
+        subscribe_payload: dict[str, Any],
     ) -> None:
         url = self._endpoints.ws_base
         reconnect_after_silence = False
         while not buffer.stopped():
-            ws: WebSocketClient | None = None
+            client: WebSocketClient | None = None
             try:
                 if reconnect_after_silence:
                     self._logger.log(
@@ -619,9 +646,9 @@ class BybitExchangeData:
                     )
                 else:
                     self._logger.log(f"Bybit {name} stream: открываем соединение")
-                ws, timeout_exception = self._connect_websocket(url)
-                ws.settimeout(self._ws_timeout)
-                ws.send(subscribe)
+                client = await self._connect_websocket(url)
+                await client.set_timeout(self._ws_timeout)
+                await client.send_json(subscribe_payload)
                 if reconnect_after_silence:
                     self._logger.log(
                         f"Bybit {name} stream: соединение успешно восстановлено"
@@ -635,8 +662,8 @@ class BybitExchangeData:
                         )
                         break
                     try:
-                        raw = ws.recv()
-                    except timeout_exception:
+                        raw = await client.recv()
+                    except WebSocketTimeoutError:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
                             self._logger.log(
@@ -655,7 +682,7 @@ class BybitExchangeData:
                         continue
                     message = json.loads(raw)
                     if message.get("op") == "ping":
-                        ws.send(json.dumps({"op": "pong", "req_id": message.get("req_id")}))
+                        await client.send_json({"op": "pong", "req_id": message.get("req_id")})
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
                             self._logger.log(
@@ -691,16 +718,16 @@ class BybitExchangeData:
                     )
                     buffer.push_resync(reason, details)
                     self._logger.log(details)
-                    time.sleep(self._reconnect_delay)
+                    await asyncio.sleep(self._reconnect_delay)
                 else:
                     details = f"Bybit {name} stream: {exc}"
                     buffer.push_resync(reason, details)
                     self._logger.log(details)
-                    time.sleep(self._reconnect_delay)
+                    await asyncio.sleep(self._reconnect_delay)
             finally:
-                if ws is not None:
+                if client is not None:
                     try:
-                        ws.close()
+                        await client.close()
                     except Exception:
                         pass
 
