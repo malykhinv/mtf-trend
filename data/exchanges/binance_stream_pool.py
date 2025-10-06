@@ -1,11 +1,11 @@
+import asyncio
 import json
 import threading
-import time
 from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Any, Callable, Dict, Optional
 
-from utils.async_websocket import ThreadedWebSocketClient, WebSocketTimeoutError
+from utils.async_websocket import AsyncWebSocketClient, WebSocketTimeoutError
 
 from .base import ExchangeLogger, ResyncReason, StreamBuffer
 
@@ -47,11 +47,14 @@ class _CombinedStreamWorker:
         self._command_queue: "Queue[tuple[str, str]]" = Queue()
         self._next_request_id = 1
         self._thread = threading.Thread(
-            target=self._run,
+            target=self._run_thread,
             name=f"binance-pool-{name}",
             daemon=True,
         )
         self._thread.start()
+
+    def _run_thread(self) -> None:
+        asyncio.run(self._run())
 
     def register(
         self,
@@ -189,15 +192,6 @@ class _CombinedStreamWorker:
             except Exception:
                 pass
 
-    def _wait_for_symbols(self) -> tuple[str, ...]:
-        while not self._stop_event.is_set():
-            symbols = self._current_symbols()
-            if symbols:
-                return symbols
-            self._update_event.wait(timeout=1.0)
-            self._update_event.clear()
-        return ()
-
     def _enqueue_all_symbols(self) -> None:
         with self._lock:
             symbols = tuple(self._registrations.keys())
@@ -224,19 +218,23 @@ class _CombinedStreamWorker:
     def _stream_name(self, symbol: str) -> str:
         return f"{symbol.lower()}@{self._stream_suffix}"
 
-    def _send_command(self, ws: Any, method: str, params: list[Any]) -> None:
+    async def _send_command(self, client: AsyncWebSocketClient, method: str, params: list[Any]) -> None:
         request_id = self._next_request_id
         self._next_request_id += 1
-        message = json.dumps({"method": method, "params": params, "id": request_id})
-        ws.send(message)
+        payload = {"method": method, "params": params, "id": request_id}
+        await client.send_json(payload)
 
-    def _send_set_combined(self, ws: Any) -> None:
+    async def _send_set_combined(self, client: AsyncWebSocketClient) -> None:
         try:
-            self._send_command(ws, "SET_PROPERTY", ["combined", True])
+            await self._send_command(client, "SET_PROPERTY", ["combined", True])
         except Exception:
             pass
 
-    def _process_commands(self, ws: Any, active_symbols: set[str]) -> None:
+    async def _process_commands(
+        self,
+        client: AsyncWebSocketClient,
+        active_symbols: set[str],
+    ) -> None:
         while True:
             try:
                 action, symbol = self._command_queue.get_nowait()
@@ -247,7 +245,7 @@ class _CombinedStreamWorker:
                     continue
                 stream_name = self._stream_name(symbol)
                 try:
-                    self._send_command(ws, "SUBSCRIBE", [stream_name])
+                    await self._send_command(client, "SUBSCRIBE", [stream_name])
                 except Exception:
                     continue
                 active_symbols.add(symbol)
@@ -256,7 +254,7 @@ class _CombinedStreamWorker:
                     continue
                 stream_name = self._stream_name(symbol)
                 try:
-                    self._send_command(ws, "UNSUBSCRIBE", [stream_name])
+                    await self._send_command(client, "UNSUBSCRIBE", [stream_name])
                 except Exception:
                     pass
                 active_symbols.discard(symbol)
@@ -266,13 +264,13 @@ class _CombinedStreamWorker:
                 stream_name = self._stream_name(symbol)
                 if symbol in active_symbols:
                     try:
-                        self._send_command(ws, "UNSUBSCRIBE", [stream_name])
+                        await self._send_command(client, "UNSUBSCRIBE", [stream_name])
                     except Exception:
                         pass
-                    time.sleep(0.05)
+                    await asyncio.sleep(0.05)
                     active_symbols.discard(symbol)
                 try:
-                    self._send_command(ws, "SUBSCRIBE", [stream_name])
+                    await self._send_command(client, "SUBSCRIBE", [stream_name])
                 except Exception:
                     continue
                 active_symbols.add(symbol)
@@ -284,22 +282,33 @@ class _CombinedStreamWorker:
             except Empty:
                 break
 
-    def _run(self) -> None:
+    async def _wait_for_symbols(self) -> tuple[str, ...]:
         while not self._stop_event.is_set():
-            symbols = self._wait_for_symbols()
+            symbols = self._current_symbols()
+            if symbols:
+                return symbols
+            if self._update_event.is_set():
+                self._update_event.clear()
+            await asyncio.sleep(1.0)
+        return ()
+
+    async def _run(self) -> None:
+        while not self._stop_event.is_set():
+            symbols = await self._wait_for_symbols()
             if not symbols:
                 continue
 
             self._enqueue_all_symbols()
-            ws: Optional[ThreadedWebSocketClient] = None
+            client: Optional[AsyncWebSocketClient] = None
             try:
-                ws = ThreadedWebSocketClient(
+                client = AsyncWebSocketClient(
                     self._ws_base,
                     timeout=self._ws_timeout,
                     heartbeat_interval=self._ws_timeout / 2 if self._ws_timeout > 0 else None,
                     heartbeat_timeout=self._ws_timeout,
                 )
-                ws.settimeout(self._ws_timeout)
+                await client.connect()
+                await client.set_timeout(self._ws_timeout)
                 self._next_request_id = 1
                 self._logger.log(
                     (
@@ -313,15 +322,17 @@ class _CombinedStreamWorker:
                     )
                 )
                 active_symbols: set[str] = set()
-                self._send_set_combined(ws)
+                await self._send_set_combined(client)
                 while not self._stop_event.is_set():
-                    self._process_commands(ws, active_symbols)
+                    await self._process_commands(client, active_symbols)
                     self._restart_requested()
                     if not self._current_symbols() and not active_symbols:
                         break
                     try:
-                        raw = ws.recv()
+                        payload = await client.recv_json()
                     except WebSocketTimeoutError:
+                        continue
+                    except json.JSONDecodeError:
                         continue
                     except Exception as exc:  # noqa: BLE001
                         if self._stop_event.is_set():
@@ -332,13 +343,7 @@ class _CombinedStreamWorker:
                         self._logger.log(details)
                         self._notify_all(ResyncReason.CONNECTION_LOST, details)
                         break
-                    self._process_commands(ws, active_symbols)
-                    if not raw:
-                        continue
-                    try:
-                        payload = json.loads(raw)
-                    except json.JSONDecodeError:
-                        continue
+                    await self._process_commands(client, active_symbols)
                     if not isinstance(payload, dict):
                         continue
                     if "result" in payload:
@@ -376,11 +381,11 @@ class _CombinedStreamWorker:
                 details = f"Binance {self._name} stream: {exc}"
                 self._logger.log(details)
                 self._notify_all(ResyncReason.CONNECTION_LOST, details)
-                time.sleep(self._reconnect_delay)
+                await asyncio.sleep(self._reconnect_delay)
             finally:
-                if ws is not None:
+                if client is not None:
                     try:
-                        ws.close()
+                        await client.close()
                     except Exception:
                         pass
                 self._drain_pending_commands()
