@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Any, Callable, Dict, Optional
 
-from websocket import WebSocketTimeoutException, create_connection
+from utils.async_websocket import ThreadedWebSocketClient, WebSocketTimeoutError
 
 from .base import ExchangeLogger, ResyncReason, StreamBuffer
 
@@ -291,12 +291,13 @@ class _CombinedStreamWorker:
                 continue
 
             self._enqueue_all_symbols()
-            ws = None
+            ws: Optional[ThreadedWebSocketClient] = None
             try:
-                ws = create_connection(
+                ws = ThreadedWebSocketClient(
                     self._ws_base,
                     timeout=self._ws_timeout,
-                    enable_multithread=True,
+                    heartbeat_interval=self._ws_timeout / 2 if self._ws_timeout > 0 else None,
+                    heartbeat_timeout=self._ws_timeout,
                 )
                 ws.settimeout(self._ws_timeout)
                 self._next_request_id = 1
@@ -320,7 +321,7 @@ class _CombinedStreamWorker:
                         break
                     try:
                         raw = ws.recv()
-                    except WebSocketTimeoutException:
+                    except WebSocketTimeoutError:
                         continue
                     except Exception as exc:  # noqa: BLE001
                         if self._stop_event.is_set():

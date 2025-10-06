@@ -1,3 +1,5 @@
+from utils.async_websocket import ThreadedWebSocketClient
+
 from .base import (
     BestBidAsk,
     DepthStreamData,
@@ -15,6 +17,8 @@ from .binance_trade import BinanceTradingAdapter
 from .bybit import BybitExchangeData
 from .bybit_trade import BybitTradingAdapter
 
+WebSocketClient = ThreadedWebSocketClient
+
 __all__ = [
     "BestBidAsk",
     "DepthStreamData",
@@ -30,4 +34,5 @@ __all__ = [
     "BinanceTradingAdapter",
     "BybitExchangeData",
     "BybitTradingAdapter",
+    "WebSocketClient",
 ]
