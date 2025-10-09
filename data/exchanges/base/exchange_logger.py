@@ -1,7 +1,6 @@
 from typing import Callable, Optional
 
 from domain.models import LogLine
-from data.logger import format_log_message
 from utils.timez import get_current_time
 from .resync_reason import ResyncReason
 
@@ -21,7 +20,7 @@ class ExchangeLogger:
             self._writer(LogLine(timestamp=timestamp, message=message, level=level))
         else:
             level_tag = level.upper() if level else "INFO"
-            print(format_log_message(timestamp, level_tag, message, use_color=True))
+            print(f"{timestamp:%H:%M:%S} [{level_tag}] {message}")
 
     def log_info(self, message: str) -> None:
         self.log(message, level="INFO")
