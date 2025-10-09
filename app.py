@@ -37,6 +37,7 @@ from domain.models import (
     BalanceSource,
     Exchange,
     ExecutionReport,
+    LogLine,
     MarginMode,
     OrderBookSnapshot,
     OrderBookUpdate,
@@ -312,11 +313,24 @@ class Application:
     def _subscribe_symbol(self, symbol: str) -> None:
         symbol = symbol.upper()
         context = self._contexts.get(symbol)
-        if context is None:
-            context = self._create_context(symbol)
-            self._contexts[symbol] = context
-        context.active = True
-        context.cycle_started = False
+        new_context: Optional[SymbolContext] = None
+        try:
+            if context is None:
+                new_context = self._create_context(symbol)
+                context = new_context
+            if context is None:
+                return
+            context.active = True
+            context.cycle_started = False
+        except Exception as exc:  # noqa: BLE001
+            self._log_error(f"Не удалось активировать {symbol}: {exc}")
+            if new_context is not None:
+                self._dispose_context(new_context)
+            elif context is not None:
+                self._dispose_context(context)
+            return
+        if new_context is not None:
+            self._contexts[symbol] = new_context
 
     @staticmethod
     def _stop_stream_subscription(subscription: StreamSubscription[Any]) -> None:
@@ -325,13 +339,8 @@ class Application:
         except Exception:
             pass
 
-    def _unsubscribe_symbol(self, symbol: str) -> None:
-        symbol = symbol.upper()
-        context = self._contexts.pop(symbol, None)
-        if context is None:
-            return
+    def _dispose_context(self, context: SymbolContext) -> None:
         context.active = False
-        self._stale_warnings.pop(symbol, None)
         subscriptions = (
             context.depth_subscription,
             context.trade_subscription,
@@ -339,9 +348,17 @@ class Application:
         )
         for subscription in subscriptions:
             self._stop_stream_subscription(subscription)
-        if self._focus_controller.current == symbol:
+        if self._focus_controller.current == context.symbol:
             timestamp = get_current_time()
             self._focus_controller.defocus(timestamp)
+
+    def _unsubscribe_symbol(self, symbol: str) -> None:
+        symbol = symbol.upper()
+        context = self._contexts.pop(symbol, None)
+        if context is None:
+            return
+        self._stale_warnings.pop(symbol, None)
+        self._dispose_context(context)
 
     def _focus_symbol(self, symbol: str) -> None:
         symbol = symbol.upper()
@@ -362,7 +379,11 @@ class Application:
         context = self._contexts.get(symbol)
         if context is None:
             return
-        snapshot = context.exchange_data.fetch_orderbook_snapshot()
+        try:
+            snapshot = context.exchange_data.fetch_orderbook_snapshot()
+        except Exception as exc:  # noqa: BLE001
+            self._log_error(f"Не удалось выполнить ресинк стакана {symbol}: {exc}")
+            return
         self._apply_snapshot(context, snapshot)
         timestamp = snapshot.received_at.astimezone(CURRENT_TIMEZONE)
         context.feed_monitor.clear()
@@ -794,6 +815,10 @@ class Application:
                 api_secret=api_secret,
             )
         raise RuntimeError("unsupported exchange")
+
+    def _log_error(self, message: str) -> None:
+        timestamp = get_current_time()
+        self._log_writer(LogLine(timestamp=timestamp, message=message, level="ERROR"))
 
     def _log_scanner_message(self, message: str) -> None:
         timestamp = get_current_time()
