@@ -11,8 +11,8 @@ from .types import LogWriter
 class EventLogger:
     write: LogWriter
 
-    def log(self, message: str, timestamp: datetime) -> None:
-        entry = LogLine(timestamp=timestamp, message=message, level="INFO")
+    def log(self, message: str, timestamp: datetime, *, level: str = "INFO") -> None:
+        entry = LogLine(timestamp=timestamp, message=message, level=level)
         self.write(entry)
 
 
