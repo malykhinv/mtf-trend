@@ -21,7 +21,7 @@ class FocusController:
         if self._current is not None:
             self.defocus(timestamp)
         self.focus_symbol(symbol)
-        self.logger.log(f"Фокус на {symbol}.", timestamp)
+        self.logger.log_info(f"Фокус на {symbol}.", timestamp)
         self._current = symbol
 
     def defocus(self, timestamp: datetime) -> None:
@@ -29,7 +29,7 @@ class FocusController:
             return
         current = self._current
         self.defocus_symbol()
-        self.logger.log(f"Дефокус со {current}.", timestamp)
+        self.logger.log_info(f"Дефокус со {current}.", timestamp)
         self._current = None
 
     @property

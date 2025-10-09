@@ -33,6 +33,7 @@ from domain.models import (
     SymbolFilters,
     Trade,
 )
+from data.logger import LogLineWriter
 from utils.async_websocket import AsyncWebSocketClient, WebSocketTimeoutError
 from utils.timez import from_exchange_timestamp, get_current_time
 from .base import (
@@ -110,7 +111,7 @@ class BybitExchangeData:
         rest_retry_backoff: float = 2.0,
         ws_timeout: float = 10.0,
         reconnect_delay: float = 1.0,
-        log_writer: Optional[Callable[[str], None]] = None,
+        log_writer: Optional[LogLineWriter] = None,
         endpoints: Optional[BybitEndpoints] = None,
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
@@ -307,21 +308,21 @@ class BybitExchangeData:
             client: WebSocketClient | None = None
             try:
                 if reconnect_after_silence:
-                    self._logger.log(
+                    self._logger.log_error(
                         "Bybit depth stream: перезапуск соединения после тайм-аута тишины"
                     )
                 else:
-                    self._logger.log("Bybit depth stream: открываем соединение")
+                    self._logger.log_info("Bybit depth stream: открываем соединение")
                 client = await self._connect_websocket(url)
                 await client.set_timeout(self._ws_timeout)
                 await client.send_json(subscribe_payload)
                 if reconnect_after_silence:
-                    self._logger.log("Bybit depth stream: соединение успешно восстановлено")
+                    self._logger.log_info("Bybit depth stream: соединение успешно восстановлено")
                     reconnect_after_silence = False
                 while not buffer.stopped():
                     if buffer.consume_restart_request():
                         reconnect_after_silence = True
-                        self._logger.log(
+                        self._logger.log_error(
                             "Bybit depth stream: получен запрос перезапуска от буфера"
                         )
                         break
@@ -330,7 +331,7 @@ class BybitExchangeData:
                     except WebSocketTimeoutError:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 "Bybit depth stream: перезапуск по запросу буфера после тайм-аута ожидания"
                             )
                             break
@@ -339,7 +340,7 @@ class BybitExchangeData:
                     if not raw:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 "Bybit depth stream: перезапуск по запросу буфера после пустого сообщения"
                             )
                             break
@@ -349,7 +350,7 @@ class BybitExchangeData:
                         await client.send_json({"op": "pong", "req_id": message.get("req_id")})
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 "Bybit depth stream: перезапуск по запросу буфера после ответа на ping"
                             )
                             break
@@ -357,7 +358,7 @@ class BybitExchangeData:
                     if message.get("topic") != topic:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 "Bybit depth stream: перезапуск по запросу буфера при ожидании целевой темы"
                             )
                             break
@@ -365,7 +366,7 @@ class BybitExchangeData:
                     self._handle_depth_message(message, buffer)
                     if buffer.consume_restart_request():
                         reconnect_after_silence = True
-                        self._logger.log(
+                        self._logger.log_error(
                             "Bybit depth stream: перезапуск по запросу буфера после обработки сообщения"
                         )
                         break
@@ -381,7 +382,7 @@ class BybitExchangeData:
                         f"{exc}"
                     )
                     buffer.push_resync(reason, details)
-                    self._logger.log(details)
+                    self._logger.log_error(details)
                     await asyncio.sleep(self._reconnect_delay)
                 else:
                     details = f"Bybit depth stream: {exc}"
@@ -643,23 +644,23 @@ class BybitExchangeData:
             client: WebSocketClient | None = None
             try:
                 if reconnect_after_silence:
-                    self._logger.log(
+                    self._logger.log_error(
                         f"Bybit {name} stream: перезапуск соединения после тайм-аута тишины"
                     )
                 else:
-                    self._logger.log(f"Bybit {name} stream: открываем соединение")
+                    self._logger.log_info(f"Bybit {name} stream: открываем соединение")
                 client = await self._connect_websocket(url)
                 await client.set_timeout(self._ws_timeout)
                 await client.send_json(subscribe_payload)
                 if reconnect_after_silence:
-                    self._logger.log(
+                    self._logger.log_info(
                         f"Bybit {name} stream: соединение успешно восстановлено"
                     )
                     reconnect_after_silence = False
                 while not buffer.stopped():
                     if buffer.consume_restart_request():
                         reconnect_after_silence = True
-                        self._logger.log(
+                        self._logger.log_error(
                             f"Bybit {name} stream: получен запрос перезапуска от буфера"
                         )
                         break
@@ -668,7 +669,7 @@ class BybitExchangeData:
                     except WebSocketTimeoutError:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 f"Bybit {name} stream: перезапуск по запросу буфера после тайм-аута ожидания"
                             )
                             break
@@ -677,7 +678,7 @@ class BybitExchangeData:
                     if not raw:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 f"Bybit {name} stream: перезапуск по запросу буфера после пустого сообщения"
                             )
                             break
@@ -687,7 +688,7 @@ class BybitExchangeData:
                         await client.send_json({"op": "pong", "req_id": message.get("req_id")})
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 f"Bybit {name} stream: перезапуск по запросу буфера после ответа на ping"
                             )
                             break
@@ -695,7 +696,7 @@ class BybitExchangeData:
                     if message.get("topic") != topic:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log(
+                            self._logger.log_error(
                                 f"Bybit {name} stream: перезапуск по запросу буфера при ожидании целевой темы"
                             )
                             break
@@ -704,7 +705,7 @@ class BybitExchangeData:
                         buffer.push_data(payload)
                     if buffer.consume_restart_request():
                         reconnect_after_silence = True
-                        self._logger.log(
+                        self._logger.log_error(
                             f"Bybit {name} stream: перезапуск по запросу буфера после обработки сообщения"
                         )
                         break
@@ -719,12 +720,12 @@ class BybitExchangeData:
                         f"Bybit {name} stream: не удалось переподключиться после тайм-аута тишины: {exc}"
                     )
                     buffer.push_resync(reason, details)
-                    self._logger.log(details)
+                    self._logger.log_error(details)
                     await asyncio.sleep(self._reconnect_delay)
                 else:
                     details = f"Bybit {name} stream: {exc}"
                     buffer.push_resync(reason, details)
-                    self._logger.log(details)
+                    self._logger.log_error(details)
                     await asyncio.sleep(self._reconnect_delay)
             finally:
                 if client is not None:

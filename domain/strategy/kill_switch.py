@@ -63,7 +63,7 @@ class KillSwitch:
         self._last_block_at = timestamp
         self._block_reason = "ожидание после ресинка"
         self._funding_event_at = None
-        self.logger.log("Блокировка торгов: ожидание после ресинка.", timestamp)
+        self.logger.log_error("Блокировка торгов: ожидание после ресинка.", timestamp)
 
     def handle_funding(self, funding_time: datetime) -> None:
         if self.funding_block <= timedelta(0):
@@ -90,7 +90,7 @@ class KillSwitch:
             self._block_reason = "окно фандинга"
         funding_str = funding_time.strftime("%Y-%m-%d %H:%M:%S %Z")
         release = (self._block_until or end).strftime("%Y-%m-%d %H:%M:%S %Z")
-        self.logger.log(
+        self.logger.log_error(
             (
                 "Блокировка торгов: окно фандинга."
                 f" Фандинг в {funding_str}, блокировка до {release}."
@@ -129,7 +129,7 @@ class KillSwitch:
         self._last_block_at = timestamp
         self._block_reason = reason
         self._funding_event_at = None
-        self.logger.log(f"Блокировка торгов: {reason}.", timestamp)
+        self.logger.log_error(f"Блокировка торгов: {reason}.", timestamp)
 
 
 __all__ = ["KillSwitch"]
