@@ -25,8 +25,6 @@ from domain.models import (
 from utils.async_websocket import ThreadedWebSocketClient, WebSocketTimeoutError
 from utils.timez import from_exchange_timestamp, get_current_time
 
-from data.logger import LogLineWriter
-
 from .base import (
     BestBidAsk,
     DepthStreamData,
@@ -66,7 +64,7 @@ class BinanceExchangeData:
         rest_retry_backoff: float = 2.0,
         ws_timeout: float = 10.0,
         reconnect_delay: float = 1.0,
-        log_writer: Optional[LogLineWriter] = None,
+        log_writer: Optional[Callable[[str], None]] = None,
         endpoints: Optional[BinanceEndpoints] = None,
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
@@ -110,13 +108,13 @@ class BinanceExchangeData:
         try:
             requested_limit = int(depth_limit)
         except (TypeError, ValueError):
-            self._logger.log_error(
+            self._logger.log(
                 f"Binance depth limit {depth_limit!r} is invalid, using {default_limit} instead"
             )
             return default_limit
 
         if requested_limit <= 0:
-            self._logger.log_error(
+            self._logger.log(
                 f"Binance depth limit {requested_limit} is unsupported, using {default_limit} instead"
             )
             return default_limit
@@ -125,7 +123,7 @@ class BinanceExchangeData:
             return requested_limit
 
         normalized = min(allowed, key=lambda value: abs(value - requested_limit))
-        self._logger.log_error(
+        self._logger.log(
             f"Binance depth limit {requested_limit} is unsupported, using {normalized} instead"
         )
         return normalized
@@ -137,7 +135,7 @@ class BinanceExchangeData:
         endpoints: BinanceEndpoints,
         ws_timeout: float,
         reconnect_delay: float,
-        log_writer: Optional[LogLineWriter],
+        log_writer: Optional[Callable[[str], None]],
     ) -> BinanceStreamPool:
         with cls._pool_lock:
             if cls._shared_stream_pool is None:
@@ -278,7 +276,7 @@ class BinanceExchangeData:
             )
             buffer.push_resync(reason, message)
             if should_log:
-                self._logger.log_error(message)
+                self._logger.log(message)
 
         release = self._stream_pool.register_depth(
             self.symbol,
@@ -450,7 +448,7 @@ class BinanceExchangeData:
             )
             buffer.push_resync(reason, message)
             if should_log:
-                self._logger.log_error(message)
+                self._logger.log(message)
 
         release = self._stream_pool.register_book_ticker(
             self.symbol,
@@ -492,7 +490,7 @@ class BinanceExchangeData:
             )
             buffer.push_resync(reason, message)
             if should_log:
-                self._logger.log_error(message)
+                self._logger.log(message)
 
         release = self._stream_pool.register_trades(
             self.symbol,
@@ -569,22 +567,22 @@ class BinanceExchangeData:
             client: WebSocketClient | None = None
             try:
                 if reconnect_after_silence:
-                    self._logger.log_error(
+                    self._logger.log(
                         f"Binance {name} stream: перезапуск соединения после тайм-аута тишины"
                     )
                 else:
-                    self._logger.log_info(f"Binance {name} stream: открываем соединение")
+                    self._logger.log(f"Binance {name} stream: открываем соединение")
                 client = self._connect_websocket(url)
                 client.settimeout(self._ws_timeout)
                 if reconnect_after_silence:
-                    self._logger.log_info(
+                    self._logger.log(
                         f"Binance {name} stream: соединение успешно восстановлено"
                     )
                     reconnect_after_silence = False
                 while not buffer.stopped():
                     if buffer.consume_restart_request():
                         reconnect_after_silence = True
-                        self._logger.log_error(
+                        self._logger.log(
                             f"Binance {name} stream: получен запрос перезапуска от буфера"
                         )
                         break
@@ -593,7 +591,7 @@ class BinanceExchangeData:
                     except WebSocketTimeoutError:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log_error(
+                            self._logger.log(
                                 f"Binance {name} stream: перезапуск по запросу буфера после тайм-аута ожидания"
                             )
                             break
@@ -602,7 +600,7 @@ class BinanceExchangeData:
                     if not message:
                         if buffer.consume_restart_request():
                             reconnect_after_silence = True
-                            self._logger.log_error(
+                            self._logger.log(
                                 f"Binance {name} stream: перезапуск по запросу буфера после пустого сообщения"
                             )
                             break
@@ -611,7 +609,7 @@ class BinanceExchangeData:
                         buffer.push_data(payload)
                     if buffer.consume_restart_request():
                         reconnect_after_silence = True
-                        self._logger.log_error(
+                        self._logger.log(
                             f"Binance {name} stream: перезапуск по запросу буфера после обработки сообщения"
                         )
                         break
@@ -626,12 +624,12 @@ class BinanceExchangeData:
                         f"Binance {name} stream: не удалось переподключиться после тайм-аута тишины: {exc}"
                     )
                     buffer.push_resync(reason, details)
-                    self._logger.log_error(details)
+                    self._logger.log(details)
                     time.sleep(self._reconnect_delay)
                 else:
                     details = f"Binance {name} stream: {exc}"
                     buffer.push_resync(reason, details)
-                    self._logger.log_error(details)
+                    self._logger.log(details)
                     time.sleep(self._reconnect_delay)
             finally:
                 if client is not None:

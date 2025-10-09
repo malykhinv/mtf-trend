@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Any, Callable, Dict, Optional
 
-from data.logger import LogLineWriter
 from utils.async_websocket import AsyncWebSocketClient, WebSocketTimeoutError
 
 from .base import ExchangeLogger, ResyncReason, StreamBuffer
@@ -31,7 +30,7 @@ class _CombinedStreamWorker:
         *,
         ws_timeout: float,
         reconnect_delay: float,
-        log_writer: Optional[LogLineWriter] = None,
+        log_writer: Optional[Callable[[str], None]] = None,
         max_streams: int,
     ) -> None:
         self._name = name
@@ -90,7 +89,7 @@ class _CombinedStreamWorker:
             current = len(self._registrations)
             self._update_event.set()
 
-        self._logger.log_info(
+        self._logger.log(
             (
                 "Binance {stream} stream: добавлен символ {symbol}, "
                 "активных {count}/{limit}"
@@ -114,7 +113,7 @@ class _CombinedStreamWorker:
                 self._update_event.set()
             released.set()
             self._command_queue.put(("unsubscribe", symbol))
-            self._logger.log_info(
+            self._logger.log(
                 (
                     "Binance {stream} stream: удален символ {symbol}, "
                     "активных {count}/{limit}"
@@ -139,7 +138,7 @@ class _CombinedStreamWorker:
     def stop(self) -> None:
         if self._stop_event.is_set():
             return
-        self._logger.log_info(
+        self._logger.log(
             f"Binance {self._name} stream: остановка, активных символов нет"
         )
         self._stop_event.set()
@@ -176,7 +175,7 @@ class _CombinedStreamWorker:
 
         if processed_symbols:
             joined = ", ".join(processed_symbols)
-            self._logger.log_error(
+            self._logger.log(
                 (
                     "Binance {stream} stream: обработан запрос повторной "
                     "синхронизации из буферов: {symbols}"
@@ -311,7 +310,7 @@ class _CombinedStreamWorker:
                 await client.connect()
                 await client.set_timeout(self._ws_timeout)
                 self._next_request_id = 1
-                self._logger.log_info(
+                self._logger.log(
                     (
                         "Binance {stream} stream: открыто соединение для {count} "
                         "символов из {limit}"
@@ -341,7 +340,7 @@ class _CombinedStreamWorker:
                         details = (
                             "Binance {stream} stream: ошибка чтения сокета: {error}"
                         ).format(stream=self._name, error=exc)
-                        self._logger.log_error(details)
+                        self._logger.log(details)
                         self._notify_all(ResyncReason.CONNECTION_LOST, details)
                         break
                     await self._process_commands(client, active_symbols)
@@ -371,7 +370,7 @@ class _CombinedStreamWorker:
                             "Binance {stream} stream: ошибка обработки сообщения для {symbol}:"
                             " {error}"
                         ).format(stream=self._name, symbol=symbol, error=exc)
-                        self._logger.log_error(details)
+                        self._logger.log(details)
                         registration.on_error(
                             ResyncReason.CONNECTION_LOST,
                             details,
@@ -380,7 +379,7 @@ class _CombinedStreamWorker:
                 if self._stop_event.is_set():
                     break
                 details = f"Binance {self._name} stream: {exc}"
-                self._logger.log_error(details)
+                self._logger.log(details)
                 self._notify_all(ResyncReason.CONNECTION_LOST, details)
                 await asyncio.sleep(self._reconnect_delay)
             finally:
@@ -401,7 +400,7 @@ class _StreamWorkerPool:
         stream_suffix: str,
         ws_timeout: float,
         reconnect_delay: float,
-        log_writer: Optional[LogLineWriter] = None,
+        log_writer: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._name = name
         self._ws_base = ws_base
@@ -467,7 +466,7 @@ class BinanceStreamPool:
         endpoints_ws_base: str,
         ws_timeout: float,
         reconnect_delay: float,
-        log_writer: Optional[LogLineWriter] = None,
+        log_writer: Optional[Callable[[str], None]] = None,
     ) -> None:
         base = endpoints_ws_base.rstrip("/")
         if not base.endswith("/ws"):

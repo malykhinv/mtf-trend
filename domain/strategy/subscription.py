@@ -24,22 +24,18 @@ class SubscriptionManager:
             try:
                 self.subscribe(symbol)
             except Exception as exc:  # noqa: BLE001
-                self.logger.log_error(
-                    f"Не удалось подписаться на {symbol}: {exc}", timestamp
-                )
+                self.logger.log(f"Не удалось подписаться на {symbol}: {exc}", timestamp)
                 continue
-            self.logger.log_info(f"Подписка на {symbol}.", timestamp)
+            self.logger.log(f"Подписка на {symbol}.", timestamp)
             active.append(symbol)
             active_set.add(symbol)
         for symbol in removals:
             try:
                 self.unsubscribe(symbol)
             except Exception as exc:  # noqa: BLE001
-                self.logger.log_error(
-                    f"Не удалось отписаться от {symbol}: {exc}", timestamp
-                )
+                self.logger.log(f"Не удалось отписаться от {symbol}: {exc}", timestamp)
                 continue
-            self.logger.log_info(f"Отписка от {symbol}.", timestamp)
+            self.logger.log(f"Отписка от {symbol}.", timestamp)
             if symbol in active_set:
                 active_set.remove(symbol)
             if symbol in active:

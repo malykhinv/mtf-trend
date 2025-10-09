@@ -11,18 +11,9 @@ from .types import LogWriter
 class EventLogger:
     write: LogWriter
 
-    def log(self, message: str, timestamp: datetime, level: str = "INFO") -> None:
-        entry = LogLine(timestamp=timestamp, message=message, level=level)
+    def log(self, message: str, timestamp: datetime) -> None:
+        entry = LogLine(timestamp=timestamp, message=message, level="INFO")
         self.write(entry)
-
-    def log_info(self, message: str, timestamp: datetime) -> None:
-        self.log(message, timestamp, level="INFO")
-
-    def log_error(self, message: str, timestamp: datetime) -> None:
-        self.log(message, timestamp, level="ERROR")
-
-    def log_trade(self, message: str, timestamp: datetime) -> None:
-        self.log(message, timestamp, level="TRADE")
 
 
 __all__ = ["EventLogger"]

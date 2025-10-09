@@ -82,7 +82,7 @@ class Strategy:
     def complete_resync(self, timestamp: datetime) -> StrategyState:
         if self._state is not StrategyState.RESYNC:
             return self._state
-        self._logger.log_info("Ресинк завершён.", timestamp)
+        self._logger.log("Ресинк завершён.", timestamp)
         self._state = self._previous_state
         self._resync_reason = None
         return self._state
@@ -143,7 +143,7 @@ class Strategy:
                     self._last_focus_signal_at = timestamp
                     self._focused_wall = wall
         if self._should_defocus(timestamp):
-            self._logger.log_info(
+            self._logger.log(
                 f"Аптик {symbol} потерян: таймаут сигнала.",
                 timestamp,
             )
@@ -230,7 +230,7 @@ class Strategy:
         self._focused_wall = wall
         self._last_focus_signal_at = timestamp
         direction = "лонг" if signal is Signal.LONG else "шорт"
-        self._logger.log_info(
+        self._logger.log(
             (
                 f"Аптик {symbol} {direction}. "
                 f"Стена {wall.price:g} объём {wall.notional:g}. "
@@ -295,7 +295,7 @@ class Strategy:
                 message = f"{message} ({reason})."
             else:
                 message = f"{message}."
-            self._logger.log_error(message, timestamp)
+            self._logger.log(message, timestamp)
             return
         if not self._position.enter(symbol, signal, wall, timestamp):
             return
@@ -423,7 +423,7 @@ class Strategy:
         self._previous_state = self._state
         self._state = StrategyState.RESYNC
         self._resync_reason = reason
-        self._logger.log_error(
+        self._logger.log(
             f"Ресинк книги. Причина: {reason.value}.", timestamp
         )
         self._track_resync_summary(timestamp)
@@ -434,7 +434,7 @@ class Strategy:
             self._resync_summary_start = timestamp
         elapsed = timestamp - self._resync_summary_start
         if elapsed >= timedelta(hours=1):
-            self._logger.log_info(
+            self._logger.log(
                 f"Ресинков за час: {self._resync_summary_count}.",
                 timestamp,
             )

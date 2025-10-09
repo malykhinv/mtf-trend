@@ -38,8 +38,7 @@ def create_log_writer(sink: LogSink | None = None) -> LogLineWriter:
     def _write(entry: LogLine) -> None:
         timestamp = entry.timestamp.astimezone()
         message = _strip_prefix(entry.message)
-        level = entry.level.upper() if entry.level else "INFO"
-        text_sink(f"{timestamp:%H:%M:%S} [{level}] {message}")
+        text_sink(f"{timestamp:%H:%M:%S} {message}")
 
     return _write
 
