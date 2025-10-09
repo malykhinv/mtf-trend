@@ -349,11 +349,82 @@ class _CombinedStreamWorker:
                     if "result" in payload:
                         continue
                     symbol = self._extract_symbol(payload)
-                    data = payload.get("data") if isinstance(payload.get("data"), dict) else None
                     if symbol is None and isinstance(payload.get("s"), str):
                         symbol = str(payload.get("s")).upper()
-                        if data is None:
-                            data = payload
+
+                    error_details: Optional[str] = None
+                    error_code: Optional[Any] = None
+                    error_message: Optional[str] = None
+                    error_section: Optional[dict[str, Any]] = None
+
+                    raw_error = payload.get("error")
+                    if isinstance(raw_error, dict):
+                        error_section = raw_error
+                        error_code = raw_error.get("code")
+                        raw_message = raw_error.get("msg") or raw_error.get("message")
+                        if isinstance(raw_message, str):
+                            error_message = raw_message
+                        elif raw_message is not None:
+                            error_message = str(raw_message)
+                    elif "code" in payload and "msg" in payload:
+                        error_code = payload.get("code")
+                        raw_message = payload.get("msg")
+                        if isinstance(raw_message, str):
+                            error_message = raw_message
+                        elif raw_message is not None:
+                            error_message = str(raw_message)
+                        error_section = {"code": error_code, "msg": error_message}
+                    elif payload.get("status") == "error":
+                        error_code = payload.get("code")
+                        for key in ("msg", "error", "errorMessage"):
+                            candidate = payload.get(key)
+                            if isinstance(candidate, str):
+                                error_message = candidate
+                                break
+                            if candidate is not None and error_message is None:
+                                error_message = str(candidate)
+                        error_section = {
+                            "status": payload.get("status"),
+                            "code": error_code,
+                            "msg": error_message,
+                        }
+
+                    if error_section is not None:
+                        parts: list[str] = []
+                        if error_code is not None:
+                            parts.append(f"code={error_code}")
+                        if error_message:
+                            parts.append(f"msg={error_message}")
+                        if not parts:
+                            parts.append(str(error_section))
+                        try:
+                            payload_dump = json.dumps(payload, ensure_ascii=False)
+                        except (TypeError, ValueError):  # pragma: no cover - safety
+                            payload_dump = str(payload)
+                        error_details = ", ".join(parts)
+                        details = (
+                            "Binance {stream} stream: получен ошибочный ответ"
+                            " для {symbol}: {details}. Payload: {payload}"
+                        ).format(
+                            stream=self._name,
+                            symbol=symbol or "неизвестного символа",
+                            details=error_details,
+                            payload=payload_dump,
+                        )
+                        self._logger.log(details)
+                        if symbol is not None:
+                            registration = self._get_registration(symbol)
+                            if registration is not None:
+                                try:
+                                    registration.on_error(ResyncReason.CONNECTION_LOST, details)
+                                except Exception:
+                                    pass
+                            active_symbols.discard(symbol)
+                        continue
+
+                    data = payload.get("data") if isinstance(payload.get("data"), dict) else None
+                    if data is None and isinstance(payload.get("s"), str):
+                        data = payload
                     if symbol is None or data is None:
                         continue
                     registration = self._get_registration(symbol)
