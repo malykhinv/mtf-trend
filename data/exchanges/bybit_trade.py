@@ -279,7 +279,9 @@ class BybitTradingAdapter(TradingAdapter):
                 RemoteDisconnected,
                 TimeoutError,
                 socket.timeout,
+                socket.gaierror,
                 ConnectionError,
+                OSError,
             ) as error:
                 if retries_remaining <= 0:
                     message = self._format_network_error(error)

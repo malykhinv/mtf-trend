@@ -171,7 +171,9 @@ class BinanceExchangeData:
                 RemoteDisconnected,
                 TimeoutError,
                 socket.timeout,
+                socket.gaierror,
                 ConnectionError,
+                OSError,
             ):
                 if retries_remaining <= 0:
                     raise
