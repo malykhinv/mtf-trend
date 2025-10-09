@@ -297,7 +297,8 @@ class Strategy:
                 message = f"{message}."
             self._logger.log(message, timestamp)
             return
-        self._position.enter(symbol, signal, wall, timestamp)
+        if not self._position.enter(symbol, signal, wall, timestamp):
+            return
         self._safety.record_entry(timestamp)
         self._last_trade_at[symbol] = timestamp
         self._notifier.notify_entry(symbol, signal, timestamp)
@@ -315,7 +316,8 @@ class Strategy:
         symbol = self._position_symbol
         if symbol is None:
             return
-        self._position.exit(symbol, reason, timestamp)
+        if not self._position.exit(symbol, reason, timestamp):
+            return
         pnl_fraction = self._compute_pnl_fraction(price)
         is_stop = "стоп" in reason.lower() or "stop" in reason.lower()
         self._safety.record_exit(timestamp, is_stop, pnl_fraction)
@@ -401,7 +403,8 @@ class Strategy:
         symbol = self._position_symbol
         if symbol is None:
             return
-        self._position.adjust_stop(symbol, wall.price, timestamp)
+        if not self._position.adjust_stop(symbol, wall.price, timestamp):
+            return
         self._last_stop_move_at[symbol] = timestamp
         self._position_wall = wall
         self._shift_candidate_price = None

@@ -6,7 +6,15 @@ from typing import Callable, Optional, Tuple
 from config.config import CONFIG
 from config.models import MarginMode as ConfigMarginMode
 from config.models import StopTrigger as ConfigStopTrigger
-from domain.models import MarginMode, Side, Signal, StopTrigger, SymbolFilters, Wall
+from domain.models import (
+    ExecutionReport,
+    MarginMode,
+    Side,
+    Signal,
+    StopTrigger,
+    SymbolFilters,
+    Wall,
+)
 from domain.strategy.types import PositionEntryHandler, PositionExitHandler, StopMoveHandler
 from domain.trading_adapter import TradingAdapter
 from utils.mathx import ceil_to_step, compute_position_size, floor_to_step
@@ -46,8 +54,82 @@ def create_execution_handlers(
     current_symbol: Optional[str] = None
     current_signal: Signal = Signal.NONE
     current_quantity: float = 0.0
+    logger = logging.getLogger(__name__)
 
-    def enter(symbol: str, signal: Signal, wall: Wall) -> None:
+    def place_market(
+        side: Side,
+        quantity: float,
+        *,
+        symbol: str,
+        signal: Signal,
+        reason: Optional[str] = None,
+    ) -> Optional[ExecutionReport]:
+        try:
+            report = trading.place_market(side, quantity, reason=reason)
+        except Exception as exc:
+            if reason:
+                logger.error(
+                    "Market order failed: %s %s qty=%.8f reason=%s signal=%s: %s",
+                    symbol,
+                    side.name,
+                    quantity,
+                    reason,
+                    signal.name,
+                    exc,
+                )
+            else:
+                logger.error(
+                    "Market order failed: %s %s qty=%.8f signal=%s: %s",
+                    symbol,
+                    side.name,
+                    quantity,
+                    signal.name,
+                    exc,
+                )
+            return None
+        logger.info(
+            "Market order executed: %s %s qty=%.8f executed=%.8f price=%.8f status=%s",
+            symbol,
+            side.name,
+            quantity,
+            report.executed_qty,
+            report.price,
+            report.status,
+        )
+        return report
+
+    def place_stop_market(
+        side: Side,
+        stop_price: float,
+        quantity: float,
+        *,
+        symbol: str,
+        signal: Signal,
+    ) -> bool:
+        try:
+            trading.place_stop_market(side, stop_price, quantity, stop_trigger)
+        except Exception as exc:
+            logger.error(
+                "Stop order failed: %s %s qty=%.8f stop=%.8f signal=%s: %s",
+                symbol,
+                side.name,
+                quantity,
+                stop_price,
+                signal.name,
+                exc,
+            )
+            return False
+        logger.info(
+            "Stop order placed: %s %s qty=%.8f stop=%.8f signal=%s",
+            symbol,
+            side.name,
+            quantity,
+            stop_price,
+            signal.name,
+        )
+        return True
+
+    def enter(symbol: str, signal: Signal, wall: Wall) -> bool:
         nonlocal current_symbol, current_signal, current_quantity
         filters: SymbolFilters = filters_provider(symbol)
         quantity_step: float = filters.quantity_step_size
@@ -61,7 +143,7 @@ def create_execution_handlers(
             quantity_step,
         )
         if quantity <= 0.0:
-            return
+            return False
         min_reference: float = max(filters.min_qty, quantity_step)
         min_quantity: float = ceil_to_step(min_reference, quantity_step)
         if min_quantity > 0.0 and quantity < min_quantity:
@@ -69,50 +151,87 @@ def create_execution_handlers(
         if filters.max_qty > 0.0:
             max_quantity: float = floor_to_step(filters.max_qty, quantity_step)
             if max_quantity <= 0.0:
-                return
+                return False
             if quantity > max_quantity:
                 quantity = max_quantity
         quantity = floor_to_step(quantity, quantity_step)
         if quantity < filters.min_qty or quantity <= 0.0:
-            return
+            return False
         side: Side = _signal_to_entry_side(signal)
-        report_quantity: float = trading.place_market(side, quantity).executed_qty
+        report = place_market(
+            side,
+            quantity,
+            symbol=symbol,
+            signal=signal,
+        )
+        if report is None:
+            return False
+        report_quantity: float = report.executed_qty
         if report_quantity <= 0.0:
             report_quantity = quantity
         executed_quantity: float = floor_to_step(report_quantity, quantity_step)
         if executed_quantity <= 0.0:
-            return
+            logger.error(
+                "Executed quantity invalid: %s %s qty=%.8f signal=%s",
+                symbol,
+                side.name,
+                report_quantity,
+                signal.name,
+            )
+            return False
         current_symbol = symbol
         current_signal = signal
         current_quantity = executed_quantity
         stop_price: float = _compute_stop_price(signal, wall.price, filters)
         stop_side: Side = _signal_to_exit_side(signal)
-        trading.place_stop_market(stop_side, stop_price, current_quantity, stop_trigger)
+        place_stop_market(
+            stop_side,
+            stop_price,
+            current_quantity,
+            symbol=symbol,
+            signal=signal,
+        )
+        return True
 
-    def exit(symbol: str, reason: str) -> None:
+    def exit(symbol: str, reason: str) -> bool:
         nonlocal current_symbol, current_signal, current_quantity
         if symbol != current_symbol:
-            return
+            return False
         if current_signal is Signal.NONE or current_quantity <= 0.0:
             current_symbol = None
             current_signal = Signal.NONE
             current_quantity = 0.0
-            return
+            return True
         side: Side = _signal_to_exit_side(current_signal)
-        trading.place_market(side, current_quantity, reason=reason)
+        report = place_market(
+            side,
+            current_quantity,
+            symbol=symbol,
+            signal=current_signal,
+            reason=reason,
+        )
+        if report is None:
+            return False
         current_symbol = None
         current_signal = Signal.NONE
         current_quantity = 0.0
+        return True
 
-    def move_stop(symbol: str, wall_price: float) -> None:
+    def move_stop(symbol: str, wall_price: float) -> bool:
         if symbol != current_symbol:
-            return
+            return False
         if current_signal is Signal.NONE or current_quantity <= 0.0:
-            return
+            return False
         filters: SymbolFilters = filters_provider(symbol)
         stop_price = _compute_stop_price(current_signal, wall_price, filters)
         stop_side: Side = _signal_to_exit_side(current_signal)
-        trading.place_stop_market(stop_side, stop_price, current_quantity, stop_trigger)
+        return place_stop_market(
+            stop_side,
+            stop_price,
+            current_quantity,
+            symbol=symbol,
+            signal=current_signal,
+        )
 
     return enter, exit, move_stop
 
