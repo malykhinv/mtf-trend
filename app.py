@@ -39,7 +39,6 @@ from domain.models import (
     BalanceSource,
     Exchange,
     ExecutionReport,
-    LogLine,
     MarginMode,
     OrderBookSnapshot,
     OrderBookUpdate,
@@ -274,7 +273,7 @@ class Application:
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
                 silence_timeout_ms=CONFIG.general.ws_silence_timeout_ms,
-                log_writer=self._sink,
+                log_writer=self._log_writer,
                 api_key=api_key,
                 api_secret=api_secret,
             )
@@ -283,7 +282,7 @@ class Application:
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
                 silence_timeout_ms=CONFIG.general.ws_silence_timeout_ms,
-                log_writer=self._sink,
+                log_writer=self._log_writer,
                 api_key=api_key,
                 api_secret=api_secret,
             )
@@ -411,7 +410,7 @@ class Application:
         self._update_best_from_book(context)
         timestamp = snapshot.received_at
         context.order_book_updated_at = timestamp
-        self._event_logger.log(
+        self._event_logger.log_info(
             (
                 f"Снимок стакана {context.symbol} применён. "
                 f"ID {snapshot.last_update_id}."
@@ -462,14 +461,14 @@ class Application:
                 f"Не удалось восстановить стакан {context.symbol} после тишины: {exc}"
             )
             timestamp = occurred_at.astimezone(CURRENT_TIMEZONE)
-            self._event_logger.log(message, timestamp)
+            self._event_logger.log_error(message, timestamp)
             return False
         self._apply_snapshot(context, snapshot)
         context.feed_monitor.has_silence_timeout = False
         context.last_depth_silence_recovery_at = now
         timestamp = occurred_at.astimezone(CURRENT_TIMEZONE)
         suffix = f" {details}" if details else ""
-        self._event_logger.log(
+        self._event_logger.log_info(
             f"Стакан {context.symbol} восстановлен после тишины.{suffix}",
             timestamp,
         )
@@ -522,7 +521,7 @@ class Application:
                 context.order_book_updated_at = None
                 timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
                 details = f" {event.details}." if event.details else ""
-                self._event_logger.log(
+                self._event_logger.log_error(
                     (
                         f"Поток стакана {context.symbol} требует ресинк: "
                         f"{event.reason.value}.{details}"
@@ -642,7 +641,7 @@ class Application:
             if new_messages:
                 details = "; ".join(new_messages)
                 log_timestamp = now.astimezone(CURRENT_TIMEZONE)
-                self._event_logger.log(
+                self._event_logger.log_error(
                     f"Пропуск наблюдения {context.symbol}: {details}.",
                     log_timestamp,
                 )
@@ -753,7 +752,7 @@ class Application:
         if context.cycle_started:
             return
         timestamp = get_current_time()
-        self._event_logger.log(
+        self._event_logger.log_info(
             f"Запущен цикл обработки для {context.symbol}.",
             timestamp,
         )
@@ -780,12 +779,12 @@ class Application:
         )
         context.order_book.reset_odr_history()
         startup_timestamp = get_current_time()
-        self._event_logger.log(
+        self._event_logger.log_info(
             f"Старт бота для {symbol} на {self._exchange.value}.",
             startup_timestamp,
         )
         filters_timestamp = get_current_time()
-        self._event_logger.log(
+        self._event_logger.log_info(
             (
                 f"Получены фильтры {symbol}: "
                 f"шаг цены {context.filters.price_tick_size:g}."
@@ -820,11 +819,11 @@ class Application:
 
     def _log_error(self, message: str) -> None:
         timestamp = get_current_time()
-        self._log_writer(LogLine(timestamp=timestamp, message=message, level="ERROR"))
+        self._event_logger.log_error(message, timestamp)
 
     def _log_scanner_message(self, message: str) -> None:
         timestamp = get_current_time()
-        self._event_logger.log(
+        self._event_logger.log_info(
             f"Сканер рынка: {message}",
             timestamp,
         )
@@ -840,7 +839,7 @@ class Application:
         timestamp = get_current_time()
         context.balance = balance
         context.balance_updated_at = timestamp
-        self._event_logger.log(
+        self._event_logger.log_info(
             f"Баланс {context.symbol} обновлён: {balance:g}.",
             timestamp,
         )
@@ -871,7 +870,7 @@ class Application:
         try:
             next_funding = context.exchange_data.fetch_next_funding_time()
         except Exception as exc:
-            self._event_logger.log(
+            self._event_logger.log_error(
                 f"Не удалось обновить время фандинга для {context.symbol}: {exc}",
                 now,
             )
@@ -883,14 +882,14 @@ class Application:
         context.funding_block_logged = False
         if next_funding is None:
             if previous is not None:
-                self._event_logger.log(
+                self._event_logger.log_info(
                     f"Следующее время фандинга для {context.symbol} недоступно.",
                     now,
                 )
             return
         if previous is None or next_funding != previous:
             localized = next_funding.astimezone(CURRENT_TIMEZONE)
-            self._event_logger.log(
+            self._event_logger.log_info(
                 (
                     f"Следующее время фандинга для {context.symbol}: "
                     f"{localized:%Y-%m-%d %H:%M:%S %Z}."
@@ -925,7 +924,7 @@ class Application:
                         f"{context.symbol}: блокировка из-за фандинга. "
                         f"Фандинг в {funding_local:%H:%M:%S %Z}."
                     )
-                self._event_logger.log(message, timestamp)
+                self._event_logger.log_error(message, timestamp)
                 context.funding_block_logged = True
         elif context.funding_block_logged and timestamp > end:
             context.funding_block_logged = False
