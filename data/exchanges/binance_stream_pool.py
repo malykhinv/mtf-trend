@@ -11,6 +11,8 @@ from .base import ExchangeLogger, ResyncReason, StreamBuffer
 
 
 MAX_STREAMS_PER_CONNECTION = 200
+COMMAND_RATE_LIMIT_PER_SECOND = 8
+COMMAND_RATE_LIMIT_WINDOW = 1.0
 
 
 @dataclass(slots=True)
@@ -46,6 +48,9 @@ class _CombinedStreamWorker:
         self._logger = ExchangeLogger(f"Binance pool:{name}", log_writer)
         self._command_queue: "Queue[tuple[str, str]]" = Queue()
         self._next_request_id = 1
+        self._command_window_start = 0.0
+        self._commands_sent_in_window = 0
+        self._last_command_timestamp = 0.0
         self._thread = threading.Thread(
             target=self._run_thread,
             name=f"binance-pool-{name}",
@@ -218,6 +223,50 @@ class _CombinedStreamWorker:
     def _stream_name(self, symbol: str) -> str:
         return f"{symbol.lower()}@{self._stream_suffix}"
 
+    async def _throttle_if_needed(self) -> None:
+        limit = COMMAND_RATE_LIMIT_PER_SECOND
+        if limit <= 0:
+            return
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if self._command_window_start == 0.0:
+            self._command_window_start = now
+            self._commands_sent_in_window = 0
+            return
+        elapsed = now - self._command_window_start
+        if elapsed >= COMMAND_RATE_LIMIT_WINDOW:
+            self._command_window_start = now
+            self._commands_sent_in_window = 0
+            return
+        if self._commands_sent_in_window < limit:
+            return
+        sleep_for = COMMAND_RATE_LIMIT_WINDOW - elapsed
+        if sleep_for > 0:
+            self._logger.log(
+                (
+                    "Binance {stream} stream: достигнут предел {limit} команд за "
+                    "{window:.1f}с, ожидаем {sleep:.2f}с"
+                ).format(
+                    stream=self._name,
+                    limit=limit,
+                    window=COMMAND_RATE_LIMIT_WINDOW,
+                    sleep=sleep_for,
+                )
+            )
+            await asyncio.sleep(sleep_for)
+        now = loop.time()
+        self._command_window_start = now
+        self._commands_sent_in_window = 0
+
+    def _record_command_sent(self) -> None:
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        if self._command_window_start == 0.0:
+            self._command_window_start = now
+            self._commands_sent_in_window = 0
+        self._commands_sent_in_window += 1
+        self._last_command_timestamp = now
+
     async def _send_command(self, client: AsyncWebSocketClient, method: str, params: list[Any]) -> None:
         request_id = self._next_request_id
         self._next_request_id += 1
@@ -245,7 +294,9 @@ class _CombinedStreamWorker:
                     continue
                 stream_name = self._stream_name(symbol)
                 try:
+                    await self._throttle_if_needed()
                     await self._send_command(client, "SUBSCRIBE", [stream_name])
+                    self._record_command_sent()
                 except Exception:
                     continue
                 active_symbols.add(symbol)
@@ -254,7 +305,9 @@ class _CombinedStreamWorker:
                     continue
                 stream_name = self._stream_name(symbol)
                 try:
+                    await self._throttle_if_needed()
                     await self._send_command(client, "UNSUBSCRIBE", [stream_name])
+                    self._record_command_sent()
                 except Exception:
                     pass
                 active_symbols.discard(symbol)
@@ -264,13 +317,17 @@ class _CombinedStreamWorker:
                 stream_name = self._stream_name(symbol)
                 if symbol in active_symbols:
                     try:
+                        await self._throttle_if_needed()
                         await self._send_command(client, "UNSUBSCRIBE", [stream_name])
+                        self._record_command_sent()
                     except Exception:
                         pass
                     await asyncio.sleep(0.05)
                     active_symbols.discard(symbol)
                 try:
+                    await self._throttle_if_needed()
                     await self._send_command(client, "SUBSCRIBE", [stream_name])
+                    self._record_command_sent()
                 except Exception:
                     continue
                 active_symbols.add(symbol)
