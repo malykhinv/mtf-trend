@@ -351,13 +351,19 @@ class BinanceExchangeData:
             if last_update <= self._depth_last_update:
                 return
 
+            skip_allowed = allow_skip or self._depth_allow_skip
+
             if first_update > expected:
+                if skip_allowed:
+                    return
                 resync_reason = ResyncReason.SEQUENCE_GAP
                 resync_details = (
                     f"Ожидали {expected}, получили диапазон {first_update}-{last_update}"
                 )
                 self._depth_allow_skip = False
             elif prev_update != self._depth_last_update:
+                if skip_allowed:
+                    return
                 resync_reason = ResyncReason.SEQUENCE_GAP
                 resync_details = (
                     f"Предыдущий апдейт {prev_update} != {self._depth_last_update}"
