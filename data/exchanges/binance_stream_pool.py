@@ -2,19 +2,19 @@ import asyncio
 import json
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from queue import Empty, Queue
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from utils.async_websocket import AsyncWebSocketClient, WebSocketTimeoutError
 
 from .base import ExchangeLogger, ResyncReason, StreamBuffer
 
-
-MAX_STREAMS_PER_CONNECTION = 200
-COMMAND_RATE_LIMIT_PER_SECOND = 5
-COMMAND_RATE_LIMIT_WINDOW = 1.0
-
+from config.stream_limits import (
+    DEFAULT_BINANCE_STREAM_PROFILES,
+    StreamLoadProfile,
+)
 
 @dataclass(slots=True)
 class _Registration:
@@ -22,6 +22,107 @@ class _Registration:
     buffer: StreamBuffer[Any]
     on_message: Callable[[dict[str, Any]], None]
     on_error: Callable[[ResyncReason, str], None]
+    weight: float
+
+
+class _RateWindow:
+    def __init__(self, window: float, limit: int, reserve: int) -> None:
+        self._window = max(float(window), 0.01)
+        self._limit = max(int(limit), 1)
+        self._reserve = max(0, min(int(reserve), self._limit - 1))
+        self._timestamps: deque[float] = deque()
+
+    @property
+    def window(self) -> float:
+        return self._window
+
+    @property
+    def limit(self) -> int:
+        return self._limit
+
+    def effective_limit(self) -> int:
+        return max(min(self._limit, self._limit - self._reserve), 1)
+
+    def prune(self, now: float) -> None:
+        boundary = now - self._window
+        while self._timestamps and self._timestamps[0] <= boundary:
+            self._timestamps.popleft()
+
+    def register(self, timestamp: float) -> None:
+        self.prune(timestamp)
+        self._timestamps.append(timestamp)
+
+    def required_delay(self, now: float) -> float:
+        self.prune(now)
+        limit = self.effective_limit()
+        if len(self._timestamps) < limit:
+            return 0.0
+        earliest_allowed = self._timestamps[0] + self._window
+        return max(0.0, earliest_allowed - now)
+
+
+class _CommandRateLimiter:
+    def __init__(self, profile: StreamLoadProfile, logger: ExchangeLogger, name: str) -> None:
+        self._steady = _RateWindow(
+            profile.steady.window_seconds,
+            profile.steady.command_limit,
+            profile.minimum_command_reserve,
+        )
+        self._burst = _RateWindow(
+            profile.burst.window_seconds,
+            profile.burst.command_limit,
+            profile.minimum_command_reserve,
+        )
+        self._logger = logger
+        self._name = name
+        self._last_command_timestamp = 0.0
+
+    async def throttle(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            now = loop.time()
+            delay, window = self._required_delay(now)
+            if delay <= 0.0:
+                return
+            limit = window.limit if window is not None else 0
+            window_size = window.window if window is not None else 0.0
+            self._logger.log(
+                (
+                    "Binance {stream} stream: достигнут предел {limit} команд за {window:.2f}с, "
+                    "ожидаем {sleep:.2f}с"
+                ).format(
+                    stream=self._name,
+                    limit=limit,
+                    window=window_size,
+                    sleep=delay,
+                )
+            )
+            await asyncio.sleep(delay)
+
+    def _required_delay(self, now: float) -> tuple[float, _RateWindow | None]:
+        windows = (self._steady, self._burst)
+        delays = [(window.required_delay(now), window) for window in windows]
+        delay, window = max(delays, key=lambda item: item[0])
+        if delay <= 0.0:
+            return 0.0, None
+        return delay, window
+
+    def record(self) -> None:
+        loop = asyncio.get_running_loop()
+        now = loop.time()
+        for window in (self._steady, self._burst):
+            window.register(now)
+        self._last_command_timestamp = now
+
+    def resubscribe_delay(self) -> float:
+        limit = self._steady.effective_limit()
+        if limit <= 0:
+            return 0.05
+        return max(0.05, self._steady.window / limit)
+
+    @property
+    def last_command_timestamp(self) -> float:
+        return self._last_command_timestamp
 
 
 class _CombinedStreamWorker:
@@ -35,6 +136,7 @@ class _CombinedStreamWorker:
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]] = None,
         max_streams: int,
+        command_profile: StreamLoadProfile,
     ) -> None:
         self._name = name
         self._ws_base = ws_base
@@ -49,9 +151,7 @@ class _CombinedStreamWorker:
         self._logger = ExchangeLogger(f"Binance pool:{name}", log_writer)
         self._command_queue: "Queue[tuple[str, str]]" = Queue()
         self._next_request_id = 1
-        self._command_window_start = 0.0
-        self._commands_sent_in_window = 0
-        self._last_command_timestamp = 0.0
+        self._command_limiter = _CommandRateLimiter(command_profile, self._logger, name)
         self._last_resubscribe: Dict[str, float] = {}
         self._thread = threading.Thread(
             target=self._run_thread,
@@ -69,6 +169,8 @@ class _CombinedStreamWorker:
         buffer: StreamBuffer[Any],
         on_message: Callable[[dict[str, Any]], None],
         on_error: Optional[Callable[[ResyncReason, str], None]] = None,
+        *,
+        weight: float,
     ) -> Callable[[], None]:
         symbol = symbol.upper()
 
@@ -83,6 +185,7 @@ class _CombinedStreamWorker:
             buffer=buffer,
             on_message=on_message,
             on_error=on_error,
+            weight=max(float(weight), 0.0),
         )
 
         with self._lock:
@@ -141,6 +244,10 @@ class _CombinedStreamWorker:
     def is_empty(self) -> bool:
         with self._lock:
             return not self._registrations
+
+    def registration_count(self) -> int:
+        with self._lock:
+            return len(self._registrations)
 
     def stop(self) -> None:
         if self._stop_event.is_set():
@@ -255,55 +362,13 @@ class _CombinedStreamWorker:
         return f"{symbol.lower()}@{self._stream_suffix}"
 
     async def _throttle_if_needed(self) -> None:
-        limit = COMMAND_RATE_LIMIT_PER_SECOND
-        if limit <= 0:
-            return
-        loop = asyncio.get_running_loop()
-        now = loop.time()
-        if self._command_window_start == 0.0:
-            self._command_window_start = now
-            self._commands_sent_in_window = 0
-            return
-        elapsed = now - self._command_window_start
-        if elapsed >= COMMAND_RATE_LIMIT_WINDOW:
-            self._command_window_start = now
-            self._commands_sent_in_window = 0
-            return
-        if self._commands_sent_in_window < limit:
-            return
-        sleep_for = COMMAND_RATE_LIMIT_WINDOW - elapsed
-        if sleep_for > 0:
-            self._logger.log(
-                (
-                    "Binance {stream} stream: достигнут предел {limit} команд за "
-                    "{window:.1f}с, ожидаем {sleep:.2f}с"
-                ).format(
-                    stream=self._name,
-                    limit=limit,
-                    window=COMMAND_RATE_LIMIT_WINDOW,
-                    sleep=sleep_for,
-                )
-            )
-            await asyncio.sleep(sleep_for)
-        now = loop.time()
-        self._command_window_start = now
-        self._commands_sent_in_window = 0
+        await self._command_limiter.throttle()
 
     def _record_command_sent(self) -> None:
-        loop = asyncio.get_running_loop()
-        now = loop.time()
-        if self._command_window_start == 0.0:
-            self._command_window_start = now
-            self._commands_sent_in_window = 0
-        self._commands_sent_in_window += 1
-        self._last_command_timestamp = now
+        self._command_limiter.record()
 
     def _resubscribe_delay(self) -> float:
-        limit = COMMAND_RATE_LIMIT_PER_SECOND
-        if limit > 0:
-            minimum_step = COMMAND_RATE_LIMIT_WINDOW / limit
-            return max(0.05, minimum_step)
-        return 0.05
+        return self._command_limiter.resubscribe_delay()
 
     async def _send_command(self, client: AsyncWebSocketClient, method: str, params: list[Any]) -> None:
         request_id = self._next_request_id
@@ -567,6 +632,7 @@ class _StreamWorkerPool:
         ws_timeout: float,
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]] = None,
+        profile: StreamLoadProfile,
     ) -> None:
         self._name = name
         self._ws_base = ws_base
@@ -574,8 +640,10 @@ class _StreamWorkerPool:
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
         self._log_writer = log_writer
+        self._profile = profile
         self._lock = threading.Lock()
         self._workers: list[_CombinedStreamWorker] = []
+        self._worker_loads: dict[_CombinedStreamWorker, float] = {}
         self._counter = 0
 
     def _create_worker(self) -> _CombinedStreamWorker:
@@ -588,16 +656,34 @@ class _StreamWorkerPool:
             ws_timeout=self._ws_timeout,
             reconnect_delay=self._reconnect_delay,
             log_writer=self._log_writer,
-            max_streams=MAX_STREAMS_PER_CONNECTION,
+            max_streams=self._profile.max_streams_per_connection,
+            command_profile=self._profile,
         )
         self._workers.append(worker)
+        self._worker_loads[worker] = 0.0
         return worker
 
     def _acquire_worker(self) -> _CombinedStreamWorker:
-        for worker in self._workers:
-            if worker.has_capacity():
-                return worker
-        return self._create_worker()
+        available = [worker for worker in self._workers if worker.has_capacity()]
+        if not available:
+            return self._create_worker()
+        return min(
+            available,
+            key=lambda worker: (
+                self._worker_loads.get(worker, 0.0),
+                worker.registration_count(),
+            ),
+        )
+
+    def ensure_workers(self, count: int) -> None:
+        target = max(0, int(count))
+        with self._lock:
+            while len(self._workers) < target:
+                self._create_worker()
+
+    def worker_count(self) -> int:
+        with self._lock:
+            return len(self._workers)
 
     def register(
         self,
@@ -605,11 +691,28 @@ class _StreamWorkerPool:
         buffer: StreamBuffer[Any],
         on_message: Callable[[dict[str, Any]], None],
         on_error: Optional[Callable[[ResyncReason, str], None]] = None,
+        *,
+        weight: float = 1.0,
     ) -> Callable[[], None]:
+        normalized_weight = max(float(weight), 0.0)
         with self._lock:
             worker = self._acquire_worker()
+            self._worker_loads[worker] = self._worker_loads.get(worker, 0.0) + normalized_weight
 
-        release = worker.register(symbol, buffer, on_message, on_error)
+        try:
+            release = worker.register(
+                symbol,
+                buffer,
+                on_message,
+                on_error,
+                weight=normalized_weight,
+            )
+        except Exception:
+            with self._lock:
+                current = self._worker_loads.get(worker, 0.0) - normalized_weight
+                self._worker_loads[worker] = max(current, 0.0)
+            raise
+
         released = threading.Event()
 
         def _release_wrapper() -> None:
@@ -617,6 +720,11 @@ class _StreamWorkerPool:
                 return
             release()
             with self._lock:
+                current = self._worker_loads.get(worker, 0.0) - normalized_weight
+                if current <= 0:
+                    self._worker_loads.pop(worker, None)
+                else:
+                    self._worker_loads[worker] = current
                 if worker.is_empty() and worker in self._workers:
                     self._workers.remove(worker)
                     worker.stop()
@@ -634,6 +742,7 @@ class BinanceStreamPool:
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]] = None,
         depth_stream_interval_ms: int = 100,
+        profiles: Mapping[str, StreamLoadProfile] | None = None,
     ) -> None:
         base = endpoints_ws_base.rstrip("/")
         if not base.endswith("/ws"):
@@ -642,6 +751,12 @@ class BinanceStreamPool:
         interval = max(1, int(depth_stream_interval_ms))
         depth_suffix = f"depth@{interval}ms"
         self._depth_stream_interval_ms = interval
+        resolved_profiles = dict(DEFAULT_BINANCE_STREAM_PROFILES)
+        if profiles is not None:
+            resolved_profiles.update(profiles)
+        depth_profile = resolved_profiles.get("depth", DEFAULT_BINANCE_STREAM_PROFILES["depth"])
+        trades_profile = resolved_profiles.get("trades", DEFAULT_BINANCE_STREAM_PROFILES["trades"])
+        book_profile = resolved_profiles.get("book", DEFAULT_BINANCE_STREAM_PROFILES["book"])
         self._depth_worker = _StreamWorkerPool(
             name=depth_suffix,
             ws_base=self._ws_base,
@@ -649,6 +764,7 @@ class BinanceStreamPool:
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
             log_writer=log_writer,
+            profile=depth_profile,
         )
         self._trades_worker = _StreamWorkerPool(
             name="trades",
@@ -657,6 +773,7 @@ class BinanceStreamPool:
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
             log_writer=log_writer,
+            profile=trades_profile,
         )
         self._book_worker = _StreamWorkerPool(
             name="book_ticker",
@@ -665,6 +782,7 @@ class BinanceStreamPool:
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
             log_writer=log_writer,
+            profile=book_profile,
         )
 
     def register_depth(
