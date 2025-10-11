@@ -10,6 +10,7 @@ from threading import Lock
 from typing import Any, Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
 
 from application import FeedMonitor, GUARDS
+from application.resync_coordinator import ResyncCoordinator
 from application.stream_pump import StreamPump
 from application.market_scanner import MarketScanner
 from config.config import CONFIG
@@ -35,6 +36,7 @@ from data.exchanges.binance_trade import BinanceAPIError
 from data.exchanges.bybit_trade import BybitAPIError
 from data.logger import LogSink, create_log_writer, create_text_log_sink
 from data.telegram import TelegramClient
+from state.resync_registry import ResyncStatus
 from domain.book import OrderBook
 from domain.detectors import check_if_has_near_wall, check_if_has_opposite_wall, compute_odr
 from domain.execution import create_execution_handlers, initialize_account
@@ -288,6 +290,14 @@ class Application:
             resync=self._handle_resync,
             safety=self._kill_switch,
         )
+        self._resync_lock = Lock()
+        self._resync_alerts: Deque[Tuple[ResyncStatus, str]] = deque()
+        self._resync_quarantine: Deque[str] = deque()
+        self._resync_quarantine_pending: set[str] = set()
+        self._resync_coordinator = ResyncCoordinator(
+            monitor_callback=self._handle_resync_alert,
+            quarantine_callback=self._schedule_resync_quarantine,
+        )
 
     @staticmethod
     def _exchange_credentials() -> tuple[str | None, str | None]:
@@ -314,6 +324,7 @@ class Application:
                 api_key=api_key,
                 api_secret=api_secret,
                 profile=profile,
+                resync_coordinator=self._resync_coordinator,
             )
         if CONFIG.general.exchange is ExchangeName.BYBIT:
             return BybitExchangeData(
@@ -424,6 +435,40 @@ class Application:
 
     def _send_telegram(self, message: str) -> None:
         self._telegram_client.send_message(message)
+
+    def _handle_resync_alert(self, status: ResyncStatus, message: str) -> None:
+        with self._resync_lock:
+            self._resync_alerts.append((status, message))
+
+    def _schedule_resync_quarantine(self, symbol: str) -> None:
+        with self._resync_lock:
+            if symbol in self._resync_quarantine_pending:
+                return
+            self._resync_quarantine_pending.add(symbol)
+            self._resync_quarantine.append(symbol)
+
+    def _drain_resync_notifications(self) -> None:
+        alerts: list[Tuple[ResyncStatus, str]] = []
+        quarantine: list[str] = []
+        with self._resync_lock:
+            while self._resync_alerts:
+                alerts.append(self._resync_alerts.popleft())
+            while self._resync_quarantine:
+                symbol = self._resync_quarantine.popleft()
+                self._resync_quarantine_pending.discard(symbol)
+                quarantine.append(symbol)
+        for status, message in alerts:
+            timestamp = get_current_time()
+            self._event_logger.log(message, timestamp)
+            self._send_telegram(message)
+        for symbol in quarantine:
+            if symbol not in self._contexts:
+                continue
+            self._event_logger.log(
+                f"{symbol}: символ выведен из торгов из-за зависшего восстановления.",
+                get_current_time(),
+            )
+            self._unsubscribe_symbol(symbol)
 
     def _handle_resync(self, reason: StrategyResyncReason) -> None:
         symbol = self._current_symbol
@@ -1186,7 +1231,9 @@ class Application:
         self._refresh_balances(force=True)
         startup_timestamp = get_current_time()
         self._subscription_manager.activate_pending(startup_timestamp)
+        self._drain_resync_notifications()
         while True:
+            self._drain_resync_notifications()
             self._refresh_symbol_scan()
             activation_timestamp = get_current_time()
             self._subscription_manager.activate_pending(activation_timestamp)
