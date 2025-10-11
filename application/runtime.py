@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from config.models.exchange_name import ExchangeName
@@ -35,6 +35,7 @@ class FeedMonitor:
     has_silence_timeout: bool = False
     has_queue_overflow: bool = False
     has_connection_loss: bool = False
+    _degraded_streams: dict[str, bool] = field(default_factory=dict, repr=False)
 
     def flag(self, reason: StreamResyncReason) -> None:
         if reason is StreamResyncReason.SEQUENCE_GAP:
@@ -52,6 +53,7 @@ class FeedMonitor:
             has_connection_loss=self.has_connection_loss,
             has_silence_timeout=self.has_silence_timeout,
             has_queue_overflow=self.has_queue_overflow,
+            degraded_streams=tuple(sorted(self._degraded_streams)),
         )
 
     def clear(self) -> None:
@@ -59,6 +61,17 @@ class FeedMonitor:
         self.has_connection_loss = False
         self.has_silence_timeout = False
         self.has_queue_overflow = False
+        self._degraded_streams.clear()
+
+    def set_degraded(self, stream: str, degraded: bool) -> bool:
+        key = stream.lower()
+        if degraded:
+            changed = not self._degraded_streams.get(key, False)
+            self._degraded_streams[key] = True
+            return changed
+        if self._degraded_streams.pop(key, None):
+            return True
+        return False
 
 
 GUARDS = RuntimeGuards()

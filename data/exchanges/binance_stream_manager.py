@@ -188,5 +188,11 @@ class BinanceStreamManager:
 
         return _release_wrapper
 
+    def migrate_stream(self, stream_type: str, symbol: str, reason: str) -> bool:
+        pool = self._pools.get(stream_type)
+        if pool is None:
+            return False
+        return pool.migrate(symbol, reason)
+
 
 __all__ = ["BinanceStreamManager"]

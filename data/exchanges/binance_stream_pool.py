@@ -1006,6 +1006,20 @@ class _StreamWorkerPool:
             return
         with self._lock:
             self._bindings[binding.symbol] = binding
+
+    def migrate(self, symbol: str, details: str) -> bool:
+        normalized = symbol.upper()
+        with self._lock:
+            binding = self._bindings.get(normalized)
+        if binding is None:
+            return False
+        self._logger.log(
+            (
+                "Binance {stream} stream: инициирована миграция символа {symbol}: {details}"
+            ).format(stream=self._name, symbol=normalized, details=details)
+        )
+        self._handle_degraded(binding.worker, normalized, details)
+        return True
         new_worker = self._acquire_worker(exclude=worker)
         with self._lock:
             self._worker_loads[new_worker] = self._worker_loads.get(new_worker, 0.0) + binding.weight
