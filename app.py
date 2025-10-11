@@ -224,10 +224,13 @@ class Application:
         self._balance_refresh_interval = timedelta(hours=CONFIG.position.balance_refresh_h)
         self._last_balance_refresh_at: Optional[datetime] = None
         self._silence_recovery_cooldown = timedelta(seconds=5)
+        subscription_limits = CONFIG.subscriptions
         self._subscription_manager = SubscriptionManager(
             subscribe=self._subscribe_symbol,
             unsubscribe=self._unsubscribe_symbol,
             logger=self._event_logger,
+            max_new_per_cycle=subscription_limits.max_new_per_cycle,
+            max_total=subscription_limits.max_total,
         )
         self._data_freshness_threshold = timedelta(
             milliseconds=CONFIG.general.ws_silence_timeout_ms
@@ -352,7 +355,7 @@ class Application:
                 self._dispose_context(new_context)
             elif context is not None:
                 self._dispose_context(context)
-            return
+            raise
         if new_context is not None:
             self._contexts[symbol] = new_context
 
@@ -1094,8 +1097,12 @@ class Application:
         interval = CONFIG.general.loop_interval_ms / 1000.0
         self._refresh_symbol_scan(force=True)
         self._refresh_balances(force=True)
+        startup_timestamp = get_current_time()
+        self._subscription_manager.activate_pending(startup_timestamp)
         while True:
             self._refresh_symbol_scan()
+            activation_timestamp = get_current_time()
+            self._subscription_manager.activate_pending(activation_timestamp)
             self._refresh_balances()
             resync_triggered = False
             work_done = False
