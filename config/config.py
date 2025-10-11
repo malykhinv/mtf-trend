@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Final
 
 from config.models import (
+    AdminSettings,
     BalanceSource,
     Config,
     ExchangeName,
@@ -10,6 +11,7 @@ from config.models import (
     FundingKillSwitchSettings,
     GeneralSettings,
     MarginMode,
+    MetricsSettings,
     OdrSettings,
     PositionSettings,
     StopTrigger,
@@ -94,6 +96,20 @@ CONFIG: Final[Config] = Config(
         # новых потоков за цикл, чтобы избежать бурстов и перегрузки.
         max_total=80,
         max_new_per_cycle=4,
+    ),
+    metrics=MetricsSettings(
+        enabled=True,
+        prometheus_port=9123,
+        daily_report_hour_utc=3,
+        resubscribe_ratio_threshold=0.4,
+        resubscribe_window_minutes=5,
+        silence_timeout_minutes=6,
+        backpressure_ratio_threshold=0.75,
+    ),
+    admin=AdminSettings(
+        host="127.0.0.1",
+        port=8099,
+        request_timeout_s=5.0,
     ),
 )
 
