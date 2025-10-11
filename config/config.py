@@ -13,6 +13,7 @@ from config.models import (
     OdrSettings,
     PositionSettings,
     StopTrigger,
+    SubscriptionSettings,
     TelegramSettings,
     TradingProfile,
     TurnoverThresholds,
@@ -84,6 +85,13 @@ CONFIG: Final[Config] = Config(
         chat_id=739865715,
         silent=False,
         uptick_cooldown_min=5,
+    ),
+    subscriptions=SubscriptionSettings(
+        # При мониторинге сотен инструментов рекомендуется удерживать
+        # порядка 80 одновременных подписок и подключать не более четырёх
+        # новых потоков за цикл, чтобы избежать бурстов и перегрузки.
+        max_total=80,
+        max_new_per_cycle=4,
     ),
 )
 
