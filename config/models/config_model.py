@@ -2,9 +2,11 @@
 
 from dataclasses import dataclass
 
+from .admin_settings import AdminSettings
 from .focus_settings import FocusSettings
 from .funding_kill_switch_settings import FundingKillSwitchSettings
 from .general_settings import GeneralSettings
+from .metrics_settings import MetricsSettings
 from .odr_settings import OdrSettings
 from .position_settings import PositionSettings
 from .subscription_settings import SubscriptionSettings
@@ -26,6 +28,8 @@ class Config:
     funding_ks: FundingKillSwitchSettings
     telegram: TelegramSettings
     subscriptions: SubscriptionSettings
+    metrics: MetricsSettings
+    admin: AdminSettings
 
 
 __all__ = ["Config"]

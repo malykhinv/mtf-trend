@@ -8,6 +8,7 @@ from queue import Empty, Queue
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional
 
 from utils.async_websocket import AsyncWebSocketClient, WebSocketTimeoutError
+from utils.metrics import METRICS
 
 from .base import ExchangeLogger, ResyncReason, StreamBuffer
 from .stream_scheduler import (
@@ -178,9 +179,10 @@ class _CombinedStreamWorker:
         self._unsubscribe_retry = CommandRetryPolicy(max_attempts=3, delay_seconds=0.25, backoff_multiplier=1.5)
         self._resubscribe_retry = CommandRetryPolicy(max_attempts=5, delay_seconds=0.5, backoff_multiplier=1.5)
         self._property_retry = CommandRetryPolicy(max_attempts=3, delay_seconds=0.5, backoff_multiplier=2.0)
+        self._worker_label = f"{name}-{id(self):x}"
         self._thread = threading.Thread(
             target=self._run_thread,
-            name=f"binance-pool-{name}",
+            name=f"binance-pool-{self._worker_label}",
             daemon=True,
         )
         self._thread.start()
@@ -194,25 +196,27 @@ class _CombinedStreamWorker:
         normalized_tags = {str(key): str(value) for key, value in tags.items()}
         command_name = normalized_tags.get("command", "command")
         latency = values.get("latency")
+        numeric_latency_val: Optional[float] = None
         if latency is not None:
             try:
-                numeric_latency = float(latency)
+                numeric_latency_val = float(latency)
             except (TypeError, ValueError):  # pragma: no cover - defensive
-                numeric_latency = 0.0
+                numeric_latency_val = 0.0
             self._logger.metric(
                 f"{self._name}.{command_name}.latency",
-                numeric_latency,
+                numeric_latency_val,
                 tags=normalized_tags,
             )
         attempts = values.get("attempts")
+        numeric_attempts_val: Optional[float] = None
         if attempts is not None:
             try:
-                numeric_attempts = float(attempts)
+                numeric_attempts_val = float(attempts)
             except (TypeError, ValueError):  # pragma: no cover - defensive
-                numeric_attempts = 0.0
+                numeric_attempts_val = 0.0
             self._logger.metric(
                 f"{self._name}.{command_name}.attempts",
-                numeric_attempts,
+                numeric_attempts_val,
                 tags=normalized_tags,
             )
         error = values.get("error")
@@ -221,6 +225,14 @@ class _CombinedStreamWorker:
                 (
                     "Binance {stream} stream: ошибка команды {command}: {error}"  # noqa: ISC003
                 ).format(stream=self._name, command=command_name, error=error)
+            )
+        if numeric_latency_val is not None:
+            attempts_value = numeric_attempts_val if numeric_attempts_val is not None else 0.0
+            METRICS.observe_command_latency(
+                self._name,
+                normalized_tags,
+                float(numeric_latency_val),
+                float(attempts_value),
             )
 
     def register(
@@ -270,6 +282,7 @@ class _CombinedStreamWorker:
                 limit=self._max_streams,
             )
         )
+        self._update_active_metric(current)
 
         released = threading.Event()
         self._command_queue.put(("subscribe", symbol))
@@ -294,6 +307,7 @@ class _CombinedStreamWorker:
                     limit=self._max_streams,
                 )
             )
+            self._update_active_metric(current)
 
         return release
 
@@ -317,6 +331,13 @@ class _CombinedStreamWorker:
         )
         self._stop_event.set()
         self._update_event.set()
+        self._update_active_metric(0)
+
+    def _update_active_metric(self, count: Optional[int] = None) -> None:
+        if count is None:
+            with self._lock:
+                count = len(self._registrations)
+        METRICS.set_active_symbols(self._name, self._worker_label, int(count))
 
     def _current_symbols(self) -> tuple[str, ...]:
         with self._lock:
