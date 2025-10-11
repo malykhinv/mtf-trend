@@ -11,7 +11,7 @@ from .base import ExchangeLogger, ResyncReason, StreamBuffer
 
 
 MAX_STREAMS_PER_CONNECTION = 200
-COMMAND_RATE_LIMIT_PER_SECOND = 8
+COMMAND_RATE_LIMIT_PER_SECOND = 5
 COMMAND_RATE_LIMIT_WINDOW = 1.0
 
 
@@ -267,6 +267,13 @@ class _CombinedStreamWorker:
         self._commands_sent_in_window += 1
         self._last_command_timestamp = now
 
+    def _resubscribe_delay(self) -> float:
+        limit = COMMAND_RATE_LIMIT_PER_SECOND
+        if limit > 0:
+            minimum_step = COMMAND_RATE_LIMIT_WINDOW / limit
+            return max(0.05, minimum_step)
+        return 0.05
+
     async def _send_command(self, client: AsyncWebSocketClient, method: str, params: list[Any]) -> None:
         request_id = self._next_request_id
         self._next_request_id += 1
@@ -322,7 +329,7 @@ class _CombinedStreamWorker:
                         self._record_command_sent()
                     except Exception:
                         pass
-                    await asyncio.sleep(0.05)
+                    await asyncio.sleep(self._resubscribe_delay())
                     active_symbols.discard(symbol)
                 try:
                     await self._throttle_if_needed()
