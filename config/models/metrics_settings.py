@@ -10,6 +10,6 @@ class MetricsSettings:
     resubscribe_window_minutes: int = 5
     silence_timeout_minutes: int = 5
     backpressure_ratio_threshold: float = 0.7
-
+    emit_json_logs: bool = False
 
 __all__ = ["MetricsSettings"]

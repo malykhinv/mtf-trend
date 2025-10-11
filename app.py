@@ -228,7 +228,7 @@ class Application:
         METRICS.configure(
             enabled=metrics_settings.enabled,
             prometheus_port=metrics_settings.prometheus_port if metrics_settings.enabled else None,
-            json_sink=self._sink,
+            json_sink=self._sink if metrics_settings.emit_json_logs else None,
             thresholds=thresholds,
             daily_report_hour=metrics_settings.daily_report_hour_utc,
         )
