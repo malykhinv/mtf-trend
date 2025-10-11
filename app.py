@@ -292,7 +292,11 @@ class Application:
             return SECRETS.bybit_api_key, SECRETS.bybit_api_secret
         return None, None
 
-    def _create_exchange_data(self, symbol: str) -> IExchangeData:
+    def _create_exchange_data(
+        self,
+        symbol: str,
+        profile: TradingProfile | None = None,
+    ) -> IExchangeData:
         api_key, api_secret = self._exchange_credentials()
         if CONFIG.general.exchange is ExchangeName.BINANCE:
             return BinanceExchangeData(
@@ -304,6 +308,7 @@ class Application:
                 log_writer=self._sink,
                 api_key=api_key,
                 api_secret=api_secret,
+                profile=profile,
             )
         if CONFIG.general.exchange is ExchangeName.BYBIT:
             return BybitExchangeData(
@@ -795,7 +800,8 @@ class Application:
         context.cycle_started = True
 
     def _create_context(self, symbol: str) -> SymbolContext:
-        exchange_data = self._create_exchange_data(symbol)
+        profile = self._symbol_profiles.get(symbol, CONFIG.general.profile)
+        exchange_data = self._create_exchange_data(symbol, profile)
         filters = exchange_data.fetch_symbol_filters()
         trading_adapter = self._create_trading_adapter(symbol, filters)
         context = SymbolContext(
@@ -811,7 +817,7 @@ class Application:
             ticker_subscription=exchange_data.stream_book_ticker(),
             filters=filters,
             trading_adapter=trading_adapter,
-            profile=self._symbol_profiles.get(symbol, CONFIG.general.profile),
+            profile=profile,
         )
         context.order_book.reset_odr_history()
         startup_timestamp = get_current_time()

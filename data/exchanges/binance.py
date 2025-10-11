@@ -12,6 +12,7 @@ from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from config.models.trading_profile import TradingProfile
 from domain.models import (
     Candle,
     Exchange,
@@ -49,6 +50,21 @@ BINANCE_ALLOWED_DEPTH_LIMITS: frozenset[int] = frozenset({5, 10, 20, 50, 100, 50
 MIN_STREAM_SILENCE_TIMEOUT_MS = 1500.0
 
 
+@dataclass(frozen=True)
+class _StreamTimeoutConfig:
+    depth: float
+    trades: float
+    book_ticker: float
+
+
+_PROFILE_STREAM_TIMEOUTS: dict[TradingProfile, _StreamTimeoutConfig] = {
+    TradingProfile.TOP: _StreamTimeoutConfig(depth=2.5, trades=6.0, book_ticker=6.0),
+    TradingProfile.ALT: _StreamTimeoutConfig(depth=3.5, trades=8.0, book_ticker=8.0),
+    TradingProfile.LISTING: _StreamTimeoutConfig(depth=1.5, trades=5.0, book_ticker=5.0),
+    TradingProfile.AUTO: _StreamTimeoutConfig(depth=3.0, trades=7.0, book_ticker=7.0),
+}
+
+
 class BinanceExchangeData:
     _pool_lock: ClassVar[threading.Lock] = threading.Lock()
     _shared_stream_pools: ClassVar[dict[tuple[str, int], BinanceStreamPool]] = {}
@@ -70,6 +86,7 @@ class BinanceExchangeData:
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
         silence_timeout_ms: float | None = None,
+        profile: TradingProfile | None = None,
     ) -> None:
         self.symbol = symbol.upper()
         self._endpoints = endpoints or BinanceEndpoints()
@@ -96,15 +113,44 @@ class BinanceExchangeData:
                 "Binance depth stream: интервал {interval} мс, лимит снапшота {limit}"
             ).format(interval=self._depth_stream_interval_ms, limit=self._depth_limit)
         )
-        if silence_timeout_ms is not None:
-            effective_silence_timeout_ms = max(
-                float(silence_timeout_ms),
-                MIN_STREAM_SILENCE_TIMEOUT_MS,
+        self._profile = profile or TradingProfile.AUTO
+        base_timeout_ms = (
+            max(float(silence_timeout_ms), MIN_STREAM_SILENCE_TIMEOUT_MS)
+            if silence_timeout_ms is not None
+            else MIN_STREAM_SILENCE_TIMEOUT_MS
+        )
+        base_timeout_s = max(0.1, base_timeout_ms / 1000.0)
+        timeouts = self._resolve_stream_silence_timeouts(
+            base_timeout_s,
+            self._profile,
+        )
+        self._depth_silence_timeout = timeouts.depth
+        self._trade_silence_timeout = timeouts.trades
+        self._book_ticker_silence_timeout = timeouts.book_ticker
+        self._generic_silence_timeout = max(
+            MIN_STREAM_SILENCE_TIMEOUT_MS / 1000.0,
+            min(base_timeout_s, max(timeouts.trades, timeouts.book_ticker)),
+        )
+        self._heartbeat_interval = max(
+            min(
+                self._depth_silence_timeout,
+                self._trade_silence_timeout,
+                self._book_ticker_silence_timeout,
             )
-        else:
-            effective_silence_timeout_ms = MIN_STREAM_SILENCE_TIMEOUT_MS
-        self._silence_timeout = max(0.1, effective_silence_timeout_ms / 1000.0)
-        self._heartbeat_interval = max(self._silence_timeout / 2, 0.1)
+            / 2,
+            0.1,
+        )
+        self._logger.log(
+            (
+                "Binance streams: таймауты тишины (профиль {profile}): "
+                "depth={depth:.1f} c, trades={trades:.1f} c, book_ticker={ticker:.1f} c"
+            ).format(
+                profile=self._profile.value,
+                depth=self._depth_silence_timeout,
+                trades=self._trade_silence_timeout,
+                ticker=self._book_ticker_silence_timeout,
+            )
+        )
         self._depth_last_update: Optional[int] = None
         self._depth_buffered_messages: list[dict[str, Any]] = []
         self._depth_allow_skip = False
@@ -177,6 +223,21 @@ class BinanceExchangeData:
             f"Binance depth limit {requested_limit} is unsupported, using {normalized} instead"
         )
         return normalized
+
+    def _resolve_stream_silence_timeouts(
+        self,
+        base_timeout_s: float,
+        profile: TradingProfile,
+    ) -> _StreamTimeoutConfig:
+        template = _PROFILE_STREAM_TIMEOUTS.get(profile)
+        if template is None:
+            template = _PROFILE_STREAM_TIMEOUTS[TradingProfile.AUTO]
+        min_timeout_s = max(0.1, MIN_STREAM_SILENCE_TIMEOUT_MS / 1000.0)
+        return _StreamTimeoutConfig(
+            depth=max(min_timeout_s, min(template.depth, base_timeout_s)),
+            trades=max(min_timeout_s, min(template.trades, base_timeout_s)),
+            book_ticker=max(min_timeout_s, min(template.book_ticker, base_timeout_s)),
+        )
 
     @classmethod
     def _get_stream_pool(
@@ -308,14 +369,15 @@ class BinanceExchangeData:
         return next_funding
 
     def stream_depth(self) -> StreamSubscription[DepthStreamData]:
-        silence_timeout = self._silence_timeout
-        heartbeat_interval = self._heartbeat_interval
+        silence_timeout = self._depth_silence_timeout
+        heartbeat_interval = max(silence_timeout / 2, 0.1)
 
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer(
             name="depth",
             logger=self._logger,
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
+            restart_grace_period=silence_timeout,
         )
         self._reset_depth_state()
 
@@ -484,12 +546,16 @@ class BinanceExchangeData:
             )
 
     def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
+        silence_timeout = self._book_ticker_silence_timeout
+        heartbeat_interval = max(silence_timeout / 2, 0.1)
+
         buffer: StreamBuffer[BestBidAsk] = StreamBuffer(
             name="book_ticker",
             logger=self._logger,
-            silence_timeout=self._silence_timeout,
-            heartbeat_interval=self._heartbeat_interval,
+            silence_timeout=silence_timeout,
+            heartbeat_interval=heartbeat_interval,
             drop_oldest_on_overflow=True,
+            restart_grace_period=silence_timeout,
         )
 
         def handle_message(message: dict[str, Any]) -> None:
@@ -525,13 +591,17 @@ class BinanceExchangeData:
         return StreamSubscription(events=iterator(), _buffer=buffer, _stopper=release)
 
     def stream_trades(self) -> StreamSubscription[Trade]:
+        silence_timeout = self._trade_silence_timeout
+        heartbeat_interval = max(silence_timeout / 2, 0.1)
+
         buffer: StreamBuffer[Trade] = StreamBuffer(
             name="trades",
             logger=self._logger,
-            silence_timeout=self._silence_timeout,
-            heartbeat_interval=self._heartbeat_interval,
+            silence_timeout=silence_timeout,
+            heartbeat_interval=heartbeat_interval,
             maxsize=4096,
             drop_oldest_on_overflow=True,
+            restart_grace_period=silence_timeout,
         )
 
         def handle_message(message: dict[str, Any]) -> None:
@@ -582,8 +652,8 @@ class BinanceExchangeData:
         drop_oldest_on_overflow: bool = False,
         maxsize: int | None = None,
     ) -> StreamSubscription[Any]:
-        silence_timeout = self._silence_timeout
-        heartbeat_interval = self._heartbeat_interval
+        silence_timeout = self._generic_silence_timeout
+        heartbeat_interval = max(silence_timeout / 2, 0.1)
 
         buffer: StreamBuffer[Any] = StreamBuffer(
             name=name,
@@ -592,6 +662,7 @@ class BinanceExchangeData:
             heartbeat_interval=heartbeat_interval,
             maxsize=maxsize,
             drop_oldest_on_overflow=drop_oldest_on_overflow,
+            restart_grace_period=silence_timeout,
         )
 
         worker = threading.Thread(
@@ -619,61 +690,81 @@ class BinanceExchangeData:
         buffer: StreamBuffer[Any],
         name: str,
     ) -> None:
-        reconnect_after_silence = False
+        pending_restart_reason: ResyncReason | None = None
+
+        def _describe(reason: ResyncReason | None) -> str:
+            if reason == ResyncReason.SILENCE_TIMEOUT:
+                return "тайм-аута тишины"
+            if reason == ResyncReason.CONNECTION_LOST:
+                return "обрыва соединения"
+            return "неизвестного события"
+
+        def _log(message: str, reason: ResyncReason | None = None) -> None:
+            if reason is None:
+                self._logger.log(f"Binance {name} stream: {message}")
+            else:
+                self._logger.log(
+                    f"Binance {name} stream: {message} ({_describe(reason)})"
+                )
+
         while not buffer.stopped():
             client: WebSocketClient | None = None
             try:
-                if reconnect_after_silence:
-                    self._logger.log(
-                        f"Binance {name} stream: перезапуск соединения после тайм-аута тишины"
-                    )
-                else:
+                if pending_restart_reason is None:
                     self._logger.log(f"Binance {name} stream: открываем соединение")
+                else:
+                    _log("перезапуск соединения", pending_restart_reason)
                 client = self._connect_websocket(url)
                 client.settimeout(self._ws_timeout)
-                if reconnect_after_silence:
-                    self._logger.log(
-                        f"Binance {name} stream: соединение успешно восстановлено"
+                if pending_restart_reason is not None:
+                    _log(
+                        "соединение успешно восстановлено",
+                        pending_restart_reason,
                     )
-                    reconnect_after_silence = False
+                    pending_restart_reason = None
                 while not buffer.stopped():
-                    if buffer.consume_restart_request():
-                        reconnect_after_silence = True
-                        self._logger.log(
-                            f"Binance {name} stream: получен запрос перезапуска от буфера"
-                        )
+                    restart_reason = buffer.consume_restart_request()
+                    if restart_reason is not None:
+                        pending_restart_reason = restart_reason
+                        _log("получен запрос перезапуска от буфера", restart_reason)
                         break
                     try:
                         message = cast(dict[str, Any], client.recv_json())
                     except WebSocketTimeoutError:
-                        if buffer.consume_restart_request():
-                            reconnect_after_silence = True
-                            self._logger.log(
-                                f"Binance {name} stream: перезапуск по запросу буфера после тайм-аута ожидания"
+                        restart_reason = buffer.consume_restart_request()
+                        if restart_reason is not None:
+                            pending_restart_reason = restart_reason
+                            _log(
+                                "перезапуск по запросу буфера после тайм-аута ожидания",
+                                restart_reason,
                             )
                             break
                         buffer.push(StreamEvent.heartbeat())
                         continue
                     if not message:
-                        if buffer.consume_restart_request():
-                            reconnect_after_silence = True
-                            self._logger.log(
-                                f"Binance {name} stream: перезапуск по запросу буфера после пустого сообщения"
+                        restart_reason = buffer.consume_restart_request()
+                        if restart_reason is not None:
+                            pending_restart_reason = restart_reason
+                            _log(
+                                "перезапуск по запросу буфера после пустого сообщения",
+                                restart_reason,
                             )
                             break
                         continue
                     for payload in parser(message):
                         buffer.push_data(payload)
-                    if buffer.consume_restart_request():
-                        reconnect_after_silence = True
-                        self._logger.log(
-                            f"Binance {name} stream: перезапуск по запросу буфера после обработки сообщения"
+                    restart_reason = buffer.consume_restart_request()
+                    if restart_reason is not None:
+                        pending_restart_reason = restart_reason
+                        _log(
+                            "перезапуск по запросу буфера после обработки сообщения",
+                            restart_reason,
                         )
                         break
             except Exception as exc:
                 reason = (
                     ResyncReason.SILENCE_TIMEOUT
-                    if reconnect_after_silence
+                    if pending_restart_reason == ResyncReason.SILENCE_TIMEOUT
                     else ResyncReason.CONNECTION_LOST
                 )
                 if reason == ResyncReason.SILENCE_TIMEOUT:
@@ -684,10 +775,13 @@ class BinanceExchangeData:
                     self._logger.log(details)
                     time.sleep(self._reconnect_delay)
                 else:
-                    details = f"Binance {name} stream: {exc}"
+                    details = (
+                        f"Binance {name} stream: обнаружен обрыв соединения: {exc}"
+                    )
                     buffer.push_resync(reason, details)
                     self._logger.log(details)
                     time.sleep(self._reconnect_delay)
+                pending_restart_reason = reason
             finally:
                 if client is not None:
                     try:
