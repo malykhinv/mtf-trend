@@ -65,3 +65,15 @@ This guarantees that high-priority symbols do not contend with low-liquidity one
    workers are precreated during service bootstrap.
 4. All changes should be validated in staging by monitoring reconnect storms and
    ensuring command throttling logs stay within the expected windows.
+5. Pipelines expose backlog metrics and chronic error hooks via
+   `StreamPipeline`. Depth, trades, and book-ticker feeds now have per-profile buffer
+   sizing, thresholds, and fallback behaviour defined under `streams/`. Review the
+   thresholds when updating `TradingProfile` allocations to ensure the SLA balance
+   between TOP and thinly traded symbols remains appropriate.
+6. The stream manager reacts to chronic error callbacks by migrating the impacted
+   symbol to a reserve socket without disrupting other workers. For incidents focused on
+   a single market, prefer tuning the pipeline thresholds before widening global
+   restart timers.
+7. Downstream strategies consume degradation signals surfaced by the runtime. Expect
+   automated position throttling (reduced leverage or temporary suspensions) whenever a
+   stream enters a degraded state; coordinate with risk to adjust policy parameters.

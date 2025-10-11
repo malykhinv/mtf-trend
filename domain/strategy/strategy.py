@@ -69,6 +69,12 @@ class Strategy:
         if reason is not None and self._state is not StrategyState.RESYNC:
             self._enter_resync(reason, observation.timestamp)
             return self._state
+        if observation.feed_status.degraded_streams:
+            self._handle_degraded_observation(
+                observation,
+                observation.feed_status.degraded_streams,
+            )
+            return self._state
         if self._state is StrategyState.RESYNC:
             return self._state
         if self._state is StrategyState.SCANNING:
@@ -337,6 +343,33 @@ class Strategy:
         self._focused_wall = None
         self._last_focus_signal_at = None
         self._last_uptick_loss_at[symbol] = timestamp
+
+    def _handle_degraded_observation(
+        self,
+        observation: MarketObservation,
+        streams: tuple[str, ...],
+    ) -> None:
+        description = ", ".join(streams)
+        self._logger.log(
+            f"Деградация потоков ({description}) для {observation.symbol}.",
+            observation.timestamp,
+        )
+        if (
+            self._state is StrategyState.IN_POSITION
+            and self._position_symbol == observation.symbol
+        ):
+            self._exit_position(
+                f"деградация каналов: {description}",
+                observation.timestamp,
+                observation.last_price,
+            )
+            return
+        if self._focus.current == observation.symbol:
+            self._focus.defocus(observation.timestamp)
+            self._focused_signal = Signal.NONE
+            self._focused_wall = None
+            self._last_focus_signal_at = None
+            self._state = StrategyState.SCANNING
 
     @staticmethod
     def _is_odr_neutral(pressure: Pressure) -> bool:

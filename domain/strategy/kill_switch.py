@@ -65,6 +65,17 @@ class KillSwitch:
         self._funding_event_at = None
         self.logger.log("Блокировка торгов: ожидание после ресинка.", timestamp)
 
+    def handle_degradation(
+        self,
+        timestamp: datetime,
+        symbol: str,
+        streams: tuple[str, ...],
+    ) -> None:
+        if not streams:
+            return
+        reason = ", ".join(streams)
+        self._trigger_block(f"деградация потоков ({symbol}: {reason})", timestamp)
+
     def handle_funding(self, funding_time: datetime) -> None:
         if self.funding_block <= timedelta(0):
             return
