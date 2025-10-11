@@ -595,15 +595,19 @@ class BinanceStreamPool:
         ws_timeout: float,
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]] = None,
+        depth_stream_interval_ms: int = 100,
     ) -> None:
         base = endpoints_ws_base.rstrip("/")
         if not base.endswith("/ws"):
             base = f"{base}/ws"
         self._ws_base = base
+        interval = max(1, int(depth_stream_interval_ms))
+        depth_suffix = f"depth@{interval}ms"
+        self._depth_stream_interval_ms = interval
         self._depth_worker = _StreamWorkerPool(
-            name="depth",
+            name=depth_suffix,
             ws_base=self._ws_base,
-            stream_suffix="depth@100ms",
+            stream_suffix=depth_suffix,
             ws_timeout=ws_timeout,
             reconnect_delay=reconnect_delay,
             log_writer=log_writer,
