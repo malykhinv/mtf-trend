@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from config.models.trading_profile import TradingProfile
+from config.stream_limits import DEFAULT_BINANCE_STREAM_PROFILES
 from domain.models import (
     Candle,
     Exchange,
@@ -35,7 +36,7 @@ from .base import (
     StreamEvent,
     StreamSubscription,
 )
-from .binance_stream_pool import BinanceStreamPool
+from .binance_stream_manager import BinanceStreamManager
 
 
 WebSocketClient = ThreadedWebSocketClient
@@ -65,9 +66,17 @@ _PROFILE_STREAM_TIMEOUTS: dict[TradingProfile, _StreamTimeoutConfig] = {
 }
 
 
+_STREAM_PROFILE_WEIGHTS: dict[TradingProfile, dict[str, float]] = {
+    TradingProfile.TOP: {"depth": 3.0, "trades": 2.5, "book": 2.0},
+    TradingProfile.ALT: {"depth": 1.0, "trades": 1.0, "book": 0.8},
+    TradingProfile.LISTING: {"depth": 2.5, "trades": 3.0, "book": 1.5},
+    TradingProfile.AUTO: {"depth": 1.5, "trades": 1.5, "book": 1.0},
+}
+
+
 class BinanceExchangeData:
-    _pool_lock: ClassVar[threading.Lock] = threading.Lock()
-    _shared_stream_pools: ClassVar[dict[tuple[str, int], BinanceStreamPool]] = {}
+    _manager_lock: ClassVar[threading.Lock] = threading.Lock()
+    _shared_stream_managers: ClassVar[dict[tuple[str, int], BinanceStreamManager]] = {}
 
     def __init__(
         self,
@@ -101,7 +110,7 @@ class BinanceExchangeData:
             depth_stream_interval_ms
         )
         self._depth_limit = self._normalize_depth_limit(depth_limit)
-        self._stream_pool = self._get_stream_pool(
+        self._stream_manager = self._get_stream_manager(
             endpoints=self._endpoints,
             depth_stream_interval_ms=self._depth_stream_interval_ms,
             ws_timeout=self._ws_timeout,
@@ -239,8 +248,14 @@ class BinanceExchangeData:
             book_ticker=max(min_timeout_s, min(template.book_ticker, base_timeout_s)),
         )
 
+    def _stream_weight(self, stream_type: str) -> float:
+        profile_weights = _STREAM_PROFILE_WEIGHTS.get(self._profile, {})
+        fallback = _STREAM_PROFILE_WEIGHTS[TradingProfile.AUTO]
+        weight = profile_weights.get(stream_type, fallback.get(stream_type, 1.0))
+        return max(float(weight), 0.1)
+
     @classmethod
-    def _get_stream_pool(
+    def _get_stream_manager(
         cls,
         *,
         endpoints: BinanceEndpoints,
@@ -248,20 +263,26 @@ class BinanceExchangeData:
         ws_timeout: float,
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]],
-    ) -> BinanceStreamPool:
-        with cls._pool_lock:
+    ) -> BinanceStreamManager:
+        with cls._manager_lock:
             key = (endpoints.ws_base.rstrip("/"), depth_stream_interval_ms)
-            pool = cls._shared_stream_pools.get(key)
-            if pool is None:
-                pool = BinanceStreamPool(
+            manager = cls._shared_stream_managers.get(key)
+            if manager is None:
+                profiles = DEFAULT_BINANCE_STREAM_PROFILES
+                expected_weights = {
+                    stream: profile.max_streams_per_connection * 1.5
+                    for stream, profile in profiles.items()
+                }
+                manager = BinanceStreamManager(
                     endpoints_ws_base=endpoints.ws_base,
                     ws_timeout=ws_timeout,
                     reconnect_delay=reconnect_delay,
                     log_writer=log_writer,
                     depth_stream_interval_ms=depth_stream_interval_ms,
+                    expected_stream_weights=expected_weights,
                 )
-                cls._shared_stream_pools[key] = pool
-            return pool
+                cls._shared_stream_managers[key] = manager
+            return manager
 
     def _rest_get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         params = params or {}
@@ -395,11 +416,12 @@ class BinanceExchangeData:
             if should_log:
                 self._logger.log(message)
 
-        release = self._stream_pool.register_depth(
+        release = self._stream_manager.register_depth(
             self.symbol,
             buffer,
             handle_message,
             handle_error,
+            weight=self._stream_weight("depth"),
         )
 
         self._start_depth_snapshot(buffer)
@@ -573,11 +595,12 @@ class BinanceExchangeData:
             if should_log:
                 self._logger.log(message)
 
-        release = self._stream_pool.register_book_ticker(
+        release = self._stream_manager.register_book_ticker(
             self.symbol,
             buffer,
             handle_message,
             handle_error,
+            weight=self._stream_weight("book"),
         )
 
         def iterator() -> Iterator[StreamEvent[BestBidAsk]]:
@@ -619,11 +642,12 @@ class BinanceExchangeData:
             if should_log:
                 self._logger.log(message)
 
-        release = self._stream_pool.register_trades(
+        release = self._stream_manager.register_trades(
             self.symbol,
             buffer,
             handle_message,
             handle_error,
+            weight=self._stream_weight("trades"),
         )
 
         def iterator() -> Iterator[StreamEvent[Trade]]:
