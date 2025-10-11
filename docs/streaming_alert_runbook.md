@@ -10,7 +10,7 @@
   * `stream_queue_backlog` и `stream_queue_ratio` (labels: `stream`, `symbol`).
   * `stream_migrations_total` — общее количество миграций потоков.
   * `stream_resync_duration_seconds` (labels: `symbol`, `reason`, `success`).
-* **JSON-логи** — каждая метрика дублируется в stdout в виде JSON-объекта. Дополнительно пишутся события `ALERT` с типами `high_resubscribe_ratio`, `extended_silence`, `backpressure` и `silence_recovered`.
+* **JSON-логи (если включены `CONFIG.metrics.emit_json_logs`)** — каждая метрика дублируется в stdout в виде JSON-объекта. Дополнительно пишутся события `ALERT` с типами `high_resubscribe_ratio`, `extended_silence`, `backpressure` и `silence_recovered`.
 * **Ежедневный отчёт** (`report=daily_metrics`) — собирает агрегаты по латентности команд, длительности ресинков, пикам очередей и миграциям.
 
 ## SLA-алерты и реакция
@@ -18,7 +18,7 @@
 ### 1. Высокая доля переподписок (`alert=high_resubscribe_ratio`)
 * **Триггер:** отношение количества `resubscribe` к `subscribe` за окно `METRICS.resubscribe_window_minutes` (по умолчанию 5 минут) превышает `CONFIG.metrics.resubscribe_ratio_threshold`.
 * **Действия:**
-  1. Проверить JSON-логи и Prometheus, убедиться, что в `stream_command_latency_seconds` нет всплеска ошибок.
+  1. Проверить Prometheus и (если включены) JSON-логи, убедиться, что в `stream_command_latency_seconds` нет всплеска ошибок.
   2. Через CLI `stream_admin.py status` оценить деградацию очередей и ручных пауз.
   3. При необходимости принудительно выполнить `stream_admin.py migrate SYMBOL --stream depth` (или другой стрим), чтобы перераспределить нагрузку.
   4. Зафиксировать инцидент и, если всплеск связан с конкретным профилем, скорректировать лимиты в `config/stream_limits.py` после анализа дневного отчёта.
@@ -56,4 +56,4 @@
 ## Контакты и эскалация
 
 * При повторяющихся проблемах миграции — эскалировать в команду инфраструктуры стриминга.
-* При аномалиях в Prometheus/JSON-логах, не отражённых в приложении, уведомить владельцев мониторинга.
+* При аномалиях в Prometheus или (при включённых логах) JSON-логах, не отражённых в приложении, уведомить владельцев мониторинга.
