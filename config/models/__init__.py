@@ -9,7 +9,6 @@ from .odr_settings import OdrSettings
 from .position_settings import PositionSettings
 from .secrets import Secrets
 from .stop_trigger import StopTrigger
-from .subscription_settings import SubscriptionSettings
 from .telegram_settings import TelegramSettings
 from .trading_profile import TradingProfile
 from .turnover_thresholds import TurnoverThresholds
@@ -28,7 +27,6 @@ __all__ = [
     "OdrSettings",
     "PositionSettings",
     "StopTrigger",
-    "SubscriptionSettings",
     "TelegramSettings",
     "TradingProfile",
     "Secrets",
