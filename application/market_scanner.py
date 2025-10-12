@@ -11,7 +11,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from config.models.exchange_name import ExchangeName
-from config.models.profile_weights import ProfileWeights
+from config.models.profile_stream_weights import ProfileStreamWeights
 from config.models.trading_profile import TradingProfile
 from config.models.turnover_thresholds import TurnoverThresholds
 
@@ -22,7 +22,7 @@ class MarketScanner:
         exchange: ExchangeName,
         profile: TradingProfile,
         thresholds: TurnoverThresholds,
-        profile_weights: ProfileWeights,
+        profile_weights: ProfileStreamWeights,
         *,
         timeout: float = 5.0,
         retries: int = 3,
@@ -40,7 +40,7 @@ class MarketScanner:
         self._retry_backoff = max(1.0, float(retry_backoff))
         self._log = log
         self._last_symbols: Tuple[Tuple[str, TradingProfile], ...] = ()
-        self._last_weights: dict[str, float] = {}
+        self._last_weights: dict[str, dict[str, float]] = {}
         self._listing_dates: dict[str, int] = {}
         self._recent_listing_cache: dict[str, bool] = {}
         self._binance_exchange_info: dict[str, dict[str, object]] = {}
@@ -343,7 +343,7 @@ class MarketScanner:
         for symbol, _ in pairs:
             if default_profile is TradingProfile.LISTING and not self._is_recent_listing(symbol):
                 continue
-            self._last_weights[symbol] = default_weight
+            self._last_weights[symbol] = dict(default_weight)
             self._store_symbol_profile(symbol, default_profile)
             result.append((symbol, default_profile))
             if max_symbols is not None and len(result) >= max_symbols:
@@ -370,29 +370,38 @@ class MarketScanner:
             return float(thresholds.listing_usd)
         return float(thresholds.top_usd)
 
-    def _resolve_weight(self, profile: TradingProfile) -> float:
-        weights = self._profile_weights
-        if profile is TradingProfile.TOP:
-            return float(weights.top)
-        if profile is TradingProfile.ALT:
-            return float(weights.alt)
-        if profile is TradingProfile.LISTING:
-            return float(weights.listing)
-        return float(weights.auto)
+    def _resolve_weight(self, profile: TradingProfile) -> dict[str, float]:
+        stream_weights = self._profile_weights
+
+        def resolve_for_stream(name: str) -> float:
+            stream_profile = getattr(stream_weights, name)
+            if profile is TradingProfile.TOP:
+                return float(stream_profile.top)
+            if profile is TradingProfile.ALT:
+                return float(stream_profile.alt)
+            if profile is TradingProfile.LISTING:
+                return float(stream_profile.listing)
+            return float(stream_profile.auto)
+
+        return {
+            "depth": resolve_for_stream("depth"),
+            "trades": resolve_for_stream("trades"),
+            "book_ticker": resolve_for_stream("book_ticker"),
+        }
 
     @property
-    def symbol_weights(self) -> dict[str, float]:
-        return dict(self._last_weights)
+    def symbol_weights(self) -> dict[str, dict[str, float]]:
+        return {symbol: dict(weights) for symbol, weights in self._last_weights.items()}
 
     @property
     def binance_exchange_info(self) -> dict[str, dict[str, object]]:
         return dict(self._binance_exchange_info)
 
-    def get_symbol_weight(self, symbol: str) -> float:
+    def get_symbol_weight(self, symbol: str) -> dict[str, float]:
         normalized = symbol.upper()
         weight = self._last_weights.get(normalized)
         if weight is not None:
-            return weight
+            return dict(weight)
         if self._profile is TradingProfile.TOP:
             return self._resolve_weight(TradingProfile.TOP)
         if self._profile is TradingProfile.ALT:

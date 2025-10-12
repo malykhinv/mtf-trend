@@ -7,6 +7,7 @@ from .general_settings import GeneralSettings
 from .margin_mode import MarginMode
 from .odr_settings import OdrSettings
 from .position_settings import PositionSettings
+from .profile_stream_weights import ProfileStreamWeights
 from .profile_weights import ProfileWeights
 from .secrets import Secrets
 from .stop_trigger import StopTrigger
@@ -27,6 +28,7 @@ __all__ = [
     "MarginMode",
     "OdrSettings",
     "PositionSettings",
+    "ProfileStreamWeights",
     "ProfileWeights",
     "StopTrigger",
     "TelegramSettings",

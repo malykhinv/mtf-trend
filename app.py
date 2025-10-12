@@ -192,7 +192,7 @@ class Application:
         self._focused_symbol: Optional[str] = None
         self._desired_symbols: Tuple[str, ...] = ()
         self._symbol_profiles: Dict[str, TradingProfile] = {}
-        self._symbol_weights: Dict[str, float] = {}
+        self._symbol_weights: Dict[str, Dict[str, float]] = {}
         self._telegram_client = TelegramClient(
             token=SECRETS.tg_bot_token,
             chat_id=CONFIG.telegram.chat_id,
@@ -240,7 +240,7 @@ class Application:
             CONFIG.general.exchange,
             CONFIG.general.profile,
             CONFIG.turnover,
-            CONFIG.profile_weights,
+            CONFIG.profile_stream_weights,
             log=self._log_scanner_message,
         )
         self._last_scan_at: Optional[datetime] = None
@@ -335,11 +335,11 @@ class Application:
         manager = self._binance_streams
         if manager is not None:
             profile = self._symbol_profiles.get(symbol, CONFIG.general.profile)
-            weight = self._symbol_weights.get(symbol)
-            if weight is None:
-                weight = self._scanner.get_symbol_weight(symbol)
+            weights = self._symbol_weights.get(symbol)
+            if weights is None:
+                weights = self._scanner.get_symbol_weight(symbol)
             manager.update_profiles({symbol: profile})
-            manager.update_weights({symbol: weight})
+            manager.update_weights({symbol: weights})
         try:
             if manager is not None:
                 manager_streams = manager.subscribe(symbol)
