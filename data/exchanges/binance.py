@@ -358,6 +358,7 @@ class _BinanceStreamSession:
         self._log = log_writer
         self._silence_timeout_s = max(float(silence_timeout_ms) / 1000.0, 1.0)
         self._budget = _CommandBudget(limit)
+        self._max_weight = float(limit.max_weight)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
             target=self._run,
@@ -371,6 +372,8 @@ class _BinanceStreamSession:
         self._next_command_id = 1
         self._consumers: Dict[str, _StreamConsumer[Any]] = {}
         self._symbol_params: Dict[str, str] = {}
+        self._param_weights: Dict[str, float] = {}
+        self._total_weight = 0.0
         self._usable_capacity = self._compute_capacity(limit)
         self._last_ping = 0.0
 
@@ -395,27 +398,38 @@ class _BinanceStreamSession:
     def max_capacity(self) -> int:
         return self._usable_capacity
 
-    def available_capacity(self) -> int:
+    def available_capacity(self) -> float:
+        if self._max_weight > 0:
+            remaining = self._max_weight - self._total_weight
+            return max(remaining, 0.0)
         if self._usable_capacity <= 0:
-            return 1_000_000
-        return max(self._usable_capacity - len(self._consumers), 0)
+            return float("inf")
+        return float(max(self._usable_capacity - len(self._consumers), 0))
 
     def register_consumer(
         self,
         consumer: _StreamConsumer[Any],
         *,
         priority: float,
+        weight: float,
         use_reserve: bool = False,
     ) -> None:
         params = consumer.params
+        weight = max(float(weight), 0.0)
         with self._command_lock:
             for param in params:
                 if param in self._consumers:
                     continue
                 if self._usable_capacity > 0 and len(self._consumers) >= self._usable_capacity:
                     raise StreamLimitError("max stream capacity reached")
+                if self._max_weight > 0:
+                    projected = self._total_weight + weight
+                    if projected - self._max_weight > 1e-9:
+                        raise StreamLimitError("max stream weight reached")
                 self._consumers[param] = consumer
                 self._symbol_params[consumer.symbol] = param
+                self._param_weights[param] = weight
+                self._total_weight += weight
                 command = _SessionCommand(
                     "SUBSCRIBE",
                     (param,),
@@ -583,11 +597,22 @@ class _BinanceStreamSession:
         error = payload.get("error")
         consumer = command.consumer
         needs_resubscribe = consumer.handle_ack(command.method, command.params, error)
+        if command.method == "SUBSCRIBE" and error is not None:
+            for param in command.params:
+                if self._consumers.pop(param, None) is not None:
+                    weight = self._param_weights.pop(param, 0.0)
+                    if weight > 0.0:
+                        self._total_weight = max(self._total_weight - weight, 0.0)
+                if self._symbol_params.get(consumer.symbol) == param:
+                    self._symbol_params.pop(consumer.symbol, None)
         if command.method == "UNSUBSCRIBE" and error is None:
             for param in command.params:
-                self._consumers.pop(param, None)
-            if consumer.symbol in self._symbol_params:
-                self._symbol_params.pop(consumer.symbol, None)
+                if self._consumers.pop(param, None) is not None:
+                    weight = self._param_weights.pop(param, 0.0)
+                    if weight > 0.0:
+                        self._total_weight = max(self._total_weight - weight, 0.0)
+                if self._symbol_params.get(consumer.symbol) == param:
+                    self._symbol_params.pop(consumer.symbol, None)
         if needs_resubscribe:
             self.resubscribe_consumer(consumer, priority=float("inf"))
 
@@ -956,12 +981,36 @@ class BinanceSymbolStreams:
 class BinanceExchangeData:
     """A pragmatic placeholder implementation of the data interface."""
 
-    PROFILE_WEIGHTS: Dict[str, float] = {
-        TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
-        TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
-        TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
-        TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
+    PROFILE_WEIGHTS: Dict[str, Dict[str, float]] = {
+        "depth": {
+            TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
+            TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
+            TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
+            TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
+        },
+        "trades": {
+            TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
+            TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
+            TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
+            TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
+        },
+        "book_ticker": {
+            TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
+            TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
+            TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
+            TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
+        },
     }
+
+    @classmethod
+    def get_profile_weight(
+        cls,
+        stream: str,
+        profile: TradingProfile | str,
+    ) -> float:
+        profile_key = profile.value if isinstance(profile, TradingProfile) else str(profile)
+        stream_weights = cls.PROFILE_WEIGHTS.get(stream, {})
+        return float(stream_weights.get(profile_key, 0.0))
 
     def __init__(
         self,
@@ -1473,7 +1522,7 @@ class BinanceStreamManager:
         self._exchange_data: Dict[str, BinanceExchangeData] = {}
         self._streams: Dict[str, BinanceSymbolStreams] = {}
         self._profiles: Dict[str, TradingProfile] = {}
-        self._weights: Dict[str, float] = {}
+        self._weights: Dict[str, Dict[str, float]] = {}
         self._sessions: Dict[str, list[_BinanceStreamSession]] = {}
         self._symbol_consumers: Dict[
             str, Dict[str, tuple[_BinanceStreamSession, _StreamConsumer[Any]]]
@@ -1481,6 +1530,7 @@ class BinanceStreamManager:
         self._exchange_info_cache: Dict[str, Dict[str, object]] = {}
         self._active: set[str] = set()
         for name in self._limit_map:
+            self._weights[name] = {}
             session = self._create_session(name)
             self._sessions[name] = [session]
 
@@ -1504,7 +1554,10 @@ class BinanceStreamManager:
 
     def update_weights(self, weights: Mapping[str, float]) -> None:
         for symbol, weight in weights.items():
-            self._weights[symbol.upper()] = float(weight)
+            normalized = symbol.upper()
+            for stream in self._limit_map:
+                stream_weights = self._weights.setdefault(stream, {})
+                stream_weights[normalized] = float(weight)
 
     def update_exchange_info(self, info: Mapping[str, Mapping[str, object]]) -> None:
         if not info:
@@ -1526,44 +1579,73 @@ class BinanceStreamManager:
     def plan_subscriptions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
         if not symbols:
             return symbols
-        available = self._available_slots()
-        if available <= 0:
-            return tuple()
-        ordered = sorted(
-            symbols,
-            key=lambda sym: self._profile_weight(sym),
-            reverse=True,
+        available_by_stream = {
+            stream: self._available_for_stream(stream)
+            for stream in self._limit_map
+        }
+        has_capacity = any(
+            math.isinf(value) or value > 0.0 for value in available_by_stream.values()
         )
+        if not has_capacity:
+            return tuple()
+
+        def total_weight(symbol: str) -> float:
+            normalized_symbol = symbol.upper()
+            return sum(
+                max(self.stream_weight(normalized_symbol, stream), 0.0)
+                for stream in self._limit_map
+            )
+
+        ordered = sorted(symbols, key=total_weight, reverse=True)
         planned: list[str] = []
         for symbol in ordered:
             normalized = symbol.upper()
             if normalized in self._active:
                 continue
-            if available <= 0:
-                break
-            planned.append(normalized)
-            available -= 1
+            requirements = {
+                stream: max(self.stream_weight(normalized, stream), 0.0)
+                for stream in self._limit_map
+            }
+            if all(
+                math.isinf(available_by_stream[stream])
+                or available_by_stream[stream] >= weight
+                for stream, weight in requirements.items()
+            ):
+                planned.append(normalized)
+                for stream, weight in requirements.items():
+                    if math.isinf(available_by_stream[stream]):
+                        continue
+                    if weight <= 0.0:
+                        continue
+                    available_by_stream[stream] = max(
+                        available_by_stream[stream] - weight,
+                        0.0,
+                    )
         return tuple(planned)
 
-    def _available_slots(self) -> int:
-        capacities = [
-            self._available_for_stream("depth"),
-            self._available_for_stream("trades"),
-            self._available_for_stream("book_ticker"),
-        ]
-        return max(min(capacities), 0)
+    def _available_slots(self) -> float:
+        capacities = [self._available_for_stream(name) for name in self._limit_map]
+        if not capacities:
+            return 0.0
+        finite = [value for value in capacities if not math.isinf(value)]
+        if not finite:
+            return float("inf")
+        return max(min(finite), 0.0)
 
-    def _available_for_stream(self, stream: str) -> int:
+    def _available_for_stream(self, stream: str) -> float:
         sessions = self._sessions.get(stream, [])
         if not sessions:
-            return self._session_capacity(stream)
-        total = sum(session.available_capacity() for session in sessions)
-        capacity = self._session_capacity(stream)
-        if capacity <= 0:
-            return 1_000_000
-        # consider capacity of a potential additional session
-        total += capacity
-        return total
+            return self._session_weight_capacity(stream)
+        total = 0.0
+        for session in sessions:
+            capacity = session.available_capacity()
+            if math.isinf(capacity):
+                return float("inf")
+            total += capacity
+        additional = self._session_weight_capacity(stream)
+        if math.isinf(additional):
+            return float("inf")
+        return total + additional
 
     def _session_capacity(self, stream: str) -> int:
         limit = self._limit_map[stream]
@@ -1573,13 +1655,27 @@ class BinanceStreamManager:
         usable = max(limit.max_symbols - reserve, 0)
         return usable if usable > 0 else limit.max_symbols
 
-    def _profile_weight(self, symbol: str) -> float:
+    def _session_weight_capacity(self, stream: str) -> float:
+        limit = self._limit_map[stream]
+        if limit.max_weight > 0:
+            return float(limit.max_weight)
+        capacity = self._session_capacity(stream)
+        if capacity <= 0:
+            return float("inf")
+        return float(capacity)
+
+    def _profile_weight(self, symbol: str, stream: str) -> float:
         normalized = symbol.upper()
-        weight = self._weights.get(normalized)
-        if weight is not None:
-            return weight
+        stream_weights = self._weights.get(stream)
+        if stream_weights is not None:
+            weight = stream_weights.get(normalized)
+            if weight is not None:
+                return weight
         profile = self._profiles.get(normalized, TradingProfile.AUTO)
-        return float(BinanceExchangeData.PROFILE_WEIGHTS.get(profile.value, 0.0))
+        return BinanceExchangeData.get_profile_weight(stream, profile)
+
+    def stream_weight(self, symbol: str, stream: str) -> float:
+        return self._profile_weight(symbol, stream)
 
     def _acquire_session(self, stream: str) -> _BinanceStreamSession:
         sessions = self._sessions.setdefault(stream, [])
@@ -1597,26 +1693,38 @@ class BinanceStreamManager:
             return existing
         exchange_data = self.get_exchange_data(symbol)
         streams, registrations = exchange_data.create_stream_bundle()
-        weight = max(self._profile_weight(symbol), 0.1)
+        stream_weights = {
+            name: max(self.stream_weight(symbol, name), 0.0)
+            for name in registrations
+        }
+        stream_priorities = {
+            name: max(stream_weights.get(name, 0.0), 0.1)
+            for name in registrations
+        }
         assignments: Dict[str, tuple[_BinanceStreamSession, _StreamConsumer[Any]]] = {}
         try:
             for stream_name, registration in registrations.items():
                 session = self._acquire_session(stream_name)
+                weight = stream_weights.get(stream_name, 0.0)
+                priority = stream_priorities.get(stream_name, 0.1)
                 try:
                     session.register_consumer(
                         registration.consumer,
-                        priority=weight,
+                        priority=priority,
+                        weight=weight,
                     )
                 except StreamLimitError:
                     session = self._acquire_session(stream_name)
                     session.register_consumer(
                         registration.consumer,
-                        priority=weight,
+                        priority=priority,
+                        weight=weight,
                     )
                 assignments[stream_name] = (session, registration.consumer)
         except Exception:
-            for session, consumer in assignments.values():
-                session.unregister_consumer(consumer, priority=weight)
+            for stream_name, (session, consumer) in assignments.items():
+                priority = stream_priorities.get(stream_name, 0.1)
+                session.unregister_consumer(consumer, priority=priority)
             raise
         streams.depth.assign_stop(lambda s=symbol: self.unsubscribe(s))
         streams.trades.assign_stop(lambda s=symbol: self.unsubscribe(s))
@@ -1648,9 +1756,10 @@ class BinanceStreamManager:
     def unsubscribe(self, symbol: str) -> None:
         symbol = symbol.upper()
         assignments = self._symbol_consumers.pop(symbol, {})
-        weight = max(self._profile_weight(symbol), 0.1)
         for stream_name, (session, consumer) in assignments.items():
-            session.unregister_consumer(consumer, priority=weight)
+            weight = max(self.stream_weight(symbol, stream_name), 0.0)
+            priority = max(weight, 0.1)
+            session.unregister_consumer(consumer, priority=priority)
         self._streams.pop(symbol, None)
         self._active.discard(symbol)
 
@@ -1662,9 +1771,10 @@ class BinanceStreamManager:
         assignments = self._symbol_consumers.get(symbol, {})
         if not assignments:
             return streams
-        weight = max(self._profile_weight(symbol), 1.0)
-        for session, consumer in assignments.values():
-            session.resubscribe_consumer(consumer, priority=weight)
+        for stream_name, (session, consumer) in assignments.items():
+            weight = max(self.stream_weight(symbol, stream_name), 0.0)
+            priority = max(weight, 1.0)
+            session.resubscribe_consumer(consumer, priority=priority)
         return streams
 
     def cancel(self, symbol: str) -> None:

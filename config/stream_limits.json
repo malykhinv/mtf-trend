@@ -3,18 +3,21 @@
     "steady_per_min": 1200,
     "burst_per_5s": 300,
     "max_symbols": 200,
-    "resubscribe_buffer": 20
+    "resubscribe_buffer": 20,
+    "max_weight": 200
   },
   "trades": {
     "steady_per_min": 1200,
     "burst_per_5s": 300,
     "max_symbols": 200,
-    "resubscribe_buffer": 20
+    "resubscribe_buffer": 20,
+    "max_weight": 200
   },
   "book_ticker": {
     "steady_per_min": 1200,
     "burst_per_5s": 300,
     "max_symbols": 200,
-    "resubscribe_buffer": 20
+    "resubscribe_buffer": 20,
+    "max_weight": 200
   }
 }

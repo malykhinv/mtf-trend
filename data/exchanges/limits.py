@@ -14,6 +14,7 @@ class StreamLimit:
     burst_per_5s: int
     max_symbols: int
     resubscribe_buffer: int
+    max_weight: float
 
     @classmethod
     def from_mapping(cls, mapping: Dict[str, Any]) -> "StreamLimit":
@@ -22,6 +23,7 @@ class StreamLimit:
             burst_per_5s=int(mapping.get("burst_per_5s", 0)),
             max_symbols=int(mapping.get("max_symbols", 0)),
             resubscribe_buffer=int(mapping.get("resubscribe_buffer", 0)),
+            max_weight=float(mapping.get("max_weight", 0.0)),
         )
 
 
