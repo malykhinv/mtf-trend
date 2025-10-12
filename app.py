@@ -18,7 +18,8 @@ from config.secrets import SECRETS
 from config.timezone import CURRENT_TIMEZONE
 from data.exchanges import (
     BestBidAsk,
-    BinanceExchangeData,
+    BinanceStreamManager,
+    BinanceSymbolStreams,
     BinanceTradingAdapter,
     BybitExchangeData,
     BybitTradingAdapter,
@@ -27,6 +28,7 @@ from data.exchanges import (
     ResyncReason as StreamResyncReason,
     StreamEventType,
     StreamSubscription,
+    StreamLimitError,
 )
 from data.exchanges.binance_trade import BinanceAPIError
 from data.exchanges.bybit_trade import BybitAPIError
@@ -202,11 +204,6 @@ class Application:
         self._balance_refresh_interval = timedelta(hours=CONFIG.position.balance_refresh_h)
         self._last_balance_refresh_at: Optional[datetime] = None
         self._silence_recovery_cooldown = timedelta(seconds=5)
-        self._subscription_manager = SubscriptionManager(
-            subscribe=self._subscribe_symbol,
-            unsubscribe=self._unsubscribe_symbol,
-            logger=self._event_logger,
-        )
         self._data_freshness_threshold = timedelta(
             milliseconds=CONFIG.general.ws_silence_timeout_ms
         )
@@ -217,6 +214,27 @@ class Application:
             logger=self._event_logger,
         )
         self._exchange = Exchange(CONFIG.general.exchange.value)
+        api_key, api_secret = self._exchange_credentials()
+        self._binance_streams: Optional[BinanceStreamManager] = None
+        if CONFIG.general.exchange is ExchangeName.BINANCE:
+            self._binance_streams = BinanceStreamManager(
+                loop_interval_ms=CONFIG.general.loop_interval_ms,
+                silence_timeout_ms=CONFIG.general.ws_silence_timeout_ms,
+                log_writer=self._sink,
+                api_key=api_key,
+                api_secret=api_secret,
+            )
+        prioritizer = (
+            self._binance_streams.plan_subscriptions
+            if self._binance_streams is not None
+            else None
+        )
+        self._subscription_manager = SubscriptionManager(
+            subscribe=self._subscribe_symbol,
+            unsubscribe=self._unsubscribe_symbol,
+            logger=self._event_logger,
+            prioritizer=prioritizer,
+        )
         self._scanner = MarketScanner(
             CONFIG.general.exchange,
             CONFIG.general.profile,
@@ -268,17 +286,12 @@ class Application:
         return None, None
 
     def _create_exchange_data(self, symbol: str) -> IExchangeData:
-        api_key, api_secret = self._exchange_credentials()
         if CONFIG.general.exchange is ExchangeName.BINANCE:
-            return BinanceExchangeData(
-                symbol=symbol,
-                loop_interval_ms=CONFIG.general.loop_interval_ms,
-                silence_timeout_ms=CONFIG.general.ws_silence_timeout_ms,
-                log_writer=self._sink,
-                api_key=api_key,
-                api_secret=api_secret,
-            )
+            if self._binance_streams is None:
+                raise RuntimeError("Binance stream manager is not initialized")
+            return self._binance_streams.get_exchange_data(symbol)
         if CONFIG.general.exchange is ExchangeName.BYBIT:
+            api_key, api_secret = self._exchange_credentials()
             return BybitExchangeData(
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
@@ -316,9 +329,16 @@ class Application:
         symbol = symbol.upper()
         context = self._contexts.get(symbol)
         new_context: Optional[SymbolContext] = None
+        manager_streams: Optional[BinanceSymbolStreams] = None
+        manager = self._binance_streams
+        if manager is not None:
+            profile = self._symbol_profiles.get(symbol, CONFIG.general.profile)
+            manager.update_profiles({symbol: profile})
         try:
+            if manager is not None:
+                manager_streams = manager.subscribe(symbol)
             if context is None:
-                new_context = self._create_context(symbol)
+                new_context = self._create_context(symbol, streams=manager_streams)
                 context = new_context
             if context is None:
                 return
@@ -326,11 +346,16 @@ class Application:
             context.cycle_started = False
         except Exception as exc:  # noqa: BLE001
             self._log_error(f"Не удалось активировать {symbol}: {exc}")
+            if manager is not None and manager_streams is not None:
+                try:
+                    manager.unsubscribe(symbol)
+                except StreamLimitError:
+                    manager.cancel(symbol)
             if new_context is not None:
                 self._dispose_context(new_context)
             elif context is not None:
                 self._dispose_context(context)
-            return
+            raise
         if new_context is not None:
             self._contexts[symbol] = new_context
 
@@ -340,6 +365,31 @@ class Application:
             subscription.stop()
         except Exception:
             pass
+
+    def _resubscribe_symbol_streams(self, context: SymbolContext) -> None:
+        manager = self._binance_streams
+        if manager is None:
+            return
+        try:
+            streams = manager.resubscribe(context.symbol)
+        except StreamLimitError as exc:
+            timestamp = get_current_time()
+            self._event_logger.log(
+                f"Не удалось переподписать {context.symbol}: {exc}",
+                timestamp,
+            )
+            return
+        subscriptions = (
+            context.depth_subscription,
+            context.trade_subscription,
+            context.ticker_subscription,
+        )
+        for subscription in subscriptions:
+            self._stop_stream_subscription(subscription)
+        context.depth_subscription = streams.depth
+        context.trade_subscription = streams.trades
+        context.ticker_subscription = streams.ticker
+        context.exchange_data = streams.exchange_data
 
     def _dispose_context(self, context: SymbolContext) -> None:
         context.active = False
@@ -356,9 +406,21 @@ class Application:
 
     def _unsubscribe_symbol(self, symbol: str) -> None:
         symbol = symbol.upper()
-        context = self._contexts.pop(symbol, None)
+        context = self._contexts.get(symbol)
         if context is None:
             return
+        manager = self._binance_streams
+        if manager is not None:
+            try:
+                manager.unsubscribe(symbol)
+            except StreamLimitError as exc:
+                timestamp = get_current_time()
+                self._event_logger.log(
+                    f"Не удалось отписаться от {symbol}: {exc}",
+                    timestamp,
+                )
+                raise
+        context = self._contexts.pop(symbol)
         self._stale_warnings.pop(symbol, None)
         self._dispose_context(context)
 
@@ -403,6 +465,7 @@ class Application:
             if event.type is StreamEventType.RESYNC and event.reason is not None:
                 context.feed_monitor.flag(event.reason)
                 context.last_update_id = None
+                self._resubscribe_symbol_streams(context)
 
     def _apply_snapshot(self, context: SymbolContext, snapshot: OrderBookSnapshot) -> None:
         context.order_book.reset_odr_history()
@@ -529,6 +592,7 @@ class Application:
                     ),
                     timestamp,
                 )
+                self._resubscribe_symbol_streams(context)
         return processed
 
     def _process_trade_stream(self, context: SymbolContext) -> bool:
@@ -724,6 +788,8 @@ class Application:
         scan_result = self._scanner.scan()
         profile_by_symbol = {symbol: profile for symbol, profile in scan_result}
         self._symbol_profiles = profile_by_symbol
+        if self._binance_streams is not None:
+            self._binance_streams.update_profiles(profile_by_symbol)
         symbols = tuple(profile_by_symbol.keys())
         self._desired_symbols = symbols
         for symbol, context in self._contexts.items():
@@ -759,8 +825,19 @@ class Application:
         )
         context.cycle_started = True
 
-    def _create_context(self, symbol: str) -> SymbolContext:
-        exchange_data = self._create_exchange_data(symbol)
+    def _create_context(
+        self, symbol: str, streams: Optional[BinanceSymbolStreams] = None
+    ) -> SymbolContext:
+        if streams is not None:
+            exchange_data = streams.exchange_data
+            depth_subscription = streams.depth
+            trade_subscription = streams.trades
+            ticker_subscription = streams.ticker
+        else:
+            exchange_data = self._create_exchange_data(symbol)
+            depth_subscription = exchange_data.stream_depth()
+            trade_subscription = exchange_data.stream_trades()
+            ticker_subscription = exchange_data.stream_book_ticker()
         filters = exchange_data.fetch_symbol_filters()
         trading_adapter = self._create_trading_adapter(symbol, filters)
         context = SymbolContext(
@@ -771,9 +848,9 @@ class Application:
                 recent_band_volume_boost=CONFIG.general.recent_band_s_vol_boost,
             ),
             feed_monitor=FeedMonitor(),
-            depth_subscription=exchange_data.stream_depth(),
-            trade_subscription=exchange_data.stream_trades(),
-            ticker_subscription=exchange_data.stream_book_ticker(),
+            depth_subscription=depth_subscription,
+            trade_subscription=trade_subscription,
+            ticker_subscription=ticker_subscription,
             filters=filters,
             trading_adapter=trading_adapter,
             profile=self._symbol_profiles.get(symbol, CONFIG.general.profile),

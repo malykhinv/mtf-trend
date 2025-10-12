@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import math
 import time
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Callable, Dict, Generic, Iterator, Optional, TypeVar
+from collections import deque
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+from typing import Callable, Deque, Dict, Generic, Iterator, Mapping, Optional, Tuple, TypeVar
 
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -13,6 +14,7 @@ from urllib.request import urlopen
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookSnapshot, OrderBookUpdate, SymbolFilters, Trade
+from config.models.trading_profile import TradingProfile
 
 from .events import StreamEvent, StreamEventType
 from .limits import StreamLimits, load_stream_limits
@@ -53,6 +55,48 @@ class StreamSubscription(Generic[T]):
         self._stopped = True
         if self._stop is not None:
             self._stop()
+
+
+class StreamLimitError(RuntimeError):
+    """Raised when stream scheduling exceeds the calculated limits."""
+
+
+@dataclass
+class _RateLimiter:
+    """Simple window-based rate limiter used by the stream manager."""
+
+    limit: int
+    window: timedelta
+    _events: Deque[datetime] = field(default_factory=deque, init=False, repr=False)
+
+    def __post_init__(self) -> None:  # pragma: no cover - simple initializer
+        # ensure window is at least positive to avoid division by zero semantics
+        if self.window <= timedelta(0):
+            object.__setattr__(self, "window", timedelta(seconds=1))
+
+    def _trim(self, timestamp: datetime) -> None:
+        while self._events and timestamp - self._events[0] >= self.window:
+            self._events.popleft()
+
+    def has_capacity(self, timestamp: datetime) -> bool:
+        if self.limit <= 0:
+            return True
+        self._trim(timestamp)
+        return len(self._events) < self.limit
+
+    def commit(self, timestamp: datetime) -> None:
+        if self.limit <= 0:
+            return
+        self._trim(timestamp)
+        self._events.append(timestamp)
+
+
+@dataclass(frozen=True, slots=True)
+class BinanceSymbolStreams:
+    exchange_data: "BinanceExchangeData"
+    depth: "StreamSubscription[DepthStreamData]"
+    trades: "StreamSubscription[Trade]"
+    ticker: "StreamSubscription[BestBidAsk]"
 
 
 class BinanceExchangeData:
@@ -202,5 +246,192 @@ class BinanceExchangeData:
                 "notional": notional_filter.get("minNotional", notional_filter.get("minQty", 5.0)),
             }
         self._exchange_info = info
+
+
+class BinanceStreamManager:
+    """Manages Binance stream subscriptions with centralized limits."""
+
+    def __init__(
+        self,
+        *,
+        loop_interval_ms: int,
+        silence_timeout_ms: int,
+        log_writer: LogSink,
+        api_key: Optional[str] = None,
+        api_secret: Optional[str] = None,
+    ) -> None:
+        self._loop_interval_ms = loop_interval_ms
+        self._silence_timeout_ms = silence_timeout_ms
+        self._log_writer = log_writer
+        self._api_key = api_key
+        self._api_secret = api_secret
+        self._limits = load_stream_limits()
+        self._exchange_data: Dict[str, BinanceExchangeData] = {}
+        self._streams: Dict[str, BinanceSymbolStreams] = {}
+        self._active: set[str] = set()
+        self._profiles: Dict[str, TradingProfile] = {}
+        self._max_symbols = self._resolve_capacity()
+        self._reserve = self._resolve_reserve()
+        self._limiters = self._build_limiters(self._limits)
+
+    @staticmethod
+    def _build_limiters(limits: StreamLimits) -> Dict[str, tuple[_RateLimiter, _RateLimiter]]:
+        return {
+            "depth": (
+                _RateLimiter(limits.depth.steady_per_min, timedelta(minutes=1)),
+                _RateLimiter(limits.depth.burst_per_5s, timedelta(seconds=5)),
+            ),
+            "trades": (
+                _RateLimiter(limits.trades.steady_per_min, timedelta(minutes=1)),
+                _RateLimiter(limits.trades.burst_per_5s, timedelta(seconds=5)),
+            ),
+            "book_ticker": (
+                _RateLimiter(limits.book_ticker.steady_per_min, timedelta(minutes=1)),
+                _RateLimiter(limits.book_ticker.burst_per_5s, timedelta(seconds=5)),
+            ),
+        }
+
+    def _resolve_capacity(self) -> int:
+        values = [
+            self._limits.depth.max_symbols,
+            self._limits.trades.max_symbols,
+            self._limits.book_ticker.max_symbols,
+        ]
+        positives = [value for value in values if value > 0]
+        if not positives:
+            return 0
+        return min(positives)
+
+    def _resolve_reserve(self) -> int:
+        values = [
+            self._limits.depth.resubscribe_buffer,
+            self._limits.trades.resubscribe_buffer,
+            self._limits.book_ticker.resubscribe_buffer,
+        ]
+        return max(values)
+
+    def update_profiles(self, profiles: Mapping[str, TradingProfile]) -> None:
+        self._profiles.update(profiles)
+
+    def plan_subscriptions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
+        if not symbols:
+            return symbols
+        available = self._available_slots()
+        if available == 0:
+            return tuple()
+        ordered = sorted(
+            symbols,
+            key=lambda sym: self._profile_weight(sym),
+            reverse=True,
+        )
+        planned: list[str] = []
+        for symbol in ordered:
+            if symbol in self._active:
+                continue
+            if available <= 0:
+                break
+            planned.append(symbol)
+            available -= 1
+        return tuple(planned)
+
+    def _available_slots(self) -> int:
+        if self._max_symbols <= 0:
+            return 1_000_000
+        active = len(self._active)
+        reserve = min(self._reserve, self._max_symbols)
+        capacity = self._max_symbols - reserve - active
+        return max(capacity, 0)
+
+    def _profile_weight(self, symbol: str) -> float:
+        profile = self._profiles.get(symbol, TradingProfile.AUTO)
+        return float(BinanceExchangeData.PROFILE_WEIGHTS.get(profile.value, 0.0))
+
+    def subscribe(self, symbol: str) -> BinanceSymbolStreams:
+        symbol = symbol.upper()
+        now = datetime.now(tz=timezone.utc)
+        self._ensure_capacity(symbol)
+        self._consume_limits(now)
+        exchange_data = self._exchange_data.get(symbol)
+        if exchange_data is None:
+            exchange_data = BinanceExchangeData(
+                symbol=symbol,
+                loop_interval_ms=self._loop_interval_ms,
+                silence_timeout_ms=self._silence_timeout_ms,
+                log_writer=self._log_writer,
+                api_key=self._api_key,
+                api_secret=self._api_secret,
+            )
+            self._exchange_data[symbol] = exchange_data
+        streams = BinanceSymbolStreams(
+            exchange_data=exchange_data,
+            depth=exchange_data.stream_depth(),
+            trades=exchange_data.stream_trades(),
+            ticker=exchange_data.stream_book_ticker(),
+        )
+        self._streams[symbol] = streams
+        self._active.add(symbol)
+        return streams
+
+    def get_exchange_data(self, symbol: str) -> BinanceExchangeData:
+        symbol = symbol.upper()
+        exchange_data = self._exchange_data.get(symbol)
+        if exchange_data is None:
+            exchange_data = BinanceExchangeData(
+                symbol=symbol,
+                loop_interval_ms=self._loop_interval_ms,
+                silence_timeout_ms=self._silence_timeout_ms,
+                log_writer=self._log_writer,
+                api_key=self._api_key,
+                api_secret=self._api_secret,
+            )
+            self._exchange_data[symbol] = exchange_data
+        return exchange_data
+
+    def unsubscribe(self, symbol: str) -> None:
+        symbol = symbol.upper()
+        now = datetime.now(tz=timezone.utc)
+        self._consume_limits(now)
+        self._streams.pop(symbol, None)
+        self._active.discard(symbol)
+
+    def resubscribe(self, symbol: str) -> BinanceSymbolStreams:
+        symbol = symbol.upper()
+        now = datetime.now(tz=timezone.utc)
+        self._consume_limits(now)
+        exchange_data = self.get_exchange_data(symbol)
+        streams = BinanceSymbolStreams(
+            exchange_data=exchange_data,
+            depth=exchange_data.stream_depth(),
+            trades=exchange_data.stream_trades(),
+            ticker=exchange_data.stream_book_ticker(),
+        )
+        self._streams[symbol] = streams
+        self._active.add(symbol)
+        return streams
+
+    def cancel(self, symbol: str) -> None:
+        """Release internal state without sending an unsubscribe command."""
+        symbol = symbol.upper()
+        self._streams.pop(symbol, None)
+        self._active.discard(symbol)
+
+    def _ensure_capacity(self, symbol: str) -> None:
+        if self._max_symbols <= 0:
+            return
+        if symbol in self._active:
+            return
+        available = self._available_slots()
+        if available <= 0:
+            raise StreamLimitError("max stream capacity reached")
+
+    def _consume_limits(self, timestamp: datetime) -> None:
+        pending_limiters: list[_RateLimiter] = []
+        for limiters in self._limiters.values():
+            for limiter in limiters:
+                if not limiter.has_capacity(timestamp):
+                    raise StreamLimitError("stream command rate exceeded")
+                pending_limiters.append(limiter)
+        for limiter in pending_limiters:
+            limiter.commit(timestamp)
 
 
