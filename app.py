@@ -796,10 +796,19 @@ class Application:
         self._symbol_profiles = profile_by_symbol
         weights_by_symbol = self._scanner.symbol_weights
         self._symbol_weights = weights_by_symbol
+        symbols = tuple(profile_by_symbol.keys())
         if self._binance_streams is not None:
+            exchange_info = self._scanner.binance_exchange_info
+            if exchange_info:
+                self._binance_streams.update_exchange_info(exchange_info)
             self._binance_streams.update_profiles(profile_by_symbol)
             self._binance_streams.update_weights(weights_by_symbol)
-        symbols = tuple(profile_by_symbol.keys())
+            first_symbol = next((sym for sym in symbols if sym.endswith("USDT")), None)
+            if first_symbol is not None:
+                try:
+                    self._binance_streams.get_exchange_data(first_symbol).fetch_symbol_filters()
+                except Exception:
+                    pass
         self._desired_symbols = symbols
         for symbol, context in self._contexts.items():
             profile = profile_by_symbol.get(symbol)
