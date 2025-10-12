@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Optional
 
 
 class ResyncReason(str, Enum):
@@ -18,7 +18,6 @@ class FeedStatus:
     has_connection_loss: bool = False
     has_silence_timeout: bool = False
     has_queue_overflow: bool = False
-    degraded_streams: Tuple[str, ...] = ()
 
     def resolve_reason(self) -> Optional[ResyncReason]:
         if self.has_sequence_gap:
@@ -30,9 +29,6 @@ class FeedStatus:
         if self.has_queue_overflow:
             return ResyncReason.BACKPRESSURE
         return None
-
-    def is_degraded(self) -> bool:
-        return bool(self.degraded_streams)
 
 
 __all__ = ["ResyncReason", "FeedStatus"]

@@ -28,7 +28,6 @@ class StreamBuffer(Generic[T]):
         self._logger = logger
         queue_size = 1024 if maxsize is None else int(maxsize)
         self._queue: "queue.Queue[StreamEvent[T]]" = queue.Queue(queue_size)
-        self._maxsize = queue_size
         self._silence_timeout = silence_timeout
         self._heartbeat_interval = (
             heartbeat_interval if heartbeat_interval is not None else silence_timeout / 2
@@ -174,16 +173,6 @@ class StreamBuffer(Generic[T]):
                 self._queue.get_nowait()
             except queue.Empty:
                 break
-
-    def backlog(self) -> int:
-        try:
-            return self._queue.qsize()
-        except NotImplementedError:  # pragma: no cover - platform specific
-            return 0
-
-    @property
-    def capacity(self) -> int:
-        return self._maxsize
 
 
 __all__ = ["StreamBuffer"]

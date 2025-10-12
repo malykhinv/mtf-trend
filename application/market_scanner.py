@@ -38,7 +38,6 @@ class MarketScanner:
         self._last_symbols: Tuple[Tuple[str, TradingProfile], ...] = ()
         self._listing_dates: dict[str, int] = {}
         self._recent_listing_cache: dict[str, bool] = {}
-        self._degraded_until: dict[str, float] = {}
 
     def scan(self) -> Tuple[Tuple[str, TradingProfile], ...]:
         try:
@@ -121,8 +120,6 @@ class MarketScanner:
             symbol = str(raw_symbol or "").upper()
             if not symbol.endswith("USDT"):
                 continue
-            if self._is_degraded(symbol):
-                continue
             try:
                 turnover_24h = float(raw_turnover or 0.0)
             except (TypeError, ValueError):
@@ -162,24 +159,6 @@ class MarketScanner:
         if self._profile is TradingProfile.LISTING:
             return float(thresholds.listing_usd)
         return float(thresholds.top_usd)
-
-    def record_degradation(self, symbol: str, hold_seconds: float) -> None:
-        normalized = symbol.upper()
-        deadline = time.monotonic() + max(0.0, float(hold_seconds))
-        self._degraded_until[normalized] = deadline
-
-    def clear_degradation(self, symbol: str) -> None:
-        self._degraded_until.pop(symbol.upper(), None)
-
-    def _is_degraded(self, symbol: str) -> bool:
-        normalized = symbol.upper()
-        expiry = self._degraded_until.get(normalized)
-        if expiry is None:
-            return False
-        if time.monotonic() >= expiry:
-            self._degraded_until.pop(normalized, None)
-            return False
-        return True
 
     def _classify_turnover(self, symbol: str, turnover: float) -> TradingProfile:
         thresholds = self._thresholds

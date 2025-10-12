@@ -38,7 +38,6 @@ from data.telegram import TelegramClient
 from domain.book import OrderBook
 from domain.detectors import check_if_has_near_wall, check_if_has_opposite_wall, compute_odr
 from domain.execution import create_execution_handlers, initialize_account
-from streams import StreamPipeline
 from domain.models import (
     BalanceSource,
     Exchange,
@@ -160,10 +159,6 @@ class SymbolContext:
     ticker_resync_reason: Optional[StreamResyncReason] = None
     ticker_resync_details: Optional[str] = None
     ticker_resync_timestamp: Optional[datetime] = None
-    depth_pipeline: Optional[StreamPipeline[Any]] = None
-    trade_pipeline: Optional[StreamPipeline[Any]] = None
-    ticker_pipeline: Optional[StreamPipeline[Any]] = None
-    degraded_streams: set[str] = field(default_factory=set)
 
 
 class TradingAdapterRouter(TradingAdapter):
@@ -653,7 +648,6 @@ class Application:
     def _build_observation(self, context: SymbolContext) -> MarketObservation:
         now = get_current_time()
         with context.lock:
-            self._update_degradation_state(context)
             stale_entries: list[tuple[str, str]] = []
             order_book_updated_at = context.order_book_updated_at
             trade_updated_at = context.trade_updated_at
@@ -810,13 +804,6 @@ class Application:
         exchange_data = self._create_exchange_data(symbol, profile)
         filters = exchange_data.fetch_symbol_filters()
         trading_adapter = self._create_trading_adapter(symbol, filters)
-        depth_subscription = exchange_data.stream_depth()
-        trade_subscription = exchange_data.stream_trades()
-        ticker_subscription = exchange_data.stream_book_ticker()
-        depth_pipeline = getattr(exchange_data, "depth_pipeline", None)
-        trade_pipeline = getattr(exchange_data, "trades_pipeline", None)
-        ticker_pipeline = getattr(exchange_data, "ticker_pipeline", None)
-
         context = SymbolContext(
             symbol=symbol,
             exchange_data=exchange_data,
@@ -825,15 +812,12 @@ class Application:
                 recent_band_volume_boost=CONFIG.general.recent_band_s_vol_boost,
             ),
             feed_monitor=FeedMonitor(),
-            depth_subscription=depth_subscription,
-            trade_subscription=trade_subscription,
-            ticker_subscription=ticker_subscription,
+            depth_subscription=exchange_data.stream_depth(),
+            trade_subscription=exchange_data.stream_trades(),
+            ticker_subscription=exchange_data.stream_book_ticker(),
             filters=filters,
             trading_adapter=trading_adapter,
             profile=profile,
-            depth_pipeline=depth_pipeline,
-            trade_pipeline=trade_pipeline,
-            ticker_pipeline=ticker_pipeline,
         )
         context.order_book.reset_odr_history()
         startup_timestamp = get_current_time()
@@ -967,69 +951,6 @@ class Application:
         context.ticker_pump.start()
         self._refresh_context_funding(context, force=True)
         return context
-
-    def _update_degradation_state(self, context: SymbolContext) -> None:
-        pipelines = {
-            "depth": context.depth_pipeline,
-            "trades": context.trade_pipeline,
-            "book": context.ticker_pipeline,
-        }
-        for stream, pipeline in pipelines.items():
-            if pipeline is None:
-                continue
-            is_degraded = pipeline.is_degraded
-            tracked = stream in context.degraded_streams
-            if is_degraded and not tracked:
-                context.degraded_streams.add(stream)
-                context.feed_monitor.set_degraded(stream, True)
-                self._handle_stream_degradation(context, stream, pipeline)
-            elif not is_degraded and tracked:
-                context.degraded_streams.discard(stream)
-                context.feed_monitor.set_degraded(stream, False)
-                self._handle_stream_recovery(context, stream)
-            else:
-                context.feed_monitor.set_degraded(stream, is_degraded)
-
-    def _handle_stream_degradation(
-        self,
-        context: SymbolContext,
-        stream: str,
-        pipeline: StreamPipeline[Any],
-    ) -> None:
-        timestamp = get_current_time()
-        health = pipeline.health_snapshot()
-        backlog = health.backlog
-        capacity = health.capacity
-        fallback = health.fallback_mode.value
-        self._event_logger.log(
-            (
-                "Деградация стрима {stream} для {symbol}: очередь {backlog}/{capacity}, "
-                "fallback={fallback}."
-            ).format(
-                stream=stream,
-                symbol=context.symbol,
-                backlog=backlog,
-                capacity=capacity,
-                fallback=fallback,
-            ),
-            timestamp,
-        )
-        hold_seconds = pipeline.degradation_hold_s
-        self._scanner.record_degradation(context.symbol, hold_seconds)
-        self._kill_switch.handle_degradation(
-            timestamp,
-            context.symbol,
-            tuple(sorted(context.degraded_streams)),
-        )
-
-    def _handle_stream_recovery(self, context: SymbolContext, stream: str) -> None:
-        timestamp = get_current_time()
-        self._event_logger.log(
-            f"Поток {stream} для {context.symbol} восстановлен.",
-            timestamp,
-        )
-        if not context.degraded_streams:
-            self._scanner.clear_degradation(context.symbol)
 
     def _create_trading_adapter(self, symbol: str, filters: SymbolFilters) -> TradingAdapter:
         api_key, api_secret = self._exchange_credentials()

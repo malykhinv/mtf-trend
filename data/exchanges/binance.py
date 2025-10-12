@@ -37,11 +37,6 @@ from .base import (
     StreamSubscription,
 )
 from .binance_stream_manager import BinanceStreamManager
-from streams import (
-    BookTickerStreamPipeline,
-    DepthStreamPipeline,
-    TradesStreamPipeline,
-)
 
 
 WebSocketClient = ThreadedWebSocketClient
@@ -76,14 +71,6 @@ _STREAM_PROFILE_WEIGHTS: dict[TradingProfile, dict[str, float]] = {
     TradingProfile.ALT: {"depth": 1.0, "trades": 1.0, "book": 0.8},
     TradingProfile.LISTING: {"depth": 2.5, "trades": 3.0, "book": 1.5},
     TradingProfile.AUTO: {"depth": 1.5, "trades": 1.5, "book": 1.0},
-}
-
-
-_RESTART_GRACE_FACTORS: dict[TradingProfile, dict[str, float]] = {
-    TradingProfile.TOP: {"depth": 0.5, "trades": 0.7, "book": 0.7},
-    TradingProfile.ALT: {"depth": 1.0, "trades": 1.2, "book": 1.2},
-    TradingProfile.LISTING: {"depth": 1.5, "trades": 1.6, "book": 1.6},
-    TradingProfile.AUTO: {"depth": 0.9, "trades": 1.0, "book": 1.0},
 }
 
 
@@ -179,9 +166,6 @@ class BinanceExchangeData:
         self._lock = threading.Lock()
         self._api_key = api_key
         self._api_secret = api_secret
-        self._depth_pipeline: Optional[DepthStreamPipeline] = None
-        self._trades_pipeline: Optional[TradesStreamPipeline] = None
-        self._ticker_pipeline: Optional[BookTickerStreamPipeline] = None
 
     def _normalize_depth_stream_interval(self, interval_ms: int) -> int:
         default_interval = 250
@@ -269,45 +253,6 @@ class BinanceExchangeData:
         fallback = _STREAM_PROFILE_WEIGHTS[TradingProfile.AUTO]
         weight = profile_weights.get(stream_type, fallback.get(stream_type, 1.0))
         return max(float(weight), 0.1)
-
-    def _resolve_restart_grace_period(self, stream_type: str) -> float:
-        factors = _RESTART_GRACE_FACTORS.get(self._profile, _RESTART_GRACE_FACTORS[TradingProfile.AUTO])
-        factor = max(float(factors.get(stream_type, 1.0)), 0.1)
-        if stream_type == "depth":
-            base = self._depth_silence_timeout
-        elif stream_type == "trades":
-            base = self._trade_silence_timeout
-        else:
-            base = self._book_ticker_silence_timeout
-        return max(0.5, base * factor)
-
-    def _request_stream_migration(
-        self,
-        stream_type: str,
-        reason: ResyncReason,
-        details: str,
-    ) -> None:
-        message = details or reason.value
-        self._logger.log(
-            (
-                "Binance {stream} stream: хроничная деградация символа {symbol}, попытка миграции: {message}"
-            ).format(stream=stream_type, symbol=self.symbol, message=message)
-        )
-        try:
-            migrated = self._stream_manager.migrate_stream(stream_type, self.symbol, message)
-        except Exception as exc:  # noqa: BLE001
-            self._logger.log(
-                (
-                    "Binance {stream} stream: ошибка миграции символа {symbol}: {error}"
-                ).format(stream=stream_type, symbol=self.symbol, error=exc)
-            )
-            return
-        if not migrated:
-            self._logger.log(
-                (
-                    "Binance {stream} stream: миграция символа {symbol} не выполнена (нет доступных воркеров)"
-                ).format(stream=stream_type, symbol=self.symbol)
-            )
 
     @classmethod
     def _get_stream_manager(
@@ -453,23 +398,12 @@ class BinanceExchangeData:
             logger=self._logger,
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
-            maxsize=DepthStreamPipeline.buffer_size(self._profile),
-            drop_oldest_on_overflow=True,
-            restart_grace_period=self._resolve_restart_grace_period("depth"),
+            restart_grace_period=silence_timeout,
         )
-        pipeline = DepthStreamPipeline(
-            name="depth",
-            buffer=buffer,
-            profile=self._profile,
-            on_chronic_error=lambda reason, details: self._request_stream_migration(
-                "depth", reason, details or "depth stream chronic degradation"
-            ),
-        )
-        self._depth_pipeline = pipeline
         self._reset_depth_state()
 
         def handle_message(message: dict[str, Any]) -> None:
-            self._handle_depth_message(message, pipeline)
+            self._handle_depth_message(message, buffer)
 
         def handle_error(reason: ResyncReason, details: str) -> None:
             suffix = f"(symbol {self.symbol})"
@@ -478,33 +412,31 @@ class BinanceExchangeData:
                 reason == ResyncReason.CONNECTION_LOST
                 and "ошибка чтения сокета" in details
             )
-            pipeline.push_resync(reason, message)
+            buffer.push_resync(reason, message)
             if should_log:
                 self._logger.log(message)
 
         release = self._stream_manager.register_depth(
             self.symbol,
-            pipeline.buffer,
+            buffer,
             handle_message,
             handle_error,
             weight=self._stream_weight("depth"),
         )
 
-        self._start_depth_snapshot(pipeline)
+        self._start_depth_snapshot(buffer)
 
         def iterator() -> Iterator[StreamEvent[DepthStreamData]]:
             try:
                 while True:
-                    yield pipeline.next_event()
+                    yield buffer.next()
             finally:
-                pipeline.buffer.stop()
+                buffer.stop()
                 release()
 
-        return StreamSubscription(events=iterator(), _buffer=pipeline.buffer, _stopper=release)
+        return StreamSubscription(events=iterator(), _buffer=buffer, _stopper=release)
 
-    def _start_depth_snapshot(self, pipeline: DepthStreamPipeline) -> None:
-        buffer = pipeline.buffer
-
+    def _start_depth_snapshot(self, buffer: StreamBuffer[DepthStreamData]) -> None:
         def load_snapshot() -> None:
             while not buffer.stopped():
                 try:
@@ -514,12 +446,12 @@ class BinanceExchangeData:
                         "Binance depth stream: не удалось получить начальный снапшот: "
                         f"{exc}"
                     )
-                    pipeline.push_resync(ResyncReason.CONNECTION_LOST, details)
+                    buffer.push_resync(ResyncReason.CONNECTION_LOST, details)
                     self._logger.log_resync(ResyncReason.CONNECTION_LOST, details)
                     self._reset_depth_state()
                     time.sleep(self._reconnect_delay)
                     continue
-                self._apply_depth_snapshot(snapshot, pipeline)
+                self._apply_depth_snapshot(snapshot, buffer)
                 break
 
         threading.Thread(
@@ -531,12 +463,11 @@ class BinanceExchangeData:
     def _handle_depth_message(
         self,
         message: dict[str, Any],
-        pipeline: DepthStreamPipeline,
+        buffer: StreamBuffer[DepthStreamData],
         *,
         buffer_if_uninitialized: bool = True,
         allow_skip: bool = False,
     ) -> None:
-        buffer = pipeline.buffer
         if message.get("e") != "depthUpdate":
             return
         first_update = int(message.get("U", 0))
@@ -583,33 +514,33 @@ class BinanceExchangeData:
 
         if resync_reason is not None:
             self._trigger_depth_resync(
-                pipeline,
+                buffer,
                 reason=resync_reason,
                 details=resync_details,
             )
             return
 
         if update is not None:
-            pipeline.push_data(update)
+            buffer.push_data(update)
 
     def _trigger_depth_resync(
         self,
-        pipeline: DepthStreamPipeline,
+        buffer: StreamBuffer[DepthStreamData],
         reason: ResyncReason,
         details: str,
     ) -> None:
         self._logger.log_resync(reason, details)
-        pipeline.push_resync(reason, details)
+        buffer.push_resync(reason, details)
         self._reset_depth_state()
         try:
             snapshot = self.fetch_orderbook_snapshot()
         except Exception as exc:  # noqa: BLE001
-            pipeline.push_resync(
+            buffer.push_resync(
                 ResyncReason.CONNECTION_LOST,
                 details=f"Ошибка получения снапшота: {exc}",
             )
             return
-        self._apply_depth_snapshot(snapshot, pipeline)
+        self._apply_depth_snapshot(snapshot, buffer)
 
     def _reset_depth_state(self) -> None:
         with self._lock:
@@ -618,7 +549,7 @@ class BinanceExchangeData:
             self._depth_buffered_messages.clear()
 
     def _apply_depth_snapshot(
-        self, snapshot: OrderBookSnapshot, pipeline: DepthStreamPipeline
+        self, snapshot: OrderBookSnapshot, buffer: StreamBuffer[DepthStreamData]
     ) -> None:
         with self._lock:
             self._depth_last_update = snapshot.last_update_id
@@ -626,13 +557,12 @@ class BinanceExchangeData:
             pending = tuple(self._depth_buffered_messages)
             self._depth_buffered_messages.clear()
 
-        pipeline.reset()
-        pipeline.push_snapshot(snapshot)
+        buffer.push_snapshot(snapshot)
 
         for message in pending:
             self._handle_depth_message(
                 message,
-                pipeline,
+                buffer,
                 buffer_if_uninitialized=False,
                 allow_skip=True,
             )
@@ -646,23 +576,13 @@ class BinanceExchangeData:
             logger=self._logger,
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
-            maxsize=BookTickerStreamPipeline.buffer_size(self._profile),
             drop_oldest_on_overflow=True,
-            restart_grace_period=self._resolve_restart_grace_period("book"),
+            restart_grace_period=silence_timeout,
         )
-        pipeline = BookTickerStreamPipeline(
-            name="book_ticker",
-            buffer=buffer,
-            profile=self._profile,
-            on_chronic_error=lambda reason, details: self._request_stream_migration(
-                "book", reason, details or "book ticker chronic degradation"
-            ),
-        )
-        self._ticker_pipeline = pipeline
 
         def handle_message(message: dict[str, Any]) -> None:
             for payload in self._parse_book_ticker(message):
-                pipeline.push_data(payload)
+                buffer.push_data(payload)
 
         def handle_error(reason: ResyncReason, details: str) -> None:
             suffix = f"(symbol {self.symbol})"
@@ -671,13 +591,13 @@ class BinanceExchangeData:
                 reason == ResyncReason.CONNECTION_LOST
                 and "ошибка чтения сокета" in details
             )
-            pipeline.push_resync(reason, message)
+            buffer.push_resync(reason, message)
             if should_log:
                 self._logger.log(message)
 
         release = self._stream_manager.register_book_ticker(
             self.symbol,
-            pipeline.buffer,
+            buffer,
             handle_message,
             handle_error,
             weight=self._stream_weight("book"),
@@ -686,12 +606,12 @@ class BinanceExchangeData:
         def iterator() -> Iterator[StreamEvent[BestBidAsk]]:
             try:
                 while True:
-                    yield pipeline.next_event()
+                    yield buffer.next()
             finally:
-                pipeline.buffer.stop()
+                buffer.stop()
                 release()
 
-        return StreamSubscription(events=iterator(), _buffer=pipeline.buffer, _stopper=release)
+        return StreamSubscription(events=iterator(), _buffer=buffer, _stopper=release)
 
     def stream_trades(self) -> StreamSubscription[Trade]:
         silence_timeout = self._trade_silence_timeout
@@ -702,23 +622,14 @@ class BinanceExchangeData:
             logger=self._logger,
             silence_timeout=silence_timeout,
             heartbeat_interval=heartbeat_interval,
-            maxsize=TradesStreamPipeline.buffer_size(self._profile),
+            maxsize=4096,
             drop_oldest_on_overflow=True,
-            restart_grace_period=self._resolve_restart_grace_period("trades"),
+            restart_grace_period=silence_timeout,
         )
-        pipeline = TradesStreamPipeline(
-            name="trades",
-            buffer=buffer,
-            profile=self._profile,
-            on_chronic_error=lambda reason, details: self._request_stream_migration(
-                "trades", reason, details or "trade stream chronic degradation"
-            ),
-        )
-        self._trades_pipeline = pipeline
 
         def handle_message(message: dict[str, Any]) -> None:
             for payload in self._parse_trade(message):
-                pipeline.push_data(payload)
+                buffer.push_data(payload)
 
         def handle_error(reason: ResyncReason, details: str) -> None:
             suffix = f"(symbol {self.symbol})"
@@ -727,13 +638,13 @@ class BinanceExchangeData:
                 reason == ResyncReason.CONNECTION_LOST
                 and "ошибка чтения сокета" in details
             )
-            pipeline.push_resync(reason, message)
+            buffer.push_resync(reason, message)
             if should_log:
                 self._logger.log(message)
 
         release = self._stream_manager.register_trades(
             self.symbol,
-            pipeline.buffer,
+            buffer,
             handle_message,
             handle_error,
             weight=self._stream_weight("trades"),
@@ -742,24 +653,12 @@ class BinanceExchangeData:
         def iterator() -> Iterator[StreamEvent[Trade]]:
             try:
                 while True:
-                    yield pipeline.next_event()
+                    yield buffer.next()
             finally:
-                pipeline.buffer.stop()
+                buffer.stop()
                 release()
 
-        return StreamSubscription(events=iterator(), _buffer=pipeline.buffer, _stopper=release)
-
-    @property
-    def depth_pipeline(self) -> Optional[DepthStreamPipeline]:
-        return self._depth_pipeline
-
-    @property
-    def trades_pipeline(self) -> Optional[TradesStreamPipeline]:
-        return self._trades_pipeline
-
-    @property
-    def ticker_pipeline(self) -> Optional[BookTickerStreamPipeline]:
-        return self._ticker_pipeline
+        return StreamSubscription(events=iterator(), _buffer=buffer, _stopper=release)
 
     def stream_kline_1m(self) -> StreamSubscription[Candle]:
         return self._run_simple_stream(
