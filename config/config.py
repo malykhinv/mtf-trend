@@ -105,7 +105,6 @@ CONFIG: Final[Config] = Config(
         resubscribe_window_minutes=5,
         silence_timeout_minutes=6,
         backpressure_ratio_threshold=0.75,
-        emit_json_logs=False,
     ),
     admin=AdminSettings(
         host="127.0.0.1",
