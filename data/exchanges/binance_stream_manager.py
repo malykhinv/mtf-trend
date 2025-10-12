@@ -9,7 +9,6 @@ from config.stream_limits import (
     DEFAULT_BINANCE_STREAM_PROFILES,
     StreamLoadProfile,
 )
-from utils.metrics import METRICS
 
 from .base import ResyncReason, StreamBuffer
 from .binance_stream_pool import _StreamWorkerPool
@@ -193,10 +192,7 @@ class BinanceStreamManager:
         pool = self._pools.get(stream_type)
         if pool is None:
             return False
-        migrated = pool.migrate(symbol, reason)
-        if migrated:
-            METRICS.increment_migration(stream_type, symbol)
-        return migrated
+        return pool.migrate(symbol, reason)
 
 
 __all__ = ["BinanceStreamManager"]

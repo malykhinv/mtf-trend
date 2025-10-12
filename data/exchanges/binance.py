@@ -355,10 +355,6 @@ class BinanceExchangeData:
                 ).format(stream=stream_type, symbol=self.symbol)
             )
 
-    def migrate_stream(self, stream_type: str, details: str | None = None) -> bool:
-        message = details or "manual migration request"
-        return self._stream_manager.migrate_stream(stream_type, self.symbol, message)
-
     @classmethod
     def _get_stream_manager(
         cls,
@@ -497,7 +493,6 @@ class BinanceExchangeData:
             on_chronic_error=lambda reason, details: self._request_stream_migration(
                 "depth", reason, details or "depth stream chronic degradation"
             ),
-            metrics_symbol=self.symbol,
         )
         self._depth_pipeline = pipeline
         self._reset_depth_state()
@@ -770,7 +765,6 @@ class BinanceExchangeData:
             on_chronic_error=lambda reason, details: self._request_stream_migration(
                 "book", reason, details or "book ticker chronic degradation"
             ),
-            metrics_symbol=self.symbol,
         )
         self._ticker_pipeline = pipeline
 
@@ -827,7 +821,6 @@ class BinanceExchangeData:
             on_chronic_error=lambda reason, details: self._request_stream_migration(
                 "trades", reason, details or "trade stream chronic degradation"
             ),
-            metrics_symbol=self.symbol,
         )
         self._trades_pipeline = pipeline
 

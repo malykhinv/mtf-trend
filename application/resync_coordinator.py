@@ -3,13 +3,12 @@ from __future__ import annotations
 import queue
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Callable, Optional, Sequence
 
 from data.exchanges import ResyncReason
 from domain.models import OrderBookSnapshot
 from state.resync_registry import ResyncRegistry, ResyncStatus
-from utils.metrics import METRICS
 from utils.timez import get_current_time
 
 
@@ -111,10 +110,8 @@ class ResyncCoordinator:
     def _execute_task(self, task: ResyncTask) -> None:
         symbol = task.symbol
         worker_id = threading.current_thread().name
-        started_at = get_current_time()
-        self._registry.record_start(symbol, worker_id, started_at)
-        end_time: datetime | None = None
-        success = False
+        now = get_current_time()
+        self._registry.record_start(symbol, worker_id, now)
         try:
             snapshot = task.fetch_snapshot()
             pending = task.apply_snapshot(snapshot)
@@ -122,29 +119,22 @@ class ResyncCoordinator:
             if not task.validate():
                 raise RuntimeError(f"validation failed for {symbol}")
         except Exception as exc:  # noqa: BLE001
-            end_time = get_current_time()
-            self._registry.record_failure(symbol, end_time, str(exc), worker_id=worker_id)
+            self._registry.record_failure(symbol, get_current_time(), str(exc), worker_id=worker_id)
             if task.on_failure is not None:
                 try:
                     task.on_failure(exc)
                 except Exception:
                     pass
         else:
-            end_time = get_current_time()
-            self._registry.record_success(symbol, end_time)
+            self._registry.record_success(symbol, get_current_time())
             if task.on_success is not None:
                 try:
                     task.on_success()
                 except Exception:
                     pass
-            success = True
         finally:
             with self._lock:
                 self._pending.discard(symbol)
-        if end_time is None:
-            end_time = get_current_time()
-        duration = max((end_time - started_at).total_seconds(), 0.0)
-        METRICS.observe_resync_duration(symbol, task.reason.value, duration, success)
 
     def _health_loop(self) -> None:
         while not self._stop_event.wait(self._health_interval):

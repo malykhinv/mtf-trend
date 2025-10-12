@@ -7,7 +7,6 @@ class ResyncReason(str, Enum):
     SILENCE_TIMEOUT = "таймаут тишины"
     CONNECTION_LOST = "потеря соединения"
     SNAPSHOT_REFRESH = "обновление снапшота"
-    MANUAL_TRIGGER = "ручной ресинк"
 
 
 __all__ = ["ResyncReason"]

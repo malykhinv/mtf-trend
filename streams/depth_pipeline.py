@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from config.models.trading_profile import TradingProfile
 from data.exchanges import StreamBuffer
@@ -74,7 +73,6 @@ class DepthStreamPipeline(StreamPipeline[DepthStreamData]):
         buffer: StreamBuffer[DepthStreamData],
         profile: TradingProfile,
         on_chronic_error,
-        metrics_symbol: Optional[str] = None,
     ) -> None:
         settings = _PROFILE_SETTINGS.get(profile, _PROFILE_SETTINGS[TradingProfile.AUTO])
         super().__init__(
@@ -87,8 +85,6 @@ class DepthStreamPipeline(StreamPipeline[DepthStreamData]):
             chronic_error_threshold=settings.chronic_threshold,
             chronic_error_window_s=settings.chronic_window_s,
             on_chronic_error=on_chronic_error,
-            metrics_stream=name,
-            metrics_symbol=metrics_symbol,
         )
 
     @staticmethod

@@ -6,7 +6,6 @@ from enum import Enum
 from typing import Callable, Generic, Optional, TypeVar
 
 from data.exchanges import ResyncReason, StreamBuffer, StreamEvent
-from utils.metrics import METRICS
 
 
 T = TypeVar("T")
@@ -55,8 +54,6 @@ class StreamPipeline(Generic[T]):
         chronic_error_threshold: int = 3,
         chronic_error_window_s: float = 30.0,
         on_chronic_error: Optional[Callable[[ResyncReason, str], None]] = None,
-        metrics_stream: Optional[str] = None,
-        metrics_symbol: Optional[str] = None,
     ) -> None:
         self._name = name
         self._buffer = buffer
@@ -72,8 +69,6 @@ class StreamPipeline(Generic[T]):
         self._chronic_error_threshold = max(1, int(chronic_error_threshold))
         self._chronic_error_window_s = max(float(chronic_error_window_s), 0.0)
         self._on_chronic_error = on_chronic_error
-        self._metrics_stream = metrics_stream or name
-        self._metrics_symbol = metrics_symbol
 
     @property
     def buffer(self) -> StreamBuffer[T]:
@@ -109,39 +104,30 @@ class StreamPipeline(Generic[T]):
             self._enter_degraded_state()
             if self._fallback_mode is FallbackMode.SKIP:
                 self._skipped_events += 1
-                self._observe_backlog(backlog)
                 return
             if self._fallback_mode is FallbackMode.AGGREGATE and self._aggregator is not None:
                 self._aggregate(payload)
-                self._observe_backlog(backlog)
                 return
         elif backlog >= self._thresholds.warning:
             self._enter_degraded_state()
             if self._fallback_mode is FallbackMode.AGGREGATE and self._aggregator is not None:
                 self._aggregate(payload)
-                self._observe_backlog(backlog)
                 return
         else:
             self._flush_pending()
             self._maybe_expire_degradation()
         self._buffer.push_data(payload)
-        self._observe_backlog()
-        self._record_flow()
 
     def push_snapshot(self, payload: T) -> None:
         self._flush_pending()
         self._maybe_expire_degradation()
         self._buffer.push_snapshot(payload)
-        self._observe_backlog()
-        self._record_flow()
 
     def push_resync(self, reason: ResyncReason, details: str | None = None) -> None:
         self._flush_pending()
         self._enter_degraded_state()
         self._buffer.push_resync(reason, details)
         self._record_error(reason, details)
-        METRICS.record_resync_trigger(self._metrics_stream, self._metrics_symbol, reason.value)
-        self._observe_backlog()
 
     def next_event(self) -> StreamEvent[T]:
         event = self._buffer.next()
@@ -149,7 +135,6 @@ class StreamPipeline(Generic[T]):
             backlog = self._buffer.backlog()
             if backlog < self._thresholds.warning:
                 self._maybe_expire_degradation()
-            self._observe_backlog(backlog)
         return event
 
     def health_snapshot(self) -> PipelineHealth:
@@ -204,19 +189,5 @@ class StreamPipeline(Generic[T]):
                 self._on_chronic_error(reason, details or "chronic stream error")
             finally:
                 self._error_timestamps.clear()
-
-    def _observe_backlog(self, backlog: Optional[int] = None) -> None:
-        metric_backlog = backlog if backlog is not None else self._buffer.backlog()
-        METRICS.observe_queue_depth(
-            self._metrics_stream,
-            self._metrics_symbol,
-            metric_backlog,
-            self._buffer.capacity,
-            self.is_degraded,
-        )
-
-    def _record_flow(self) -> None:
-        symbol = self._metrics_symbol or "unknown"
-        METRICS.record_flow(self._metrics_stream, symbol)
 
 *** End of File

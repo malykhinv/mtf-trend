@@ -10,7 +10,6 @@ from threading import Lock
 from typing import Any, Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
 
 from application import FeedMonitor, GUARDS
-from application.stream_admin import StreamAdminInterface, StreamAdminServer
 from application.resync_coordinator import ResyncCoordinator
 from application.stream_pump import StreamPump
 from application.market_scanner import MarketScanner
@@ -70,7 +69,6 @@ from domain.strategy.resync import ResyncReason as StrategyResyncReason
 from domain.strategy.state import StrategyState
 from domain.trading_adapter import TradingAdapter
 from utils import get_current_time
-from utils.metrics import METRICS, MetricsThresholds
 
 
 class VolumeSpikeTracker:
@@ -218,23 +216,8 @@ class Application:
         self._sink = sink
         self._log_writer = create_log_writer(sink)
         self._event_logger = EventLogger(write=self._log_writer)
-        metrics_settings = CONFIG.metrics
-        thresholds = MetricsThresholds(
-            resubscribe_ratio=metrics_settings.resubscribe_ratio_threshold,
-            resubscribe_window_s=max(metrics_settings.resubscribe_window_minutes, 1) * 60.0,
-            silence_timeout_s=max(metrics_settings.silence_timeout_minutes, 1) * 60.0,
-            backpressure_ratio=metrics_settings.backpressure_ratio_threshold,
-        )
-        METRICS.configure(
-            enabled=metrics_settings.enabled,
-            prometheus_port=metrics_settings.prometheus_port if metrics_settings.enabled else None,
-            json_sink=self._sink,
-            thresholds=thresholds,
-            daily_report_hour=metrics_settings.daily_report_hour_utc,
-        )
         self._focused_symbol: Optional[str] = None
         self._desired_symbols: Tuple[str, ...] = ()
-        self._paused_symbols: set[str] = set()
         self._symbol_profiles: Dict[str, TradingProfile] = {}
         self._telegram_client = TelegramClient(
             token=SECRETS.tg_bot_token,
@@ -275,7 +258,6 @@ class Application:
         self._last_scan_at: Optional[datetime] = None
         self._scanner_interval = timedelta(seconds=CONFIG.turnover.market_scan_interval_s)
         self._current_symbol: Optional[str] = None
-        self._admin_lock = Lock()
         entry, exit_, move_stop = create_execution_handlers(
             self._trading_router,
             self._provide_filters,
@@ -316,16 +298,6 @@ class Application:
             monitor_callback=self._handle_resync_alert,
             quarantine_callback=self._schedule_resync_quarantine,
         )
-        admin_settings = CONFIG.admin
-        interface = StreamAdminInterface(
-            pause=self.pause_symbol,
-            resume=self.resume_symbol,
-            migrate=self.migrate_symbol,
-            force_resync=self.force_resync,
-            status=self.get_status,
-        )
-        self._admin_server = StreamAdminServer(interface, admin_settings.host, admin_settings.port)
-        self._admin_server.start()
 
     @staticmethod
     def _exchange_credentials() -> tuple[str | None, str | None]:
@@ -387,193 +359,6 @@ class Application:
         if context is None:
             raise ValueError(f"unknown symbol {symbol}")
         return context.balance
-
-    def _update_desired_symbols(self, *, extra_symbol: str | None = None) -> Tuple[str, ...]:
-        symbols = tuple(self._symbol_profiles.keys())
-        desired = [symbol for symbol in symbols if symbol not in self._paused_symbols]
-        if extra_symbol and extra_symbol not in desired:
-            desired.append(extra_symbol)
-        result = tuple(desired)
-        self._desired_symbols = result
-        return result
-
-    @staticmethod
-    def _normalize_stream_names(stream: Optional[str]) -> Tuple[str, ...]:
-        if stream is None:
-            return ("depth", "trades", "book")
-        normalized = stream.strip().lower()
-        if not normalized or normalized in {"*", "all"}:
-            return ("depth", "trades", "book")
-        mapping = {"ticker": "book", "book_ticker": "book"}
-        resolved = mapping.get(normalized, normalized)
-        if resolved not in {"depth", "trades", "book"}:
-            return ()
-        return (resolved,)
-
-    def pause_symbol(self, symbol: str) -> bool:
-        normalized = symbol.upper()
-        timestamp = get_current_time()
-        with self._admin_lock:
-            if normalized in self._paused_symbols:
-                return False
-            self._paused_symbols.add(normalized)
-            desired = self._update_desired_symbols()
-        localized = timestamp.astimezone(CURRENT_TIMEZONE)
-        self._event_logger.log(
-            f"Символ {normalized} переведён в паузу оператором.",
-            localized,
-        )
-        self._subscription_manager.update(desired, timestamp)
-        return True
-
-    def resume_symbol(self, symbol: str) -> bool:
-        normalized = symbol.upper()
-        timestamp = get_current_time()
-        with self._admin_lock:
-            was_paused = normalized in self._paused_symbols
-            if was_paused:
-                self._paused_symbols.discard(normalized)
-            self._symbol_profiles.setdefault(normalized, CONFIG.general.profile)
-            desired = self._update_desired_symbols(extra_symbol=normalized)
-        if not was_paused and normalized not in desired:
-            return False
-        localized = timestamp.astimezone(CURRENT_TIMEZONE)
-        self._event_logger.log(
-            f"Символ {normalized} возвращён из паузы.",
-            localized,
-        )
-        self._subscription_manager.update(desired, timestamp)
-        return True
-
-    def migrate_symbol(
-        self, symbol: str, stream: Optional[str] = None, details: Optional[str] = None
-    ) -> bool:
-        normalized = symbol.upper()
-        context = self._contexts.get(normalized)
-        if context is None:
-            return False
-        migrate_func = getattr(context.exchange_data, "migrate_stream", None)
-        if migrate_func is None:
-            return False
-        streams = self._normalize_stream_names(stream)
-        if not streams:
-            return False
-        message = details or "manual migration request"
-        success = False
-        for stream_name in streams:
-            try:
-                migrated = bool(migrate_func(stream_name, message))
-            except Exception:  # noqa: BLE001
-                migrated = False
-            success = success or migrated
-        if success:
-            timestamp = get_current_time().astimezone(CURRENT_TIMEZONE)
-            self._event_logger.log(
-                f"Миграция стрима {','.join(streams)} для {normalized} инициирована вручную.",
-                timestamp,
-            )
-        return success
-
-    def force_resync(
-        self, symbol: str, stream: Optional[str] = None, reason: Optional[str] = None
-    ) -> bool:
-        normalized = symbol.upper()
-        context = self._contexts.get(normalized)
-        if context is None:
-            return False
-        streams = self._normalize_stream_names(stream)
-        if not streams:
-            return False
-        timestamp = get_current_time()
-        message = reason or "manual resync"
-        triggered = False
-        with context.lock:
-            if "depth" in streams:
-                context.depth_resync_flag = True
-                context.depth_resync_reason = StreamResyncReason.MANUAL_TRIGGER
-                context.depth_resync_details = message
-                context.depth_resync_timestamp = timestamp
-                if context.depth_pipeline is not None:
-                    context.depth_pipeline.push_resync(
-                        StreamResyncReason.MANUAL_TRIGGER,
-                        message,
-                    )
-                triggered = True
-            if "trades" in streams:
-                context.trade_resync_flag = True
-                context.trade_resync_reason = StreamResyncReason.MANUAL_TRIGGER
-                context.trade_resync_details = message
-                context.trade_resync_timestamp = timestamp
-                if context.trade_pipeline is not None:
-                    context.trade_pipeline.push_resync(
-                        StreamResyncReason.MANUAL_TRIGGER,
-                        message,
-                    )
-                triggered = True
-            if "book" in streams:
-                context.ticker_resync_flag = True
-                context.ticker_resync_reason = StreamResyncReason.MANUAL_TRIGGER
-                context.ticker_resync_details = message
-                context.ticker_resync_timestamp = timestamp
-                if context.ticker_pipeline is not None:
-                    context.ticker_pipeline.push_resync(
-                        StreamResyncReason.MANUAL_TRIGGER,
-                        message,
-                    )
-                triggered = True
-        if triggered:
-            localized = timestamp.astimezone(CURRENT_TIMEZONE)
-            self._event_logger.log(
-                f"Ресинк {','.join(streams)} для {normalized} инициирован вручную: {message}.",
-                localized,
-            )
-        return triggered
-
-    def get_status(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        target_symbols: Iterable[str]
-        if symbol:
-            target_symbols = (symbol.upper(),)
-        else:
-            target_symbols = tuple(self._contexts.keys())
-        snapshots: list[Dict[str, Any]] = []
-        for name in target_symbols:
-            context = self._contexts.get(name)
-            if context is None:
-                snapshots.append({"symbol": name, "active": False})
-                continue
-            pipelines = {}
-            for stream_name, pipeline in (
-                ("depth", context.depth_pipeline),
-                ("trades", context.trade_pipeline),
-                ("book", context.ticker_pipeline),
-            ):
-                if pipeline is None:
-                    continue
-                health = pipeline.health_snapshot()
-                pipelines[stream_name] = {
-                    "backlog": health.backlog,
-                    "capacity": health.capacity,
-                    "degraded": health.is_degraded,
-                    "fallback": health.fallback_mode.value,
-                    "aggregated": health.aggregated_events,
-                    "skipped": health.skipped_events,
-                }
-            snapshots.append(
-                {
-                    "symbol": name,
-                    "active": context.active,
-                    "profile": context.profile.value,
-                    "paused": name in self._paused_symbols,
-                    "degraded_streams": sorted(context.degraded_streams),
-                    "pipelines": pipelines,
-                    "balance": context.balance,
-                }
-            )
-        return {
-            "timestamp": get_current_time().isoformat(),
-            "symbols": snapshots,
-            "paused": sorted(self._paused_symbols),
-        }
 
     def _subscribe_symbol(self, symbol: str) -> None:
         symbol = symbol.upper()
@@ -1029,9 +814,9 @@ class Application:
                 return
         scan_result = self._scanner.scan()
         profile_by_symbol = {symbol: profile for symbol, profile in scan_result}
-        with self._admin_lock:
-            self._symbol_profiles = profile_by_symbol
-            symbols = self._update_desired_symbols()
+        self._symbol_profiles = profile_by_symbol
+        symbols = tuple(profile_by_symbol.keys())
+        self._desired_symbols = symbols
         for symbol, context in self._contexts.items():
             profile = profile_by_symbol.get(symbol)
             if profile is not None:
