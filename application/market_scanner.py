@@ -70,7 +70,7 @@ class MarketScanner:
         if listing_dates:
             self._listing_dates = listing_dates
         self._recent_listing_cache.clear()
-        url = "https://api.binance.com/api/v3/ticker/24hr"
+        url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
         data = self._request_json(request)
         symbols: Sequence[dict[str, object]] = []
@@ -121,7 +121,7 @@ class MarketScanner:
             fetched_at = self._exchange_info_fetched_at or 0.0
             if time.time() - fetched_at < self._exchange_info_ttl:
                 return self._binance_exchange_info
-        url = "https://api.binance.com/api/v3/exchangeInfo"
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         request = Request(url, method="GET", headers={"User-Agent": "mtf-trend/1.0"})
         data = self._request_json(request)
         exchange_info = self._parse_binance_exchange_info(data)
@@ -142,45 +142,54 @@ class MarketScanner:
                 )
         existing = self._binance_exchange_info
         result: dict[str, dict[str, object]] = {}
+        target_quote_asset = "USDT"
         for item in symbols:
             raw_symbol = item.get("symbol")
             if not raw_symbol:
                 continue
             symbol = str(raw_symbol).upper()
             status = str(item.get("status") or "").upper()
-            if status != "TRADING":
+            contract_status = str(item.get("contractStatus") or "").upper()
+            if contract_status:
+                if contract_status != "TRADING":
+                    continue
+            elif status != "TRADING":
                 continue
-            if not bool(item.get("isSpotTradingAllowed", False)):
+            contract_type = str(item.get("contractType") or "").upper()
+            if contract_type not in {"PERPETUAL", "CURRENT_QUARTER", "NEXT_QUARTER"}:
+                continue
+            quote_asset = str(item.get("quoteAsset") or "").upper()
+            if target_quote_asset and quote_asset != target_quote_asset:
                 continue
             permissions = item.get("permissions")
-            permissions_tuple: tuple[str, ...] = ()
-            if isinstance(permissions, Sequence) and not isinstance(permissions, (str, bytes)):
-                normalized_permissions = {str(entry).upper() for entry in permissions}
-                if "SPOT" not in normalized_permissions:
-                    continue
-                permissions_tuple = tuple(str(entry) for entry in permissions)
+            if not (
+                isinstance(permissions, Sequence)
+                and not isinstance(permissions, (str, bytes))
+            ):
+                continue
+            normalized_permissions = {str(entry).upper() for entry in permissions}
+            if not normalized_permissions.intersection({"UMFUTURE", "CMFUTURE"}):
+                continue
+            permissions_tuple = tuple(str(entry) for entry in permissions)
             filters = item.get("filters")
             filter_entries: Sequence[Mapping[str, object]] = ()
             if isinstance(filters, Sequence) and not isinstance(filters, (str, bytes)):
                 filter_entries = tuple(
                     entry for entry in filters if isinstance(entry, Mapping)
                 )
-            price_filter: Mapping[str, object] = next(
-                (
-                    entry
-                    for entry in filter_entries
-                    if str(entry.get("filterType") or "").upper() == "PRICE_FILTER"
-                ),
-                {},
-            )
-            lot_filter: Mapping[str, object] = next(
-                (
-                    entry
-                    for entry in filter_entries
-                    if str(entry.get("filterType") or "").upper() == "LOT_SIZE"
-                ),
-                {},
-            )
+            def _find_filter(filter_type: str) -> Mapping[str, object]:
+                return next(
+                    (
+                        entry
+                        for entry in filter_entries
+                        if str(entry.get("filterType") or "").upper() == filter_type
+                    ),
+                    {},
+                )
+
+            price_filter: Mapping[str, object] = _find_filter("PRICE_FILTER")
+            lot_filter: Mapping[str, object] = _find_filter("LOT_SIZE")
+            market_lot_filter: Mapping[str, object] = _find_filter("MARKET_LOT_SIZE")
             notional_filter: Mapping[str, object] = next(
                 (
                     entry
@@ -189,14 +198,49 @@ class MarketScanner:
                 ),
                 {},
             )
+            percent_price_filter: Mapping[str, object] = _find_filter("PERCENT_PRICE")
             current = existing.get(symbol) if isinstance(existing, Mapping) else None
             previous_tick = 0.1
             previous_step = 0.001
+            previous_market_step = previous_step
             previous_notional = 5.0
+            previous_multiplier_down = 0.0
+            previous_multiplier_up = 0.0
             if isinstance(current, Mapping):
-                previous_tick = self._safe_float(current.get("tickSize"), previous_tick)
-                previous_step = self._safe_float(current.get("stepSize"), previous_step)
-                previous_notional = self._safe_float(current.get("notional"), previous_notional)
+                current_filters = current.get("filters")
+                if isinstance(current_filters, Mapping):
+                    prev_price = current_filters.get("price")
+                    if isinstance(prev_price, Mapping):
+                        previous_tick = self._safe_float(
+                            prev_price.get("tickSize"), previous_tick
+                        )
+                    prev_lot = current_filters.get("lot")
+                    if isinstance(prev_lot, Mapping):
+                        previous_step = self._safe_float(
+                            prev_lot.get("stepSize"), previous_step
+                        )
+                    prev_market_lot = current_filters.get("marketLot")
+                    if isinstance(prev_market_lot, Mapping):
+                        previous_market_step = self._safe_float(
+                            prev_market_lot.get("stepSize"), previous_market_step
+                        )
+                    prev_notional = current_filters.get("notional")
+                    if isinstance(prev_notional, Mapping):
+                        previous_notional = self._safe_float(
+                            prev_notional.get("minNotional"), previous_notional
+                        )
+                    prev_percent = current_filters.get("percentPrice")
+                    if isinstance(prev_percent, Mapping):
+                        previous_multiplier_down = self._safe_float(
+                            prev_percent.get("multiplierDown"), previous_multiplier_down
+                        )
+                        previous_multiplier_up = self._safe_float(
+                            prev_percent.get("multiplierUp"), previous_multiplier_up
+                        )
+                else:
+                    previous_tick = self._safe_float(current.get("tickSize"), previous_tick)
+                    previous_step = self._safe_float(current.get("stepSize"), previous_step)
+                    previous_notional = self._safe_float(current.get("notional"), previous_notional)
             min_price_value = max(self._safe_float(price_filter.get("minPrice"), 0.0), 0.0)
             max_price_value = self._safe_float(price_filter.get("maxPrice"), math.inf)
             if max_price_value <= 0.0:
@@ -216,40 +260,95 @@ class MarketScanner:
             max_qty_value = self._safe_float(lot_filter.get("maxQty"), math.inf)
             if max_qty_value <= 0.0:
                 max_qty_value = math.inf
+            market_step_size_value = max(
+                self._safe_float(market_lot_filter.get("stepSize"), previous_market_step),
+                10 ** -8,
+            )
+            market_min_qty_value = max(
+                self._safe_float(market_lot_filter.get("minQty"), market_step_size_value),
+                market_step_size_value,
+            )
+            market_max_qty_value = self._safe_float(market_lot_filter.get("maxQty"), math.inf)
+            if market_max_qty_value <= 0.0:
+                market_max_qty_value = math.inf
             min_notional_value = max(
-                self._safe_float(notional_filter.get("minNotional"), previous_notional),
+                self._safe_float(
+                    notional_filter.get("minNotional")
+                    or notional_filter.get("notional"),
+                    previous_notional,
+                ),
                 0.0,
             )
+            multiplier_down_value = max(
+                self._safe_float(
+                    percent_price_filter.get("multiplierDown"), previous_multiplier_down
+                ),
+                0.0,
+            )
+            multiplier_up_value = max(
+                self._safe_float(
+                    percent_price_filter.get("multiplierUp"), previous_multiplier_up
+                ),
+                0.0,
+            )
+            price_filters = {
+                "minPrice": min_price_value,
+                "maxPrice": max_price_value,
+                "tickSize": tick_size_value,
+            }
+            lot_filters = {
+                "minQty": min_qty_value,
+                "maxQty": max_qty_value,
+                "stepSize": step_size_value,
+            }
+            market_lot_filters = {
+                "minQty": market_min_qty_value,
+                "maxQty": market_max_qty_value,
+                "stepSize": market_step_size_value,
+            }
             filters_payload = {
-                "price": {
-                    "minPrice": min_price_value,
-                    "maxPrice": max_price_value,
-                    "tickSize": tick_size_value,
-                },
-                "lot": {
-                    "minQty": min_qty_value,
-                    "maxQty": max_qty_value,
-                    "stepSize": step_size_value,
-                },
+                "price": price_filters,
+                "lot": lot_filters,
+                "marketLot": market_lot_filters,
                 "notional": {
                     "minNotional": min_notional_value,
                 },
+                "percentPrice": {
+                    "multiplierDown": multiplier_down_value,
+                    "multiplierUp": multiplier_up_value,
+                    "multiplierDecimal": percent_price_filter.get("multiplierDecimal"),
+                },
             }
+            listing_date = item.get("listingDate")
+            if listing_date is None:
+                listing_date = item.get("onboardDate")
             entry_payload: dict[str, object] = {
                 "baseAsset": str(item.get("baseAsset", "")),
                 "quoteAsset": str(item.get("quoteAsset", "")),
+                "marginAsset": str(item.get("marginAsset", "")),
+                "contractType": contract_type,
+                "contractStatus": contract_status or status,
                 "tickSize": tick_size_value,
                 "stepSize": step_size_value,
+                "lotSize": lot_filters,
+                "marketLotSize": market_lot_filters,
                 "notional": min_notional_value,
                 "filters": filters_payload,
+                "listingDate": listing_date,
                 "meta": {
                     "status": status,
-                    "isSpotTradingAllowed": bool(item.get("isSpotTradingAllowed", False)),
+                    "contractStatus": contract_status or status,
+                    "contractType": contract_type,
                     "onboardDate": item.get("onboardDate"),
+                    "listingDate": listing_date,
                     "permissions": permissions_tuple,
                     "baseAssetPrecision": item.get("baseAssetPrecision"),
                     "quoteAssetPrecision": item.get("quoteAssetPrecision"),
                     "quotePrecision": item.get("quotePrecision"),
+                    "pricePrecision": item.get("pricePrecision"),
+                    "quantityPrecision": item.get("quantityPrecision"),
+                    "deliveryDate": item.get("deliveryDate"),
+                    "pair": item.get("pair"),
                 },
             }
             if isinstance(current, Mapping) and "profile" in current:
@@ -269,7 +368,9 @@ class MarketScanner:
     ) -> dict[str, int]:
         listing_dates: dict[str, int] = {}
         for symbol, item in exchange_info.items():
-            raw_onboard = item.get("onboardDate")
+            raw_onboard = item.get("listingDate")
+            if raw_onboard is None:
+                raw_onboard = item.get("onboardDate")
             try:
                 onboard_ts = int(str(raw_onboard))
             except (TypeError, ValueError):
