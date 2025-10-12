@@ -7,12 +7,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from http.client import RemoteDisconnected
-from typing import Any, Callable, ClassVar, Iterable, Iterator, Optional, Sequence, cast
+from typing import Any, Callable, ClassVar, Iterable, Iterator, Optional, cast
 from urllib import parse
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from application.resync_coordinator import ResyncCoordinator, ResyncTask
 from config.models.trading_profile import TradingProfile
 from config.stream_limits import DEFAULT_BINANCE_STREAM_PROFILES
 from domain.models import (
@@ -45,50 +44,7 @@ from streams import (
 )
 
 
-DepthMessage = dict[str, Any]
-DeltaHandler = Callable[[DepthMessage], None]
 WebSocketClient = ThreadedWebSocketClient
-
-
-def fetch_snapshot(
-    *,
-    rest_get: Callable[[str, dict[str, Any]], Any],
-    symbol: str,
-    depth_limit: int,
-    level_builder: Callable[[float, float, datetime], OrderBookLevel],
-    now_provider: Callable[[], datetime] = get_current_time,
-) -> OrderBookSnapshot:
-    data = rest_get("/fapi/v1/depth", {"symbol": symbol, "limit": depth_limit})
-    last_update_id = int(data["lastUpdateId"])
-    now = now_provider()
-    bids = tuple(
-        level_builder(float(price), float(qty), now) for price, qty in data.get("bids", [])
-    )
-    asks = tuple(
-        level_builder(float(price), float(qty), now) for price, qty in data.get("asks", [])
-    )
-    return OrderBookSnapshot(
-        exchange=Exchange.BINANCE,
-        symbol=symbol,
-        last_update_id=last_update_id,
-        bids=bids,
-        asks=asks,
-        received_at=now,
-    )
-
-
-def apply_snapshot(
-    *, pipeline: DepthStreamPipeline, snapshot: OrderBookSnapshot
-) -> None:
-    pipeline.reset()
-    pipeline.push_snapshot(snapshot)
-
-
-def replay_delta(
-    messages: Sequence[DepthMessage], handler: DeltaHandler
-) -> None:
-    for message in messages:
-        handler(message)
 
 
 @dataclass(slots=True)
@@ -153,7 +109,6 @@ class BinanceExchangeData:
         api_secret: Optional[str] = None,
         silence_timeout_ms: float | None = None,
         profile: TradingProfile | None = None,
-        resync_coordinator: ResyncCoordinator | None = None,
     ) -> None:
         self.symbol = symbol.upper()
         self._endpoints = endpoints or BinanceEndpoints()
@@ -227,7 +182,6 @@ class BinanceExchangeData:
         self._depth_pipeline: Optional[DepthStreamPipeline] = None
         self._trades_pipeline: Optional[TradesStreamPipeline] = None
         self._ticker_pipeline: Optional[BookTickerStreamPipeline] = None
-        self._resync_coordinator = resync_coordinator
 
     def _normalize_depth_stream_interval(self, interval_ms: int) -> int:
         default_interval = 250
@@ -445,12 +399,29 @@ class BinanceExchangeData:
         )
 
     def fetch_orderbook_snapshot(self) -> OrderBookSnapshot:
-        return fetch_snapshot(
-            rest_get=self._rest_get,
-            symbol=self.symbol,
-            depth_limit=self._depth_limit,
-            level_builder=self._build_level,
+        data = self._rest_get(
+            "/fapi/v1/depth",
+            {"symbol": self.symbol, "limit": self._depth_limit},
         )
+        last_update_id = int(data["lastUpdateId"])
+        now = get_current_time()
+        bids = tuple(
+            self._build_level(float(price), float(qty), now)
+            for price, qty in data.get("bids", [])
+        )
+        asks = tuple(
+            self._build_level(float(price), float(qty), now)
+            for price, qty in data.get("asks", [])
+        )
+        snapshot = OrderBookSnapshot(
+            exchange=Exchange.BINANCE,
+            symbol=self.symbol,
+            last_update_id=last_update_id,
+            bids=bids,
+            asks=asks,
+            received_at=now,
+        )
+        return snapshot
 
     def fetch_next_funding_time(self) -> Optional[datetime]:
         response = self._rest_get(
@@ -630,94 +601,15 @@ class BinanceExchangeData:
         self._logger.log_resync(reason, details)
         pipeline.push_resync(reason, details)
         self._reset_depth_state()
-        coordinator = self._resync_coordinator
-        if coordinator is not None:
-            task = self._build_depth_resync_task(pipeline, reason, details)
-            if coordinator.submit(task):
-                return
-            self._logger.log(
-                (
-                    "Binance depth stream {symbol}: восстановление уже в обработке"
-                ).format(symbol=self.symbol)
-            )
-            return
         try:
             snapshot = self.fetch_orderbook_snapshot()
         except Exception as exc:  # noqa: BLE001
-            message = f"Ошибка получения снапшота: {exc}"
-            pipeline.push_resync(ResyncReason.CONNECTION_LOST, details=message)
-            self._logger.log_resync(ResyncReason.CONNECTION_LOST, message)
+            pipeline.push_resync(
+                ResyncReason.CONNECTION_LOST,
+                details=f"Ошибка получения снапшота: {exc}",
+            )
             return
         self._apply_depth_snapshot(snapshot, pipeline)
-
-    def _build_depth_resync_task(
-        self,
-        pipeline: DepthStreamPipeline,
-        reason: ResyncReason,
-        details: str,
-    ) -> ResyncTask:
-        symbol = self.symbol
-
-        def fetch() -> OrderBookSnapshot:
-            return fetch_snapshot(
-                rest_get=self._rest_get,
-                symbol=symbol,
-                depth_limit=self._depth_limit,
-                level_builder=self._build_level,
-            )
-
-        def apply(snapshot: OrderBookSnapshot) -> Sequence[DepthMessage]:
-            with self._lock:
-                self._depth_last_update = snapshot.last_update_id
-                self._depth_allow_skip = True
-                pending = tuple(self._depth_buffered_messages)
-                self._depth_buffered_messages.clear()
-            apply_snapshot(pipeline=pipeline, snapshot=snapshot)
-            return pending
-
-        def replay(pending: Sequence[DepthMessage]) -> None:
-            replay_delta(
-                pending,
-                lambda message: self._handle_depth_message(
-                    message,
-                    pipeline,
-                    buffer_if_uninitialized=False,
-                    allow_skip=True,
-                ),
-            )
-
-        def validate() -> bool:
-            with self._lock:
-                return self._depth_last_update is not None
-
-        def on_failure(exc: Exception) -> None:
-            message = (
-                f"Binance depth stream {symbol}: не удалось восстановить ({details}): {exc}"
-            )
-            pipeline.push_resync(ResyncReason.CONNECTION_LOST, details=message)
-            self._logger.log_resync(ResyncReason.CONNECTION_LOST, message)
-            self._reset_depth_state()
-
-        def on_success() -> None:
-            with self._lock:
-                update_id = self._depth_last_update
-            self._logger.log(
-                (
-                    "Binance depth stream {symbol}: восстановление завершено, "
-                    "ID {update_id}"
-                ).format(symbol=symbol, update_id=update_id)
-            )
-
-        return ResyncTask(
-            symbol=symbol,
-            reason=reason,
-            fetch_snapshot=fetch,
-            apply_snapshot=apply,
-            replay_delta=replay,
-            validate=validate,
-            on_failure=on_failure,
-            on_success=on_success,
-        )
 
     def _reset_depth_state(self) -> None:
         with self._lock:
@@ -734,16 +626,16 @@ class BinanceExchangeData:
             pending = tuple(self._depth_buffered_messages)
             self._depth_buffered_messages.clear()
 
-        apply_snapshot(pipeline=pipeline, snapshot=snapshot)
-        replay_delta(
-            pending,
-            lambda message: self._handle_depth_message(
+        pipeline.reset()
+        pipeline.push_snapshot(snapshot)
+
+        for message in pending:
+            self._handle_depth_message(
                 message,
                 pipeline,
                 buffer_if_uninitialized=False,
                 allow_skip=True,
-            ),
-        )
+            )
 
     def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
         silence_timeout = self._book_ticker_silence_timeout
@@ -1125,4 +1017,4 @@ class BinanceExchangeData:
         )
 
 
-__all__ = ["BinanceExchangeData", "fetch_snapshot", "apply_snapshot", "replay_delta"]
+__all__ = ["BinanceExchangeData"]
