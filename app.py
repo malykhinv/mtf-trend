@@ -6,11 +6,9 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from threading import Lock
 from typing import Any, Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
 
 from application import FeedMonitor, GUARDS
-from application.stream_pump import StreamPump
 from application.market_scanner import MarketScanner
 from config.config import CONFIG
 from config.models.balance_source import BalanceSource as ConfigBalanceSource
@@ -28,7 +26,6 @@ from data.exchanges import (
     IExchangeData,
     ResyncReason as StreamResyncReason,
     StreamEventType,
-    StreamEvent,
     StreamSubscription,
 )
 from data.exchanges.binance_trade import BinanceAPIError
@@ -140,25 +137,6 @@ class SymbolContext:
     volume_ratio: float = 0.0
     volume_spike: bool = False
     last_depth_silence_recovery_at: Optional[datetime] = None
-    lock: Lock = field(default_factory=Lock, repr=False)
-    depth_pump: Optional[StreamPump[DepthStreamData]] = None
-    trade_pump: Optional[StreamPump[Trade]] = None
-    ticker_pump: Optional[StreamPump[BestBidAsk]] = None
-    depth_dirty: bool = False
-    depth_resync_flag: bool = False
-    depth_resync_reason: Optional[StreamResyncReason] = None
-    depth_resync_details: Optional[str] = None
-    depth_resync_timestamp: Optional[datetime] = None
-    trade_dirty: bool = False
-    trade_resync_flag: bool = False
-    trade_resync_reason: Optional[StreamResyncReason] = None
-    trade_resync_details: Optional[str] = None
-    trade_resync_timestamp: Optional[datetime] = None
-    ticker_dirty: bool = False
-    ticker_resync_flag: bool = False
-    ticker_resync_reason: Optional[StreamResyncReason] = None
-    ticker_resync_details: Optional[str] = None
-    ticker_resync_timestamp: Optional[datetime] = None
 
 
 class TradingAdapterRouter(TradingAdapter):
@@ -365,20 +343,6 @@ class Application:
 
     def _dispose_context(self, context: SymbolContext) -> None:
         context.active = False
-        pumps = (
-            context.depth_pump,
-            context.trade_pump,
-            context.ticker_pump,
-        )
-        for pump in pumps:
-            if pump is not None:
-                pump.stop()
-        for pump in pumps:
-            if pump is not None:
-                pump.join()
-        context.depth_pump = None
-        context.trade_pump = None
-        context.ticker_pump = None
         subscriptions = (
             context.depth_subscription,
             context.trade_subscription,
@@ -422,11 +386,9 @@ class Application:
         except Exception as exc:  # noqa: BLE001
             self._log_error(f"Не удалось выполнить ресинк стакана {symbol}: {exc}")
             return
-        with context.lock:
-            self._apply_snapshot(context, snapshot)
-            context.feed_monitor.clear()
-            context.depth_dirty = True
+        self._apply_snapshot(context, snapshot)
         timestamp = snapshot.received_at.astimezone(CURRENT_TIMEZONE)
+        context.feed_monitor.clear()
         self._strategy.complete_resync(timestamp)
 
     def _initialize_order_book(self, context: SymbolContext) -> None:
@@ -436,15 +398,11 @@ class Application:
                 snapshot = cast(OrderBookSnapshot, event.data)
                 if snapshot is None:
                     continue
-                with context.lock:
-                    self._apply_snapshot(context, snapshot)
-                    context.depth_dirty = True
+                self._apply_snapshot(context, snapshot)
                 break
             if event.type is StreamEventType.RESYNC and event.reason is not None:
-                with context.lock:
-                    context.feed_monitor.flag(event.reason)
-                    context.last_update_id = None
-                    context.order_book_updated_at = None
+                context.feed_monitor.flag(event.reason)
+                context.last_update_id = None
 
     def _apply_snapshot(self, context: SymbolContext, snapshot: OrderBookSnapshot) -> None:
         context.order_book.reset_odr_history()
@@ -493,11 +451,10 @@ class Application:
         occurred_at: datetime,
     ) -> bool:
         now = get_current_time()
-        with context.lock:
-            last = context.last_depth_silence_recovery_at
-            if last is not None and now - last < self._silence_recovery_cooldown:
-                context.feed_monitor.has_silence_timeout = False
-                return True
+        last = context.last_depth_silence_recovery_at
+        if last is not None and now - last < self._silence_recovery_cooldown:
+            context.feed_monitor.has_silence_timeout = False
+            return True
         try:
             snapshot = context.exchange_data.fetch_orderbook_snapshot()
         except Exception as exc:  # noqa: BLE001
@@ -507,11 +464,9 @@ class Application:
             timestamp = occurred_at.astimezone(CURRENT_TIMEZONE)
             self._event_logger.log(message, timestamp)
             return False
-        with context.lock:
-            self._apply_snapshot(context, snapshot)
-            context.feed_monitor.has_silence_timeout = False
-            context.last_depth_silence_recovery_at = now
-            context.depth_dirty = True
+        self._apply_snapshot(context, snapshot)
+        context.feed_monitor.has_silence_timeout = False
+        context.last_depth_silence_recovery_at = now
         timestamp = occurred_at.astimezone(CURRENT_TIMEZONE)
         suffix = f" {details}" if details else ""
         self._event_logger.log(
@@ -531,87 +486,107 @@ class Application:
         return current - timestamp <= self._data_freshness_threshold
 
     def _process_depth_stream(self, context: SymbolContext) -> bool:
-        with context.lock:
-            dirty = context.depth_dirty
-            resync_flag = context.depth_resync_flag
-            reason = context.depth_resync_reason
-            details = context.depth_resync_details
-            timestamp = context.depth_resync_timestamp
-            context.depth_dirty = False
-            context.depth_resync_flag = False
-            context.depth_resync_reason = None
-            context.depth_resync_details = None
-            context.depth_resync_timestamp = None
-        processed = dirty or resync_flag
-        if not resync_flag or reason is None:
-            return processed
-        occurred_at = timestamp or get_current_time()
-        if reason is StreamResyncReason.SILENCE_TIMEOUT:
-            if self._recover_depth_from_silence(context, details, occurred_at):
-                return True
-        localized = occurred_at.astimezone(CURRENT_TIMEZONE)
-        suffix = f" {details}." if details else ""
-        self._event_logger.log(
-            (
-                f"Поток стакана {context.symbol} требует ресинк: "
-                f"{reason.value}.{suffix}"
-            ),
-            localized,
-        )
+        buffer = context.depth_subscription._buffer
+        events = buffer.drain_pending()
+        if not events:
+            try:
+                primary = next(context.depth_subscription.events)
+            except StopIteration:
+                return False
+            events = [primary]
+            events.extend(buffer.drain_pending())
+        processed = False
+        for event in events:
+            processed = True
+            if event.type is StreamEventType.DATA:
+                update = cast(OrderBookUpdate, event.data)
+                if update is not None:
+                    self._apply_update(context, update)
+            elif event.type is StreamEventType.SNAPSHOT:
+                snapshot = cast(OrderBookSnapshot, event.data)
+                if snapshot is not None:
+                    self._apply_snapshot(context, snapshot)
+                    context.feed_monitor.clear()
+            elif event.type is StreamEventType.RESYNC and event.reason is not None:
+                if (
+                    event.reason is StreamResyncReason.SILENCE_TIMEOUT
+                    and self._recover_depth_from_silence(
+                        context,
+                        event.details,
+                        event.timestamp,
+                    )
+                ):
+                    continue
+                context.feed_monitor.flag(event.reason)
+                context.last_update_id = None
+                context.order_book_updated_at = None
+                timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
+                details = f" {event.details}." if event.details else ""
+                self._event_logger.log(
+                    (
+                        f"Поток стакана {context.symbol} требует ресинк: "
+                        f"{event.reason.value}.{details}"
+                    ),
+                    timestamp,
+                )
         return processed
 
     def _process_trade_stream(self, context: SymbolContext) -> bool:
-        with context.lock:
-            dirty = context.trade_dirty
-            resync_flag = context.trade_resync_flag
-            reason = context.trade_resync_reason
-            details = context.trade_resync_details
-            timestamp = context.trade_resync_timestamp
-            context.trade_dirty = False
-            context.trade_resync_flag = False
-            context.trade_resync_reason = None
-            context.trade_resync_details = None
-            context.trade_resync_timestamp = None
-        processed = dirty or resync_flag
-        if resync_flag and reason is not None:
-            occurred_at = timestamp or get_current_time()
-            localized = occurred_at.astimezone(CURRENT_TIMEZONE)
-            suffix = f" {details}." if details else ""
-            self._event_logger.log(
-                (
-                    f"Поток сделок {context.symbol} требует ресинк: "
-                    f"{reason.value}.{suffix}"
-                ),
-                localized,
-            )
-            return True
+        buffer = context.trade_subscription._buffer
+        events = buffer.drain_pending()
+        if not events:
+            try:
+                primary = next(context.trade_subscription.events)
+            except StopIteration:
+                return False
+            events = [primary]
+            events.extend(buffer.drain_pending())
+        processed = False
+        for event in events:
+            processed = True
+            if event.type is StreamEventType.DATA:
+                trade = cast(Trade, event.data)
+                if trade is not None:
+                    trade_time = trade.executed_at
+                    context.trade_updated_at = trade_time
+                    context.last_trade_price = trade.price
+                    now = get_current_time()
+                    if self._is_data_fresh(trade_time, now):
+                        _, _, ratio, ready = context.volume_tracker.observe(
+                            trade_time, trade.price, trade.quantity
+                        )
+                        context.volume_ratio = ratio
+                        context.volume_spike = (
+                            ready and ratio >= CONFIG.general.vol_spike_mult
+                        )
+                    else:
+                        context.volume_ratio = 0.0
+                        context.volume_spike = False
         return processed
 
-    def _process_ticker_stream(self, context: SymbolContext) -> bool:
-        with context.lock:
-            dirty = context.ticker_dirty
-            resync_flag = context.ticker_resync_flag
-            reason = context.ticker_resync_reason
-            details = context.ticker_resync_details
-            timestamp = context.ticker_resync_timestamp
-            context.ticker_dirty = False
-            context.ticker_resync_flag = False
-            context.ticker_resync_reason = None
-            context.ticker_resync_details = None
-            context.ticker_resync_timestamp = None
-        processed = dirty or resync_flag
-        if resync_flag and reason is not None:
-            occurred_at = timestamp or get_current_time()
-            localized = occurred_at.astimezone(CURRENT_TIMEZONE)
-            suffix = f" {details}." if details else ""
-            self._event_logger.log(
-                (
-                    f"Поток тикера {context.symbol} требует ресинк: "
-                    f"{reason.value}.{suffix}"
-                ),
-                localized,
-            )
-            return True
+    @staticmethod
+    def _process_ticker_stream(context: SymbolContext) -> bool:
+        buffer = context.ticker_subscription._buffer
+        events = buffer.drain_pending()
+        if not events:
+            try:
+                primary = next(context.ticker_subscription.events)
+            except StopIteration:
+                return False
+            events = [primary]
+            events.extend(buffer.drain_pending())
+        processed = False
+        latest_ticker: BestBidAsk | None = None
+        for event in events:
+            processed = True
+            if event.type is StreamEventType.DATA:
+                ticker = cast(BestBidAsk, event.data)
+                if ticker is not None:
+                    latest_ticker = ticker
+        if latest_ticker is not None:
+            context.best_bid = latest_ticker.bid_price
+            context.best_ask = latest_ticker.ask_price
+            context.ticker_updated_at = latest_ticker.event_time
         return processed
 
     @staticmethod
@@ -637,99 +612,29 @@ class Application:
 
     def _build_observation(self, context: SymbolContext) -> MarketObservation:
         now = get_current_time()
-        with context.lock:
-            stale_entries: list[tuple[str, str]] = []
+        stale_entries = []
+        if not self._is_data_fresh(context.order_book_updated_at, now):
             order_book_updated_at = context.order_book_updated_at
-            trade_updated_at = context.trade_updated_at
-            if not self._is_data_fresh(order_book_updated_at, now):
-                if order_book_updated_at is None:
-                    reason = "стакан не инициализирован"
-                else:
-                    localized = order_book_updated_at.astimezone(CURRENT_TIMEZONE)
-                    reason = (
-                        "стакан устарел (обновлён "
-                        f"{localized.isoformat(timespec='seconds')})"
-                    )
-                stale_entries.append(("order_book", reason))
-            if not self._is_data_fresh(trade_updated_at, now):
-                if trade_updated_at is None:
-                    reason = "нет свежих сделок"
-                else:
-                    localized = trade_updated_at.astimezone(CURRENT_TIMEZONE)
-                    reason = (
-                        "сделки устарели (последняя "
-                        f"{localized.isoformat(timespec='seconds')})"
-                    )
-                stale_entries.append(("trade", reason))
-            if stale_entries:
-                observation = MarketObservation(
-                    timestamp=now,
-                    symbol=context.symbol,
-                    last_price=self._resolve_last_price(context),
-                    tick_size=context.filters.price_tick_size,
-                    pressure=None,
-                    bid_wall=None,
-                    ask_wall=None,
-                    bid_opposite_wall_blocks=False,
-                    ask_opposite_wall_blocks=False,
-                    available_symbols=self._desired_symbols,
-                    feed_status=context.feed_monitor.snapshot(),
-                    volume_ratio=0.0,
-                    volume_spike=False,
-                )
+            if order_book_updated_at is None:
+                reason = "стакан не инициализирован"
             else:
-                last_price = self._resolve_last_price(context)
-                tick_size = context.filters.price_tick_size
-                pressure = None
-                if last_price > 0.0 and tick_size > 0.0:
-                    pressure = compute_odr(context.order_book, last_price, tick_size)
-                bid_wall_candidate = check_if_has_near_wall(
-                    context.order_book, Side.BID, context.profile
+                localized = order_book_updated_at.astimezone(CURRENT_TIMEZONE)
+                reason = (
+                    "стакан устарел (обновлён "
+                    f"{localized.isoformat(timespec='seconds')})"
                 )
-                ask_wall_candidate = check_if_has_near_wall(
-                    context.order_book, Side.ASK, context.profile
+            stale_entries.append(("order_book", reason))
+        if not self._is_data_fresh(context.trade_updated_at, now):
+            trade_updated_at = context.trade_updated_at
+            if trade_updated_at is None:
+                reason = "нет свежих сделок"
+            else:
+                localized = trade_updated_at.astimezone(CURRENT_TIMEZONE)
+                reason = (
+                    "сделки устарели (последняя "
+                    f"{localized.isoformat(timespec='seconds')})"
                 )
-                bid_wall = (
-                    self._assign_symbol(context, bid_wall_candidate)
-                    if bid_wall_candidate is not None
-                    else None
-                )
-                ask_wall = (
-                    self._assign_symbol(context, ask_wall_candidate)
-                    if ask_wall_candidate is not None
-                    else None
-                )
-                bid_opposite_blocks = False
-                if bid_wall is not None:
-                    bid_opposite_blocks = check_if_has_opposite_wall(
-                        context.order_book,
-                        Side.ASK,
-                        bid_wall,
-                        context.profile,
-                    )
-                ask_opposite_blocks = False
-                if ask_wall is not None:
-                    ask_opposite_blocks = check_if_has_opposite_wall(
-                        context.order_book,
-                        Side.BID,
-                        ask_wall,
-                        context.profile,
-                    )
-                observation = MarketObservation(
-                    timestamp=now,
-                    symbol=context.symbol,
-                    last_price=last_price,
-                    tick_size=tick_size,
-                    pressure=pressure,
-                    bid_wall=bid_wall,
-                    ask_wall=ask_wall,
-                    bid_opposite_wall_blocks=bid_opposite_blocks,
-                    ask_opposite_wall_blocks=ask_opposite_blocks,
-                    available_symbols=self._desired_symbols,
-                    feed_status=context.feed_monitor.snapshot(),
-                    volume_ratio=context.volume_ratio,
-                    volume_spike=context.volume_spike,
-                )
+            stale_entries.append(("trade", reason))
         if stale_entries:
             recorded = self._stale_warnings.get(context.symbol, set())
             current_keys = {key for key, _ in stale_entries}
@@ -742,9 +647,74 @@ class Application:
                     log_timestamp,
                 )
             self._stale_warnings[context.symbol] = current_keys
-        else:
-            self._stale_warnings.pop(context.symbol, None)
-        return observation
+            return MarketObservation(
+                timestamp=now,
+                symbol=context.symbol,
+                last_price=self._resolve_last_price(context),
+                tick_size=context.filters.price_tick_size,
+                pressure=None,
+                bid_wall=None,
+                ask_wall=None,
+                bid_opposite_wall_blocks=False,
+                ask_opposite_wall_blocks=False,
+                available_symbols=self._desired_symbols,
+                feed_status=context.feed_monitor.snapshot(),
+                volume_ratio=0.0,
+                volume_spike=False,
+            )
+        self._stale_warnings.pop(context.symbol, None)
+        last_price = self._resolve_last_price(context)
+        tick_size = context.filters.price_tick_size
+        pressure = None
+        if last_price > 0.0 and tick_size > 0.0:
+            pressure = compute_odr(context.order_book, last_price, tick_size)
+        bid_wall_candidate = check_if_has_near_wall(
+            context.order_book, Side.BID, context.profile
+        )
+        ask_wall_candidate = check_if_has_near_wall(
+            context.order_book, Side.ASK, context.profile
+        )
+        bid_wall = (
+            self._assign_symbol(context, bid_wall_candidate)
+            if bid_wall_candidate is not None
+            else None
+        )
+        ask_wall = (
+            self._assign_symbol(context, ask_wall_candidate)
+            if ask_wall_candidate is not None
+            else None
+        )
+        bid_opposite_blocks = False
+        if bid_wall is not None:
+            bid_opposite_blocks = check_if_has_opposite_wall(
+                context.order_book,
+                Side.ASK,
+                bid_wall,
+                context.profile,
+            )
+        ask_opposite_blocks = False
+        if ask_wall is not None:
+            ask_opposite_blocks = check_if_has_opposite_wall(
+                context.order_book,
+                Side.BID,
+                ask_wall,
+                context.profile,
+            )
+        return MarketObservation(
+            timestamp=now,
+            symbol=context.symbol,
+            last_price=last_price,
+            tick_size=tick_size,
+            pressure=pressure,
+            bid_wall=bid_wall,
+            ask_wall=ask_wall,
+            bid_opposite_wall_blocks=bid_opposite_blocks,
+            ask_opposite_wall_blocks=ask_opposite_blocks,
+            available_symbols=self._desired_symbols,
+            feed_status=context.feed_monitor.snapshot(),
+            volume_ratio=context.volume_ratio,
+            volume_spike=context.volume_spike,
+        )
 
     def _refresh_symbol_scan(self, timestamp: Optional[datetime] = None, *, force: bool = False) -> None:
         timestamp = timestamp or get_current_time()
@@ -825,119 +795,6 @@ class Application:
         initialize_account(context.trading_adapter)
         self._update_context_balance(context)
         self._initialize_order_book(context)
-        depth_name = f"{symbol.lower()}-depth-pump"
-        trade_name = f"{symbol.lower()}-trade-pump"
-        ticker_name = f"{symbol.lower()}-ticker-pump"
-
-        def handle_depth_event(event: StreamEvent[DepthStreamData]) -> None:
-            if event.type is StreamEventType.HEARTBEAT:
-                return
-            if event.type is StreamEventType.DATA:
-                update = cast(OrderBookUpdate, event.data)
-                if update is None:
-                    return
-                with context.lock:
-                    self._apply_update(context, update)
-                    context.depth_dirty = True
-                return
-            if event.type is StreamEventType.SNAPSHOT:
-                snapshot = cast(OrderBookSnapshot, event.data)
-                if snapshot is None:
-                    return
-                with context.lock:
-                    self._apply_snapshot(context, snapshot)
-                    context.feed_monitor.clear()
-                    context.depth_dirty = True
-                return
-            if event.type is StreamEventType.RESYNC and event.reason is not None:
-                with context.lock:
-                    context.feed_monitor.flag(event.reason)
-                    context.last_update_id = None
-                    context.order_book_updated_at = None
-                    context.depth_resync_flag = True
-                    context.depth_resync_reason = event.reason
-                    context.depth_resync_details = event.details
-                    context.depth_resync_timestamp = event.timestamp
-                return
-
-        def handle_trade_event(event: StreamEvent[Trade]) -> None:
-            if event.type is StreamEventType.HEARTBEAT:
-                return
-            if event.type is StreamEventType.DATA:
-                trade = cast(Trade, event.data)
-                if trade is None:
-                    return
-                trade_time = trade.executed_at
-                now = get_current_time()
-                with context.lock:
-                    context.trade_updated_at = trade_time
-                    context.last_trade_price = trade.price
-                    if self._is_data_fresh(trade_time, now):
-                        _, _, ratio, ready = context.volume_tracker.observe(
-                            trade_time, trade.price, trade.quantity
-                        )
-                        context.volume_ratio = ratio
-                        context.volume_spike = (
-                            ready and ratio >= CONFIG.general.vol_spike_mult
-                        )
-                    else:
-                        context.volume_ratio = 0.0
-                        context.volume_spike = False
-                    context.trade_dirty = True
-                return
-            if event.type is StreamEventType.RESYNC and event.reason is not None:
-                with context.lock:
-                    context.trade_resync_flag = True
-                    context.trade_resync_reason = event.reason
-                    context.trade_resync_details = event.details
-                    context.trade_resync_timestamp = event.timestamp
-                    context.trade_updated_at = None
-                    context.volume_ratio = 0.0
-                    context.volume_spike = False
-                return
-
-        def handle_ticker_event(event: StreamEvent[BestBidAsk]) -> None:
-            if event.type is StreamEventType.HEARTBEAT:
-                return
-            if event.type is StreamEventType.DATA:
-                ticker = cast(BestBidAsk, event.data)
-                if ticker is None:
-                    return
-                with context.lock:
-                    context.best_bid = ticker.bid_price
-                    context.best_ask = ticker.ask_price
-                    context.ticker_updated_at = ticker.event_time
-                    context.ticker_dirty = True
-                return
-            if event.type is StreamEventType.RESYNC and event.reason is not None:
-                with context.lock:
-                    context.ticker_resync_flag = True
-                    context.ticker_resync_reason = event.reason
-                    context.ticker_resync_details = event.details
-                    context.ticker_resync_timestamp = event.timestamp
-                    context.best_bid = None
-                    context.best_ask = None
-                    context.ticker_updated_at = None
-                return
-
-        context.depth_pump = StreamPump(
-            context.depth_subscription,
-            handle_depth_event,
-            name=depth_name,
-        )
-        context.trade_pump = StreamPump(
-            context.trade_subscription,
-            handle_trade_event,
-            name=trade_name,
-        )
-        context.ticker_pump = StreamPump(
-            context.ticker_subscription,
-            handle_ticker_event,
-            name=ticker_name,
-        )
-        context.depth_pump.start()
-        context.trade_pump.start()
-        context.ticker_pump.start()
         self._refresh_context_funding(context, force=True)
         return context
 
