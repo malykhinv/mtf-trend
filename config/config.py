@@ -12,6 +12,7 @@ from config.models import (
     MarginMode,
     OdrSettings,
     PositionSettings,
+    ProfileStreamWeights,
     ProfileWeights,
     StopTrigger,
     TelegramSettings,
@@ -86,11 +87,25 @@ CONFIG: Final[Config] = Config(
         silent=False,
         uptick_cooldown_min=5,
     ),
-    profile_weights=ProfileWeights(
-        top=1.0,
-        alt=0.5,
-        listing=0.8,
-        auto=0.3,
+    profile_stream_weights=ProfileStreamWeights(
+        depth=ProfileWeights(
+            top=1.0,
+            alt=0.5,
+            listing=0.8,
+            auto=0.3,
+        ),
+        trades=ProfileWeights(
+            top=1.0,
+            alt=0.5,
+            listing=0.8,
+            auto=0.3,
+        ),
+        book_ticker=ProfileWeights(
+            top=1.0,
+            alt=0.5,
+            listing=0.8,
+            auto=0.3,
+        ),
     ),
 )
 

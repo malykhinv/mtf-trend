@@ -406,6 +406,11 @@ class _BinanceStreamSession:
             return float("inf")
         return float(max(self._usable_capacity - len(self._consumers), 0))
 
+    def available_symbols(self) -> float:
+        if self._usable_capacity <= 0:
+            return float("inf")
+        return float(max(self._usable_capacity - len(self._consumers), 0))
+
     def register_consumer(
         self,
         consumer: _StreamConsumer[Any],
@@ -981,24 +986,37 @@ class BinanceSymbolStreams:
 class BinanceExchangeData:
     """A pragmatic placeholder implementation of the data interface."""
 
+    _PROFILE_STREAM_WEIGHTS = CONFIG.profile_stream_weights
     PROFILE_WEIGHTS: Dict[str, Dict[str, float]] = {
         "depth": {
-            TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
-            TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
-            TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
-            TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
+            TradingProfile.TOP.value: float(_PROFILE_STREAM_WEIGHTS.depth.top),
+            TradingProfile.LISTING.value: float(
+                _PROFILE_STREAM_WEIGHTS.depth.listing
+            ),
+            TradingProfile.ALT.value: float(_PROFILE_STREAM_WEIGHTS.depth.alt),
+            TradingProfile.AUTO.value: float(_PROFILE_STREAM_WEIGHTS.depth.auto),
         },
         "trades": {
-            TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
-            TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
-            TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
-            TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
+            TradingProfile.TOP.value: float(_PROFILE_STREAM_WEIGHTS.trades.top),
+            TradingProfile.LISTING.value: float(
+                _PROFILE_STREAM_WEIGHTS.trades.listing
+            ),
+            TradingProfile.ALT.value: float(_PROFILE_STREAM_WEIGHTS.trades.alt),
+            TradingProfile.AUTO.value: float(_PROFILE_STREAM_WEIGHTS.trades.auto),
         },
         "book_ticker": {
-            TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
-            TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
-            TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
-            TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
+            TradingProfile.TOP.value: float(
+                _PROFILE_STREAM_WEIGHTS.book_ticker.top
+            ),
+            TradingProfile.LISTING.value: float(
+                _PROFILE_STREAM_WEIGHTS.book_ticker.listing
+            ),
+            TradingProfile.ALT.value: float(
+                _PROFILE_STREAM_WEIGHTS.book_ticker.alt
+            ),
+            TradingProfile.AUTO.value: float(
+                _PROFILE_STREAM_WEIGHTS.book_ticker.auto
+            ),
         },
     }
 
@@ -1552,12 +1570,21 @@ class BinanceStreamManager:
             if exchange_data is not None:
                 exchange_data.set_symbol_profile(normalized, profile)
 
-    def update_weights(self, weights: Mapping[str, float]) -> None:
-        for symbol, weight in weights.items():
+    def update_weights(self, weights: Mapping[str, Mapping[str, float] | float]) -> None:
+        for symbol, weight_map in weights.items():
             normalized = symbol.upper()
+            if not normalized:
+                continue
+            if isinstance(weight_map, Mapping):
+                for stream, value in weight_map.items():
+                    if stream not in self._limit_map:
+                        continue
+                    stream_weights = self._weights.setdefault(stream, {})
+                    stream_weights[normalized] = float(value)
+                continue
             for stream in self._limit_map:
                 stream_weights = self._weights.setdefault(stream, {})
-                stream_weights[normalized] = float(weight)
+                stream_weights[normalized] = float(weight_map)
 
     def update_exchange_info(self, info: Mapping[str, Mapping[str, object]]) -> None:
         if not info:
@@ -1579,12 +1606,22 @@ class BinanceStreamManager:
     def plan_subscriptions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
         if not symbols:
             return symbols
-        available_by_stream = {
-            stream: self._available_for_stream(stream)
+        available_weight_by_stream = {
+            stream: self._available_weight_for_stream(stream)
+            for stream in self._limit_map
+        }
+        available_symbols_by_stream = {
+            stream: self._available_symbol_capacity(stream)
             for stream in self._limit_map
         }
         has_capacity = any(
-            math.isinf(value) or value > 0.0 for value in available_by_stream.values()
+            (math.isinf(available_weight_by_stream[stream])
+            or available_weight_by_stream[stream] > 0.0)
+            and (
+                math.isinf(available_symbols_by_stream[stream])
+                or available_symbols_by_stream[stream] > 0.0
+            )
+            for stream in self._limit_map
         )
         if not has_capacity:
             return tuple()
@@ -1607,24 +1644,37 @@ class BinanceStreamManager:
                 for stream in self._limit_map
             }
             if all(
-                math.isinf(available_by_stream[stream])
-                or available_by_stream[stream] >= weight
+                (
+                    math.isinf(available_weight_by_stream[stream])
+                    or available_weight_by_stream[stream] >= weight
+                )
+                and (
+                    math.isinf(available_symbols_by_stream[stream])
+                    or available_symbols_by_stream[stream] >= 1.0
+                )
                 for stream, weight in requirements.items()
             ):
                 planned.append(normalized)
                 for stream, weight in requirements.items():
-                    if math.isinf(available_by_stream[stream]):
+                    if not math.isinf(available_symbols_by_stream[stream]):
+                        available_symbols_by_stream[stream] = max(
+                            available_symbols_by_stream[stream] - 1.0,
+                            0.0,
+                        )
+                    if math.isinf(available_weight_by_stream[stream]):
                         continue
                     if weight <= 0.0:
                         continue
-                    available_by_stream[stream] = max(
-                        available_by_stream[stream] - weight,
+                    available_weight_by_stream[stream] = max(
+                        available_weight_by_stream[stream] - weight,
                         0.0,
                     )
         return tuple(planned)
 
     def _available_slots(self) -> float:
-        capacities = [self._available_for_stream(name) for name in self._limit_map]
+        capacities = [
+            self._available_weight_for_stream(name) for name in self._limit_map
+        ]
         if not capacities:
             return 0.0
         finite = [value for value in capacities if not math.isinf(value)]
@@ -1632,7 +1682,7 @@ class BinanceStreamManager:
             return float("inf")
         return max(min(finite), 0.0)
 
-    def _available_for_stream(self, stream: str) -> float:
+    def _available_weight_for_stream(self, stream: str) -> float:
         sessions = self._sessions.get(stream, [])
         if not sessions:
             return self._session_weight_capacity(stream)
@@ -1646,6 +1696,24 @@ class BinanceStreamManager:
         if math.isinf(additional):
             return float("inf")
         return total + additional
+
+    def _available_symbol_capacity(self, stream: str) -> float:
+        sessions = self._sessions.get(stream, [])
+        if not sessions:
+            capacity = self._session_capacity(stream)
+            if capacity <= 0:
+                return float("inf")
+            return float(capacity)
+        total = 0.0
+        for session in sessions:
+            capacity = session.available_symbols()
+            if math.isinf(capacity):
+                return float("inf")
+            total += capacity
+        additional = self._session_capacity(stream)
+        if additional <= 0:
+            return float("inf")
+        return total + float(additional)
 
     def _session_capacity(self, stream: str) -> int:
         limit = self._limit_map[stream]
