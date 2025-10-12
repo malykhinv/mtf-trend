@@ -33,7 +33,7 @@ from domain.models import Exchange, OrderBookLevel, OrderBookSnapshot, OrderBook
 from config.models.trading_profile import TradingProfile
 
 from .events import ResyncReason, StreamEvent, StreamEventType
-from .limits import StreamLimits, load_stream_limits
+from .limits import StreamLimit, StreamLimits, load_stream_limits
 from .stream_buffer import StreamBuffer
 
 try:  # pragma: no cover - imported lazily for environments without websockets
@@ -109,6 +109,11 @@ class StreamSubscription(Generic[T]):
         self._stopped = True
         if self._stop is not None:
             self._stop()
+
+    def assign_stop(self, stop_callback: Optional[Callable[[], None]]) -> None:
+        """Assign or replace the stop callback used by the subscription."""
+
+        self._stop = stop_callback
 
 
 class StreamLimitError(RuntimeError):
@@ -206,6 +211,427 @@ class _CommandBudget:
                 self._reserve_used -= 1
             return True
 
+
+@dataclass(slots=True)
+class _StreamConsumer(Generic[T]):
+    """In-memory handler used by shared sessions to deliver stream events."""
+
+    stream: str
+    symbol: str
+    params: Tuple[str, ...]
+    buffer: StreamBuffer[T]
+    parser: Callable[[Dict[str, Any]], Iterable[StreamEvent[T]]]
+    metrics: _StreamMetrics
+    log: LogSink
+    silence_timeout_ms: int
+    snapshot_factory: SnapshotFactory[T] = None
+
+    def __post_init__(self) -> None:
+        self._delay_threshold_ms = max(float(self.silence_timeout_ms) / 4.0, 250.0)
+
+    def process(self, payload: Dict[str, Any]) -> bool:
+        """Process incoming payload and push parsed events to the buffer.
+
+        Returns ``True`` when a resubscribe should be scheduled for the consumer.
+        """
+
+        try:
+            events = list(self.parser(payload))
+        except _StreamValidationError as exc:
+            needs_resubscribe = self.emit_resync(
+                exc.reason,
+                exc.details,
+                enqueue_resubscribe=exc.resubscribe,
+            )
+            self.push_snapshot()
+            return needs_resubscribe
+        for event in events:
+            self._record_latency(event.timestamp)
+            self._push_event(event)
+        return False
+
+    def handle_timeout(self) -> bool:
+        details = f"{self.stream} silence timeout for {self.symbol}"
+        resubscribe = self.emit_resync(
+            ResyncReason.SILENCE_TIMEOUT,
+            details,
+            enqueue_resubscribe=True,
+        )
+        self.push_snapshot()
+        return resubscribe
+
+    def handle_ack(self, method: str, params: Tuple[str, ...], error: Any) -> bool:
+        command = method.upper()
+        if error is not None:
+            details = f"command error for {params}: {error}"
+            return self.emit_resync(
+                ResyncReason.CONNECTION_LOST,
+                details,
+                enqueue_resubscribe=True,
+            )
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        details = f"{command.lower()} confirmed for {' '.join(params)}"
+        event = StreamEvent(StreamEventType.DATA, None, now, details=details)
+        self._push_event(event)
+        return False
+
+    def emit_resync(
+        self,
+        reason: ResyncReason,
+        details: str,
+        *,
+        enqueue_resubscribe: bool = True,
+    ) -> bool:
+        self.metrics.record_resync(reason)
+        try:
+            self.log(f"[{self.stream}:{self.symbol}] {details} ({reason.name})")
+        except Exception:  # pragma: no cover - logging failures ignored
+            pass
+        event = StreamEvent(
+            StreamEventType.RESYNC,
+            None,
+            datetime.now(tz=CURRENT_TIMEZONE),
+            reason=reason,
+            details=details,
+        )
+        self._push_event(event)
+        return enqueue_resubscribe
+
+    def push_snapshot(self) -> None:
+        if self.snapshot_factory is None:
+            return
+        snapshot_event = self.snapshot_factory()
+        if snapshot_event is None:
+            return
+        self._push_event(snapshot_event)
+
+    def _record_latency(self, timestamp: datetime) -> None:
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        latency_ms = max((now - timestamp).total_seconds() * 1000.0, 0.0)
+        self.metrics.record_latency(latency_ms, self._delay_threshold_ms)
+
+    def _push_event(self, event: StreamEvent[T]) -> None:
+        appended = self.buffer.append(event)
+        if appended:
+            return
+        self.metrics.record_resync(ResyncReason.QUEUE_OVERFLOW)
+        overflow = StreamEvent(
+            StreamEventType.RESYNC,
+            None,
+            datetime.now(tz=CURRENT_TIMEZONE),
+            reason=ResyncReason.QUEUE_OVERFLOW,
+            details=f"buffer overflow on {self.stream} stream",
+        )
+        self.buffer.append(overflow)
+
+
+@dataclass(slots=True)
+class _SessionCommand(Generic[T]):
+    method: str
+    params: Tuple[str, ...]
+    priority: float
+    consumer: _StreamConsumer[T]
+    use_reserve: bool = False
+
+
+@dataclass(slots=True)
+class _StreamRegistration(Generic[T]):
+    consumer: _StreamConsumer[T]
+    subscription: StreamSubscription[T]
+
+
+class _BinanceStreamSession:
+    """Shared websocket session that fans out events to registered consumers."""
+
+    _BASE_ENDPOINT = "wss://fstream.binance.com/stream"
+
+    def __init__(
+        self,
+        *,
+        stream: str,
+        limit: "StreamLimit",
+        silence_timeout_ms: int,
+        log_writer: LogSink,
+    ) -> None:
+        self._stream = stream
+        self._limit = limit
+        self._log = log_writer
+        self._silence_timeout_s = max(float(silence_timeout_ms) / 1000.0, 1.0)
+        self._budget = _CommandBudget(limit)
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"binance-session-{stream}",
+            daemon=True,
+        )
+        self._command_queue: list[tuple[float, int, _SessionCommand[Any]]] = []
+        self._command_lock = threading.Lock()
+        self._sequence = 0
+        self._inflight: Dict[int, _SessionCommand[Any]] = {}
+        self._next_command_id = 1
+        self._consumers: Dict[str, _StreamConsumer[Any]] = {}
+        self._symbol_params: Dict[str, str] = {}
+        self._usable_capacity = self._compute_capacity(limit)
+        self._last_ping = 0.0
+
+    @staticmethod
+    def _compute_capacity(limit: "StreamLimit") -> int:
+        if limit.max_symbols <= 0:
+            return 0
+        reserve = max(0, limit.resubscribe_buffer)
+        usable = max(limit.max_symbols - reserve, 0)
+        return usable if usable > 0 else limit.max_symbols
+
+    def start(self) -> None:
+        if websockets is None:
+            return
+        if not self._thread.is_alive():
+            self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    @property
+    def max_capacity(self) -> int:
+        return self._usable_capacity
+
+    def available_capacity(self) -> int:
+        if self._usable_capacity <= 0:
+            return 1_000_000
+        return max(self._usable_capacity - len(self._consumers), 0)
+
+    def register_consumer(
+        self,
+        consumer: _StreamConsumer[Any],
+        *,
+        priority: float,
+        use_reserve: bool = False,
+    ) -> None:
+        params = consumer.params
+        with self._command_lock:
+            for param in params:
+                if param in self._consumers:
+                    continue
+                if self._usable_capacity > 0 and len(self._consumers) >= self._usable_capacity:
+                    raise StreamLimitError("max stream capacity reached")
+                self._consumers[param] = consumer
+                self._symbol_params[consumer.symbol] = param
+                command = _SessionCommand(
+                    "SUBSCRIBE",
+                    (param,),
+                    priority,
+                    consumer,
+                    use_reserve=use_reserve,
+                )
+                self._enqueue_command(command)
+
+    def unregister_consumer(
+        self,
+        consumer: _StreamConsumer[Any],
+        *,
+        priority: float,
+    ) -> None:
+        params = tuple(param for param, entry in self._consumers.items() if entry is consumer)
+        if not params:
+            return
+        with self._command_lock:
+            for param in params:
+                command = _SessionCommand("UNSUBSCRIBE", (param,), priority, consumer)
+                self._enqueue_command(command)
+
+    def resubscribe_consumer(
+        self,
+        consumer: _StreamConsumer[Any],
+        *,
+        priority: float,
+    ) -> None:
+        params = tuple(param for param, entry in self._consumers.items() if entry is consumer)
+        if not params:
+            return
+        with self._command_lock:
+            for param in params:
+                command = _SessionCommand(
+                    "SUBSCRIBE",
+                    (param,),
+                    priority,
+                    consumer,
+                    use_reserve=True,
+                )
+                self._enqueue_command(command, allow_duplicates=True)
+
+    def _enqueue_command(
+        self,
+        command: _SessionCommand[Any],
+        *,
+        allow_duplicates: bool = False,
+    ) -> None:
+        if not allow_duplicates:
+            for _, _, queued in self._command_queue:
+                if (
+                    queued.method == command.method
+                    and queued.params == command.params
+                ):
+                    return
+            for inflight in self._inflight.values():
+                if (
+                    inflight.method == command.method
+                    and inflight.params == command.params
+                ):
+                    return
+        score = -float(command.priority)
+        self._sequence += 1
+        self._command_queue.append((score, self._sequence, command))
+
+    async def _flush_commands(self, ws: WebSocketClientProtocol) -> None:
+        while self._command_queue and not self._stop_event.is_set():
+            self._command_queue.sort()
+            score, seq, command = self._command_queue[0]
+            budget_priority = "resync" if command.use_reserve else "normal"
+            if not self._budget.consume(priority=budget_priority):
+                break
+            self._command_queue.pop(0)
+            command_id = self._next_command_id
+            self._next_command_id += 1
+            payload = {
+                "id": command_id,
+                "method": command.method,
+                "params": list(command.params),
+            }
+            await ws.send(json.dumps(payload))
+            self._inflight[command_id] = command
+
+    async def _maybe_send_ping(self, ws: WebSocketClientProtocol) -> None:
+        now = time.monotonic()
+        interval = max(self._silence_timeout_s / 2.0, 10.0)
+        if now - self._last_ping < interval:
+            return
+        try:
+            await ws.ping()
+            self._last_ping = now
+        except Exception as exc:
+            raise RuntimeError(f"ping failed: {exc}")
+
+    async def _recv_loop(self, ws: WebSocketClientProtocol) -> None:
+        while not self._stop_event.is_set():
+            await self._flush_commands(ws)
+            await self._maybe_send_ping(ws)
+            try:
+                raw = await asyncio.wait_for(ws.recv(), timeout=self._silence_timeout_s)
+            except asyncio.TimeoutError:
+                self._handle_timeout()
+                continue
+            payload = self._decode_payload(raw)
+            if payload is None:
+                continue
+            if "id" in payload and "result" in payload:
+                self._handle_ack(payload)
+                continue
+            data = payload.get("data", payload)
+            if not isinstance(data, dict):
+                continue
+            consumer = self._resolve_consumer(payload, data)
+            if consumer is None:
+                continue
+            needs_resubscribe = consumer.process(data)
+            if needs_resubscribe:
+                self.resubscribe_consumer(consumer, priority=consumer.metrics.messages + 1.0)
+
+    def _handle_timeout(self) -> None:
+        consumers = list(dict.fromkeys(self._consumers.values()))
+        for consumer in consumers:
+            if consumer.handle_timeout():
+                self.resubscribe_consumer(consumer, priority=float("inf"))
+
+    def _decode_payload(self, raw: Any) -> Optional[Dict[str, Any]]:
+        if isinstance(raw, (bytes, bytearray)):
+            try:
+                raw = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
+        if isinstance(raw, str):
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                return None
+            if isinstance(payload, dict):
+                return payload
+            return None
+        if isinstance(raw, dict):
+            return raw
+        return None
+
+    def _resolve_consumer(
+        self,
+        envelope: Mapping[str, Any],
+        data: Mapping[str, Any],
+    ) -> Optional[_StreamConsumer[Any]]:
+        stream_id = envelope.get("stream")
+        if isinstance(stream_id, str):
+            return self._consumers.get(stream_id)
+        symbol = data.get("s")
+        if isinstance(symbol, str):
+            param = self._symbol_params.get(symbol.upper())
+            if param is not None:
+                return self._consumers.get(param)
+        return None
+
+    def _handle_ack(self, payload: Dict[str, Any]) -> None:
+        command_id = int(payload.get("id", -1))
+        command = self._inflight.pop(command_id, None)
+        if command is None:
+            return
+        error = payload.get("error")
+        consumer = command.consumer
+        needs_resubscribe = consumer.handle_ack(command.method, command.params, error)
+        if command.method == "UNSUBSCRIBE" and error is None:
+            for param in command.params:
+                self._consumers.pop(param, None)
+            if consumer.symbol in self._symbol_params:
+                self._symbol_params.pop(consumer.symbol, None)
+        if needs_resubscribe:
+            self.resubscribe_consumer(consumer, priority=float("inf"))
+
+    def _run(self) -> None:
+        if websockets is None:  # pragma: no cover - network optional
+            return
+        backoff = 1.0
+        while not self._stop_event.is_set():
+            try:
+                asyncio.run(self._main())
+                backoff = 1.0
+            except Exception as exc:  # pragma: no cover - connection safety
+                if self._stop_event.is_set():
+                    break
+                try:
+                    self._log(f"[{self._stream}:session] connection lost: {exc}")
+                except Exception:  # pragma: no cover - logging safety
+                    pass
+                time.sleep(backoff)
+                backoff = min(backoff * 2.0, 30.0)
+
+    async def _main(self) -> None:
+        self._last_ping = time.monotonic()
+        async with websockets.connect(  # type: ignore[union-attr]
+            self._BASE_ENDPOINT,
+            ping_interval=None,
+            close_timeout=5,
+        ) as ws:
+            await self._on_connected(ws)
+            await self._recv_loop(ws)
+
+    async def _on_connected(self, ws: WebSocketClientProtocol) -> None:
+        consumers = list(dict.fromkeys(self._consumers.values()))
+        for consumer in consumers:
+            for param in consumer.params:
+                command = _SessionCommand(
+                    "SUBSCRIBE",
+                    (param,),
+                    priority=float("inf"),
+                    consumer=consumer,
+                    use_reserve=True,
+                )
+                self._enqueue_command(command, allow_duplicates=True)
+        await self._flush_commands(ws)
 
 class _StreamValidationError(RuntimeError):
     __slots__ = ("reason", "details", "resubscribe")
@@ -670,10 +1096,19 @@ class BinanceExchangeData:
     def fetch_next_funding_time(self) -> Optional[datetime]:
         return datetime.now(tz=CURRENT_TIMEZONE) + timedelta(hours=8)
 
-    def stream_depth(self) -> StreamSubscription[DepthStreamData]:
-        buffer: StreamBuffer[DepthStreamData] = StreamBuffer()
-        metrics = self._metrics["depth"]
-        budget = self._command_budgets["depth"]
+    def _stream_iterator(
+        self, buffer: StreamBuffer[T]
+    ) -> Iterator[StreamEvent[T]]:
+        interval = self._loop_interval / 1000.0
+        while True:
+            pending = buffer.drain_pending()
+            if pending:
+                for event in pending:
+                    yield event
+                continue
+            time.sleep(interval)
+
+    def _register_depth_stream(self) -> _StreamRegistration[DepthStreamData]:
         symbol_stream = f"{self._symbol.lower()}@depth@100ms"
         last_final_id: Optional[int] = None
 
@@ -715,40 +1150,26 @@ class BinanceExchangeData:
             last_final_id = final_id
             return (StreamEvent(StreamEventType.DATA, update, event_time),)
 
-        first_snapshot = snapshot_factory()
-        if first_snapshot is not None:
-            buffer.append(first_snapshot)
-
-        worker = _BinanceStreamWorker[DepthStreamData](
+        buffer: StreamBuffer[DepthStreamData] = StreamBuffer()
+        consumer = _StreamConsumer(
             stream="depth",
             symbol=self._symbol,
             params=(symbol_stream,),
             buffer=buffer,
             parser=parser,
-            metrics=metrics,
+            metrics=self._metrics["depth"],
+            log=self._log_writer,
             silence_timeout_ms=self._silence_timeout,
-            log_writer=self._log_writer,
-            budget=budget,
             snapshot_factory=snapshot_factory,
         )
-        worker.start()
+        consumer.push_snapshot()
+        subscription = StreamSubscription(
+            self._stream_iterator(buffer),
+            buffer,
+        )
+        return _StreamRegistration(consumer=consumer, subscription=subscription)
 
-        def generator() -> Iterator[StreamEvent[DepthStreamData]]:
-            interval = self._loop_interval / 1000.0
-            while True:
-                pending = buffer.drain_pending()
-                if pending:
-                    for event in pending:
-                        yield event
-                    continue
-                time.sleep(interval)
-
-        return StreamSubscription(generator(), buffer, worker.stop)
-
-    def stream_trades(self) -> StreamSubscription[Trade]:
-        buffer: StreamBuffer[Trade] = StreamBuffer()
-        metrics = self._metrics["trades"]
-        budget = self._command_budgets["trades"]
+    def _register_trades_stream(self) -> _StreamRegistration[Trade]:
         symbol_stream = f"{self._symbol.lower()}@aggTrade"
         last_trade_id: Optional[int] = None
 
@@ -759,144 +1180,113 @@ class BinanceExchangeData:
                 return ()
             try:
                 trade_id = int(message.get("a"))
-                price = float(message.get("p", 0.0))
-                quantity = float(message.get("q", 0.0))
             except (TypeError, ValueError):
                 raise _StreamValidationError(
                     ResyncReason.SEQUENCE_GAP,
-                    "trade payload invalid",
+                    "trade id missing",
                 )
             if last_trade_id is not None and trade_id <= last_trade_id:
                 raise _StreamValidationError(
                     ResyncReason.SEQUENCE_GAP,
-                    f"trade id regression: {trade_id} <= {last_trade_id}",
+                    "out-of-order trade sequence",
                 )
-            if quantity <= 0 or not math.isfinite(quantity):
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    f"trade quantity invalid: {quantity}",
-                )
-            if not math.isfinite(price) or price <= 0:
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    f"trade price invalid: {price}",
-                )
-            event_time = _milliseconds_to_datetime(message.get("T", message.get("E")))
-            side = Side.ASK if bool(message.get("m")) else Side.BID
+            price = _safe_float(message.get("p"), 0.0)
+            quantity = _safe_float(message.get("q"), 0.0)
+            event_time = _milliseconds_to_datetime(message.get("T"))
+            is_buyer_maker = bool(message.get("m", False))
+            side = Side.SELL if is_buyer_maker else Side.BUY
             trade = Trade(
-                trade_id=str(trade_id),
                 exchange=Exchange.BINANCE,
                 symbol=self._symbol,
-                executed_at=event_time,
+                trade_id=trade_id,
                 price=price,
                 quantity=quantity,
                 side=side,
+                trade_time=event_time,
             )
             last_trade_id = trade_id
             return (StreamEvent(StreamEventType.DATA, trade, event_time),)
 
-        worker = _BinanceStreamWorker[Trade](
+        buffer: StreamBuffer[Trade] = StreamBuffer()
+        consumer = _StreamConsumer(
             stream="trades",
             symbol=self._symbol,
             params=(symbol_stream,),
             buffer=buffer,
             parser=parser,
-            metrics=metrics,
+            metrics=self._metrics["trades"],
+            log=self._log_writer,
             silence_timeout_ms=self._silence_timeout,
-            log_writer=self._log_writer,
-            budget=budget,
         )
-        worker.start()
+        subscription = StreamSubscription(
+            self._stream_iterator(buffer),
+            buffer,
+        )
+        return _StreamRegistration(consumer=consumer, subscription=subscription)
 
-        def generator() -> Iterator[StreamEvent[Trade]]:
-            interval = self._loop_interval / 1000.0
-            while True:
-                pending = buffer.drain_pending()
-                if pending:
-                    for event in pending:
-                        yield event
-                    continue
-                time.sleep(interval)
-
-        return StreamSubscription(generator(), buffer, worker.stop)
-
-    def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
-        buffer: StreamBuffer[BestBidAsk] = StreamBuffer()
-        metrics = self._metrics["book_ticker"]
-        budget = self._command_budgets["book_ticker"]
+    def _register_ticker_stream(self) -> _StreamRegistration[BestBidAsk]:
         symbol_stream = f"{self._symbol.lower()}@bookTicker"
-        last_update_id: Optional[int] = None
 
         def parser(message: Dict[str, Any]) -> Iterable[StreamEvent[BestBidAsk]]:
-            nonlocal last_update_id
             event_type = str(message.get("e", "")).lower()
             if event_type != "bookticker":
                 return ()
-            try:
-                update_id = int(message.get("u", 0))
-                bid_price = float(message.get("b", 0.0))
-                bid_qty = float(message.get("B", 0.0))
-                ask_price = float(message.get("a", 0.0))
-                ask_qty = float(message.get("A", 0.0))
-            except (TypeError, ValueError):
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    "ticker payload invalid",
-                    resubscribe=False,
-                )
-            if last_update_id is not None and update_id <= last_update_id:
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    f"ticker id regression: {update_id} <= {last_update_id}",
-                    resubscribe=False,
-                )
-            if any(value < 0 for value in (bid_qty, ask_qty)):
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    "ticker volume negative",
-                    resubscribe=False,
-                )
-            if bid_price < 0 or ask_price < 0 or not math.isfinite(bid_price) or not math.isfinite(ask_price):
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    "ticker price invalid",
-                    resubscribe=False,
-                )
-            if bid_price > ask_price and ask_price > 0:
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    f"bid {bid_price} exceeds ask {ask_price}",
-                    resubscribe=False,
-                )
-            event_time = _milliseconds_to_datetime(message.get("E", message.get("T")))
-            best = BestBidAsk(bid=bid_price, ask=ask_price, timestamp=event_time)
-            last_update_id = update_id
-            return (StreamEvent(StreamEventType.DATA, best, event_time),)
+            best_bid = _safe_float(message.get("b", 0.0), 0.0)
+            best_ask = _safe_float(message.get("a", 0.0), 0.0)
+            event_time = _milliseconds_to_datetime(message.get("E"))
+            ticker = BestBidAsk(best_bid, best_ask, event_time)
+            return (StreamEvent(StreamEventType.DATA, ticker, event_time),)
 
-        worker = _BinanceStreamWorker[BestBidAsk](
+        buffer: StreamBuffer[BestBidAsk] = StreamBuffer()
+        consumer = _StreamConsumer(
             stream="book_ticker",
             symbol=self._symbol,
             params=(symbol_stream,),
             buffer=buffer,
             parser=parser,
-            metrics=metrics,
+            metrics=self._metrics["book_ticker"],
+            log=self._log_writer,
             silence_timeout_ms=self._silence_timeout,
-            log_writer=self._log_writer,
-            budget=budget,
         )
-        worker.start()
+        subscription = StreamSubscription(
+            self._stream_iterator(buffer),
+            buffer,
+        )
+        return _StreamRegistration(consumer=consumer, subscription=subscription)
 
-        def generator() -> Iterator[StreamEvent[BestBidAsk]]:
-            interval = self._loop_interval / 1000.0
-            while True:
-                pending = buffer.drain_pending()
-                if pending:
-                    for event in pending:
-                        yield event
-                    continue
-                time.sleep(interval)
+    def create_stream_bundle(
+        self,
+    ) -> tuple[
+        BinanceSymbolStreams,
+        Dict[str, _StreamRegistration[Any]],
+    ]:
+        depth_registration = self._register_depth_stream()
+        trades_registration = self._register_trades_stream()
+        ticker_registration = self._register_ticker_stream()
+        streams = BinanceSymbolStreams(
+            exchange_data=self,
+            depth=depth_registration.subscription,
+            trades=trades_registration.subscription,
+            ticker=ticker_registration.subscription,
+        )
+        registrations: Dict[str, _StreamRegistration[Any]] = {
+            "depth": depth_registration,
+            "trades": trades_registration,
+            "book_ticker": ticker_registration,
+        }
+        return streams, registrations
 
-        return StreamSubscription(generator(), buffer, worker.stop)
+    def stream_depth(self) -> StreamSubscription[DepthStreamData]:
+        streams, _ = self.create_stream_bundle()
+        return streams.depth
+
+    def stream_trades(self) -> StreamSubscription[Trade]:
+        streams, _ = self.create_stream_bundle()
+        return streams.trades
+
+    def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
+        streams, _ = self.create_stream_bundle()
+        return streams.ticker
 
     # ------------------------------------------------------------------
     def _parse_levels(
@@ -1075,51 +1465,34 @@ class BinanceStreamManager:
         self._api_key = api_key
         self._api_secret = api_secret
         self._limits = load_stream_limits()
+        self._limit_map: Dict[str, StreamLimit] = {
+            "depth": self._limits.depth,
+            "trades": self._limits.trades,
+            "book_ticker": self._limits.book_ticker,
+        }
         self._exchange_data: Dict[str, BinanceExchangeData] = {}
         self._streams: Dict[str, BinanceSymbolStreams] = {}
-        self._active: set[str] = set()
         self._profiles: Dict[str, TradingProfile] = {}
         self._weights: Dict[str, float] = {}
-        self._max_symbols = self._resolve_capacity()
-        self._reserve = self._resolve_reserve()
-        self._limiters = self._build_limiters(self._limits)
+        self._sessions: Dict[str, list[_BinanceStreamSession]] = {}
+        self._symbol_consumers: Dict[
+            str, Dict[str, tuple[_BinanceStreamSession, _StreamConsumer[Any]]]
+        ] = {}
         self._exchange_info_cache: Dict[str, Dict[str, object]] = {}
+        self._active: set[str] = set()
+        for name in self._limit_map:
+            session = self._create_session(name)
+            self._sessions[name] = [session]
 
-    @staticmethod
-    def _build_limiters(limits: StreamLimits) -> Dict[str, tuple[_RateLimiter, _RateLimiter]]:
-        return {
-            "depth": (
-                _RateLimiter(limits.depth.steady_per_min, timedelta(minutes=1)),
-                _RateLimiter(limits.depth.burst_per_5s, timedelta(seconds=5)),
-            ),
-            "trades": (
-                _RateLimiter(limits.trades.steady_per_min, timedelta(minutes=1)),
-                _RateLimiter(limits.trades.burst_per_5s, timedelta(seconds=5)),
-            ),
-            "book_ticker": (
-                _RateLimiter(limits.book_ticker.steady_per_min, timedelta(minutes=1)),
-                _RateLimiter(limits.book_ticker.burst_per_5s, timedelta(seconds=5)),
-            ),
-        }
-
-    def _resolve_capacity(self) -> int:
-        values = [
-            self._limits.depth.max_symbols,
-            self._limits.trades.max_symbols,
-            self._limits.book_ticker.max_symbols,
-        ]
-        positives = [value for value in values if value > 0]
-        if not positives:
-            return 0
-        return min(positives)
-
-    def _resolve_reserve(self) -> int:
-        values = [
-            self._limits.depth.resubscribe_buffer,
-            self._limits.trades.resubscribe_buffer,
-            self._limits.book_ticker.resubscribe_buffer,
-        ]
-        return max(values)
+    def _create_session(self, stream: str) -> _BinanceStreamSession:
+        session = _BinanceStreamSession(
+            stream=stream,
+            limit=self._limit_map[stream],
+            silence_timeout_ms=self._silence_timeout_ms,
+            log_writer=self._log_writer,
+        )
+        session.start()
+        return session
 
     def update_profiles(self, profiles: Mapping[str, TradingProfile]) -> None:
         for symbol, profile in profiles.items():
@@ -1154,7 +1527,7 @@ class BinanceStreamManager:
         if not symbols:
             return symbols
         available = self._available_slots()
-        if available == 0:
+        if available <= 0:
             return tuple()
         ordered = sorted(
             symbols,
@@ -1163,21 +1536,42 @@ class BinanceStreamManager:
         )
         planned: list[str] = []
         for symbol in ordered:
-            if symbol in self._active:
+            normalized = symbol.upper()
+            if normalized in self._active:
                 continue
             if available <= 0:
                 break
-            planned.append(symbol)
+            planned.append(normalized)
             available -= 1
         return tuple(planned)
 
     def _available_slots(self) -> int:
-        if self._max_symbols <= 0:
+        capacities = [
+            self._available_for_stream("depth"),
+            self._available_for_stream("trades"),
+            self._available_for_stream("book_ticker"),
+        ]
+        return max(min(capacities), 0)
+
+    def _available_for_stream(self, stream: str) -> int:
+        sessions = self._sessions.get(stream, [])
+        if not sessions:
+            return self._session_capacity(stream)
+        total = sum(session.available_capacity() for session in sessions)
+        capacity = self._session_capacity(stream)
+        if capacity <= 0:
             return 1_000_000
-        active = len(self._active)
-        reserve = min(self._reserve, self._max_symbols)
-        capacity = self._max_symbols - reserve - active
-        return max(capacity, 0)
+        # consider capacity of a potential additional session
+        total += capacity
+        return total
+
+    def _session_capacity(self, stream: str) -> int:
+        limit = self._limit_map[stream]
+        if limit.max_symbols <= 0:
+            return 1_000_000
+        reserve = max(0, limit.resubscribe_buffer)
+        usable = max(limit.max_symbols - reserve, 0)
+        return usable if usable > 0 else limit.max_symbols
 
     def _profile_weight(self, symbol: str) -> float:
         normalized = symbol.upper()
@@ -1187,33 +1581,48 @@ class BinanceStreamManager:
         profile = self._profiles.get(normalized, TradingProfile.AUTO)
         return float(BinanceExchangeData.PROFILE_WEIGHTS.get(profile.value, 0.0))
 
+    def _acquire_session(self, stream: str) -> _BinanceStreamSession:
+        sessions = self._sessions.setdefault(stream, [])
+        for session in sessions:
+            if session.available_capacity() > 0:
+                return session
+        session = self._create_session(stream)
+        sessions.append(session)
+        return session
+
     def subscribe(self, symbol: str) -> BinanceSymbolStreams:
         symbol = symbol.upper()
-        now = datetime.now(tz=timezone.utc)
-        self._ensure_capacity(symbol)
-        self._consume_limits(now)
-        exchange_data = self._exchange_data.get(symbol)
-        if exchange_data is None:
-            exchange_data = BinanceExchangeData(
-                symbol=symbol,
-                loop_interval_ms=self._loop_interval_ms,
-                silence_timeout_ms=self._silence_timeout_ms,
-                log_writer=self._log_writer,
-                api_key=self._api_key,
-                api_secret=self._api_secret,
-                exchange_info=self._exchange_info_cache,
-            )
-            self._exchange_data[symbol] = exchange_data
-            profile = self._profiles.get(symbol)
-            if profile is not None:
-                exchange_data.set_symbol_profile(symbol, profile)
-        streams = BinanceSymbolStreams(
-            exchange_data=exchange_data,
-            depth=exchange_data.stream_depth(),
-            trades=exchange_data.stream_trades(),
-            ticker=exchange_data.stream_book_ticker(),
-        )
+        existing = self._streams.get(symbol)
+        if existing is not None:
+            return existing
+        exchange_data = self.get_exchange_data(symbol)
+        streams, registrations = exchange_data.create_stream_bundle()
+        weight = max(self._profile_weight(symbol), 0.1)
+        assignments: Dict[str, tuple[_BinanceStreamSession, _StreamConsumer[Any]]] = {}
+        try:
+            for stream_name, registration in registrations.items():
+                session = self._acquire_session(stream_name)
+                try:
+                    session.register_consumer(
+                        registration.consumer,
+                        priority=weight,
+                    )
+                except StreamLimitError:
+                    session = self._acquire_session(stream_name)
+                    session.register_consumer(
+                        registration.consumer,
+                        priority=weight,
+                    )
+                assignments[stream_name] = (session, registration.consumer)
+        except Exception:
+            for session, consumer in assignments.values():
+                session.unregister_consumer(consumer, priority=weight)
+            raise
+        streams.depth.assign_stop(lambda s=symbol: self.unsubscribe(s))
+        streams.trades.assign_stop(lambda s=symbol: self.unsubscribe(s))
+        streams.ticker.assign_stop(lambda s=symbol: self.unsubscribe(s))
         self._streams[symbol] = streams
+        self._symbol_consumers[symbol] = assignments
         self._active.add(symbol)
         return streams
 
@@ -1238,49 +1647,29 @@ class BinanceStreamManager:
 
     def unsubscribe(self, symbol: str) -> None:
         symbol = symbol.upper()
-        now = datetime.now(tz=timezone.utc)
-        self._consume_limits(now)
+        assignments = self._symbol_consumers.pop(symbol, {})
+        weight = max(self._profile_weight(symbol), 0.1)
+        for stream_name, (session, consumer) in assignments.items():
+            session.unregister_consumer(consumer, priority=weight)
         self._streams.pop(symbol, None)
         self._active.discard(symbol)
 
     def resubscribe(self, symbol: str) -> BinanceSymbolStreams:
         symbol = symbol.upper()
-        now = datetime.now(tz=timezone.utc)
-        self._consume_limits(now)
-        exchange_data = self.get_exchange_data(symbol)
-        streams = BinanceSymbolStreams(
-            exchange_data=exchange_data,
-            depth=exchange_data.stream_depth(),
-            trades=exchange_data.stream_trades(),
-            ticker=exchange_data.stream_book_ticker(),
-        )
-        self._streams[symbol] = streams
-        self._active.add(symbol)
+        streams = self._streams.get(symbol)
+        if streams is None:
+            return self.subscribe(symbol)
+        assignments = self._symbol_consumers.get(symbol, {})
+        if not assignments:
+            return streams
+        weight = max(self._profile_weight(symbol), 1.0)
+        for session, consumer in assignments.values():
+            session.resubscribe_consumer(consumer, priority=weight)
         return streams
 
     def cancel(self, symbol: str) -> None:
-        """Release internal state without sending an unsubscribe command."""
         symbol = symbol.upper()
         self._streams.pop(symbol, None)
         self._active.discard(symbol)
-
-    def _ensure_capacity(self, symbol: str) -> None:
-        if self._max_symbols <= 0:
-            return
-        if symbol in self._active:
-            return
-        available = self._available_slots()
-        if available <= 0:
-            raise StreamLimitError("max stream capacity reached")
-
-    def _consume_limits(self, timestamp: datetime) -> None:
-        pending_limiters: list[_RateLimiter] = []
-        for limiters in self._limiters.values():
-            for limiter in limiters:
-                if not limiter.has_capacity(timestamp):
-                    raise StreamLimitError("stream command rate exceeded")
-                pending_limiters.append(limiter)
-        for limiter in pending_limiters:
-            limiter.commit(timestamp)
-
+        self._symbol_consumers.pop(symbol, None)
 
