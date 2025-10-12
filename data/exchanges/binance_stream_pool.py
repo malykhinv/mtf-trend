@@ -5,16 +5,11 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from queue import Empty, Queue
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from utils.async_websocket import AsyncWebSocketClient, WebSocketTimeoutError
 
 from .base import ExchangeLogger, ResyncReason, StreamBuffer
-from .stream_scheduler import (
-    CommandResult,
-    CommandRetryPolicy,
-    StreamCommandScheduler,
-)
 
 from config.stream_limits import (
     DEFAULT_BINANCE_STREAM_PROFILES,
@@ -28,17 +23,6 @@ class _Registration:
     on_message: Callable[[dict[str, Any]], None]
     on_error: Callable[[ResyncReason, str], None]
     weight: float
-
-
-@dataclass(slots=True)
-class _Binding:
-    symbol: str
-    buffer: StreamBuffer[Any]
-    on_message: Callable[[dict[str, Any]], None]
-    on_error: Callable[[ResyncReason, str], None]
-    weight: float
-    worker: "_CombinedStreamWorker"
-    release_wrapper: Callable[[], None]
 
 
 class _RateWindow:
@@ -153,7 +137,6 @@ class _CombinedStreamWorker:
         log_writer: Optional[Callable[[str], None]] = None,
         max_streams: int,
         command_profile: StreamLoadProfile,
-        on_degraded: Callable[["_CombinedStreamWorker", str, str], None],
     ) -> None:
         self._name = name
         self._ws_base = ws_base
@@ -167,17 +150,9 @@ class _CombinedStreamWorker:
         self._registrations: Dict[str, _Registration] = {}
         self._logger = ExchangeLogger(f"Binance pool:{name}", log_writer)
         self._command_queue: "Queue[tuple[str, str]]" = Queue()
+        self._next_request_id = 1
         self._command_limiter = _CommandRateLimiter(command_profile, self._logger, name)
         self._last_resubscribe: Dict[str, float] = {}
-        self._on_degraded = on_degraded
-        self._scheduler = StreamCommandScheduler(
-            logger=self._logger,
-            metrics_sink=self._publish_metric,
-        )
-        self._subscribe_retry = CommandRetryPolicy(max_attempts=4, delay_seconds=0.25, backoff_multiplier=2.0)
-        self._unsubscribe_retry = CommandRetryPolicy(max_attempts=3, delay_seconds=0.25, backoff_multiplier=1.5)
-        self._resubscribe_retry = CommandRetryPolicy(max_attempts=5, delay_seconds=0.5, backoff_multiplier=1.5)
-        self._property_retry = CommandRetryPolicy(max_attempts=3, delay_seconds=0.5, backoff_multiplier=2.0)
         self._thread = threading.Thread(
             target=self._run_thread,
             name=f"binance-pool-{name}",
@@ -187,41 +162,6 @@ class _CombinedStreamWorker:
 
     def _run_thread(self) -> None:
         asyncio.run(self._run())
-
-    def _publish_metric(self, name: str, payload: Mapping[str, Any]) -> None:
-        values = payload.get("values", {}) if isinstance(payload, Mapping) else {}
-        tags = payload.get("tags", {}) if isinstance(payload, Mapping) else {}
-        normalized_tags = {str(key): str(value) for key, value in tags.items()}
-        command_name = normalized_tags.get("command", "command")
-        latency = values.get("latency")
-        if latency is not None:
-            try:
-                numeric_latency = float(latency)
-            except (TypeError, ValueError):  # pragma: no cover - defensive
-                numeric_latency = 0.0
-            self._logger.metric(
-                f"{self._name}.{command_name}.latency",
-                numeric_latency,
-                tags=normalized_tags,
-            )
-        attempts = values.get("attempts")
-        if attempts is not None:
-            try:
-                numeric_attempts = float(attempts)
-            except (TypeError, ValueError):  # pragma: no cover - defensive
-                numeric_attempts = 0.0
-            self._logger.metric(
-                f"{self._name}.{command_name}.attempts",
-                numeric_attempts,
-                tags=normalized_tags,
-            )
-        error = values.get("error")
-        if error:
-            self._logger.log(
-                (
-                    "Binance {stream} stream: ошибка команды {command}: {error}"  # noqa: ISC003
-                ).format(stream=self._name, command=command_name, error=error)
-            )
 
     def register(
         self,
@@ -395,6 +335,12 @@ class _CombinedStreamWorker:
             except Exception:
                 pass
 
+    def _enqueue_all_symbols(self) -> None:
+        with self._lock:
+            symbols = tuple(self._registrations.keys())
+        for symbol in symbols:
+            self._command_queue.put(("subscribe", symbol))
+
     def _extract_symbol(self, payload: dict[str, Any]) -> Optional[str]:
         data = payload.get("data")
         symbol = None
@@ -418,218 +364,76 @@ class _CombinedStreamWorker:
     async def _throttle_if_needed(self) -> None:
         await self._command_limiter.throttle()
 
+    def _record_command_sent(self) -> None:
+        self._command_limiter.record()
+
     def _resubscribe_delay(self) -> float:
         return self._command_limiter.resubscribe_delay()
+
+    async def _send_command(self, client: AsyncWebSocketClient, method: str, params: list[Any]) -> None:
+        request_id = self._next_request_id
+        self._next_request_id += 1
+        payload = {"method": method, "params": params, "id": request_id}
+        await client.send_json(payload)
+
+    async def _send_set_combined(self, client: AsyncWebSocketClient) -> None:
+        try:
+            await self._send_command(client, "SET_PROPERTY", ["combined", True])
+        except Exception:
+            pass
 
     async def _process_commands(
         self,
         client: AsyncWebSocketClient,
         active_symbols: set[str],
     ) -> None:
-        resubscribe_offset = 0.0
         while True:
             try:
                 action, symbol = self._command_queue.get_nowait()
             except Empty:
                 break
             if action == "subscribe":
-                self._schedule_subscribe(symbol, active_symbols)
+                if self._get_registration(symbol) is None or symbol in active_symbols:
+                    continue
+                stream_name = self._stream_name(symbol)
+                try:
+                    await self._throttle_if_needed()
+                    await self._send_command(client, "SUBSCRIBE", [stream_name])
+                    self._record_command_sent()
+                except Exception:
+                    continue
+                active_symbols.add(symbol)
             elif action == "unsubscribe":
-                self._schedule_unsubscribe(symbol, active_symbols)
+                if symbol not in active_symbols:
+                    continue
+                stream_name = self._stream_name(symbol)
+                try:
+                    await self._throttle_if_needed()
+                    await self._send_command(client, "UNSUBSCRIBE", [stream_name])
+                    self._record_command_sent()
+                except Exception:
+                    pass
+                active_symbols.discard(symbol)
             elif action == "resubscribe":
-                self._schedule_resubscribe(symbol, active_symbols, resubscribe_offset)
-                resubscribe_offset += self._resubscribe_delay()
-        await self._scheduler.dispatch(
-            throttle=self._throttle_if_needed,
-            send=client.send_json,
-            after_send=lambda _: self._command_limiter.record(),
-        )
-
-    def _schedule_subscribe(self, symbol: str, active_symbols: set[str]) -> None:
-        normalized = symbol.upper()
-        if self._get_registration(normalized) is None or normalized in active_symbols:
-            return
-        stream_name = self._stream_name(normalized)
-        self._scheduler.schedule(
-            "SUBSCRIBE",
-            [stream_name],
-            timeout=self._ws_timeout,
-            retry_policy=self._subscribe_retry,
-            metadata={"type": "subscribe", "symbols": (normalized,)},
-        )
-
-    def _schedule_unsubscribe(self, symbol: str, active_symbols: set[str]) -> None:
-        normalized = symbol.upper()
-        if normalized not in active_symbols:
-            return
-        stream_name = self._stream_name(normalized)
-        self._scheduler.schedule(
-            "UNSUBSCRIBE",
-            [stream_name],
-            timeout=self._ws_timeout,
-            retry_policy=self._unsubscribe_retry,
-            metadata={"type": "unsubscribe", "symbols": (normalized,)},
-        )
-
-    def _schedule_resubscribe(
-        self,
-        symbol: str,
-        active_symbols: set[str],
-        offset: float,
-    ) -> None:
-        normalized = symbol.upper()
-        if self._get_registration(normalized) is None:
-            return
-        stream_name = self._stream_name(normalized)
-        if normalized in active_symbols:
-            self._scheduler.schedule(
-                "UNSUBSCRIBE",
-                [stream_name],
-                timeout=self._ws_timeout,
-                retry_policy=self._unsubscribe_retry,
-                metadata={"type": "resubscribe", "phase": "unsubscribe", "symbols": (normalized,)},
-            )
-            active_symbols.discard(normalized)
-        delay = offset + self._resubscribe_delay()
-        self._scheduler.schedule(
-            "SUBSCRIBE",
-            [stream_name],
-            timeout=self._ws_timeout,
-            retry_policy=self._resubscribe_retry,
-            metadata={"type": "resubscribe", "phase": "subscribe", "symbols": (normalized,)},
-            delay=delay,
-        )
-
-    def _prime_connection(self, symbols: Iterable[str]) -> None:
-        streams: list[str] = []
-        metadata_symbols: list[str] = []
-        for symbol in symbols:
-            normalized = symbol.upper()
-            if self._get_registration(normalized) is None:
-                continue
-            streams.append(self._stream_name(normalized))
-            metadata_symbols.append(normalized)
-        if not streams:
-            return
-        self._scheduler.schedule(
-            "SET_PROPERTY",
-            ["combined", True],
-            timeout=self._ws_timeout,
-            retry_policy=self._property_retry,
-            metadata={"type": "set_property", "symbols": ()},
-        )
-        self._scheduler.schedule(
-            "SUBSCRIBE",
-            streams,
-            timeout=self._ws_timeout,
-            retry_policy=self._subscribe_retry,
-            metadata={"type": "subscribe", "phase": "initial", "symbols": tuple(metadata_symbols)},
-        )
-
-    def _metadata_symbols(self, metadata: Mapping[str, Any]) -> tuple[str, ...]:
-        symbols = metadata.get("symbols")
-        if isinstance(symbols, str):
-            return (symbols.upper(),)
-        if isinstance(symbols, (list, tuple)):
-            return tuple(str(item).upper() for item in symbols)
-        return ()
-
-    def _handle_command_result(
-        self,
-        result: CommandResult,
-        active_symbols: set[str],
-    ) -> None:
-        metadata = result.command.metadata if isinstance(result.command.metadata, Mapping) else {}
-        command_type = metadata.get("type")
-        symbols = self._metadata_symbols(metadata)
-        if command_type == "subscribe":
-            if result.success:
-                for symbol in symbols:
-                    active_symbols.add(symbol)
-            else:
-                details = result.error_details or "subscribe error"
-                for symbol in symbols:
-                    self._failover_symbol(symbol, details, active_symbols)
-        elif command_type == "unsubscribe":
-            if result.success:
-                for symbol in symbols:
+                if self._get_registration(symbol) is None:
+                    continue
+                stream_name = self._stream_name(symbol)
+                if symbol in active_symbols:
+                    try:
+                        await self._throttle_if_needed()
+                        await self._send_command(client, "UNSUBSCRIBE", [stream_name])
+                        self._record_command_sent()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(self._resubscribe_delay())
                     active_symbols.discard(symbol)
-            else:
-                details = result.error_details or "unsubscribe error"
-                self._logger.log(
-                    (
-                        "Binance {stream} stream: не удалось отписаться от {symbols}: {details}"  # noqa: ISC003
-                    ).format(stream=self._name, symbols=", ".join(symbols), details=details)
-                )
-        elif command_type == "resubscribe":
-            phase = metadata.get("phase")
-            if phase == "unsubscribe":
-                if result.success:
-                    for symbol in symbols:
-                        active_symbols.discard(symbol)
-                else:
-                    details = result.error_details or "resubscribe unsubscribe error"
-                    self._logger.log(
-                        (
-                            "Binance {stream} stream: сбой отписки при ресинке {symbols}: {details}"  # noqa: ISC003
-                        ).format(stream=self._name, symbols=", ".join(symbols), details=details)
-                    )
-            elif phase == "subscribe":
-                if result.success:
-                    for symbol in symbols:
-                        active_symbols.add(symbol)
-                else:
-                    details = result.error_details or "resubscribe subscribe error"
-                    for symbol in symbols:
-                        self._failover_symbol(symbol, details, active_symbols)
-        elif command_type == "set_property":
-            return
-
-    def _handle_command_failures(
-        self,
-        failures: Iterable[CommandResult],
-        active_symbols: set[str],
-    ) -> None:
-        for result in failures:
-            metadata = result.command.metadata if isinstance(result.command.metadata, Mapping) else {}
-            symbols = self._metadata_symbols(metadata)
-            if not symbols:
-                continue
-            details = result.error_details or "timeout"
-            for symbol in symbols:
-                self._failover_symbol(symbol, details, active_symbols)
-
-    def _failover_symbol(
-        self,
-        symbol: str,
-        details: str,
-        active_symbols: set[str],
-    ) -> None:
-        normalized = symbol.upper()
-        active_symbols.discard(normalized)
-        registration = self._get_registration(normalized)
-        if registration is not None:
-            try:
-                registration.on_error(ResyncReason.CONNECTION_LOST, details)
-            except Exception:
-                pass
-        predicate = lambda command: normalized in self._metadata_symbols(command.metadata)  # noqa: E731
-        cancelled = self._scheduler.cancel(predicate)
-        if cancelled:
-            self._logger.log(
-                (
-                    "Binance {stream} stream: отменены {count} команд(ы) для символа {symbol}"  # noqa: ISC003
-                ).format(stream=self._name, count=len(cancelled), symbol=normalized)
-            )
-        self._logger.log(
-            (
-                "Binance {stream} stream: символ {symbol} переводится на резерв из-за ошибки: {details}"  # noqa: ISC003
-            ).format(stream=self._name, symbol=normalized, details=details)
-        )
-        try:
-            self._on_degraded(self, normalized, details)
-        except Exception:
-            pass
+                try:
+                    await self._throttle_if_needed()
+                    await self._send_command(client, "SUBSCRIBE", [stream_name])
+                    self._record_command_sent()
+                except Exception:
+                    continue
+                active_symbols.add(symbol)
 
     def _drain_pending_commands(self) -> None:
         while True:
@@ -654,7 +458,7 @@ class _CombinedStreamWorker:
             if not symbols:
                 continue
 
-            self._scheduler.reset()
+            self._enqueue_all_symbols()
             client: Optional[AsyncWebSocketClient] = None
             try:
                 client = AsyncWebSocketClient(
@@ -665,6 +469,7 @@ class _CombinedStreamWorker:
                 )
                 await client.connect()
                 await client.set_timeout(self._ws_timeout)
+                self._next_request_id = 1
                 self._logger.log(
                     (
                         "Binance {stream} stream: открыто соединение для {count} "
@@ -677,22 +482,11 @@ class _CombinedStreamWorker:
                     )
                 )
                 active_symbols: set[str] = set()
-                self._prime_connection(symbols)
-                await self._scheduler.dispatch(
-                    throttle=self._throttle_if_needed,
-                    send=client.send_json,
-                    after_send=lambda _: self._command_limiter.record(),
-                )
-                self._handle_command_failures(self._scheduler.expire(), active_symbols)
+                await self._send_set_combined(client)
                 while not self._stop_event.is_set():
                     await self._process_commands(client, active_symbols)
-                    self._handle_command_failures(self._scheduler.expire(), active_symbols)
                     self._restart_requested()
-                    if (
-                        not self._current_symbols()
-                        and not active_symbols
-                        and not self._scheduler.has_activity()
-                    ):
+                    if not self._current_symbols() and not active_symbols:
                         break
                     try:
                         payload = await client.recv_json()
@@ -709,16 +503,10 @@ class _CombinedStreamWorker:
                         self._logger.log(details)
                         self._notify_all(ResyncReason.CONNECTION_LOST, details)
                         break
-                    result: Optional[CommandResult] = None
-                    if isinstance(payload, Mapping):
-                        result = self._scheduler.handle_response(payload)
-                    if result is not None:
-                        self._handle_command_result(result, active_symbols)
-                        self._handle_command_failures(self._scheduler.expire(), active_symbols)
-                        continue
                     await self._process_commands(client, active_symbols)
-                    self._handle_command_failures(self._scheduler.expire(), active_symbols)
                     if not isinstance(payload, dict):
+                        continue
+                    if "result" in payload:
                         continue
                     symbol = self._extract_symbol(payload)
                     if symbol is None and isinstance(payload.get("s"), str):
@@ -785,7 +573,13 @@ class _CombinedStreamWorker:
                         )
                         self._logger.log(details)
                         if symbol is not None:
-                            self._failover_symbol(symbol, details, active_symbols)
+                            registration = self._get_registration(symbol)
+                            if registration is not None:
+                                try:
+                                    registration.on_error(ResyncReason.CONNECTION_LOST, details)
+                                except Exception:
+                                    pass
+                            active_symbols.discard(symbol)
                         continue
 
                     data = payload.get("data") if isinstance(payload.get("data"), dict) else None
@@ -825,7 +619,6 @@ class _CombinedStreamWorker:
                         await client.close()
                     except Exception:
                         pass
-                self._scheduler.reset()
                 self._drain_pending_commands()
 
 
@@ -851,7 +644,6 @@ class _StreamWorkerPool:
         self._lock = threading.Lock()
         self._workers: list[_CombinedStreamWorker] = []
         self._worker_loads: dict[_CombinedStreamWorker, float] = {}
-        self._bindings: dict[str, _Binding] = {}
         self._counter = 0
 
     def _create_worker(self) -> _CombinedStreamWorker:
@@ -866,27 +658,15 @@ class _StreamWorkerPool:
             log_writer=self._log_writer,
             max_streams=self._profile.max_streams_per_connection,
             command_profile=self._profile,
-            on_degraded=self._handle_degraded,
         )
         self._workers.append(worker)
         self._worker_loads[worker] = 0.0
         return worker
 
-    def _acquire_worker(
-        self,
-        *,
-        exclude: Optional[_CombinedStreamWorker] = None,
-    ) -> _CombinedStreamWorker:
-        available = [
-            worker
-            for worker in self._workers
-            if worker.has_capacity() and worker is not exclude
-        ]
+    def _acquire_worker(self) -> _CombinedStreamWorker:
+        available = [worker for worker in self._workers if worker.has_capacity()]
         if not available:
-            worker = self._create_worker()
-            if worker is exclude:
-                worker = self._create_worker()
-            return worker
+            return self._create_worker()
         return min(
             available,
             key=lambda worker: (
@@ -914,24 +694,17 @@ class _StreamWorkerPool:
         *,
         weight: float = 1.0,
     ) -> Callable[[], None]:
-        normalized_symbol = symbol.upper()
         normalized_weight = max(float(weight), 0.0)
-        resolved_on_error = on_error
-        if resolved_on_error is None:
-            def _default_error(reason: ResyncReason, details: str) -> None:
-                buffer.push_resync(reason, details)
-
-            resolved_on_error = _default_error
         with self._lock:
             worker = self._acquire_worker()
             self._worker_loads[worker] = self._worker_loads.get(worker, 0.0) + normalized_weight
 
         try:
             release = worker.register(
-                normalized_symbol,
+                symbol,
                 buffer,
                 on_message,
-                resolved_on_error,
+                on_error,
                 weight=normalized_weight,
             )
         except Exception:
@@ -940,30 +713,6 @@ class _StreamWorkerPool:
                 self._worker_loads[worker] = max(current, 0.0)
             raise
 
-        release_wrapper = self._wrap_release(worker, normalized_weight, release)
-        binding = _Binding(
-            symbol=normalized_symbol,
-            buffer=buffer,
-            on_message=on_message,
-            on_error=resolved_on_error,
-            weight=normalized_weight,
-            worker=worker,
-            release_wrapper=release_wrapper,
-        )
-        with self._lock:
-            self._bindings[normalized_symbol] = binding
-
-        def _release_handle() -> None:
-            self._release_binding(normalized_symbol, remove=True)
-
-        return _release_handle
-
-    def _wrap_release(
-        self,
-        worker: _CombinedStreamWorker,
-        weight: float,
-        release: Callable[[], None],
-    ) -> Callable[[], None]:
         released = threading.Event()
 
         def _release_wrapper() -> None:
@@ -971,7 +720,7 @@ class _StreamWorkerPool:
                 return
             release()
             with self._lock:
-                current = self._worker_loads.get(worker, 0.0) - weight
+                current = self._worker_loads.get(worker, 0.0) - normalized_weight
                 if current <= 0:
                     self._worker_loads.pop(worker, None)
                 else:
@@ -982,63 +731,6 @@ class _StreamWorkerPool:
             released.set()
 
         return _release_wrapper
-
-    def _release_binding(self, symbol: str, *, remove: bool) -> Optional[_Binding]:
-        normalized = symbol.upper()
-        with self._lock:
-            binding = self._bindings.get(normalized)
-        if binding is None:
-            return None
-        binding.release_wrapper()
-        if remove:
-            with self._lock:
-                self._bindings.pop(normalized, None)
-        return binding
-
-    def _handle_degraded(
-        self,
-        worker: _CombinedStreamWorker,
-        symbol: str,
-        details: str,
-    ) -> None:
-        binding = self._release_binding(symbol, remove=False)
-        if binding is None or binding.worker is not worker:
-            return
-        with self._lock:
-            self._bindings[binding.symbol] = binding
-        new_worker = self._acquire_worker(exclude=worker)
-        with self._lock:
-            self._worker_loads[new_worker] = self._worker_loads.get(new_worker, 0.0) + binding.weight
-        try:
-            release = new_worker.register(
-                binding.symbol,
-                binding.buffer,
-                binding.on_message,
-                binding.on_error,
-                weight=binding.weight,
-            )
-        except Exception as exc:  # noqa: BLE001
-            with self._lock:
-                current = self._worker_loads.get(new_worker, 0.0) - binding.weight
-                if current <= 0:
-                    self._worker_loads.pop(new_worker, None)
-                else:
-                    self._worker_loads[new_worker] = current
-            try:
-                binding.buffer.push_resync(
-                    ResyncReason.CONNECTION_LOST,
-                    f"Не удалось переключить поток {binding.symbol}: {exc}",
-                )
-            except Exception:
-                pass
-            with self._lock:
-                self._bindings.pop(binding.symbol, None)
-            return
-        release_wrapper = self._wrap_release(new_worker, binding.weight, release)
-        binding.worker = new_worker
-        binding.release_wrapper = release_wrapper
-        with self._lock:
-            self._bindings[binding.symbol] = binding
 
 
 class BinanceStreamPool:
