@@ -12,6 +12,7 @@ from config.models import (
     MarginMode,
     OdrSettings,
     PositionSettings,
+    ProfileWeights,
     StopTrigger,
     TelegramSettings,
     TradingProfile,
@@ -84,6 +85,12 @@ CONFIG: Final[Config] = Config(
         chat_id=739865715,
         silent=False,
         uptick_cooldown_min=5,
+    ),
+    profile_weights=ProfileWeights(
+        top=1.0,
+        alt=0.5,
+        listing=0.8,
+        auto=0.3,
     ),
 )
 

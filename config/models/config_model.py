@@ -7,6 +7,7 @@ from .funding_kill_switch_settings import FundingKillSwitchSettings
 from .general_settings import GeneralSettings
 from .odr_settings import OdrSettings
 from .position_settings import PositionSettings
+from .profile_weights import ProfileWeights
 from .telegram_settings import TelegramSettings
 from .turnover_thresholds import TurnoverThresholds
 from .wall_settings import WallSettings
@@ -24,6 +25,7 @@ class Config:
     focus: FocusSettings
     funding_ks: FundingKillSwitchSettings
     telegram: TelegramSettings
+    profile_weights: ProfileWeights
 
 
 __all__ = ["Config"]
