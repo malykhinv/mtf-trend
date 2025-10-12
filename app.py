@@ -299,8 +299,6 @@ class Application:
                 symbol=symbol,
                 loop_interval_ms=CONFIG.general.loop_interval_ms,
                 silence_timeout_ms=CONFIG.general.ws_silence_timeout_ms,
-                depth_stream_interval_ms=CONFIG.general.depth_stream_interval_ms,
-                depth_limit=CONFIG.general.depth_snapshot_limit,
                 log_writer=self._sink,
                 api_key=api_key,
                 api_secret=api_secret,

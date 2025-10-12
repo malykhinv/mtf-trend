@@ -51,14 +51,13 @@ MIN_STREAM_SILENCE_TIMEOUT_MS = 1500.0
 
 class BinanceExchangeData:
     _pool_lock: ClassVar[threading.Lock] = threading.Lock()
-    _shared_stream_pools: ClassVar[dict[tuple[str, int], BinanceStreamPool]] = {}
+    _shared_stream_pool: ClassVar[BinanceStreamPool | None] = None
 
     def __init__(
         self,
         symbol: str,
         loop_interval_ms: int = 100,
-        depth_stream_interval_ms: int = 250,
-        depth_limit: int = 100,
+        depth_limit: int = 500,
         rest_timeout: float = 5.0,
         rest_retries: int = 3,
         rest_retry_delay: float = 0.5,
@@ -80,22 +79,13 @@ class BinanceExchangeData:
         self._ws_timeout = ws_timeout
         self._reconnect_delay = reconnect_delay
         self._logger = ExchangeLogger(f"Binance:{self.symbol}", log_writer)
-        self._depth_stream_interval_ms = self._normalize_depth_stream_interval(
-            depth_stream_interval_ms
-        )
-        self._depth_limit = self._normalize_depth_limit(depth_limit)
         self._stream_pool = self._get_stream_pool(
             endpoints=self._endpoints,
-            depth_stream_interval_ms=self._depth_stream_interval_ms,
             ws_timeout=self._ws_timeout,
             reconnect_delay=self._reconnect_delay,
             log_writer=log_writer,
         )
-        self._logger.log(
-            (
-                "Binance depth stream: интервал {interval} мс, лимит снапшота {limit}"
-            ).format(interval=self._depth_stream_interval_ms, limit=self._depth_limit)
-        )
+        self._depth_limit = self._normalize_depth_limit(depth_limit)
         if silence_timeout_ms is not None:
             effective_silence_timeout_ms = max(
                 float(silence_timeout_ms),
@@ -112,48 +102,8 @@ class BinanceExchangeData:
         self._api_key = api_key
         self._api_secret = api_secret
 
-    def _normalize_depth_stream_interval(self, interval_ms: int) -> int:
-        default_interval = 250
-        minimum_interval = 100
-        maximum_interval = 1000
-        try:
-            requested_interval = int(interval_ms)
-        except (TypeError, ValueError):
-            self._logger.log(
-                (
-                    "Binance depth stream interval {value!r} невалиден, используем {default} мс"
-                ).format(value=interval_ms, default=default_interval)
-            )
-            return default_interval
-
-        if requested_interval <= 0:
-            self._logger.log(
-                (
-                    "Binance depth stream interval {value} мс не поддерживается, используем {default} мс"
-                ).format(value=requested_interval, default=default_interval)
-            )
-            return default_interval
-
-        if requested_interval < minimum_interval:
-            self._logger.log(
-                (
-                    "Binance depth stream interval {value} мс слишком мал, используем {minimum} мс"
-                ).format(value=requested_interval, minimum=minimum_interval)
-            )
-            return minimum_interval
-
-        if requested_interval > maximum_interval:
-            self._logger.log(
-                (
-                    "Binance depth stream interval {value} мс слишком велик, используем {maximum} мс"
-                ).format(value=requested_interval, maximum=maximum_interval)
-            )
-            return maximum_interval
-
-        return requested_interval
-
     def _normalize_depth_limit(self, depth_limit: int) -> int:
-        default_limit = 100
+        default_limit = 500
         allowed = sorted(BINANCE_ALLOWED_DEPTH_LIMITS)
         try:
             requested_limit = int(depth_limit)
@@ -183,24 +133,19 @@ class BinanceExchangeData:
         cls,
         *,
         endpoints: BinanceEndpoints,
-        depth_stream_interval_ms: int,
         ws_timeout: float,
         reconnect_delay: float,
         log_writer: Optional[Callable[[str], None]],
     ) -> BinanceStreamPool:
         with cls._pool_lock:
-            key = (endpoints.ws_base.rstrip("/"), depth_stream_interval_ms)
-            pool = cls._shared_stream_pools.get(key)
-            if pool is None:
-                pool = BinanceStreamPool(
+            if cls._shared_stream_pool is None:
+                cls._shared_stream_pool = BinanceStreamPool(
                     endpoints_ws_base=endpoints.ws_base,
                     ws_timeout=ws_timeout,
                     reconnect_delay=reconnect_delay,
                     log_writer=log_writer,
-                    depth_stream_interval_ms=depth_stream_interval_ms,
                 )
-                cls._shared_stream_pools[key] = pool
-            return pool
+            return cls._shared_stream_pool
 
     def _rest_get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         params = params or {}
