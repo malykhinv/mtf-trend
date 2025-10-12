@@ -346,31 +346,39 @@ class BinanceExchangeData:
                     self._depth_buffered_messages.append(message)
                 return
 
+            expected = self._depth_last_update + 1
+
             if last_update <= self._depth_last_update:
                 return
 
             skip_allowed = allow_skip or self._depth_allow_skip
 
-            expected = self._depth_last_update + 1
-
-            if prev_update == self._depth_last_update:
-                update = self._build_depth_update(message, event_time)
-                self._depth_last_update = last_update
-                self._depth_allow_skip = False
-            elif skip_allowed and first_update <= expected <= last_update:
-                update = self._build_depth_update(message, event_time)
-                self._depth_last_update = last_update
-                self._depth_allow_skip = False
-            else:
-                resync_reason = ResyncReason.SEQUENCE_GAP
+            if skip_allowed:
                 if first_update <= expected <= last_update:
-                    resync_details = (
-                        f"Предыдущий апдейт {prev_update} != {self._depth_last_update}"
-                    )
+                    update = self._build_depth_update(message, event_time)
+                    self._depth_last_update = last_update
+                    self._depth_allow_skip = False
                 else:
+                    resync_reason = ResyncReason.SEQUENCE_GAP
                     resync_details = (
                         f"Ожидали {expected}, получили диапазон {first_update}-{last_update}"
                     )
+                    self._depth_allow_skip = False
+            elif first_update > expected:
+                resync_reason = ResyncReason.SEQUENCE_GAP
+                resync_details = (
+                    f"Ожидали {expected}, получили диапазон {first_update}-{last_update}"
+                )
+                self._depth_allow_skip = False
+            elif prev_update != self._depth_last_update:
+                resync_reason = ResyncReason.SEQUENCE_GAP
+                resync_details = (
+                    f"Предыдущий апдейт {prev_update} != {self._depth_last_update}"
+                )
+                self._depth_allow_skip = False
+            else:
+                update = self._build_depth_update(message, event_time)
+                self._depth_last_update = last_update
                 self._depth_allow_skip = False
 
         if resync_reason is not None:
