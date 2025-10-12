@@ -22,7 +22,6 @@ class StreamBuffer(Generic[T]):
         heartbeat_interval: Optional[float] = None,
         maxsize: int | None = None,
         drop_oldest_on_overflow: bool = False,
-        restart_grace_period: Optional[float] = None,
     ) -> None:
         self._name = name
         self._logger = logger
@@ -38,13 +37,6 @@ class StreamBuffer(Generic[T]):
         now = time.monotonic()
         self._last_data = now
         self._last_heartbeat = now
-        self._restart_grace_period = (
-            max(0.0, restart_grace_period)
-            if restart_grace_period is not None
-            else silence_timeout
-        )
-        self._last_restart_requested_at: float | None = None
-        self._last_restart_reason: ResyncReason | None = None
 
     def stopped(self) -> bool:
         return self._stop.is_set()
@@ -58,48 +50,21 @@ class StreamBuffer(Generic[T]):
                 self._drain()
                 self._queue.put_nowait(StreamEvent.stop())
 
-    def request_restart(
-        self,
-        reason: ResyncReason | None = None,
-        *,
-        force: bool = False,
-    ) -> None:
-        now = time.monotonic()
-        if not force:
-            if self._restart_event.is_set():
-                return
-            if (
-                self._last_restart_requested_at is not None
-                and now - self._last_restart_requested_at < self._restart_grace_period
-            ):
-                return
+    def request_restart(self) -> None:
         self._restart_event.set()
-        self._last_restart_requested_at = now
-        self._last_restart_reason = reason
 
-    def consume_restart_request(self) -> ResyncReason | None:
+    def consume_restart_request(self) -> bool:
         if self._restart_event.is_set():
             self._restart_event.clear()
-            reason = self._last_restart_reason
-            self._last_restart_reason = None
-            return reason
-        return None
+            return True
+        return False
 
     def restart_requested(self) -> bool:
         return self._restart_event.is_set()
 
-    def restart_grace_period(self) -> float:
-        return self._restart_grace_period
-
-    def last_restart_request_age(self) -> float | None:
-        if self._last_restart_requested_at is None:
-            return None
-        return time.monotonic() - self._last_restart_requested_at
-
     def push(self, event: StreamEvent[T]) -> None:
         if event.type in {StreamEventType.DATA, StreamEventType.SNAPSHOT}:
             self._last_data = time.monotonic()
-            self._last_restart_requested_at = None
         try:
             self._queue.put_nowait(event)
         except queue.Full:
@@ -147,7 +112,7 @@ class StreamBuffer(Generic[T]):
                 now = time.monotonic()
                 if now - self._last_data >= self._silence_timeout:
                     self._last_data = now
-                    self.request_restart(ResyncReason.SILENCE_TIMEOUT)
+                    self.request_restart()
                     self._last_heartbeat = now
                     return StreamEvent.heartbeat()
                 if now - self._last_heartbeat >= self._heartbeat_interval:

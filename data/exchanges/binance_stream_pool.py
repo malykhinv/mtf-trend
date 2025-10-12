@@ -1,7 +1,6 @@
 import asyncio
 import json
 import threading
-import time
 from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Any, Callable, Dict, Optional
@@ -52,7 +51,6 @@ class _CombinedStreamWorker:
         self._command_window_start = 0.0
         self._commands_sent_in_window = 0
         self._last_command_timestamp = 0.0
-        self._last_resubscribe: Dict[str, float] = {}
         self._thread = threading.Thread(
             target=self._run_thread,
             name=f"binance-pool-{name}",
@@ -163,58 +161,29 @@ class _CombinedStreamWorker:
         with self._lock:
             registrations = list(self._registrations.values())
 
-        processed: list[tuple[str, ResyncReason]] = []
-        suppressed: list[str] = []
-        now = time.monotonic()
+        processed_symbols: list[str] = []
         for registration in registrations:
-            reason = registration.buffer.consume_restart_request()
-            if reason is None:
+            if not registration.buffer.consume_restart_request():
                 continue
 
-            actual_reason = reason or ResyncReason.CONNECTION_LOST
-            grace = max(registration.buffer.restart_grace_period(), 0.0)
-            last_request = self._last_resubscribe.get(registration.symbol)
-            if last_request is not None and now - last_request < grace:
-                suppressed.append(registration.symbol)
-                continue
-
-            self._last_resubscribe[registration.symbol] = now
-            processed.append((registration.symbol, actual_reason))
+            processed_symbols.append(registration.symbol)
             self._command_queue.put(("resubscribe", registration.symbol))
             details = (
-                "Binance {stream} stream: {reason} для {symbol}, "
+                "Binance {stream} stream: таймаут тишины для {symbol}, "
                 "запрос повторной синхронизации"
-            ).format(
-                stream=self._name,
-                reason=(
-                    "таймаут тишины"
-                    if actual_reason == ResyncReason.SILENCE_TIMEOUT
-                    else "обрыв соединения"
-                ),
-                symbol=registration.symbol,
-            )
+            ).format(stream=self._name, symbol=registration.symbol)
 
             try:
-                registration.on_error(actual_reason, details)
+                registration.on_error(ResyncReason.SILENCE_TIMEOUT, details)
             except Exception:
                 pass
 
-        if processed:
-            joined = ", ".join(
-                f"{symbol} ({reason.name})" for symbol, reason in processed
-            )
+        if processed_symbols:
+            joined = ", ".join(processed_symbols)
             self._logger.log(
                 (
                     "Binance {stream} stream: обработан запрос повторной "
                     "синхронизации из буферов: {symbols}"
-                ).format(stream=self._name, symbols=joined)
-            )
-        if suppressed:
-            joined = ", ".join(suppressed)
-            self._logger.log(
-                (
-                    "Binance {stream} stream: проигнорированы повторные запросы "
-                    "синхронизации: {symbols}"
                 ).format(stream=self._name, symbols=joined)
             )
 
