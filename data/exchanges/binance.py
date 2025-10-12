@@ -343,7 +343,7 @@ class _StreamRegistration(Generic[T]):
 class _BinanceStreamSession:
     """Shared websocket session that fans out events to registered consumers."""
 
-    _BASE_ENDPOINT = "wss://fstream.binance.com/stream"
+    _BASE_ENDPOINT = "wss://stream.binance.com:9443/ws"
 
     def __init__(
         self,
@@ -673,7 +673,7 @@ class _BinanceStreamWorker(Generic[T]):
         "_last_ping",
     )
 
-    _BASE_ENDPOINT = "wss://fstream.binance.com/stream"
+    _BASE_ENDPOINT = "wss://stream.binance.com:9443/ws"
 
     def __init__(
         self,
