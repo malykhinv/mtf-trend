@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Set, Tuple
+from typing import Callable, List, Optional, Set, Tuple
 
 from .event_logger import EventLogger
 from .types import SubscriptionHandler
@@ -13,11 +13,14 @@ class SubscriptionManager:
     subscribe: SubscriptionHandler
     unsubscribe: SubscriptionHandler
     logger: EventLogger
+    prioritizer: Optional[Callable[[Tuple[str, ...]], Tuple[str, ...]]] = None
     _active: Tuple[str, ...] = field(default_factory=tuple)
 
     def update(self, symbols: Tuple[str, ...], timestamp: datetime) -> None:
         additions = self._compute_additions(symbols)
         removals = self._compute_removals(symbols)
+        if self.prioritizer is not None and additions:
+            additions = self.prioritizer(additions)
         active: List[str] = list(self._active)
         active_set: Set[str] = set(active)
         for symbol in additions:

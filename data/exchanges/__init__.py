@@ -19,7 +19,15 @@ from domain.models import (
     Trade,
 )
 
-from .binance import BestBidAsk, BinanceExchangeData, DepthStreamData, StreamSubscription
+from .binance import (
+    BestBidAsk,
+    BinanceExchangeData,
+    BinanceStreamManager,
+    BinanceSymbolStreams,
+    DepthStreamData,
+    StreamLimitError,
+    StreamSubscription,
+)
 from .events import ResyncReason, StreamEvent, StreamEventType
 from .stream_buffer import StreamBuffer
 
@@ -192,7 +200,10 @@ class BybitTradingAdapter(IExchangeTrade):
 __all__ = [
     "BestBidAsk",
     "BinanceExchangeData",
+    "BinanceStreamManager",
+    "BinanceSymbolStreams",
     "BinanceTradingAdapter",
+    "StreamLimitError",
     "BybitExchangeData",
     "BybitTradingAdapter",
     "DepthStreamData",
