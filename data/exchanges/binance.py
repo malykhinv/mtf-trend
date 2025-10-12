@@ -8,7 +8,20 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Deque, Dict, Generic, Iterable, Iterator, Mapping, Optional, Tuple, TypeVar
+from typing import (
+    Any,
+    Callable,
+    Deque,
+    Dict,
+    Generic,
+    Iterable,
+    Iterator,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    TypeVar,
+)
 
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -63,6 +76,13 @@ def _build_level(price: float, quantity: float, timestamp: datetime) -> OrderBoo
         min_quantity_seen=quantity,
         max_quantity_seen=quantity,
     )
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 T = TypeVar("T")
 
@@ -526,6 +546,7 @@ class BinanceExchangeData:
         log_writer: LogSink,
         api_key: Optional[str] = None,
         api_secret: Optional[str] = None,
+        exchange_info: Optional[Mapping[str, Mapping[str, object]]] = None,
     ) -> None:
         self._symbol = symbol.upper()
         self._loop_interval = max(loop_interval_ms, 100)
@@ -545,23 +566,53 @@ class BinanceExchangeData:
             "trades": _CommandBudget(self._limits.trades),
             "book_ticker": _CommandBudget(self._limits.book_ticker),
         }
-        self._load_exchange_info()
+        if exchange_info:
+            self.update_exchange_info(exchange_info)
+        if self._symbol not in self._exchange_info:
+            self._load_exchange_info()
 
     # ------------------------------------------------------------------
     # Interface implementation expected by the application
     def fetch_symbol_filters(self) -> SymbolFilters:
-        info = self._exchange_info.get(self._symbol)
+        info = self._exchange_info.get(self._symbol, {})
         base_asset = self._symbol.replace("USDT", "")
         quote_asset = "USDT"
         price_tick = 0.1
         qty_step = 0.001
         min_notional = 5.0
-        if info is not None:
+        min_price = 0.0
+        max_price = math.inf
+        min_qty = qty_step
+        max_qty = math.inf
+        if isinstance(info, Mapping):
             base_asset = str(info.get("baseAsset", base_asset))
             quote_asset = str(info.get("quoteAsset", quote_asset))
-            price_tick = float(info.get("tickSize", price_tick))
-            qty_step = float(info.get("stepSize", qty_step))
-            min_notional = float(info.get("notional", min_notional))
+            filters = info.get("filters")
+            if isinstance(filters, Mapping):
+                price_filter = filters.get("price")
+                if isinstance(price_filter, Mapping):
+                    price_tick = _safe_float(price_filter.get("tickSize"), price_tick)
+                    min_price = _safe_float(price_filter.get("minPrice"), min_price)
+                    max_price_value = _safe_float(price_filter.get("maxPrice"), max_price)
+                    if max_price_value > 0.0:
+                        max_price = max_price_value
+                lot_filter = filters.get("lot")
+                if isinstance(lot_filter, Mapping):
+                    qty_step = _safe_float(lot_filter.get("stepSize"), qty_step)
+                    min_qty_value = _safe_float(lot_filter.get("minQty"), min_qty)
+                    min_qty = max(qty_step, min_qty_value)
+                    max_qty_value = _safe_float(lot_filter.get("maxQty"), max_qty)
+                    if max_qty_value > 0.0:
+                        max_qty = max_qty_value
+                notional_filter = filters.get("notional")
+                if isinstance(notional_filter, Mapping):
+                    min_notional = _safe_float(
+                        notional_filter.get("minNotional"),
+                        min_notional,
+                    )
+            price_tick = _safe_float(info.get("tickSize"), price_tick)
+            qty_step = _safe_float(info.get("stepSize"), qty_step)
+            min_notional = _safe_float(info.get("notional"), min_notional)
         return SymbolFilters(
             exchange=Exchange.BINANCE,
             symbol=self._symbol,
@@ -569,12 +620,41 @@ class BinanceExchangeData:
             quote_asset=quote_asset,
             price_tick_size=price_tick,
             quantity_step_size=qty_step,
-            min_price=0.0,
-            max_price=math.inf,
-            min_qty=qty_step,
-            max_qty=math.inf,
+            min_price=min_price,
+            max_price=max_price,
+            min_qty=min_qty,
+            max_qty=max_qty,
             min_notional=min_notional,
         )
+
+    def update_exchange_info(self, info: Mapping[str, Mapping[str, object]]) -> None:
+        if not info:
+            return
+        updates: Dict[str, Dict[str, object]] = {}
+        for symbol, entry in info.items():
+            normalized = symbol.upper()
+            if not normalized:
+                continue
+            if not isinstance(entry, Mapping):
+                continue
+            current = self._exchange_info.get(normalized)
+            merged: Dict[str, object] = {}
+            if isinstance(current, Mapping):
+                merged.update(current)
+            merged.update(dict(entry))
+            updates[normalized] = merged
+        if updates:
+            self._exchange_info.update(updates)
+
+    def set_symbol_profile(self, symbol: str, profile: TradingProfile) -> None:
+        normalized = symbol.upper()
+        entry = self._exchange_info.get(normalized)
+        if isinstance(entry, Mapping):
+            updated = dict(entry)
+        else:
+            updated = {}
+        updated["profile"] = profile
+        self._exchange_info[normalized] = updated
 
     def fetch_orderbook_snapshot(self) -> OrderBookSnapshot:
         now = datetime.now(tz=CURRENT_TIMEZONE)
@@ -852,33 +932,129 @@ class BinanceExchangeData:
         return tuple(levels)
 
     def _load_exchange_info(self) -> None:
-        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        url = "https://api.binance.com/api/v3/exchangeInfo"
         try:
             with urlopen(url, timeout=5) as response:  # noqa: S310
                 payload = json.load(response)
         except (URLError, TimeoutError, ValueError, OSError):
-            self._exchange_info = {}
             return
+        symbols: Sequence[Mapping[str, object]] = ()
+        if isinstance(payload, Mapping):
+            raw_symbols = payload.get("symbols")
+            if isinstance(raw_symbols, Sequence) and not isinstance(raw_symbols, (str, bytes)):
+                symbols = tuple(
+                    entry
+                    for entry in raw_symbols
+                    if isinstance(entry, Mapping)
+                )
+        existing = self._exchange_info
         info: Dict[str, Dict[str, object]] = {}
-        for entry in payload.get("symbols", []):
-            if entry.get("status") != "TRADING":
+        for entry in symbols:
+            status = str(entry.get("status") or "").upper()
+            if status != "TRADING":
                 continue
-            name = str(entry.get("symbol"))
-            filters = entry.get("filters", [])
-            price_filter = next((f for f in filters if f.get("filterType") == "PRICE_FILTER"), {})
-            lot_filter = next((f for f in filters if f.get("filterType") == "LOT_SIZE"), {})
-            notional_filter = next(
-                (f for f in filters if f.get("filterType") in {"MIN_NOTIONAL", "MARKET_LOT_SIZE"}),
+            if not bool(entry.get("isSpotTradingAllowed", False)):
+                continue
+            permissions = entry.get("permissions")
+            permissions_tuple: Tuple[str, ...] = ()
+            if isinstance(permissions, Sequence) and not isinstance(permissions, (str, bytes)):
+                normalized_permissions = {str(value).upper() for value in permissions}
+                if "SPOT" not in normalized_permissions:
+                    continue
+                permissions_tuple = tuple(str(value) for value in permissions)
+            symbol = str(entry.get("symbol") or "").upper()
+            if not symbol:
+                continue
+            filter_entries: Sequence[Mapping[str, object]] = ()
+            filters = entry.get("filters")
+            if isinstance(filters, Sequence) and not isinstance(filters, (str, bytes)):
+                filter_entries = tuple(
+                    item for item in filters if isinstance(item, Mapping)
+                )
+            price_filter: Mapping[str, object] = next(
+                (
+                    item
+                    for item in filter_entries
+                    if str(item.get("filterType") or "").upper() == "PRICE_FILTER"
+                ),
                 {},
             )
-            info[name] = {
-                "baseAsset": entry.get("baseAsset", ""),
-                "quoteAsset": entry.get("quoteAsset", ""),
-                "tickSize": price_filter.get("tickSize", 0.1),
-                "stepSize": lot_filter.get("stepSize", 0.001),
-                "notional": notional_filter.get("minNotional", notional_filter.get("minQty", 5.0)),
+            lot_filter: Mapping[str, object] = next(
+                (
+                    item
+                    for item in filter_entries
+                    if str(item.get("filterType") or "").upper() == "LOT_SIZE"
+                ),
+                {},
+            )
+            notional_filter: Mapping[str, object] = next(
+                (
+                    item
+                    for item in filter_entries
+                    if str(item.get("filterType") or "").upper() in {"MIN_NOTIONAL", "NOTIONAL"}
+                ),
+                {},
+            )
+            current = existing.get(symbol) if isinstance(existing, Mapping) else None
+            previous_tick = 0.1
+            previous_step = 0.001
+            previous_notional = 5.0
+            if isinstance(current, Mapping):
+                previous_tick = _safe_float(current.get("tickSize"), previous_tick)
+                previous_step = _safe_float(current.get("stepSize"), previous_step)
+                previous_notional = _safe_float(current.get("notional"), previous_notional)
+            min_price_value = max(_safe_float(price_filter.get("minPrice"), 0.0), 0.0)
+            max_price_value = _safe_float(price_filter.get("maxPrice"), math.inf)
+            if max_price_value <= 0.0:
+                max_price_value = math.inf
+            price_filters = {
+                "minPrice": min_price_value,
+                "maxPrice": max_price_value,
+                "tickSize": max(_safe_float(price_filter.get("tickSize"), previous_tick), 10 ** -8),
             }
-        self._exchange_info = info
+            step_size_value = max(_safe_float(lot_filter.get("stepSize"), previous_step), 10 ** -8)
+            min_qty_value = max(_safe_float(lot_filter.get("minQty"), previous_step), step_size_value)
+            max_qty_value = _safe_float(lot_filter.get("maxQty"), math.inf)
+            if max_qty_value <= 0.0:
+                max_qty_value = math.inf
+            lot_filters = {
+                "minQty": min_qty_value,
+                "maxQty": max_qty_value,
+                "stepSize": step_size_value,
+            }
+            min_notional_value = max(
+                _safe_float(notional_filter.get("minNotional"), previous_notional),
+                0.0,
+            )
+            notional_filters = {
+                "minNotional": min_notional_value,
+            }
+            entry_info: Dict[str, object] = {
+                "baseAsset": str(entry.get("baseAsset", "")),
+                "quoteAsset": str(entry.get("quoteAsset", "")),
+                "tickSize": price_filters["tickSize"],
+                "stepSize": lot_filters["stepSize"],
+                "notional": notional_filters["minNotional"],
+                "filters": {
+                    "price": price_filters,
+                    "lot": lot_filters,
+                    "notional": notional_filters,
+                },
+                "meta": {
+                    "status": status,
+                    "isSpotTradingAllowed": bool(entry.get("isSpotTradingAllowed", False)),
+                    "onboardDate": entry.get("onboardDate"),
+                    "permissions": permissions_tuple,
+                    "baseAssetPrecision": entry.get("baseAssetPrecision"),
+                    "quoteAssetPrecision": entry.get("quoteAssetPrecision"),
+                    "quotePrecision": entry.get("quotePrecision"),
+                },
+            }
+            if isinstance(current, Mapping) and "profile" in current:
+                entry_info["profile"] = current["profile"]
+            info[symbol] = entry_info
+        if info:
+            self._exchange_info = info
 
 
 class BinanceStreamManager:
@@ -907,6 +1083,7 @@ class BinanceStreamManager:
         self._max_symbols = self._resolve_capacity()
         self._reserve = self._resolve_reserve()
         self._limiters = self._build_limiters(self._limits)
+        self._exchange_info_cache: Dict[str, Dict[str, object]] = {}
 
     @staticmethod
     def _build_limiters(limits: StreamLimits) -> Dict[str, tuple[_RateLimiter, _RateLimiter]]:
@@ -946,11 +1123,32 @@ class BinanceStreamManager:
 
     def update_profiles(self, profiles: Mapping[str, TradingProfile]) -> None:
         for symbol, profile in profiles.items():
-            self._profiles[symbol.upper()] = profile
+            normalized = symbol.upper()
+            self._profiles[normalized] = profile
+            exchange_data = self._exchange_data.get(normalized)
+            if exchange_data is not None:
+                exchange_data.set_symbol_profile(normalized, profile)
 
     def update_weights(self, weights: Mapping[str, float]) -> None:
         for symbol, weight in weights.items():
             self._weights[symbol.upper()] = float(weight)
+
+    def update_exchange_info(self, info: Mapping[str, Mapping[str, object]]) -> None:
+        if not info:
+            return
+        normalized: Dict[str, Dict[str, object]] = {}
+        for symbol, entry in info.items():
+            normalized_symbol = symbol.upper()
+            if not normalized_symbol:
+                continue
+            if not isinstance(entry, Mapping):
+                continue
+            normalized[normalized_symbol] = dict(entry)
+        if not normalized:
+            return
+        self._exchange_info_cache = normalized
+        for exchange_data in self._exchange_data.values():
+            exchange_data.update_exchange_info(normalized)
 
     def plan_subscriptions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
         if not symbols:
@@ -1003,8 +1201,12 @@ class BinanceStreamManager:
                 log_writer=self._log_writer,
                 api_key=self._api_key,
                 api_secret=self._api_secret,
+                exchange_info=self._exchange_info_cache,
             )
             self._exchange_data[symbol] = exchange_data
+            profile = self._profiles.get(symbol)
+            if profile is not None:
+                exchange_data.set_symbol_profile(symbol, profile)
         streams = BinanceSymbolStreams(
             exchange_data=exchange_data,
             depth=exchange_data.stream_depth(),
@@ -1026,8 +1228,12 @@ class BinanceStreamManager:
                 log_writer=self._log_writer,
                 api_key=self._api_key,
                 api_secret=self._api_secret,
+                exchange_info=self._exchange_info_cache,
             )
             self._exchange_data[symbol] = exchange_data
+            profile = self._profiles.get(symbol)
+            if profile is not None:
+                exchange_data.set_symbol_profile(symbol, profile)
         return exchange_data
 
     def unsubscribe(self, symbol: str) -> None:
