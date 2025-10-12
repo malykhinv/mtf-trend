@@ -11,6 +11,7 @@ from typing import Callable, Deque, Dict, Generic, Iterator, Mapping, Optional, 
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from config.config import CONFIG
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookSnapshot, OrderBookUpdate, SymbolFilters, Trade
@@ -103,10 +104,10 @@ class BinanceExchangeData:
     """A pragmatic placeholder implementation of the data interface."""
 
     PROFILE_WEIGHTS: Dict[str, float] = {
-        "TOP": 1.0,
-        "LISTING": 0.8,
-        "ALT": 0.5,
-        "AUTO": 0.3,
+        TradingProfile.TOP.value: float(CONFIG.profile_weights.top),
+        TradingProfile.LISTING.value: float(CONFIG.profile_weights.listing),
+        TradingProfile.ALT.value: float(CONFIG.profile_weights.alt),
+        TradingProfile.AUTO.value: float(CONFIG.profile_weights.auto),
     }
 
     def __init__(
@@ -270,6 +271,7 @@ class BinanceStreamManager:
         self._streams: Dict[str, BinanceSymbolStreams] = {}
         self._active: set[str] = set()
         self._profiles: Dict[str, TradingProfile] = {}
+        self._weights: Dict[str, float] = {}
         self._max_symbols = self._resolve_capacity()
         self._reserve = self._resolve_reserve()
         self._limiters = self._build_limiters(self._limits)
@@ -311,7 +313,12 @@ class BinanceStreamManager:
         return max(values)
 
     def update_profiles(self, profiles: Mapping[str, TradingProfile]) -> None:
-        self._profiles.update(profiles)
+        for symbol, profile in profiles.items():
+            self._profiles[symbol.upper()] = profile
+
+    def update_weights(self, weights: Mapping[str, float]) -> None:
+        for symbol, weight in weights.items():
+            self._weights[symbol.upper()] = float(weight)
 
     def plan_subscriptions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
         if not symbols:
@@ -343,7 +350,11 @@ class BinanceStreamManager:
         return max(capacity, 0)
 
     def _profile_weight(self, symbol: str) -> float:
-        profile = self._profiles.get(symbol, TradingProfile.AUTO)
+        normalized = symbol.upper()
+        weight = self._weights.get(normalized)
+        if weight is not None:
+            return weight
+        profile = self._profiles.get(normalized, TradingProfile.AUTO)
         return float(BinanceExchangeData.PROFILE_WEIGHTS.get(profile.value, 0.0))
 
     def subscribe(self, symbol: str) -> BinanceSymbolStreams:
