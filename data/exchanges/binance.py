@@ -212,7 +212,7 @@ class _CommandBudget:
             return True
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, eq=False)
 class _StreamConsumer(Generic[T]):
     """In-memory handler used by shared sessions to deliver stream events."""
 
