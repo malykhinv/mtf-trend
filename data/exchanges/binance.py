@@ -225,6 +225,7 @@ class _StreamConsumer(Generic[T]):
     log: LogSink
     silence_timeout_ms: int
     snapshot_factory: SnapshotFactory[T] = None
+    _delay_threshold_ms: float = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._delay_threshold_ms = max(float(self.silence_timeout_ms) / 4.0, 250.0)
