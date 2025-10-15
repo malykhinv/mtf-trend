@@ -30,8 +30,6 @@ from data.exchanges import (
     StreamSubscription,
     StreamLimitError,
 )
-from data.exchanges.binance_trade import BinanceAPIError
-from data.exchanges.bybit_trade import BybitAPIError
 from data.logger import LogSink, create_log_writer, create_text_log_sink
 from data.telegram import TelegramClient
 from domain.book import OrderBook
@@ -927,7 +925,7 @@ class Application:
     def _update_context_balance(self, context: SymbolContext) -> None:
         try:
             balance = context.trading_adapter.get_balance(self._balance_source)
-        except (BinanceAPIError, BybitAPIError, Exception) as error:
+        except (Exception) as error:
             self._log_error(
                 f"Не удалось обновить баланс {context.symbol}: {error}"
             )
