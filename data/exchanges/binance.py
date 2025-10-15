@@ -1075,7 +1075,34 @@ class BinanceExchangeData:
     # ------------------------------------------------------------------
     # Interface implementation expected by the application
     def fetch_symbol_filters(self) -> SymbolFilters:
-        info = self._exchange_info.get(self._symbol, {})
+        info = self._exchange_info.get(self._symbol)
+        if not isinstance(info, Mapping):
+            try:
+                self._log_writer(
+                    f"[ERROR] missing exchange info for {self._symbol}, refreshing cache"
+                )
+            except Exception:
+                pass
+            try:
+                self._load_exchange_info()
+            except Exception as exc:  # pragma: no cover - network safety
+                try:
+                    self._log_writer(
+                        f"[ERROR] failed to refresh exchange info for {self._symbol}: {exc}"
+                    )
+                except Exception:
+                    pass
+            info = self._exchange_info.get(self._symbol)
+            if not isinstance(info, Mapping):
+                try:
+                    self._log_writer(
+                        f"[CRITICAL] exchange info unavailable for {self._symbol}; aborting"
+                    )
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    f"binance exchange info unavailable for {self._symbol}"
+                )
         base_asset = self._symbol.replace("USDT", "")
         quote_asset = "USDT"
         price_tick = 0.1
