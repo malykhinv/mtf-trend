@@ -1215,7 +1215,9 @@ class BinanceExchangeData:
         last_final_id: Optional[int] = None
 
         def snapshot_factory() -> Optional[StreamEvent[DepthStreamData]]:
+            nonlocal last_final_id
             snapshot = self.fetch_orderbook_snapshot()
+            last_final_id = snapshot.last_update_id
             return StreamEvent(StreamEventType.SNAPSHOT, snapshot, snapshot.received_at)
 
         def parser(message: Dict[str, Any]) -> Iterable[StreamEvent[DepthStreamData]]:
