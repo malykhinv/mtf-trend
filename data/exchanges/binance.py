@@ -651,7 +651,14 @@ class _BinanceStreamSession:
             await self._recv_loop(ws)
 
     async def _on_connected(self, ws: WebSocketClientProtocol) -> None:
-        consumers = list(dict.fromkeys(self._consumers.values()))
+        consumers: list[_StreamConsumer[Any]] = []
+        seen_ids: set[int] = set()
+        for consumer in self._consumers.values():
+            consumer_id = id(consumer)
+            if consumer_id in seen_ids:
+                continue
+            seen_ids.add(consumer_id)
+            consumers.append(consumer)
         for consumer in consumers:
             for param in consumer.params:
                 command = _SessionCommand(
