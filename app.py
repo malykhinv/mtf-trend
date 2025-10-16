@@ -520,6 +520,18 @@ class Application:
         occurred_at: datetime,
     ) -> bool:
         now = get_current_time()
+        manager = self._binance_streams
+        if manager is not None:
+            cooldown_until = manager.get_cooldown_until(context.symbol)
+            if cooldown_until is not None:
+                remaining = max((cooldown_until - now).total_seconds(), 0.0)
+                timestamp = occurred_at.astimezone(CURRENT_TIMEZONE)
+                message = (
+                    f"Восстановление стакана {context.symbol} отложено на"
+                    f" {remaining:.1f}с из-за cooldown переподписки."
+                )
+                self._event_logger.log(message, timestamp)
+                return False
         last = context.last_depth_silence_recovery_at
         if last is not None and now - last < self._silence_recovery_cooldown:
             context.feed_monitor.has_silence_timeout = False
@@ -598,6 +610,21 @@ class Application:
                     ),
                     timestamp,
                 )
+                manager = self._binance_streams
+                if manager is not None:
+                    cooldown_until = manager.get_cooldown_until(context.symbol)
+                else:
+                    cooldown_until = None
+                if cooldown_until is not None:
+                    remaining = max((cooldown_until - get_current_time()).total_seconds(), 0.0)
+                    self._event_logger.log(
+                        (
+                            f"Переподписка {context.symbol} отложена на"
+                            f" {remaining:.1f}с из-за cooldown."
+                        ),
+                        timestamp,
+                    )
+                    continue
                 self._resubscribe_symbol_streams(context)
         return processed
 
