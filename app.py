@@ -10,7 +10,7 @@ from typing import Any, Deque, Dict, Iterable, Optional, Sequence, Tuple, cast
 
 from application import FeedMonitor, GUARDS
 from application.market_scanner import MarketScanner
-from config.config import CONFIG
+from config.config import CONFIG, MAX_NEW_SUBSCRIPTIONS
 from config.models.balance_source import BalanceSource as ConfigBalanceSource
 from config.models.exchange_name import ExchangeName
 from config.models.trading_profile import TradingProfile
@@ -198,6 +198,8 @@ class Application:
         )
         self._telegram_notifier = TelegramNotifier(send_message=self._send_telegram)
         self._contexts: Dict[str, SymbolContext] = {}
+        self._pending_symbols: Deque[str] = deque()
+        self._pending_symbol_set: set[str] = set()
         self._trading_router = TradingAdapterRouter(self._contexts)
         self._balance_source = self._map_balance_source(CONFIG.position.balance_source)
         self._balance_refresh_interval = timedelta(hours=CONFIG.position.balance_refresh_h)
@@ -790,9 +792,14 @@ class Application:
             if timestamp - self._last_scan_at < self._scanner_interval:
                 return
         scan_result = self._scanner.scan()
-        profile_by_symbol = {symbol: profile for symbol, profile in scan_result}
+        profile_by_symbol = {
+            symbol.upper(): profile for symbol, profile in scan_result
+        }
         self._symbol_profiles = profile_by_symbol
-        weights_by_symbol = self._scanner.symbol_weights
+        weights_by_symbol = {
+            symbol.upper(): weights
+            for symbol, weights in self._scanner.symbol_weights.items()
+        }
         self._symbol_weights = weights_by_symbol
         symbols = tuple(profile_by_symbol.keys())
         if self._binance_streams is not None:
@@ -807,13 +814,117 @@ class Application:
                     self._binance_streams.get_exchange_data(first_symbol).fetch_symbol_filters()
                 except Exception:
                     pass
+        desired_set = set(symbols)
+        if self._pending_symbols:
+            filtered_pending: Deque[str] = deque()
+            seen_pending: set[str] = set()
+            for symbol in self._pending_symbols:
+                if symbol not in desired_set:
+                    continue
+                context = self._contexts.get(symbol)
+                if context is not None and context.active:
+                    continue
+                if symbol in seen_pending:
+                    continue
+                filtered_pending.append(symbol)
+                seen_pending.add(symbol)
+            self._pending_symbols = filtered_pending
+            self._pending_symbol_set = set(filtered_pending)
+        for symbol in symbols:
+            if symbol in self._pending_symbol_set:
+                continue
+            context = self._contexts.get(symbol)
+            if context is not None and context.active:
+                continue
+            self._pending_symbols.append(symbol)
+            self._pending_symbol_set.add(symbol)
         self._desired_symbols = symbols
         for symbol, context in self._contexts.items():
             profile = profile_by_symbol.get(symbol)
             if profile is not None:
                 context.profile = profile
-        self._subscription_manager.update(symbols, timestamp)
         self._last_scan_at = timestamp
+
+    def _maybe_refresh_subscriptions(self, timestamp: Optional[datetime] = None) -> None:
+        timestamp = timestamp or get_current_time()
+        desired = tuple(symbol.upper() for symbol in self._desired_symbols)
+        desired_set = set(desired)
+        if not desired_set:
+            self._subscription_manager.update(tuple(), timestamp, max_new=0)
+            self._pending_symbols.clear()
+            self._pending_symbol_set.clear()
+            return
+        filtered: Deque[str] = deque()
+        seen_pending: set[str] = set()
+        for symbol in self._pending_symbols:
+            if symbol not in desired_set:
+                continue
+            context = self._contexts.get(symbol)
+            if context is not None and context.active:
+                continue
+            if symbol in seen_pending:
+                continue
+            filtered.append(symbol)
+            seen_pending.add(symbol)
+        self._pending_symbols = filtered
+        self._pending_symbol_set = set(filtered)
+        candidates = tuple(self._pending_symbols)
+        if not candidates:
+            scheduled: list[str] = []
+        else:
+            prioritizer = self._subscription_manager.prioritizer
+            ordered = (
+                prioritizer(candidates)
+                if prioritizer is not None and candidates
+                else candidates
+            )
+            limit = MAX_NEW_SUBSCRIPTIONS
+            if limit <= 0:
+                selected = ordered
+            else:
+                selected = ordered[:limit]
+            selected_set = set(selected)
+            if selected_set:
+                remaining: Deque[str] = deque(
+                    symbol for symbol in self._pending_symbols if symbol not in selected_set
+                )
+                self._pending_symbols = remaining
+                self._pending_symbol_set = set(remaining)
+            else:
+                selected = tuple()
+            scheduled = [symbol for symbol in selected]
+        active_symbols: list[str] = []
+        seen: set[str] = set()
+        for symbol in desired:
+            context = self._contexts.get(symbol)
+            if context is not None and context.active and symbol not in seen:
+                active_symbols.append(symbol)
+                seen.add(symbol)
+        for symbol in scheduled:
+            if symbol in seen:
+                continue
+            active_symbols.append(symbol)
+            seen.add(symbol)
+        max_new: Optional[int]
+        if scheduled:
+            max_new = len(scheduled) if MAX_NEW_SUBSCRIPTIONS > 0 else None
+        else:
+            max_new = 0
+        self._subscription_manager.update(tuple(active_symbols), timestamp, max_new=max_new)
+        if not scheduled:
+            return
+        desired_set = set(self._desired_symbols)
+        failed: list[str] = []
+        for symbol in scheduled:
+            context = self._contexts.get(symbol)
+            if context is None or not context.active:
+                if symbol in desired_set:
+                    failed.append(symbol)
+        for symbol in reversed(failed):
+            if symbol in self._pending_symbol_set:
+                continue
+            self._pending_symbols.appendleft(symbol)
+            self._pending_symbol_set.add(symbol)
 
     def _iter_active_contexts(self) -> Iterable[SymbolContext]:
         ordered: Tuple[str, ...] = self._desired_symbols
@@ -1043,9 +1154,11 @@ class Application:
     def run(self) -> None:
         interval = CONFIG.general.loop_interval_ms / 1000.0
         self._refresh_symbol_scan(force=True)
+        self._maybe_refresh_subscriptions()
         self._refresh_balances(force=True)
         while True:
             self._refresh_symbol_scan()
+            self._maybe_refresh_subscriptions()
             self._refresh_balances()
             resync_triggered = False
             work_done = False

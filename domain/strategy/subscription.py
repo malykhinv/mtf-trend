@@ -16,11 +16,21 @@ class SubscriptionManager:
     prioritizer: Optional[Callable[[Tuple[str, ...]], Tuple[str, ...]]] = None
     _active: Tuple[str, ...] = field(default_factory=tuple)
 
-    def update(self, symbols: Tuple[str, ...], timestamp: datetime) -> None:
-        additions = self._compute_additions(symbols)
+    def update(
+        self,
+        symbols: Tuple[str, ...],
+        timestamp: datetime,
+        max_new: Optional[int] = None,
+    ) -> None:
+        additions = list(self._compute_additions(symbols))
         removals = self._compute_removals(symbols)
         if self.prioritizer is not None and additions:
-            additions = self.prioritizer(additions)
+            additions = list(self.prioritizer(tuple(additions)))
+        if max_new is not None:
+            if max_new <= 0:
+                additions = []
+            else:
+                additions = additions[:max_new]
         active: List[str] = list(self._active)
         active_set: Set[str] = set(active)
         for symbol in additions:

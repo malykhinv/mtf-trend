@@ -26,7 +26,7 @@ from typing import (
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from config.config import CONFIG
+from config.config import CONFIG, MAX_ACTIVE_STREAMS
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookLevel, OrderBookSnapshot, OrderBookUpdate, Side, SymbolFilters, Trade
@@ -1667,6 +1667,7 @@ class BinanceStreamManager:
         ] = {}
         self._exchange_info_cache: Dict[str, Dict[str, object]] = {}
         self._active: set[str] = set()
+        self._max_active_streams = MAX_ACTIVE_STREAMS
         for name in self._limit_map:
             self._weights[name] = {}
             session = self._create_session(name)
@@ -1734,6 +1735,13 @@ class BinanceStreamManager:
             stream: self._available_symbol_capacity(stream)
             for stream in self._limit_map
         }
+        remaining_global = (
+            float("inf")
+            if self._max_active_streams <= 0
+            else max(self._max_active_streams - len(self._active), 0)
+        )
+        if remaining_global <= 0:
+            return tuple()
         has_capacity = any(
             (math.isinf(available_weight_by_stream[stream])
             or available_weight_by_stream[stream] > 0.0)
@@ -1775,6 +1783,10 @@ class BinanceStreamManager:
                 for stream, weight in requirements.items()
             ):
                 planned.append(normalized)
+                if not math.isinf(remaining_global):
+                    remaining_global = max(remaining_global - 1, 0)
+                    if remaining_global <= 0:
+                        break
                 for stream, weight in requirements.items():
                     if not math.isinf(available_symbols_by_stream[stream]):
                         available_symbols_by_stream[stream] = max(
@@ -1879,6 +1891,13 @@ class BinanceStreamManager:
         existing = self._streams.get(symbol)
         if existing is not None:
             return existing
+        if (
+            self._max_active_streams > 0
+            and len(self._active) >= self._max_active_streams
+        ):
+            raise StreamLimitError(
+                f"достигнут лимит активных стримов {self._max_active_streams}"
+            )
         exchange_data = self.get_exchange_data(symbol)
         streams, registrations = exchange_data.create_stream_bundle()
         stream_weights = {

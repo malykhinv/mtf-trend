@@ -23,6 +23,10 @@ from config.models import (
     WallShiftSettings,
 )
 
+MAX_ACTIVE_STREAMS: Final[int] = 60
+MAX_NEW_SUBSCRIPTIONS: Final[int] = 3
+
+
 CONFIG: Final[Config] = Config(
     general=GeneralSettings(
         exchange=ExchangeName.BINANCE,
@@ -109,4 +113,4 @@ CONFIG: Final[Config] = Config(
     ),
 )
 
-__all__ = ["CONFIG"]
+__all__ = ["CONFIG", "MAX_ACTIVE_STREAMS", "MAX_NEW_SUBSCRIPTIONS"]
