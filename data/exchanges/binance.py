@@ -253,9 +253,14 @@ class _StreamConsumer(Generic[T]):
     silence_timeout_ms: int
     snapshot_factory: SnapshotFactory[T] = None
     _delay_threshold_ms: float = field(init=False, repr=False)
+    _timeout_marks: Deque[datetime] = field(default_factory=deque, init=False, repr=False)
+    _timeout_window: timedelta = field(init=False, repr=False)
+    _timeout_limit: int = field(init=False, repr=False, default=3)
 
     def __post_init__(self) -> None:
         self._delay_threshold_ms = max(float(self.silence_timeout_ms) / 4.0, 250.0)
+        window_seconds = max(float(self.silence_timeout_ms) / 1000.0 * 3.0, 15.0)
+        self._timeout_window = timedelta(seconds=window_seconds)
 
     def process(self, payload: Dict[str, Any]) -> bool:
         """Process incoming payload and push parsed events to the buffer.
@@ -273,9 +278,14 @@ class _StreamConsumer(Generic[T]):
             )
             self.push_snapshot()
             return needs_resubscribe
+        reset_timeouts = False
         for event in events:
             self._record_latency(event.timestamp)
             self._push_event(event)
+            if event.type in (StreamEventType.DATA, StreamEventType.SNAPSHOT):
+                reset_timeouts = True
+        if reset_timeouts:
+            self._timeout_marks.clear()
         return False
 
     def handle_timeout(self) -> bool:
@@ -310,9 +320,30 @@ class _StreamConsumer(Generic[T]):
         *,
         enqueue_resubscribe: bool = True,
     ) -> bool:
+        enqueue = enqueue_resubscribe
+        attempt_suffix = ""
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        if reason == ResyncReason.SILENCE_TIMEOUT:
+            enqueue = enqueue_resubscribe and self._register_timeout(now)
+            attempts = len(self._timeout_marks)
+            attempt_suffix = (
+                f" [{min(attempts, self._timeout_limit)}/{self._timeout_limit} timeouts]"
+            )
+            if not enqueue:
+                attempt_suffix += " (cooldown active)"
+        else:
+            if self._timeout_marks:
+                self._timeout_marks.clear()
+        detail_text = details or ""
+        if attempt_suffix:
+            if detail_text:
+                detail_text = f"{detail_text}{attempt_suffix}"
+            else:
+                detail_text = attempt_suffix.strip()
         self.metrics.record_resync(reason)
         try:
-            self.log(f"[{self.stream}:{self.symbol}] {details} ({reason.name})")
+            message = f"[{self.stream}:{self.symbol}] {detail_text} ({reason.name})"
+            self.log(message)
         except Exception:  # pragma: no cover - logging failures ignored
             pass
         event = StreamEvent(
@@ -320,10 +351,17 @@ class _StreamConsumer(Generic[T]):
             None,
             datetime.now(tz=CURRENT_TIMEZONE),
             reason=reason,
-            details=details,
+            details=detail_text,
         )
         self._push_event(event)
-        return enqueue_resubscribe
+        return enqueue
+
+    def _register_timeout(self, now: datetime) -> bool:
+        cutoff = now - self._timeout_window
+        while self._timeout_marks and self._timeout_marks[0] < cutoff:
+            self._timeout_marks.popleft()
+        self._timeout_marks.append(now)
+        return len(self._timeout_marks) <= self._timeout_limit
 
     def push_snapshot(self) -> None:
         if self.snapshot_factory is None:
@@ -360,6 +398,13 @@ class _SessionCommand(Generic[T]):
     priority: float
     consumer: _StreamConsumer[T]
     use_reserve: bool = False
+
+
+@dataclass(slots=True)
+class _ResubscribeCooldownState:
+    attempts: int
+    next_allowed_at: datetime
+    last_failure_at: datetime
 
 
 @dataclass(slots=True)
@@ -1698,6 +1743,10 @@ class BinanceStreamManager:
         self._exchange_info_cache: Dict[str, Dict[str, object]] = {}
         self._active: set[str] = set()
         self._max_active_streams = MAX_ACTIVE_STREAMS
+        self._resubscribe_state: Dict[str, _ResubscribeCooldownState] = {}
+        self._backoff_base_seconds = max(float(self._silence_timeout_ms) / 1000.0, 1.0)
+        self._backoff_max_seconds = 300.0
+        self._backoff_reset_after = timedelta(minutes=10)
         for name in self._limit_map:
             self._weights[name] = {}
             session = self._create_session(name)
@@ -1883,6 +1932,22 @@ class BinanceStreamManager:
             return float("inf")
         return total + additional
 
+    def get_cooldown_until(self, symbol: str) -> Optional[datetime]:
+        normalized = symbol.upper()
+        state = self._resubscribe_state.get(normalized)
+        if state is None:
+            return None
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        if now - state.last_failure_at >= self._backoff_reset_after:
+            self._resubscribe_state.pop(normalized, None)
+            return None
+        if now >= state.next_allowed_at:
+            return None
+        return state.next_allowed_at
+
+    def _clear_cooldown(self, symbol: str) -> None:
+        self._resubscribe_state.pop(symbol.upper(), None)
+
     def _available_symbol_capacity(self, stream: str) -> float:
         sessions = self._sessions.get(stream, [])
         if not sessions:
@@ -1942,6 +2007,7 @@ class BinanceStreamManager:
 
     def subscribe(self, symbol: str) -> BinanceSymbolStreams:
         symbol = symbol.upper()
+        self._clear_cooldown(symbol)
         existing = self._streams.get(symbol)
         if existing is not None:
             return existing
@@ -2023,6 +2089,7 @@ class BinanceStreamManager:
             session.unregister_consumer(consumer, priority=priority)
         self._streams.pop(symbol, None)
         self._active.discard(symbol)
+        self._clear_cooldown(symbol)
 
     def resubscribe(self, symbol: str) -> BinanceSymbolStreams:
         symbol = symbol.upper()
@@ -2032,6 +2099,47 @@ class BinanceStreamManager:
         assignments = self._symbol_consumers.get(symbol, {})
         if not assignments:
             return streams
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        state = self._resubscribe_state.get(symbol)
+        if state is not None:
+            if now - state.last_failure_at >= self._backoff_reset_after:
+                self._clear_cooldown(symbol)
+                state = None
+            elif now < state.next_allowed_at:
+                remaining = state.next_allowed_at - now
+                try:
+                    self._log_writer(
+                        (
+                            f"Переподписка {symbol} отложена:"
+                            f" ещё {remaining.total_seconds():.1f}с cooldown"
+                        )
+                    )
+                except Exception:
+                    pass
+                self._active.discard(symbol)
+                return streams
+        attempts = 0 if state is None else state.attempts
+        attempts += 1
+        delay_seconds = min(
+            self._backoff_base_seconds * (2 ** max(attempts - 1, 0)),
+            self._backoff_max_seconds,
+        )
+        next_allowed_at = now + timedelta(seconds=delay_seconds)
+        self._resubscribe_state[symbol] = _ResubscribeCooldownState(
+            attempts=attempts,
+            next_allowed_at=next_allowed_at,
+            last_failure_at=now,
+        )
+        try:
+            self._log_writer(
+                (
+                    f"Переподписка {symbol}: попытка {attempts},"
+                    f" следующий интервал ожидания {delay_seconds:.1f}с"
+                )
+            )
+        except Exception:
+            pass
+        self._active.add(symbol)
         for stream_name, (session, consumer) in assignments.items():
             weight = max(self.stream_weight(symbol, stream_name), 0.0)
             priority = max(weight, 1.0)
@@ -2043,4 +2151,5 @@ class BinanceStreamManager:
         self._streams.pop(symbol, None)
         self._active.discard(symbol)
         self._symbol_consumers.pop(symbol, None)
+        self._clear_cooldown(symbol)
 
