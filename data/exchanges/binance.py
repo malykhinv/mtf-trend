@@ -182,7 +182,14 @@ class _StreamMetrics:
 
 
 class _CommandBudget:
-    __slots__ = ("_steady", "_burst", "_reserve_limit", "_reserve_used", "_lock")
+    __slots__ = (
+        "_steady",
+        "_burst",
+        "_reserve_limit",
+        "_reserve_used",
+        "_lock",
+        "_failure_delay",
+    )
 
     def __init__(self, limit: "StreamLimit") -> None:
         self._steady = _RateLimiter(limit.steady_per_min, timedelta(minutes=1))
@@ -190,6 +197,7 @@ class _CommandBudget:
         self._reserve_limit = max(0, limit.resubscribe_buffer)
         self._reserve_used = 0
         self._lock = threading.Lock()
+        self._failure_delay = 0.0
 
     def consume(self, *, priority: str = "normal") -> bool:
         """Consume from the configured budget.
@@ -200,16 +208,35 @@ class _CommandBudget:
         use_reserve = priority != "normal"
         now = datetime.now(tz=timezone.utc)
         with self._lock:
-            if use_reserve and self._reserve_used < self._reserve_limit:
-                self._reserve_used += 1
-                return True
-            if not self._steady.has_capacity(now) or not self._burst.has_capacity(now):
+            steady_ok = self._steady.has_capacity(now)
+            burst_ok = self._burst.has_capacity(now)
+            if not steady_ok or not burst_ok:
+                wait = 0.0
+                if not steady_ok and self._steady.limit > 0:
+                    wait = max(wait, self._steady.window.total_seconds())
+                if not burst_ok and self._burst.limit > 0:
+                    wait = max(wait, self._burst.window.total_seconds())
+                self._failure_delay = wait
                 return False
             self._steady.commit(now)
             self._burst.commit(now)
-            if self._reserve_used > 0:
+            self._failure_delay = 0.0
+            if use_reserve and self._reserve_used < self._reserve_limit:
+                self._reserve_used += 1
+            elif not use_reserve and self._reserve_used > 0:
                 self._reserve_used -= 1
             return True
+
+    def failure_delay(self) -> float:
+        with self._lock:
+            if self._failure_delay > 0.0:
+                return self._failure_delay
+            waits: list[float] = []
+            if self._steady.limit > 0:
+                waits.append(self._steady.window.total_seconds())
+            if self._burst.limit > 0:
+                waits.append(self._burst.window.total_seconds())
+            return max(waits) if waits else 0.0
 
 
 @dataclass(slots=True, eq=False)
@@ -508,6 +535,9 @@ class _BinanceStreamSession:
             score, seq, command = self._command_queue[0]
             budget_priority = "resync" if command.use_reserve else "normal"
             if not self._budget.consume(priority=budget_priority):
+                delay = self._budget.failure_delay()
+                if delay > 0.0:
+                    await asyncio.sleep(delay)
                 break
             self._command_queue.pop(0)
             command_id = self._next_command_id
@@ -1727,6 +1757,28 @@ class BinanceStreamManager:
     def plan_subscriptions(self, symbols: Tuple[str, ...]) -> Tuple[str, ...]:
         if not symbols:
             return symbols
+        streams_per_symbol = len(self._limit_map)
+        if streams_per_symbol <= 0:
+            streams_per_symbol = 1
+        burst_limits = [
+            limit.burst_per_5s
+            for limit in self._limit_map.values()
+            if limit.burst_per_5s > 0
+        ]
+        steady_limits = [
+            limit.steady_per_min
+            for limit in self._limit_map.values()
+            if limit.steady_per_min > 0
+        ]
+        burst_capacity = min(burst_limits) if burst_limits else float("inf")
+        steady_capacity = min(steady_limits) if steady_limits else float("inf")
+        command_capacity = min(burst_capacity, steady_capacity)
+        if math.isinf(command_capacity):
+            max_new_batch: Optional[int] = None
+        else:
+            max_new_batch = int(command_capacity // streams_per_symbol)
+        if max_new_batch is not None and max_new_batch <= 0:
+            return tuple()
         available_weight_by_stream = {
             stream: self._available_weight_for_stream(stream)
             for stream in self._limit_map
@@ -1764,6 +1816,8 @@ class BinanceStreamManager:
         ordered = sorted(symbols, key=total_weight, reverse=True)
         planned: list[str] = []
         for symbol in ordered:
+            if max_new_batch is not None and len(planned) >= max_new_batch:
+                break
             normalized = symbol.upper()
             if normalized in self._active:
                 continue
