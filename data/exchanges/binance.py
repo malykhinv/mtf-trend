@@ -1414,7 +1414,8 @@ class BinanceExchangeData:
             if event_type != "aggtrade":
                 return ()
             try:
-                trade_id = int(message.get("a"))
+                trade_id_raw = message.get("a")
+                trade_id = int(trade_id_raw)
             except (TypeError, ValueError):
                 raise _StreamValidationError(
                     ResyncReason.SEQUENCE_GAP,
@@ -1437,11 +1438,11 @@ class BinanceExchangeData:
             trade = Trade(
                 exchange=Exchange.BINANCE,
                 symbol=self._symbol,
-                trade_id=trade_id,
+                trade_id=str(trade_id),
                 price=price,
                 quantity=quantity,
                 side=side,
-                trade_time=event_time,
+                executed_at=event_time,
             )
             last_trade_id = trade_id
             return (StreamEvent(StreamEventType.DATA, trade, event_time),)
