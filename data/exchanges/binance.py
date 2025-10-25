@@ -1365,11 +1365,23 @@ class BinanceExchangeData:
                     ResyncReason.SEQUENCE_GAP,
                     "depth update ids missing",
                 )
-            if last_final_id is not None and prev_final != last_final_id:
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    f"depth sequence gap: expected {last_final_id}, got {prev_final}",
-                )
+            if last_final_id is not None:
+                if final_id <= last_final_id:
+                    return ()
+                expected_next = last_final_id + 1
+                if prev_final > last_final_id:
+                    raise _StreamValidationError(
+                        ResyncReason.SEQUENCE_GAP,
+                        f"depth sequence gap: expected <= {last_final_id}, got {prev_final}",
+                    )
+                if prev_final < last_final_id and not (first_id <= expected_next <= final_id):
+                    raise _StreamValidationError(
+                        ResyncReason.SEQUENCE_GAP,
+                        (
+                            "depth sequence gap: "
+                            f"missing {expected_next} in update range [{first_id}, {final_id}]"
+                        ),
+                    )
             event_time = _milliseconds_to_datetime(message.get("E"))
             bids = self._parse_levels(message.get("b", ()), event_time, "bid")
             asks = self._parse_levels(message.get("a", ()), event_time, "ask")
