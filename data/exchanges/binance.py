@@ -48,9 +48,21 @@ except Exception:  # pragma: no cover - handled at runtime
 
 @dataclass(frozen=True, slots=True)
 class BestBidAsk:
-    bid: float
-    ask: float
-    timestamp: datetime
+    bid_price: float
+    ask_price: float
+    event_time: datetime
+
+    @property
+    def bid(self) -> float:
+        return self.bid_price
+
+    @property
+    def ask(self) -> float:
+        return self.ask_price
+
+    @property
+    def timestamp(self) -> datetime:
+        return self.event_time
 
 
 DepthStreamData = OrderBookUpdate | OrderBookSnapshot
@@ -1486,7 +1498,11 @@ class BinanceExchangeData:
             best_bid = _safe_float(message.get("b", 0.0), 0.0)
             best_ask = _safe_float(message.get("a", 0.0), 0.0)
             event_time = _milliseconds_to_datetime(message.get("E"))
-            ticker = BestBidAsk(best_bid, best_ask, event_time)
+            ticker = BestBidAsk(
+                bid_price=best_bid,
+                ask_price=best_ask,
+                event_time=event_time,
+            )
             return (StreamEvent(StreamEventType.DATA, ticker, event_time),)
 
         buffer: StreamBuffer[BestBidAsk] = StreamBuffer()
