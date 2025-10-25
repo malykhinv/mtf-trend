@@ -1429,7 +1429,11 @@ class BinanceExchangeData:
             quantity = _safe_float(message.get("q"), 0.0)
             event_time = _milliseconds_to_datetime(message.get("T"))
             is_buyer_maker = bool(message.get("m", False))
-            side = Side.SELL if is_buyer_maker else Side.BUY
+            # Binance reports whether the buyer was the market maker. When the buyer is
+            # the maker, the aggressive order was a sell (ask); otherwise, it was a buy
+            # (bid). The Side enum only defines BID/ASK, so convert the flag
+            # accordingly.
+            side = Side.ASK if is_buyer_maker else Side.BID
             trade = Trade(
                 exchange=Exchange.BINANCE,
                 symbol=self._symbol,
