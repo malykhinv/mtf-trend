@@ -1260,14 +1260,70 @@ class BinanceExchangeData:
         self._exchange_info[normalized] = updated
 
     def fetch_orderbook_snapshot(self) -> OrderBookSnapshot:
-        now = datetime.now(tz=CURRENT_TIMEZONE)
+        url = (
+            "https://fapi.binance.com/fapi/v1/depth"
+            f"?symbol={self._symbol}&limit=1000"
+        )
+        try:
+            with urlopen(url, timeout=5) as response:  # noqa: S310
+                payload = json.load(response)
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:  # pragma: no cover - network
+            try:
+                self._log_writer(
+                    f"[ERROR] failed to fetch depth snapshot for {self._symbol}: {exc}"
+                )
+            except Exception:  # pragma: no cover - logging
+                pass
+            raise RuntimeError(
+                f"failed to fetch orderbook snapshot for {self._symbol}"
+            ) from exc
+
+        if not isinstance(payload, Mapping):
+            raise RuntimeError("depth snapshot payload malformed")
+
+        try:
+            last_update_id = int(payload.get("lastUpdateId"))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("depth snapshot missing lastUpdateId") from exc
+
+        received_at = datetime.now(tz=CURRENT_TIMEZONE)
+
+        def build_levels(entries: Any, side: str) -> Tuple[OrderBookLevel, ...]:
+            if not isinstance(entries, Iterable) or isinstance(entries, (str, bytes)):
+                return ()
+            levels: list[OrderBookLevel] = []
+            for entry in entries:
+                if not isinstance(entry, (Sequence, list, tuple)) or len(entry) < 2:
+                    continue
+                price_raw, quantity_raw = entry[0], entry[1]
+                try:
+                    price = float(price_raw)
+                    quantity = float(quantity_raw)
+                except (TypeError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"depth snapshot {side} level malformed"
+                    ) from exc
+                if not math.isfinite(price) or not math.isfinite(quantity):
+                    raise RuntimeError(
+                        f"depth snapshot {side} level non finite"
+                    )
+                if quantity < 0:
+                    raise RuntimeError(
+                        f"depth snapshot {side} level negative quantity"
+                    )
+                levels.append(_build_level(price, quantity, received_at))
+            return tuple(levels)
+
+        bids = build_levels(payload.get("bids"), "bid")
+        asks = build_levels(payload.get("asks"), "ask")
+
         return OrderBookSnapshot(
             exchange=Exchange.BINANCE,
             symbol=self._symbol,
-            last_update_id=0,
-            bids=(),
-            asks=(),
-            received_at=now,
+            last_update_id=last_update_id,
+            bids=bids,
+            asks=asks,
+            received_at=received_at,
         )
 
     def fetch_next_funding_time(self) -> Optional[datetime]:
