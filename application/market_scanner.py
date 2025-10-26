@@ -78,7 +78,7 @@ class MarketScanner:
             symbols = [item for item in data if isinstance(item, dict)]
         allowed = exchange_info or self._binance_exchange_info
         seen: set[str] = set()
-        entries: list[Tuple[str, object]] = []
+        entries: list[dict[str, object]] = []
         for item in symbols:
             raw_symbol = item.get("symbol")
             if not raw_symbol:
@@ -91,7 +91,15 @@ class MarketScanner:
             if symbol in seen:
                 continue
             seen.add(symbol)
-            entries.append((symbol, item.get("quoteVolume") or item.get("volume")))
+            entries.append(
+                {
+                    "symbol": symbol,
+                    "turnover": item.get("quoteVolume")
+                    or item.get("volume"),
+                    "trade_count": item.get("count"),
+                    "price_change": item.get("priceChangePercent"),
+                }
+            )
         return self._filter_and_sort(entries)
 
     def _scan_bybit(self) -> Tuple[Tuple[str, TradingProfile], ...]:
@@ -105,14 +113,37 @@ class MarketScanner:
         entries: Sequence[dict[str, object]] = result.get("list") or []
         self._listing_dates = self._fetch_listing_dates()
         self._recent_listing_cache.clear()
-        rows = (
-            (
-                row.get("symbol", ""),
-                row.get("turnover24h") or row.get("turnover24Hours") or row.get("volume24h"),
+        normalized_rows: list[dict[str, object]] = []
+        for row in entries:
+            if not isinstance(row, Mapping):
+                continue
+            symbol = row.get("symbol", "")
+            turnover = (
+                row.get("turnover24h")
+                or row.get("turnover24Hours")
+                or row.get("volume24h")
             )
-            for row in entries
-        )
-        return self._filter_and_sort(rows)
+            trade_count = (
+                row.get("tradeCnt24h")
+                or row.get("tradeCnt24Hours")
+                or row.get("tradeCount24h")
+                or row.get("tradeCount")
+            )
+            price_change = row.get("price24hPcnt")
+            if price_change not in (None, ""):
+                try:
+                    price_change = float(price_change) * 100.0
+                except (TypeError, ValueError):
+                    price_change = None
+            normalized_rows.append(
+                {
+                    "symbol": symbol,
+                    "turnover": turnover,
+                    "trade_count": trade_count,
+                    "price_change": price_change,
+                }
+            )
+        return self._filter_and_sort(normalized_rows)
 
     def _load_binance_exchange_info(
         self, *, refresh: bool = False
@@ -405,18 +436,67 @@ class MarketScanner:
                 delay *= self._retry_backoff
 
     def _filter_and_sort(
-        self, entries: Iterable[Tuple[object, object]]
+        self, entries: Iterable[Mapping[str, object] | Sequence[object]]
     ) -> Tuple[Tuple[str, TradingProfile], ...]:
         threshold = self._resolve_threshold()
         minutes_per_day = 1440.0
-        pairs: list[Tuple[str, float]] = []
-        for raw_symbol, raw_turnover in entries:
-            symbol = str(raw_symbol or "").upper()
+        normalized: list[Tuple[str, float, float, float | None]] = []
+        btc_trades: float | None = None
+        for entry in entries:
+            symbol: str
+            turnover_value: object
+            trade_count_value: object | None
+            price_change_value: object | None
+            if isinstance(entry, Mapping):
+                symbol = str(entry.get("symbol") or "")
+                turnover_value = entry.get("turnover")
+                trade_count_value = entry.get("trade_count")
+                price_change_value = entry.get("price_change")
+            elif isinstance(entry, Sequence) and not isinstance(entry, (str, bytes)):
+                if not entry:
+                    continue
+                symbol = str(entry[0] or "")
+                turnover_value = entry[1] if len(entry) > 1 else None
+                trade_count_value = entry[2] if len(entry) > 2 else None
+                price_change_value = entry[3] if len(entry) > 3 else None
+            else:
+                continue
+            symbol = symbol.upper()
             if not symbol.endswith("USDT"):
                 continue
             try:
-                turnover_24h = float(raw_turnover or 0.0)
+                turnover_24h = float(turnover_value or 0.0)
             except (TypeError, ValueError):
+                continue
+            trade_count: float | None = None
+            if trade_count_value not in (None, ""):
+                try:
+                    trade_count = float(trade_count_value)
+                except (TypeError, ValueError):
+                    trade_count = None
+            if trade_count is None:
+                continue
+            price_change: float | None = None
+            if price_change_value not in (None, ""):
+                try:
+                    price_change = float(price_change_value)
+                except (TypeError, ValueError):
+                    price_change = None
+            normalized.append((symbol, turnover_24h, trade_count, price_change))
+            if symbol == "BTCUSDT" and trade_count is not None:
+                btc_trades = trade_count
+        trade_threshold = 0.0
+        if btc_trades is not None:
+            trade_threshold = min(1_000_000.0, 0.5 * btc_trades)
+        pairs: list[Tuple[str, float]] = []
+        for symbol, turnover_24h, trade_count, price_change in normalized:
+            meets_trade_requirement = True
+            if trade_threshold > 0.0:
+                meets_trade_requirement = trade_count >= trade_threshold
+            meets_price_requirement = False
+            if price_change is not None:
+                meets_price_requirement = abs(price_change) <= 15.0
+            if not meets_trade_requirement and not meets_price_requirement:
                 continue
             turnover_per_minute = turnover_24h / minutes_per_day
             if turnover_per_minute >= threshold:
