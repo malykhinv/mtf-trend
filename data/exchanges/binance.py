@@ -378,10 +378,23 @@ class _StreamConsumer(Generic[T]):
     def push_snapshot(self) -> None:
         if self.snapshot_factory is None:
             return
-        snapshot_event = self.snapshot_factory()
-        if snapshot_event is None:
+        try:
+            snapshot_result = self.snapshot_factory()
+        except _StreamValidationError as exc:
+            self.emit_resync(
+                exc.reason,
+                exc.details,
+                enqueue_resubscribe=exc.resubscribe,
+            )
             return
-        self._push_event(snapshot_event)
+        if snapshot_result is None:
+            return
+        snapshot_event, replay_events = snapshot_result
+        if snapshot_event is not None:
+            self._push_event(snapshot_event)
+        replay_list = list(replay_events)
+        if replay_list:
+            self.buffer.extend(replay_list)
 
     def _record_latency(self, timestamp: datetime) -> None:
         now = datetime.now(tz=CURRENT_TIMEZONE)
@@ -774,7 +787,9 @@ class _StreamValidationError(RuntimeError):
         self.resubscribe = resubscribe
 
 
-SnapshotFactory = Optional[Callable[[], Optional[StreamEvent[T]]]]
+SnapshotFactory = Optional[
+    Callable[[], tuple[Optional[StreamEvent[T]], Iterable[StreamEvent[T]]]]
+]
 
 
 class _BinanceStreamWorker(Generic[T]):
@@ -1064,10 +1079,23 @@ class _BinanceStreamWorker(Generic[T]):
     def _push_snapshot(self) -> None:
         if self._snapshot_factory is None:
             return
-        snapshot_event = self._snapshot_factory()
-        if snapshot_event is None:
+        try:
+            snapshot_result = self._snapshot_factory()
+        except _StreamValidationError as exc:
+            self._emit_resync(
+                exc.reason,
+                exc.details,
+                enqueue_resubscribe=exc.resubscribe,
+            )
             return
-        self._push_event(snapshot_event)
+        if snapshot_result is None:
+            return
+        snapshot_event, replay_events = snapshot_result
+        if snapshot_event is not None:
+            self._push_event(snapshot_event)
+        replay_list = list(replay_events)
+        if replay_list:
+            self._buffer.extend(replay_list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1355,16 +1383,80 @@ class BinanceExchangeData:
 
     def _register_depth_stream(self) -> _StreamRegistration[DepthStreamData]:
         symbol_stream = f"{self._symbol.lower()}@depth@100ms"
+        buffer: StreamBuffer[DepthStreamData] = StreamBuffer()
         last_final_id: Optional[int] = None
+        snapshot_ready = False
+        pending_updates: Deque[tuple[OrderBookUpdate, int]] = deque()
 
-        def snapshot_factory() -> Optional[StreamEvent[DepthStreamData]]:
+        def apply_update(
+            update: OrderBookUpdate,
+            prev_final: int,
+        ) -> Iterable[StreamEvent[DepthStreamData]]:
             nonlocal last_final_id
+            if last_final_id is not None:
+                if update.last_update_id <= last_final_id:
+                    return ()
+                expected_next = last_final_id + 1
+                if prev_final > last_final_id:
+                    raise _StreamValidationError(
+                        ResyncReason.SEQUENCE_GAP,
+                        (
+                            "depth sequence gap: "
+                            f"expected <= {last_final_id}, got {prev_final}"
+                        ),
+                    )
+                if (
+                    prev_final < last_final_id
+                    and not (update.first_update_id <= expected_next <= update.last_update_id)
+                ):
+                    raise _StreamValidationError(
+                        ResyncReason.SEQUENCE_GAP,
+                        (
+                            "depth sequence gap: "
+                            f"missing {expected_next} in update range "
+                            f"[{update.first_update_id}, {update.last_update_id}]"
+                        ),
+                    )
+            event = StreamEvent(
+                StreamEventType.DATA,
+                update,
+                update.event_time,
+            )
+            last_final_id = update.last_update_id
+            return (event,)
+
+        def snapshot_factory() -> tuple[
+            Optional[StreamEvent[DepthStreamData]],
+            Iterable[StreamEvent[DepthStreamData]],
+        ]:
+            nonlocal last_final_id, snapshot_ready
+            snapshot_ready = False
             snapshot = self.fetch_orderbook_snapshot()
             last_final_id = snapshot.last_update_id
-            return StreamEvent(StreamEventType.SNAPSHOT, snapshot, snapshot.received_at)
+            replay_events: list[StreamEvent[DepthStreamData]] = []
+            while pending_updates:
+                update, prev_final = pending_updates.popleft()
+                try:
+                    events = apply_update(update, prev_final)
+                except _StreamValidationError:
+                    pending_updates.clear()
+                    last_final_id = None
+                    snapshot_ready = False
+                    raise
+                if not events:
+                    continue
+                replay_events.extend(events)
+            snapshot_ready = True
+            snapshot_event = StreamEvent(
+                StreamEventType.SNAPSHOT,
+                snapshot,
+                snapshot.received_at,
+                details=f"replay={len(replay_events)}",
+            )
+            return snapshot_event, tuple(replay_events)
 
         def parser(message: Dict[str, Any]) -> Iterable[StreamEvent[DepthStreamData]]:
-            nonlocal last_final_id
+            nonlocal last_final_id, snapshot_ready
             event_type = str(message.get("e", "")).lower()
             if event_type != "depthupdate":
                 return ()
@@ -1377,23 +1469,6 @@ class BinanceExchangeData:
                     ResyncReason.SEQUENCE_GAP,
                     "depth update ids missing",
                 )
-            if last_final_id is not None:
-                if final_id <= last_final_id:
-                    return ()
-                expected_next = last_final_id + 1
-                if prev_final > last_final_id:
-                    raise _StreamValidationError(
-                        ResyncReason.SEQUENCE_GAP,
-                        f"depth sequence gap: expected <= {last_final_id}, got {prev_final}",
-                    )
-                if prev_final < last_final_id and not (first_id <= expected_next <= final_id):
-                    raise _StreamValidationError(
-                        ResyncReason.SEQUENCE_GAP,
-                        (
-                            "depth sequence gap: "
-                            f"missing {expected_next} in update range [{first_id}, {final_id}]"
-                        ),
-                    )
             event_time = _milliseconds_to_datetime(message.get("E"))
             bids = self._parse_levels(message.get("b", ()), event_time, "bid")
             asks = self._parse_levels(message.get("a", ()), event_time, "ask")
@@ -1406,10 +1481,11 @@ class BinanceExchangeData:
                 asks=asks,
                 event_time=event_time,
             )
-            last_final_id = final_id
-            return (StreamEvent(StreamEventType.DATA, update, event_time),)
+            if not snapshot_ready:
+                pending_updates.append((update, prev_final))
+                return ()
+            return apply_update(update, prev_final)
 
-        buffer: StreamBuffer[DepthStreamData] = StreamBuffer()
         consumer = _StreamConsumer(
             stream="depth",
             symbol=self._symbol,
@@ -1421,7 +1497,6 @@ class BinanceExchangeData:
             silence_timeout_ms=self._silence_timeout,
             snapshot_factory=snapshot_factory,
         )
-        consumer.push_snapshot()
         subscription = StreamSubscription(
             self._stream_iterator(buffer),
             buffer,
@@ -1545,7 +1620,10 @@ class BinanceExchangeData:
         return streams, registrations
 
     def stream_depth(self) -> StreamSubscription[DepthStreamData]:
-        streams, _ = self.create_stream_bundle()
+        streams, registrations = self.create_stream_bundle()
+        depth_registration = registrations.get("depth")
+        if depth_registration is not None:
+            depth_registration.consumer.push_snapshot()
         return streams.depth
 
     def stream_trades(self) -> StreamSubscription[Trade]:
@@ -2142,6 +2220,8 @@ class BinanceStreamManager:
                 priority = stream_priorities.get(stream_name, 0.1)
                 session.unregister_consumer(consumer, priority=priority)
             raise
+        for registration in registrations.values():
+            registration.consumer.push_snapshot()
         streams.depth.assign_stop(lambda s=symbol: self.unsubscribe(s))
         streams.trades.assign_stop(lambda s=symbol: self.unsubscribe(s))
         streams.ticker.assign_stop(lambda s=symbol: self.unsubscribe(s))

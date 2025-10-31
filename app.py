@@ -464,6 +464,18 @@ class Application:
         self._strategy.complete_resync(timestamp)
 
     def _initialize_order_book(self, context: SymbolContext) -> None:
+        def _parse_replay_count(details: Optional[str]) -> int:
+            if not details:
+                return 0
+            prefix = "replay="
+            if not details.startswith(prefix):
+                return 0
+            try:
+                value = int(details[len(prefix) :])
+            except ValueError:
+                return 0
+            return value if value > 0 else 0
+
         while True:
             event = next(context.depth_subscription.events)
             if event.type is StreamEventType.SNAPSHOT:
@@ -471,6 +483,27 @@ class Application:
                 if snapshot is None:
                     continue
                 self._apply_snapshot(context, snapshot)
+                replay_count = _parse_replay_count(event.details)
+                replay_failed = False
+                for _ in range(replay_count):
+                    follow_event = next(context.depth_subscription.events)
+                    if follow_event.type is StreamEventType.DATA:
+                        update = cast(OrderBookUpdate, follow_event.data)
+                        if update is None:
+                            continue
+                        self._apply_update(context, update)
+                        continue
+                    if (
+                        follow_event.type is StreamEventType.RESYNC
+                        and follow_event.reason is not None
+                    ):
+                        context.feed_monitor.flag(follow_event.reason)
+                        context.last_update_id = None
+                        self._resubscribe_symbol_streams(context)
+                        replay_failed = True
+                        break
+                if replay_failed:
+                    continue
                 break
             if event.type is StreamEventType.RESYNC and event.reason is not None:
                 context.feed_monitor.flag(event.reason)
