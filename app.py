@@ -204,6 +204,8 @@ class Application:
         self._balance_source = self._map_balance_source(CONFIG.position.balance_source)
         self._balance_refresh_interval = timedelta(hours=CONFIG.position.balance_refresh_h)
         self._last_balance_refresh_at: Optional[datetime] = None
+        self._cached_balance: Optional[float] = None
+        self._cached_balance_updated_at: Optional[datetime] = None
         self._silence_recovery_cooldown = timedelta(seconds=5)
         self._data_freshness_threshold = timedelta(
             milliseconds=CONFIG.general.ws_silence_timeout_ms
@@ -325,6 +327,8 @@ class Application:
         context = self._contexts.get(symbol)
         if context is None:
             raise ValueError(f"unknown symbol {symbol}")
+        if self._cached_balance is not None:
+            return self._cached_balance
         return context.balance
 
     def _subscribe_symbol(self, symbol: str) -> None:
@@ -1072,18 +1076,51 @@ class Application:
         )
 
     def _update_context_balance(self, context: SymbolContext) -> None:
+        cached = self._cached_balance
+        timestamp = self._cached_balance_updated_at
+        if cached is None or timestamp is None:
+            result = self._refresh_cached_balance(source_context=context)
+            if result is None:
+                return
+            cached, timestamp = result
+        self._apply_cached_balance(context, cached, timestamp)
+
+    def _refresh_cached_balance(
+        self, *, source_context: Optional[SymbolContext] = None
+    ) -> Optional[Tuple[float, datetime]]:
+        adapter: Optional[TradingAdapter] = None
+        symbol: Optional[str] = None
+        if source_context is not None:
+            adapter = source_context.trading_adapter
+            symbol = source_context.symbol
+        else:
+            for context in self._contexts.values():
+                if context.active:
+                    adapter = context.trading_adapter
+                    symbol = context.symbol
+                    break
+        if adapter is None:
+            return None
         try:
-            balance = context.trading_adapter.get_balance(self._balance_source)
-        except (Exception) as error:
+            balance = adapter.get_balance(self._balance_source)
+        except Exception as error:  # noqa: BLE001
+            details = f" {symbol}" if symbol is not None else ""
             self._log_error(
-                f"Не удалось обновить баланс {context.symbol}: {error}"
+                f"Не удалось обновить баланс{details}: {error}"
             )
-            return
+            return None
         timestamp = get_current_time()
+        self._cached_balance = balance
+        self._cached_balance_updated_at = timestamp
+        return balance, timestamp
+
+    def _apply_cached_balance(
+        self, context: SymbolContext, balance: float, timestamp: datetime
+    ) -> None:
         context.balance = balance
         context.balance_updated_at = timestamp
         self._event_logger.log(
-            f"Баланс {context.symbol} обновлён: {balance:g}.",
+            f"Баланс аккаунта (общий) для {context.symbol} обновлён: {balance:g}.",
             timestamp,
         )
 
@@ -1183,11 +1220,16 @@ class Application:
             and now - self._last_balance_refresh_at < self._balance_refresh_interval
         ):
             return
-        for context in self._contexts.values():
-            if not context.active:
-                continue
-            self._update_context_balance(context)
-        self._last_balance_refresh_at = now
+        active_contexts = [c for c in self._contexts.values() if c.active]
+        if not active_contexts:
+            return
+        result = self._refresh_cached_balance(source_context=active_contexts[0])
+        if result is None:
+            return
+        balance, timestamp = result
+        for context in active_contexts:
+            self._apply_cached_balance(context, balance, timestamp)
+        self._last_balance_refresh_at = timestamp
 
     def run(self) -> None:
         interval = CONFIG.general.loop_interval_ms / 1000.0
