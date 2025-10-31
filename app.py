@@ -281,6 +281,7 @@ class Application:
             logger=self._event_logger,
             resync=self._handle_resync,
             safety=self._kill_switch,
+            detailed_diagnostics=CONFIG.general.enable_detailed_diagnostics,
         )
 
     @staticmethod
@@ -639,16 +640,28 @@ class Application:
                     continue
                 context.feed_monitor.flag(event.reason)
                 context.last_update_id = None
-                context.order_book_updated_at = None
                 timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
                 details = f" {event.details}." if event.details else ""
+                lost_seconds: Optional[float]
+                if context.order_book_updated_at is not None:
+                    lost_seconds = (
+                        event.timestamp - context.order_book_updated_at
+                    ).total_seconds()
+                else:
+                    lost_seconds = None
+                loss_suffix = (
+                    f" (stream=depth, lost={lost_seconds:.1f}с)."
+                    if lost_seconds is not None
+                    else " (stream=depth, lost=н/д)."
+                )
                 self._event_logger.log(
                     (
                         f"Поток стакана {context.symbol} требует ресинк: "
-                        f"{event.reason.value}.{details}"
+                        f"{event.reason.value}.{details}{loss_suffix}"
                     ),
                     timestamp,
                 )
+                context.order_book_updated_at = None
                 manager = self._binance_streams
                 if manager is not None:
                     cooldown_until = manager.get_cooldown_until(context.symbol)
@@ -714,10 +727,33 @@ class Application:
                     else:
                         context.volume_ratio = 0.0
                         context.volume_spike = False
+            elif event.type is StreamEventType.RESYNC and event.reason is not None:
+                timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
+                last_trade_at = context.trade_updated_at
+                lost_seconds: Optional[float]
+                if last_trade_at is not None:
+                    lost_seconds = (
+                        event.timestamp - last_trade_at
+                    ).total_seconds()
+                else:
+                    lost_seconds = None
+                details = f" {event.details}." if event.details else ""
+                loss_suffix = (
+                    f" (stream=trades, lost={lost_seconds:.1f}с)."
+                    if lost_seconds is not None
+                    else " (stream=trades, lost=н/д)."
+                )
+                self._event_logger.log(
+                    (
+                        f"Поток сделок {context.symbol} требует ресинк: "
+                        f"{event.reason.value}.{details}{loss_suffix}"
+                    ),
+                    timestamp,
+                )
+                context.trade_updated_at = None
         return processed
 
-    @staticmethod
-    def _process_ticker_stream(context: SymbolContext) -> bool:
+    def _process_ticker_stream(self, context: SymbolContext) -> bool:
         buffer = context.ticker_subscription._buffer
         events = buffer.drain_pending()
         if not events:
@@ -735,6 +771,30 @@ class Application:
                 ticker = cast(BestBidAsk, event.data)
                 if ticker is not None:
                     latest_ticker = ticker
+            elif event.type is StreamEventType.RESYNC and event.reason is not None:
+                timestamp = event.timestamp.astimezone(CURRENT_TIMEZONE)
+                last_ticker_at = context.ticker_updated_at
+                lost_seconds: Optional[float]
+                if last_ticker_at is not None:
+                    lost_seconds = (
+                        event.timestamp - last_ticker_at
+                    ).total_seconds()
+                else:
+                    lost_seconds = None
+                details = f" {event.details}." if event.details else ""
+                loss_suffix = (
+                    f" (stream=ticker, lost={lost_seconds:.1f}с)."
+                    if lost_seconds is not None
+                    else " (stream=ticker, lost=н/д)."
+                )
+                self._event_logger.log(
+                    (
+                        f"Поток тикера {context.symbol} требует ресинк: "
+                        f"{event.reason.value}.{details}{loss_suffix}"
+                    ),
+                    timestamp,
+                )
+                context.ticker_updated_at = None
         if latest_ticker is not None:
             context.best_bid = latest_ticker.bid_price
             context.best_ask = latest_ticker.ask_price

@@ -15,6 +15,7 @@ class GeneralSettings:
     recent_band_s_vol_boost: int
     vol_spike_mult: float
     orderbook_snapshot_timeout_s: float
+    enable_detailed_diagnostics: bool
 
 
 __all__ = ["GeneralSettings"]
