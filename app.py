@@ -123,6 +123,8 @@ class SymbolContext:
     funding_block_logged: bool = False
     last_update_id: Optional[int] = None
     last_trade_price: Optional[float] = None
+    last_trade_id: Optional[int] = None
+    missed_trade_ids: int = 0
     best_bid: Optional[float] = None
     best_ask: Optional[float] = None
     order_book_updated_at: Optional[datetime] = None
@@ -684,6 +686,22 @@ class Application:
                     trade_time = trade.executed_at
                     context.trade_updated_at = trade_time
                     context.last_trade_price = trade.price
+                    trade_id_value: Optional[int]
+                    try:
+                        trade_id_value = int(trade.trade_id)
+                    except (TypeError, ValueError):
+                        trade_id_value = None
+                    if trade_id_value is not None:
+                        previous_id = context.last_trade_id
+                        if previous_id is not None:
+                            gap = trade_id_value - previous_id
+                            if gap > 1:
+                                context.missed_trade_ids += gap - 1
+                            elif gap == 1 and context.missed_trade_ids > 0:
+                                context.missed_trade_ids -= 1
+                            elif gap <= 0:
+                                context.missed_trade_ids += 1
+                        context.last_trade_id = trade_id_value
                     now = get_current_time()
                     if self._is_data_fresh(trade_time, now):
                         _, _, ratio, ready = context.volume_tracker.observe(
