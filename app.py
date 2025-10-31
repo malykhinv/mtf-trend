@@ -822,13 +822,24 @@ class Application:
         profile_by_symbol = {
             symbol.upper(): profile for symbol, profile in scan_result
         }
+        symbols = tuple(profile_by_symbol.keys())
+        preview_limit = 10
+        if symbols:
+            preview = ", ".join(symbols[:preview_limit])
+            if len(symbols) > preview_limit:
+                preview = f"{preview}, ..."
+            scanner_message = (
+                f"Получено {len(symbols)} символов: {preview}"
+            )
+        else:
+            scanner_message = "Сканер не вернул символов."
+        self._log_scanner_message(scanner_message)
         self._symbol_profiles = profile_by_symbol
         weights_by_symbol = {
             symbol.upper(): weights
             for symbol, weights in self._scanner.symbol_weights.items()
         }
         self._symbol_weights = weights_by_symbol
-        symbols = tuple(profile_by_symbol.keys())
         if self._binance_streams is not None:
             exchange_info = self._scanner.binance_exchange_info
             if exchange_info:
