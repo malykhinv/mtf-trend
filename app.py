@@ -827,14 +827,10 @@ class Application:
             symbol.upper(): profile for symbol, profile in scan_result
         }
         symbols = tuple(profile_by_symbol.keys())
-        preview_limit = 10
+        preview_limit = -1
         if symbols:
-            preview = ", ".join(symbols[:preview_limit])
-            if len(symbols) > preview_limit:
-                preview = f"{preview}, ..."
-            scanner_message = (
-                f"Получено {len(symbols)} символов: {preview}"
-            )
+            preview = "\n".join(symbols[:preview_limit])
+            scanner_message = preview
         else:
             scanner_message = "Сканер не вернул символов."
         self._log_scanner_message(scanner_message)
