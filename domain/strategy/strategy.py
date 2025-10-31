@@ -29,6 +29,7 @@ class Strategy:
         logger: EventLogger,
         resync: ResyncHandler,
         safety: KillSwitch,
+        detailed_diagnostics: bool = False,
     ) -> None:
         self._subscriptions = subscriptions
         self._focus = focus
@@ -47,6 +48,7 @@ class Strategy:
         self._last_trade_at: dict[str, datetime] = {}
         self._last_stop_move_at: dict[str, datetime] = {}
         self._last_uptick_loss_at: dict[str, datetime] = {}
+        self._last_partial_log_at: dict[str, datetime] = {}
         self._position_symbol: Optional[str] = None
         self._position_signal = Signal.NONE
         self._position_wall: Optional[Wall] = None
@@ -58,6 +60,8 @@ class Strategy:
         self._resync_reason: Optional[ResyncReason] = None
         self._resync_summary_start: Optional[datetime] = None
         self._resync_summary_count = 0
+        self._detailed_diagnostics_enabled = detailed_diagnostics
+        self._partial_log_interval = timedelta(seconds=30)
 
     @property
     def state(self) -> StrategyState:
@@ -93,6 +97,28 @@ class Strategy:
             self._subscriptions.update(observation.available_symbols, observation.timestamp)
             self._last_scan_at = observation.timestamp
 
+    def _log_partial_diagnostics(
+        self,
+        symbol: str,
+        timestamp: datetime,
+        *,
+        wall_present: bool,
+        volume_spike: bool,
+    ) -> None:
+        if not self._detailed_diagnostics_enabled:
+            return
+        if wall_present == volume_spike:
+            return
+        last_logged = self._last_partial_log_at.get(symbol)
+        if last_logged is not None and timestamp - last_logged < self._partial_log_interval:
+            return
+        self._last_partial_log_at[symbol] = timestamp
+        if wall_present:
+            detail = "обнаружена стенка, но нет всплеска объёма"
+        else:
+            detail = "есть всплеск объёма, но стенка не найдена"
+        self._logger.log(f"Диагностика {symbol}: {detail}.", timestamp)
+
     def _handle_scanning(self, observation: MarketObservation) -> None:
         if observation.pressure is None:
             return
@@ -108,6 +134,12 @@ class Strategy:
         else:
             return
         if wall is None or not observation.volume_spike:
+            self._log_partial_diagnostics(
+                observation.symbol,
+                observation.timestamp,
+                wall_present=wall is not None,
+                volume_spike=observation.volume_spike,
+            )
             return
         self._focus_on_symbol(
             observation.symbol,

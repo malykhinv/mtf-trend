@@ -39,6 +39,7 @@ CONFIG: Final[Config] = Config(
         recent_band_s_vol_boost=8,
         vol_spike_mult=2.0,
         orderbook_snapshot_timeout_s=5.0,
+        enable_detailed_diagnostics=True,
     ),
     turnover=TurnoverThresholds(
         top_usd=700_000,
