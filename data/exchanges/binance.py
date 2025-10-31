@@ -26,7 +26,7 @@ from typing import (
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from config.config import CONFIG, MAX_ACTIVE_STREAMS
+from config.config import ALLOWED_GAP, CONFIG, MAX_ACTIVE_STREAMS
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookLevel, OrderBookSnapshot, OrderBookUpdate, Side, SymbolFilters, Trade
@@ -1550,11 +1550,31 @@ class BinanceExchangeData:
                     ResyncReason.SEQUENCE_GAP,
                     "trade id missing",
                 )
-            if last_trade_id is not None and trade_id <= last_trade_id:
-                raise _StreamValidationError(
-                    ResyncReason.SEQUENCE_GAP,
-                    "out-of-order trade sequence",
-                )
+            if last_trade_id is not None:
+                gap = trade_id - last_trade_id
+                if gap <= 0:
+                    raise _StreamValidationError(
+                        ResyncReason.SEQUENCE_GAP,
+                        "out-of-order trade sequence",
+                    )
+                if gap == 1:
+                    pass
+                elif gap <= ALLOWED_GAP:
+                    try:
+                        self._log_writer(
+                            (
+                                f"Поток сделок {self._symbol}: пропущено"
+                                f" {gap - 1} id", 
+                                f" (gap={gap}, допуск до {ALLOWED_GAP}).",
+                            )
+                        )
+                    except Exception:
+                        pass
+                else:
+                    raise _StreamValidationError(
+                        ResyncReason.SEQUENCE_GAP,
+                        "trade sequence gap exceeds allowance",
+                    )
             price = _safe_float(message.get("p"), 0.0)
             quantity = _safe_float(message.get("q"), 0.0)
             event_time = _milliseconds_to_datetime(message.get("T"))
