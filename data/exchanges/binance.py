@@ -1304,19 +1304,49 @@ class BinanceExchangeData:
             "https://fapi.binance.com/fapi/v1/depth"
             f"?symbol={self._symbol}&limit=1000"
         )
-        try:
-            with urlopen(url, timeout=5) as response:  # noqa: S310
-                payload = json.load(response)
-        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:  # pragma: no cover - network
+        timeout_s = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
+        max_attempts = 3
+        base_delay = 0.5
+        last_exception: Exception | None = None
+        payload: Mapping[str, Any] | None = None
+
+        for attempt in range(1, max_attempts + 1):
             try:
-                self._log_writer(
-                    f"[ERROR] failed to fetch depth snapshot for {self._symbol}: {exc}"
-                )
-            except Exception:  # pragma: no cover - logging
-                pass
+                with urlopen(url, timeout=timeout_s) as response:  # noqa: S310
+                    payload = json.load(response)
+                break
+            except (
+                URLError,
+                TimeoutError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:  # pragma: no cover - network
+                last_exception = exc
+                if attempt < max_attempts:
+                    backoff = base_delay * (2 ** (attempt - 1))
+                    try:
+                        self._log_writer(
+                            (
+                                f"[WARNING] depth snapshot attempt {attempt} failed for"
+                                f" {self._symbol}: {exc}. Retrying in {backoff:.2f}s"
+                            )
+                        )
+                    except Exception:  # pragma: no cover - logging
+                        pass
+                    time.sleep(backoff)
+                else:
+                    try:
+                        self._log_writer(
+                            f"[ERROR] failed to fetch depth snapshot for {self._symbol}: {exc}"
+                        )
+                    except Exception:  # pragma: no cover - logging
+                        pass
+
+        if payload is None:
+            assert last_exception is not None
             raise RuntimeError(
                 f"failed to fetch orderbook snapshot for {self._symbol}"
-            ) from exc
+            ) from last_exception
 
         if not isinstance(payload, Mapping):
             raise RuntimeError("depth snapshot payload malformed")
