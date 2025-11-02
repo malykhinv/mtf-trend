@@ -1397,7 +1397,112 @@ class BinanceExchangeData:
         )
 
     def fetch_next_funding_time(self) -> Optional[datetime]:
-        return datetime.now(tz=CURRENT_TIMEZONE) + timedelta(hours=8)
+        url = (
+            "https://fapi.binance.com/fapi/v1/premiumIndex"
+            f"?symbol={self._symbol}"
+        )
+        timeout_s = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
+        max_attempts = 3
+        base_delay = 0.5
+        payload: Any | None = None
+        last_exception: Exception | None = None
+
+        def _log(message: str) -> None:
+            try:
+                self._log_writer(message)
+            except Exception:  # pragma: no cover - defensive logging
+                pass
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                with urlopen(url, timeout=timeout_s) as response:  # noqa: S310
+                    payload = json.load(response)
+                break
+            except (
+                URLError,
+                TimeoutError,
+                OSError,
+                json.JSONDecodeError,
+            ) as exc:  # pragma: no cover - network access
+                last_exception = exc
+                if attempt < max_attempts:
+                    delay = base_delay * (2 ** (attempt - 1))
+                    _log(
+                        (
+                            f"[WARNING] funding info attempt {attempt} failed for "
+                            f"{self._symbol}: {exc}. Retrying in {delay:.2f}s"
+                        )
+                    )
+                    time.sleep(delay)
+                else:
+                    _log(
+                        (
+                            f"[ERROR] funding info attempt {attempt} failed for "
+                            f"{self._symbol}: {exc}"
+                        )
+                    )
+
+        if payload is None:
+            if last_exception is not None:
+                raise RuntimeError(
+                    f"failed to fetch funding info for {self._symbol}"
+                ) from last_exception
+            raise RuntimeError(f"funding info unavailable for {self._symbol}")
+
+        entries: Tuple[Mapping[str, Any], ...]
+        if isinstance(payload, Mapping):
+            entries = (payload,)
+        elif isinstance(payload, Sequence) and not isinstance(payload, (str, bytes)):
+            entries = tuple(
+                entry for entry in payload if isinstance(entry, Mapping)
+            )
+        else:
+            raise RuntimeError("funding info payload malformed")
+
+        if not entries:
+            raise RuntimeError("funding info payload empty")
+
+        symbol = self._symbol.upper()
+        entry = next(
+            (
+                item
+                for item in entries
+                if str(item.get("symbol") or "").upper() == symbol
+            ),
+            None,
+        )
+        if entry is None:
+            entry = entries[0]
+            entry_symbol = str(entry.get("symbol") or "").upper()
+            if entry_symbol and entry_symbol != symbol:
+                _log(
+                    (
+                        "[WARNING] funding info symbol mismatch: expected "
+                        f"{symbol}, received {entry_symbol}"
+                    )
+                )
+
+        raw_timestamp = (
+            entry.get("nextFundingTime")
+            or entry.get("nextFundingTimestamp")
+            or entry.get("fundingTime")
+        )
+        if raw_timestamp is None:
+            raise RuntimeError("funding info missing next funding timestamp")
+
+        try:
+            timestamp_value = float(raw_timestamp)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("funding info invalid next funding timestamp") from exc
+
+        if not math.isfinite(timestamp_value) or timestamp_value <= 0:
+            raise RuntimeError("funding info invalid next funding timestamp")
+
+        seconds = timestamp_value / 1000.0 if timestamp_value >= 1e12 else timestamp_value
+        funding_time = datetime.fromtimestamp(seconds, tz=timezone.utc).astimezone(
+            CURRENT_TIMEZONE
+        )
+        return funding_time
 
     def _stream_iterator(
         self, buffer: StreamBuffer[T]
