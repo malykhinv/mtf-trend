@@ -37,6 +37,7 @@ from .binance import (
     StreamLimitError,
     StreamSubscription,
 )
+from .bybit import BybitExchangeData
 from .events import ResyncReason, StreamEvent, StreamEventType
 from .stream_buffer import StreamBuffer
 
@@ -234,29 +235,6 @@ class BinanceTradingAdapter(IExchangeTrade):
         trigger: StopTrigger,
     ) -> None:
         return None
-
-
-class BybitExchangeData(IExchangeData):
-    def __init__(self, *args, **kwargs) -> None:  # noqa: ANN002, ANN003
-        raise NotImplementedError("Bybit data access is not available")
-
-    def fetch_symbol_filters(self) -> SymbolFilters:
-        raise NotImplementedError
-
-    def fetch_orderbook_snapshot(self) -> OrderBookSnapshot:
-        raise NotImplementedError
-
-    def fetch_next_funding_time(self) -> Optional[datetime]:
-        raise NotImplementedError
-
-    def stream_depth(self) -> StreamSubscription[DepthStreamData]:
-        raise NotImplementedError
-
-    def stream_trades(self) -> StreamSubscription[Trade]:
-        raise NotImplementedError
-
-    def stream_book_ticker(self) -> StreamSubscription[BestBidAsk]:
-        raise NotImplementedError
 
 
 class BybitTradingAdapter(IExchangeTrade):
