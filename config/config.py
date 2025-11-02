@@ -4,6 +4,7 @@ from typing import Final
 
 from config.models import (
     BalanceSource,
+    BinanceTradeSettings,
     Config,
     ExchangeName,
     FocusSettings,
@@ -113,6 +114,11 @@ CONFIG: Final[Config] = Config(
             listing=0.8,
             auto=0.3,
         ),
+    ),
+    binance_trading=BinanceTradeSettings(
+        new_client_order_id_prefix=None,
+        reduce_only=False,
+        close_position=False,
     ),
 )
 

@@ -1,4 +1,5 @@
 from .balance_source import BalanceSource
+from .binance_trade_settings import BinanceTradeSettings
 from .config_model import Config
 from .exchange_name import ExchangeName
 from .focus_settings import FocusSettings
@@ -20,6 +21,7 @@ from .wall_shift_settings import WallShiftSettings
 
 __all__ = [
     "BalanceSource",
+    "BinanceTradeSettings",
     "Config",
     "ExchangeName",
     "FocusSettings",
