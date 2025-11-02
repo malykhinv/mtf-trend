@@ -233,6 +233,12 @@ class BinanceTradingAdapter(IExchangeTrade):
         self._api_key = api_key
         self._api_secret = api_secret
         self._log_writer: LogSink = log_writer or (lambda message: None)
+        settings = CONFIG.binance_trading
+        self._client_order_id_prefix = self._sanitize_identifier(
+            settings.new_client_order_id_prefix
+        )
+        self._market_reduce_only = settings.reduce_only
+        self._stop_close_position = settings.close_position
 
     def _log(self, message: str) -> None:
         try:
@@ -247,6 +253,7 @@ class BinanceTradingAdapter(IExchangeTrade):
         *,
         timeout: float,
         context: Optional[str] = None,
+        method: str = "GET",
     ) -> str:
         if not self._api_key or not self._api_secret:
             raise RuntimeError("Binance API credentials are required for signed requests")
@@ -267,7 +274,13 @@ class BinanceTradingAdapter(IExchangeTrade):
                 hashlib.sha256,
             ).hexdigest()
             url = f"{self._REST_HOST}{path}?{query_string}&signature={signature}"
-            request = Request(url=url, headers={"X-MBX-APIKEY": self._api_key})
+            data_bytes = b"" if method.upper() != "GET" else None
+            request = Request(
+                url=url,
+                headers={"X-MBX-APIKEY": self._api_key},
+                data=data_bytes,
+                method=method.upper(),
+            )
 
             try:
                 with urlopen(request, timeout=timeout) as response:  # noqa: S310
@@ -347,18 +360,29 @@ class BinanceTradingAdapter(IExchangeTrade):
         *,
         reason: Optional[str] = None,
     ) -> ExecutionReport:
-        executed_at = datetime.now(tz=CURRENT_TIMEZONE)
-        return ExecutionReport(
-            exchange=Exchange.BINANCE,
-            symbol=self._symbol,
-            order_id="SIMULATED",
+        timeout_s = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
+        client_id = self._build_client_order_id(reason)
+        params: dict[str, Any] = {
+            "symbol": self._symbol,
+            "side": "BUY" if side is Side.BID else "SELL",
+            "type": "MARKET",
+            "quantity": format(quantity, "g"),
+        }
+        if client_id is not None:
+            params["newClientOrderId"] = client_id
+        params["reduceOnly"] = self._bool_param(self._market_reduce_only)
+        response_text = self._signed_request(
+            "/fapi/v1/order",
+            params=params,
+            timeout=timeout_s,
+            context="create market order",
+            method="POST",
+        )
+        payload = self._decode_payload(response_text, context="create market order")
+        return self._build_execution_report(
+            payload,
             side=side,
-            price=0.0,
-            quantity=quantity,
-            executed_qty=quantity,
-            status="FILLED",
-            commission=0.0,
-            executed_at=executed_at,
+            requested_qty=quantity,
         )
 
     def place_stop_market(
@@ -368,7 +392,196 @@ class BinanceTradingAdapter(IExchangeTrade):
         quantity: float,
         trigger: StopTrigger,
     ) -> None:
+        timeout_s = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
+        params: dict[str, Any] = {
+            "symbol": self._symbol,
+            "side": "BUY" if side is Side.BID else "SELL",
+            "type": "STOP_MARKET",
+            "stopPrice": format(stop_price, "g"),
+            "workingType": self._map_working_type(trigger),
+            "closePosition": self._bool_param(self._stop_close_position),
+        }
+        if not self._stop_close_position:
+            params["quantity"] = format(quantity, "g")
+        params["reduceOnly"] = self._bool_param(self._market_reduce_only)
+        response_text = self._signed_request(
+            "/fapi/v1/order",
+            params=params,
+            timeout=timeout_s,
+            context="create stop order",
+            method="POST",
+        )
+        payload = self._decode_payload(response_text, context="create stop order")
+        order_id = str(payload.get("orderId") or payload.get("clientOrderId") or "").strip()
+        status = str(payload.get("status") or "").strip()
+        order_type = str(payload.get("type") or "").strip()
+        if not order_id:
+            order_id = "UNKNOWN"
+        if not status:
+            status = "UNKNOWN"
+        if not order_type:
+            order_type = "STOP_MARKET"
+        self._log(
+            (
+                f"[INFO] Binance stop order ack for {self._symbol}: "
+                f"id={order_id} type={order_type} status={status}"
+            )
+        )
+
+    @staticmethod
+    def _sanitize_identifier(value: Optional[str]) -> Optional[str]:
+        if not value:
+            return None
+        filtered = "".join(ch for ch in value if ch.isalnum() or ch in {"-", "_"})
+        if not filtered:
+            return None
+        return filtered[:36]
+
+    def _build_client_order_id(self, reason: Optional[str]) -> Optional[str]:
+        prefix = self._client_order_id_prefix
+        suffix = self._sanitize_identifier(reason)
+        if prefix is None and suffix is None:
+            return None
+        parts = []
+        if prefix is not None:
+            parts.append(prefix)
+        if suffix is not None:
+            parts.append(suffix)
+        combined = "_".join(parts)
+        return combined[:36] if combined else None
+
+    @staticmethod
+    def _bool_param(value: bool) -> str:
+        return "true" if value else "false"
+
+    @staticmethod
+    def _to_float(value: Any) -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(result):
+            return 0.0
+        return result
+
+    def _decode_payload(self, text: str, *, context: str) -> Mapping[str, Any]:
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError as exc:
+            self._log(
+                f"[ERROR] Binance {context} response decode failed for {self._symbol}: {exc}"
+            )
+            raise RuntimeError(f"Binance {context} response invalid") from exc
+        if not isinstance(payload, Mapping):
+            self._log(
+                f"[ERROR] Binance {context} response malformed for {self._symbol}"
+            )
+            raise RuntimeError(f"Binance {context} response malformed")
+        code = payload.get("code")
+        if code is not None:
+            try:
+                code_value = int(code)
+            except (TypeError, ValueError):
+                code_value = -1
+            if code_value != 0:
+                message = str(payload.get("msg") or "unknown error")
+                self._log(
+                    (
+                        f"[ERROR] Binance {context} failed for {self._symbol}: "
+                        f"{message} (code {code_value})"
+                    )
+                )
+                raise RuntimeError(
+                    f"Binance {context} failed: {message} (code {code_value})"
+                )
+        return payload
+
+    def _build_execution_report(
+        self,
+        payload: Mapping[str, Any],
+        *,
+        side: Side,
+        requested_qty: float,
+    ) -> ExecutionReport:
+        order_id = str(payload.get("orderId") or payload.get("clientOrderId") or "").strip()
+        if not order_id:
+            self._log(
+                f"[ERROR] Binance order response missing orderId for {self._symbol}"
+            )
+            raise RuntimeError("Binance order response missing orderId")
+        quantity_value = self._to_float(payload.get("origQty"))
+        if quantity_value <= 0.0:
+            quantity_value = max(requested_qty, 0.0)
+        executed_qty = self._to_float(payload.get("executedQty") or payload.get("cumQty"))
+        if executed_qty <= 0.0:
+            executed_qty = quantity_value
+        cum_quote = self._to_float(
+            payload.get("cumQuote")
+            or payload.get("cumQuoteQty")
+            or payload.get("cummulativeQuoteQty")
+        )
+        price = self._to_float(payload.get("avgPrice"))
+        if price <= 0.0:
+            price = self._to_float(payload.get("price"))
+        if price <= 0.0 and executed_qty > 0.0 and cum_quote > 0.0:
+            price = cum_quote / executed_qty
+        commission = self._to_float(
+            payload.get("commission") or payload.get("commissionAmount")
+        )
+        status = str(payload.get("status") or "").strip()
+        if not status:
+            status = "UNKNOWN"
+        executed_at = datetime.now(tz=CURRENT_TIMEZONE)
+        time_value = payload.get("updateTime") or payload.get("transactTime")
+        parsed_time = self._parse_time(time_value)
+        if parsed_time is not None:
+            executed_at = parsed_time
+        return ExecutionReport(
+            exchange=Exchange.BINANCE,
+            symbol=self._symbol,
+            order_id=order_id,
+            side=side,
+            price=price,
+            quantity=quantity_value,
+            executed_qty=executed_qty,
+            status=status,
+            commission=commission,
+            executed_at=executed_at,
+        )
+
+    @staticmethod
+    def _parse_time(value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.astimezone(CURRENT_TIMEZONE)
+        if isinstance(value, (int, float)):
+            seconds = float(value)
+            if seconds > 1e12:
+                seconds /= 1000.0
+            return datetime.fromtimestamp(seconds, tz=CURRENT_TIMEZONE)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            if text.isdigit():
+                return BinanceTradingAdapter._parse_time(int(text))
+            try:
+                parsed = datetime.fromisoformat(text)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return parsed.replace(tzinfo=CURRENT_TIMEZONE)
+            return parsed.astimezone(CURRENT_TIMEZONE)
         return None
+
+    @staticmethod
+    def _map_working_type(trigger: StopTrigger) -> str:
+        if trigger is StopTrigger.MARK:
+            return "MARK_PRICE"
+        if trigger is StopTrigger.LAST:
+            return "LAST_PRICE"
+        return "MARK_PRICE"
 
 
 class BybitTradingAdapter(IExchangeTrade):

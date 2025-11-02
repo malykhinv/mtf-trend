@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from .binance_trade_settings import BinanceTradeSettings
 from .focus_settings import FocusSettings
 from .funding_kill_switch_settings import FundingKillSwitchSettings
 from .general_settings import GeneralSettings
@@ -26,6 +27,7 @@ class Config:
     funding_ks: FundingKillSwitchSettings
     telegram: TelegramSettings
     profile_stream_weights: ProfileStreamWeights
+    binance_trading: BinanceTradeSettings
 
 
 __all__ = ["Config"]

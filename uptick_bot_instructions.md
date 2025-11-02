@@ -110,6 +110,12 @@ utils/
 - `LEVERAGE = 10`
 - `STOP_TRIGGER = "mark_price" | "last_price"`
 
+### Binance торговля
+
+- `BINANCE_NEW_CLIENT_ORDER_ID_PREFIX = None | "..."`
+- `BINANCE_MARKET_REDUCE_ONLY = False`
+- `BINANCE_STOP_CLOSE_POSITION = False`
+
 ### Фокус/дефокус
 
 - `DEFOCUS_TIMEOUT_S = 30`
