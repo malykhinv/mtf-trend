@@ -26,7 +26,12 @@ from typing import (
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from config.config import ALLOWED_GAP, CONFIG, MAX_ACTIVE_STREAMS
+from config.config import (
+    ALLOWED_GAP,
+    CONFIG,
+    MAX_ACTIVE_STREAMS,
+    STREAM_METRICS_LOG_INTERVAL_MIN,
+)
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookLevel, OrderBookSnapshot, OrderBookUpdate, Side, SymbolFilters, Trade
@@ -173,6 +178,10 @@ class _StreamMetrics:
     reconnects: int = 0
     queue_overflows: int = 0
     messages: int = 0
+    last_report_at: datetime | None = None
+    messages_since_report: int = 0
+    resyncs_since_report: int = 0
+    exceptions_since_report: int = 0
 
     def record_latency(self, latency_ms: float, threshold_ms: float) -> None:
         self.latency_last_ms = latency_ms
@@ -191,6 +200,42 @@ class _StreamMetrics:
             self.reconnects += 1
         elif reason == ResyncReason.QUEUE_OVERFLOW:
             self.queue_overflows += 1
+
+    def register_message(self, now: datetime) -> None:
+        self.messages_since_report += 1
+        if self.last_report_at is None:
+            self.last_report_at = now
+
+    def register_resync(self, now: datetime) -> None:
+        self.resyncs_since_report += 1
+        if self.last_report_at is None:
+            self.last_report_at = now
+
+    def register_exception(self, now: datetime) -> None:
+        self.exceptions_since_report += 1
+        if self.last_report_at is None:
+            self.last_report_at = now
+
+    def consume_report(
+        self,
+        now: datetime,
+        interval: timedelta,
+    ) -> tuple[int, int, int] | None:
+        if self.last_report_at is None:
+            self.last_report_at = now
+            return None
+        if now - self.last_report_at < interval:
+            return None
+        summary = (
+            self.messages_since_report,
+            self.resyncs_since_report,
+            self.exceptions_since_report,
+        )
+        self.last_report_at = now
+        self.messages_since_report = 0
+        self.resyncs_since_report = 0
+        self.exceptions_since_report = 0
+        return summary
 
 
 class _CommandBudget:
@@ -268,11 +313,13 @@ class _StreamConsumer(Generic[T]):
     _timeout_marks: Deque[datetime] = field(default_factory=deque, init=False, repr=False)
     _timeout_window: timedelta = field(init=False, repr=False)
     _timeout_limit: int = field(init=False, repr=False, default=3)
+    _report_interval: timedelta = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._delay_threshold_ms = max(float(self.silence_timeout_ms) / 4.0, 250.0)
         window_seconds = max(float(self.silence_timeout_ms) / 1000.0 * 3.0, 15.0)
         self._timeout_window = timedelta(seconds=window_seconds)
+        self._report_interval = timedelta(minutes=STREAM_METRICS_LOG_INTERVAL_MIN)
 
     def process(self, payload: Dict[str, Any]) -> bool:
         """Process incoming payload and push parsed events to the buffer.
@@ -290,6 +337,9 @@ class _StreamConsumer(Generic[T]):
             )
             self.push_snapshot()
             return needs_resubscribe
+        except Exception as exc:
+            detail = f"исключение парсера: {exc}"
+            return self.handle_exception(detail)
         reset_timeouts = False
         for event in events:
             self._record_latency(event.timestamp)
@@ -322,8 +372,19 @@ class _StreamConsumer(Generic[T]):
         now = datetime.now(tz=CURRENT_TIMEZONE)
         details = f"{command.lower()} confirmed for {' '.join(params)}"
         event = StreamEvent(StreamEventType.DATA, None, now, details=details)
+        self.metrics.register_message(now)
+        self._maybe_report(now)
         self._push_event(event)
         return False
+
+    def handle_exception(self, details: str, *, resubscribe: bool = True) -> bool:
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        self.metrics.register_exception(now)
+        return self.emit_resync(
+            ResyncReason.CONNECTION_LOST,
+            details,
+            enqueue_resubscribe=resubscribe,
+        )
 
     def emit_resync(
         self,
@@ -353,11 +414,13 @@ class _StreamConsumer(Generic[T]):
             else:
                 detail_text = attempt_suffix.strip()
         self.metrics.record_resync(reason)
+        self.metrics.register_resync(now)
         try:
             message = f"[{self.stream}:{self.symbol}] {detail_text} ({reason.name})"
             self.log(message)
         except Exception:  # pragma: no cover - logging failures ignored
             pass
+        self._maybe_report(now)
         event = StreamEvent(
             StreamEventType.RESYNC,
             None,
@@ -400,12 +463,17 @@ class _StreamConsumer(Generic[T]):
         now = datetime.now(tz=CURRENT_TIMEZONE)
         latency_ms = max((now - timestamp).total_seconds() * 1000.0, 0.0)
         self.metrics.record_latency(latency_ms, self._delay_threshold_ms)
+        self.metrics.register_message(now)
+        self._maybe_report(now)
 
     def _push_event(self, event: StreamEvent[T]) -> None:
         appended = self.buffer.append(event)
         if appended:
             return
         self.metrics.record_resync(ResyncReason.QUEUE_OVERFLOW)
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        self.metrics.register_resync(now)
+        self._maybe_report(now)
         overflow = StreamEvent(
             StreamEventType.RESYNC,
             None,
@@ -414,6 +482,21 @@ class _StreamConsumer(Generic[T]):
             details=f"buffer overflow on {self.stream} stream",
         )
         self.buffer.append(overflow)
+
+    def _maybe_report(self, now: datetime) -> None:
+        summary = self.metrics.consume_report(now, self._report_interval)
+        if summary is None:
+            return
+        messages, resyncs, exceptions = summary
+        report = (
+            f"[{self.stream}:{self.symbol}] Сводка за "
+            f"{STREAM_METRICS_LOG_INTERVAL_MIN}м: "
+            f"сообщений={messages}, ресинки={resyncs}, исключения={exceptions}"
+        )
+        try:
+            self.log(report)
+        except Exception:  # pragma: no cover - logging failures ignored
+            pass
 
 
 @dataclass(slots=True)
@@ -652,7 +735,14 @@ class _BinanceStreamSession:
             consumer = self._resolve_consumer(payload, data)
             if consumer is None:
                 continue
-            needs_resubscribe = consumer.process(data)
+            try:
+                needs_resubscribe = consumer.process(data)
+            except Exception as exc:
+                detail = f"исключение обработчика: {exc}"
+                enqueue = consumer.handle_exception(detail)
+                if enqueue:
+                    self.resubscribe_consumer(consumer, priority=float("inf"))
+                continue
             if needs_resubscribe:
                 self.resubscribe_consumer(consumer, priority=consumer.metrics.messages + 1.0)
 
@@ -811,6 +901,7 @@ class _BinanceStreamWorker(Generic[T]):
         "_inflight",
         "_next_command_id",
         "_last_ping",
+        "_report_interval",
     )
 
     _BASE_ENDPOINT = "wss://fstream.binance.com/stream"
@@ -850,6 +941,7 @@ class _BinanceStreamWorker(Generic[T]):
         self._inflight: Dict[int, tuple[str, Tuple[str, ...], str]] = {}
         self._next_command_id = 1
         self._last_ping = 0.0
+        self._report_interval = timedelta(minutes=STREAM_METRICS_LOG_INTERVAL_MIN)
 
     def start(self) -> None:
         if websockets is None:
@@ -870,6 +962,9 @@ class _BinanceStreamWorker(Generic[T]):
         try:
             asyncio.run(self._main())
         except Exception as exc:  # pragma: no cover - background thread safety
+            now = datetime.now(tz=CURRENT_TIMEZONE)
+            self._metrics.register_exception(now)
+            self._maybe_report(now)
             self._emit_resync(
                 ResyncReason.CONNECTION_LOST,
                 f"stream {self._stream} crashed: {exc}",
@@ -885,6 +980,9 @@ class _BinanceStreamWorker(Generic[T]):
                 if self._stop_event.is_set():
                     break
                 details = f"{self._stream} connection lost: {exc}"
+                now = datetime.now(tz=CURRENT_TIMEZONE)
+                self._metrics.register_exception(now)
+                self._maybe_report(now)
                 self._emit_resync(ResyncReason.CONNECTION_LOST, details)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2.0, 30.0)
@@ -934,6 +1032,18 @@ class _BinanceStreamWorker(Generic[T]):
                 events = list(self._parser(data))
             except _StreamValidationError as exc:
                 self._emit_resync(exc.reason, exc.details, enqueue_resubscribe=exc.resubscribe)
+                self._push_snapshot()
+                continue
+            except Exception as exc:
+                now = datetime.now(tz=CURRENT_TIMEZONE)
+                self._metrics.register_exception(now)
+                self._maybe_report(now)
+                detail = f"parser exception: {exc}"
+                self._emit_resync(
+                    ResyncReason.CONNECTION_LOST,
+                    detail,
+                    enqueue_resubscribe=True,
+                )
                 self._push_snapshot()
                 continue
             for event in events:
@@ -1019,6 +1129,8 @@ class _BinanceStreamWorker(Generic[T]):
         else:
             details = f"{method.lower()} confirmed for {' '.join(params)}"
             event = StreamEvent(StreamEventType.DATA, None, now, details=details)
+            self._metrics.register_message(now)
+            self._maybe_report(now)
             self._push_event(event)
         if method == "UNSUBSCRIBE" and not self._command_queue:
             self._stop_event.set()
@@ -1036,6 +1148,8 @@ class _BinanceStreamWorker(Generic[T]):
         now = datetime.now(tz=CURRENT_TIMEZONE)
         latency_ms = max((now - timestamp).total_seconds() * 1000.0, 0.0)
         self._metrics.record_latency(latency_ms, self._delay_threshold_ms)
+        self._metrics.register_message(now)
+        self._maybe_report(now)
 
     def _emit_resync(
         self,
@@ -1044,17 +1158,20 @@ class _BinanceStreamWorker(Generic[T]):
         *,
         enqueue_resubscribe: bool = True,
     ) -> None:
+        now = datetime.now(tz=CURRENT_TIMEZONE)
         self._metrics.record_resync(reason)
+        self._metrics.register_resync(now)
         try:
             self._log(
                 f"[{self._stream}:{self._symbol}] {details} ({reason.name})",
             )
         except Exception:  # pragma: no cover - logging failures ignored
             pass
+        self._maybe_report(now)
         event = StreamEvent(
             StreamEventType.RESYNC,
             None,
-            datetime.now(tz=CURRENT_TIMEZONE),
+            now,
             reason=reason,
             details=details,
         )
@@ -1067,10 +1184,13 @@ class _BinanceStreamWorker(Generic[T]):
         if appended:
             return
         self._metrics.record_resync(ResyncReason.QUEUE_OVERFLOW)
+        now = datetime.now(tz=CURRENT_TIMEZONE)
+        self._metrics.register_resync(now)
+        self._maybe_report(now)
         overflow = StreamEvent(
             StreamEventType.RESYNC,
             None,
-            datetime.now(tz=CURRENT_TIMEZONE),
+            now,
             reason=ResyncReason.QUEUE_OVERFLOW,
             details=f"buffer overflow on {self._stream} stream",
         )
@@ -1096,6 +1216,21 @@ class _BinanceStreamWorker(Generic[T]):
         replay_list = list(replay_events)
         if replay_list:
             self._buffer.extend(replay_list)
+
+    def _maybe_report(self, now: datetime) -> None:
+        summary = self._metrics.consume_report(now, self._report_interval)
+        if summary is None:
+            return
+        messages, resyncs, exceptions = summary
+        report = (
+            f"[{self._stream}:{self._symbol}] Сводка за "
+            f"{STREAM_METRICS_LOG_INTERVAL_MIN}м: "
+            f"сообщений={messages}, ресинки={resyncs}, исключения={exceptions}"
+        )
+        try:
+            self._log(report)
+        except Exception:  # pragma: no cover - logging failures ignored
+            pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -1641,6 +1776,7 @@ class BinanceExchangeData:
     def _register_trades_stream(self) -> _StreamRegistration[Trade]:
         symbol_stream = f"{self._symbol.lower()}@aggTrade"
         last_trade_id: Optional[int] = None
+        last_trade_time: Optional[datetime] = None
 
         def parser(message: Dict[str, Any]) -> Iterable[StreamEvent[Trade]]:
             nonlocal last_trade_id
@@ -1665,12 +1801,25 @@ class BinanceExchangeData:
                 if gap == 1:
                     pass
                 elif gap <= ALLOWED_GAP:
+                    pause_seconds: Optional[float]
+                    if last_trade_time is not None:
+                        pause_seconds = max(
+                            (event_time - last_trade_time).total_seconds(),
+                            0.0,
+                        )
+                    else:
+                        pause_seconds = None
+                    pause_suffix = (
+                        f", пауза {pause_seconds:.2f}с"
+                        if pause_seconds is not None
+                        else ", пауза н/д"
+                    )
                     try:
                         self._log_writer(
                             (
                                 f"Поток сделок {self._symbol}: пропущено"
-                                f" {gap - 1} id", 
-                                f" (gap={gap}, допуск до {ALLOWED_GAP}).",
+                                f" {gap - 1} id",
+                                f" (gap={gap}, допуск до {ALLOWED_GAP}{pause_suffix}).",
                             )
                         )
                     except Exception:
@@ -1698,6 +1847,7 @@ class BinanceExchangeData:
                 side=side,
                 executed_at=event_time,
             )
+            last_trade_time = event_time
             last_trade_id = trade_id
             return (StreamEvent(StreamEventType.DATA, trade, event_time),)
 

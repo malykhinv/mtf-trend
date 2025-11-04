@@ -5,8 +5,8 @@ import json
 import math
 import threading
 import time
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, field
+from datetime import datetime, timezone, timedelta
 from typing import (
     Any,
     Callable,
@@ -26,7 +26,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from config.config import CONFIG
+from config.config import CONFIG, STREAM_METRICS_LOG_INTERVAL_MIN
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookLevel, OrderBookSnapshot, OrderBookUpdate, Side, SymbolFilters, Trade
@@ -228,6 +228,11 @@ class _BybitStreamWorker(Generic[T]):
     log: LogSink
     silence_timeout_ms: int
     snapshot_factory: Optional[SnapshotFactory[T]] = None
+    _report_interval: timedelta = field(init=False, repr=False)
+    _last_report_at: datetime | None = field(init=False, repr=False, default=None)
+    _messages_since_report: int = field(init=False, repr=False, default=0)
+    _resyncs_since_report: int = field(init=False, repr=False, default=0)
+    _exceptions_since_report: int = field(init=False, repr=False, default=0)
 
     _endpoint: str = "wss://stream.bybit.com/v5/public/linear"
 
@@ -238,7 +243,52 @@ class _BybitStreamWorker(Generic[T]):
             name=f"bybit-{self.topic}",
             daemon=True,
         )
+        self._report_interval = timedelta(minutes=STREAM_METRICS_LOG_INTERVAL_MIN)
         self._silence_timeout_s = max(float(self.silence_timeout_ms) / 1000.0, 5.0)
+
+    def _register_messages(self, count: int) -> None:
+        if count <= 0:
+            return
+        now = _now()
+        self._messages_since_report += count
+        if self._last_report_at is None:
+            self._last_report_at = now
+        self._log_summary_if_needed(now)
+
+    def _register_resync(self) -> None:
+        now = _now()
+        self._resyncs_since_report += 1
+        if self._last_report_at is None:
+            self._last_report_at = now
+        self._log_summary_if_needed(now)
+
+    def _register_exception(self) -> None:
+        now = _now()
+        self._exceptions_since_report += 1
+        if self._last_report_at is None:
+            self._last_report_at = now
+        self._log_summary_if_needed(now)
+
+    def _log_summary_if_needed(self, now: datetime) -> None:
+        if self._last_report_at is None:
+            self._last_report_at = now
+            return
+        if now - self._last_report_at < self._report_interval:
+            return
+        report = (
+            f"[{self.topic}] Сводка за {STREAM_METRICS_LOG_INTERVAL_MIN}м: "
+            f"сообщений={self._messages_since_report}, "
+            f"ресинки={self._resyncs_since_report}, "
+            f"исключения={self._exceptions_since_report}"
+        )
+        try:
+            self.log(report)
+        except Exception:
+            pass
+        self._last_report_at = now
+        self._messages_since_report = 0
+        self._resyncs_since_report = 0
+        self._exceptions_since_report = 0
 
     def start(self) -> None:
         if websockets is None:
@@ -299,14 +349,17 @@ class _BybitStreamWorker(Generic[T]):
                         try:
                             events = list(self.parser(payload))
                         except _BybitStreamError as exc:
+                            self._register_exception()
                             self._emit_resync(exc.reason, exc.details)
                             self._push_snapshot()
                             break
                         if not events:
                             continue
+                        self._register_messages(len(events))
                         for event in events:
                             appended = self.buffer.append(event)
                             if not appended:
+                                self._register_resync()
                                 overflow = StreamEvent(
                                     StreamEventType.RESYNC,
                                     None,
@@ -319,11 +372,13 @@ class _BybitStreamWorker(Generic[T]):
             except (ConnectionClosedOK,):
                 break
             except (ConnectionClosed, ConnectionClosedError, OSError, asyncio.TimeoutError) as exc:
+                self._register_exception()
                 self._emit_resync(
                     ResyncReason.CONNECTION_LOST,
                     f"{self.topic} connection lost: {exc}",
                 )
             except Exception as exc:  # pragma: no cover - defensive logging
+                self._register_exception()
                 self._emit_resync(
                     ResyncReason.CONNECTION_LOST,
                     f"{self.topic} stream error: {exc}",
@@ -392,6 +447,7 @@ class _BybitStreamWorker(Generic[T]):
         return payload
 
     def _emit_resync(self, reason: ResyncReason, details: str) -> None:
+        self._register_resync()
         event = StreamEvent(
             StreamEventType.RESYNC,
             None,
@@ -411,6 +467,7 @@ class _BybitStreamWorker(Generic[T]):
         try:
             events = tuple(self.snapshot_factory())
         except Exception as exc:
+            self._register_exception()
             self._emit_resync(
                 ResyncReason.CONNECTION_LOST,
                 f"failed to refresh snapshot for {self.topic}: {exc}",

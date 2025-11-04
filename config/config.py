@@ -27,6 +27,7 @@ from config.models import (
 MAX_ACTIVE_STREAMS: Final[int] = 60
 MAX_NEW_SUBSCRIPTIONS: Final[int] = 3
 ALLOWED_GAP: Final[int] = 3
+STREAM_METRICS_LOG_INTERVAL_MIN: Final[int] = 5
 
 
 CONFIG: Final[Config] = Config(
@@ -127,4 +128,5 @@ __all__ = [
     "MAX_ACTIVE_STREAMS",
     "MAX_NEW_SUBSCRIPTIONS",
     "ALLOWED_GAP",
+    "STREAM_METRICS_LOG_INTERVAL_MIN",
 ]
