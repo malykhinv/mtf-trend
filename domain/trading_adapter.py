@@ -27,7 +27,7 @@ class TradingAdapter(Protocol):
         stop_price: float,
         quantity: float,
         trigger: StopTrigger,
-    ) -> None:
+    ) -> bool:
         ...
 
 

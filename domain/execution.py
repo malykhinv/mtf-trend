@@ -107,7 +107,7 @@ def create_execution_handlers(
         signal: Signal,
     ) -> bool:
         try:
-            trading.place_stop_market(side, stop_price, quantity, stop_trigger)
+            success = trading.place_stop_market(side, stop_price, quantity, stop_trigger)
         except Exception as exc:
             logger.error(
                 "Stop order failed: %s %s qty=%.8f stop=%.8f signal=%s: %s",
@@ -117,6 +117,16 @@ def create_execution_handlers(
                 stop_price,
                 signal.name,
                 exc,
+            )
+            return False
+        if not success:
+            logger.error(
+                "Stop order rejected: %s %s qty=%.8f stop=%.8f signal=%s",
+                symbol,
+                side.name,
+                quantity,
+                stop_price,
+                signal.name,
             )
             return False
         logger.info(
@@ -184,13 +194,22 @@ def create_execution_handlers(
         current_quantity = executed_quantity
         stop_price: float = _compute_stop_price(signal, wall.price, filters)
         stop_side: Side = _signal_to_exit_side(signal)
-        place_stop_market(
+        stop_success = place_stop_market(
             stop_side,
             stop_price,
             current_quantity,
             symbol=symbol,
             signal=signal,
         )
+        if not stop_success:
+            logger.error(
+                "Initial stop order placement failed: %s %s qty=%.8f stop=%.8f signal=%s",
+                symbol,
+                stop_side.name,
+                current_quantity,
+                stop_price,
+                signal.name,
+            )
         return True
 
     def exit(symbol: str, reason: str) -> bool:
@@ -225,13 +244,23 @@ def create_execution_handlers(
         filters: SymbolFilters = filters_provider(symbol)
         stop_price = _compute_stop_price(current_signal, wall_price, filters)
         stop_side: Side = _signal_to_exit_side(current_signal)
-        return place_stop_market(
+        success = place_stop_market(
             stop_side,
             stop_price,
             current_quantity,
             symbol=symbol,
             signal=current_signal,
         )
+        if not success:
+            logger.error(
+                "Stop move failed: %s %s qty=%.8f stop=%.8f signal=%s",
+                symbol,
+                stop_side.name,
+                current_quantity,
+                stop_price,
+                current_signal.name,
+            )
+        return success
 
     return enter, exit, move_stop
 

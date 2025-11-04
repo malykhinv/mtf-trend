@@ -178,8 +178,8 @@ class TradingAdapterRouter(TradingAdapter):
         stop_price: float,
         quantity: float,
         trigger: StopTrigger,
-    ) -> None:
-        self._resolve().place_stop_market(side, stop_price, quantity, trigger)
+    ) -> bool:
+        return self._resolve().place_stop_market(side, stop_price, quantity, trigger)
 
 
 class Application:

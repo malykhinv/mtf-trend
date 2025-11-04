@@ -213,7 +213,7 @@ class IExchangeTrade(Protocol):
         stop_price: float,
         quantity: float,
         trigger: StopTrigger,
-    ) -> None: ...
+    ) -> bool: ...
 
 
 class BinanceTradingAdapter(IExchangeTrade):
@@ -239,12 +239,50 @@ class BinanceTradingAdapter(IExchangeTrade):
         )
         self._market_reduce_only = settings.reduce_only
         self._stop_close_position = settings.close_position
+        self._last_stop_order_id: Optional[str] = None
+        self._last_stop_client_id: Optional[str] = None
 
     def _log(self, message: str) -> None:
         try:
             self._log_writer(message)
         except Exception:  # pragma: no cover - logging sink errors are ignored
             pass
+
+    def _cancel_previous_stop_order(self, *, timeout: float) -> None:
+        order_id = self._last_stop_order_id
+        client_id = self._last_stop_client_id
+        if not order_id and not client_id:
+            return
+
+        params: dict[str, Any] = {"symbol": self._symbol}
+        if order_id:
+            params["orderId"] = order_id
+        elif client_id:
+            params["origClientOrderId"] = client_id
+
+        try:
+            self._signed_request(
+                "/fapi/v1/order",
+                params=params,
+                timeout=timeout,
+                context="cancel stop order",
+                method="DELETE",
+            )
+            identifier = order_id or client_id or "UNKNOWN"
+            self._log(
+                f"[INFO] Binance cancelled previous stop order for {self._symbol}: id={identifier}"
+            )
+        except Exception as exc:  # pragma: no cover - network errors
+            identifier = order_id or client_id or "UNKNOWN"
+            self._log(
+                (
+                    f"[WARNING] Binance cancel stop order failed for {self._symbol} "
+                    f"id={identifier}: {exc}"
+                )
+            )
+        finally:
+            self._last_stop_order_id = None
+            self._last_stop_client_id = None
 
     def _signed_request(
         self,
@@ -391,8 +429,9 @@ class BinanceTradingAdapter(IExchangeTrade):
         stop_price: float,
         quantity: float,
         trigger: StopTrigger,
-    ) -> None:
+    ) -> bool:
         timeout_s = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
+        self._cancel_previous_stop_order(timeout=timeout_s)
         params: dict[str, Any] = {
             "symbol": self._symbol,
             "side": "BUY" if side is Side.BID else "SELL",
@@ -412,21 +451,41 @@ class BinanceTradingAdapter(IExchangeTrade):
             method="POST",
         )
         payload = self._decode_payload(response_text, context="create stop order")
-        order_id = str(payload.get("orderId") or payload.get("clientOrderId") or "").strip()
+        order_id = str(payload.get("orderId") or "").strip()
+        client_order_id = str(payload.get("clientOrderId") or "").strip()
         status = str(payload.get("status") or "").strip()
         order_type = str(payload.get("type") or "").strip()
-        if not order_id:
-            order_id = "UNKNOWN"
+        identifier = order_id or client_order_id or "UNKNOWN"
         if not status:
             status = "UNKNOWN"
         if not order_type:
             order_type = "STOP_MARKET"
+        normalized_status = status.upper()
+        allowed_statuses = {
+            "NEW",
+            "PENDING_NEW",
+            "ACCEPTED",
+            "PENDING",
+            "FILLED",
+            "PARTIALLY_FILLED",
+        }
+        if normalized_status not in allowed_statuses:
+            self._log(
+                (
+                    f"[ERROR] Binance stop order rejected for {self._symbol}: "
+                    f"id={identifier} type={order_type} status={status}"
+                )
+            )
+            return False
+        self._last_stop_order_id = order_id or None
+        self._last_stop_client_id = client_order_id or None
         self._log(
             (
                 f"[INFO] Binance stop order ack for {self._symbol}: "
-                f"id={order_id} type={order_type} status={status}"
+                f"id={identifier} type={order_type} status={status}"
             )
         )
+        return True
 
     @staticmethod
     def _sanitize_identifier(value: Optional[str]) -> Optional[str]:
@@ -601,12 +660,53 @@ class BybitTradingAdapter(IExchangeTrade):
         self._timeout = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
         self._log_writer: LogSink = log_writer or (lambda message: None)
         self._rest_client: Optional[_BybitPrivateRestClient] = None
+        self._last_stop_order_id: Optional[str] = None
+        self._last_stop_link_id: Optional[str] = None
 
     def _log(self, message: str) -> None:
         try:
             self._log_writer(message)
         except Exception:  # pragma: no cover - logging sink errors are ignored
             pass
+
+    def _cancel_previous_stop_order(self) -> None:
+        order_id = self._last_stop_order_id
+        link_id = self._last_stop_link_id
+        if not order_id and not link_id:
+            return
+
+        body = {
+            "category": "linear",
+            "symbol": self._symbol,
+        }
+        if order_id:
+            body["orderId"] = order_id
+        if link_id:
+            body["orderLinkId"] = link_id
+
+        client = self._client()
+        try:
+            payload = client.post(
+                "/v5/order/cancel",
+                body=body,
+                context="cancel stop order",
+            )
+            self._extract_result(payload, context="cancel stop order")
+            identifier = order_id or link_id or "UNKNOWN"
+            self._log(
+                f"[INFO] Bybit cancelled previous stop order for {self._symbol}: id={identifier}"
+            )
+        except Exception as exc:  # pragma: no cover - network errors
+            identifier = order_id or link_id or "UNKNOWN"
+            self._log(
+                (
+                    f"[WARNING] Bybit cancel stop order failed for {self._symbol} "
+                    f"id={identifier}: {exc}"
+                )
+            )
+        finally:
+            self._last_stop_order_id = None
+            self._last_stop_link_id = None
 
     def _ensure_credentials(self, *, context: str) -> None:
         if self._api_key and self._api_secret:
@@ -899,8 +999,9 @@ class BybitTradingAdapter(IExchangeTrade):
         stop_price: float,
         quantity: float,
         trigger: StopTrigger,
-    ) -> None:
+    ) -> bool:
         client = self._client()
+        self._cancel_previous_stop_order()
         trigger_map = {
             StopTrigger.MARK: "MarkPrice",
             StopTrigger.LAST: "LastPrice",
@@ -930,7 +1031,41 @@ class BybitTradingAdapter(IExchangeTrade):
             body=body,
             context="create stop order",
         )
-        self._extract_result(payload, context="create stop order")
+        result, _ = self._extract_result(payload, context="create stop order")
+        order_id = str(result.get("orderId") or result.get("orderID") or "").strip()
+        link_id = str(result.get("orderLinkId") or result.get("orderLinkID") or "").strip()
+        status = str(result.get("orderStatus") or result.get("status") or "").strip()
+        order_type = str(result.get("orderType") or "").strip() or "Market"
+        identifier = order_id or link_id or "UNKNOWN"
+        normalized_status = status.upper() if status else "UNKNOWN"
+        allowed_statuses = {
+            "NEW",
+            "CREATED",
+            "ACCEPTED",
+            "UNTRIGGERED",
+            "TRIGGERED",
+            "PENDING",
+            "PENDING_NEW",
+            "FILLED",
+            "PARTIALLY_FILLED",
+        }
+        if normalized_status not in allowed_statuses:
+            self._log(
+                (
+                    f"[ERROR] Bybit stop order rejected for {self._symbol}: "
+                    f"id={identifier} type={order_type} status={normalized_status}"
+                )
+            )
+            return False
+        self._last_stop_order_id = order_id or None
+        self._last_stop_link_id = link_id or None
+        self._log(
+            (
+                f"[INFO] Bybit stop order ack for {self._symbol}: "
+                f"id={identifier} type={order_type} status={normalized_status}"
+            )
+        )
+        return True
 
 
 __all__ = [
