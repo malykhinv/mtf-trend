@@ -25,7 +25,7 @@ from config.models import (
 )
 
 MAX_ACTIVE_STREAMS: Final[int] = 60
-MAX_NEW_SUBSCRIPTIONS: Final[int] = 3
+MAX_NEW_SUBSCRIPTIONS: Final[int] = 1
 ALLOWED_GAP: Final[int] = 3
 STREAM_METRICS_LOG_INTERVAL_MIN: Final[int] = 5
 
@@ -48,7 +48,7 @@ CONFIG: Final[Config] = Config(
         top_usd=700_000,
         alt_usd=120_000,
         listing_usd=250_000,
-        market_scan_interval_s=30,
+        market_scan_interval_s=300,
     ),
     odr=OdrSettings(
         odr_in_short=3.1,

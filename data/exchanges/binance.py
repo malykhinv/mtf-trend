@@ -1655,6 +1655,7 @@ class BinanceExchangeData:
         symbol_stream = f"{self._symbol.lower()}@depth@100ms"
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer()
         last_final_id: Optional[int] = None
+        last_event_time: Optional[datetime] = None
         snapshot_ready = False
         pending_updates: Deque[tuple[OrderBookUpdate, int]] = deque()
 
@@ -1662,17 +1663,25 @@ class BinanceExchangeData:
             update: OrderBookUpdate,
             prev_final: int,
         ) -> Iterable[StreamEvent[DepthStreamData]]:
-            nonlocal last_final_id
+            nonlocal last_final_id, last_event_time
             if last_final_id is not None:
                 if update.last_update_id <= last_final_id:
                     return ()
                 expected_next = last_final_id + 1
                 if prev_final > last_final_id:
+                    missing = prev_final - last_final_id
+                    gap_seconds_text = "н/д"
+                    if last_event_time is not None:
+                        gap_seconds = max(
+                            (update.event_time - last_event_time).total_seconds(),
+                            0.0,
+                        )
+                        gap_seconds_text = f"{gap_seconds:.3f}"
                     raise _StreamValidationError(
                         ResyncReason.SEQUENCE_GAP,
                         (
                             "depth sequence gap: "
-                            f"expected <= {last_final_id}, got {prev_final}"
+                            f"пропущено {missing} обновлений, пауза {gap_seconds_text}с"
                         ),
                     )
                 if (
@@ -1693,16 +1702,18 @@ class BinanceExchangeData:
                 update.event_time,
             )
             last_final_id = update.last_update_id
+            last_event_time = update.event_time
             return (event,)
 
         def snapshot_factory() -> tuple[
             Optional[StreamEvent[DepthStreamData]],
             Iterable[StreamEvent[DepthStreamData]],
         ]:
-            nonlocal last_final_id, snapshot_ready
+            nonlocal last_final_id, last_event_time, snapshot_ready
             snapshot_ready = False
             snapshot = self.fetch_orderbook_snapshot()
             last_final_id = snapshot.last_update_id
+            last_event_time = snapshot.received_at
             replay_events: list[StreamEvent[DepthStreamData]] = []
             while pending_updates:
                 update, prev_final = pending_updates.popleft()
