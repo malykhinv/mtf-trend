@@ -16,6 +16,7 @@ class GeneralSettings:
     vol_spike_mult: float
     orderbook_snapshot_timeout_s: float
     enable_detailed_diagnostics: bool
+    trade_gap_threshold: int
 
 
 __all__ = ["GeneralSettings"]

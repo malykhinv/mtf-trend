@@ -379,10 +379,10 @@ class Application:
         except Exception:
             pass
 
-    def _resubscribe_symbol_streams(self, context: SymbolContext) -> None:
+    def _resubscribe_symbol_streams(self, context: SymbolContext) -> bool:
         manager = self._binance_streams
         if manager is None:
-            return
+            return False
         try:
             streams = manager.resubscribe(context.symbol)
         except StreamLimitError as exc:
@@ -391,7 +391,7 @@ class Application:
                 f"Не удалось переподписать {context.symbol}: {exc}",
                 timestamp,
             )
-            return
+            return False
         subscriptions = (
             context.depth_subscription,
             context.trade_subscription,
@@ -403,6 +403,7 @@ class Application:
         context.trade_subscription = streams.trades
         context.ticker_subscription = streams.ticker
         context.exchange_data = streams.exchange_data
+        return True
 
     def _dispose_context(self, context: SymbolContext) -> None:
         context.active = False
@@ -691,6 +692,7 @@ class Application:
             events = [primary]
             events.extend(buffer.drain_pending())
         processed = False
+        threshold = CONFIG.general.trade_gap_threshold
         for event in events:
             processed = True
             if event.type is StreamEventType.DATA:
@@ -710,11 +712,37 @@ class Application:
                             gap = trade_id_value - previous_id
                             if gap > 1:
                                 context.missed_trade_ids += gap - 1
-                            elif gap == 1 and context.missed_trade_ids > 0:
-                                context.missed_trade_ids -= 1
+                            elif gap == 1:
+                                context.missed_trade_ids = 0
                             elif gap <= 0:
                                 context.missed_trade_ids += 1
+                        elif context.missed_trade_ids > 0:
+                            context.missed_trade_ids = 0
                         context.last_trade_id = trade_id_value
+                        if (
+                            threshold > 0
+                            and context.missed_trade_ids >= threshold
+                        ):
+                            timestamp = get_current_time().astimezone(
+                                CURRENT_TIMEZONE
+                            )
+                            self._event_logger.log(
+                                (
+                                    f"Поток сделок {context.symbol} обнаружил "
+                                    f"разрыв последовательности: пропущено"
+                                    f" {context.missed_trade_ids} ID (порог "
+                                    f"{threshold}). Запрашиваем ресинк."
+                                ),
+                                timestamp,
+                            )
+                            context.feed_monitor.flag(
+                                StreamResyncReason.SEQUENCE_GAP
+                            )
+                            context.last_trade_id = None
+                            context.trade_updated_at = None
+                            if self._resubscribe_symbol_streams(context):
+                                context.missed_trade_ids = 0
+                            continue
                     now = get_current_time()
                     if self._is_data_fresh(trade_time, now):
                         _, _, ratio, ready = context.volume_tracker.observe(
@@ -751,6 +779,7 @@ class Application:
                     timestamp,
                 )
                 context.trade_updated_at = None
+                context.missed_trade_ids = 0
         return processed
 
     def _process_ticker_stream(self, context: SymbolContext) -> bool:
