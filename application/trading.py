@@ -58,8 +58,8 @@ class NoopTradingAdapter(TradingAdapter):
         stop_price: float,
         quantity: float,
         trigger: StopTrigger,
-    ) -> None:
-        return
+    ) -> bool:
+        return True
 
 
 __all__ = ["NoopTradingAdapter"]
