@@ -1780,6 +1780,7 @@ class BinanceExchangeData:
 
         def parser(message: Dict[str, Any]) -> Iterable[StreamEvent[Trade]]:
             nonlocal last_trade_id
+            nonlocal last_trade_time
             event_type = str(message.get("e", "")).lower()
             if event_type != "aggtrade":
                 return ()
@@ -1791,6 +1792,7 @@ class BinanceExchangeData:
                     ResyncReason.SEQUENCE_GAP,
                     "trade id missing",
                 )
+            event_time = _milliseconds_to_datetime(message.get("T"))
             if last_trade_id is not None:
                 gap = trade_id - last_trade_id
                 if gap <= 0:
@@ -1831,7 +1833,6 @@ class BinanceExchangeData:
                     )
             price = _safe_float(message.get("p"), 0.0)
             quantity = _safe_float(message.get("q"), 0.0)
-            event_time = _milliseconds_to_datetime(message.get("T"))
             is_buyer_maker = bool(message.get("m", False))
             # Binance reports whether the buyer was the market maker. When the buyer is
             # the maker, the aggressive order was a sell (ask); otherwise, it was a buy
