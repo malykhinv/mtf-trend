@@ -80,6 +80,7 @@ CONFIG: Final[Config] = Config(
         position_fraction=0.10,
         position_min_usdt=10,
         balance_refresh_h=1,
+        balance_retry_interval_s=15.0,
         balance_source=BalanceSource.AVAILABLE_BALANCE,
         margin_mode=MarginMode.ISOLATED,
         leverage=1,

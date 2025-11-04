@@ -205,9 +205,12 @@ class Application:
         self._trading_router = TradingAdapterRouter(self._contexts)
         self._balance_source = self._map_balance_source(CONFIG.position.balance_source)
         self._balance_refresh_interval = timedelta(hours=CONFIG.position.balance_refresh_h)
+        retry_seconds = max(float(CONFIG.position.balance_retry_interval_s), 0.0)
+        self._balance_retry_interval = timedelta(seconds=retry_seconds)
         self._last_balance_refresh_at: Optional[datetime] = None
         self._cached_balance: Optional[float] = None
         self._cached_balance_updated_at: Optional[datetime] = None
+        self._next_balance_retry_at: Optional[datetime] = None
         self._silence_recovery_cooldown = timedelta(seconds=5)
         self._data_freshness_threshold = timedelta(
             milliseconds=CONFIG.general.ws_silence_timeout_ms
@@ -1215,6 +1218,11 @@ class Application:
         cached = self._cached_balance
         timestamp = self._cached_balance_updated_at
         if cached is None or timestamp is None:
+            if (
+                self._next_balance_retry_at is not None
+                and get_current_time() < self._next_balance_retry_at
+            ):
+                return
             result = self._refresh_cached_balance(source_context=context)
             if result is None:
                 return
@@ -1244,10 +1252,14 @@ class Application:
             self._log_error(
                 f"Не удалось обновить баланс{details}: {error}"
             )
+            if self._balance_retry_interval.total_seconds() > 0.0:
+                now = get_current_time()
+                self._next_balance_retry_at = now + self._balance_retry_interval
             return None
         timestamp = get_current_time()
         self._cached_balance = balance
         self._cached_balance_updated_at = timestamp
+        self._next_balance_retry_at = None
         return balance, timestamp
 
     def _apply_cached_balance(
@@ -1349,6 +1361,11 @@ class Application:
         if not self._contexts:
             return
         now = get_current_time()
+        if (
+            self._next_balance_retry_at is not None
+            and now < self._next_balance_retry_at
+        ):
+            return
         if (
             not force
             and self._balance_refresh_interval.total_seconds() > 0.0
