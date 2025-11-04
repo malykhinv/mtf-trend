@@ -42,6 +42,7 @@ CONFIG: Final[Config] = Config(
         vol_spike_mult=2.0,
         orderbook_snapshot_timeout_s=5.0,
         enable_detailed_diagnostics=True,
+        trade_gap_threshold=5,
     ),
     turnover=TurnoverThresholds(
         top_usd=700_000,
