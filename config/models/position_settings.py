@@ -10,6 +10,7 @@ class PositionSettings:
     position_fraction: float
     position_min_usdt: int
     balance_refresh_h: int
+    balance_retry_interval_s: float
     balance_source: BalanceSource
     margin_mode: MarginMode
     leverage: int
