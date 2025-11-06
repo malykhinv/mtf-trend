@@ -1789,6 +1789,12 @@ class BinanceExchangeData:
         last_trade_id: Optional[int] = None
         last_trade_time: Optional[datetime] = None
 
+        def reset_trade_sequence_state() -> None:
+            nonlocal last_trade_id
+            nonlocal last_trade_time
+            last_trade_id = None
+            last_trade_time = None
+
         def parser(message: Dict[str, Any]) -> Iterable[StreamEvent[Trade]]:
             nonlocal last_trade_id
             nonlocal last_trade_time
@@ -1799,6 +1805,7 @@ class BinanceExchangeData:
                 trade_id_raw = message.get("a")
                 trade_id = int(trade_id_raw)
             except (TypeError, ValueError):
+                reset_trade_sequence_state()
                 raise _StreamValidationError(
                     ResyncReason.SEQUENCE_GAP,
                     "trade id missing",
@@ -1807,6 +1814,7 @@ class BinanceExchangeData:
             if last_trade_id is not None:
                 gap = trade_id - last_trade_id
                 if gap <= 0:
+                    reset_trade_sequence_state()
                     raise _StreamValidationError(
                         ResyncReason.SEQUENCE_GAP,
                         "out-of-order trade sequence",
@@ -1838,6 +1846,7 @@ class BinanceExchangeData:
                     except Exception:
                         pass
                 else:
+                    reset_trade_sequence_state()
                     raise _StreamValidationError(
                         ResyncReason.SEQUENCE_GAP,
                         "trade sequence gap exceeds allowance",
