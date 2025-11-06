@@ -364,11 +364,13 @@ class _StreamConsumer(Generic[T]):
         command = method.upper()
         if error is not None:
             details = f"command error for {params}: {error}"
-            return self.emit_resync(
+            needs_resubscribe = self.emit_resync(
                 ResyncReason.CONNECTION_LOST,
                 details,
                 enqueue_resubscribe=True,
             )
+            self.push_snapshot()
+            return needs_resubscribe
         now = datetime.now(tz=CURRENT_TIMEZONE)
         details = f"{command.lower()} confirmed for {' '.join(params)}"
         event = StreamEvent(StreamEventType.DATA, None, now, details=details)
@@ -380,11 +382,13 @@ class _StreamConsumer(Generic[T]):
     def handle_exception(self, details: str, *, resubscribe: bool = True) -> bool:
         now = datetime.now(tz=CURRENT_TIMEZONE)
         self.metrics.register_exception(now)
-        return self.emit_resync(
+        needs_resubscribe = self.emit_resync(
             ResyncReason.CONNECTION_LOST,
             details,
             enqueue_resubscribe=resubscribe,
         )
+        self.push_snapshot()
+        return needs_resubscribe
 
     def emit_resync(
         self,
@@ -558,6 +562,8 @@ class _BinanceStreamSession:
         self._usable_capacity = self._compute_capacity(limit)
         self._last_ping = 0.0
         self._last_rate_limit_log = 0.0
+        self._status_report_interval = float(STREAM_METRICS_LOG_INTERVAL_MIN) * 60.0
+        self._last_status_log = 0.0
 
     @staticmethod
     def _compute_capacity(limit: "StreamLimit") -> int:
@@ -740,10 +746,48 @@ class _BinanceStreamSession:
         except Exception as exc:
             raise RuntimeError(f"ping failed: {exc}")
 
+    def _maybe_log_status(self) -> None:
+        interval = self._status_report_interval
+        if interval <= 0.0:
+            return
+        now = time.monotonic()
+        if now - self._last_status_log < interval:
+            return
+        with self._command_lock:
+            total_params = len(self._consumers)
+            symbol_count = len(self._symbol_params)
+            queue_len = len(self._command_queue)
+            inflight = len(self._inflight)
+            total_weight = self._total_weight
+            max_weight = self._max_weight
+            usable_capacity = self._usable_capacity
+            reserve_buffer = getattr(self._limit, "resubscribe_buffer", 0)
+        if usable_capacity > 0:
+            capacity_info = f"{total_params}/{usable_capacity}"
+            available_slots_str = str(max(usable_capacity - total_params, 0))
+        else:
+            capacity_info = "без ограничений"
+            available_slots_str = "∞"
+        if max_weight > 0.0:
+            weight_info = f"{total_weight:.1f}/{max_weight:.1f}"
+            available_weight_str = f"{max(max_weight - total_weight, 0.0):.1f}"
+        else:
+            weight_info = "без ограничений"
+            available_weight_str = "∞"
+        status = (
+            f"[{self._stream}] Статус потоков: символов={symbol_count}, подписок={total_params}, "
+            f"очередь={queue_len}, inflight={inflight}, емкость={capacity_info} "
+            f"(доступно {available_slots_str}), вес={weight_info} "
+            f"(доступно {available_weight_str}), резерв_ресинка={reserve_buffer}."
+        )
+        self._log(status)
+        self._last_status_log = now
+
     async def _recv_loop(self, ws: WebSocketClientProtocol) -> None:
         while not self._stop_event.is_set():
             await self._flush_commands(ws)
             await self._maybe_send_ping(ws)
+            self._maybe_log_status()
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=self._silence_timeout_s)
             except asyncio.TimeoutError:
@@ -867,6 +911,10 @@ class _BinanceStreamSession:
             await self._recv_loop(ws)
 
     async def _on_connected(self, ws: WebSocketClientProtocol) -> None:
+        with self._command_lock:
+            self._command_queue.clear()
+            self._inflight.clear()
+            self._last_status_log = time.monotonic() - self._status_report_interval
         consumers: list[_StreamConsumer[Any]] = []
         seen_ids: set[int] = set()
         for consumer in self._consumers.values():
@@ -1343,6 +1391,14 @@ class BinanceExchangeData:
             "trades": _CommandBudget(self._limits.trades),
             "book_ticker": _CommandBudget(self._limits.book_ticker),
         }
+        depth_update_ms = getattr(CONFIG.general, "binance_depth_update_ms", 100)
+        try:
+            depth_update_ms = int(depth_update_ms)
+        except (TypeError, ValueError):
+            depth_update_ms = 100
+        if depth_update_ms <= 0:
+            depth_update_ms = 100
+        self._depth_update_ms = depth_update_ms
         if exchange_info:
             self.update_exchange_info(exchange_info)
         if self._symbol not in self._exchange_info:
@@ -1430,6 +1486,10 @@ class BinanceExchangeData:
             max_qty=max_qty,
             min_notional=min_notional,
         )
+
+    def _depth_stream_param(self) -> str:
+        interval = max(int(self._depth_update_ms), 100)
+        return f"{self._symbol.lower()}@depth@{interval}ms"
 
     def update_exchange_info(self, info: Mapping[str, Mapping[str, object]]) -> None:
         if not info:
@@ -1678,7 +1738,7 @@ class BinanceExchangeData:
             time.sleep(interval)
 
     def _register_depth_stream(self) -> _StreamRegistration[DepthStreamData]:
-        symbol_stream = f"{self._symbol.lower()}@depth@100ms"
+        symbol_stream = self._depth_stream_param()
         buffer: StreamBuffer[DepthStreamData] = StreamBuffer()
         last_final_id: Optional[int] = None
         last_event_time: Optional[datetime] = None

@@ -36,6 +36,7 @@ CONFIG: Final[Config] = Config(
         profile=TradingProfile.AUTO,
         loop_interval_ms=100,
         ws_silence_timeout_ms=30_000,
+        binance_depth_update_ms=500,
         odr_smooth_samples=3,
         recent_band_s=5,
         recent_band_s_vol_boost=8,
