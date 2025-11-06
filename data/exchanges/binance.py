@@ -166,6 +166,12 @@ class _RateLimiter:
         self._trim(timestamp)
         self._events.append(timestamp)
 
+    def remaining(self, timestamp: datetime) -> float:
+        if self.limit <= 0:
+            return float("inf")
+        self._trim(timestamp)
+        return max(self.limit - len(self._events), 0)
+
 
 @dataclass(slots=True)
 class _StreamMetrics:
@@ -295,6 +301,27 @@ class _CommandBudget:
                 waits.append(self._burst.window.total_seconds())
             return max(waits) if waits else 0.0
 
+    def reserve_remaining(self) -> int:
+        with self._lock:
+            return max(self._reserve_limit - self._reserve_used, 0)
+
+    def debug_state(self) -> Dict[str, float]:
+        now = datetime.now(tz=timezone.utc)
+        with self._lock:
+            steady_remaining = self._steady.remaining(now)
+            burst_remaining = self._burst.remaining(now)
+            reserve_remaining = max(self._reserve_limit - self._reserve_used, 0)
+            failure_delay = self._failure_delay if self._failure_delay > 0.0 else 0.0
+        return {
+            "steady_remaining": float(steady_remaining),
+            "steady_limit": float(self._steady.limit),
+            "burst_remaining": float(burst_remaining),
+            "burst_limit": float(self._burst.limit),
+            "reserve_remaining": float(reserve_remaining),
+            "reserve_limit": float(self._reserve_limit),
+            "failure_delay": float(failure_delay),
+        }
+
 
 @dataclass(slots=True, eq=False)
 class _StreamConsumer(Generic[T]):
@@ -314,6 +341,7 @@ class _StreamConsumer(Generic[T]):
     _timeout_window: timedelta = field(init=False, repr=False)
     _timeout_limit: int = field(init=False, repr=False, default=3)
     _report_interval: timedelta = field(init=False, repr=False)
+    _last_resync_reason: str | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._delay_threshold_ms = max(float(self.silence_timeout_ms) / 4.0, 250.0)
@@ -335,7 +363,7 @@ class _StreamConsumer(Generic[T]):
                 exc.details,
                 enqueue_resubscribe=exc.resubscribe,
             )
-            self.push_snapshot()
+            self.push_snapshot(reason=f"validation:{exc.reason.name}")
             return needs_resubscribe
         except Exception as exc:
             detail = f"исключение парсера: {exc}"
@@ -369,7 +397,7 @@ class _StreamConsumer(Generic[T]):
                 details,
                 enqueue_resubscribe=True,
             )
-            self.push_snapshot()
+            self.push_snapshot(reason="ack-error")
             return needs_resubscribe
         now = datetime.now(tz=CURRENT_TIMEZONE)
         details = f"{command.lower()} confirmed for {' '.join(params)}"
@@ -387,7 +415,7 @@ class _StreamConsumer(Generic[T]):
             details,
             enqueue_resubscribe=resubscribe,
         )
-        self.push_snapshot()
+        self.push_snapshot(reason="exception")
         return needs_resubscribe
 
     def emit_resync(
@@ -419,6 +447,8 @@ class _StreamConsumer(Generic[T]):
                 detail_text = attempt_suffix.strip()
         self.metrics.record_resync(reason)
         self.metrics.register_resync(now)
+        recorded_reason = detail_text or reason.name
+        self._last_resync_reason = f"{reason.name}:{recorded_reason}".strip(":")
         try:
             message = f"[{self.stream}:{self.symbol}] {detail_text} ({reason.name})"
             self.log(message)
@@ -442,7 +472,7 @@ class _StreamConsumer(Generic[T]):
         self._timeout_marks.append(now)
         return len(self._timeout_marks) <= self._timeout_limit
 
-    def push_snapshot(self) -> None:
+    def push_snapshot(self, *, reason: str | None = None) -> None:
         if self.snapshot_factory is None:
             return
         try:
@@ -462,6 +492,20 @@ class _StreamConsumer(Generic[T]):
         replay_list = list(replay_events)
         if replay_list:
             self.buffer.extend(replay_list)
+        if reason is not None:
+            replay_count = len(replay_list)
+            try:
+                self.log(
+                    (
+                        f"[{self.stream}:{self.symbol}] REST snapshot applied after {reason}; "
+                        f"replayed_updates={replay_count}"
+                    )
+                )
+            except Exception:  # pragma: no cover - defensive logging
+                pass
+
+    def get_last_resync_reason(self) -> str | None:
+        return self._last_resync_reason
 
     def _record_latency(self, timestamp: datetime) -> None:
         now = datetime.now(tz=CURRENT_TIMEZONE)
@@ -599,6 +643,49 @@ class _BinanceStreamSession:
             return float("inf")
         return float(max(self._usable_capacity - len(self._consumers), 0))
 
+    def diagnostic_state(self) -> Dict[str, Any]:
+        with self._command_lock:
+            queue_len = len(self._command_queue)
+            inflight = len(self._inflight)
+            total_params = len(self._consumers)
+            symbol_count = len(self._symbol_params)
+        weight_left = float("inf")
+        if self._max_weight > 0:
+            weight_left = max(self._max_weight - self._total_weight, 0.0)
+        budget_state = self._budget.debug_state()
+        return {
+            "queue": queue_len,
+            "inflight": inflight,
+            "params": total_params,
+            "symbols": symbol_count,
+            "weight_left": float(weight_left),
+            "capacity_left": float(self.available_symbols()),
+            "budget": budget_state,
+        }
+
+    def can_accept(self, weight: float | None = None) -> tuple[bool, str, Dict[str, Any]]:
+        weight_value = max(float(weight or 0.0), 0.0)
+        with self._command_lock:
+            consumers = len(self._consumers)
+        capacity_left = float(self.available_symbols())
+        weight_left = float("inf")
+        if self._max_weight > 0:
+            weight_left = max(self._max_weight - self._total_weight, 0.0)
+        if self._usable_capacity > 0 and capacity_left <= 0:
+            return False, "capacity", {
+                "capacity_left": capacity_left,
+                "weight_left": weight_left,
+            }
+        if self._max_weight > 0 and weight_value - weight_left > 1e-9:
+            return False, "weight", {
+                "capacity_left": capacity_left,
+                "weight_left": weight_left,
+            }
+        return True, "ok", {
+            "capacity_left": capacity_left,
+            "weight_left": weight_left,
+        }
+
     def register_consumer(
         self,
         consumer: _StreamConsumer[Any],
@@ -701,6 +788,19 @@ class _BinanceStreamSession:
         score = -float(command.priority)
         self._sequence += 1
         self._command_queue.append((score, self._sequence, command))
+        try:
+            queue_len = len(self._command_queue)
+            budget_state = self._budget.debug_state()
+            self._log(
+                (
+                    f"[{self._stream}] Команда {command.method} {command.params}"
+                    f" поставлена в очередь. Размер очереди={queue_len},"
+                    f" inflight={len(self._inflight)},"
+                    f" бюджет={budget_state}."
+                )
+            )
+        except Exception:
+            pass
 
     async def _flush_commands(self, ws: WebSocketClientProtocol) -> None:
         while self._command_queue and not self._stop_event.is_set():
@@ -714,10 +814,12 @@ class _BinanceStreamSession:
                 if now - self._last_rate_limit_log > 30.0:
                     symbol = getattr(command.consumer, 'symbol', 'unknown')
                     queue_len = len(self._command_queue)
+                    budget_state = self._budget.debug_state()
                     log_msg = (
                         f"[{self._stream}] Rate limit: {command.method} для {symbol} "
                         f"заблокирован на {delay:.1f}с. "
-                        f"В очереди {queue_len} команд(а/ы)."
+                        f"В очереди {queue_len} команд(а/ы). "
+                        f"Статус бюджета: {budget_state}. "
                     )
                     self._log(log_msg)
                     self._last_rate_limit_log = now
@@ -734,6 +836,17 @@ class _BinanceStreamSession:
             }
             await ws.send(json.dumps(payload))
             self._inflight[command_id] = command
+            try:
+                queue_len = len(self._command_queue)
+                self._log(
+                    (
+                        f"[{self._stream}] Отправлена команда {command.method}"
+                        f" {command.params} (приоритет={command.priority:.1f})."
+                        f" Очередь после отправки={queue_len}."
+                    )
+                )
+            except Exception:
+                pass
 
     async def _maybe_send_ping(self, ws: WebSocketClientProtocol) -> None:
         now = time.monotonic()
@@ -2575,11 +2688,31 @@ class BinanceStreamManager:
     def stream_weight(self, symbol: str, stream: str) -> float:
         return self._profile_weight(symbol, stream)
 
-    def _acquire_session(self, stream: str) -> _BinanceStreamSession:
+    def _acquire_session(
+        self,
+        stream: str,
+        *,
+        symbol: str | None = None,
+        weight: float | None = None,
+    ) -> _BinanceStreamSession:
         sessions = self._sessions.setdefault(stream, [])
         for session in sessions:
-            if session.available_capacity() > 0:
+            can_accept, reason, info = session.can_accept(weight)
+            if can_accept:
                 return session
+            sym_text = symbol or "unknown"
+            try:
+                budget_state = session.diagnostic_state().get("budget", {})
+                self._log_writer(
+                    (
+                        f"[{stream}] Сессия отказала {sym_text}: причина={reason},"
+                        f" остаток_слотов={info.get('capacity_left')},"
+                        f" остаток_веса={info.get('weight_left'):.2f},"
+                        f" бюджет={budget_state}."
+                    )
+                )
+            except Exception:
+                pass
         session = self._create_session(stream)
         sessions.append(session)
         return session
@@ -2599,12 +2732,38 @@ class BinanceStreamManager:
             raise StreamLimitError(
                 f"достигнут лимит активных стримов {self._max_active_streams}"
             )
+        queue_depth = 0
+        diagnostic_snapshots: Dict[str, Any] = {}
+        try:
+            for stream_name, session_list in self._sessions.items():
+                stream_queue = 0
+                for session in session_list:
+                    state = session.diagnostic_state()
+                    stream_queue += state.get("queue", 0)
+                    diagnostic_snapshots.setdefault(stream_name, []).append(state)
+                queue_depth += stream_queue
+        except Exception:
+            diagnostic_snapshots = {}
+        self._log_writer(
+            (
+                f"Подписка: {symbol}. Активных символов {len(self._active)}, "
+                f"очередь команд {queue_depth}."
+            )
+        )
         exchange_data = self.get_exchange_data(symbol)
         streams, registrations = exchange_data.create_stream_bundle()
         stream_weights = {
             name: max(self.stream_weight(symbol, name), 0.0)
             for name in registrations
         }
+        try:
+            self._log_writer(
+                (
+                    f"Подписка: {symbol}. Профильные веса {stream_weights}."
+                )
+            )
+        except Exception:
+            pass
         stream_priorities = {
             name: max(stream_weights.get(name, 0.0), 0.1)
             for name in registrations
@@ -2612,7 +2771,12 @@ class BinanceStreamManager:
         assignments: Dict[str, tuple[_BinanceStreamSession, _StreamConsumer[Any]]] = {}
         try:
             for stream_name, registration in registrations.items():
-                session = self._acquire_session(stream_name)
+                weight = stream_weights.get(stream_name, 0.0)
+                session = self._acquire_session(
+                    stream_name,
+                    symbol=symbol,
+                    weight=weight,
+                )
                 weight = stream_weights.get(stream_name, 0.0)
                 priority = stream_priorities.get(stream_name, 0.1)
                 try:
@@ -2622,7 +2786,17 @@ class BinanceStreamManager:
                         weight=weight,
                     )
                 except StreamLimitError:
-                    session = self._acquire_session(stream_name)
+                    self._log_writer(
+                        (
+                            f"[{stream_name}] StreamLimitError для {symbol}, "
+                            f"повторная попытка через новую сессию."
+                        )
+                    )
+                    session = self._acquire_session(
+                        stream_name,
+                        symbol=symbol,
+                        weight=weight,
+                    )
                     session.register_consumer(
                         registration.consumer,
                         priority=priority,
@@ -2714,10 +2888,17 @@ class BinanceStreamManager:
             last_failure_at=now,
         )
         try:
+            reasons: set[str] = set()
+            for session, consumer in assignments.values():
+                reason = consumer.get_last_resync_reason()
+                if reason:
+                    reasons.add(reason)
+            reason_text = ", ".join(sorted(reasons)) or "n/a"
             self._log_writer(
                 (
                     f"Переподписка {symbol}: попытка {attempts},"
-                    f" следующий интервал ожидания {delay_seconds:.1f}с"
+                    f" следующий интервал ожидания {delay_seconds:.1f}с,"
+                    f" причина={reason_text}"
                 )
             )
         except Exception:
