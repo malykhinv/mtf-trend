@@ -1,23 +1,23 @@
 {
   "depth": {
-    "steady_per_min": 20,
-    "burst_per_5s": 3,
-    "max_symbols": 66,
-    "resubscribe_buffer": 6,
-    "max_weight": 60
+    "steady_per_min": 60,
+    "burst_per_5s": 6,
+    "max_symbols": 120,
+    "resubscribe_buffer": 10,
+    "max_weight": 100
   },
   "trades": {
-    "steady_per_min": 20,
-    "burst_per_5s": 3,
-    "max_symbols": 66,
-    "resubscribe_buffer": 6,
-    "max_weight": 60
+    "steady_per_min": 60,
+    "burst_per_5s": 6,
+    "max_symbols": 120,
+    "resubscribe_buffer": 10,
+    "max_weight": 100
   },
   "book_ticker": {
-    "steady_per_min": 20,
-    "burst_per_5s": 3,
-    "max_symbols": 66,
-    "resubscribe_buffer": 6,
-    "max_weight": 60
+    "steady_per_min": 60,
+    "burst_per_5s": 6,
+    "max_symbols": 120,
+    "resubscribe_buffer": 10,
+    "max_weight": 100
   }
 }

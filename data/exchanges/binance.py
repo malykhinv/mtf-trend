@@ -557,6 +557,7 @@ class _BinanceStreamSession:
         self._total_weight = 0.0
         self._usable_capacity = self._compute_capacity(limit)
         self._last_ping = 0.0
+        self._last_rate_limit_log = 0.0
 
     @staticmethod
     def _compute_capacity(limit: "StreamLimit") -> int:
@@ -607,10 +608,23 @@ class _BinanceStreamSession:
                 if param in self._consumers:
                     continue
                 if self._usable_capacity > 0 and len(self._consumers) >= self._usable_capacity:
+                    symbol = getattr(consumer, 'symbol', 'unknown')
+                    msg = (
+                        f"[{self._stream}] Лимит символов: {symbol} не может быть добавлен. "
+                        f"Занято {len(self._consumers)}/{self._usable_capacity}."
+                    )
+                    self._log(msg)
                     raise StreamLimitError("max stream capacity reached")
                 if self._max_weight > 0:
                     projected = self._total_weight + weight
                     if projected - self._max_weight > 1e-9:
+                        symbol = getattr(consumer, 'symbol', 'unknown')
+                        msg = (
+                            f"[{self._stream}] Лимит веса: {symbol} требует {weight:.1f}, "
+                            f"доступно {self._max_weight - self._total_weight:.1f} "
+                            f"из {self._max_weight:.1f}."
+                        )
+                        self._log(msg)
                         raise StreamLimitError("max stream weight reached")
                 self._consumers[param] = consumer
                 self._symbol_params[consumer.symbol] = param
@@ -689,6 +703,18 @@ class _BinanceStreamSession:
             budget_priority = "resync" if command.use_reserve else "normal"
             if not self._budget.consume(priority=budget_priority):
                 delay = self._budget.failure_delay()
+                # Логируем rate limiting (не чаще раза в 30 секунд)
+                now = time.monotonic()
+                if now - self._last_rate_limit_log > 30.0:
+                    symbol = getattr(command.consumer, 'symbol', 'unknown')
+                    queue_len = len(self._command_queue)
+                    log_msg = (
+                        f"[{self._stream}] Rate limit: {command.method} для {symbol} "
+                        f"заблокирован на {delay:.1f}с. "
+                        f"В очереди {queue_len} команд(а/ы)."
+                    )
+                    self._log(log_msg)
+                    self._last_rate_limit_log = now
                 if delay > 0.0:
                     await asyncio.sleep(delay)
                 break
@@ -2504,10 +2530,12 @@ class BinanceStreamManager:
         existing = self._streams.get(symbol)
         if existing is not None:
             return existing
-        if (
-            self._max_active_streams > 0
-            and len(self._active) >= self._max_active_streams
-        ):
+        if 0 < self._max_active_streams <= len(self._active):
+            msg = (
+                f"Глобальный лимит: {symbol} не может быть добавлен. "
+                f"Активных символов {len(self._active)}/{self._max_active_streams}."
+            )
+            self._log_writer(msg)
             raise StreamLimitError(
                 f"достигнут лимит активных стримов {self._max_active_streams}"
             )
