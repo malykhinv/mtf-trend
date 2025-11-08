@@ -17,6 +17,8 @@ from config.models.turnover_thresholds import TurnoverThresholds
 
 
 class MarketScanner:
+    RECENT_LISTING_WINDOW_DAYS = 14
+
     def __init__(
             self,
             exchange: ExchangeName,
@@ -511,6 +513,8 @@ class MarketScanner:
             classified: list[Tuple[str, TradingProfile]] = []
             for symbol, turnover in pairs:
                 profile = self._classify_turnover(symbol, turnover)
+                if not profile:
+                    continue
                 if profile is TradingProfile.LISTING and not self._is_recent_listing(symbol):
                     continue
                 self._last_weights[symbol] = self._resolve_weight(profile)
@@ -592,22 +596,18 @@ class MarketScanner:
             return self._resolve_weight(TradingProfile.LISTING)
         return self._resolve_weight(TradingProfile.AUTO)
 
-    def _classify_turnover(self, symbol: str, turnover: float) -> TradingProfile:
+    def _classify_turnover(self, symbol: str, turnover: float) -> TradingProfile | None:
         thresholds = self._thresholds
         top_threshold = float(thresholds.top_usd)
         listing_threshold = float(thresholds.listing_usd)
         alt_threshold = float(thresholds.alt_usd)
         if turnover >= top_threshold:
             return TradingProfile.TOP
-        if turnover >= listing_threshold:
-            if self._is_recent_listing(symbol):
-                return TradingProfile.LISTING
-            if turnover >= alt_threshold:
-                return TradingProfile.ALT
-            return TradingProfile.ALT
+        if turnover >= listing_threshold and self._is_recent_listing(symbol):
+            return TradingProfile.LISTING
         if turnover >= alt_threshold:
             return TradingProfile.ALT
-        return TradingProfile.LISTING
+        return None
 
     def _is_recent_listing(self, symbol: str) -> bool:
         normalized = symbol.upper()
@@ -627,8 +627,8 @@ class MarketScanner:
                 result = False
             else:
                 now_ms = time.time() * 1000.0
-                thirty_days_ms = 30.0 * 24.0 * 3600.0 * 1000.0
-                result = now_ms - launch_ts <= thirty_days_ms
+                window_ms = self.RECENT_LISTING_WINDOW_DAYS * 24.0 * 3600.0 * 1000.0
+                result = now_ms - launch_ts <= window_ms
         self._recent_listing_cache[normalized] = result
         return result
 
