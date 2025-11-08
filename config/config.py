@@ -53,9 +53,9 @@ CONFIG: Final[Config] = Config(
         trade_gap_threshold=50,
     ),
     turnover=TurnoverThresholds(
-        top_usd=700_000,
-        alt_usd=120_000,
-        listing_usd=250_000,
+        top_usd=500_000_000,
+        alt_usd=100_000_000,
+        listing_usd=5_000_000,
         market_scan_interval_s=300,
     ),
     odr=OdrSettings(
