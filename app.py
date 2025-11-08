@@ -969,8 +969,22 @@ class Application:
             if timestamp - self._last_scan_at < self._scanner_interval:
                 return
         scan_result = self._scanner.scan()
+        filtered_scan: list[tuple[str, TradingProfile]] = []
+        for raw_symbol, profile in scan_result:
+            normalized = raw_symbol.upper()
+            if not normalized.isascii():
+                self._event_logger.log(
+                    (
+                        "Сканер рынка: символ "
+                        f"{raw_symbol} исключён — неподдерживаемое имя"
+                    ),
+                    get_current_time(),
+                )
+                continue
+            filtered_scan.append((normalized, profile))
+        scan_result = filtered_scan
         profile_by_symbol = {
-            symbol.upper(): profile for symbol, profile in scan_result
+            symbol: profile for symbol, profile in scan_result
         }
         symbols = tuple(profile_by_symbol.keys())
         preview_limit = -1
@@ -984,6 +998,7 @@ class Application:
         weights_by_symbol = {
             symbol.upper(): weights
             for symbol, weights in self._scanner.symbol_weights.items()
+            if symbol.upper() in profile_by_symbol
         }
         self._symbol_weights = weights_by_symbol
         if self._binance_streams is not None:
