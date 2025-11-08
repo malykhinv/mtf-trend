@@ -67,4 +67,3 @@ def _validate_decimal(value: Decimal) -> None:
 
 
 __all__ = ["NumberLike", "get_current_time", "from_exchange_timestamp"]
-

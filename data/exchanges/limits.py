@@ -56,5 +56,3 @@ def load_stream_limits(path: Path | None = None) -> StreamLimits:
         with source.open("r", encoding="utf-8") as fp:
             data = json.load(fp)
     return StreamLimits.from_mapping(data)
-
-

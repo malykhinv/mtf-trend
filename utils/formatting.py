@@ -27,4 +27,3 @@ def format_money(value: float, currency: str = "USDT", decimals: int = 2) -> str
 
 
 __all__ = ["format_number", "format_money"]
-

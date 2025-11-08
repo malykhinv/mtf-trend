@@ -74,9 +74,9 @@ class KillSwitch:
         if now < start or now > end:
             return
         if (
-            self._funding_event_at == funding_time
-            and self._block_until is not None
-            and self._block_until >= end
+                self._funding_event_at == funding_time
+                and self._block_until is not None
+                and self._block_until >= end
         ):
             return
         if self._block_until is None or self._block_until < end:

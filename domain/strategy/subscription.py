@@ -17,10 +17,10 @@ class SubscriptionManager:
     _active: Tuple[str, ...] = field(default_factory=tuple)
 
     def update(
-        self,
-        symbols: Tuple[str, ...],
-        timestamp: datetime,
-        max_new: Optional[int] = None,
+            self,
+            symbols: Tuple[str, ...],
+            timestamp: datetime,
+            max_new: Optional[int] = None,
     ) -> None:
         additions = list(self._compute_additions(symbols))
         removals = self._compute_removals(symbols)

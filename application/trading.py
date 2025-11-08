@@ -9,12 +9,12 @@ from utils import get_current_time
 
 class NoopTradingAdapter(TradingAdapter):
     def __init__(
-        self,
-        exchange: Exchange,
-        symbol: str,
-        *,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
+            self,
+            exchange: Exchange,
+            symbol: str,
+            *,
+            api_key: Optional[str] = None,
+            api_secret: Optional[str] = None,
     ) -> None:
         self._exchange = exchange
         self._symbol = symbol
@@ -29,11 +29,11 @@ class NoopTradingAdapter(TradingAdapter):
         return leverage
 
     def place_market(
-        self,
-        side: Side,
-        quantity: float,
-        *,
-        reason: str | None = None,
+            self,
+            side: Side,
+            quantity: float,
+            *,
+            reason: str | None = None,
     ) -> ExecutionReport:
         executed_at = get_current_time()
         if reason:
@@ -53,11 +53,11 @@ class NoopTradingAdapter(TradingAdapter):
         )
 
     def place_stop_market(
-        self,
-        side: Side,
-        stop_price: float,
-        quantity: float,
-        trigger: StopTrigger,
+            self,
+            side: Side,
+            stop_price: float,
+            quantity: float,
+            trigger: StopTrigger,
     ) -> bool:
         return True
 

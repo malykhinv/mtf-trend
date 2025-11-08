@@ -16,7 +16,6 @@ from config.config import (
     STREAM_METRICS_LOG_INTERVAL_MIN,
 )
 from data.logger import LogSink
-
 from .binance_websocket import WebSocketClientProtocol, websockets
 from .command_budget import CommandBudget
 from .limits import StreamLimit
@@ -56,12 +55,12 @@ class BinanceStreamSession:
     _global_policy_violation_until = 0.0
 
     def __init__(
-        self,
-        *,
-        stream: str,
-        limit: StreamLimit,
-        silence_timeout_ms: int,
-        log_writer: LogSink,
+            self,
+            *,
+            stream: str,
+            limit: StreamLimit,
+            silence_timeout_ms: int,
+            log_writer: LogSink,
     ) -> None:
         self._stream = stream
         self._limit = limit
@@ -172,12 +171,12 @@ class BinanceStreamSession:
         }
 
     def register_consumer(
-        self,
-        consumer: StreamConsumer[Any],
-        *,
-        priority: float,
-        weight: float,
-        use_reserve: bool = False,
+            self,
+            consumer: StreamConsumer[Any],
+            *,
+            priority: float,
+            weight: float,
+            use_reserve: bool = False,
     ) -> None:
         params = consumer.params
         weight = max(float(weight), 0.0)
@@ -218,10 +217,10 @@ class BinanceStreamSession:
                 self._enqueue_command(command)
 
     def unregister_consumer(
-        self,
-        consumer: StreamConsumer[Any],
-        *,
-        priority: float,
+            self,
+            consumer: StreamConsumer[Any],
+            *,
+            priority: float,
     ) -> None:
         params = tuple(param for param, entry in self._consumers.items() if entry is consumer)
         if not params:
@@ -232,10 +231,10 @@ class BinanceStreamSession:
                 self._enqueue_command(command)
 
     def resubscribe_consumer(
-        self,
-        consumer: StreamConsumer[Any],
-        *,
-        priority: float,
+            self,
+            consumer: StreamConsumer[Any],
+            *,
+            priority: float,
     ) -> None:
         now = time.monotonic()
         local_remaining = max(self._policy_violation_until - now, 0.0)
@@ -265,8 +264,8 @@ class BinanceStreamSession:
                     use_reserve=True,
                 )
                 quota_exhausted = (
-                    self._resubscribe_quota_total > 0
-                    and self._resubscribe_quota <= 0
+                        self._resubscribe_quota_total > 0
+                        and self._resubscribe_quota <= 0
                 )
                 if quota_exhausted or self._budget.reserve_remaining() <= 0:
                     self._pending_resubscribe.append(command)
@@ -285,22 +284,22 @@ class BinanceStreamSession:
                     self._resubscribe_quota = max(self._resubscribe_quota - 1, 0)
 
     def _enqueue_command(
-        self,
-        command: SessionCommand[Any],
-        *,
-        allow_duplicates: bool = False,
+            self,
+            command: SessionCommand[Any],
+            *,
+            allow_duplicates: bool = False,
     ) -> None:
         if not allow_duplicates:
             for _, _, queued in self._command_queue:
                 if (
-                    queued.method == command.method
-                    and queued.params == command.params
+                        queued.method == command.method
+                        and queued.params == command.params
                 ):
                     return
             for inflight in self._inflight.values():
                 if (
-                    inflight.method == command.method
-                    and inflight.params == command.params
+                        inflight.method == command.method
+                        and inflight.params == command.params
                 ):
                     return
         score = -float(command.priority)
@@ -486,9 +485,9 @@ class BinanceStreamSession:
         return None
 
     def _resolve_consumer(
-        self,
-        envelope: Mapping[str, Any],
-        data: Mapping[str, Any],
+            self,
+            envelope: Mapping[str, Any],
+            data: Mapping[str, Any],
     ) -> Optional[StreamConsumer[Any]]:
         stream_id = envelope.get("stream")
         if isinstance(stream_id, str):
@@ -550,9 +549,9 @@ class BinanceStreamSession:
     async def _main(self) -> None:
         self._last_ping = time.monotonic()
         async with websockets.connect(  # type: ignore[union-attr]
-            self._BASE_ENDPOINT,
-            ping_interval=None,
-            close_timeout=5,
+                self._BASE_ENDPOINT,
+                ping_interval=None,
+                close_timeout=5,
         ) as ws:
             self._policy_violation_until = 0.0
             self._resubscribe_quota = self._resubscribe_quota_total

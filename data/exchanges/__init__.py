@@ -8,7 +8,6 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Mapping, Optional, Protocol, Sequence
-
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -23,12 +22,10 @@ from domain.models import (
     MarginMode,
     Side,
     OrderBookSnapshot,
-    OrderBookUpdate,
     StopTrigger,
     SymbolFilters,
     Trade,
 )
-
 from .binance import (
     BestBidAsk,
     BinanceExchangeData,
@@ -58,12 +55,12 @@ class _BybitPrivateRestClient:
     _RECV_WINDOW = 5000
 
     def __init__(
-        self,
-        *,
-        api_key: str,
-        api_secret: str,
-        timeout_s: float,
-        log: LogSink,
+            self,
+            *,
+            api_key: str,
+            api_secret: str,
+            timeout_s: float,
+            log: LogSink,
     ) -> None:
         self._api_key = api_key
         self._api_secret = api_secret
@@ -100,13 +97,13 @@ class _BybitPrivateRestClient:
         return hmac.new(secret, message, hashlib.sha256).hexdigest()
 
     def _request(
-        self,
-        method: str,
-        path: str,
-        *,
-        params: Optional[Mapping[str, Any]] = None,
-        body: Optional[Mapping[str, Any]] = None,
-        context: str,
+            self,
+            method: str,
+            path: str,
+            *,
+            params: Optional[Mapping[str, Any]] = None,
+            body: Optional[Mapping[str, Any]] = None,
+            context: str,
     ) -> Mapping[str, Any]:
         query_params = dict(params.items()) if params else {}
         query_string = self._encode_params(query_params) if query_params else ""
@@ -168,20 +165,20 @@ class _BybitPrivateRestClient:
         raise RuntimeError(f"Bybit REST {context} failed") from last_exception
 
     def get(
-        self,
-        path: str,
-        *,
-        params: Optional[Mapping[str, Any]] = None,
-        context: str,
+            self,
+            path: str,
+            *,
+            params: Optional[Mapping[str, Any]] = None,
+            context: str,
     ) -> Mapping[str, Any]:
         return self._request("GET", path, params=params, context=context)
 
     def post(
-        self,
-        path: str,
-        *,
-        body: Optional[Mapping[str, Any]] = None,
-        context: str,
+            self,
+            path: str,
+            *,
+            body: Optional[Mapping[str, Any]] = None,
+            context: str,
     ) -> Mapping[str, Any]:
         return self._request("POST", path, body=body, context=context)
 
@@ -208,11 +205,11 @@ class IExchangeTrade(Protocol):
     def place_market(self, side, quantity, *, reason: Optional[str] = None) -> ExecutionReport: ...
 
     def place_stop_market(
-        self,
-        side,
-        stop_price: float,
-        quantity: float,
-        trigger: StopTrigger,
+            self,
+            side,
+            stop_price: float,
+            quantity: float,
+            trigger: StopTrigger,
     ) -> bool: ...
 
 
@@ -220,13 +217,13 @@ class BinanceTradingAdapter(IExchangeTrade):
     _REST_HOST = "https://fapi.binance.com"
 
     def __init__(
-        self,
-        *,
-        symbol: str,
-        quote_asset: str,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        log_writer: Optional[LogSink] = None,
+            self,
+            *,
+            symbol: str,
+            quote_asset: str,
+            api_key: Optional[str] = None,
+            api_secret: Optional[str] = None,
+            log_writer: Optional[LogSink] = None,
     ) -> None:
         self._symbol = symbol.upper()
         self._quote_asset = quote_asset.upper()
@@ -285,13 +282,13 @@ class BinanceTradingAdapter(IExchangeTrade):
             self._last_stop_client_id = None
 
     def _signed_request(
-        self,
-        path: str,
-        params: Optional[Mapping[str, Any]] = None,
-        *,
-        timeout: float,
-        context: Optional[str] = None,
-        method: str = "GET",
+            self,
+            path: str,
+            params: Optional[Mapping[str, Any]] = None,
+            *,
+            timeout: float,
+            context: Optional[str] = None,
+            method: str = "GET",
     ) -> str:
         if not self._api_key or not self._api_secret:
             raise RuntimeError("Binance API credentials are required for signed requests")
@@ -392,11 +389,11 @@ class BinanceTradingAdapter(IExchangeTrade):
         return leverage
 
     def place_market(
-        self,
-        side: Side,
-        quantity: float,
-        *,
-        reason: Optional[str] = None,
+            self,
+            side: Side,
+            quantity: float,
+            *,
+            reason: Optional[str] = None,
     ) -> ExecutionReport:
         timeout_s = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
         client_id = self._build_client_order_id(reason)
@@ -424,11 +421,11 @@ class BinanceTradingAdapter(IExchangeTrade):
         )
 
     def place_stop_market(
-        self,
-        side: Side,
-        stop_price: float,
-        quantity: float,
-        trigger: StopTrigger,
+            self,
+            side: Side,
+            stop_price: float,
+            quantity: float,
+            trigger: StopTrigger,
     ) -> bool:
         timeout_s = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
         self._cancel_previous_stop_order(timeout=timeout_s)
@@ -556,11 +553,11 @@ class BinanceTradingAdapter(IExchangeTrade):
         return payload
 
     def _build_execution_report(
-        self,
-        payload: Mapping[str, Any],
-        *,
-        side: Side,
-        requested_qty: float,
+            self,
+            payload: Mapping[str, Any],
+            *,
+            side: Side,
+            requested_qty: float,
     ) -> ExecutionReport:
         order_id = str(payload.get("orderId") or payload.get("clientOrderId") or "").strip()
         if not order_id:
@@ -645,13 +642,13 @@ class BinanceTradingAdapter(IExchangeTrade):
 
 class BybitTradingAdapter(IExchangeTrade):
     def __init__(
-        self,
-        *,
-        symbol: str,
-        settle_coin: str,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        log_writer: Optional[LogSink] = None,
+            self,
+            *,
+            symbol: str,
+            settle_coin: str,
+            api_key: Optional[str] = None,
+            api_secret: Optional[str] = None,
+            log_writer: Optional[LogSink] = None,
     ) -> None:
         self._symbol = symbol.upper()
         self._settle_coin = settle_coin
@@ -778,10 +775,10 @@ class BybitTradingAdapter(IExchangeTrade):
         return f" ({', '.join(parts)})" if parts else ""
 
     def _extract_result(
-        self,
-        payload: Mapping[str, Any],
-        *,
-        context: str,
+            self,
+            payload: Mapping[str, Any],
+            *,
+            context: str,
     ) -> tuple[Mapping[str, Any], Optional[float]]:
         ret_code_raw = payload.get("retCode", 0)
         try:
@@ -885,11 +882,11 @@ class BybitTradingAdapter(IExchangeTrade):
         return leverage
 
     def place_market(
-        self,
-        side: Side,
-        quantity: float,
-        *,
-        reason: Optional[str] = None,
+            self,
+            side: Side,
+            quantity: float,
+            *,
+            reason: Optional[str] = None,
     ) -> ExecutionReport:
         client = self._client()
         side_text = "Buy" if side is Side.BID else "Sell"
@@ -922,12 +919,12 @@ class BybitTradingAdapter(IExchangeTrade):
         return report
 
     def _build_execution_report(
-        self,
-        order: Mapping[str, Any],
-        *,
-        side: Side,
-        requested_qty: float,
-        response_time: Optional[float],
+            self,
+            order: Mapping[str, Any],
+            *,
+            side: Side,
+            requested_qty: float,
+            response_time: Optional[float],
     ) -> ExecutionReport:
         order_id = str(order.get("orderId") or order.get("orderID") or "").strip()
         if not order_id:
@@ -994,11 +991,11 @@ class BybitTradingAdapter(IExchangeTrade):
         )
 
     def place_stop_market(
-        self,
-        side: Side,
-        stop_price: float,
-        quantity: float,
-        trigger: StopTrigger,
+            self,
+            side: Side,
+            stop_price: float,
+            quantity: float,
+            trigger: StopTrigger,
     ) -> bool:
         client = self._client()
         self._cancel_previous_stop_order()
@@ -1087,4 +1084,3 @@ __all__ = [
     "StreamEventType",
     "StreamSubscription",
 ]
-

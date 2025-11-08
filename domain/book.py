@@ -94,8 +94,8 @@ class RecentBand:
     def _cleanup(self, current_time: datetime) -> None:
         ensure_current_timezone(current_time)
         if (
-            self._last_cleanup_at is not None
-            and current_time <= self._last_cleanup_at
+                self._last_cleanup_at is not None
+                and current_time <= self._last_cleanup_at
         ):
             return
         if self._capacity == 0:
@@ -132,8 +132,8 @@ class RecentBand:
     def _locate_price(self, price: float) -> Tuple[int, Optional[int]]:
         index_pos = bisect_left(self._index_prices, price)
         if (
-            index_pos < len(self._index_prices)
-            and self._index_prices[index_pos] == price
+                index_pos < len(self._index_prices)
+                and self._index_prices[index_pos] == price
         ):
             return index_pos, self._index_slots[index_pos]
         return index_pos, None
@@ -253,12 +253,12 @@ class _BookSide:
     )
 
     def __init__(
-        self,
-        side: Side,
-        *,
-        recent_band_capacity: int,
-        recent_band_window_s: int,
-        recent_band_volume_boost: int,
+            self,
+            side: Side,
+            *,
+            recent_band_capacity: int,
+            recent_band_window_s: int,
+            recent_band_volume_boost: int,
     ) -> None:
         self._side = side
         self._levels: List[_StoredLevel] = []
@@ -285,8 +285,8 @@ class _BookSide:
     def _locate_price(self, price: float) -> Tuple[int, Optional[int]]:
         index_pos = bisect_left(self._index_prices, price)
         if (
-            index_pos < len(self._index_prices)
-            and self._index_prices[index_pos] == price
+                index_pos < len(self._index_prices)
+                and self._index_prices[index_pos] == price
         ):
             return index_pos, self._index_positions[index_pos]
         return index_pos, None
@@ -409,11 +409,11 @@ class OrderBook:
     __slots__ = ("_bids", "_asks", "_odr_history")
 
     def __init__(
-        self,
-        *,
-        recent_band_window_s: int,
-        recent_band_volume_boost: int,
-        recent_band_capacity: Optional[int] = None,
+            self,
+            *,
+            recent_band_window_s: int,
+            recent_band_volume_boost: int,
+            recent_band_capacity: Optional[int] = None,
     ) -> None:
         base_capacity = (
             max(1, recent_band_capacity)

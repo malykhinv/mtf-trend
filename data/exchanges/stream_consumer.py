@@ -8,13 +8,11 @@ from typing import Any, Callable, Deque, Dict, Generic, Iterable, Optional, Tupl
 from config.config import STREAM_METRICS_LOG_INTERVAL_MIN
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
-
 from .events import ResyncReason, StreamEvent, StreamEventType
 from .stream_buffer import StreamBuffer
 from .stream_metrics import StreamMetrics
 
 T = TypeVar("T")
-
 
 SnapshotFactory = Optional[
     Callable[[], tuple[Optional[StreamEvent[T]], Iterable[StreamEvent[T]]]]
@@ -27,11 +25,11 @@ class StreamValidationError(RuntimeError):
     __slots__ = ("reason", "details", "resubscribe")
 
     def __init__(
-        self,
-        reason: ResyncReason,
-        details: str,
-        *,
-        resubscribe: bool = True,
+            self,
+            reason: ResyncReason,
+            details: str,
+            *,
+            resubscribe: bool = True,
     ) -> None:
         super().__init__(details)
         self.reason = reason
@@ -132,11 +130,11 @@ class StreamConsumer(Generic[T]):
         return needs_resubscribe
 
     def emit_resync(
-        self,
-        reason: ResyncReason,
-        details: str,
-        *,
-        enqueue_resubscribe: bool = True,
+            self,
+            reason: ResyncReason,
+            details: str,
+            *,
+            enqueue_resubscribe: bool = True,
     ) -> bool:
         enqueue = enqueue_resubscribe
         attempt_suffix = ""

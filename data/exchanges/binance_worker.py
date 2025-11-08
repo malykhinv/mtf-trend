@@ -11,7 +11,6 @@ from typing import Any, Callable, Deque, Dict, Generic, Iterable, Optional, Tupl
 from config.config import STREAM_METRICS_LOG_INTERVAL_MIN
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
-
 from .binance_websocket import (
     ConnectionClosed,
     WebSocketClientProtocol,
@@ -53,18 +52,18 @@ class BinanceStreamWorker(Generic[T]):
     _BASE_ENDPOINT = "wss://fstream.binance.com/stream"
 
     def __init__(
-        self,
-        *,
-        stream: str,
-        symbol: str,
-        params: Iterable[str],
-        buffer: StreamBuffer[T],
-        parser: Callable[[Dict[str, Any]], Iterable[StreamEvent[T]]],
-        metrics: StreamMetrics,
-        silence_timeout_ms: int,
-        log_writer: LogSink,
-        budget: CommandBudget,
-        snapshot_factory: SnapshotFactory[T] = None,
+            self,
+            *,
+            stream: str,
+            symbol: str,
+            params: Iterable[str],
+            buffer: StreamBuffer[T],
+            parser: Callable[[Dict[str, Any]], Iterable[StreamEvent[T]]],
+            metrics: StreamMetrics,
+            silence_timeout_ms: int,
+            log_writer: LogSink,
+            budget: CommandBudget,
+            snapshot_factory: SnapshotFactory[T] = None,
     ) -> None:
         self._stream = stream
         self._symbol = symbol
@@ -136,9 +135,9 @@ class BinanceStreamWorker(Generic[T]):
         self._log(f"connecting {self._stream} stream for {self._symbol}")
         try:
             async with websockets.connect(  # type: ignore[union-attr]
-                self._BASE_ENDPOINT,
-                ping_interval=None,
-                close_timeout=5,
+                    self._BASE_ENDPOINT,
+                    ping_interval=None,
+                    close_timeout=5,
             ) as ws:
                 await self._on_connected(ws)
                 await self._recv_loop(ws)
@@ -225,11 +224,11 @@ class BinanceStreamWorker(Generic[T]):
         return None
 
     def _queue_command(
-        self,
-        method: str,
-        params: Iterable[str],
-        *,
-        priority: str = "normal",
+            self,
+            method: str,
+            params: Iterable[str],
+            *,
+            priority: str = "normal",
     ) -> None:
         normalized_method = method.upper()
         normalized_params = tuple(params)
@@ -297,11 +296,11 @@ class BinanceStreamWorker(Generic[T]):
         self._maybe_report(now)
 
     def _emit_resync(
-        self,
-        reason: ResyncReason,
-        details: str,
-        *,
-        enqueue_resubscribe: bool = True,
+            self,
+            reason: ResyncReason,
+            details: str,
+            *,
+            enqueue_resubscribe: bool = True,
     ) -> None:
         now = datetime.now(tz=CURRENT_TIMEZONE)
         self._metrics.record_resync(reason)

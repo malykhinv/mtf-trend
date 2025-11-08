@@ -38,5 +38,3 @@ class StreamBuffer(Generic[T]):
         drained = list(self._queue)
         self._queue.clear()
         return drained
-
-

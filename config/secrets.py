@@ -4,7 +4,6 @@ import os
 from typing import Final
 
 from config.env_loader import load_env
-
 from config.models.secrets import Secrets
 
 load_env()
@@ -37,6 +36,5 @@ SECRETS: Final[Secrets] = Secrets(
     bybit_api_key=_optional_env("BYBIT_API_KEY"),
     bybit_api_secret=_optional_env("BYBIT_API_SECRET"),
 )
-
 
 __all__ = ["SECRETS"]

@@ -56,9 +56,9 @@ class StreamMetrics:
             self.last_report_at = now
 
     def consume_report(
-        self,
-        now: datetime,
-        interval: timedelta,
+            self,
+            now: datetime,
+            interval: timedelta,
     ) -> tuple[int, int, int] | None:
         if self.last_report_at is None:
             self.last_report_at = now

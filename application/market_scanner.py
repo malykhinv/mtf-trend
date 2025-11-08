@@ -18,17 +18,17 @@ from config.models.turnover_thresholds import TurnoverThresholds
 
 class MarketScanner:
     def __init__(
-        self,
-        exchange: ExchangeName,
-        profile: TradingProfile,
-        thresholds: TurnoverThresholds,
-        profile_weights: ProfileStreamWeights,
-        *,
-        timeout: float = 5.0,
-        retries: int = 3,
-        retry_delay: float = 0.5,
-        retry_backoff: float = 2.0,
-        log: Optional[Callable[[str], None]] = None,
+            self,
+            exchange: ExchangeName,
+            profile: TradingProfile,
+            thresholds: TurnoverThresholds,
+            profile_weights: ProfileStreamWeights,
+            *,
+            timeout: float = 5.0,
+            retries: int = 3,
+            retry_delay: float = 0.5,
+            retry_backoff: float = 2.0,
+            log: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._exchange = exchange
         self._profile = profile
@@ -95,7 +95,7 @@ class MarketScanner:
                 {
                     "symbol": symbol,
                     "turnover": item.get("quoteVolume")
-                    or item.get("volume"),
+                                or item.get("volume"),
                     "trade_count": item.get("count"),
                     "price_change": item.get("priceChangePercent"),
                 }
@@ -119,15 +119,15 @@ class MarketScanner:
                 continue
             symbol = row.get("symbol", "")
             turnover = (
-                row.get("turnover24h")
-                or row.get("turnover24Hours")
-                or row.get("volume24h")
+                    row.get("turnover24h")
+                    or row.get("turnover24Hours")
+                    or row.get("volume24h")
             )
             trade_count = (
-                row.get("tradeCnt24h")
-                or row.get("tradeCnt24Hours")
-                or row.get("tradeCount24h")
-                or row.get("tradeCount")
+                    row.get("tradeCnt24h")
+                    or row.get("tradeCnt24Hours")
+                    or row.get("tradeCount24h")
+                    or row.get("tradeCount")
             )
             price_change = row.get("price24hPcnt")
             if price_change not in (None, ""):
@@ -146,7 +146,7 @@ class MarketScanner:
         return self._filter_and_sort(normalized_rows)
 
     def _load_binance_exchange_info(
-        self, *, refresh: bool = False
+            self, *, refresh: bool = False
     ) -> Mapping[str, dict[str, object]]:
         if self._binance_exchange_info and not refresh:
             fetched_at = self._exchange_info_fetched_at or 0.0
@@ -162,7 +162,7 @@ class MarketScanner:
         return self._binance_exchange_info
 
     def _parse_binance_exchange_info(
-        self, payload: object
+            self, payload: object
     ) -> dict[str, dict[str, object]]:
         symbols: Sequence[Mapping[str, object]] = ()
         if isinstance(payload, Mapping):
@@ -194,8 +194,8 @@ class MarketScanner:
                 continue
             permissions = item.get("permissions")
             if not (
-                isinstance(permissions, Sequence)
-                and not isinstance(permissions, (str, bytes))
+                    isinstance(permissions, Sequence)
+                    and not isinstance(permissions, (str, bytes))
             ):
                 continue
             normalized_permissions = {str(entry).upper() for entry in permissions}
@@ -208,6 +208,7 @@ class MarketScanner:
                 filter_entries = tuple(
                     entry for entry in filters if isinstance(entry, Mapping)
                 )
+
             def _find_filter(filter_type: str) -> Mapping[str, object]:
                 return next(
                     (
@@ -395,7 +396,7 @@ class MarketScanner:
             return default
 
     def _extract_listing_dates(
-        self, exchange_info: Mapping[str, Mapping[str, object]]
+            self, exchange_info: Mapping[str, Mapping[str, object]]
     ) -> dict[str, int]:
         listing_dates: dict[str, int] = {}
         for symbol, item in exchange_info.items():
@@ -420,13 +421,13 @@ class MarketScanner:
             except HTTPError:
                 raise
             except (
-                URLError,
-                RemoteDisconnected,
-                TimeoutError,
-                socket.timeout,
-                socket.gaierror,
-                ConnectionError,
-                OSError,
+                    URLError,
+                    RemoteDisconnected,
+                    TimeoutError,
+                    socket.timeout,
+                    socket.gaierror,
+                    ConnectionError,
+                    OSError,
             ):
                 if retries_remaining <= 0:
                     raise
@@ -436,7 +437,7 @@ class MarketScanner:
                 delay *= self._retry_backoff
 
     def _filter_and_sort(
-        self, entries: Iterable[Mapping[str, object] | Sequence[object]]
+            self, entries: Iterable[Mapping[str, object] | Sequence[object]]
     ) -> Tuple[Tuple[str, TradingProfile], ...]:
         threshold = self._resolve_threshold()
         minutes_per_day = 1440.0

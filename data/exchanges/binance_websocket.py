@@ -9,7 +9,6 @@ except Exception:  # pragma: no cover - handled at runtime
     WebSocketClientProtocol = object  # type: ignore[misc]
     ConnectionClosed = ConnectionClosedError = ConnectionClosedOK = Exception  # type: ignore[assignment]
 
-
 __all__ = [
     "websockets",
     "WebSocketClientProtocol",

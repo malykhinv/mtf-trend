@@ -13,20 +13,20 @@ class TradingAdapter(Protocol):
         ...
 
     def place_market(
-        self,
-        side: Side,
-        quantity: float,
-        *,
-        reason: Optional[str] = None,
+            self,
+            side: Side,
+            quantity: float,
+            *,
+            reason: Optional[str] = None,
     ) -> ExecutionReport:
         ...
 
     def place_stop_market(
-        self,
-        side: Side,
-        stop_price: float,
-        quantity: float,
-        trigger: StopTrigger,
+            self,
+            side: Side,
+            stop_price: float,
+            quantity: float,
+            trigger: StopTrigger,
     ) -> bool:
         ...
 

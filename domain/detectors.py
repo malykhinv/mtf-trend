@@ -47,12 +47,12 @@ def check_if_price_recent(level_price: float, recent_low: float, recent_high: fl
 
 
 def check_if_is_large_wall(
-    level: OrderBookLevel,
-    abs_usd_min: float,
-    rel_mult_min: float,
-    median_level_qty: float,
-    persist_s: float,
-    now: datetime,
+        level: OrderBookLevel,
+        abs_usd_min: float,
+        rel_mult_min: float,
+        median_level_qty: float,
+        persist_s: float,
+        now: datetime,
 ) -> bool:
     lifetime: timedelta = now - level.first_seen_at
     if lifetime < timedelta(seconds=persist_s):
@@ -65,9 +65,9 @@ def check_if_is_large_wall(
 
 
 def check_if_has_near_wall(
-    book: OrderBook,
-    side_stop: Side,
-    profile: TradingProfile,
+        book: OrderBook,
+        side_stop: Side,
+        profile: TradingProfile,
 ) -> Optional[Wall]:
     abs_threshold: float = _resolve_absolute_threshold(profile)
     level: Optional[OrderBookLevel] = book.find_nearest_wall(
@@ -80,12 +80,12 @@ def check_if_has_near_wall(
     persist_s: float = _resolve_persist(profile)
     median_qty: float = _compute_median_quantity(book.iter_recent_band(side_stop))
     if not check_if_is_large_wall(
-        level,
-        abs_threshold,
-        CONFIG.walls.relative_multiplier,
-        median_qty,
-        persist_s,
-        now,
+            level,
+            abs_threshold,
+            CONFIG.walls.relative_multiplier,
+            median_qty,
+            persist_s,
+            now,
     ):
         return None
     return Wall(
@@ -101,10 +101,10 @@ def check_if_has_near_wall(
 
 
 def check_if_has_opposite_wall(
-    book: OrderBook,
-    side_move: Side,
-    our_wall: Wall,
-    profile: TradingProfile,
+        book: OrderBook,
+        side_move: Side,
+        our_wall: Wall,
+        profile: TradingProfile,
 ) -> bool:
     opposite_side: Side = Side.ASK if side_move is Side.BID else Side.BID
     abs_threshold: float = _resolve_absolute_threshold(profile)
@@ -118,20 +118,20 @@ def check_if_has_opposite_wall(
     persist_s: float = _resolve_persist(profile)
     median_qty: float = _compute_median_quantity(book.iter_recent_band(opposite_side))
     if not check_if_is_large_wall(
-        level,
-        abs_threshold,
-        CONFIG.walls.relative_multiplier,
-        median_qty,
-        persist_s,
-        now,
+            level,
+            abs_threshold,
+            CONFIG.walls.relative_multiplier,
+            median_qty,
+            persist_s,
+            now,
     ):
         return False
     return level.notional >= our_wall.notional
 
 
 def _collect_levels(
-    levels: Iterable[OrderBookLevel],
-    fallback: Optional[OrderBookLevel],
+        levels: Iterable[OrderBookLevel],
+        fallback: Optional[OrderBookLevel],
 ) -> Tuple[OrderBookLevel, ...]:
     collected: Tuple[OrderBookLevel, ...] = tuple(levels)
     if collected:
@@ -140,9 +140,9 @@ def _collect_levels(
 
 
 def _sum_side_pressure(
-    levels: Sequence[OrderBookLevel],
-    last_price: float,
-    tick_size: float,
+        levels: Sequence[OrderBookLevel],
+        last_price: float,
+        tick_size: float,
 ) -> float:
     contributions: list[float] = [
         compute_odr_weight(level.price, last_price, tick_size) * level.notional

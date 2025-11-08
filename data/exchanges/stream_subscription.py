@@ -14,10 +14,10 @@ class StreamSubscription(Generic[T]):
     __slots__ = ("events", "_buffer", "_stop", "_stopped")
 
     def __init__(
-        self,
-        events: Iterator[StreamEvent[T]],
-        buffer: StreamBuffer[T],
-        stop_callback: Optional[Callable[[], None]] = None,
+            self,
+            events: Iterator[StreamEvent[T]],
+            buffer: StreamBuffer[T],
+            stop_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         self.events = events
         self._buffer = buffer

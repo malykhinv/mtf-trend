@@ -39,5 +39,3 @@ class StreamEvent(Generic[T_cov]):
             data=data,
             timestamp=datetime.now(tz=CURRENT_TIMEZONE),
         )
-
-

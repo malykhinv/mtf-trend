@@ -40,6 +40,7 @@ def _supports_color_output(stream: TextIO | None) -> bool:
 def _print_sink(message: str) -> None:
     print(message)
 
+
 setattr(_print_sink, "_supports_color", _supports_color_output(getattr(sys, "stdout", None)))
 
 

@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import math
-import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import (
     Any,
-    Callable,
     Deque,
     Dict,
     Iterable,
@@ -21,7 +18,6 @@ from typing import (
     Tuple,
     TypeVar,
 )
-
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -29,23 +25,17 @@ from config.config import (
     ALLOWED_GAP,
     CONFIG,
     MAX_ACTIVE_STREAMS,
-    MAX_RESUBSCRIBE_PER_CYCLE,
-    POLICY_VIOLATION_GLOBAL_COOLDOWN_S,
-    POLICY_VIOLATION_STREAM_COOLDOWN_S,
-    STREAM_METRICS_LOG_INTERVAL_MIN,
 )
+from config.models.trading_profile import TradingProfile
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookLevel, OrderBookSnapshot, OrderBookUpdate, Side, SymbolFilters, Trade
-from config.models.trading_profile import TradingProfile
-
 from .binance_session import BinanceStreamSession, ResubscribeCooldownState, StreamRegistration
-from .binance_websocket import WebSocketClientProtocol, websockets
 from .command_budget import CommandBudget
 from .events import ResyncReason, StreamEvent, StreamEventType
 from .limits import StreamLimit, StreamLimits, load_stream_limits
 from .stream_buffer import StreamBuffer
-from .stream_consumer import SnapshotFactory, StreamConsumer, StreamValidationError
+from .stream_consumer import StreamConsumer, StreamValidationError
 from .stream_metrics import StreamMetrics
 from .stream_subscription import StreamLimitError, StreamSubscription
 
@@ -100,6 +90,7 @@ def _safe_float(value: Any, default: float) -> float:
     except (TypeError, ValueError):
         return default
 
+
 T = TypeVar("T")
 
 
@@ -150,24 +141,24 @@ class BinanceExchangeData:
 
     @classmethod
     def get_profile_weight(
-        cls,
-        stream: str,
-        profile: TradingProfile | str,
+            cls,
+            stream: str,
+            profile: TradingProfile | str,
     ) -> float:
         profile_key = profile.value if isinstance(profile, TradingProfile) else str(profile)
         stream_weights = cls.PROFILE_WEIGHTS.get(stream, {})
         return float(stream_weights.get(profile_key, 0.0))
 
     def __init__(
-        self,
-        *,
-        symbol: str,
-        loop_interval_ms: int,
-        silence_timeout_ms: int,
-        log_writer: LogSink,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
-        exchange_info: Optional[Mapping[str, Mapping[str, object]]] = None,
+            self,
+            *,
+            symbol: str,
+            loop_interval_ms: int,
+            silence_timeout_ms: int,
+            log_writer: LogSink,
+            api_key: Optional[str] = None,
+            api_secret: Optional[str] = None,
+            exchange_info: Optional[Mapping[str, Mapping[str, object]]] = None,
     ) -> None:
         self._symbol = symbol.upper()
         self._loop_interval = max(loop_interval_ms, 100)
@@ -333,10 +324,10 @@ class BinanceExchangeData:
                     payload = json.load(response)
                 break
             except (
-                URLError,
-                TimeoutError,
-                OSError,
-                json.JSONDecodeError,
+                    URLError,
+                    TimeoutError,
+                    OSError,
+                    json.JSONDecodeError,
             ) as exc:  # pragma: no cover - network
                 last_exception = exc
                 if attempt < max_attempts:
@@ -436,10 +427,10 @@ class BinanceExchangeData:
                     payload = json.load(response)
                 break
             except (
-                URLError,
-                TimeoutError,
-                OSError,
-                json.JSONDecodeError,
+                    URLError,
+                    TimeoutError,
+                    OSError,
+                    json.JSONDecodeError,
             ) as exc:  # pragma: no cover - network access
                 last_exception = exc
                 if attempt < max_attempts:
@@ -500,9 +491,9 @@ class BinanceExchangeData:
                 )
 
         raw_timestamp = (
-            entry.get("nextFundingTime")
-            or entry.get("nextFundingTimestamp")
-            or entry.get("fundingTime")
+                entry.get("nextFundingTime")
+                or entry.get("nextFundingTimestamp")
+                or entry.get("fundingTime")
         )
         if raw_timestamp is None:
             raise RuntimeError("funding info missing next funding timestamp")
@@ -522,7 +513,7 @@ class BinanceExchangeData:
         return funding_time
 
     def _stream_iterator(
-        self, buffer: StreamBuffer[T]
+            self, buffer: StreamBuffer[T]
     ) -> Iterator[StreamEvent[T]]:
         interval = self._loop_interval / 1000.0
         while True:
@@ -542,8 +533,8 @@ class BinanceExchangeData:
         pending_updates: Deque[tuple[OrderBookUpdate, int]] = deque()
 
         def apply_update(
-            update: OrderBookUpdate,
-            prev_final: int,
+                update: OrderBookUpdate,
+                prev_final: int,
         ) -> Iterable[StreamEvent[DepthStreamData]]:
             nonlocal last_final_id, last_event_time
             if last_final_id is not None:
@@ -567,8 +558,8 @@ class BinanceExchangeData:
                         ),
                     )
                 if (
-                    prev_final < last_final_id
-                    and not (update.first_update_id <= expected_next <= update.last_update_id)
+                        prev_final < last_final_id
+                        and not (update.first_update_id <= expected_next <= update.last_update_id)
                 ):
                     raise StreamValidationError(
                         ResyncReason.SEQUENCE_GAP,
@@ -806,7 +797,7 @@ class BinanceExchangeData:
         return StreamRegistration(consumer=consumer, subscription=subscription)
 
     def create_stream_bundle(
-        self,
+            self,
     ) -> tuple[
         BinanceSymbolStreams,
         Dict[str, StreamRegistration[Any]],
@@ -844,10 +835,10 @@ class BinanceExchangeData:
 
     # ------------------------------------------------------------------
     def _parse_levels(
-        self,
-        entries: Iterable[Iterable[Any]],
-        timestamp: datetime,
-        side: str,
+            self,
+            entries: Iterable[Iterable[Any]],
+            timestamp: datetime,
+            side: str,
     ) -> Tuple[OrderBookLevel, ...]:
         levels: list[OrderBookLevel] = []
         for entry in entries:
@@ -905,8 +896,8 @@ class BinanceExchangeData:
                 continue
             permissions = entry.get("permissions")
             if not (
-                isinstance(permissions, Sequence)
-                and not isinstance(permissions, (str, bytes))
+                    isinstance(permissions, Sequence)
+                    and not isinstance(permissions, (str, bytes))
             ):
                 continue
             normalized_permissions = {str(value).upper() for value in permissions}
@@ -922,6 +913,7 @@ class BinanceExchangeData:
                 filter_entries = tuple(
                     item for item in filters if isinstance(item, Mapping)
                 )
+
             def _find_filter(filter_type: str) -> Mapping[str, object]:
                 return next(
                     (
@@ -1088,13 +1080,13 @@ class BinanceStreamManager:
     """Manages Binance stream subscriptions with centralized limits."""
 
     def __init__(
-        self,
-        *,
-        loop_interval_ms: int,
-        silence_timeout_ms: int,
-        log_writer: LogSink,
-        api_key: Optional[str] = None,
-        api_secret: Optional[str] = None,
+            self,
+            *,
+            loop_interval_ms: int,
+            silence_timeout_ms: int,
+            log_writer: LogSink,
+            api_key: Optional[str] = None,
+            api_secret: Optional[str] = None,
     ) -> None:
         self._loop_interval_ms = loop_interval_ms
         self._silence_timeout_ms = silence_timeout_ms
@@ -1220,10 +1212,10 @@ class BinanceStreamManager:
             return tuple()
         has_capacity = any(
             (math.isinf(available_weight_by_stream[stream])
-            or available_weight_by_stream[stream] > 0.0)
+             or available_weight_by_stream[stream] > 0.0)
             and (
-                math.isinf(available_symbols_by_stream[stream])
-                or available_symbols_by_stream[stream] > 0.0
+                    math.isinf(available_symbols_by_stream[stream])
+                    or available_symbols_by_stream[stream] > 0.0
             )
             for stream in self._limit_map
         )
@@ -1250,15 +1242,15 @@ class BinanceStreamManager:
                 for stream in self._limit_map
             }
             if all(
-                (
-                    math.isinf(available_weight_by_stream[stream])
-                    or available_weight_by_stream[stream] >= weight
-                )
-                and (
-                    math.isinf(available_symbols_by_stream[stream])
-                    or available_symbols_by_stream[stream] >= 1.0
-                )
-                for stream, weight in requirements.items()
+                    (
+                            math.isinf(available_weight_by_stream[stream])
+                            or available_weight_by_stream[stream] >= weight
+                    )
+                    and (
+                            math.isinf(available_symbols_by_stream[stream])
+                            or available_symbols_by_stream[stream] >= 1.0
+                    )
+                    for stream, weight in requirements.items()
             ):
                 planned.append(normalized)
                 if not math.isinf(remaining_global):
@@ -1372,11 +1364,11 @@ class BinanceStreamManager:
         return self._profile_weight(symbol, stream)
 
     def _acquire_session(
-        self,
-        stream: str,
-        *,
-        symbol: str | None = None,
-        weight: float | None = None,
+            self,
+            stream: str,
+            *,
+            symbol: str | None = None,
+            weight: float | None = None,
     ) -> BinanceStreamSession:
         sessions = self._sessions.setdefault(stream, [])
         for session in sessions:
@@ -1599,4 +1591,3 @@ class BinanceStreamManager:
         self._active.discard(symbol)
         self._symbol_consumers.pop(symbol, None)
         self._clear_cooldown(symbol)
-

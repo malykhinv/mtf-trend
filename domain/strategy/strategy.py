@@ -20,16 +20,16 @@ from .types import ResyncHandler
 class Strategy:
 
     def __init__(
-        self,
-        *,
-        subscriptions: SubscriptionManager,
-        focus: FocusController,
-        position: PositionController,
-        notifier: TelegramNotifier,
-        logger: EventLogger,
-        resync: ResyncHandler,
-        safety: KillSwitch,
-        detailed_diagnostics: bool = False,
+            self,
+            *,
+            subscriptions: SubscriptionManager,
+            focus: FocusController,
+            position: PositionController,
+            notifier: TelegramNotifier,
+            logger: EventLogger,
+            resync: ResyncHandler,
+            safety: KillSwitch,
+            detailed_diagnostics: bool = False,
     ) -> None:
         self._subscriptions = subscriptions
         self._focus = focus
@@ -98,12 +98,12 @@ class Strategy:
             self._last_scan_at = observation.timestamp
 
     def _log_partial_diagnostics(
-        self,
-        symbol: str,
-        timestamp: datetime,
-        *,
-        wall_present: bool,
-        volume_spike: bool,
+            self,
+            symbol: str,
+            timestamp: datetime,
+            *,
+            wall_present: bool,
+            volume_spike: bool,
     ) -> None:
         if not self._detailed_diagnostics_enabled:
             return
@@ -249,12 +249,12 @@ class Strategy:
             self._wall_drop_since = None
 
     def _focus_on_symbol(
-        self,
-        symbol: str,
-        signal: Signal,
-        wall: Wall,
-        timestamp: datetime,
-        volume_ratio: float,
+            self,
+            symbol: str,
+            signal: Signal,
+            wall: Wall,
+            timestamp: datetime,
+            volume_ratio: float,
     ) -> None:
         self._focus.focus(symbol, timestamp)
         self._state = StrategyState.FOCUSED
@@ -284,7 +284,7 @@ class Strategy:
         return self._has_recent_activity(symbol, timestamp, cooldown)
 
     def _has_recent_activity(
-        self, symbol: str, timestamp: datetime, window: timedelta
+            self, symbol: str, timestamp: datetime, window: timedelta
     ) -> bool:
         lower_bound = timestamp - window
         last_uptick = self._last_uptick_at.get(symbol)
@@ -307,11 +307,11 @@ class Strategy:
         return timestamp - self._last_focus_signal_at >= timeout
 
     def _enter_position(
-        self,
-        symbol: str,
-        wall: Wall,
-        timestamp: datetime,
-        last_price: float,
+            self,
+            symbol: str,
+            wall: Wall,
+            timestamp: datetime,
+            last_price: float,
     ) -> None:
         signal = self._focused_signal
         if signal is Signal.NONE:
@@ -377,9 +377,9 @@ class Strategy:
         return low <= pressure.imbalance_ratio <= high
 
     def _detect_wall_drop(
-        self,
-        wall: Optional[Wall],
-        tick_size: float,
+            self,
+            wall: Optional[Wall],
+            tick_size: float,
     ) -> bool:
         reference = self._position_wall
         signal = self._position_signal
@@ -402,7 +402,7 @@ class Strategy:
         return False
 
     def _consider_wall_shift(
-        self, wall: Wall, tick_size: float, timestamp: datetime
+            self, wall: Wall, tick_size: float, timestamp: datetime
     ) -> None:
         reference = self._position_wall
         signal = self._position_signal

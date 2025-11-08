@@ -58,11 +58,11 @@ def round_to_step(value: float, step: float) -> float:
 
 
 def compute_position_size(
-    balance: float,
-    fraction: float,
-    minimum_notional: float,
-    price: float,
-    step: float,
+        balance: float,
+        fraction: float,
+        minimum_notional: float,
+        price: float,
+        step: float,
 ) -> float:
     if price <= 0.0:
         raise ValueError("price must be positive")

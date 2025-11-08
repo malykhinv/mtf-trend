@@ -21,7 +21,6 @@ from typing import (
     Tuple,
     TypeVar,
 )
-
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -30,7 +29,6 @@ from config.config import CONFIG, STREAM_METRICS_LOG_INTERVAL_MIN
 from config.timezone import CURRENT_TIMEZONE
 from data.logger import LogSink
 from domain.models import Exchange, OrderBookLevel, OrderBookSnapshot, OrderBookUpdate, Side, SymbolFilters, Trade
-
 from .binance import BestBidAsk, DepthStreamData, StreamSubscription
 from .events import ResyncReason, StreamEvent, StreamEventType
 from .stream_buffer import StreamBuffer
@@ -43,7 +41,6 @@ except Exception:  # pragma: no cover - handled gracefully when websockets missi
     websockets = None  # type: ignore[assignment]
     WebSocketClientProtocol = object  # type: ignore[misc]
     ConnectionClosed = ConnectionClosedError = ConnectionClosedOK = Exception  # type: ignore[assignment]
-
 
 T = TypeVar("T")
 
@@ -120,12 +117,12 @@ class _BybitRestClient:
     _REST_HOST = "https://api.bybit.com"
 
     def __init__(
-        self,
-        *,
-        symbol: str,
-        category: str,
-        timeout_s: float,
-        log: LogSink,
+            self,
+            *,
+            symbol: str,
+            category: str,
+            timeout_s: float,
+            log: LogSink,
     ) -> None:
         self._symbol = symbol.upper()
         self._category = category
@@ -133,12 +130,12 @@ class _BybitRestClient:
         self._log = log
 
     def _request(
-        self,
-        path: str,
-        params: Mapping[str, Any],
-        *,
-        context: str,
-        max_attempts: int = 3,
+            self,
+            path: str,
+            params: Mapping[str, Any],
+            *,
+            context: str,
+            max_attempts: int = 3,
     ) -> Mapping[str, Any]:
         query = dict(params)
         query.setdefault("category", self._category)
@@ -321,9 +318,9 @@ class _BybitStreamWorker(Generic[T]):
             try:
                 assert websockets is not None
                 async with websockets.connect(  # type: ignore[attr-defined]
-                    self._endpoint,
-                    ping_interval=None,
-                    close_timeout=5.0,
+                        self._endpoint,
+                        ping_interval=None,
+                        close_timeout=5.0,
                 ) as ws:
                     await self._subscribe(ws)
                     self._push_snapshot()
@@ -416,9 +413,9 @@ class _BybitStreamWorker(Generic[T]):
         raise RuntimeError("subscribe ack timeout")
 
     def _parse_message(
-        self,
-        raw: Any,
-        ws: WebSocketClientProtocol,
+            self,
+            raw: Any,
+            ws: WebSocketClientProtocol,
     ) -> Optional[Mapping[str, Any]]:
         if isinstance(raw, bytes):
             text = raw.decode("utf-8", errors="ignore")
@@ -482,13 +479,13 @@ class BybitExchangeData:
     _REST_DEPTH = 200
 
     def __init__(
-        self,
-        *,
-        symbol: str,
-        loop_interval_ms: int,
-        silence_timeout_ms: int,
-        log_writer: LogSink,
-        category: str = "linear",
+            self,
+            *,
+            symbol: str,
+            loop_interval_ms: int,
+            silence_timeout_ms: int,
+            log_writer: LogSink,
+            category: str = "linear",
     ) -> None:
         self._symbol = symbol.upper()
         timeout = getattr(CONFIG.general, "orderbook_snapshot_timeout_s", 5.0)
@@ -625,9 +622,9 @@ class BybitExchangeData:
             msg_type = str(message.get("type", "delta")).lower()
             seq = _to_int(entry.get("seq")) or _to_int(entry.get("u"))
             prev_seq = (
-                _to_int(entry.get("prevSeq"))
-                or _to_int(entry.get("pu"))
-                or (_to_int(entry.get("seq")) - 1 if _to_int(entry.get("seq")) else None)
+                    _to_int(entry.get("prevSeq"))
+                    or _to_int(entry.get("pu"))
+                    or (_to_int(entry.get("seq")) - 1 if _to_int(entry.get("seq")) else None)
             )
             timestamp = _to_datetime(message.get("ts") or entry.get("ts"))
 
@@ -800,8 +797,8 @@ class BybitExchangeData:
             self._instrument_cache = normalized
 
     def _stream_iterator(
-        self,
-        buffer: StreamBuffer[T],
+            self,
+            buffer: StreamBuffer[T],
     ) -> Iterator[StreamEvent[T]]:
         interval = max(self._loop_interval / 1000.0, 0.1)
         while True:
@@ -814,4 +811,3 @@ class BybitExchangeData:
 
 
 __all__ = ["BybitExchangeData"]
-

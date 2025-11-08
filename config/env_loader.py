@@ -26,8 +26,8 @@ def load_env(path: Path = Path(".env")) -> None:
                 value = value.strip()
 
                 if len(value) >= 2 and (
-                    (value.startswith("\"") and value.endswith("\""))
-                    or (value.startswith("'") and value.endswith("'"))
+                        (value.startswith("\"") and value.endswith("\""))
+                        or (value.startswith("'") and value.endswith("'"))
                 ):
                     value = value[1:-1]
 

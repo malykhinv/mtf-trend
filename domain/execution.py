@@ -46,9 +46,9 @@ def initialize_account(trading: TradingAdapter) -> None:
 
 
 def create_execution_handlers(
-    trading: TradingAdapter,
-    filters_provider: SymbolFiltersProvider,
-    balance_provider: BalanceProvider,
+        trading: TradingAdapter,
+        filters_provider: SymbolFiltersProvider,
+        balance_provider: BalanceProvider,
 ) -> Tuple[PositionEntryHandler, PositionExitHandler, StopMoveHandler]:
     stop_trigger: StopTrigger = _map_stop_trigger(CONFIG.position.stop_trigger)
     current_symbol: Optional[str] = None
@@ -57,12 +57,12 @@ def create_execution_handlers(
     logger = logging.getLogger(__name__)
 
     def place_market(
-        side: Side,
-        quantity: float,
-        *,
-        symbol: str,
-        signal: Signal,
-        reason: Optional[str] = None,
+            side: Side,
+            quantity: float,
+            *,
+            symbol: str,
+            signal: Signal,
+            reason: Optional[str] = None,
     ) -> Optional[ExecutionReport]:
         try:
             report = trading.place_market(side, quantity, reason=reason)
@@ -99,12 +99,12 @@ def create_execution_handlers(
         return report
 
     def place_stop_market(
-        side: Side,
-        stop_price: float,
-        quantity: float,
-        *,
-        symbol: str,
-        signal: Signal,
+            side: Side,
+            stop_price: float,
+            quantity: float,
+            *,
+            symbol: str,
+            signal: Signal,
     ) -> bool:
         try:
             success = trading.place_stop_market(side, stop_price, quantity, stop_trigger)

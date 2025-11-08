@@ -25,13 +25,12 @@ from config.models import (
 )
 
 MAX_ACTIVE_STREAMS: Final[int] = 300
-MAX_NEW_SUBSCRIPTIONS: Final[int] = 2
+MAX_NEW_SUBSCRIPTIONS: Final[int] = 8
 MAX_RESUBSCRIBE_PER_CYCLE: Final[int] = 5
 POLICY_VIOLATION_STREAM_COOLDOWN_S: Final[int] = 10
 POLICY_VIOLATION_GLOBAL_COOLDOWN_S: Final[int] = 30
 ALLOWED_GAP: Final[int] = 3
 STREAM_METRICS_LOG_INTERVAL_MIN: Final[int] = 5
-
 
 CONFIG: Final[Config] = Config(
     general=GeneralSettings(
