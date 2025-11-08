@@ -30,6 +30,9 @@ from config.config import (
     ALLOWED_GAP,
     CONFIG,
     MAX_ACTIVE_STREAMS,
+    MAX_RESUBSCRIBE_PER_CYCLE,
+    POLICY_VIOLATION_GLOBAL_COOLDOWN_S,
+    POLICY_VIOLATION_STREAM_COOLDOWN_S,
     STREAM_METRICS_LOG_INTERVAL_MIN,
 )
 from config.timezone import CURRENT_TIMEZONE
@@ -573,6 +576,8 @@ class _BinanceStreamSession:
     """Shared websocket session that fans out events to registered consumers."""
 
     _BASE_ENDPOINT = "wss://fstream.binance.com/stream"
+    _global_policy_lock = threading.Lock()
+    _global_policy_violation_until = 0.0
 
     def __init__(
         self,
@@ -609,6 +614,9 @@ class _BinanceStreamSession:
         self._status_report_interval = float(STREAM_METRICS_LOG_INTERVAL_MIN) * 60.0
         self._last_status_log = 0.0
         self._pending_resubscribe: Deque[_SessionCommand[Any]] = deque()
+        self._resubscribe_quota_total = max(int(MAX_RESUBSCRIBE_PER_CYCLE), 0)
+        self._resubscribe_quota = self._resubscribe_quota_total
+        self._policy_violation_until = 0.0
 
     @staticmethod
     def _compute_capacity(limit: "StreamLimit") -> int:
@@ -753,6 +761,21 @@ class _BinanceStreamSession:
         *,
         priority: float,
     ) -> None:
+        now = time.monotonic()
+        local_remaining = max(self._policy_violation_until - now, 0.0)
+        global_remaining = self._global_cooldown_remaining(now)
+        remaining = max(local_remaining, global_remaining)
+        if remaining > 0.0:
+            try:
+                self._log(
+                    (
+                        f"[{self._stream}] Ресабскрипция {consumer.symbol} отложена: "
+                        f"policy cooldown ещё {remaining:.1f}с"
+                    )
+                )
+            except Exception:
+                pass
+            return
         params = tuple(param for param, entry in self._consumers.items() if entry is consumer)
         if not params:
             return
@@ -765,19 +788,25 @@ class _BinanceStreamSession:
                     consumer,
                     use_reserve=True,
                 )
-                if self._budget.reserve_remaining() <= 0:
+                quota_exhausted = (
+                    self._resubscribe_quota_total > 0
+                    and self._resubscribe_quota <= 0
+                )
+                if quota_exhausted or self._budget.reserve_remaining() <= 0:
                     self._pending_resubscribe.append(command)
                     try:
                         self._log(
                             (
                                 f"[{self._stream}] Ресинк {consumer.symbol} отложен:"
-                                " reserve исчерпан, ожидание освобождения ресурса."
+                                " лимит пересабскрипций или reserve исчерпан."
                             )
                         )
                     except Exception:
                         pass
                     continue
                 self._enqueue_command(command, allow_duplicates=True)
+                if self._resubscribe_quota_total > 0:
+                    self._resubscribe_quota = max(self._resubscribe_quota - 1, 0)
 
     def _enqueue_command(
         self,
@@ -816,11 +845,20 @@ class _BinanceStreamSession:
             pass
 
     async def _flush_commands(self, ws: WebSocketClientProtocol) -> None:
+        quota_initialized = False
         while not self._stop_event.is_set():
             with self._command_lock:
+                if not quota_initialized and self._resubscribe_quota_total > 0:
+                    self._resubscribe_quota = self._resubscribe_quota_total
+                    quota_initialized = True
                 while self._pending_resubscribe and self._budget.reserve_remaining() > 0:
                     command = self._pending_resubscribe.popleft()
+                    if self._resubscribe_quota_total > 0 and self._resubscribe_quota <= 0:
+                        self._pending_resubscribe.appendleft(command)
+                        break
                     self._enqueue_command(command, allow_duplicates=True)
+                    if self._resubscribe_quota_total > 0:
+                        self._resubscribe_quota = max(self._resubscribe_quota - 1, 0)
             if not self._command_queue:
                 break
             self._command_queue.sort()
@@ -996,19 +1034,21 @@ class _BinanceStreamSession:
         consumer = command.consumer
         needs_resubscribe = consumer.handle_ack(command.method, command.params, error)
         if command.method == "SUBSCRIBE" and error is not None:
+            code = None
+            if isinstance(error, Mapping):
+                code = error.get("code")
+            if code in {1008, 1013}:
+                self._activate_policy_violation()
+                try:
+                    self._log(
+                        f"[{self._stream}] Policy violation ack для {consumer.symbol}: code={code}"
+                    )
+                except Exception:
+                    pass
             for param in command.params:
-                if self._consumers.pop(param, None) is not None:
-                    weight = self._param_weights.pop(param, 0.0)
-                    if weight > 0.0:
-                        self._total_weight = max(self._total_weight - weight, 0.0)
-                if self._symbol_params.get(consumer.symbol) == param:
-                    self._symbol_params.pop(consumer.symbol, None)
-        if command.method == "UNSUBSCRIBE" and error is None:
-            for param in command.params:
-                if self._consumers.pop(param, None) is not None:
-                    weight = self._param_weights.pop(param, 0.0)
-                    if weight > 0.0:
-                        self._total_weight = max(self._total_weight - weight, 0.0)
+                weight = self._param_weights.pop(param, 0.0)
+                if weight > 0.0:
+                    self._total_weight = max(self._total_weight - weight, 0.0)
                 if self._symbol_params.get(consumer.symbol) == param:
                     self._symbol_params.pop(consumer.symbol, None)
         if needs_resubscribe:
@@ -1039,8 +1079,30 @@ class _BinanceStreamSession:
             ping_interval=None,
             close_timeout=5,
         ) as ws:
+            self._policy_violation_until = 0.0
+            self._resubscribe_quota = self._resubscribe_quota_total
             await self._on_connected(ws)
             await self._recv_loop(ws)
+
+    @classmethod
+    def _global_cooldown_remaining(cls, now: float) -> float:
+        with cls._global_policy_lock:
+            return max(cls._global_policy_violation_until - now, 0.0)
+
+    def _activate_policy_violation(self) -> None:
+        now = time.monotonic()
+        if POLICY_VIOLATION_STREAM_COOLDOWN_S > 0:
+            stream_until = now + float(POLICY_VIOLATION_STREAM_COOLDOWN_S)
+            self._policy_violation_until = max(self._policy_violation_until, stream_until)
+        if POLICY_VIOLATION_GLOBAL_COOLDOWN_S <= 0:
+            return
+        global_until = now + float(POLICY_VIOLATION_GLOBAL_COOLDOWN_S)
+        cls = type(self)
+        with cls._global_policy_lock:
+            cls._global_policy_violation_until = max(
+                cls._global_policy_violation_until,
+                global_until,
+            )
 
     async def _on_connected(self, ws: WebSocketClientProtocol) -> None:
         with self._command_lock:
