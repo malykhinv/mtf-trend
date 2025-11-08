@@ -25,7 +25,7 @@ from config.models import (
 )
 
 MAX_ACTIVE_STREAMS: Final[int] = 300
-MAX_NEW_SUBSCRIPTIONS: Final[int] = 3
+MAX_NEW_SUBSCRIPTIONS: Final[int] = 5
 ALLOWED_GAP: Final[int] = 3
 STREAM_METRICS_LOG_INTERVAL_MIN: Final[int] = 5
 
@@ -34,22 +34,22 @@ CONFIG: Final[Config] = Config(
     general=GeneralSettings(
         exchange=ExchangeName.BINANCE,
         profile=TradingProfile.AUTO,
-        loop_interval_ms=100,
+        loop_interval_ms=200,
         ws_silence_timeout_ms=30_000,
-        binance_depth_update_ms=500,
+        binance_depth_update_ms=1000,
         odr_smooth_samples=3,
         recent_band_s=5,
         recent_band_s_vol_boost=8,
         vol_spike_mult=2.0,
         orderbook_snapshot_timeout_s=5.0,
         enable_detailed_diagnostics=True,
-        trade_gap_threshold=5,
+        trade_gap_threshold=50,
     ),
     turnover=TurnoverThresholds(
         top_usd=700_000,
         alt_usd=120_000,
         listing_usd=250_000,
-        market_scan_interval_s=1500,
+        market_scan_interval_s=300,
     ),
     odr=OdrSettings(
         odr_in_short=3.1,
