@@ -1060,6 +1060,14 @@ class Application:
                 if prioritizer is not None and candidates
                 else candidates
             )
+            if candidates and not ordered:
+                self._event_logger.log(
+                    (
+                        "Приоритизатор подписок не вернул символов: "
+                        f"кандидатов={len(candidates)}."
+                    ),
+                    timestamp,
+                )
             limit = MAX_NEW_SUBSCRIPTIONS
             if limit <= 0:
                 selected = ordered
@@ -1075,6 +1083,15 @@ class Application:
             else:
                 selected = tuple()
             scheduled = [symbol for symbol in selected]
+        if not scheduled and candidates:
+            pending_snapshot = list(self._pending_symbols)
+            self._event_logger.log(
+                (
+                    "Подписка на стримы: нет новых символов. "
+                    f"кандидатов={len(candidates)}, pending={len(pending_snapshot)}."
+                ),
+                timestamp,
+            )
         if scheduled:
             pending_snapshot = list(self._pending_symbols)
             scheduled_text = ", ".join(scheduled)
@@ -1402,6 +1419,7 @@ class Application:
         self._refresh_balances(force=True)
         while True:
             self._refresh_symbol_scan()
+            self._maybe_refresh_subscriptions()
             self._refresh_balances()
             resync_triggered = False
             work_done = False
