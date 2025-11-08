@@ -1063,8 +1063,8 @@ class Application:
             if candidates and not ordered:
                 self._event_logger.log(
                     (
-                        "Приоритизатор подписок не вернул символов: "
-                        f"кандидатов={len(candidates)}."
+                        "Подписка\tприоритизатор вернул пустой список\t"
+                        f"кандидатов={len(candidates)}"
                     ),
                     timestamp,
                 )
@@ -1087,8 +1087,9 @@ class Application:
             pending_snapshot = list(self._pending_symbols)
             self._event_logger.log(
                 (
-                    "Подписка на стримы: нет новых символов. "
-                    f"кандидатов={len(candidates)}, pending={len(pending_snapshot)}."
+                    "Подписка\tнет новых символов\t"
+                    f"кандидатов={len(candidates)}\t"
+                    f"pending={len(pending_snapshot)}"
                 ),
                 timestamp,
             )
@@ -1098,8 +1099,9 @@ class Application:
             pending_text = ", ".join(pending_snapshot) if pending_snapshot else "-"
             self._event_logger.log(
                 (
-                    "Подписка на стримы: запланированы "
-                    f"{scheduled_text}. В очереди осталось: {pending_text}."
+                    "Подписка\tзапланированы\t"
+                    f"{scheduled_text}\t"
+                    f"pending={pending_text if pending_snapshot else '-'}"
                 ),
                 timestamp,
             )
