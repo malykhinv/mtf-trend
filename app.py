@@ -67,11 +67,11 @@ from utils import get_current_time
 
 class VolumeSpikeTracker:
     def __init__(
-        self,
-        *,
-        window: timedelta = timedelta(seconds=30),
-        smoothing: float = 0.2,
-        min_samples: int = 20,
+            self,
+            *,
+            window: timedelta = timedelta(seconds=30),
+            smoothing: float = 0.2,
+            min_samples: int = 20,
     ) -> None:
         self._window = window
         self._smoothing = smoothing
@@ -164,20 +164,20 @@ class TradingAdapterRouter(TradingAdapter):
         return self._resolve().set_leverage(leverage, margin_mode)
 
     def place_market(
-        self,
-        side: Side,
-        quantity: float,
-        *,
-        reason: Optional[str] = None,
+            self,
+            side: Side,
+            quantity: float,
+            *,
+            reason: Optional[str] = None,
     ) -> ExecutionReport:
         return self._resolve().place_market(side, quantity, reason=reason)
 
     def place_stop_market(
-        self,
-        side: Side,
-        stop_price: float,
-        quantity: float,
-        trigger: StopTrigger,
+            self,
+            side: Side,
+            stop_price: float,
+            quantity: float,
+            trigger: StopTrigger,
     ) -> bool:
         return self._resolve().place_stop_market(side, stop_price, quantity, trigger)
 
@@ -478,7 +478,7 @@ class Application:
             if not details.startswith(prefix):
                 return 0
             try:
-                value = int(details[len(prefix) :])
+                value = int(details[len(prefix):])
             except ValueError:
                 return 0
             return value if value > 0 else 0
@@ -501,8 +501,8 @@ class Application:
                         self._apply_update(context, update)
                         continue
                     if (
-                        follow_event.type is StreamEventType.RESYNC
-                        and follow_event.reason is not None
+                            follow_event.type is StreamEventType.RESYNC
+                            and follow_event.reason is not None
                     ):
                         context.feed_monitor.flag(follow_event.reason)
                         context.last_update_id = None
@@ -558,10 +558,10 @@ class Application:
         context.best_ask = None if ask_level is None else ask_level.price
 
     def _recover_depth_from_silence(
-        self,
-        context: SymbolContext,
-        details: Optional[str],
-        occurred_at: datetime,
+            self,
+            context: SymbolContext,
+            details: Optional[str],
+            occurred_at: datetime,
     ) -> bool:
         now = get_current_time()
         manager = self._binance_streams
@@ -601,7 +601,7 @@ class Application:
         return True
 
     def _is_data_fresh(
-        self, timestamp: Optional[datetime], now: Optional[datetime] = None
+            self, timestamp: Optional[datetime], now: Optional[datetime] = None
     ) -> bool:
         if timestamp is None:
             return False
@@ -634,12 +634,12 @@ class Application:
                     context.feed_monitor.clear()
             elif event.type is StreamEventType.RESYNC and event.reason is not None:
                 if (
-                    event.reason is StreamResyncReason.SILENCE_TIMEOUT
-                    and self._recover_depth_from_silence(
-                        context,
-                        event.details,
-                        event.timestamp,
-                    )
+                        event.reason is StreamResyncReason.SILENCE_TIMEOUT
+                        and self._recover_depth_from_silence(
+                    context,
+                    event.details,
+                    event.timestamp,
+                )
                 ):
                     continue
                 context.feed_monitor.flag(event.reason)
@@ -649,7 +649,7 @@ class Application:
                 lost_seconds: Optional[float]
                 if context.order_book_updated_at is not None:
                     lost_seconds = (
-                        event.timestamp - context.order_book_updated_at
+                            event.timestamp - context.order_book_updated_at
                     ).total_seconds()
                 else:
                     lost_seconds = None
@@ -723,8 +723,8 @@ class Application:
                             context.missed_trade_ids = 0
                         context.last_trade_id = trade_id_value
                         if (
-                            threshold > 0
-                            and context.missed_trade_ids >= threshold
+                                threshold > 0
+                                and context.missed_trade_ids >= threshold
                         ):
                             timestamp = get_current_time().astimezone(
                                 CURRENT_TIMEZONE
@@ -753,7 +753,7 @@ class Application:
                         )
                         context.volume_ratio = ratio
                         context.volume_spike = (
-                            ready and ratio >= CONFIG.general.vol_spike_mult
+                                ready and ratio >= CONFIG.general.vol_spike_mult
                         )
                     else:
                         context.volume_ratio = 0.0
@@ -764,7 +764,7 @@ class Application:
                 lost_seconds: Optional[float]
                 if last_trade_at is not None:
                     lost_seconds = (
-                        event.timestamp - last_trade_at
+                            event.timestamp - last_trade_at
                     ).total_seconds()
                 else:
                     lost_seconds = None
@@ -809,7 +809,7 @@ class Application:
                 lost_seconds: Optional[float]
                 if last_ticker_at is not None:
                     lost_seconds = (
-                        event.timestamp - last_ticker_at
+                            event.timestamp - last_ticker_at
                     ).total_seconds()
                 else:
                     lost_seconds = None
@@ -1025,6 +1025,7 @@ class Application:
             if profile is not None:
                 context.profile = profile
         self._last_scan_at = timestamp
+        self._maybe_refresh_subscriptions(timestamp)
 
     def _maybe_refresh_subscriptions(self, timestamp: Optional[datetime] = None) -> None:
         timestamp = timestamp or get_current_time()
@@ -1074,6 +1075,17 @@ class Application:
             else:
                 selected = tuple()
             scheduled = [symbol for symbol in selected]
+        if scheduled:
+            pending_snapshot = list(self._pending_symbols)
+            scheduled_text = ", ".join(scheduled)
+            pending_text = ", ".join(pending_snapshot) if pending_snapshot else "-"
+            self._event_logger.log(
+                (
+                    "Подписка на стримы: запланированы "
+                    f"{scheduled_text}. В очереди осталось: {pending_text}."
+                ),
+                timestamp,
+            )
         active_symbols: list[str] = []
         seen: set[str] = set()
         for symbol in desired:
@@ -1134,7 +1146,7 @@ class Application:
         context.cycle_started = True
 
     def _create_context(
-        self, symbol: str, streams: Optional[BinanceSymbolStreams] = None
+            self, symbol: str, streams: Optional[BinanceSymbolStreams] = None
     ) -> SymbolContext:
         if streams is not None:
             exchange_data = streams.exchange_data
@@ -1219,8 +1231,8 @@ class Application:
         timestamp = self._cached_balance_updated_at
         if cached is None or timestamp is None:
             if (
-                self._next_balance_retry_at is not None
-                and get_current_time() < self._next_balance_retry_at
+                    self._next_balance_retry_at is not None
+                    and get_current_time() < self._next_balance_retry_at
             ):
                 return
             result = self._refresh_cached_balance(source_context=context)
@@ -1230,7 +1242,7 @@ class Application:
         self._apply_cached_balance(context, cached, timestamp)
 
     def _refresh_cached_balance(
-        self, *, source_context: Optional[SymbolContext] = None
+            self, *, source_context: Optional[SymbolContext] = None
     ) -> Optional[Tuple[float, datetime]]:
         adapter: Optional[TradingAdapter] = None
         symbol: Optional[str] = None
@@ -1263,7 +1275,7 @@ class Application:
         return balance, timestamp
 
     def _apply_cached_balance(
-        self, context: SymbolContext, balance: float, timestamp: datetime
+            self, context: SymbolContext, balance: float, timestamp: datetime
     ) -> None:
         context.balance = balance
         context.balance_updated_at = timestamp
@@ -1273,10 +1285,10 @@ class Application:
         )
 
     def _refresh_context_funding(
-        self,
-        context: SymbolContext,
-        *,
-        force: bool = False,
+            self,
+            context: SymbolContext,
+            *,
+            force: bool = False,
     ) -> None:
         now = get_current_time()
         needs_refresh = force
@@ -1285,8 +1297,8 @@ class Application:
                 needs_refresh = True
             elif context.next_funding_at is None:
                 needs_refresh = (
-                    now - context.next_funding_updated_at
-                    >= self._funding_refresh_interval
+                        now - context.next_funding_updated_at
+                        >= self._funding_refresh_interval
                 )
             else:
                 if now - context.next_funding_updated_at >= self._funding_refresh_interval:
@@ -1362,15 +1374,15 @@ class Application:
             return
         now = get_current_time()
         if (
-            self._next_balance_retry_at is not None
-            and now < self._next_balance_retry_at
+                self._next_balance_retry_at is not None
+                and now < self._next_balance_retry_at
         ):
             return
         if (
-            not force
-            and self._balance_refresh_interval.total_seconds() > 0.0
-            and self._last_balance_refresh_at is not None
-            and now - self._last_balance_refresh_at < self._balance_refresh_interval
+                not force
+                and self._balance_refresh_interval.total_seconds() > 0.0
+                and self._last_balance_refresh_at is not None
+                and now - self._last_balance_refresh_at < self._balance_refresh_interval
         ):
             return
         active_contexts = [c for c in self._contexts.values() if c.active]
@@ -1387,11 +1399,9 @@ class Application:
     def run(self) -> None:
         interval = CONFIG.general.loop_interval_ms / 1000.0
         self._refresh_symbol_scan(force=True)
-        self._maybe_refresh_subscriptions()
         self._refresh_balances(force=True)
         while True:
             self._refresh_symbol_scan()
-            self._maybe_refresh_subscriptions()
             self._refresh_balances()
             resync_triggered = False
             work_done = False

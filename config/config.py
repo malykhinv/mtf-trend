@@ -25,7 +25,7 @@ from config.models import (
 )
 
 MAX_ACTIVE_STREAMS: Final[int] = 300
-MAX_NEW_SUBSCRIPTIONS: Final[int] = 2
+MAX_NEW_SUBSCRIPTIONS: Final[int] = 3
 ALLOWED_GAP: Final[int] = 3
 STREAM_METRICS_LOG_INTERVAL_MIN: Final[int] = 5
 
