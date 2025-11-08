@@ -1099,6 +1099,7 @@ class BinanceStreamManager:
             "trades": self._limits.trades,
             "book_ticker": self._limits.book_ticker,
         }
+        self._global_command_budget = CommandBudget(self._build_global_limit())
         self._exchange_data: Dict[str, BinanceExchangeData] = {}
         self._streams: Dict[str, BinanceSymbolStreams] = {}
         self._profiles: Dict[str, TradingProfile] = {}
@@ -1119,12 +1120,33 @@ class BinanceStreamManager:
             session = self._create_session(name)
             self._sessions[name] = [session]
 
+    def _build_global_limit(self) -> StreamLimit:
+        steady_values = [
+            limit.steady_per_min for limit in self._limit_map.values() if limit.steady_per_min > 0
+        ]
+        burst_values = [
+            limit.burst_per_5s for limit in self._limit_map.values() if limit.burst_per_5s > 0
+        ]
+        steady = min(steady_values) if steady_values else 0
+        burst = min(burst_values) if burst_values else 0
+        reserve_total = sum(
+            max(limit.resubscribe_buffer, 0) for limit in self._limit_map.values()
+        )
+        return StreamLimit(
+            steady_per_min=steady,
+            burst_per_5s=burst,
+            max_symbols=0,
+            resubscribe_buffer=reserve_total,
+            max_weight=0.0,
+        )
+
     def _create_session(self, stream: str) -> BinanceStreamSession:
         session = BinanceStreamSession(
             stream=stream,
             limit=self._limit_map[stream],
             silence_timeout_ms=self._silence_timeout_ms,
             log_writer=self._log_writer,
+            command_limiter=self._global_command_budget,
         )
         session.start()
         return session
@@ -1189,6 +1211,9 @@ class BinanceStreamManager:
         burst_capacity = min(burst_limits) if burst_limits else float("inf")
         steady_capacity = min(steady_limits) if steady_limits else float("inf")
         command_capacity = min(burst_capacity, steady_capacity)
+        global_budget_capacity = self._global_command_budget.available()
+        if not math.isinf(global_budget_capacity):
+            command_capacity = min(command_capacity, global_budget_capacity)
         if math.isinf(command_capacity):
             max_new_batch: Optional[int] = None
         else:
