@@ -25,6 +25,11 @@ from config.models import (
 )
 
 MAX_ACTIVE_STREAMS: Final[int] = 300
+# MAX_NEW_SUBSCRIPTIONS must not exceed the per-cycle capacity derived from
+# config/stream_limits.json. With three stream buckets and a Binance limit of
+# up to 10 subscription messages per second (50 per 5 seconds), a
+# burst_per_5s of 24 keeps our effective cap at eight new subscriptions while
+# leaving ample safety margin.
 MAX_NEW_SUBSCRIPTIONS: Final[int] = 8
 MAX_RESUBSCRIBE_PER_CYCLE: Final[int] = 5
 POLICY_VIOLATION_STREAM_COOLDOWN_S: Final[int] = 10
