@@ -65,6 +65,10 @@ utils/
 - `RECENT_BAND_S = 5`
 - `RECENT_BAND_S_VOL_BOOST = 8`
 - `VOL_SPIKE_MULT = 2.0`
+- `MAX_NEW_SUBSCRIPTIONS = 8`  
+  Связан с `config/stream_limits.json`: значение должно оставаться ≤ `burst_per_5s / len(limit_map)`.
+  При лимите Binance до 10 подписок в секунду (50 за 5 секунд) текущий буфер `burst_per_5s = 24`
+  гарантирует восемь новых подписок за цикл без риска превышения.
 
 ### Обороты (отбор монет)
 
