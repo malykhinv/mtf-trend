@@ -43,6 +43,23 @@ class RateLimiter:
         self._trim(timestamp)
         return max(self.limit - len(self._events), 0)
 
+    def revert(self, timestamp: datetime) -> None:
+        """Revert a previously committed event if it is still tracked."""
+
+        if self.limit <= 0:
+            return
+        self._trim(timestamp)
+        for index in range(len(self._events) - 1, -1, -1):
+            if self._events[index] == timestamp:
+                del self._events[index]
+                break
+
+
+@dataclass(slots=True)
+class CommandBudgetToken:
+    timestamp: datetime
+    reserve_delta: int = 0
+
 
 class CommandBudget:
     """Enforces Binance command rate limits across shared sessions."""
@@ -64,8 +81,16 @@ class CommandBudget:
         self._lock = Lock()
         self._failure_delay = 0.0
 
-    def consume(self, *, priority: str = "normal") -> bool:
-        """Consume from the configured budget."""
+    def _calculate_failure_delay(self) -> float:
+        wait = 0.0
+        if self._steady.limit > 0:
+            wait = max(wait, self._steady.window.total_seconds())
+        if self._burst.limit > 0:
+            wait = max(wait, self._burst.window.total_seconds())
+        return wait
+
+    def can_consume(self, *, priority: str = "normal") -> bool:
+        """Check whether a consume operation would succeed without mutating state."""
 
         use_reserve = priority != "normal"
         now = datetime.now(tz=timezone.utc)
@@ -73,36 +98,71 @@ class CommandBudget:
             steady_ok = self._steady.has_capacity(now)
             burst_ok = self._burst.has_capacity(now)
             if not steady_ok or not burst_ok:
-                wait = 0.0
-                if not steady_ok and self._steady.limit > 0:
-                    wait = max(wait, self._steady.window.total_seconds())
-                if not burst_ok and self._burst.limit > 0:
-                    wait = max(wait, self._burst.window.total_seconds())
-                self._failure_delay = wait
                 return False
+            if use_reserve and self._reserve_limit > 0:
+                return self._reserve_used < self._reserve_limit
+            return True
+
+    def acquire(self, *, priority: str = "normal") -> CommandBudgetToken | None:
+        """Attempt to reserve quota from the configured budget."""
+
+        use_reserve = priority != "normal"
+        now = datetime.now(tz=timezone.utc)
+        with self._lock:
+            steady_ok = self._steady.has_capacity(now)
+            burst_ok = self._burst.has_capacity(now)
+            if not steady_ok or not burst_ok:
+                self._failure_delay = self._calculate_failure_delay()
+                return None
+            if use_reserve and self._reserve_limit > 0 and self._reserve_used >= self._reserve_limit:
+                self._failure_delay = self._calculate_failure_delay()
+                return None
             self._steady.commit(now)
             self._burst.commit(now)
-            self._failure_delay = 0.0
+            reserve_delta = 0
             if use_reserve and self._reserve_used < self._reserve_limit:
                 self._reserve_used += 1
+                reserve_delta = 1
             elif not use_reserve and self._reserve_used > 0:
                 self._reserve_used -= 1
-            return True
+                reserve_delta = -1
+            self._failure_delay = 0.0
+            return CommandBudgetToken(timestamp=now, reserve_delta=reserve_delta)
+
+    def release(self, token: CommandBudgetToken | None) -> None:
+        if token is None:
+            return
+        with self._lock:
+            self._steady.revert(token.timestamp)
+            self._burst.revert(token.timestamp)
+            if token.reserve_delta == 1:
+                self._reserve_used = max(self._reserve_used - 1, 0)
+            elif token.reserve_delta == -1:
+                if self._reserve_limit > 0:
+                    self._reserve_used = min(self._reserve_used + 1, self._reserve_limit)
+
+    def consume(self, *, priority: str = "normal") -> bool:
+        """Consume from the configured budget."""
+
+        token = self.acquire(priority=priority)
+        return token is not None
 
     def failure_delay(self) -> float:
         with self._lock:
             if self._failure_delay > 0.0:
                 return self._failure_delay
-            waits: list[float] = []
-            if self._steady.limit > 0:
-                waits.append(self._steady.window.total_seconds())
-            if self._burst.limit > 0:
-                waits.append(self._burst.window.total_seconds())
-            return max(waits) if waits else 0.0
+            return self._calculate_failure_delay()
 
     def reserve_remaining(self) -> int:
         with self._lock:
             return max(self._reserve_limit - self._reserve_used, 0)
+
+    def available(self) -> float:
+        now = datetime.now(tz=timezone.utc)
+        with self._lock:
+            steady_remaining = self._steady.remaining(now)
+            burst_remaining = self._burst.remaining(now)
+        return float(min(steady_remaining, burst_remaining))
 
     def debug_state(self) -> Dict[str, float]:
         now = datetime.now(tz=timezone.utc)
@@ -122,4 +182,4 @@ class CommandBudget:
         }
 
 
-__all__ = ["RateLimiter", "CommandBudget"]
+__all__ = ["RateLimiter", "CommandBudget", "CommandBudgetToken"]

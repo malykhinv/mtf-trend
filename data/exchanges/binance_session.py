@@ -17,7 +17,7 @@ from config.config import (
 )
 from data.logger import LogSink
 from .binance_websocket import WebSocketClientProtocol, websockets
-from .command_budget import CommandBudget
+from .command_budget import CommandBudget, CommandBudgetToken
 from .limits import StreamLimit
 from .stream_consumer import StreamConsumer
 from .stream_subscription import StreamLimitError, StreamSubscription
@@ -61,12 +61,14 @@ class BinanceStreamSession:
             limit: StreamLimit,
             silence_timeout_ms: int,
             log_writer: LogSink,
+            command_limiter: CommandBudget | None = None,
     ) -> None:
         self._stream = stream
         self._limit = limit
         self._log = log_writer
         self._silence_timeout_s = max(float(silence_timeout_ms) / 1000.0, 1.0)
         self._budget = CommandBudget(limit)
+        self._global_budget = command_limiter
         self._max_weight = float(limit.max_weight)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
@@ -339,7 +341,32 @@ class BinanceStreamSession:
             self._command_queue.sort()
             score, seq, command = self._command_queue[0]
             budget_priority = "resync" if command.use_reserve else "normal"
-            if not self._budget.consume(priority=budget_priority):
+            global_token: CommandBudgetToken | None = None
+            local_token: CommandBudgetToken | None = None
+            if self._global_budget is not None:
+                global_token = self._global_budget.acquire(priority=budget_priority)
+                if global_token is None:
+                    delay = self._global_budget.failure_delay()
+                    now = time.monotonic()
+                    if now - self._last_rate_limit_log > 30.0:
+                        symbol = getattr(command.consumer, "symbol", "unknown")
+                        queue_len = len(self._command_queue)
+                        budget_state = self._global_budget.debug_state()
+                        log_msg = (
+                            f"[{self._stream}] Global rate limit: {command.method} для {symbol} "
+                            f"заблокирован на {delay:.1f}с. "
+                            f"В очереди {queue_len} команд(а/ы). "
+                            f"Глобальный бюджет: {budget_state}. "
+                        )
+                        self._log(log_msg)
+                        self._last_rate_limit_log = now
+                    if delay > 0.0:
+                        await asyncio.sleep(delay)
+                    break
+            local_token = self._budget.acquire(priority=budget_priority)
+            if local_token is None:
+                if self._global_budget is not None and global_token is not None:
+                    self._global_budget.release(global_token)
                 delay = self._budget.failure_delay()
                 now = time.monotonic()
                 if now - self._last_rate_limit_log > 30.0:
@@ -365,7 +392,14 @@ class BinanceStreamSession:
                 "method": command.method,
                 "params": list(command.params),
             }
-            await ws.send(json.dumps(payload))
+            try:
+                await ws.send(json.dumps(payload))
+            except Exception:
+                self._budget.release(local_token)
+                if self._global_budget is not None:
+                    self._global_budget.release(global_token)
+                self._inflight.pop(command_id, None)
+                raise
             self._inflight[command_id] = command
             try:
                 queue_len = len(self._command_queue)
