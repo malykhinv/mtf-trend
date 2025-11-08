@@ -253,6 +253,7 @@ class Application:
         self._last_scan_at: Optional[datetime] = None
         self._scanner_interval = timedelta(seconds=CONFIG.turnover.market_scan_interval_s)
         self._current_symbol: Optional[str] = None
+        self._startup_complete: bool = False
         entry, exit_, move_stop = create_execution_handlers(
             self._trading_router,
             self._provide_filters,
@@ -454,6 +455,8 @@ class Application:
         self._telegram_client.send_message(message)
 
     def _handle_resync(self, reason: StrategyResyncReason) -> None:
+        if not self._startup_complete:
+            return
         symbol = self._current_symbol
         if symbol is None:
             return
@@ -1124,6 +1127,7 @@ class Application:
             max_new = 0
         self._subscription_manager.update(tuple(active_symbols), timestamp, max_new=max_new)
         if not scheduled:
+            self._check_startup_complete()
             return
         desired_set = set(self._desired_symbols)
         failed: list[str] = []
@@ -1137,6 +1141,24 @@ class Application:
                 continue
             self._pending_symbols.appendleft(symbol)
             self._pending_symbol_set.add(symbol)
+        self._check_startup_complete()
+
+    def _check_startup_complete(self) -> None:
+        if self._startup_complete:
+            return
+        desired = set(self._desired_symbols)
+        if not desired:
+            return
+        for symbol in desired:
+            context = self._contexts.get(symbol)
+            if context is None or not context.active:
+                return
+        if self._pending_symbols:
+            return
+        self._startup_complete = True
+        timestamp = get_current_time()
+        self._event_logger.log("Подписка\tинициализация завершена", timestamp)
+        self._event_logger.log("Подписка\tполноценный режим активирован", timestamp)
 
     def _iter_active_contexts(self) -> Iterable[SymbolContext]:
         ordered: Tuple[str, ...] = self._desired_symbols
@@ -1431,6 +1453,8 @@ class Application:
                 self._refresh_context_funding(context)
                 now = get_current_time()
                 self._handle_funding_window(context, now)
+                if not self._startup_complete:
+                    continue
                 if self._process_depth_stream(context):
                     work_done = True
                 if self._process_trade_stream(context):
@@ -1438,10 +1462,11 @@ class Application:
                 if self._process_ticker_stream(context):
                     work_done = True
                 observation = self._build_observation(context)
-                state = self._strategy.process(observation)
-                if state is StrategyState.RESYNC:
-                    resync_triggered = True
-                    break
+                if self._startup_complete:
+                    state = self._strategy.process(observation)
+                    if state is StrategyState.RESYNC:
+                        resync_triggered = True
+                        break
             self._current_symbol = None
             if not work_done:
                 time.sleep(interval)
