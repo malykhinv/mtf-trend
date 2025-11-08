@@ -608,6 +608,7 @@ class _BinanceStreamSession:
         self._last_rate_limit_log = 0.0
         self._status_report_interval = float(STREAM_METRICS_LOG_INTERVAL_MIN) * 60.0
         self._last_status_log = 0.0
+        self._pending_resubscribe: Deque[_SessionCommand[Any]] = deque()
 
     @staticmethod
     def _compute_capacity(limit: "StreamLimit") -> int:
@@ -764,6 +765,18 @@ class _BinanceStreamSession:
                     consumer,
                     use_reserve=True,
                 )
+                if self._budget.reserve_remaining() <= 0:
+                    self._pending_resubscribe.append(command)
+                    try:
+                        self._log(
+                            (
+                                f"[{self._stream}] Ресинк {consumer.symbol} отложен:"
+                                " reserve исчерпан, ожидание освобождения ресурса."
+                            )
+                        )
+                    except Exception:
+                        pass
+                    continue
                 self._enqueue_command(command, allow_duplicates=True)
 
     def _enqueue_command(
@@ -803,7 +816,13 @@ class _BinanceStreamSession:
             pass
 
     async def _flush_commands(self, ws: WebSocketClientProtocol) -> None:
-        while self._command_queue and not self._stop_event.is_set():
+        while not self._stop_event.is_set():
+            with self._command_lock:
+                while self._pending_resubscribe and self._budget.reserve_remaining() > 0:
+                    command = self._pending_resubscribe.popleft()
+                    self._enqueue_command(command, allow_duplicates=True)
+            if not self._command_queue:
+                break
             self._command_queue.sort()
             score, seq, command = self._command_queue[0]
             budget_priority = "resync" if command.use_reserve else "normal"

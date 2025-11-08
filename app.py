@@ -580,6 +580,9 @@ class Application:
                 self._event_logger.log(message, timestamp)
                 return False
         last = context.last_depth_silence_recovery_at
+        if not self._startup_complete:
+            context.feed_monitor.has_silence_timeout = False
+            return True
         if last is not None and now - last < self._silence_recovery_cooldown:
             context.feed_monitor.has_silence_timeout = False
             return True
@@ -636,6 +639,10 @@ class Application:
                     self._apply_snapshot(context, snapshot)
                     context.feed_monitor.clear()
             elif event.type is StreamEventType.RESYNC and event.reason is not None:
+                if not self._startup_complete and event.reason is StreamResyncReason.SILENCE_TIMEOUT:
+                    # игнорим до завершения инициализации
+                    context.feed_monitor.has_silence_timeout = False
+                    continue
                 if (
                         event.reason is StreamResyncReason.SILENCE_TIMEOUT
                         and self._recover_depth_from_silence(
