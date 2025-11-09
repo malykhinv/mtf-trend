@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
 
+from .band import Band
 from .level import Level
 from .pump import Pump
 from .scenario_status import ScenarioStatus
@@ -17,6 +18,7 @@ class SymbolState:
     cooldown_until: Optional[datetime]
     last_pump: Optional[Pump]
     last_level: Optional[Level]
+    last_band: Optional[Band]
     l_pullback: Optional[float]
     h_main: Optional[float]
 
