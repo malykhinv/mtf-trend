@@ -1,9 +1,11 @@
 from .models import (
+    ActiveOrder,
     Band,
     Candle,
     Level,
     LevelPattern,
     OrderParams,
+    OrderRole,
     Pump,
     ScenarioStatus,
     SymbolState,
@@ -12,11 +14,13 @@ from .models import (
 )
 
 __all__ = [
+    "ActiveOrder",
     "Band",
     "Candle",
     "Level",
     "LevelPattern",
     "OrderParams",
+    "OrderRole",
     "Pump",
     "ScenarioStatus",
     "SymbolState",
