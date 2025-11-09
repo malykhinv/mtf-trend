@@ -4,7 +4,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Dict, Iterable, List
+from typing import Callable, Dict, Iterable, List, Set
 
 import ccxt
 
@@ -61,25 +61,24 @@ class MarketScanner:
     logger: logging.Logger = logging.getLogger(__name__)
     state: MarketScanState = field(default_factory=MarketScanState)
 
-    def _should_enable_extended_mode(self, filter_result: SymbolFilterResult, stats: TradingStats) -> bool:
-        if not self.rest_config.fetch_ltf:
-            return False
-        if filter_result["is_new_listing"]:
-            return False
-        trades = int(stats.get("trades_24h", 0))
-        return trades >= self.symbol_filters_config.min_trades_established
-
-    def _collect_symbol_data(self, symbol: str, filter_result: SymbolFilterResult, stats: TradingStats) -> SymbolMarketSnapshot:
+    def _collect_symbol_data(
+        self,
+        symbol: str,
+        filter_result: SymbolFilterResult,
+        stats: TradingStats,
+        *,
+        focus_symbols: Set[str],
+    ) -> SymbolMarketSnapshot:
         htf_candles = self.client.fetch_htf_ohlcv(symbol)
-        extended_mode = self._should_enable_extended_mode(filter_result, stats)
-        ltf_candles = self.client.fetch_ltf_ohlcv(symbol) if extended_mode else []
+        should_fetch_ltf = self.rest_config.fetch_ltf and symbol in focus_symbols
+        ltf_candles = self.client.fetch_ltf_ohlcv(symbol) if should_fetch_ltf else []
         snapshot = SymbolMarketSnapshot(
             symbol=symbol,
             listing_age=filter_result["listing_age"],
             stats=stats,
             htf_candles=htf_candles,
             ltf_candles=ltf_candles,
-            extended_mode=extended_mode,
+            extended_mode=should_fetch_ltf,
             last_updated=self.now_factory(),
         )
         return snapshot
@@ -90,7 +89,8 @@ class MarketScanner:
         filter_result = self.symbol_filter.evaluate(symbol, market, stats)
         return filter_result["allowed"], filter_result, stats
 
-    def scan_once(self) -> MarketScanState:
+    def scan_once(self, *, focus_symbols: Iterable[str] | None = None) -> MarketScanState:
+        focus_set: Set[str] = set(focus_symbols or [])
         futures_symbols = self.client.get_futures_symbols()
         observed_now: set[str] = set()
         for symbol in futures_symbols:
@@ -99,7 +99,12 @@ class MarketScanner:
                 self.state.remove_symbols([symbol])
                 continue
             observed_now.add(symbol)
-            snapshot = self._collect_symbol_data(symbol, filter_result, stats)
+            snapshot = self._collect_symbol_data(
+                symbol,
+                filter_result,
+                stats,
+                focus_symbols=focus_set,
+            )
             self.state.update_symbol(snapshot)
 
         stale_symbols = [symbol for symbol in self.state.symbols if symbol not in observed_now]

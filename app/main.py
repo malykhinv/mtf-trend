@@ -3,13 +3,17 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import dataclass, field
+from typing import Sequence
 
 import ccxt
 
 from config.config import AppConfig, load_config, load_env
-from infrastructure import setup_logging
+from infrastructure import TelegramNotifier, setup_logging
+from integrations import RawSwingsOutput, SwingsAdapter, SwingsExtractor
+from domain.models import Candle
 from services.exchange import set_leverage
-from services.market_scan import build_market_scanner
+from services import build_trading_loop
 
 
 def configure_logging() -> None:
@@ -46,19 +50,42 @@ def create_exchange(config: AppConfig) -> ccxt.Exchange:
     return exchange
 
 
-def start_symbol_monitoring(config: AppConfig, exchange: ccxt.Exchange) -> None:
-    scanner = build_market_scanner(config, exchange=exchange)
-    logging.info(
-        "Запуск мониторинга символов для %s с периодом %s ч",
-        config.exchange.name,
-        config.scan.market_scan_interval_h,
-    )
-    scanner.run_forever()
+@dataclass
+class _FallbackSwingsExtractor(SwingsExtractor):
+    """Simple extractor returning an empty swings payload."""
+
+    warned: bool = field(default=False, init=False)
+
+    def extract(self, candles: Sequence[Candle]) -> RawSwingsOutput:
+        if not self.warned:
+            logging.warning(
+                "SwingsExtractor не настроен, используется заглушка без сигналов"
+            )
+            self.warned = True
+        return {
+            "swings": [],
+            "has_consolidation": False,
+            "consolidation_band": None,
+        }
+
+
+def create_swings_adapter() -> SwingsAdapter:
+    extractor: SwingsExtractor = _FallbackSwingsExtractor()
+    return SwingsAdapter(extractor)
+
+
+def create_notifier(config: AppConfig) -> TelegramNotifier | None:
+    token = (config.telegram.token or "").strip()
+    chat_id = (config.telegram.chat_id or "").strip()
+    if not token or not chat_id:
+        return None
+    return TelegramNotifier.from_config(config)
 
 
 def main() -> None:
     config = configure()
     exchange = create_exchange(config)
+    notifier = create_notifier(config)
     leverage_applied = set_leverage(config.leverage.leverage, config.leverage.margin_mode, exchange)
     if not leverage_applied:
         logging.warning(
@@ -67,7 +94,14 @@ def main() -> None:
             config.leverage.margin_mode,
             config.exchange.name,
         )
-    start_symbol_monitoring(config, exchange)
+    swings_adapter = create_swings_adapter()
+    trading_loop = build_trading_loop(
+        config,
+        exchange=exchange,
+        swings_adapter=swings_adapter,
+        notifier=notifier,
+    )
+    trading_loop.run_forever()
 
 
 if __name__ == "__main__":
