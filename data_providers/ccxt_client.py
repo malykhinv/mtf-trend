@@ -5,6 +5,21 @@ from typing import Any, Final, Mapping, MutableMapping, Optional, Sequence, Type
 
 import ccxt
 
+SUPPORTED_EXCHANGES: Mapping[str, type[ccxt.Exchange]] = {
+    "binance": ccxt.binance,
+    "binanceusdm": ccxt.binanceusdm,
+}
+
+
+def get_exchange_class(name: str) -> type[ccxt.Exchange]:
+    exchange_class = SUPPORTED_EXCHANGES.get(name)
+    if exchange_class is None:
+        supported = ", ".join(sorted(SUPPORTED_EXCHANGES)) or "<не настроены>"
+        raise ValueError(
+            f"Биржа {name!r} не поддерживается. Доступные варианты: {supported}"
+        )
+    return exchange_class
+
 
 class OHLCV(TypedDict):
     """Normalized OHLCV candle returned by CCXT."""
@@ -65,7 +80,7 @@ class CcxtClient:
         self._markets: MutableMapping[str, _CcxtMarketInfo] | None = None
 
     def _create_exchange(self) -> ccxt.Exchange:
-        exchange_class = getattr(ccxt, self._config.exchange_name)
+        exchange_class = get_exchange_class(self._config.exchange_name)
         exchange: ccxt.Exchange = exchange_class({
             "apiKey": self._config.api_key,
             "secret": self._config.api_secret,
