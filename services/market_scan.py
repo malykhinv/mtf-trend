@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List
 
+import ccxt
+
 from config.config import AppConfig, RestDataConfig, ScanConfig, SymbolFiltersConfig
 from data_providers import (
     CcxtClient,
@@ -120,7 +122,7 @@ class MarketScanner:
                 time.sleep(sleep_for)
 
 
-def build_market_scanner(config: AppConfig) -> MarketScanner:
+def build_market_scanner(config: AppConfig, *, exchange: ccxt.Exchange | None = None) -> MarketScanner:
     client_config = CcxtClientConfig(
         exchange_name=config.exchange.name,
         api_key=config.exchange.api_key,
@@ -130,7 +132,7 @@ def build_market_scanner(config: AppConfig) -> MarketScanner:
         rest_htf=config.rest_data.fetch_htf,
         rest_ltf=config.rest_data.fetch_ltf,
     )
-    client = CcxtClient(client_config)
+    client = CcxtClient(client_config, exchange=exchange)
     symbol_filter = SymbolFilter(config.symbol_filters)
     return MarketScanner(
         client=client,
