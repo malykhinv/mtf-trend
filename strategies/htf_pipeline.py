@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from typing import Sequence
 
 from config.config import AppConfig, AtrConfig, VolumeConfig
@@ -12,6 +13,8 @@ from strategies.pullback import (
     validate_pullback_on_H,
 )
 from strategies.pump_detection import detect_pump_candle_on_H
+
+from infrastructure import Notifier, get_logger, log_pullback_status, log_pump_detected
 
 _DEFAULT_MAX_PULLBACK_FRACTION = 0.40
 
@@ -38,6 +41,8 @@ class HtfPipeline:
     atr_config: AtrConfig
     volume_config: VolumeConfig
     max_pullback_fraction: float = _DEFAULT_MAX_PULLBACK_FRACTION
+    notifier: Notifier | None = None
+    logger: logging.Logger = field(default_factory=lambda: get_logger(__name__))
 
     @classmethod
     def from_config(
@@ -45,6 +50,8 @@ class HtfPipeline:
         config: AppConfig,
         *,
         max_pullback_fraction: float | None = None,
+        notifier: Notifier | None = None,
+        logger: logging.Logger | None = None,
     ) -> HtfPipeline:
         fraction = (
             max_pullback_fraction
@@ -55,15 +62,21 @@ class HtfPipeline:
             atr_config=config.atr,
             volume_config=config.volume,
             max_pullback_fraction=fraction,
+            notifier=notifier,
+            logger=logger or get_logger(__name__),
         )
 
     def run(
         self,
         candles: Sequence[Candle],
         existing_pump: Pump | None = None,
+        *,
+        symbol: str | None = None,
     ) -> HtfPipelineResult:
         atr_values = compute_atr(candles, self.atr_config)
         volume_result = compute_volume_zscore(candles, self.volume_config)
+
+        symbol_for_log = symbol or "?"
 
         pump_candidate = detect_pump_candle_on_H(candles, atr_values, self.atr_config)
         if pump_candidate is None:
@@ -73,6 +86,18 @@ class HtfPipeline:
         if pump_candidate is not None:
             pump_index = _find_candle_index(candles, pump_candidate.candle)
         pump = pump_candidate if pump_index is not None else None
+
+        atr_at_pump = atr_values[pump_index] if pump is not None and pump_index is not None else None
+        is_new_pump = pump is not None and (existing_pump is None or pump != existing_pump)
+        if pump is not None and atr_at_pump is not None and is_new_pump:
+            log_pump_detected(
+                logger=self.logger,
+                notifier=self.notifier,
+                symbol=symbol_for_log,
+                pump=pump,
+                atr_value=atr_at_pump,
+                atr_mult=self.atr_config.atr_mult,
+            )
 
         if pump is not None and pump_index is not None:
             candles_after_pump = candles[pump_index + 1 :]
@@ -89,6 +114,22 @@ class HtfPipeline:
                 )
             else:
                 pullback_result = PullbackValidationResult(False, None, None)
+
+        if pump is not None:
+            should_log_pullback = False
+            if pullback_result.cancel_reason is not None:
+                should_log_pullback = True
+            elif pullback_result.is_valid and is_new_pump:
+                should_log_pullback = True
+            if should_log_pullback:
+                log_pullback_status(
+                    logger=self.logger,
+                    notifier=self.notifier,
+                    symbol=symbol_for_log,
+                    l_pullback=pullback_result.l_pullback,
+                    valid=pullback_result.is_valid,
+                    reason=pullback_result.cancel_reason,
+                )
 
         ready = (
             volume_result.allowed

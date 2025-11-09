@@ -6,8 +6,16 @@ from dataclasses import dataclass, field
 import ccxt
 
 from config.config import AppConfig, MinTakeProfitConfig, RiskRewardConfig
-from domain.models import OrderParams, ScenarioStatus, SymbolState
+from domain.models import OrderParams
 from execution import ExecutionEventHandler, OrderManager
+from infrastructure import (
+    Notifier,
+    OrderPlacementContext,
+    get_logger,
+    log_cooldown_active,
+    log_orders_placed,
+)
+from state import SymbolState
 from strategies.ltf_pipeline import BreakoutSignal
 
 
@@ -19,7 +27,9 @@ class SignalExecutor:
     event_handler: ExecutionEventHandler
     risk_reward_config: RiskRewardConfig
     min_tp_config: MinTakeProfitConfig
-    logger: logging.Logger = field(default_factory=lambda: logging.getLogger(__name__))
+    timeframe_pair: str = ""
+    notifier: Notifier | None = None
+    logger: logging.Logger = field(default_factory=lambda: get_logger(__name__))
 
     @classmethod
     def from_config(
@@ -28,6 +38,8 @@ class SignalExecutor:
         config: AppConfig,
         *,
         quote_currency: str = "USDT",
+        notifier: Notifier | None = None,
+        logger: logging.Logger | None = None,
     ) -> SignalExecutor:
         order_manager = OrderManager(
             exchange=exchange,
@@ -38,12 +50,16 @@ class SignalExecutor:
         event_handler = ExecutionEventHandler(
             order_manager=order_manager,
             cooldown_minutes=config.cooldown.minutes,
+            notifier=notifier,
         )
         return cls(
             order_manager=order_manager,
             event_handler=event_handler,
             risk_reward_config=config.risk_reward,
             min_tp_config=config.min_take_profit,
+            timeframe_pair=f"{config.timeframes.htf}/{config.timeframes.ltf}",
+            notifier=notifier,
+            logger=logger or get_logger(__name__),
         )
 
     def execute_breakout_signal(self, symbol: str, state: SymbolState, signal: BreakoutSignal) -> SymbolState:
@@ -54,7 +70,13 @@ class SignalExecutor:
             self.logger.debug("Пропуск %s: уже есть активные ордера", symbol)
             return state
         if self._is_in_cooldown(state):
-            self.logger.info("Пропуск %s: действует кулдаун", symbol)
+            if state.cooldown_until is not None:
+                log_cooldown_active(
+                    logger=self.logger,
+                    notifier=self.notifier,
+                    symbol=symbol,
+                    until=state.cooldown_until,
+                )
             return state
         if not self._meets_thresholds(signal):
             self.logger.debug("Пропуск %s: сигнал не удовлетворяет RR/MIN_TP", symbol)
@@ -76,16 +98,21 @@ class SignalExecutor:
 
         state.active_orders = dict(active_orders)
         state.last_order_params = order_params
-        state.open_quantity = 0.0
-        state.has_open_position = False
-        state.status = ScenarioStatus.ACTIVE
-        self.logger.info(
-            "Размещён сетап по %s: entry=%.4f, stop=%.4f, tp1=%.4f, tp2=%.4f",
-            symbol,
-            order_params.entry_price,
-            order_params.stop_loss,
-            order_params.take_profit_1,
-            order_params.take_profit_2,
+        state.reset_position()
+        state.mark_active()
+        log_orders_placed(
+            logger=self.logger,
+            notifier=self.notifier,
+            context=OrderPlacementContext(
+                symbol=symbol,
+                timeframe_pair=self.timeframe_pair,
+                entry_price=order_params.entry_price,
+                stop_loss=order_params.stop_loss,
+                take_profit_1=order_params.take_profit_1,
+                take_profit_2=order_params.take_profit_2,
+                position_size=order_params.position_size,
+                rr=signal.rr,
+            ),
         )
         return state
 
