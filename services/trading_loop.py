@@ -1,8 +1,9 @@
 from __future__ import annotations
+
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Sequence
 
 import ccxt
@@ -19,6 +20,7 @@ from services.market_scan import (
     SymbolMarketSnapshot,
     build_market_scanner,
 )
+from services.order_watcher import OrderWatcher
 from services.signal_executor import SignalExecutor
 from state import SymbolState
 from strategies import HtfPipeline, LtfPipeline
@@ -32,6 +34,7 @@ class TradingLoop:
     htf_pipeline: HtfPipeline
     ltf_pipeline: LtfPipeline
     signal_executor: SignalExecutor
+    order_watcher: OrderWatcher
     scan_interval_hours: int
     notifier: Notifier | None = None
     now_factory: Callable[[], datetime] = field(
@@ -45,16 +48,20 @@ class TradingLoop:
         """Continuously perform market scans and react to resulting signals."""
 
         interval_seconds = max(self.scan_interval_hours, 1) * 3600
+        next_scan_at = self.now_factory()
         while True:
-            start = self.now_factory()
-            self.logger.info("Запуск торгового цикла")
-            try:
-                self.run_once()
-            except Exception as exc:  # pragma: no cover - safeguard for runtime
-                self.logger.exception("Ошибка торгового цикла: %s", exc)
-            elapsed = (self.now_factory() - start).total_seconds()
-            sleep_for = max(interval_seconds - elapsed, 0.0)
-            if sleep_for:
+            now = self.now_factory()
+            if now >= next_scan_at:
+                self.logger.info("Запуск торгового цикла")
+                start = now
+                try:
+                    self.run_once()
+                except Exception as exc:  # pragma: no cover - safeguard for runtime
+                    self.logger.exception("Ошибка торгового цикла: %s", exc)
+                next_scan_at = start + timedelta(seconds=interval_seconds)
+            self.order_watcher.poll()
+            sleep_for = self._compute_sleep_duration(now, next_scan_at)
+            if sleep_for > 0:
                 time.sleep(sleep_for)
 
     def run_once(self) -> None:
@@ -70,6 +77,7 @@ class TradingLoop:
                 self.logger.exception(
                     "Ошибка обработки символа %s: %s", snapshot.symbol, exc
                 )
+        self.order_watcher.poll()
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -87,6 +95,23 @@ class TradingLoop:
         candles = tuple(_convert_ohlcv_to_candle(candle) for candle in snapshot.htf_candles)
         existing_pump = self.pumps.get(snapshot.symbol)
         htf_result = self.htf_pipeline.run(candles, existing_pump, symbol=snapshot.symbol)
+
+        cancel_reason = htf_result.pullback.cancel_reason
+        if (
+            cancel_reason is not None
+            and not state.has_open_position
+            and (state.active_orders or state.status in {ScenarioStatus.MONITORING, ScenarioStatus.ACTIVE})
+        ):
+            state = self.signal_executor.event_handler.handle_scenario_cancelled(
+                state,
+                snapshot.symbol,
+                reason=cancel_reason,
+            )
+            state.update_pump(h_main=None, l_pullback=None)
+            state.update_levels(level_top=None, level_low=None)
+            self.pumps.pop(snapshot.symbol, None)
+            self.states[snapshot.symbol] = state
+            return
 
         pump = htf_result.pump
         if pump is None:
@@ -159,6 +184,20 @@ class TradingLoop:
                 focus.add(symbol)
         return focus
 
+    def _compute_sleep_duration(self, now: datetime, next_scan_at: datetime) -> float:
+        candidates: list[float] = []
+        if next_scan_at > now:
+            candidates.append((next_scan_at - now).total_seconds())
+        watcher_sleep = self.order_watcher.time_until_next_poll(now)
+        if watcher_sleep is not None:
+            candidates.append(watcher_sleep)
+        if not candidates:
+            return 0.0
+        positive = [value for value in candidates if value > 0.0]
+        if positive:
+            return min(positive)
+        return 0.0
+
     def _cleanup_stale_symbols(self, market_state: MarketScanState) -> None:
         observed = set(market_state.symbols)
         for symbol in list(self.states.keys()):
@@ -193,15 +232,28 @@ def build_trading_loop(
         notifier=notifier,
         logger=loop_logger,
     )
+    states: Dict[str, SymbolState] = {}
+    pumps: Dict[str, Pump] = {}
+    order_watcher = OrderWatcher(
+        exchange=exchange,
+        event_handler=signal_executor.event_handler,
+        states=states,
+        order_poll_interval=config.execution_polling.orders_interval_s,
+        trade_poll_interval=config.execution_polling.trades_interval_s,
+        logger=loop_logger,
+    )
     return TradingLoop(
         scanner=scanner,
         htf_pipeline=htf_pipeline,
         ltf_pipeline=ltf_pipeline,
         signal_executor=signal_executor,
+        order_watcher=order_watcher,
         scan_interval_hours=config.scan.market_scan_interval_h,
         notifier=notifier,
         now_factory=now_factory or (lambda: datetime.now(tz=timezone.utc)),
         logger=loop_logger,
+        states=states,
+        pumps=pumps,
     )
 
 

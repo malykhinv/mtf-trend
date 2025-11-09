@@ -5,6 +5,7 @@ from .market_scan import (
     SymbolMarketSnapshot,
     build_market_scanner,
 )
+from .order_watcher import OrderWatcher
 from .signal_executor import SignalExecutor
 from .trading_loop import TradingLoop, build_trading_loop
 
@@ -17,5 +18,6 @@ __all__ = [
     "SymbolMarketSnapshot",
     "build_market_scanner",
     "build_trading_loop",
+    "OrderWatcher",
     "set_leverage",
 ]
