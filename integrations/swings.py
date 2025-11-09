@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
-from typing import Protocol, Sequence, TypedDict, overload
+from typing import Any, Protocol, Sequence, TypedDict, overload
 
 from domain.models import Band, Candle, SwingsOutput, SwingHigh
 
@@ -58,6 +59,37 @@ class SwingsAdapter:
         )
 
 
+class RealSwingsExtractor(SwingsExtractor):
+    """Extractor that relies on the external ``Swings`` module."""
+
+    def __init__(self) -> None:
+        try:
+            from swings import Swings  # type: ignore import-not-found
+        except ImportError as exc:  # pragma: no cover - integration guard
+            raise RuntimeError(
+                "Модуль Swings недоступен. Установите зависимость, чтобы извлекать свинги."
+            ) from exc
+
+        self._swings = Swings()
+
+    def extract(self, candles: Sequence[Candle]) -> RawSwingsOutput:
+        payload = [_convert_candle(candle) for candle in candles]
+        try:
+            raw_output = self._swings.extract(payload)
+        except AttributeError as exc:  # pragma: no cover - integration guard
+            raise RuntimeError("Экземпляр Swings не поддерживает метод extract") from exc
+
+        mapping = _ensure_mapping(raw_output)
+        swings = [_convert_external_swing(item) for item in mapping["swings"]]
+        consolidation_raw = mapping.get("consolidation_band")
+        consolidation = _convert_external_band(consolidation_raw)
+        return {
+            "swings": swings,
+            "has_consolidation": bool(mapping["has_consolidation"]),
+            "consolidation_band": consolidation,
+        }
+
+
 def _convert_raw_swing(raw: RawSwing) -> SwingHigh:
     return SwingHigh(
         price=float(raw["price"]),
@@ -75,6 +107,54 @@ def _convert_raw_band(raw: RawBand | None) -> Band | None:
         start_timestamp=_normalise_datetime(raw["start_timestamp"]),
         end_timestamp=_normalise_datetime(raw["end_timestamp"]),
     )
+
+
+def _convert_external_swing(raw: Any) -> RawSwing:
+    mapping = _ensure_mapping(raw)
+    return {
+        "price": float(mapping["price"]),
+        "timestamp": mapping["timestamp"],
+        "index": int(mapping["index"]),
+    }
+
+
+def _convert_external_band(raw: Any) -> RawBand | None:
+    if raw is None:
+        return None
+    mapping = _ensure_mapping(raw)
+    return {
+        "low": float(mapping["low"]),
+        "high": float(mapping["high"]),
+        "start_timestamp": mapping["start_timestamp"],
+        "end_timestamp": mapping["end_timestamp"],
+    }
+
+
+def _convert_candle(candle: Candle) -> dict[str, float | int]:
+    return {
+        "open": float(candle.open),
+        "high": float(candle.high),
+        "low": float(candle.low),
+        "close": float(candle.close),
+        "volume": float(candle.volume),
+        "timestamp": _to_timestamp_ms(candle.timestamp),
+    }
+
+
+def _ensure_mapping(obj: Any) -> Mapping[str, Any]:
+    if isinstance(obj, Mapping):
+        return obj
+    if is_dataclass(obj):
+        return asdict(obj)
+    raise TypeError("Ожидается отображение или dataclass от модуля Swings")
+
+
+def _to_timestamp_ms(value: datetime) -> int:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    else:
+        value = value.astimezone(timezone.utc)
+    return int(value.timestamp() * 1000)
 
 
 @overload
@@ -109,6 +189,7 @@ __all__ = [
     "RawBand",
     "RawSwing",
     "RawSwingsOutput",
+    "RealSwingsExtractor",
     "SwingsAdapter",
     "SwingsExtractor",
 ]
