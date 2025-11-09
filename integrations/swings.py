@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import importlib.util
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timezone
 from typing import Any, Protocol, Sequence, TypedDict, overload
 
 from domain.models import Band, Candle, SwingsOutput, SwingHigh
+
+
+if importlib.util.find_spec("swings") is not None:  # pragma: no cover - optional dependency
+    from swings import Swings  # type: ignore import-not-found
+else:  # pragma: no cover - optional dependency
+    Swings = None  # type: ignore[assignment]
 
 
 class RawSwing(TypedDict):
@@ -63,12 +70,10 @@ class RealSwingsExtractor(SwingsExtractor):
     """Extractor that relies on the external ``Swings`` module."""
 
     def __init__(self) -> None:
-        try:
-            from swings import Swings  # type: ignore import-not-found
-        except ImportError as exc:  # pragma: no cover - integration guard
+        if Swings is None:
             raise RuntimeError(
                 "Модуль Swings недоступен. Установите зависимость, чтобы извлекать свинги."
-            ) from exc
+            )
 
         self._swings = Swings()
 

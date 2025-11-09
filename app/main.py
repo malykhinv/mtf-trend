@@ -11,6 +11,7 @@ from infrastructure import TelegramNotifier, setup_logging
 from integrations import RealSwingsExtractor, SwingsAdapter
 from services.exchange import set_leverage
 from services import build_trading_loop
+from data_providers.ccxt_client import get_exchange_class
 
 
 def configure_logging() -> None:
@@ -36,7 +37,7 @@ def configure() -> AppConfig:
 
 
 def create_exchange(config: AppConfig) -> ccxt.Exchange:
-    exchange_class = getattr(ccxt, config.exchange.name)
+    exchange_class = get_exchange_class(config.exchange.name)
     exchange: ccxt.Exchange = exchange_class(
         {
             "apiKey": config.exchange.api_key,
