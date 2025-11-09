@@ -102,6 +102,12 @@ class CooldownConfig:
 
 
 @dataclass(frozen=True)
+class ExecutionPollingConfig:
+    orders_interval_s: int
+    trades_interval_s: int
+
+
+@dataclass(frozen=True)
 class RuntimeConfig:
     timezone: str
 
@@ -124,6 +130,7 @@ class AppConfig:
     exchange: ExchangeConfig
     leverage: LeverageConfig
     cooldown: CooldownConfig
+    execution_polling: ExecutionPollingConfig
 
 
 def load_env(path: Path | str | None = None) -> None:
@@ -261,6 +268,11 @@ def load_config() -> AppConfig:
         minutes=_get_int("COOLDOWN_MINUTES"),
     )
 
+    execution_polling = ExecutionPollingConfig(
+        orders_interval_s=_get_int("ORDER_POLL_INTERVAL_SEC", 5),
+        trades_interval_s=_get_int("TRADE_POLL_INTERVAL_SEC", 5),
+    )
+
     return AppConfig(
         runtime=runtime,
         timeframes=timeframes,
@@ -278,6 +290,7 @@ def load_config() -> AppConfig:
         exchange=exchange,
         leverage=leverage,
         cooldown=cooldown,
+        execution_polling=execution_polling,
     )
 
 
@@ -285,6 +298,7 @@ __all__ = [
     "AppConfig",
     "AtrConfig",
     "CooldownConfig",
+    "ExecutionPollingConfig",
     "ConfigError",
     "ExchangeConfig",
     "LeverageConfig",
