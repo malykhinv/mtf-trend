@@ -5,6 +5,7 @@ import os
 import time
 
 from config.config import AppConfig, load_config, load_env
+from services.market_scan import build_market_scanner
 
 
 def configure_logging() -> None:
@@ -30,7 +31,13 @@ def configure() -> AppConfig:
 
 
 def start_symbol_monitoring(config: AppConfig) -> None:
-    logging.info("Мониторинг символов ещё не реализован для %s", config.exchange.name)
+    scanner = build_market_scanner(config)
+    logging.info(
+        "Запуск мониторинга символов для %s с периодом %s ч",
+        config.exchange.name,
+        config.scan.market_scan_interval_h,
+    )
+    scanner.run_forever()
 
 
 def main() -> None:
