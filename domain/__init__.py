@@ -8,7 +8,6 @@ from .models import (
     OrderRole,
     Pump,
     ScenarioStatus,
-    SymbolState,
     SwingHigh,
     SwingsOutput,
 )
@@ -23,7 +22,6 @@ __all__ = [
     "OrderRole",
     "Pump",
     "ScenarioStatus",
-    "SymbolState",
     "SwingHigh",
     "SwingsOutput",
 ]

@@ -160,7 +160,7 @@ class OrderManager:
         *,
         quantity: float,
         new_stop_price: float,
-    ) -> str:
+    ) -> tuple[str, float]:
         """Cancel the existing stop-loss order and place a new one."""
 
         precision = self._get_precision(symbol)
@@ -177,7 +177,7 @@ class OrderManager:
             new_order_id,
             adjusted_price,
         )
-        return new_order_id
+        return new_order_id, adjusted_price
 
     def cancel_orders(self, symbol: str, order_ids: Iterable[str]) -> None:
         """Cancel orders for ``symbol`` ignoring failures."""

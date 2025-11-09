@@ -5,11 +5,12 @@ import os
 import time
 
 from config.config import AppConfig, load_config, load_env
+from infrastructure import setup_logging
 from services.market_scan import build_market_scanner
 
 
 def configure_logging() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    setup_logging(level=logging.INFO)
 
 
 def set_timezone(name: str) -> None:
