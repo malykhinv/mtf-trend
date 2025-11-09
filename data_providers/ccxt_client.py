@@ -59,9 +59,9 @@ class CcxtClient:
 
     _DEFAULT_LIMIT: Final[int] = 150
 
-    def __init__(self, config: CcxtClientConfig) -> None:
+    def __init__(self, config: CcxtClientConfig, *, exchange: ccxt.Exchange | None = None) -> None:
         self._config = config
-        self._exchange = self._create_exchange()
+        self._exchange = exchange if exchange is not None else self._create_exchange()
         self._markets: MutableMapping[str, _CcxtMarketInfo] | None = None
 
     def _create_exchange(self) -> ccxt.Exchange:
