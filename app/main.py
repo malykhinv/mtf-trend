@@ -3,15 +3,12 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import dataclass, field
-from typing import Sequence
 
 import ccxt
 
 from config.config import AppConfig, load_config, load_env
 from infrastructure import TelegramNotifier, setup_logging
-from integrations import RawSwingsOutput, SwingsAdapter, SwingsExtractor
-from domain.models import Candle
+from integrations import RealSwingsExtractor, SwingsAdapter
 from services.exchange import set_leverage
 from services import build_trading_loop
 
@@ -50,27 +47,8 @@ def create_exchange(config: AppConfig) -> ccxt.Exchange:
     return exchange
 
 
-@dataclass
-class _FallbackSwingsExtractor(SwingsExtractor):
-    """Simple extractor returning an empty swings payload."""
-
-    warned: bool = field(default=False, init=False)
-
-    def extract(self, candles: Sequence[Candle]) -> RawSwingsOutput:
-        if not self.warned:
-            logging.warning(
-                "SwingsExtractor не настроен, используется заглушка без сигналов"
-            )
-            self.warned = True
-        return {
-            "swings": [],
-            "has_consolidation": False,
-            "consolidation_band": None,
-        }
-
-
 def create_swings_adapter() -> SwingsAdapter:
-    extractor: SwingsExtractor = _FallbackSwingsExtractor()
+    extractor = RealSwingsExtractor()
     return SwingsAdapter(extractor)
 
 
