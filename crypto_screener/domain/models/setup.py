@@ -4,7 +4,6 @@ from enum import Enum
 
 
 class SetupType(Enum):
-    NONE = "NONE"
     CAPTURE = "CAPTURE"
     ORDER = "ORDER"
 

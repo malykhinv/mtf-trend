@@ -13,3 +13,4 @@ class Swing:
     ts: datetime
     price: float
     type: SwingType
+    is_open: bool

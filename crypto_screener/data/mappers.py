@@ -17,6 +17,7 @@ def map_ohlcv(raw: list[list[float]]) -> list[Bar]:
                 low=float(l),
                 close=float(c),
                 volume=float(v),
+                swing=None
             )
         )
     return mapped
