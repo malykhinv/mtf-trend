@@ -14,7 +14,7 @@ class AppConfig:
 
     TFS: List[Timeframe] = field(default_factory=lambda: [Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5])
 
-    NOTIFY_ENABLED: bool = True
+    IS_NOTIFIER_ENABLED: bool = True
 
     OHLCV_LIMIT: int = 1000
     LISTING_PERIOD_DAYS: int = 14

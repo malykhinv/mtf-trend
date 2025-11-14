@@ -6,12 +6,14 @@ from dotenv import load_dotenv
 
 from crypto_screener.config.config import cfg
 from crypto_screener.data.exchanges.binance import Binance
-from crypto_screener.data.notifiers.tg import LogNotifier, TgNotifier
+from crypto_screener.data.notifiers.log import LogNotifier
+from crypto_screener.data.notifiers.telegram import TgNotifier
 from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.models.mode import Mode
 from crypto_screener.domain.models.setup import SetupType
 from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.domain.setup_detector import detect_setup
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.signals import handle_sig
@@ -22,9 +24,9 @@ def build_exchange(api_key: str, api_secret: str) -> Exchange:
     return Binance(api_key, api_secret)
 
 
-def build_notifier(enabled: bool, token: Optional[str], chat_id: Optional[str]):
-    if enabled and token and chat_id:
-        return TgNotifier(token, chat_id)
+def build_notifier(enabled: bool, event_token: Optional[str], order_token: Optional[str], chat_id: Optional[str]):
+    if enabled and event_token and order_token and chat_id:
+        return TgNotifier(event_token, order_token, chat_id)
     return LogNotifier()
 
 
@@ -55,10 +57,12 @@ def initialize_exchange() -> Exchange:
     return build_exchange(api_key, api_secret)
 
 
-def initialize_notifier() -> LogNotifier | TgNotifier:
-    tg_token = os.getenv("TG_TOKEN", None)
-    tg_chat = os.getenv("TG_CHAT_ID", None)
-    return build_notifier(cfg.NOTIFY_ENABLED, tg_token, tg_chat)
+def initialize_notifier() -> Notifier:
+    is_notifier_enabled = cfg.IS_NOTIFIER_ENABLED
+    event_token = os.getenv("TELEGRAM_EVENT_TOKEN", None)
+    order_token = os.getenv("TELEGRAM_ORDER_TOKEN", None)
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", None)
+    return build_notifier(is_notifier_enabled, event_token, order_token, chat_id)
 
 
 def fetch_symbols(exchange: Exchange) -> list[FuturesSymbol]:
@@ -76,9 +80,9 @@ def fetch_filtered_symbols(exchange: Exchange) -> list[FuturesSymbol]:
 
 def run_live(
         exchange: Exchange,
-        notifier: LogNotifier | TgNotifier,
+        notifier: Notifier,
         filtered_symbols: list[FuturesSymbol],
-        tf_list: list[Timeframe],
+        tf_list: list[Timeframe]
 ) -> None:
     log.d("Запуск в живом режиме.")
     if not filtered_symbols or not tf_list:
@@ -111,13 +115,13 @@ def run_live(
                     if key not in notified_once:
                         notified_once.add(key)
                         message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
-                        executor.submit(notifier.notify, message)
+                        executor.submit(notifier.notify, NotificationType.EVENT, message)
                 elif setup.type == SetupType.ORDER:
                     message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                     log.i(message)
                     # TODO Открытие позиции на бирже.
                     # TODO Создание изображения для уведомления.
-                    executor.submit(notifier.notify, message)
+                    executor.submit(notifier.notify, NotificationType.ORDER, message)
                     capture_state.symbol = None
 
 
