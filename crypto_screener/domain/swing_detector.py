@@ -10,15 +10,16 @@ class SwingDetectionConfig:
     window: int
     atr_multiplier: float
     atr_window: int
+    open_lag: int
 
 
 _SWING_PARAMS = {
-    Timeframe.M1: SwingDetectionConfig(window=4, atr_multiplier=2.4, atr_window=50),
-    Timeframe.M5: SwingDetectionConfig(window=3, atr_multiplier=2.0, atr_window=40),
-    Timeframe.M15: SwingDetectionConfig(window=3, atr_multiplier=1.6, atr_window=30),
-    Timeframe.M30: SwingDetectionConfig(window=2, atr_multiplier=1.4, atr_window=30),
-    Timeframe.H1: SwingDetectionConfig(window=2, atr_multiplier=1.2, atr_window=20),
-    Timeframe.H4: SwingDetectionConfig(window=2, atr_multiplier=1.0, atr_window=14),
+    Timeframe.M1: SwingDetectionConfig(window=4, atr_multiplier=2.4, atr_window=50, open_lag=5),
+    Timeframe.M5: SwingDetectionConfig(window=3, atr_multiplier=2.0, atr_window=40, open_lag=4),
+    Timeframe.M15: SwingDetectionConfig(window=3, atr_multiplier=1.6, atr_window=30, open_lag=3),
+    Timeframe.M30: SwingDetectionConfig(window=2, atr_multiplier=1.4, atr_window=30, open_lag=2),
+    Timeframe.H1: SwingDetectionConfig(window=2, atr_multiplier=1.2, atr_window=20, open_lag=1),
+    Timeframe.H4: SwingDetectionConfig(window=2, atr_multiplier=1.0, atr_window=14, open_lag=1),
 }
 
 
@@ -34,7 +35,8 @@ def add_swings(
         bars=bars,
         window=config.window,
         atr_mult=config.atr_multiplier,
-        atr_window=config.atr_window
+        atr_window=config.atr_window,
+        open_lag=config.open_lag,
     )
 
 
@@ -43,6 +45,7 @@ def _add_swings(
         window: int,
         atr_mult: float,
         atr_window: int,
+        open_lag: int,
 ) -> list[Bar]:
     length = len(bars)
     if length == 0:
@@ -136,7 +139,15 @@ def _add_swings(
     swing_by_idx: dict[int, Swing] = {}
 
     for idx, swing_type, price in filtered:
-        is_open = _is_swing_open(price, bars[idx + 1:])
+        if 0 < open_lag < length:
+            future_end = length - open_lag
+            if idx + 1 < future_end:
+                future_bars = bars[idx + 1:future_end]
+            else:
+                future_bars = []
+        else:
+            future_bars = bars[idx + 1:]
+        is_open = _is_swing_open(price, future_bars)
         swing_by_idx[idx] = Swing(
             ts=bars[idx].ts,
             price=price,
