@@ -1,4 +1,5 @@
 from distutils.command.install import main_key
+from email.contentmanager import maintype
 from typing import Optional
 
 from crypto_screener.config.config import cfg
@@ -71,12 +72,18 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     return bars[best_idx:]
 
 
+def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
+    main_low = _get_first_open_swing(bars, swing_type=SwingType.LOW)
+    main_low_idx, _ = main_low
+    main_high = _get_first_open_swing(bars[main_low_idx + 1:], swing_type=SwingType.HIGH)
+    return [main_low, main_high]
+
+
 def _get_first_open_swing(
         bars: list[Bar],
         swing_type: SwingType,
-        start_idx: int = 0,
 ) -> tuple[int, Swing] | None:
-    for idx in range(start_idx, len(bars)):
+    for idx in range(0, len(bars)):
         swing = bars[idx].swing
         if swing is None:
             continue
@@ -88,35 +95,6 @@ def _get_first_open_swing(
     return None
 
 
-def _check_if_has_dump(bars: list[Bar]) -> bool:
-    if not bars:
-        return False
-
-    first_low = _get_first_open_swing(bars, swing_type=SwingType.LOW)
-    if first_low is None:
-        return False
-    first_low_idx, first_low_swing = first_low
-
-    main_high = _get_first_open_swing(bars, swing_type=SwingType.HIGH, start_idx=first_low_idx + 1)
-    if main_high is None:
-        return False
-    main_high_idx, main_high_swing = main_high
-
-    retrace_low = _get_first_open_swing(bars, swing_type=SwingType.LOW, start_idx=main_high_idx + 1)
-    if retrace_low is None:
-        return False
-    _, retrace_low_swing = retrace_low
-
-    rise = main_high_swing.price - first_low_swing.price
-    if rise <= 0:
-        return False
-
-    retrace = main_high_swing.price - retrace_low_swing.price
-    if retrace < 0:
-        retrace = 0.0
-
-    return retrace <= rise * cfg.RETRACE_RATIO_MAX
-
 def _get_cascade_long(bars: list[Bar]) -> list[Swing]:
     cascade = []
     main_high = _get_first_open_swing(bars, swing_type=SwingType.HIGH)
@@ -126,20 +104,41 @@ def _get_cascade_long(bars: list[Bar]) -> list[Swing]:
     # TODO
     return cascade
 
+
 # endregion
 
 
 def detect_setup(bars: list[Bar]) -> Setup | None:
     setup = None
     bars = _trim_by_volume(bars)
+    if not bars:
+        return None
+
+    # Анализ роста.
+    main_low, main_high = _get_main_rising_swings_indexed(bars)
+    if not main_low or not main_high:
+        return setup
+    _, main_low_swing = main_low
+    main_high_index, main_high_swing = main_high
+    rise = main_high_swing.price - main_low_swing.price
+    if rise <= 0:
+        return setup
 
     # Анализ коррекции.
-    has_dump = _check_if_has_dump(bars)
-    if not has_dump:
+    correction_bars = bars[main_high_index + 1:]
+    retrace_low = _get_first_open_swing(correction_bars, swing_type=SwingType.LOW)
+    if not retrace_low:
+        return setup
+    _, retrace_low_swing = retrace_low
+    retrace = main_high_swing.price - retrace_low_swing.price
+    if retrace <= 0:
+        return setup
+    has_dump = retrace >= rise * cfg.RETRACE_RATIO_MAX
+    if has_dump:
         return setup
 
     # Анализ лонгового каскада.
-    cascade_long = _get_cascade_long(bars)
+    cascade_long = _get_cascade_long(correction_bars)
     has_cascade_long = len(cascade_long) >= cfg.CASCADE_LENGTH_MIN
     if not has_cascade_long:
         return setup
@@ -151,6 +150,12 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
         return setup
 
     setup = Setup.CAPTURE
+
+    # Анализ поддержки под каскадом.
+    support = _get_support(bars)
+    has_support = False
+    if not has_support:
+        return setup
 
     # Анализ пробоя лонгового каскада.
     has_breakout_long = _check_if_has_breakout_high(bars, cascade_long)
