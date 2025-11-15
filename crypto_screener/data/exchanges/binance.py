@@ -25,8 +25,8 @@ class Binance(Exchange):
         )
 
     def get_futures_symbols(self) -> Iterable[FuturesSymbol]:
-        markets = self._client.load_markets(params={"type": "swap"})
-        tickers = self._client.fetch_tickers(params={"type": "swap"})
+        markets = self._client.load_markets()
+        tickers = self._client.fetch_tickers()
         symbols: list[FuturesSymbol] = []
 
         for market in markets.values():
