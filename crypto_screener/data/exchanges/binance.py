@@ -19,18 +19,21 @@ class Binance(Exchange):
             {
                 "apiKey": api_key,
                 "secret": api_secret,
-                "options": {"defaultType": "future"},
+                "options": {"defaultType": "swap", "defaultSubType": "linear"},
                 "enableRateLimit": True,
             }
         )
 
     def get_futures_symbols(self) -> Iterable[FuturesSymbol]:
-        markets = self._client.load_markets()
-        tickers = self._client.fetch_tickers()
+        markets = self._client.load_markets(params={"type": "swap"})
+        tickers = self._client.fetch_tickers(params={"type": "swap"})
         symbols: list[FuturesSymbol] = []
 
         for market in markets.values():
-            if not market.get("future"):
+            if not market.get("contract"):
+                continue
+
+            if market.get("settle") != "USDT" and market.get("quote") != "USDT":
                 continue
 
             symbol = market["symbol"]
