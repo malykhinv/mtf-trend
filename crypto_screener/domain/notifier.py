@@ -6,7 +6,12 @@ class NotificationType(Enum):
     EVENT = "EVENT"
     ORDER = "ORDER"
 
+
 class Notifier(ABC):
     @abstractmethod
-    def notify(self, type: NotificationType, message: str) -> None:
+    def notify(
+            self,
+            notification_type: NotificationType,
+            message: str
+    ) -> None:
         ...

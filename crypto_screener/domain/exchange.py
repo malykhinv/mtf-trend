@@ -21,5 +21,11 @@ class Exchange(ABC):
         ...
 
     @abstractmethod
-    def get_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int, end: Optional[datetime]) -> list[Bar]:
+    def get_ohlcv(
+            self,
+            symbol: str,
+            timeframe: Timeframe,
+            limit: int,
+            end: Optional[datetime] = None
+    ) -> list[Bar]:
         ...

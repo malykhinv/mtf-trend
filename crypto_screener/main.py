@@ -1,7 +1,4 @@
 import os
-from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
-from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -9,29 +6,42 @@ from crypto_screener.config.config import cfg
 from crypto_screener.data.exchanges.binance import Binance
 from crypto_screener.data.notifiers.log import LogNotifier
 from crypto_screener.data.notifiers.telegram import TgNotifier
-from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol
-from crypto_screener.domain.models.setup import SetupType
-from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.notifier import Notifier, NotificationType
-from crypto_screener.domain.setup_detector import detect_setup
+from crypto_screener.domain.notifier import Notifier
+from crypto_screener.execution.run_live import run_live
+from crypto_screener.execution.run_test_market import run_test_market
+from crypto_screener.execution.run_test_symbol import run_test_symbol
 from crypto_screener.utils.logger import log
-from crypto_screener.utils.signals import handle_sig
 
 
-def build_exchange(api_key: str, api_secret: str) -> Exchange:
+# region Private
+def _initialize_exchange() -> Exchange:
+    api_key = os.getenv("API_KEY", None)
+    api_secret = os.getenv("API_SECRET", None)
     # return Bybit(api_key, api_secret)
     return Binance(api_key, api_secret)
 
 
-def build_notifier(enabled: bool, event_token: Optional[str], order_token: Optional[str], chat_id: Optional[str]):
-    if enabled and event_token and order_token and chat_id:
+def _initialize_notifier() -> Notifier:
+    is_notifier_enabled = cfg.IS_NOTIFIER_ENABLED
+    event_token = os.getenv("TELEGRAM_EVENT_TOKEN", None)
+    order_token = os.getenv("TELEGRAM_ORDER_TOKEN", None)
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", None)
+    if is_notifier_enabled and event_token and order_token and chat_id:
         return TgNotifier(event_token, order_token, chat_id)
     return LogNotifier()
 
 
-def filter_symbols(symbols: list[FuturesSymbol], btc_trades_24h: int) -> list[FuturesSymbol]:
+def _fetch_symbols(exchange: Exchange) -> list[FuturesSymbol]:
+    symbols = exchange.get_futures_symbols()
+    return symbols
+
+
+def _filter_symbols(
+        symbols: list[FuturesSymbol],
+        btc_trades_24h: int
+) -> list[FuturesSymbol]:
     from datetime import datetime, timezone
 
     now = datetime.now(tz=timezone.utc)
@@ -52,108 +62,29 @@ def filter_symbols(symbols: list[FuturesSymbol], btc_trades_24h: int) -> list[Fu
     return filtered
 
 
-def initialize_exchange() -> Exchange:
-    api_key = os.getenv("API_KEY", None)
-    api_secret = os.getenv("API_SECRET", None)
-    return build_exchange(api_key, api_secret)
-
-
-def initialize_notifier() -> Notifier:
-    is_notifier_enabled = cfg.IS_NOTIFIER_ENABLED
-    event_token = os.getenv("TELEGRAM_EVENT_TOKEN", None)
-    order_token = os.getenv("TELEGRAM_ORDER_TOKEN", None)
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", None)
-    return build_notifier(is_notifier_enabled, event_token, order_token, chat_id)
-
-
-def fetch_symbols(exchange: Exchange) -> list[FuturesSymbol]:
-    symbols = exchange.get_futures_symbols()
-    return symbols
-
-
-def fetch_filtered_symbols(exchange: Exchange) -> list[FuturesSymbol]:
-    symbols = fetch_symbols(exchange)
+def _fetch_filtered_symbols(exchange: Exchange) -> list[FuturesSymbol]:
+    symbols = _fetch_symbols(exchange)
     btc_trades_24h = next((s.trades_24h for s in symbols if s.symbol.startswith("BTC")), 0)
-    filtered_symbols = filter_symbols(symbols, btc_trades_24h)
+    filtered_symbols = _filter_symbols(symbols, btc_trades_24h)
     log.i(f"Отобрано {len(filtered_symbols)} символов из {len(symbols)}.")
     return filtered_symbols
 
 
-def run_live(
-        exchange: Exchange,
-        notifier: Notifier,
-        filtered_symbols: list[FuturesSymbol],
-        tf_list: list[Timeframe]
-) -> None:
-    log.d("Запуск в живом режиме.")
-    if not filtered_symbols or not tf_list:
-        log.e("Не хватает данных для начала анализа.")
-        return
-
-    capture_state = CaptureState()
-    executor = ThreadPoolExecutor(max_workers=2)
-    handle_sig(executor)
-    notified_once: set[tuple[str, Timeframe, SetupType]] = set()
-
-    while True:
-        if not capture_state.symbol:
-            log.d("Запуск цикла анализа отобранных монет.")
-
-        active_symbols = [s for s in filtered_symbols if not capture_state.symbol or capture_state.symbol == s.symbol]
-        for symbol in active_symbols:
-            for timeframe in tf_list:
-                bars = exchange.get_ohlcv(symbol.symbol, timeframe, cfg.OHLCV_LIMIT)
-                setup = detect_setup(bars)
-                if setup is None:
-                    if capture_state.symbol == symbol.symbol:
-                        capture_state.symbol = None
-                    continue
-
-                if setup.type == SetupType.CAPTURE:
-                    if capture_state.symbol is None:
-                        capture_state.symbol = symbol.symbol
-                    key = (symbol.symbol, timeframe, setup.type)
-                    if key not in notified_once:
-                        notified_once.add(key)
-                        message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
-                        executor.submit(notifier.notify, NotificationType.EVENT, message)
-                elif setup.type == SetupType.ORDER:
-                    message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
-                    log.i(message)
-                    # TODO Открытие позиции на бирже.
-                    # TODO Создание изображения для уведомления.
-                    executor.submit(notifier.notify, NotificationType.ORDER, message)
-                    capture_state.symbol = None
-
-
-def run_test_market(exchange: Exchange, symbols: list[FuturesSymbol]) -> None:
-    # TODO Реализовать позже.
-    return None
-
-
-def run_test_symbol(
-        exchange: Exchange,
-        symbol: str,
-        timeframe: Timeframe,
-        limit: int,
-        end: datetime,
-) -> None:
-    log.d(f"Запуск тестирования {symbol} на {timeframe.tf}.")
-    bars = exchange.get_ohlcv(symbol, timeframe, limit, end)
+# endregion
 
 def main() -> None:
     load_dotenv()
-    exchange = initialize_exchange()
+    exchange = _initialize_exchange()
     tfs = cfg.TFS
     mode: Mode = cfg.MODE
     match mode:
         case Live():
-            notifier = initialize_notifier()
-            filtered_symbols = fetch_filtered_symbols(exchange)
+            notifier = _initialize_notifier()
+            filtered_symbols = _fetch_filtered_symbols(exchange)
             run_live(exchange, notifier, filtered_symbols, tfs)
 
         case TestMarket():
-            symbols = fetch_symbols(exchange)
+            symbols = _fetch_symbols(exchange)
             run_test_market(exchange, symbols, tfs)
 
         case TestSymbol(symbol=symbol, timeframe=timeframe, limit=limit, end=end):

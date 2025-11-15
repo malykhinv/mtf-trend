@@ -14,7 +14,11 @@ from crypto_screener.utils.extractors import extract_float, extract_int
 
 
 class Bybit(Exchange):
-    def __init__(self, api_key: str, api_secret: str):
+    def __init__(
+            self,
+            api_key: str,
+            api_secret: str
+    ):
         self._client = ccxt.bybit(
             {
                 "apiKey": api_key,
@@ -67,7 +71,12 @@ class Bybit(Exchange):
             )
         return symbols
 
-    def get_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int, end: Optional[datetime]) -> list[Bar]:
-        raw = self._client.fetch_ohlcv(symbol, timeframe=timeframe.tf, limit=limit)
+    def get_ohlcv(
+            self,
+            symbol: str,
+            timeframe: Timeframe,
+            limit: int,
+            end: Optional[datetime] = None
+    ) -> list[Bar]:
+        raw = self._client.fetch_ohlcv(symbol=symbol, timeframe=timeframe.tf, limit=limit)
         return map_ohlcv(raw)
-

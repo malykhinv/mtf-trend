@@ -5,8 +5,9 @@ from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
+# region Private
 @dataclass
-class SwingDetectionConfig:
+class _SwingDetectionConfig:
     window: int
     atr_multiplier: float
     atr_window: int
@@ -14,30 +15,13 @@ class SwingDetectionConfig:
 
 
 _SWING_PARAMS = {
-    Timeframe.M1: SwingDetectionConfig(window=4, atr_multiplier=2.4, atr_window=50, open_lag=5),
-    Timeframe.M5: SwingDetectionConfig(window=3, atr_multiplier=2.0, atr_window=40, open_lag=4),
-    Timeframe.M15: SwingDetectionConfig(window=3, atr_multiplier=1.6, atr_window=30, open_lag=3),
-    Timeframe.M30: SwingDetectionConfig(window=2, atr_multiplier=1.4, atr_window=30, open_lag=2),
-    Timeframe.H1: SwingDetectionConfig(window=2, atr_multiplier=1.2, atr_window=20, open_lag=1),
-    Timeframe.H4: SwingDetectionConfig(window=2, atr_multiplier=1.0, atr_window=14, open_lag=1),
+    Timeframe.M1: _SwingDetectionConfig(window=4, atr_multiplier=2.4, atr_window=50, open_lag=5),
+    Timeframe.M5: _SwingDetectionConfig(window=3, atr_multiplier=2.0, atr_window=40, open_lag=4),
+    Timeframe.M15: _SwingDetectionConfig(window=3, atr_multiplier=1.6, atr_window=30, open_lag=3),
+    Timeframe.M30: _SwingDetectionConfig(window=2, atr_multiplier=1.4, atr_window=30, open_lag=2),
+    Timeframe.H1: _SwingDetectionConfig(window=2, atr_multiplier=1.2, atr_window=20, open_lag=1),
+    Timeframe.H4: _SwingDetectionConfig(window=2, atr_multiplier=1.0, atr_window=14, open_lag=1),
 }
-
-
-def add_swings(
-        bars: list[Bar],
-        timeframe: Timeframe,
-) -> list[Bar]:
-    config = _SWING_PARAMS.get(timeframe)
-    if config is None:
-        raise ValueError(f"Таймфрейм не поддерживается: {timeframe}.")
-
-    return _add_swings(
-        bars=bars,
-        window=config.window,
-        atr_mult=config.atr_multiplier,
-        atr_window=config.atr_window,
-        open_lag=config.open_lag,
-    )
 
 
 def _add_swings(
@@ -93,26 +77,6 @@ def _add_swings(
 
     filtered: list[tuple[int, SwingType, float]] = []
 
-    def _is_more_extreme(type: SwingType, new_price: float, old_price: float) -> bool:
-        if type == SwingType.LOW:
-            return new_price < old_price
-        else:
-            return new_price > old_price
-
-    def _get_move_threshold(
-            min_move_series: list[float | None],
-            idx1: int,
-            idx2: int,
-    ) -> float | None:
-        candidates_thresholds: list[float] = []
-        for idx in (idx1, idx2):
-            v = min_move_series[idx]
-            if v is not None and v > 0:
-                candidates_thresholds.append(v)
-        if not candidates_thresholds:
-            return None
-        return max(candidates_thresholds)
-
     for idx, swing_type, price in candidates:
         if not filtered:
             filtered.append((idx, swing_type, price))
@@ -163,6 +127,32 @@ def _add_swings(
     return enriched
 
 
+def _is_more_extreme(
+        swing_type: SwingType,
+        new_price: float,
+        old_price: float
+) -> bool:
+    if swing_type == SwingType.LOW:
+        return new_price < old_price
+    else:
+        return new_price > old_price
+
+
+def _get_move_threshold(
+        min_move_series: list[float | None],
+        idx1: int,
+        idx2: int,
+) -> float | None:
+    candidates_thresholds: list[float] = []
+    for idx in (idx1, idx2):
+        v = min_move_series[idx]
+        if v is not None and v > 0:
+            candidates_thresholds.append(v)
+    if not candidates_thresholds:
+        return None
+    return max(candidates_thresholds)
+
+
 def _compute_min_move_series(
         bars: list[Bar],
         atr_mult: float,
@@ -204,11 +194,32 @@ def _compute_min_move_series(
     return min_move
 
 
-
-def _is_swing_open(price: float, future_bars: list[Bar]) -> bool:
+def _is_swing_open(
+        price: float,
+        future_bars: list[Bar]
+) -> bool:
     for bar in future_bars:
         body_low = min(bar.open, bar.close)
         body_high = max(bar.open, bar.close)
         if body_low <= price <= body_high:
             return False
     return True
+
+
+# endregion
+
+def add_swings(
+        bars: list[Bar],
+        timeframe: Timeframe,
+) -> list[Bar]:
+    config = _SWING_PARAMS.get(timeframe)
+    if config is None:
+        raise ValueError(f"Таймфрейм не поддерживается: {timeframe}.")
+
+    return _add_swings(
+        bars=bars,
+        window=config.window,
+        atr_mult=config.atr_multiplier,
+        atr_window=config.atr_window,
+        open_lag=config.open_lag,
+    )

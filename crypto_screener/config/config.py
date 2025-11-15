@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import List
 from zoneinfo import ZoneInfo
 
 from crypto_screener.domain.models.mode import Live, Mode
@@ -12,7 +11,7 @@ class AppConfig:
 
     TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
-    TFS: List[Timeframe] = field(default_factory=lambda: [Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5])
+    TFS: list[Timeframe] = field(default_factory=lambda: [Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5])
 
     IS_NOTIFIER_ENABLED: bool = True
 
