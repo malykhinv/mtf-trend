@@ -10,7 +10,7 @@ from crypto_screener.data.notifiers.log import LogNotifier
 from crypto_screener.data.notifiers.telegram import TgNotifier
 from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.capture_state import CaptureState
-from crypto_screener.domain.models.mode import Mode
+from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol
 from crypto_screener.domain.models.setup import SetupType
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Notifier, NotificationType
@@ -125,22 +125,37 @@ def run_live(
                     capture_state.symbol = None
 
 
-def run_backtest(exchange: Exchange, symbols: list[FuturesSymbol]) -> None:
+def run_test_market(exchange: Exchange, symbols: list[FuturesSymbol]) -> None:
     # TODO Реализовать позже.
     return None
+
+
+def run_test_symbol(exchange: Exchange, mode: TestSymbol, tf_list: list[Timeframe]) -> None:
+    log.d(
+        "Запуск тестирования символа %s до %s с лимитом %s записей.",
+        mode.symbol.symbol,
+        mode.end.isoformat(),
+        mode.limit,
+    )
+    for timeframe in tf_list:
+        bars = exchange.get_ohlcv(mode.symbol.symbol, timeframe, mode.limit)
+        log.d("Получено %d баров для %s на %s.", len(bars), mode.symbol.symbol, timeframe.tf)
+
 
 def main() -> None:
     load_dotenv()
     exchange = initialize_exchange()
     tfs = cfg.TFS
-    mode = cfg.MODE
-    if mode == Mode.LIVE:
+    mode: Mode = cfg.MODE
+    if isinstance(mode, Live):
         notifier = initialize_notifier()
         filtered_symbols = fetch_filtered_symbols(exchange)
         run_live(exchange, notifier, filtered_symbols, tfs)
-    elif mode == Mode.BACKTEST:
+    elif isinstance(mode, TestMarket):
         symbols = fetch_symbols(exchange)
-        run_backtest(exchange, symbols)
+        run_test_market(exchange, symbols)
+    elif isinstance(mode, TestSymbol):
+        run_test_symbol(exchange, mode, tfs)
     else:
         log.e(f"Режим {mode} не предусмотрен.")
 

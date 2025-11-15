@@ -2,13 +2,13 @@ from dataclasses import dataclass, field
 from typing import List
 from zoneinfo import ZoneInfo
 
-from crypto_screener.domain.models.mode import Mode
+from crypto_screener.domain.models.mode import Live, Mode
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
 @dataclass(frozen=True)
 class AppConfig:
-    MODE: Mode = Mode.LIVE
+    MODE: Mode = field(default_factory=Live)
 
     TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
