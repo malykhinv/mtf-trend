@@ -1,8 +1,10 @@
+from distutils.command.install import main_key
 from typing import Optional
 
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.setup import Setup
+from crypto_screener.domain.models.swing import SwingType, Swing
 
 
 # region Private
@@ -67,6 +69,53 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
         return []
 
     return bars[best_idx:]
+
+
+def _get_first_open_swing(
+        bars: list[Bar],
+        swing_type: SwingType,
+        start_idx: int = 0,
+) -> tuple[int, Swing] | None:
+    for idx in range(start_idx, len(bars)):
+        swing = bars[idx].swing
+        if swing is None:
+            continue
+        if not swing.is_open:
+            continue
+        if swing.type != swing_type:
+            continue
+        return idx, swing
+    return None
+
+
+def _check_if_has_dump(bars: list[Bar]) -> bool:
+    if not bars:
+        return False
+
+    first_low = _get_first_open_swing(bars, SwingType.LOW)
+    if first_low is None:
+        return False
+    first_low_idx, first_low_swing = first_low
+
+    main_high = _get_first_open_swing(bars, SwingType.HIGH, start_idx=first_low_idx + 1)
+    if main_high is None:
+        return False
+    main_high_idx, main_high_swing = main_high
+
+    retrace_low = _get_first_open_swing(bars, SwingType.LOW, start_idx=main_high_idx + 1)
+    if retrace_low is None:
+        return False
+    _, retrace_low_swing = retrace_low
+
+    rise = main_high_swing.price - first_low_swing.price
+    if rise <= 0:
+        return False
+
+    retrace = main_high_swing.price - retrace_low_swing.price
+    if retrace < 0:
+        retrace = 0.0
+
+    return retrace <= rise * cfg.RETRACE_RATIO_MAX
 
 
 # endregion

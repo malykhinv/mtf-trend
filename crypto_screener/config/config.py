@@ -25,6 +25,7 @@ class AppConfig:
 
     HIGH_VOLUME_THRESHOLD: int = 5
     HIGH_VOLUME_FRACTION_MIN: float = 0.5
+    RETRACE_RATIO_MAX: float = 0.5
     CASCADE_LENGTH_MIN: int = 3
     RESISTANCE_COUNT_MAX: int = 1
 
