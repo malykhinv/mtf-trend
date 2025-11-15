@@ -23,5 +23,10 @@ class AppConfig:
     TRADES_24H_MIN: int = 1_000_000
     TRADES_24H_BTC_RATIO: float = 0.5
 
+    HIGH_VOLUME_THRESHOLD: int = 5
+    HIGH_VOLUME_FRACTION_MIN: float = 0.5
+    CASCADE_LENGTH_MIN: int = 3
+    RESISTANCE_COUNT_MAX: int = 1
+
 
 cfg = AppConfig()

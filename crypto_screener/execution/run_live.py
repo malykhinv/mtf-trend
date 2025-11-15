@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange, FuturesSymbol
-from crypto_screener.domain.models.setup import SetupType
+from crypto_screener.domain.models.setup import Setup
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.domain.setup_detector import detect_setup
@@ -25,7 +25,7 @@ def run_live(
     capture_state = CaptureState()
     executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(executor)
-    notified_once: set[tuple[str, Timeframe, SetupType]] = set()
+    notified_once: set[tuple[str, Timeframe, Setup]] = set()
 
     while True:
         if not capture_state.symbol:
@@ -41,15 +41,15 @@ def run_live(
                         capture_state.symbol = None
                     continue
 
-                if setup.type == SetupType.CAPTURE:
+                if setup == Setup.CAPTURE:
                     if capture_state.symbol is None:
                         capture_state.symbol = symbol.symbol
-                    key = (symbol.symbol, timeframe, setup.type)
+                    key = (symbol.symbol, timeframe, setup)
                     if key not in notified_once:
                         notified_once.add(key)
                         message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
                         executor.submit(notifier.notify, NotificationType.EVENT, message)
-                elif setup.type == SetupType.ORDER:
+                elif setup == Setup.ORDER:
                     message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                     log.i(message)
                     # TODO Открытие позиции на бирже.
