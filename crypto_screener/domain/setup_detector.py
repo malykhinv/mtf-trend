@@ -92,17 +92,17 @@ def _check_if_has_dump(bars: list[Bar]) -> bool:
     if not bars:
         return False
 
-    first_low = _get_first_open_swing(bars, SwingType.LOW)
+    first_low = _get_first_open_swing(bars, swing_type=SwingType.LOW)
     if first_low is None:
         return False
     first_low_idx, first_low_swing = first_low
 
-    main_high = _get_first_open_swing(bars, SwingType.HIGH, start_idx=first_low_idx + 1)
+    main_high = _get_first_open_swing(bars, swing_type=SwingType.HIGH, start_idx=first_low_idx + 1)
     if main_high is None:
         return False
     main_high_idx, main_high_swing = main_high
 
-    retrace_low = _get_first_open_swing(bars, SwingType.LOW, start_idx=main_high_idx + 1)
+    retrace_low = _get_first_open_swing(bars, swing_type=SwingType.LOW, start_idx=main_high_idx + 1)
     if retrace_low is None:
         return False
     _, retrace_low_swing = retrace_low
@@ -117,6 +117,14 @@ def _check_if_has_dump(bars: list[Bar]) -> bool:
 
     return retrace <= rise * cfg.RETRACE_RATIO_MAX
 
+def _get_cascade_long(bars: list[Bar]) -> list[Swing]:
+    cascade = []
+    main_high = _get_first_open_swing(bars, swing_type=SwingType.HIGH)
+    if main_high is None:
+        return cascade
+    main_high_idx, main_high_swing = main_high
+    # TODO
+    return cascade
 
 # endregion
 
