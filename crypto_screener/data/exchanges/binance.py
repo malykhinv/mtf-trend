@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Iterable, Optional
 
 import ccxt  # type: ignore
 
@@ -70,7 +70,7 @@ class Binance(Exchange):
             )
         return symbols
 
-    def get_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Bar]:
+    def get_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int, end: Optional[datetime]) -> list[Bar]:
         raw = self._client.fetch_ohlcv(symbol, timeframe=timeframe.tf, limit=limit)
         return map_ohlcv(raw)
 

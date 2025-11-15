@@ -1,28 +1,25 @@
-from __future__ import annotations
-
-from abc import ABC
 from dataclasses import dataclass
 from datetime import datetime
 
-from crypto_screener.domain.exchange import FuturesSymbol
-
-
-class Mode(ABC):
-    """Base class for application modes."""
-
-
-class Live(Mode):
-    """Run application in live monitoring mode."""
-
-
-class TestMarket(Mode):
-    """Run application in market-wide testing mode."""
+from crypto_screener.domain.models.timeframe import Timeframe
 
 
 @dataclass(frozen=True)
-class TestSymbol(Mode):
-    """Run application against a single symbol with custom parameters."""
+class Live:
+    pass
 
-    symbol: FuturesSymbol
-    end: datetime
+
+@dataclass(frozen=True)
+class TestMarket:
+    pass
+
+
+@dataclass(frozen=True)
+class TestSymbol:
+    symbol: str
+    timeframe: Timeframe
     limit: int
+    end: datetime
+
+
+Mode = Live | TestMarket | TestSymbol

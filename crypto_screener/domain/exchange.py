@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -20,5 +21,5 @@ class Exchange(ABC):
         ...
 
     @abstractmethod
-    def get_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Bar]:
+    def get_ohlcv(self, symbol: str, timeframe: Timeframe, limit: int, end: Optional[datetime]) -> list[Bar]:
         ...

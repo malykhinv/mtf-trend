@@ -1,5 +1,6 @@
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -8,8 +9,8 @@ from crypto_screener.config.config import cfg
 from crypto_screener.data.exchanges.binance import Binance
 from crypto_screener.data.notifiers.log import LogNotifier
 from crypto_screener.data.notifiers.telegram import TgNotifier
-from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.capture_state import CaptureState
+from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol
 from crypto_screener.domain.models.setup import SetupType
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -130,34 +131,37 @@ def run_test_market(exchange: Exchange, symbols: list[FuturesSymbol]) -> None:
     return None
 
 
-def run_test_symbol(exchange: Exchange, mode: TestSymbol, tf_list: list[Timeframe]) -> None:
-    log.d(
-        "Запуск тестирования символа %s до %s с лимитом %s записей.",
-        mode.symbol.symbol,
-        mode.end.isoformat(),
-        mode.limit,
-    )
-    for timeframe in tf_list:
-        bars = exchange.get_ohlcv(mode.symbol.symbol, timeframe, mode.limit)
-        log.d("Получено %d баров для %s на %s.", len(bars), mode.symbol.symbol, timeframe.tf)
-
+def run_test_symbol(
+        exchange: Exchange,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int,
+        end: datetime,
+) -> None:
+    log.d(f"Запуск тестирования {symbol} на {timeframe.tf}.")
+    bars = exchange.get_ohlcv(symbol, timeframe, limit, end)
 
 def main() -> None:
     load_dotenv()
     exchange = initialize_exchange()
     tfs = cfg.TFS
     mode: Mode = cfg.MODE
-    if isinstance(mode, Live):
-        notifier = initialize_notifier()
-        filtered_symbols = fetch_filtered_symbols(exchange)
-        run_live(exchange, notifier, filtered_symbols, tfs)
-    elif isinstance(mode, TestMarket):
-        symbols = fetch_symbols(exchange)
-        run_test_market(exchange, symbols)
-    elif isinstance(mode, TestSymbol):
-        run_test_symbol(exchange, mode, tfs)
-    else:
-        log.e(f"Режим {mode} не предусмотрен.")
+    match mode:
+        case Live():
+            notifier = initialize_notifier()
+            filtered_symbols = fetch_filtered_symbols(exchange)
+            run_live(exchange, notifier, filtered_symbols, tfs)
+
+        case TestMarket():
+            symbols = fetch_symbols(exchange)
+            run_test_market(exchange, symbols, tfs)
+
+        case TestSymbol(symbol=symbol, timeframe=timeframe, limit=limit, end=end):
+            run_test_symbol(exchange, symbol, timeframe, limit, end)
+
+        case _:
+            # noinspection PyUnreachableCode
+            raise ValueError(f"Режим {mode} не предусмотрен.")
 
 
 if __name__ == "__main__":
