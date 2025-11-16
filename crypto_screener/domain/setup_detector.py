@@ -112,9 +112,40 @@ def _get_first_open_swing_indexed(
     return None
 
 
-def _get_cascade_long(swings: list[Swing], length_min: int, range_max: float) -> list[Swing]:
+def _get_cascade(swings: list[Swing], length_min: int, range_max: float) -> list[Swing]:
     cascade = []
-    # TODO
+    if not swings or length_min <= 0 or range_max < 0:
+        return cascade
+
+    best_start = -1
+    best_end = -1
+
+    for start_idx in range(len(swings)):
+        min_price = float("inf")
+        max_price = float("-inf")
+        for end_idx in range(start_idx, len(swings)):
+            price = swings[end_idx].price
+            if price < min_price:
+                min_price = price
+            if price > max_price:
+                max_price = price
+
+            if max_price - min_price > range_max:
+                break
+
+            current_length = end_idx - start_idx + 1
+            if current_length < length_min:
+                continue
+
+            best_length = best_end - best_start + 1 if best_start != -1 else 0
+            if current_length > best_length or (current_length == best_length and (best_start == -1 or start_idx < best_start)):
+                best_start = start_idx
+                best_end = end_idx
+
+    if best_start == -1:
+        return cascade
+
+    cascade = swings[best_start:best_end + 1]
     return cascade
 
 
@@ -175,7 +206,7 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
     filter_price = correction_low + retrace * cfg.CASCADE_LONG_RETRACE_RATIO_MIN
     open_high_swings = _filter_by_price(open_high_swings, SwingType.HIGH, filter_price)
     cascade_range_max = retrace * cfg.CASCADE_RANGE_RATIO_MAX
-    cascade_long = _get_cascade_long(open_high_swings, cfg.CASCADE_LENGTH_MIN, cascade_range_max)
+    cascade_long = _get_cascade(open_high_swings, cfg.CASCADE_LENGTH_MIN, cascade_range_max)
     if not cascade_long:
         return setup
 
