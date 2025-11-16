@@ -73,13 +73,30 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
 
 
 def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
-    main_low = _get_first_open_swing(bars, swing_type=SwingType.LOW)
+    main_low = _get_first_open_swing_indexed(bars, SwingType.LOW)
     main_low_idx, _ = main_low
-    main_high = _get_first_open_swing(bars[main_low_idx + 1:], swing_type=SwingType.HIGH)
+    main_high = _get_first_open_swing_indexed(bars[main_low_idx + 1:], SwingType.HIGH)
     return [main_low, main_high]
 
 
-def _get_first_open_swing(
+def _get_open_swings(
+        bars: list[Bar],
+        swing_type: SwingType,
+) -> list[Swing] | None:
+    swings = []
+    for idx in range(0, len(bars)):
+        swing = bars[idx].swing
+        if swing is None:
+            continue
+        if not swing.is_open:
+            continue
+        if swing.type != swing_type:
+            continue
+        swings.append(swing)
+    return swings
+
+
+def _get_first_open_swing_indexed(
         bars: list[Bar],
         swing_type: SwingType,
 ) -> tuple[int, Swing] | None:
@@ -95,14 +112,27 @@ def _get_first_open_swing(
     return None
 
 
-def _get_cascade_long(bars: list[Bar]) -> list[Swing]:
+def _get_cascade_long(swings: list[Swing], length_min: int, range_max: float) -> list[Swing]:
     cascade = []
-    main_high = _get_first_open_swing(bars, swing_type=SwingType.HIGH)
-    if main_high is None:
-        return cascade
-    main_high_idx, main_high_swing = main_high
     # TODO
     return cascade
+
+
+def _filter_by_price(swings: list[Swing], swing_type: SwingType, price: float) -> list[Swing]:
+    filtered = []
+    for swing in swings:
+        if swing.type != swing_type:
+            continue
+        match swing.type:
+            case SwingType.HIGH:
+                if swing.price > price:
+                    filtered.append(swing)
+
+            case SwingType.LOW:
+                if swing.price < price:
+                    filtered.append(swing)
+
+    return filtered
 
 
 # endregion
@@ -110,9 +140,11 @@ def _get_cascade_long(bars: list[Bar]) -> list[Swing]:
 
 def detect_setup(bars: list[Bar]) -> Setup | None:
     setup = None
+
+    # Анализ повышения объемов.
     bars = _trim_by_volume(bars)
     if not bars:
-        return None
+        return setup
 
     # Анализ роста.
     main_low, main_high = _get_main_rising_swings_indexed(bars)
@@ -121,30 +153,34 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
     _, main_low_swing = main_low
     main_high_index, main_high_swing = main_high
     rise = main_high_swing.price - main_low_swing.price
-    if rise <= 0:
+    rise_pct = 100 * rise / main_low_swing.price
+    is_rise_valid = rise > 0 and rise_pct >= cfg.PRICE_RISE_PCT_MIN
+    if not is_rise_valid:
         return setup
 
     # Анализ коррекции.
     correction_bars = bars[main_high_index + 1:]
-    retrace_low = _get_first_open_swing(correction_bars, swing_type=SwingType.LOW)
-    if not retrace_low:
+    correction_low = _get_first_open_swing_indexed(correction_bars, SwingType.LOW)
+    if not correction_low:
         return setup
-    _, retrace_low_swing = retrace_low
+    _, retrace_low_swing = correction_low
     retrace = main_high_swing.price - retrace_low_swing.price
-    if retrace <= 0:
-        return setup
-    has_dump = retrace >= rise * cfg.RETRACE_RATIO_MAX
-    if has_dump:
+    retrace_ratio = retrace / rise
+    is_retrace_valid = retrace >= 0 and retrace_ratio <= cfg.RETRACE_RATIO_MAX
+    if not is_retrace_valid:
         return setup
 
     # Анализ лонгового каскада.
-    cascade_long = _get_cascade_long(correction_bars)
-    has_cascade_long = len(cascade_long) >= cfg.CASCADE_LENGTH_MIN
-    if not has_cascade_long:
+    open_high_swings = _get_open_swings(correction_bars, SwingType.HIGH)
+    filter_price = correction_low + retrace * cfg.CASCADE_LONG_RETRACE_RATIO_MIN
+    open_high_swings = _filter_by_price(open_high_swings, SwingType.HIGH, filter_price)
+    cascade_range_max = retrace * cfg.CASCADE_RANGE_RATIO_MAX
+    cascade_long = _get_cascade_long(open_high_swings, cfg.CASCADE_LENGTH_MIN, cascade_range_max)
+    if not cascade_long:
         return setup
 
     # Анализ сопротивления над каскадом.
-    resistance = _get_resistance(bars, cascade_long)
+    resistance = _get_resistance(correction_bars, cascade_long)
     has_resistance = len(resistance) > cfg.RESISTANCE_COUNT_MAX
     if has_resistance:
         return setup
@@ -152,13 +188,13 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
     setup = Setup.CAPTURE
 
     # Анализ поддержки под каскадом.
-    support = _get_support(bars)
+    support = _get_support(correction_bars)
     has_support = False
     if not has_support:
         return setup
 
     # Анализ пробоя лонгового каскада.
-    has_breakout_long = _check_if_has_breakout_high(bars, cascade_long)
+    has_breakout_long = _check_if_has_breakout_high(correction_bars, cascade_long)
     if not has_breakout_long:
         return setup
 
