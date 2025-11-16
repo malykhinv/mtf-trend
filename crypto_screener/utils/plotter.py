@@ -31,12 +31,12 @@ def _build_figure() -> tuple[Figure, Any]:
         visible=True,
         color=cfg.PLOT_GRID_COLOR,
         linestyle=":",
-        linewidth=0.6,
-        alpha=0.4
+        linewidth=cfg.PLOT_GRID_LINEWIDTH,
+        alpha=cfg.PLOT_GRID_ALPHA
     )
     for spine in ax.spines.values():
         spine.set_color(cfg.PLOT_GRID_COLOR)
-    ax.tick_params(colors="white", labelsize=9)
+    ax.tick_params(colors=cfg.PLOT_TICK_COLOR, labelsize=cfg.PLOT_TICK_LABELSIZE)
     return fig, ax
 
 
@@ -48,16 +48,22 @@ def _draw_candles(
 ):
     for bar, time_value in zip(bars, times):
         color = cfg.PLOT_COLOR_UP if bar.close >= bar.open else cfg.PLOT_COLOR_DOWN
-        ax.plot([time_value, time_value], [bar.low, bar.high], color=color, linewidth=1.1, zorder=1)
-        body_height = max(abs(bar.close - bar.open), 1e-5)
+        ax.plot(
+            [time_value, time_value],
+            [bar.low, bar.high],
+            color=color,
+            linewidth=cfg.PLOT_CANDLE_WICK_LINEWIDTH,
+            zorder=cfg.PLOT_CANDLE_WICK_ZORDER
+        )
+        body_height = max(abs(bar.close - bar.open), cfg.PLOT_CANDLE_BODY_MIN_HEIGHT)
         ax.add_patch(
             Rectangle(
-                xy=(time_value - width / 2, min(bar.open, bar.close)),
+                xy=(time_value - width * cfg.PLOT_CANDLE_BODY_X_OFFSET_RATIO, min(bar.open, bar.close)),
                 width=width,
                 height=body_height,
                 facecolor=color,
                 edgecolor=color,
-                zorder=2,
+                zorder=cfg.PLOT_CANDLE_BODY_ZORDER,
             )
         )
 
@@ -68,15 +74,21 @@ def _format_ax(
         min_price: float,
         max_price: float
 ):
-    pad = max((max_price - min_price) * 0.05, 1e-3)
+    pad = max((max_price - min_price) * cfg.PLOT_PRICE_PAD_RATIO, cfg.PLOT_PRICE_PAD_MIN)
     ax.set_ylim(min_price - pad, max_price + pad)
 
-    locator = mdates.AutoDateLocator(minticks=4, maxticks=8)
-    formatter = mdates.DateFormatter(cfg.PLOT_X_AXIS_TIME_FORMAT, tz=cfg.TIMEZONE)
+    locator = mdates.AutoDateLocator(
+        minticks=cfg.PLOT_X_AXIS_MINTICKS,
+        maxticks=cfg.PLOT_X_AXIS_MAXTICKS
+    )
+    formatter = mdates.DateFormatter(
+        fmt=cfg.PLOT_X_AXIS_TIME_FORMAT,
+        tz=cfg.TIMEZONE
+    )
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(formatter)
     for label in ax.get_xticklabels():
-        label.set_rotation(0)
+        label.set_rotation(cfg.PLOT_X_AXIS_LABEL_ROTATION)
 
     ax.yaxis.set_major_formatter(FuncFormatter(_format_price))
 
@@ -103,16 +115,17 @@ def _draw_swing_group(
             marker=marker,
             s=cfg.PLOT_SWING_MARKER_SIZE,
             color=color,
-            edgecolors="white",
-            linewidths=0.6,
-            alpha=0.85 if not swing.is_open else 0.55,
-            zorder=3,
+            linewidths=cfg.PLOT_SWING_MARKER_EDGE_LINEWIDTH,
+            alpha=cfg.PLOT_SWING_MARKER_ALPHA if not swing.is_open else cfg.PLOT_SWING_MARKER_OPEN_ALPHA,
+            edgecolors=cfg.PLOT_SWING_MARKER_EDGE_COLOR,
+            zorder=cfg.PLOT_SWING_ZORDER,
         )
 
 
 def _get_candle_width(times: list[float]) -> float:
-    if len(times) < 2:
-        return (1 / (24 * 60)) * cfg.PLOT_CANDLE_WIDTH_MULTIPLIER
+    if len(times) < cfg.PLOT_CANDLE_FALLBACK_MIN_TIMES:
+        minutes_ratio = cfg.PLOT_CANDLE_FALLBACK_INTERVAL_MINUTES / cfg.PLOT_MINUTES_IN_DAY
+        return minutes_ratio * cfg.PLOT_CANDLE_WIDTH_MULTIPLIER
     intervals = [times[i + 1] - times[i] for i in range(len(times) - 1)]
     avg_interval = sum(intervals) / len(intervals)
     return avg_interval * cfg.PLOT_CANDLE_WIDTH_MULTIPLIER
@@ -120,9 +133,9 @@ def _get_candle_width(times: list[float]) -> float:
 
 def _format_price(value: float) -> str:
     abs_value = abs(value)
-    if abs_value >= 100:
+    if abs_value >= cfg.PLOT_PRICE_HIGH_THRESHOLD:
         return f"{value:,.{cfg.PLOT_PRICE_DECIMALS_HIGH}f}"
-    if abs_value >= 1:
+    if abs_value >= cfg.PLOT_PRICE_MID_THRESHOLD:
         return f"{value:,.{cfg.PLOT_PRICE_DECIMALS_MID}f}"
     return f"{value:,.{cfg.PLOT_PRICE_DECIMALS_LOW}f}"
 
@@ -138,7 +151,11 @@ def _resolve_output_path(
 ) -> Path:
     base_dir = Path(cfg.PLOT_OUTPUT_DIR)
     base_dir.mkdir(parents=True, exist_ok=True)
-    safe_symbol = re.sub(r"[^A-Za-z0-9_-]+", "-", symbol).strip("-") or "asset"
+    safe_symbol = re.sub(
+        pattern=r"[^A-Za-z0-9_-]+",
+        repl="-",
+        string=symbol
+    ).strip("-") or cfg.PLOT_DEFAULT_SYMBOL
     filename = f"{safe_symbol}_{timeframe.tf}_{time:%Y%m%d_%H%M%S}.png"
     return base_dir / filename
 
@@ -164,7 +181,7 @@ def plot(
 
     min_price = min(bar.low for bar in bars)
     max_price = max(bar.high for bar in bars)
-    y_offset = max((max_price - min_price) * 0.015, 1e-4)
+    y_offset = max((max_price - min_price) * cfg.PLOT_Y_OFFSET_RATIO, cfg.PLOT_Y_OFFSET_MIN)
 
     _draw_candles(ax, bars, times, candle_width)
     _format_ax(ax, times, min_price, max_price)
@@ -197,8 +214,8 @@ def plot(
 
     ax.set_title(
         title=f"{symbol.upper()} • {timeframe.tf}",
-        color="white",
-        pad=12
+        color=cfg.PLOT_TITLE_COLOR,
+        pad=cfg.PLOT_TITLE_PAD
     )
 
     fig.tight_layout()

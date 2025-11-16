@@ -61,6 +61,8 @@ class AppConfig:
     PLOT_HEIGHT_INCHES: float = 6
     PLOT_DPI: int = 110
     # Цвета графика.
+    PLOT_TICK_COLOR: str = "white"
+    PLOT_TITLE_COLOR: str = "white"
     PLOT_COLOR_UP: str = "#078772"
     PLOT_COLOR_DOWN: str = "#d42f2f"
     PLOT_BACKGROUND_COLOR: str = "#0f0f0f"
@@ -69,15 +71,42 @@ class AppConfig:
     PLOT_CASCADE_SWING_COLOR: str = "#64b5f6"
     PLOT_RESISTANCE_SWING_COLOR: str = "#ef5350"
     PLOT_SUPPORT_SWING_COLOR: str = "#66bb6a"
-    # Размеры маркеров свингов.
+    # Маркеры свингов.
     PLOT_SWING_MARKER_SIZE: int = 35
-    # Ширина свечей.
+    PLOT_SWING_MARKER_EDGE_LINEWIDTH: float = 0.6
+    PLOT_SWING_MARKER_EDGE_COLOR: str = "white"
+    PLOT_SWING_MARKER_ALPHA: float = 0.85
+    PLOT_SWING_MARKER_OPEN_ALPHA: float = 0.55
+    PLOT_SWING_ZORDER: int = 3
+    # Размер и положение свечей.
     PLOT_CANDLE_WIDTH_MULTIPLIER: float = 0.6
+    PLOT_CANDLE_WICK_LINEWIDTH: float = 1.1
+    PLOT_CANDLE_BODY_MIN_HEIGHT: float = 1e-5
+    PLOT_CANDLE_BODY_X_OFFSET_RATIO: float = 0.5
+    PLOT_CANDLE_WICK_ZORDER: int = 1
+    PLOT_CANDLE_BODY_ZORDER: int = 2
+    PLOT_CANDLE_FALLBACK_MIN_TIMES: int = 2
+    PLOT_CANDLE_FALLBACK_INTERVAL_MINUTES: int = 1
+    PLOT_MINUTES_IN_DAY: int = 24 * 60
     # Форматирование осей.
     PLOT_X_AXIS_TIME_FORMAT: str = "%d %b %H:%M"
+    PLOT_X_AXIS_MINTICKS: int = 4
+    PLOT_X_AXIS_MAXTICKS: int = 8
+    PLOT_X_AXIS_LABEL_ROTATION: int = 0
+    PLOT_TICK_LABELSIZE: int = 9
+    PLOT_PRICE_PAD_RATIO: float = 0.05
+    PLOT_PRICE_PAD_MIN: float = 1e-3
+    PLOT_TITLE_PAD: int = 12
+    PLOT_GRID_LINEWIDTH: float = 0.6
+    PLOT_GRID_ALPHA: float = 0.4
+    PLOT_Y_OFFSET_RATIO: float = 0.015
+    PLOT_Y_OFFSET_MIN: float = 1e-4
     PLOT_PRICE_DECIMALS_HIGH: int = 2
     PLOT_PRICE_DECIMALS_MID: int = 4
     PLOT_PRICE_DECIMALS_LOW: int = 6
+    PLOT_PRICE_HIGH_THRESHOLD: float = 100
+    PLOT_PRICE_MID_THRESHOLD: float = 1
+    PLOT_DEFAULT_SYMBOL: str = "asset"
     # endregion
 
 
