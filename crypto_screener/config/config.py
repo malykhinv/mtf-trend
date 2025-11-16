@@ -25,15 +25,15 @@ _mode_test_market = TestMarket(
 )
 
 _mode_test_symbol = TestSymbol(
-    symbol='BTCUSDT',
-    timeframe=Timeframe.H1,
-    limit=1000,
+    symbol='KAIAUSDT',
+    timeframe=Timeframe.M15,
+    limit=500,
     end=datetime(
         year=2025,
-        month=11,
-        day=16,
-        hour=16,
-        minute=32,
+        month=6,
+        day=10,
+        hour=22,
+        minute=45,
         tzinfo=_timezone
     )
 )
@@ -47,7 +47,7 @@ class AppConfig:
     TIMEZONE: ZoneInfo = _timezone
 
     # Режим работы.
-    MODE: Mode = _mode_live
+    MODE: Mode = _mode_test_symbol
 
     # region Объем.
     # Минимальная длина окна для нахождения зоны повышенного объема.
