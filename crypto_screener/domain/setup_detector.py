@@ -1,5 +1,3 @@
-from distutils.command.install import main_key
-from email.contentmanager import maintype
 from typing import Optional
 
 from crypto_screener.config.config import cfg
@@ -74,8 +72,15 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
 
 def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
     main_low = _get_first_open_swing_indexed(bars, SwingType.LOW)
+    if not main_low:
+        return []
+    main_high = _get_first_open_swing_indexed(bars, SwingType.HIGH)
+    if not main_high:
+        return []
     main_low_idx, _ = main_low
-    main_high = _get_first_open_swing_indexed(bars[main_low_idx + 1:], SwingType.HIGH)
+    main_high_idx, _ = main_high
+    if main_high_idx <= main_low_idx:
+        return []
     return [main_low, main_high]
 
 
@@ -112,20 +117,17 @@ def _get_first_open_swing_indexed(
     return None
 
 
-def _filter_by_price(swings: list[Swing], swing_type: SwingType, price: float) -> list[Swing]:
+def _filter_by_price(
+        swings: list[Swing],
+        price_min: float,
+        price_max: float
+) -> list[Swing]:
     filtered = []
+    if price_min <= 0 or price_min >= price_max:
+        raise ValueError(f"Некорректные границы цены: {price_min}..{price_max}.")
     for swing in swings:
-        if swing.type != swing_type:
-            continue
-        match swing.type:
-            case SwingType.HIGH:
-                if swing.price > price:
-                    filtered.append(swing)
-
-            case SwingType.LOW:
-                if swing.price < price:
-                    filtered.append(swing)
-
+        if price_min <= swing.price >= price_max:
+            filtered.append(swing)
     return filtered
 
 
@@ -204,8 +206,9 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
 
     # Анализ лонгового каскада.
     open_high_swings = _get_open_swings(correction_bars, SwingType.HIGH)
-    cascade_filter_price = correction_low_swing.price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
-    open_high_swings = _filter_by_price(open_high_swings, SwingType.HIGH, cascade_filter_price)
+    cascade_price_min = correction_low_swing.price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
+    cascade_price_max = main_high_swing.price
+    open_high_swings = _filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
     cascade_range_max = retrace_range * cfg.CASCADE_RANGE_RATIO_MAX
     cascade_long = _get_cascade(open_high_swings, cfg.CASCADE_LENGTH_MIN, cascade_range_max)
     if not cascade_long:
@@ -213,8 +216,9 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
 
     # Анализ сопротивления над каскадом.
     resistance_price_min = max(cascade_long, key=lambda swing: swing.price).price
-    resistance = _filter_by_price(open_high_swings, SwingType.HIGH, resistance_price_min)
-    has_resistance = len(resistance) > cfg.RESISTANCE_COUNT_MAX
+    resistance_price_max = main_high_swing.price
+    resistance_swings = _filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
+    has_resistance = len(resistance_swings) > cfg.RESISTANCE_COUNT_MAX
     if has_resistance:
         return setup
 
@@ -224,8 +228,9 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
     initial_swing = cascade_long[0]
     consolidation_range = initial_swing.price - correction_low_swing.price
     open_low_swings = _get_open_swings(correction_bars, SwingType.LOW)
-    support_filter_price = correction_low_swing.price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
-    open_low_swings = _filter_by_price(open_low_swings, SwingType.LOW, support_filter_price)
+    support_price_min = correction_low_swing.price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
+    support_price_max = initial_swing.price
+    open_low_swings = _filter_by_price(open_low_swings, support_price_min, support_price_max)
     support = open_low_swings[-1] if open_low_swings else None
     has_support = support is not None
     if not has_support:
