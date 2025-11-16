@@ -123,6 +123,7 @@ def run_live(
                         if key not in notified_once:
                             notified_once.add(key)
                             message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
+                            # TODO Создание изображения для уведомления.
                             executor.submit(notifier.notify, NotificationType.EVENT, message)
 
                     # Найден торговый сетап.

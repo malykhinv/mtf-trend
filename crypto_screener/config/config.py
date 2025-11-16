@@ -39,8 +39,9 @@ class AppConfig:
     RESISTANCE_COUNT_MAX: int = 1
     # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
     SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.5
-    # Минимальное расстояние от ключевых цен до цены частичного закрытия.
+    # Минимальное расстояние от Entry и TP до PC при частичном закрытии позиции.
     PARTIAL_CLOSE_SIDE_PCT_MIN: float = 2.0
+    # Соотношение цены участков Entry-BE и Entry-PC при частичном закрытии позиции.
     BREAKEVEN_PARTIAL_CLOSE_RATIO: float = 0.5
 
 
