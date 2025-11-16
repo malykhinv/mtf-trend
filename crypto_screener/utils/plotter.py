@@ -12,7 +12,7 @@ import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import FuncFormatter
-
+from matplotlib.axes import Axes
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.swing import Swing, SwingType
@@ -21,10 +21,19 @@ from crypto_screener.domain.models.timeframe import Timeframe
 
 # region Private.
 def _build_figure() -> tuple[Figure, Any]:
-    fig, ax = plt.subplots(figsize=(cfg.PLOT_WIDTH_INCHES, cfg.PLOT_HEIGHT_INCHES), dpi=cfg.PLOT_DPI)
+    fig, ax = plt.subplots(
+        figsize=(cfg.PLOT_WIDTH_INCHES, cfg.PLOT_HEIGHT_INCHES),
+        dpi=cfg.PLOT_DPI
+    )
     fig.patch.set_facecolor(cfg.PLOT_BACKGROUND_COLOR)
     ax.set_facecolor(cfg.PLOT_BACKGROUND_COLOR)
-    ax.grid(True, color=cfg.PLOT_GRID_COLOR, linestyle=":", linewidth=0.6, alpha=0.4)
+    ax.grid(
+        visible=True,
+        color=cfg.PLOT_GRID_COLOR,
+        linestyle=":",
+        linewidth=0.6,
+        alpha=0.4
+    )
     for spine in ax.spines.values():
         spine.set_color(cfg.PLOT_GRID_COLOR)
     ax.tick_params(colors="white", labelsize=9)
@@ -32,7 +41,7 @@ def _build_figure() -> tuple[Figure, Any]:
 
 
 def _draw_candles(
-        ax,
+        ax: Axes,
         bars: list[Bar],
         times: list[float],
         width: float
@@ -54,7 +63,7 @@ def _draw_candles(
 
 
 def _format_ax(
-        ax,
+        ax: Axes,
         times: list[float],
         min_price: float,
         max_price: float
@@ -76,7 +85,7 @@ def _format_ax(
 
 
 def _draw_swing_group(
-        ax,
+        ax: Axes,
         swings: list[Swing],
         *,
         color: str,
@@ -153,45 +162,54 @@ def plot(
     times = [_datetime_to_mpl(bar.time) for bar in bars]
     candle_width = _get_candle_width(times)
 
-    min_price = min(b.low for b in bars)
-    max_price = max(b.high for b in bars)
+    min_price = min(bar.low for bar in bars)
+    max_price = max(bar.high for bar in bars)
     y_offset = max((max_price - min_price) * 0.015, 1e-4)
 
     _draw_candles(ax, bars, times, candle_width)
     _format_ax(ax, times, min_price, max_price)
 
     _draw_swing_group(
-        ax,
+        ax=ax,
         swings=cascade_swings,
         color=cfg.PLOT_CASCADE_SWING_COLOR,
         y_offset=y_offset
     )
     _draw_swing_group(
-        ax,
+        ax=ax,
         swings=resistance_swings,
         color=cfg.PLOT_RESISTANCE_SWING_COLOR,
         y_offset=y_offset
     )
     _draw_swing_group(
-        ax,
+        ax=ax,
         swings=support_swings,
         color=cfg.PLOT_SUPPORT_SWING_COLOR,
         y_offset=y_offset
     )
     if main_high_swing:
         _draw_swing_group(
-            ax,
+            ax=ax,
             swings=[main_high_swing],
             color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
             y_offset=y_offset
         )
 
-    ax.set_title(f"{symbol.upper()} • {timeframe.tf}", color="white", pad=12)
+    ax.set_title(
+        title=f"{symbol.upper()} • {timeframe.tf}",
+        color="white",
+        pad=12
+    )
 
     fig.tight_layout()
 
     output_path = _resolve_output_path(symbol, timeframe, bars[-1].time)
-    fig.savefig(output_path, facecolor=cfg.PLOT_BACKGROUND_COLOR, dpi=cfg.PLOT_DPI, bbox_inches="tight")
+    fig.savefig(
+        fname=output_path,
+        facecolor=cfg.PLOT_BACKGROUND_COLOR,
+        dpi=cfg.PLOT_DPI,
+        bbox_inches="tight"
+    )
     plt.close(fig)
 
     return output_path
