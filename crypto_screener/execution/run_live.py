@@ -10,7 +10,7 @@ from crypto_screener.utils.logger import log
 from crypto_screener.utils.signals import handle_sig
 
 
-# region Private
+# region Private.
 def _fetch_filtered_symbols(
         exchange: Exchange,
         listing_period_days: int,

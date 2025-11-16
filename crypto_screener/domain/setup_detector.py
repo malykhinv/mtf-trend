@@ -6,7 +6,7 @@ from crypto_screener.domain.models.setup import Setup, Capture, Buy
 from crypto_screener.domain.models.swing import SwingType, Swing
 
 
-# region Private
+# region Private.
 def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     length = len(bars)
     if length == 0:

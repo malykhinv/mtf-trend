@@ -11,7 +11,7 @@ def map_ohlcv(raw: list[list[float]]) -> list[Bar]:
         dt_local = dt_utc.astimezone(cfg.TIMEZONE)
         mapped.append(
             Bar(
-                ts=dt_local,
+                time=dt_local,
                 open=float(o),
                 high=float(h),
                 low=float(l),

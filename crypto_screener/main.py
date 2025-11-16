@@ -14,7 +14,7 @@ from crypto_screener.execution.run_test_market import run_test_market
 from crypto_screener.execution.run_test_symbol import run_test_symbol
 
 
-# region Private
+# region Private.
 def _initialize_exchange() -> Exchange:
     api_key = os.getenv("API_KEY", None)
     api_secret = os.getenv("API_SECRET", None)

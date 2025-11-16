@@ -5,7 +5,7 @@ from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
-# region Private
+# region Private.
 @dataclass
 class _SwingDetectionConfig:
     window: int
@@ -113,7 +113,7 @@ def _add_swings(
             future_bars = bars[idx + 1:]
         is_open = _is_swing_open(price, future_bars)
         swing_by_idx[idx] = Swing(
-            ts=bars[idx].ts,
+            time=bars[idx].time,
             price=price,
             type=swing_type,
             is_open=is_open,

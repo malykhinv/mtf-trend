@@ -10,7 +10,7 @@ class SwingType(Enum):
 
 @dataclass(frozen=True)
 class Swing:
-    ts: datetime
+    time: datetime
     price: float
     type: SwingType
     is_open: bool

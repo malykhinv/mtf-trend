@@ -7,7 +7,7 @@ from crypto_screener.domain.models.swing import Swing
 
 @dataclass(frozen=True)
 class Bar:
-    ts: datetime
+    time: datetime
     open: float
     high: float
     low: float

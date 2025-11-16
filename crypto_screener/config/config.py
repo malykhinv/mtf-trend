@@ -19,12 +19,17 @@ class AppConfig:
     )
     # Временная зона.
     TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
+
+    # region Объем.
     # Минимальная длина окна для нахождения зоны повышенного объема.
     VOLUME_TRIM_SIDE_BARS_MIN: int = 10
     # Порог изменения объема для нахождения зоны повышенного объема.
     HIGH_VOLUME_THRESHOLD: int = 5
     # Порог свечей с повышенным объемом в зоне повышенного объема.
     HIGH_VOLUME_FRACTION_MIN: float = 0.5
+    # endregion
+
+    # region Движение цены.
     # Рост цены на основных свингах в зоне повышенного объема.
     PRICE_RISE_PCT_MIN: float = 6.0
     # Соотношение глубины отката к росту.
@@ -39,10 +44,41 @@ class AppConfig:
     RESISTANCE_COUNT_MAX: int = 1
     # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
     SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.5
+    # endregion
+
+    # region Частичное закрытие позиции.
     # Минимальное расстояние от Entry и TP до PC при частичном закрытии позиции.
     PARTIAL_CLOSE_SIDE_PCT_MIN: float = 2.0
     # Соотношение цены участков Entry-BE и Entry-PC при частичном закрытии позиции.
     BREAKEVEN_PARTIAL_CLOSE_RATIO: float = 0.5
+    # endregion
+
+    # region Построение графиков.
+    # Папка для графиков.
+    PLOT_OUTPUT_DIR: str = ".generated/plot"
+    # Размер графика.
+    PLOT_WIDTH_INCHES: float = 12
+    PLOT_HEIGHT_INCHES: float = 6
+    PLOT_DPI: int = 110
+    # Цвета графика.
+    PLOT_COLOR_UP: str = "#078772"
+    PLOT_COLOR_DOWN: str = "#d42f2f"
+    PLOT_BACKGROUND_COLOR: str = "#0f0f0f"
+    PLOT_GRID_COLOR: str = "#2f2f2f"
+    PLOT_MAIN_HIGH_SWING_COLOR: str = "#ffe082"
+    PLOT_CASCADE_SWING_COLOR: str = "#64b5f6"
+    PLOT_RESISTANCE_SWING_COLOR: str = "#ef5350"
+    PLOT_SUPPORT_SWING_COLOR: str = "#66bb6a"
+    # Размеры маркеров свингов.
+    PLOT_SWING_MARKER_SIZE: int = 35
+    # Ширина свечей.
+    PLOT_CANDLE_WIDTH_MULTIPLIER: float = 0.6
+    # Форматирование осей.
+    PLOT_X_AXIS_TIME_FORMAT: str = "%d %b %H:%M"
+    PLOT_PRICE_DECIMALS_HIGH: int = 2
+    PLOT_PRICE_DECIMALS_MID: int = 4
+    PLOT_PRICE_DECIMALS_LOW: int = 6
+    # endregion
 
 
 cfg = AppConfig()
