@@ -225,8 +225,6 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
     if has_resistance:
         return setup
 
-    setup = Setup.CAPTURE
-
     # Анализ поддержки под каскадом.
     initial_swing = cascade_long[0]
     consolidation_range = initial_swing.price - correction_low_swing.price
@@ -234,18 +232,36 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
     support_price_min = correction_low_swing.price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
     support_price_max = initial_swing.price
     open_low_swings = _filter_by_price(open_low_swings, support_price_min, support_price_max)
-    support = open_low_swings[-1] if open_low_swings else None
-    has_support = support is not None
+    support_swing = open_low_swings[-1] if open_low_swings else None
+    has_support = support_swing is not None
     if not has_support:
         return setup
 
+    # Анализ пробоя поддержки под каскадом.
+    current_bar = correction_bars[-1]
+    current_price = current_bar.close
+    has_breakout_short = current_price < support_swing.price
+    if has_breakout_short:
+        return setup
+
+    # Анализ риска и вознаграждения.
+    loss_price = support_swing.price
+    loss_pct = 100 * (loss_price - current_price) / loss_price
+    profit_pct = 100 * (main_high_swing.price - current_price) / current_price
+    rr = abs(loss_pct / profit_pct)
+    if rr < cfg.RR_MIN:
+        return setup
+
+    # Проторговка после отката с лонговым каскадом.
+    setup = Setup.CAPTURE
+
     # Анализ пробоя лонгового каскада.
     target_swing = cascade_long[-1]
-    current_bar = correction_bars[-1]
-    has_breakout_long = current_bar.close > target_swing.price
+    has_breakout_long = current_price > target_swing.price
     if not has_breakout_long:
         return setup
 
-    # Пробой каскада.
+    # Пробой лонгового каскада.
     setup = Setup.ORDER
+
     return setup
