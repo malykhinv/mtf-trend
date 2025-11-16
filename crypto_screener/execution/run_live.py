@@ -109,10 +109,13 @@ def run_live(
                 bars = exchange.get_ohlcv(symbol.symbol, timeframe, limit)
                 setup = detect_setup(bars)
                 match setup:
+                    # Сетап не найден.
                     case None:
                         if capture_state.symbol == symbol.symbol:
                             capture_state.symbol = None
                         continue
+
+                    # Найден базовый сетап.
                     case Capture():
                         if capture_state.symbol is None:
                             capture_state.symbol = symbol.symbol
@@ -121,6 +124,8 @@ def run_live(
                             notified_once.add(key)
                             message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
                             executor.submit(notifier.notify, NotificationType.EVENT, message)
+
+                    # Найден торговый сетап.
                     case Buy(
                         take_profit_price=take_profit_price,
                         stop_loss_price=stop_loss_price,

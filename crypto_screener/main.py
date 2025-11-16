@@ -38,6 +38,7 @@ def main() -> None:
     exchange = _initialize_exchange()
     mode: Mode = cfg.MODE
     match mode:
+        # Работа с актуальным рынком.
         case Live(
             timeframes=timeframes,
             limit=limit,
@@ -60,12 +61,14 @@ def main() -> None:
                 trades_24h_btc_ratio_min
             )
 
+        # Тест истории для всего рынка.
         case TestMarket(
             timeframes=timeframes,
             limit=limit
         ):
             run_test_market(exchange, timeframes, limit)
 
+        # Тест символа в определенный момент.
         case TestSymbol(
             symbol=symbol,
             timeframe=timeframe,
