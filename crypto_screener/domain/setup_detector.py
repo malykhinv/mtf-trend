@@ -4,6 +4,8 @@ from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.setup import Setup, Capture, Buy
 from crypto_screener.domain.models.swing import SwingType, Swing
+from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.swing_detector import add_swings
 
 
 # region Private.
@@ -172,13 +174,18 @@ def _get_cascade(swings: list[Swing], length_min: int, range_max: float) -> list
 # endregion
 
 
-def detect_setup(bars: list[Bar]) -> Setup | None:
+def detect_setup(
+        bars: list[Bar],
+        timeframe: Timeframe
+) -> Setup | None:
     setup = None
 
     # Анализ повышения объемов.
     bars = _trim_by_volume(bars)
     if not bars:
         return setup
+
+    bars = add_swings(bars, timeframe)
 
     # Анализ роста.
     main_rising_swings = _get_main_rising_swings_indexed(bars)

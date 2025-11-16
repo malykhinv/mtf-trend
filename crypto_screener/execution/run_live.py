@@ -141,7 +141,7 @@ def run_live(
         for symbol in active_symbols:
             for timeframe in timeframes:
                 bars = exchange.get_ohlcv(symbol.symbol, timeframe, limit)
-                setup = detect_setup(bars)
+                setup = detect_setup(bars, timeframe)
                 match setup:
                     # Сетап не найден.
                     case None:

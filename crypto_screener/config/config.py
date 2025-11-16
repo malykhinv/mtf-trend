@@ -64,7 +64,7 @@ class AppConfig:
     # Соотношение глубины отката к росту.
     RETRACE_RATIO_MAX: float = 0.5
     # Минимальный уровень отката (снизу-вверх), на котором может располагаться каскад.
-    CASCADE_RETRACE_RATIO_MIN: float = 0.5
+    CASCADE_RETRACE_RATIO_MIN: float = 0.4
     # Максимальный разброс цены в каскаде относительно размера отката.
     CASCADE_RANGE_RATIO_MAX: float = 0.2
     # Минимальное число свингов для образования каскада.

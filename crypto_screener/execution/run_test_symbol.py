@@ -15,6 +15,6 @@ def run_test_symbol(
 ) -> None:
     log.d(f"Запуск тестирования {symbol} на {timeframe.tf}.")
     bars = exchange.get_ohlcv(symbol, timeframe, limit, end)
-    setup = detect_setup(bars)
+    setup = detect_setup(bars, timeframe)
     message = f"Обнаружен {setup.name.capitalize()}-сетап." if setup else "Сетап не обнаружен."
     log.d(message)
