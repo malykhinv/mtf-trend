@@ -188,11 +188,6 @@ def plot(
 
     ax.set_title(f"{symbol.upper()} • {timeframe.tf}", color="white", pad=12)
 
-    legend = ax.legend(loc="upper left", fontsize=9)
-    if legend:
-        for text in legend.get_texts():
-            text.set_color("white")
-
     fig.tight_layout()
 
     output_path = _resolve_output_path(symbol, timeframe, bars[-1].time)
