@@ -81,5 +81,16 @@ class Binance(Exchange):
             limit: int,
             end: Optional[datetime] = None
     ) -> list[Bar]:
-        raw = self._client.fetch_ohlcv(symbol=symbol, timeframe=timeframe.tf, limit=limit)
+        params: dict[str, int] = {"limit": limit}
+        if end:
+            timeframe_ms = timeframe.minutes * 60 * 1000
+            end_ms = int(end.astimezone(timezone.utc).timestamp() * 1000)
+            params["since"] = end_ms - timeframe_ms * limit
+
+        raw = self._client.fetch_ohlcv(
+            symbol=symbol,
+            timeframe=timeframe.tf,
+            since=params.get("since"),
+            limit=params["limit"],
+        )
         return map_ohlcv(raw)
