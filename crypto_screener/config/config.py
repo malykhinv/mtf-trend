@@ -27,14 +27,16 @@ class AppConfig:
     PRICE_RISE_PCT_MIN: float = 6.0
     # Соотношение глубины отката к росту.
     RETRACE_RATIO_MAX: float = 0.5
-    # Минимальный уровень отката (снизу-вверх), на котором может располагаться лонговый каскад.
-    CASCADE_LONG_RETRACE_RATIO_MIN: float = 0.5
+    # Минимальный уровень отката (снизу-вверх), на котором может располагаться каскад.
+    CASCADE_RETRACE_RATIO_MIN: float = 0.5
     # Максимальный разброс цены в каскаде относительно размера отката.
     CASCADE_RANGE_RATIO_MAX: float = 0.2
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
     # Максимальное количество свингов после каскада.
     RESISTANCE_COUNT_MAX: int = 1
+    # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
+    SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.5
 
 
 cfg = AppConfig()
