@@ -12,7 +12,7 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     if length == 0:
         return []
 
-    min_side_bars = cfg.VOLUME_TRIM_MIN_SIDE_BARS
+    min_side_bars = cfg.VOLUME_TRIM_SIDE_BARS_MIN
     if length < 2 * min_side_bars:
         return []
 
@@ -126,7 +126,7 @@ def _filter_by_price(
     if price_min <= 0 or price_min >= price_max:
         raise ValueError(f"Некорректные границы цены: {price_min}..{price_max}.")
     for swing in swings:
-        if price_min <= swing.price >= price_max:
+        if price_min <= swing.price <= price_max:
             filtered.append(swing)
     return filtered
 
@@ -181,7 +181,10 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
         return setup
 
     # Анализ роста.
-    main_low, main_high = _get_main_rising_swings_indexed(bars)
+    main_rising_swings = _get_main_rising_swings_indexed(bars)
+    if not main_rising_swings:
+        return setup
+    main_low, main_high = main_rising_swings
     if not main_low or not main_high:
         return setup
     _, main_low_swing = main_low

@@ -19,6 +19,8 @@ class AppConfig:
     )
     # Временная зона.
     TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
+    # Минимальная длина окна для нахождения зоны повышенного объема.
+    VOLUME_TRIM_SIDE_BARS_MIN: int = 10
     # Порог изменения объема для нахождения зоны повышенного объема.
     HIGH_VOLUME_THRESHOLD: int = 5
     # Порог свечей с повышенным объемом в зоне повышенного объема.
