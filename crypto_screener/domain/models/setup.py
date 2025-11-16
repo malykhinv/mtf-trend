@@ -2,10 +2,18 @@ from abc import ABC
 from dataclasses import dataclass, field
 from typing import Optional
 
+from crypto_screener.domain.models.swing import Swing
+
 
 @dataclass(frozen=True)
 class Setup(ABC):
-    name: str
+    name: str = field(init=False)
+
+    # Поля конструктора.
+    main_high_swing: Optional[Swing]
+    cascade_swings: list[Swing]
+    resistance_swings: list[Swing]
+    support_swings: list[Swing]
 
 
 @dataclass(frozen=True)

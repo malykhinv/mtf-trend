@@ -1,12 +1,19 @@
+from __future__ import annotations
+
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Optional
 
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange, FuturesSymbol
+from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.setup import Capture, Buy
+from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.domain.setup_detector import detect_setup
 from crypto_screener.utils.logger import log
+from crypto_screener.utils.plotter import plot
 from crypto_screener.utils.signals import handle_sig
 
 
@@ -63,6 +70,33 @@ def _filter_symbols(
     return filtered
 
 
+def _send_notification(
+        notifier: Notifier,
+        notification_type: NotificationType,
+        message: str,
+        symbol: str,
+        timeframe: Timeframe,
+        bars: list[Bar],
+        main_high_swing: Optional[Swing],
+        cascade_swings: list[Swing],
+        resistance_swings: list[Swing],
+        support_swings: list[Swing]
+) -> None:
+    try:
+        image_path = plot(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            main_high_swing=main_high_swing,
+            cascade_swings=cascade_swings,
+            resistance_swings=resistance_swings,
+            support_swings=support_swings
+        )
+        notifier.notify(notification_type, message, image_path)
+    except Exception as exception:
+        log.e(f"Ошибка при отправке уведомления: {exception}")
+
+
 # endregion
 
 def run_live(
@@ -116,18 +150,38 @@ def run_live(
                         continue
 
                     # Найден базовый сетап.
-                    case Capture():
+                    case Capture(
+                        main_high_swing=main_high_swing,
+                        cascade_swings=cascade_swings,
+                        resistance_swings=resistance_swings,
+                        support_swings=support_swings,
+                    ):
                         if capture_state.symbol is None:
                             capture_state.symbol = symbol.symbol
                         key = (symbol.symbol, timeframe, setup.name)
                         if key not in notified_once:
                             notified_once.add(key)
                             message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
-                            # TODO Создание изображения для уведомления.
-                            executor.submit(notifier.notify, NotificationType.EVENT, message)
+                            executor.submit(
+                                _send_notification,
+                                notifier=notifier,
+                                notification_type=NotificationType.EVENT,
+                                message=message,
+                                symbol=symbol.symbol,
+                                timeframe=timeframe,
+                                bars=bars,
+                                main_high_swing=main_high_swing,
+                                cascade_swings=cascade_swings,
+                                resistance_swings=resistance_swings,
+                                support_swings=support_swings
+                            )
 
                     # Найден торговый сетап.
                     case Buy(
+                        main_high_swing=main_high_swing,
+                        cascade_swings=cascade_swings,
+                        resistance_swings=resistance_swings,
+                        support_swings=support_swings,
                         take_profit_price=take_profit_price,
                         stop_loss_price=stop_loss_price,
                         partial_close_price=partial_close_price,
@@ -136,6 +190,17 @@ def run_live(
                         message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                         log.i(message)
                         # TODO Открытие позиции на бирже.
-                        # TODO Создание изображения для уведомления.
-                        executor.submit(notifier.notify, NotificationType.ORDER, message)
+                        executor.submit(
+                            _send_notification,
+                            notifier=notifier,
+                            notification_type=NotificationType.ORDER,
+                            message=message,
+                            symbol=symbol.symbol,
+                            timeframe=timeframe,
+                            bars=bars,
+                            main_high_swing=main_high_swing,
+                            cascade_swings=cascade_swings,
+                            resistance_swings=resistance_swings,
+                            support_swings=support_swings
+                        )
                         capture_state.symbol = None

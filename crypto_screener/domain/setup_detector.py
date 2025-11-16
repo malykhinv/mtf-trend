@@ -254,7 +254,12 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
         return setup
 
     # Проторговка после отката с лонговым каскадом.
-    setup = Capture()
+    setup = Capture(
+        main_high_swing=main_high_swing,
+        cascade_swings=cascade_long,
+        resistance_swings=resistance_swings,
+        support_swings=open_low_swings
+    )
 
     # Анализ пробоя лонгового каскада.
     target_swing = cascade_long[-1]
@@ -273,6 +278,10 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
         partial_close_price = nearest_resistance_price if has_partial_close else None
         breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
     setup = Buy(
+        main_high_swing=main_high_swing,
+        cascade_swings=cascade_long,
+        resistance_swings=resistance_swings,
+        support_swings=open_low_swings,
         take_profit_price=profit_price,
         stop_loss_price=loss_price,
         partial_close_price=partial_close_price,

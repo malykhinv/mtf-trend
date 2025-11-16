@@ -1,5 +1,9 @@
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from enum import Enum
+from pathlib import Path
+from typing import Optional
 
 
 class NotificationType(Enum):
@@ -12,6 +16,7 @@ class Notifier(ABC):
     def notify(
             self,
             notification_type: NotificationType,
-            message: str
+            message: str,
+            image_path: Optional[Path] = None
     ) -> None:
         ...
