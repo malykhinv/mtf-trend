@@ -11,7 +11,7 @@ def run_test_symbol(
         symbol: str,
         timeframe: Timeframe,
         limit: int,
-        end: datetime,
+        end: datetime
 ) -> None:
     log.d(f"Запуск тестирования {symbol} на {timeframe.tf}.")
     bars = exchange.get_ohlcv(symbol, timeframe, limit, end)

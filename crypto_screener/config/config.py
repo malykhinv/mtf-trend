@@ -1,24 +1,53 @@
 from dataclasses import dataclass
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from crypto_screener.domain.models.mode import Live, Mode
+from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
 
+# Временная зона.
+_timezone: ZoneInfo = ZoneInfo("Europe/Belgrade")
+
+# region Режимы работы.
+_mode_live = Live(
+    timeframes=[Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5],
+    limit=1000,
+    listing_period_days=14,
+    volume_24h_new_usdt_min=5_000_000,
+    volume_24h_old_usdt_min=50_000_000,
+    trades_24h_min=1_000_000,
+    trades_24h_btc_ratio_min=0.5
+)
+
+_mode_test_market = TestMarket(
+    timeframes=[Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5],
+    limit=1000
+)
+
+_mode_test_symbol = TestSymbol(
+    symbol='BTCUSDT',
+    timeframe=Timeframe.H1,
+    limit=1000,
+    end=datetime(
+        year=2025,
+        month=11,
+        day=16,
+        hour=16,
+        minute=32,
+        tzinfo=_timezone
+    )
+)
+
+
+# endregion
 
 @dataclass(frozen=True)
 class AppConfig:
-    # Режим работы.
-    MODE: Mode = Live(
-        timeframes=[Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5],
-        limit=1000,
-        listing_period_days=14,
-        volume_24h_new_usdt_min=5_000_000,
-        volume_24h_old_usdt_min=50_000_000,
-        trades_24h_min=1_000_000,
-        trades_24h_btc_ratio_min=0.5,
-    )
     # Временная зона.
-    TIMEZONE: ZoneInfo = ZoneInfo("Europe/Belgrade")
+    TIMEZONE: ZoneInfo = _timezone
+
+    # Режим работы.
+    MODE: Mode = _mode_live
 
     # region Объем.
     # Минимальная длина окна для нахождения зоны повышенного объема.
