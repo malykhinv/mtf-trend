@@ -38,14 +38,40 @@ def main() -> None:
     exchange = _initialize_exchange()
     mode: Mode = cfg.MODE
     match mode:
-        case Live(timeframes=timeframes, limit=limit, listing_period_days=listing_period_days):
+        case Live(
+            timeframes=timeframes,
+            limit=limit,
+            listing_period_days=listing_period_days,
+            volume_24h_new_usdt_min=volume_24h_new_usdt_min,
+            volume_24h_old_usdt_min=volume_24h_old_usdt_min,
+            trades_24h_min=trades_24h_min,
+            trades_24h_btc_ratio_min=trades_24h_btc_ratio_min
+        ):
             notifier = _initialize_notifier()
-            run_live(exchange, notifier, timeframes, limit, listing_period_days)
+            run_live(
+                exchange,
+                notifier,
+                timeframes,
+                limit,
+                listing_period_days,
+                volume_24h_new_usdt_min,
+                volume_24h_old_usdt_min,
+                trades_24h_min,
+                trades_24h_btc_ratio_min
+            )
 
-        case TestMarket(timeframes=timeframes, limit=limit):
+        case TestMarket(
+            timeframes=timeframes,
+            limit=limit
+        ):
             run_test_market(exchange, timeframes, limit)
 
-        case TestSymbol(symbol=symbol, timeframe=timeframe, limit=limit, end=end):
+        case TestSymbol(
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=limit,
+            end=end
+        ):
             run_test_symbol(exchange, symbol, timeframe, limit, end)
 
         case _:

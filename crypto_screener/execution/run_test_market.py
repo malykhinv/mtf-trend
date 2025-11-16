@@ -1,4 +1,4 @@
-from crypto_screener.domain.exchange import Exchange, FuturesSymbol
+from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.timeframe import Timeframe
 
 

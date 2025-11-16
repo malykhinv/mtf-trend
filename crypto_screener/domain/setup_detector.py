@@ -2,7 +2,7 @@ from typing import Optional
 
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.setup import Setup
+from crypto_screener.domain.models.setup import Setup, Capture, Buy
 from crypto_screener.domain.models.swing import SwingType, Swing
 
 
@@ -245,15 +245,16 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
         return setup
 
     # Анализ риска и вознаграждения.
+    profit_price = main_high_swing.price
     loss_price = support_swing.price
     loss_pct = 100 * (loss_price - current_price) / loss_price
-    profit_pct = 100 * (main_high_swing.price - current_price) / current_price
+    profit_pct = 100 * (profit_price - current_price) / current_price
     rr = abs(loss_pct / profit_pct)
     if rr < cfg.RR_MIN:
         return setup
 
     # Проторговка после отката с лонговым каскадом.
-    setup = Setup.CAPTURE
+    setup = Capture()
 
     # Анализ пробоя лонгового каскада.
     target_swing = cascade_long[-1]
@@ -262,6 +263,20 @@ def detect_setup(bars: list[Bar]) -> Setup | None:
         return setup
 
     # Пробой лонгового каскада.
-    setup = Setup.ORDER
+    nearest_resistance_price = resistance_swings[-1].price
+    nearest_resistance_distance_pct = 100 * (nearest_resistance_price - current_price) / current_price
+    partial_close_side_pct = cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
+    has_partial_close = partial_close_side_pct <= nearest_resistance_distance_pct < profit_pct - partial_close_side_pct
+    partial_close_price = None
+    breakeven_price = None
+    if has_partial_close:
+        partial_close_price = nearest_resistance_price if has_partial_close else None
+        breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
+    setup = Buy(
+        take_profit_price=profit_price,
+        stop_loss_price=loss_price,
+        partial_close_price=partial_close_price,
+        breakeven_price=breakeven_price
+    )
 
     return setup
