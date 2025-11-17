@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Optional
 
 from crypto_screener.domain.capture_state import CaptureState

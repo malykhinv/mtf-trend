@@ -1,6 +1,5 @@
 from datetime import datetime, timezone
 
-from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
 
 

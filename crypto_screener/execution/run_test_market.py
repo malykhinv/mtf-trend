@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.mode import PlotPolicy
 from crypto_screener.domain.models.timeframe import Timeframe

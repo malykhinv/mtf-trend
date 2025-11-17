@@ -5,7 +5,6 @@ from typing import Iterable, Optional
 
 import ccxt
 
-from crypto_screener.config.config import cfg
 from crypto_screener.data.mappers import map_ohlcv
 from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.models.bar import Bar
