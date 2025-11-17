@@ -28,8 +28,7 @@ def _add_swings(
         bars: list[Bar],
         window: int,
         atr_mult: float,
-        atr_window: int,
-        open_lag: int,
+        atr_window: int
 ) -> list[Bar]:
     length = len(bars)
     if length == 0:
@@ -103,20 +102,10 @@ def _add_swings(
     swing_by_idx: dict[int, Swing] = {}
 
     for idx, swing_type, price in filtered:
-        if 0 < open_lag < length:
-            future_end = length - open_lag
-            if idx + 1 < future_end:
-                future_bars = bars[idx + 1:future_end]
-            else:
-                future_bars = []
-        else:
-            future_bars = bars[idx + 1:]
-        is_open = _is_swing_open(price, future_bars)
         swing_by_idx[idx] = Swing(
             time=bars[idx].time,
             price=price,
-            type=swing_type,
-            is_open=is_open,
+            type=swing_type
         )
 
     enriched: list[Bar] = []
@@ -206,6 +195,122 @@ def _is_swing_open(
     return True
 
 
+def _refine_swings(bars: list[Bar]) -> list[Bar]:
+    length = len(bars)
+    if length == 0:
+        return []
+
+    swing_indices: list[int] = []
+    swing_types: list[SwingType] = []
+    swing_prices: list[float] = []
+
+    for i, bar in enumerate(bars):
+        swing = bar.swing
+        if swing is not None:
+            swing_indices.append(i)
+            swing_types.append(swing.type)
+            swing_prices.append(swing.price)
+
+    swings_count = len(swing_indices)
+    if swings_count < 3:
+        return bars
+
+    for i in range(swings_count - 2):
+        t0 = swing_types[i]
+        t1 = swing_types[i + 1]
+        t2 = swing_types[i + 2]
+
+        if t0 != t2 or t0 == t1:
+            continue
+
+        mid_type = t1
+        left_idx = swing_indices[i]
+        mid_idx = swing_indices[i + 1]
+        right_idx = swing_indices[i + 2]
+
+        if right_idx - left_idx <= 1:
+            continue
+
+        best_idx = mid_idx
+        match mid_type:
+            case SwingType.LOW:
+                best_value = bars[best_idx].low
+                for j in range(left_idx + 1, right_idx):
+                    value = bars[j].low
+                    if value < best_value:
+                        best_value = value
+                        best_idx = j
+                new_price = bars[best_idx].low
+            case SwingType.HIGH:
+                best_value = bars[best_idx].high
+                for j in range(left_idx + 1, right_idx):
+                    value = bars[j].high
+                    if value > best_value:
+                        best_value = value
+                        best_idx = j
+                new_price = bars[best_idx].high
+
+        swing_indices[i + 1] = best_idx
+        swing_prices[i + 1] = new_price
+
+    swing_by_idx: dict[int, Swing] = {}
+    for idx, swing_type, price in zip(swing_indices, swing_types, swing_prices):
+        swing_by_idx[idx] = Swing(
+            time=bars[idx].time,
+            price=price,
+            type=swing_type
+        )
+
+    refined: list[Bar] = []
+    for i, bar in enumerate(bars):
+        refined_swing = swing_by_idx.get(i)
+        refined.append(replace(bar, swing=refined_swing))
+
+    return refined
+
+
+def _mark_swings_open(
+        bars: list[Bar],
+        open_lag: int,
+) -> list[Bar]:
+    length = len(bars)
+    if length == 0:
+        return []
+
+    result: list[Bar] = []
+
+    for idx, bar in enumerate(bars):
+        swing = bar.swing
+        if swing is None:
+            result.append(bar)
+            continue
+
+        if 0 < open_lag < length:
+            future_end = length - open_lag
+            if idx + 1 < future_end:
+                future_bars = bars[idx + 1:future_end]
+            else:
+                future_bars = []
+        else:
+            future_bars = bars[idx + 1:]
+
+        is_open = _is_swing_open(swing.price, future_bars)
+
+        result.append(
+            replace(
+                bar,
+                swing=Swing(
+                    time=swing.time,
+                    price=swing.price,
+                    type=swing.type,
+                    is_open=is_open
+                )
+            )
+        )
+
+    return result
+
+
 # endregion
 
 def add_swings(
@@ -215,11 +320,12 @@ def add_swings(
     config = _SWING_PARAMS.get(timeframe)
     if config is None:
         raise ValueError(f"Таймфрейм не поддерживается: {timeframe}.")
-
-    return _add_swings(
+    enriched = _add_swings(
         bars=bars,
         window=config.window,
         atr_mult=config.atr_multiplier,
         atr_window=config.atr_window,
-        open_lag=config.open_lag,
     )
+    refined = _refine_swings(enriched)
+    marked_open = _mark_swings_open(refined, config.open_lag)
+    return marked_open

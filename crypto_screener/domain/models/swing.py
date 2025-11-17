@@ -13,4 +13,4 @@ class Swing:
     time: datetime
     price: float
     type: SwingType
-    is_open: bool
+    is_open: bool = False
