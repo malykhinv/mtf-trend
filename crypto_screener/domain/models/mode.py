@@ -1,9 +1,16 @@
 from dataclasses import dataclass
 from datetime import datetime
+from enum import Enum
 
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
+class PlotPolicy(Enum):
+    ON_ANY = "ON_ANY"
+    ON_SETUP = "ON_SETUP"
+
+
+# region Mode
 @dataclass(frozen=True)
 class Live:
     timeframes: list[Timeframe]
@@ -19,6 +26,8 @@ class Live:
 class TestMarket:
     timeframes: list[Timeframe]
     limit: int
+    window: int
+    plot_policy: PlotPolicy
 
 
 @dataclass(frozen=True)
@@ -27,13 +36,8 @@ class TestSymbol:
     timeframe: Timeframe
     limit: int
     end: datetime
-
-@dataclass(frozen=True)
-class TestPlotter:
-    symbol: str
-    timeframe: Timeframe
-    limit: int
-    end: datetime
+    plot_policy: PlotPolicy
 
 
 Mode = Live | TestMarket | TestSymbol
+# endregion

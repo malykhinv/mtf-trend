@@ -64,18 +64,21 @@ def main() -> None:
         # Тест истории для всего рынка.
         case TestMarket(
             timeframes=timeframes,
-            limit=limit
+            limit=limit,
+            window=window,
+            plot_policy=plot_policy
         ):
-            run_test_market(exchange, timeframes, limit)
+            run_test_market(exchange, timeframes, limit, window, plot_policy)
 
         # Тест символа в определенный момент.
         case TestSymbol(
             symbol=symbol,
             timeframe=timeframe,
             limit=limit,
-            end=end
+            end=end,
+            plot_policy=plot_policy
         ):
-            run_test_symbol(exchange, symbol, timeframe, limit, end)
+            run_test_symbol(exchange, symbol, timeframe, limit, end, plot_policy)
 
         case _:
             # noinspection PyUnreachableCode

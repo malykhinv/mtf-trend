@@ -18,7 +18,7 @@ class Binance(Exchange):
             self,
             api_key: str,
             api_secret: str
-    ):
+    ) -> None:
         self._client = ccxt.binance(
             {
                 "apiKey": api_key,

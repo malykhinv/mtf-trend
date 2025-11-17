@@ -18,7 +18,7 @@ class Bybit(Exchange):
             self,
             api_key: str,
             api_secret: str
-    ):
+    ) -> None:
         self._client = ccxt.bybit(
             {
                 "apiKey": api_key,

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol, TestPlotter
+from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol, PlotPolicy
 from crypto_screener.domain.models.timeframe import Timeframe
 
 # Временная зона.
@@ -21,13 +21,15 @@ _mode_live = Live(
 
 _mode_test_market = TestMarket(
     timeframes=[Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5],
-    limit=1000
+    limit=1500,
+    window=400,
+    plot_policy=PlotPolicy.ON_SETUP
 )
 
 _mode_test_symbol = TestSymbol(
     symbol='KAIAUSDT',
     timeframe=Timeframe.M15,
-    limit=500,
+    limit=400,
     end=datetime(
         year=2025,
         month=6,
@@ -35,7 +37,8 @@ _mode_test_symbol = TestSymbol(
         hour=23,
         minute=46,
         tzinfo=_timezone
-    )
+    ),
+    plot_policy=PlotPolicy.ON_ANY
 )
 
 

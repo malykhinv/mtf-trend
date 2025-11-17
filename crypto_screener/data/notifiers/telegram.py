@@ -16,7 +16,7 @@ class TgNotifier(Notifier):
             event_token: str,
             order_token: str,
             chat_id: str
-    ):
+    ) -> None:
         self._event_bot = Bot(token=event_token)
         self._order_bot = Bot(token=order_token)
         self._chat_id = chat_id
