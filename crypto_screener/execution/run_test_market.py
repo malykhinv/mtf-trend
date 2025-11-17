@@ -1,11 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from crypto_screener.config.config import cfg
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.mode import PlotPolicy
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.execution.run_test_symbol import run_test_symbol
 from crypto_screener.utils.logger import log
+from crypto_screener.utils.time import utc_now
 
 
 def run_test_market(
@@ -31,7 +31,7 @@ def run_test_market(
                     symbol=symbol.symbol,
                     timeframe=timeframe,
                     limit=limit,
-                    end=datetime.now(cfg.TIMEZONE),
+                    end=utc_now(),
                 )
             except Exception as exception:
                 log.e(f"{symbol} {timeframe.tf}: ошибка получения данных: {exception}")

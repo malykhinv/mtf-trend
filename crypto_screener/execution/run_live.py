@@ -15,6 +15,7 @@ from crypto_screener.domain.setup_detector import detect_setup
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot
 from crypto_screener.utils.signals import handle_sig
+from crypto_screener.utils.time import utc_now
 
 
 # region Private.
@@ -50,13 +51,10 @@ def _filter_symbols(
         trades_24h_btc_ratio_min: float,
         btc_trades_24h: int
 ) -> list[FuturesSymbol]:
-    from datetime import datetime, timezone
-
-    now = datetime.now(tz=timezone.utc)
     filtered: list[FuturesSymbol] = []
 
     for symbol in symbols:
-        listing_age_days = (now - symbol.listing_ts.astimezone(timezone.utc)).days
+        listing_age_days = (utc_now() - symbol.listing_time).days
         if listing_age_days <= listing_period_days:
             if symbol.volume_usdt_24h < volume_24h_new_usdt_min:
                 continue

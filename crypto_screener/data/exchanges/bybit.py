@@ -45,10 +45,9 @@ class Bybit(Exchange):
             launch_time = market_info.get("launchTime") or market_info.get("createdAt")
             onboard_ms = int(launch_time) if launch_time else 0
             if onboard_ms:
-                ts_utc = datetime.fromtimestamp(onboard_ms / 1000, tz=timezone.utc)
+                listing_time = datetime.fromtimestamp(onboard_ms / 1000, tz=timezone.utc)
             else:
-                ts_utc = datetime.fromtimestamp(0, tz=timezone.utc)
-            listing_ts = ts_utc.astimezone(cfg.TIMEZONE)
+                listing_time = datetime.fromtimestamp(0, tz=timezone.utc)
 
             volume = extract_float(
                 ticker.get("quoteVolume"),
@@ -64,7 +63,7 @@ class Bybit(Exchange):
             symbols.append(
                 FuturesSymbol(
                     symbol=symbol,
-                    listing_ts=listing_ts,
+                    listing_time=listing_time,
                     volume_usdt_24h=volume,
                     trades_24h=trades,
                 )

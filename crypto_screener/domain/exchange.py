@@ -10,7 +10,7 @@ from crypto_screener.domain.models.timeframe import Timeframe
 @dataclass(frozen=True)
 class FuturesSymbol:
     symbol: str
-    listing_ts: datetime
+    listing_time: datetime
     volume_usdt_24h: float
     trades_24h: int
 
