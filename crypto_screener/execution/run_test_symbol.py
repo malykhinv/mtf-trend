@@ -69,5 +69,7 @@ def run_test_symbol(
         end: datetime,
         plot_policy: PlotPolicy
 ) -> None:
+    log.d(f"Проверка {symbol} на {timeframe.tf}")
     bars = exchange.get_ohlcv(symbol, timeframe, limit, end)
     run_test_bars(symbol, timeframe, bars, plot_policy)
+    log.d("Тест завершен.")

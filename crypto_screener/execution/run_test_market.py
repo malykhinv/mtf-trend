@@ -65,7 +65,7 @@ def run_test_market(
 
     for symbol in symbols:
         for timeframe in timeframes:
-            log.e(f"Проверка {symbol.symbol} на {timeframe.tf}")
+            log.d(f"Проверка {symbol.symbol} на {timeframe.tf}")
             try:
                 bars = exchange.get_ohlcv(
                     symbol=symbol.symbol,
@@ -93,3 +93,4 @@ def run_test_market(
                     bars=window_bars,
                     plot_policy=plot_policy,
                 )
+    log.d("Тест завершен.")
