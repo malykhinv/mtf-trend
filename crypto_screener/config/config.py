@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol
+from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol, TestPlotter
 from crypto_screener.domain.models.timeframe import Timeframe
 
 # Временная зона.
@@ -32,8 +32,8 @@ _mode_test_symbol = TestSymbol(
         year=2025,
         month=6,
         day=10,
-        hour=22,
-        minute=45,
+        hour=23,
+        minute=46,
         tzinfo=_timezone
     )
 )
@@ -72,10 +72,16 @@ class AppConfig:
     # Максимальное количество свингов после каскада.
     RESISTANCE_COUNT_MAX: int = 1
     # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
-    SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.5
+    SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.3
     # endregion
 
-    # region Частичное закрытие позиции.
+    # region Позиции.
+    # Минимальное соотношение Entry-TP к Entry-SL.
+    REWARD_RISK_RATIO_MIN: float = 1 / 1
+    # Минимальное расстояние Entry-TP.
+    PROFIT_PCT_MIN: float = 3
+    # Минимальное расстояние Entry-SL.
+    LOSS_PCT_MIN: float = 0.5
     # Минимальное расстояние от Entry и TP до PC при частичном закрытии позиции.
     PARTIAL_CLOSE_SIDE_PCT_MIN: float = 2.0
     # Соотношение цены участков Entry-BE и Entry-PC при частичном закрытии позиции.
@@ -101,11 +107,9 @@ class AppConfig:
     PLOT_RESISTANCE_SWING_COLOR: str = "#ef5350"
     PLOT_SUPPORT_SWING_COLOR: str = "#66bb6a"
     # Маркеры свингов.
-    PLOT_SWING_MARKER_SIZE: int = 35
-    PLOT_SWING_MARKER_EDGE_LINEWIDTH: float = 0.6
-    PLOT_SWING_MARKER_EDGE_COLOR: str = "white"
-    PLOT_SWING_MARKER_ALPHA: float = 0.85
-    PLOT_SWING_MARKER_OPEN_ALPHA: float = 0.55
+    PLOT_SWING_MARKER_SIZE: int = 32
+    PLOT_SWING_MARKER_CLOSED_ALPHA: float = 0.5
+    PLOT_SWING_MARKER_OPEN_ALPHA: float = 1.0
     PLOT_SWING_ZORDER: int = 3
     # Размер и положение свечей.
     PLOT_CANDLE_WIDTH_MULTIPLIER: float = 0.6

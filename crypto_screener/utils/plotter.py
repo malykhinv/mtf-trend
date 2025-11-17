@@ -115,9 +115,7 @@ def _draw_swing_group(
             marker=marker,
             s=cfg.PLOT_SWING_MARKER_SIZE,
             color=color,
-            linewidths=cfg.PLOT_SWING_MARKER_EDGE_LINEWIDTH,
-            alpha=cfg.PLOT_SWING_MARKER_ALPHA if not swing.is_open else cfg.PLOT_SWING_MARKER_OPEN_ALPHA,
-            edgecolors=cfg.PLOT_SWING_MARKER_EDGE_COLOR,
+            alpha=cfg.PLOT_SWING_MARKER_CLOSED_ALPHA if not swing.is_open else cfg.PLOT_SWING_MARKER_OPEN_ALPHA,
             zorder=cfg.PLOT_SWING_ZORDER,
         )
 
@@ -131,7 +129,7 @@ def _get_candle_width(times: list[float]) -> float:
     return avg_interval * cfg.PLOT_CANDLE_WIDTH_MULTIPLIER
 
 
-def _format_price(value: float) -> str:
+def _format_price(value: float, _: object) -> str:
     abs_value = abs(value)
     if abs_value >= cfg.PLOT_PRICE_HIGH_THRESHOLD:
         return f"{value:,.{cfg.PLOT_PRICE_DECIMALS_HIGH}f}"
@@ -213,7 +211,7 @@ def plot(
         )
 
     ax.set_title(
-        title=f"{symbol.upper()} • {timeframe.tf}",
+        label=f"{symbol.upper()} • {timeframe.tf}",
         color=cfg.PLOT_TITLE_COLOR,
         pad=cfg.PLOT_TITLE_PAD
     )

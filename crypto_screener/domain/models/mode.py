@@ -28,5 +28,12 @@ class TestSymbol:
     limit: int
     end: datetime
 
+@dataclass(frozen=True)
+class TestPlotter:
+    symbol: str
+    timeframe: Timeframe
+    limit: int
+    end: datetime
+
 
 Mode = Live | TestMarket | TestSymbol

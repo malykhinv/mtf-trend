@@ -253,11 +253,19 @@ def detect_setup(
 
     # Анализ риска и вознаграждения.
     profit_price = main_high_swing.price
+    target_swing = cascade_long[-1]
     loss_price = support_swing.price
     loss_pct = 100 * (loss_price - current_price) / loss_price
+    is_loss_valid = abs(loss_pct) > cfg.LOSS_PCT_MIN
+    if not is_loss_valid:
+        return setup
     profit_pct = 100 * (profit_price - current_price) / current_price
-    rr = abs(loss_pct / profit_pct)
-    if rr < cfg.RR_MIN:
+    is_profit_valid = profit_pct > cfg.PROFIT_PCT_MIN
+    if not is_profit_valid:
+        return setup
+    reward_risk = abs(profit_pct / loss_pct)
+    is_reward_risk_valid = reward_risk >= cfg.REWARD_RISK_RATIO_MIN
+    if not is_reward_risk_valid:
         return setup
 
     # Проторговка после отката с лонговым каскадом.
@@ -269,7 +277,6 @@ def detect_setup(
     )
 
     # Анализ пробоя лонгового каскада.
-    target_swing = cascade_long[-1]
     has_breakout_long = current_price > target_swing.price
     if not has_breakout_long:
         return setup
