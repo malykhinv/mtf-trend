@@ -28,6 +28,9 @@ class TestMarket:
     limit: int
     window: int
     plot_policy: PlotPolicy
+    volume_24h_usdt_min: float | None
+    trades_24h_min: int | None
+    listing_age_days_min: int | None
 
 
 @dataclass(frozen=True)

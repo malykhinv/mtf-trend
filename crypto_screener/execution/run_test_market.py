@@ -1,4 +1,6 @@
-from crypto_screener.domain.exchange import Exchange
+from datetime import timedelta
+
+from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.models.mode import PlotPolicy
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.execution.run_test_symbol import run_test_bars
@@ -6,12 +8,39 @@ from crypto_screener.utils.logger import log
 from crypto_screener.utils.time import utc_now
 
 
+# region Private
+def _filter_symbols(
+        symbols: list[FuturesSymbol],
+        volume_min: float | None,
+        trades_min: int | None,
+        listing_age_days_min: int | None,
+) -> list[FuturesSymbol]:
+    filtered = symbols
+
+    if volume_min is not None:
+        filtered = [s for s in filtered if (s.volume_usdt_24h or 0) >= volume_min]
+
+    if trades_min is not None:
+        filtered = [s for s in filtered if (s.trades_24h or 0) >= trades_min]
+
+    if listing_age_days_min is not None and listing_age_days_min > 0:
+        min_listing_time = utc_now() - timedelta(days=listing_age_days_min)
+        filtered = [s for s in filtered if s.listing_time <= min_listing_time]
+
+    return filtered
+
+
+# endregion
+
 def run_test_market(
         exchange: Exchange,
         timeframes: list[Timeframe],
         limit: int,
         window: int,
-        plot_policy: PlotPolicy
+        plot_policy: PlotPolicy,
+        volume_24h_usdt_min: float,
+        trades_24h_min: int,
+        listing_age_days_min: int,
 ) -> None:
     log.d("Запуск тестирования рынка.")
 
@@ -23,7 +52,16 @@ def run_test_market(
         return
 
     symbols = exchange.get_futures_symbols()
-    log.d(f"Получено {len(symbols)} символов.")
+    log.d(f"Получено {len(symbols)} символов до фильтрации.")
+
+    symbols = _filter_symbols(
+        symbols,
+        volume_24h_usdt_min,
+        trades_24h_min,
+        listing_age_days_min,
+    )
+    log.d(f"Фильтры: объем ≥ {volume_24h_usdt_min}, сделки ≥ {trades_24h_min}, возраст ≥ {listing_age_days_min} дней")
+    log.d(f"После фильтрации осталось {len(symbols)} символов.")
 
     for symbol in symbols:
         for timeframe in timeframes:

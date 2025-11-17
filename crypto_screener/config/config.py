@@ -23,7 +23,10 @@ _mode_test_market = TestMarket(
     timeframes=[Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5],
     limit=1500,
     window=400,
-    plot_policy=PlotPolicy.ON_SETUP
+    plot_policy=PlotPolicy.ON_SETUP,
+    volume_24h_usdt_min=20_000_000,
+    trades_24h_min=300_000,
+    listing_age_days_min=30
 )
 
 _mode_test_symbol = TestSymbol(

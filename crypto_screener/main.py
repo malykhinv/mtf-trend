@@ -66,9 +66,21 @@ def main() -> None:
             timeframes=timeframes,
             limit=limit,
             window=window,
-            plot_policy=plot_policy
+            plot_policy=plot_policy,
+            volume_24h_usdt_min=volume_24h_usdt_min,
+            trades_24h_min=trades_24h_min,
+            listing_age_days_min=listing_age_days_min
         ):
-            run_test_market(exchange, timeframes, limit, window, plot_policy)
+            run_test_market(
+                exchange,
+                timeframes,
+                limit,
+                window,
+                plot_policy,
+                volume_24h_usdt_min,
+                trades_24h_min,
+                listing_age_days_min
+            )
 
         # Тест символа в определенный момент.
         case TestSymbol(
