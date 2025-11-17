@@ -177,7 +177,7 @@ def _get_cascade(swings: list[Swing], length_min: int, range_max: float) -> list
 def detect_setup(
         bars: list[Bar],
         timeframe: Timeframe
-) -> Setup | None:
+) -> Optional[Setup]:
     setup = None
 
     # Анализ повышения объемов.

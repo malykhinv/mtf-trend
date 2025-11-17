@@ -20,8 +20,6 @@ def _detect_setup(
     setup = detect_setup(bars, timeframe)
     if setup:
         log.d(f"Обнаружен {setup.name.capitalize()}-сетап.")
-    else:
-        log.d("Сетап не обнаружен.")
     return setup
 
 
@@ -54,7 +52,6 @@ def run_test_symbol(
         end: datetime,
         plot_policy: PlotPolicy
 ) -> None:
-    log.d(f"Запуск тестирования {symbol} на {timeframe.tf}.")
     bars = exchange.get_ohlcv(symbol, timeframe, limit, end)
     setup = _detect_setup(bars, timeframe)
     match plot_policy:

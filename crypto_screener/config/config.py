@@ -50,7 +50,7 @@ class AppConfig:
     TIMEZONE: ZoneInfo = _timezone
 
     # Режим работы.
-    MODE: Mode = _mode_test_symbol
+    MODE: Mode = _mode_test_market
 
     # region Объем.
     # Минимальная длина окна для нахождения зоны повышенного объема.
