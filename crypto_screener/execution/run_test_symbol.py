@@ -44,6 +44,23 @@ def _plot(
 
 # endregion
 
+def run_test_bars(
+        symbol: str,
+        timeframe: Timeframe,
+        bars: list[Bar],
+        plot_policy: PlotPolicy,
+) -> None:
+    if not bars:
+        return
+    setup = _detect_setup(bars, timeframe)
+    match plot_policy:
+        case PlotPolicy.ON_ANY:
+            _plot(symbol, bars, timeframe)
+        case PlotPolicy.ON_SETUP:
+            if setup:
+                _plot(symbol, bars, timeframe)
+
+
 def run_test_symbol(
         exchange: Exchange,
         symbol: str,
@@ -53,10 +70,4 @@ def run_test_symbol(
         plot_policy: PlotPolicy
 ) -> None:
     bars = exchange.get_ohlcv(symbol, timeframe, limit, end)
-    setup = _detect_setup(bars, timeframe)
-    match plot_policy:
-        case PlotPolicy.ON_ANY:
-            _plot(symbol, bars, timeframe)
-        case PlotPolicy.ON_SETUP:
-            if setup:
-                _plot(symbol, bars, timeframe)
+    run_test_bars(symbol, timeframe, bars, plot_policy)

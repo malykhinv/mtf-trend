@@ -1,7 +1,7 @@
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.mode import PlotPolicy
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.execution.run_test_symbol import run_test_symbol
+from crypto_screener.execution.run_test_symbol import run_test_bars
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.time import utc_now
 
@@ -48,13 +48,10 @@ def run_test_market(
                 continue
 
             for i in range(window - 1, len(bars)):
-                end = bars[i].time
-
-                run_test_symbol(
-                    exchange=exchange,
+                window_bars = bars[i - window + 1:i + 1]
+                run_test_bars(
                     symbol=symbol.symbol,
                     timeframe=timeframe,
-                    limit=window,
-                    end=end,
+                    bars=window_bars,
                     plot_policy=plot_policy,
                 )
