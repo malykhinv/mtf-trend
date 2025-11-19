@@ -114,6 +114,7 @@ class AppConfig:
     PLOT_COLOR_DOWN: str = "#d42f2f"
     PLOT_BACKGROUND_COLOR: str = "#0f0f0f"
     PLOT_GRID_COLOR: str = "#2f2f2f"
+    PLOT_VOLUME_COLOR: str = "#2f2f2f"
     PLOT_MAIN_HIGH_SWING_COLOR: str = "#ffe082"
     PLOT_CASCADE_SWING_COLOR: str = "#64b5f6"
     PLOT_RESISTANCE_SWING_COLOR: str = "#ef5350"
@@ -147,6 +148,11 @@ class AppConfig:
     PLOT_GRID_ALPHA: float = 0.4
     PLOT_Y_OFFSET_RATIO: float = 0.015
     PLOT_Y_OFFSET_MIN: float = 1e-4
+    PLOT_VOLUME_ALPHA: float = 0.5
+    PLOT_VOLUME_PAD_RATIO: float = 0.05
+    PLOT_VOLUME_ZORDER: int = 1
+    PLOT_HEIGHT_RATIOS: tuple[int, int] = (3, 1)
+    PLOT_SUBPLOT_HSPACE: float = 0.03
     PLOT_PRICE_DECIMALS_HIGH: int = 2
     PLOT_PRICE_DECIMALS_MID: int = 4
     PLOT_PRICE_DECIMALS_LOW: int = 6

@@ -1,7 +1,7 @@
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional
 
 import matplotlib
 from matplotlib.figure import Figure
@@ -22,12 +22,7 @@ from crypto_screener.domain.models.timeframe import Timeframe
 
 
 # region Private.
-def _build_figure() -> tuple[Figure, Any]:
-    fig, ax = plt.subplots(
-        figsize=(cfg.PLOT_WIDTH_INCHES, cfg.PLOT_HEIGHT_INCHES),
-        dpi=cfg.PLOT_DPI
-    )
-    fig.patch.set_facecolor(cfg.PLOT_BACKGROUND_COLOR)
+def _style_ax(ax: Axes) -> None:
     ax.set_facecolor(cfg.PLOT_BACKGROUND_COLOR)
     ax.grid(
         visible=True,
@@ -39,7 +34,24 @@ def _build_figure() -> tuple[Figure, Any]:
     for spine in ax.spines.values():
         spine.set_color(cfg.PLOT_GRID_COLOR)
     ax.tick_params(colors=cfg.PLOT_TICK_COLOR, labelsize=cfg.PLOT_TICK_LABELSIZE)
-    return fig, ax
+
+
+def _build_figure() -> tuple[Figure, Axes, Axes]:
+    fig, (price_ax, volume_ax) = plt.subplots(
+        nrows=2,
+        ncols=1,
+        figsize=(cfg.PLOT_WIDTH_INCHES, cfg.PLOT_HEIGHT_INCHES),
+        dpi=cfg.PLOT_DPI,
+        gridspec_kw={
+            "height_ratios": cfg.PLOT_HEIGHT_RATIOS,
+            "hspace": cfg.PLOT_SUBPLOT_HSPACE
+        },
+        sharex=True,
+    )
+    fig.patch.set_facecolor(cfg.PLOT_BACKGROUND_COLOR)
+    _style_ax(price_ax)
+    _style_ax(volume_ax)
+    return fig, price_ax, volume_ax
 
 
 def _draw_candles(
@@ -78,7 +90,13 @@ def _format_ax(
 ):
     pad = max((max_price - min_price) * cfg.PLOT_PRICE_PAD_RATIO, cfg.PLOT_PRICE_PAD_MIN)
     ax.set_ylim(min_price - pad, max_price + pad)
+    width = _get_candle_width(times)
+    ax.set_xlim(times[0] - width, times[-1] + width)
+    ax.yaxis.set_major_formatter(FuncFormatter(_format_price))
+    ax.tick_params(labelbottom=False)
 
+
+def _format_time_axis(ax: Axes):
     locator = mdates.AutoDateLocator(
         minticks=cfg.PLOT_X_AXIS_MINTICKS,
         maxticks=cfg.PLOT_X_AXIS_MAXTICKS
@@ -91,11 +109,6 @@ def _format_ax(
     ax.xaxis.set_major_formatter(formatter)
     for label in ax.get_xticklabels():
         label.set_rotation(cfg.PLOT_X_AXIS_LABEL_ROTATION)
-
-    ax.yaxis.set_major_formatter(FuncFormatter(_format_price))
-
-    width = _get_candle_width(times)
-    ax.set_xlim(times[0] - width, times[-1] + width)
 
 
 def _draw_swing_group(
@@ -140,8 +153,43 @@ def _format_price(value: float, _: object) -> str:
     return f"{value:,.{cfg.PLOT_PRICE_DECIMALS_LOW}f}"
 
 
+def _format_volume(value: float, _: object) -> str:
+    abs_value = abs(value)
+    if abs_value >= 1_000_000_000:
+        return f"{value / 1_000_000_000:.1f}B"
+    if abs_value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M"
+    if abs_value >= 1_000:
+        return f"{value / 1_000:.1f}K"
+    return f"{value:.0f}"
+
+
 def _datetime_to_mpl(time: datetime) -> float:
     return mdates.date2num(time)
+
+
+def _draw_volume(ax: Axes, bars: list[Bar], times: list[float], width: float) -> list[float]:
+    volumes = [bar.volume for bar in bars]
+    colors = [cfg.PLOT_VOLUME_COLOR for _ in bars]
+    ax.bar(
+        times,
+        volumes,
+        width=width,
+        color=colors,
+        alpha=cfg.PLOT_VOLUME_ALPHA,
+        align="center",
+        zorder=cfg.PLOT_VOLUME_ZORDER,
+    )
+    return volumes
+
+
+def _format_volume_ax(ax: Axes, volumes: list[float]):
+    if not volumes:
+        return
+    max_volume = max(volumes)
+    pad = max_volume * cfg.PLOT_VOLUME_PAD_RATIO if max_volume > 0 else cfg.PLOT_VOLUME_PAD_RATIO
+    ax.set_ylim(0, max_volume + pad)
+    ax.yaxis.set_major_formatter(FuncFormatter(_format_volume))
 
 
 def _resolve_output_path(
@@ -175,7 +223,7 @@ def plot(
     if not symbol or not bars:
         raise ValueError("Недостаточно данных для построения графика.")
 
-    fig, ax = _build_figure()
+    fig, price_ax, volume_ax = _build_figure()
 
     times = [_datetime_to_mpl(bar.time) for bar in bars]
     candle_width = _get_candle_width(times)
@@ -184,33 +232,37 @@ def plot(
     max_price = max(bar.high for bar in bars)
     y_offset = max((max_price - min_price) * cfg.PLOT_Y_OFFSET_RATIO, cfg.PLOT_Y_OFFSET_MIN)
 
-    _draw_candles(ax, bars, times, candle_width)
-    _format_ax(ax, times, min_price, max_price)
+    _draw_candles(price_ax, bars, times, candle_width)
+    _format_ax(price_ax, times, min_price, max_price)
+
+    volumes = _draw_volume(volume_ax, bars, times, candle_width)
+    _format_volume_ax(volume_ax, volumes)
+    _format_time_axis(volume_ax)
 
     if cascade_swings:
         _draw_swing_group(
-            ax=ax,
+            ax=price_ax,
             swings=cascade_swings,
             color=cfg.PLOT_CASCADE_SWING_COLOR,
             y_offset=y_offset
         )
     if resistance_swings:
         _draw_swing_group(
-            ax=ax,
+            ax=price_ax,
             swings=resistance_swings,
             color=cfg.PLOT_RESISTANCE_SWING_COLOR,
             y_offset=y_offset
         )
     if support_swings:
         _draw_swing_group(
-            ax=ax,
+            ax=price_ax,
             swings=support_swings,
             color=cfg.PLOT_SUPPORT_SWING_COLOR,
             y_offset=y_offset
         )
     if main_high_swing:
         _draw_swing_group(
-            ax=ax,
+            ax=price_ax,
             swings=[main_high_swing],
             color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
             y_offset=y_offset
@@ -219,13 +271,13 @@ def plot(
         bars = add_swings(bars, timeframe)
         swings = [bar.swing for bar in bars if bar.swing]
         _draw_swing_group(
-            ax=ax,
+            ax=price_ax,
             swings=swings,
             color=cfg.PLOT_COMMON_SWING_COLOR,
             y_offset=y_offset
         )
 
-    ax.set_title(
+    price_ax.set_title(
         label=f"{symbol.upper()} • {timeframe.tf}",
         color=cfg.PLOT_TITLE_COLOR,
         pad=cfg.PLOT_TITLE_PAD
