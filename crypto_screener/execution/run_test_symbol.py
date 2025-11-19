@@ -7,6 +7,7 @@ from crypto_screener.domain.models.mode import PlotPolicy, TestData
 from crypto_screener.domain.models.setup import Setup
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.setup_detector import detect_setup
+from crypto_screener.utils.history import calculate_limit
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot
 
@@ -21,7 +22,8 @@ def _run_test_symbol(
         plot_policy: PlotPolicy
 ) -> None:
     log.d(f"Проверка {symbol} на {timeframe.tf}")
-    bars = exchange.get_ohlcv(symbol, timeframe, limit, end)
+    timeframe_limit = calculate_limit(limit, timeframe)
+    bars = exchange.get_ohlcv(symbol, timeframe, timeframe_limit, end)
     run_test_bars(
         symbol=symbol,
         timeframe=timeframe,
