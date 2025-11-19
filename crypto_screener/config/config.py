@@ -14,11 +14,11 @@ _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Time
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
-    TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
-    TestData('KAIAUSDT', Timeframe.M15, datetime(year=2025, month=6, day=10, hour=22, minute=46)),
-    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
-    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
-    TestData('WIFUSDT', Timeframe.M15, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
+    # TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
+    TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
+    # TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
+    # TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
+    # TestData('WIFUSDT', Timeframe.M15, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
 ]
 
 # region Режимы работы.

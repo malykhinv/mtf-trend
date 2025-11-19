@@ -148,16 +148,13 @@ def _resolve_output_path(
         time: datetime,
         subdir: Optional[str] = None
 ) -> Path:
-    output_dir = Path(cfg.PLOT_OUTPUT_DIR)
+    output_dir = cfg.PLOT_OUTPUT_DIR
     if subdir:
         output_dir += f"/{subdir}"
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    safe_symbol = re.sub(
-        pattern=r"[^A-Za-z0-9_-]+",
-        repl="-",
-        string=symbol
-    ).strip("-")
-    filename = f"{safe_symbol} {timeframe.tf} {time:%d.%m.%Y %H.%M.%S}.png"
+    symbol = re.sub(r"[^A-Za-z0-9]+", "", symbol.split(":", 1)[0])
+    filename = f"{symbol} {timeframe.tf} {time:%d.%m.%Y %H.%M.%S}.png"
     return output_dir / filename
 
 
