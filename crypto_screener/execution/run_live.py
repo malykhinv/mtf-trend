@@ -77,7 +77,8 @@ def _send_notification(
         main_high_swing: Optional[Swing],
         cascade_swings: list[Swing],
         resistance_swings: list[Swing],
-        support_swings: list[Swing]
+        support_swings: list[Swing],
+        subdir: Optional[str] = None
 ) -> None:
     try:
         image_path = plot(
@@ -87,7 +88,8 @@ def _send_notification(
             main_high_swing=main_high_swing,
             cascade_swings=cascade_swings,
             resistance_swings=resistance_swings,
-            support_swings=support_swings
+            support_swings=support_swings,
+            subdir=subdir
         )
         notifier.notify(notification_type, message, image_path)
     except Exception as exception:
@@ -170,7 +172,8 @@ def run_live(
                                 main_high_swing=main_high_swing,
                                 cascade_swings=cascade_swings,
                                 resistance_swings=resistance_swings,
-                                support_swings=support_swings
+                                support_swings=support_swings,
+                                subdir='event'
                             )
 
                     # Найден торговый сетап.
@@ -198,6 +201,7 @@ def run_live(
                             main_high_swing=main_high_swing,
                             cascade_swings=cascade_swings,
                             resistance_swings=resistance_swings,
-                            support_swings=support_swings
+                            support_swings=support_swings,
+                            subdir='order'
                         )
                         capture_state.symbol = None

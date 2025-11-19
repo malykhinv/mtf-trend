@@ -7,11 +7,11 @@ from crypto_screener.data.exchanges.binance import Binance
 from crypto_screener.data.notifiers.log import LogNotifier
 from crypto_screener.data.notifiers.telegram import TgNotifier
 from crypto_screener.domain.exchange import Exchange
-from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol
+from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbols
 from crypto_screener.domain.notifier import Notifier
 from crypto_screener.execution.run_live import run_live
 from crypto_screener.execution.run_test_market import run_test_market
-from crypto_screener.execution.run_test_symbol import run_test_symbol
+from crypto_screener.execution.run_test_symbol import run_test_symbols
 
 
 # region Private.
@@ -79,18 +79,16 @@ def main() -> None:
                 plot_policy,
                 volume_24h_usdt_min,
                 trades_24h_min,
-                listing_age_days_min
+                listing_age_days_min,
             )
 
-        # Тест символа в определенный момент.
-        case TestSymbol(
-            symbol=symbol,
-            timeframe=timeframe,
+        # Тест набора символов.
+        case TestSymbols(
+            test_data=test_data,
             limit=limit,
-            end=end,
             plot_policy=plot_policy
         ):
-            run_test_symbol(exchange, symbol, timeframe, limit, end, plot_policy)
+            run_test_symbols(exchange, test_data, limit, plot_policy)
 
         case _:
             # noinspection PyUnreachableCode

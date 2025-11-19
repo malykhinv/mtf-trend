@@ -2,25 +2,38 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from crypto_screener.domain.models.mode import Live, Mode, TestMarket, TestSymbol, PlotPolicy
+from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, \
+    TestData
 from crypto_screener.domain.models.timeframe import Timeframe
 
 # Временная зона.
 _timezone: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
+# Таймфреймы.
+_timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5]
+
+# Данные для тестирования конкретных символов.
+_test_data: list[TestData] = [
+    TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
+    TestData('KAIAUSDT', Timeframe.M15, datetime(year=2025, month=6, day=10, hour=22, minute=46)),
+    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
+    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
+    TestData('WIFUSDT', Timeframe.M15, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
+]
+
 # region Режимы работы.
 _mode_live = Live(
-    timeframes=[Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5],
+    timeframes=_timeframes,
     limit=1000,
     listing_period_days=14,
     volume_24h_new_usdt_min=5_000_000,
     volume_24h_old_usdt_min=50_000_000,
-    trades_24h_min=1_000_000,
+    trades_24h_min=500_000,
     trades_24h_btc_ratio_min=0.5
 )
 
 _mode_test_market = TestMarket(
-    timeframes=[Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5],
+    timeframes=_timeframes,
     limit=1500,
     window=400,
     plot_policy=PlotPolicy.ON_SETUP,
@@ -29,18 +42,9 @@ _mode_test_market = TestMarket(
     listing_age_days_min=30
 )
 
-_mode_test_symbol = TestSymbol(
-    symbol='KAIAUSDT',
-    timeframe=Timeframe.M15,
-    limit=400,
-    end=datetime(
-        year=2025,
-        month=6,
-        day=10,
-        hour=23,
-        minute=46,
-        tzinfo=_timezone
-    ),
+_mode_test_symbols = TestSymbols(
+    test_data=_test_data,
+    limit=1000,
     plot_policy=PlotPolicy.ON_ANY
 )
 
@@ -53,7 +57,7 @@ class AppConfig:
     TIMEZONE: ZoneInfo = _timezone
 
     # Режим работы.
-    MODE: Mode = _mode_test_market
+    MODE: Mode = _mode_test_symbols
 
     # region Объем.
     # Минимальная длина окна для нахождения зоны повышенного объема.

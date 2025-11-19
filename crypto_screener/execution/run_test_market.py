@@ -40,7 +40,7 @@ def run_test_market(
         plot_policy: PlotPolicy,
         volume_24h_usdt_min: float,
         trades_24h_min: int,
-        listing_age_days_min: int,
+        listing_age_days_min: int
 ) -> None:
     log.d("Запуск тестирования рынка.")
 
@@ -92,5 +92,6 @@ def run_test_market(
                     timeframe=timeframe,
                     bars=window_bars,
                     plot_policy=plot_policy,
+                    subdir='test_market'
                 )
     log.d("Тест завершен.")

@@ -145,17 +145,20 @@ def _datetime_to_mpl(time: datetime) -> float:
 def _resolve_output_path(
         symbol: str,
         timeframe: Timeframe,
-        time: datetime
+        time: datetime,
+        subdir: Optional[str] = None
 ) -> Path:
-    base_dir = Path(cfg.PLOT_OUTPUT_DIR)
-    base_dir.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(cfg.PLOT_OUTPUT_DIR)
+    if subdir:
+        output_dir += f"/{subdir}"
+    output_dir.mkdir(parents=True, exist_ok=True)
     safe_symbol = re.sub(
         pattern=r"[^A-Za-z0-9_-]+",
         repl="-",
         string=symbol
-    ).strip("-") or cfg.PLOT_DEFAULT_SYMBOL
-    filename = f"{safe_symbol}_{timeframe.tf}_{time:%Y%m%d_%H%M%S}.png"
-    return base_dir / filename
+    ).strip("-")
+    filename = f"{safe_symbol} {timeframe.tf} {time:%d.%m.%Y %H.%M.%S}.png"
+    return output_dir / filename
 
 
 # endregion
@@ -167,7 +170,8 @@ def plot(
         main_high_swing: Optional[Swing],
         cascade_swings: list[Swing],
         resistance_swings: list[Swing],
-        support_swings: list[Swing]
+        support_swings: list[Swing],
+        subdir: Optional[str] = None
 ):
     if not symbol or not bars:
         raise ValueError("Недостаточно данных для построения графика.")
@@ -218,7 +222,7 @@ def plot(
 
     fig.tight_layout()
 
-    output_path = _resolve_output_path(symbol, timeframe, bars[-1].time)
+    output_path = _resolve_output_path(symbol, timeframe, bars[-1].time, subdir)
     fig.savefig(
         fname=output_path,
         facecolor=cfg.PLOT_BACKGROUND_COLOR,

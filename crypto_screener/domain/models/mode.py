@@ -5,6 +5,12 @@ from enum import Enum
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
+@dataclass(frozen=True)
+class TestData:
+    symbol: str
+    timeframe: Timeframe
+    end: datetime
+
 class PlotPolicy(Enum):
     ON_ANY = "ON_ANY"
     ON_SETUP = "ON_SETUP"
@@ -41,6 +47,12 @@ class TestSymbol:
     end: datetime
     plot_policy: PlotPolicy
 
+@dataclass(frozen=True)
+class TestSymbols:
+    test_data: list[TestData]
+    limit: int
+    plot_policy: PlotPolicy
 
-Mode = Live | TestMarket | TestSymbol
+
+Mode = Live | TestMarket | TestSymbols
 # endregion
