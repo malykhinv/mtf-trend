@@ -11,6 +11,7 @@ from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.domain.setup_detector import detect_setup
+from crypto_screener.utils.history import calculate_limit
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot
 from crypto_screener.utils.signals import handle_sig
@@ -141,7 +142,8 @@ def run_live(
                           or capture_state.symbol == symbol.symbol]
         for symbol in active_symbols:
             for timeframe in timeframes:
-                bars = exchange.get_ohlcv(symbol.symbol, timeframe, limit)
+                timeframe_limit = calculate_limit(limit, timeframe)
+                bars = exchange.get_ohlcv(symbol.symbol, timeframe, timeframe_limit)
                 setup = detect_setup(symbol.symbol, bars, timeframe)
                 match setup:
                     # Сетап не найден.
