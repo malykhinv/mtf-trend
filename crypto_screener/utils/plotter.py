@@ -196,6 +196,7 @@ def _resolve_output_path(
         symbol: str,
         timeframe: Timeframe,
         time: datetime,
+        length: int,
         subdir: Optional[str] = None
 ) -> Path:
     output_dir = cfg.PLOT_OUTPUT_DIR
@@ -204,7 +205,7 @@ def _resolve_output_path(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     symbol = re.sub(r"[^A-Za-z0-9]+", "", symbol.split(":", 1)[0])
-    filename = f"{symbol} {timeframe.tf} {time:%d.%m.%Y %H.%M.%S}.png"
+    filename = f"{symbol} {timeframe.tf} {length} {time:%d.%m.%Y %H.%M.%S}.png"
     return output_dir / filename
 
 
@@ -285,7 +286,8 @@ def plot(
 
     fig.tight_layout()
 
-    output_path = _resolve_output_path(symbol, timeframe, bars[-1].time, subdir)
+    length = len(bars)
+    output_path = _resolve_output_path(symbol, timeframe, bars[-1].time, length, subdir)
     fig.savefig(
         fname=output_path,
         facecolor=cfg.PLOT_BACKGROUND_COLOR,

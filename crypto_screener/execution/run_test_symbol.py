@@ -7,7 +7,7 @@ from crypto_screener.domain.models.mode import PlotPolicy, TestData
 from crypto_screener.domain.models.setup import Setup
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.setup_detector import detect_setup
-from crypto_screener.utils.history import calculate_limit
+from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot
 
@@ -22,15 +22,15 @@ def _run_test_symbol(
         plot_policy: PlotPolicy
 ) -> None:
     log.d(f"Проверка {symbol} на {timeframe.tf}")
-    timeframe_limit = calculate_limit(limit, timeframe)
-    bars = exchange.get_ohlcv(symbol, timeframe, timeframe_limit, end)
-    run_test_bars(
-        symbol=symbol,
-        timeframe=timeframe,
-        bars=bars,
-        plot_policy=plot_policy,
-        subdir='test_symbol'
-    )
+    for timeframe_limit in calculate_limit_grid(limit, timeframe):
+        bars = exchange.get_ohlcv(symbol, timeframe, timeframe_limit, end)
+        run_test_bars(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            plot_policy=plot_policy,
+            subdir='test_symbol'
+        )
     log.d("Тест завершен.")
 
 def _detect_setup(
@@ -39,7 +39,7 @@ def _detect_setup(
         timeframe: Timeframe,
 ) -> Setup:
     setup = detect_setup(symbol, bars, timeframe)
-    if setup:
+    if setup.is_filled:
         log.d(f"Обнаружен {setup.name.capitalize()}-сетап.")
     return setup
 

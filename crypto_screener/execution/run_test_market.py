@@ -4,7 +4,7 @@ from crypto_screener.domain.exchange import Exchange, FuturesSymbol
 from crypto_screener.domain.models.mode import PlotPolicy
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.execution.run_test_symbol import run_test_bars
-from crypto_screener.utils.history import calculate_limit, calculate_window
+from crypto_screener.utils.history import calculate_limit_grid, calculate_window
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.time import utc_now
 
@@ -66,35 +66,35 @@ def run_test_market(
 
     for symbol in symbols:
         for timeframe in timeframes:
-            timeframe_limit = calculate_limit(limit, timeframe)
-            timeframe_window = calculate_window(window, timeframe, timeframe_limit)
-            log.d(f"Проверка {symbol.symbol} на {timeframe.tf} (limit={timeframe_limit}, window={timeframe_window})")
-            try:
-                bars = exchange.get_ohlcv(
-                    symbol=symbol.symbol,
-                    timeframe=timeframe,
-                    limit=timeframe_limit,
-                    end=utc_now(),
-                )
-            except Exception as exception:
-                log.e(f"{symbol.symbol} {timeframe.tf}: ошибка получения данных: {exception}")
-                continue
+            for timeframe_limit in calculate_limit_grid(limit, timeframe):
+                timeframe_window = calculate_window(window, timeframe, timeframe_limit)
+                log.d(f"Проверка {symbol.symbol} на {timeframe.tf} (limit={timeframe_limit}, window={timeframe_window})")
+                try:
+                    bars = exchange.get_ohlcv(
+                        symbol=symbol.symbol,
+                        timeframe=timeframe,
+                        limit=timeframe_limit,
+                        end=utc_now(),
+                    )
+                except Exception as exception:
+                    log.e(f"{symbol.symbol} {timeframe.tf}: ошибка получения данных: {exception}")
+                    continue
 
-            if not bars:
-                log.e(f"{symbol.symbol} {timeframe.tf}: не удалось получить свечи.")
-                continue
+                if not bars:
+                    log.e(f"{symbol.symbol} {timeframe.tf}: не удалось получить свечи.")
+                    continue
 
-            if len(bars) < timeframe_window:
-                log.e(f"{symbol.symbol} {timeframe.tf}: для теста нужно минимум {timeframe_window} свечей, получено {len(bars)}.")
-                continue
+                if len(bars) < timeframe_window:
+                    log.e(f"{symbol.symbol} {timeframe.tf}: для теста нужно минимум {timeframe_window} свечей, получено {len(bars)}.")
+                    continue
 
-            for i in range(timeframe_window - 1, len(bars)):
-                window_bars = bars[i - timeframe_window + 1:i + 1]
-                run_test_bars(
-                    symbol=symbol.symbol,
-                    timeframe=timeframe,
-                    bars=window_bars,
-                    plot_policy=plot_policy,
-                    subdir='test_market'
-                )
+                for i in range(timeframe_window - 1, len(bars)):
+                    window_bars = bars[i - timeframe_window + 1:i + 1]
+                    run_test_bars(
+                        symbol=symbol.symbol,
+                        timeframe=timeframe,
+                        bars=window_bars,
+                        plot_policy=plot_policy,
+                        subdir='test_market'
+                    )
     log.d("Тест завершен.")

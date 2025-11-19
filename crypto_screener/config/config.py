@@ -24,7 +24,7 @@ _test_data: list[TestData] = [
 # region Режимы работы.
 _mode_live = Live(
     timeframes=_timeframes,
-    limit=1000,
+    limit=400,
     listing_period_days=14,
     volume_24h_new_usdt_min=5_000_000,
     volume_24h_old_usdt_min=50_000_000,
@@ -34,8 +34,8 @@ _mode_live = Live(
 
 _mode_test_market = TestMarket(
     timeframes=_timeframes,
-    limit=1500,
-    window=400,
+    limit=400,
+    window=160,
     plot_policy=PlotPolicy.ON_FILLED_SETUP,
     volume_24h_usdt_min=20_000_000,
     trades_24h_min=300_000,
@@ -44,7 +44,7 @@ _mode_test_market = TestMarket(
 
 _mode_test_symbols = TestSymbols(
     test_data=_test_data,
-    limit=1000,
+    limit=400,
     plot_policy=PlotPolicy.ON_ANY
 )
 

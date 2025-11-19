@@ -23,6 +23,21 @@ def calculate_limit(
     return _scale_by_timeframe(base_limit, timeframe, _LIMIT_MIN)
 
 
+def calculate_limit_grid(
+        base_limit: int,
+        timeframe: Timeframe
+) -> list[int]:
+    variants = [base_limit, base_limit * 2, base_limit * 3]
+    limits: list[int] = []
+
+    for variant in variants:
+        limit = calculate_limit(variant, timeframe)
+        if limit not in limits:
+            limits.append(limit)
+
+    return limits
+
+
 def calculate_window(
         base_window: int,
         timeframe: Timeframe,
