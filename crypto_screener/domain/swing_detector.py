@@ -35,7 +35,7 @@ def _add_swings(
         return []
 
     if length < 2 * window + 1:
-        return [replace(b, swing=None) for b in bars]
+        return [replace(bar, swing=None) for bar in bars]
 
     min_move_by_idx: list[float | None] = _compute_min_move_series(
         bars=bars,
@@ -53,13 +53,13 @@ def _add_swings(
         high = bar.high
 
         is_local_low = (
-                all(low <= b.low for b in segment)
+                all(low <= bar.low for bar in segment)
                 and low < bars[idx - 1].low
                 and low < bars[idx + 1].low
         )
 
         is_local_high = (
-                all(high >= b.high for b in segment)
+                all(high >= bar.high for bar in segment)
                 and high > bars[idx - 1].high
                 and high > bars[idx + 1].high
         )
@@ -70,7 +70,7 @@ def _add_swings(
             candidates.append((idx, SwingType.HIGH, high))
 
     if not candidates:
-        return [replace(b, swing=None) for b in bars]
+        return [replace(bar, swing=None) for bar in bars]
 
     candidates.sort(key=lambda x: x[0])
 
@@ -83,18 +83,15 @@ def _add_swings(
 
         last_idx, last_type, last_price = filtered[-1]
 
-        # тот же тип → оставляем только более экстремальный свинг
         if swing_type == last_type:
             if _is_more_extreme(swing_type, price, last_price):
                 filtered[-1] = (idx, swing_type, price)
             continue
 
-        # другой тип → проверяем, достаточно ли движение в ценах
         move_abs = abs(price - last_price)
         threshold = _get_move_threshold(min_move_by_idx, last_idx, idx)
 
         if threshold is not None and move_abs < threshold:
-            # движение слишком маленькое — игнорируем
             continue
 
         filtered.append((idx, swing_type, price))

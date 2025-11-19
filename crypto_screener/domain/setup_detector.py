@@ -18,7 +18,7 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     if length < 2 * min_side_bars:
         return []
 
-    volumes = [b.volume for b in bars]
+    volumes = [bar.volume for bar in bars]
 
     prefix = [0.0] * (length + 1)
     for i, v in enumerate(volumes):

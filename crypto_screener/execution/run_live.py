@@ -27,7 +27,7 @@ def _fetch_filtered_symbols(
         trades_24h_btc_ratio_min: float
 ) -> list[FuturesSymbol]:
     symbols = exchange.get_futures_symbols()
-    btc_trades_24h = next((s.trades_24h for s in symbols if s.symbol.startswith("BTC")), 0)
+    btc_trades_24h = next((symbol.trades_24h for symbol in symbols if symbol.symbol.startswith("BTC")), 0)
     filtered_symbols = _filter_symbols(
         symbols,
         listing_period_days,
@@ -136,7 +136,9 @@ def run_live(
         if not capture_state.symbol:
             log.d("Запуск цикла анализа отобранных монет.")
 
-        active_symbols = [s for s in filtered_symbols if not capture_state.symbol or capture_state.symbol == s.symbol]
+        active_symbols = [symbol for symbol in filtered_symbols
+                          if not capture_state.symbol
+                          or capture_state.symbol == symbol.symbol]
         for symbol in active_symbols:
             for timeframe in timeframes:
                 bars = exchange.get_ohlcv(symbol.symbol, timeframe, limit)

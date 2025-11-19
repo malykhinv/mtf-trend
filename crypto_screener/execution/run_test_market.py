@@ -18,14 +18,14 @@ def _filter_symbols(
     filtered = symbols
 
     if volume_min is not None:
-        filtered = [s for s in filtered if (s.volume_usdt_24h or 0) >= volume_min]
+        filtered = [symbol for symbol in filtered if (symbol.volume_usdt_24h or 0) >= volume_min]
 
     if trades_min is not None:
-        filtered = [s for s in filtered if (s.trades_24h or 0) >= trades_min]
+        filtered = [symbol for symbol in filtered if (symbol.trades_24h or 0) >= trades_min]
 
     if listing_age_days_min is not None and listing_age_days_min > 0:
         min_listing_time = utc_now() - timedelta(days=listing_age_days_min)
-        filtered = [s for s in filtered if s.listing_time <= min_listing_time]
+        filtered = [symbol for symbol in filtered if symbol.listing_time <= min_listing_time]
 
     return filtered
 
