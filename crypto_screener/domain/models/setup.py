@@ -2,28 +2,43 @@ from abc import ABC
 from dataclasses import dataclass, field
 from typing import Optional
 
+from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.swing import Swing
+from crypto_screener.domain.models.timeframe import Timeframe
 
 
-@dataclass(frozen=True)
+@dataclass
 class Setup(ABC):
     name: str = field(init=False)
+    is_filled: bool = field(init=False)
 
     # Поля конструктора.
+    symbol: str
+    timeframe: Timeframe
+    bars: list[Bar]
     main_high_swing: Optional[Swing]
-    cascade_swings: list[Swing]
-    resistance_swings: list[Swing]
-    support_swings: list[Swing]
+    cascade_swings: Optional[list[Swing]]
+    resistance_swings: Optional[list[Swing]]
+    support_swings: Optional[list[Swing]]
 
 
-@dataclass(frozen=True)
+@dataclass
+class Unfilled(Setup):
+    name: str = field(init=False, default="Undefined")
+    is_filled: bool = field(init=False, default=False)
+
+
+@dataclass
 class Capture(Setup):
     name: str = field(init=False, default="Capture")
+    is_filled: bool = field(init=False, default=True)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Buy(Setup):
     name: str = field(init=False, default="Buy")
+    is_filled: bool = field(init=False, default=True)
+
     take_profit_price: float
     stop_loss_price: float
     partial_close_price: Optional[float]

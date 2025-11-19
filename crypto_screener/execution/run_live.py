@@ -75,9 +75,9 @@ def _send_notification(
         timeframe: Timeframe,
         bars: list[Bar],
         main_high_swing: Optional[Swing],
-        cascade_swings: list[Swing],
-        resistance_swings: list[Swing],
-        support_swings: list[Swing],
+        cascade_swings: Optional[list[Swing]],
+        resistance_swings: Optional[list[Swing]],
+        support_swings: Optional[list[Swing]],
         subdir: Optional[str] = None
 ) -> None:
     try:
@@ -140,7 +140,7 @@ def run_live(
         for symbol in active_symbols:
             for timeframe in timeframes:
                 bars = exchange.get_ohlcv(symbol.symbol, timeframe, limit)
-                setup = detect_setup(bars, timeframe)
+                setup = detect_setup(symbol.symbol, bars, timeframe)
                 match setup:
                     # Сетап не найден.
                     case None:

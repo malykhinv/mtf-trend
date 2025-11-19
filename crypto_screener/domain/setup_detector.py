@@ -2,7 +2,7 @@ from typing import Optional
 
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.setup import Setup, Capture, Buy
+from crypto_screener.domain.models.setup import Setup, Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import SwingType, Swing
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.swing_detector import add_swings
@@ -175,10 +175,19 @@ def _get_cascade(swings: list[Swing], length_min: int, range_max: float) -> list
 
 
 def detect_setup(
+        symbol: str,
         bars: list[Bar],
         timeframe: Timeframe
-) -> Optional[Setup]:
-    setup = None
+) -> Setup:
+    setup = Unfilled(
+        symbol=symbol,
+        timeframe=timeframe,
+        bars=bars,
+        main_high_swing=None,
+        cascade_swings=None,
+        resistance_swings=None,
+        support_swings=None
+    )
 
     # Анализ повышения объемов.
     bars = _trim_by_volume(bars)
@@ -186,6 +195,7 @@ def detect_setup(
         return setup
 
     bars = add_swings(bars, timeframe)
+    setup.bars = bars
 
     # Анализ роста.
     main_rising_swings = _get_main_rising_swings_indexed(bars)
@@ -196,6 +206,8 @@ def detect_setup(
         return setup
     _, main_low_swing = main_low
     main_high_index, main_high_swing = main_high
+    setup.main_high_swing = main_high_swing
+
     rise = main_high_swing.price - main_low_swing.price
     rise_pct = 100 * rise / main_low_swing.price
     is_rise_valid = rise > 0 and rise_pct >= cfg.PRICE_RISE_PCT_MIN
@@ -221,6 +233,8 @@ def detect_setup(
     open_high_swings = _filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
     cascade_range_max = retrace_range * cfg.CASCADE_RANGE_RATIO_MAX
     cascade_long = _get_cascade(open_high_swings, cfg.CASCADE_LENGTH_MIN, cascade_range_max)
+    setup.cascade_swings = cascade_long
+
     if not cascade_long:
         return setup
 
@@ -228,6 +242,8 @@ def detect_setup(
     resistance_price_min = max(cascade_long, key=lambda swing: swing.price).price
     resistance_price_max = main_high_swing.price
     resistance_swings = _filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
+    setup.resistance_swings = resistance_swings
+
     has_resistance = len(resistance_swings) > cfg.RESISTANCE_COUNT_MAX
     if has_resistance:
         return setup
@@ -236,6 +252,8 @@ def detect_setup(
     initial_swing = cascade_long[0]
     consolidation_range = initial_swing.price - correction_low_swing.price
     open_low_swings = _get_open_swings(correction_bars, SwingType.LOW)
+    setup.support_swings = open_low_swings
+
     support_price_min = correction_low_swing.price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
     support_price_max = initial_swing.price
     open_low_swings = _filter_by_price(open_low_swings, support_price_min, support_price_max)
@@ -270,6 +288,9 @@ def detect_setup(
 
     # Проторговка после отката с лонговым каскадом.
     setup = Capture(
+        symbol=symbol,
+        timeframe=timeframe,
+        bars=bars,
         main_high_swing=main_high_swing,
         cascade_swings=cascade_long,
         resistance_swings=resistance_swings,
@@ -292,6 +313,9 @@ def detect_setup(
         partial_close_price = nearest_resistance_price if has_partial_close else None
         breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
     setup = Buy(
+        symbol=symbol,
+        timeframe=timeframe,
+        bars=bars,
         main_high_swing=main_high_swing,
         cascade_swings=cascade_long,
         resistance_swings=resistance_swings,

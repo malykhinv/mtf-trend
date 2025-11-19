@@ -13,7 +13,7 @@ class TestData:
 
 class PlotPolicy(Enum):
     ON_ANY = "ON_ANY"
-    ON_SETUP = "ON_SETUP"
+    ON_FILLED_SETUP = "ON_FILLED_SETUP"
 
 
 # region Mode

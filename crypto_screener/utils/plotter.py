@@ -6,6 +6,8 @@ from typing import Optional, Any
 import matplotlib
 from matplotlib.figure import Figure
 
+from crypto_screener.domain.swing_detector import add_swings
+
 matplotlib.use("Agg")
 
 import matplotlib.dates as mdates
@@ -165,9 +167,9 @@ def plot(
         timeframe: Timeframe,
         bars: list[Bar],
         main_high_swing: Optional[Swing],
-        cascade_swings: list[Swing],
-        resistance_swings: list[Swing],
-        support_swings: list[Swing],
+        cascade_swings: Optional[list[Swing]],
+        resistance_swings: Optional[list[Swing]],
+        support_swings: Optional[list[Swing]],
         subdir: Optional[str] = None
 ):
     if not symbol or not bars:
@@ -185,29 +187,41 @@ def plot(
     _draw_candles(ax, bars, times, candle_width)
     _format_ax(ax, times, min_price, max_price)
 
-    _draw_swing_group(
-        ax=ax,
-        swings=cascade_swings,
-        color=cfg.PLOT_CASCADE_SWING_COLOR,
-        y_offset=y_offset
-    )
-    _draw_swing_group(
-        ax=ax,
-        swings=resistance_swings,
-        color=cfg.PLOT_RESISTANCE_SWING_COLOR,
-        y_offset=y_offset
-    )
-    _draw_swing_group(
-        ax=ax,
-        swings=support_swings,
-        color=cfg.PLOT_SUPPORT_SWING_COLOR,
-        y_offset=y_offset
-    )
+    if cascade_swings:
+        _draw_swing_group(
+            ax=ax,
+            swings=cascade_swings,
+            color=cfg.PLOT_CASCADE_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if resistance_swings:
+        _draw_swing_group(
+            ax=ax,
+            swings=resistance_swings,
+            color=cfg.PLOT_RESISTANCE_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if support_swings:
+        _draw_swing_group(
+            ax=ax,
+            swings=support_swings,
+            color=cfg.PLOT_SUPPORT_SWING_COLOR,
+            y_offset=y_offset
+        )
     if main_high_swing:
         _draw_swing_group(
             ax=ax,
             swings=[main_high_swing],
             color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if not cascade_swings and not resistance_swings and not support_swings:
+        bars = add_swings(bars, timeframe)
+        swings = [bar.swing for bar in bars if bar.swing]
+        _draw_swing_group(
+            ax=ax,
+            swings=swings,
+            color=cfg.PLOT_COMMON_SWING_COLOR,
             y_offset=y_offset
         )
 

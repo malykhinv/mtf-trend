@@ -14,11 +14,11 @@ _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Time
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
-    # TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
+    TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
     TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
-    # TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
-    # TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
-    # TestData('WIFUSDT', Timeframe.M15, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
+    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
+    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
+    TestData('WIFUSDT', Timeframe.M15, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
 ]
 
 # region Режимы работы.
@@ -36,7 +36,7 @@ _mode_test_market = TestMarket(
     timeframes=_timeframes,
     limit=1500,
     window=400,
-    plot_policy=PlotPolicy.ON_SETUP,
+    plot_policy=PlotPolicy.ON_FILLED_SETUP,
     volume_24h_usdt_min=20_000_000,
     trades_24h_min=300_000,
     listing_age_days_min=30
@@ -116,6 +116,7 @@ class AppConfig:
     PLOT_CASCADE_SWING_COLOR: str = "#64b5f6"
     PLOT_RESISTANCE_SWING_COLOR: str = "#ef5350"
     PLOT_SUPPORT_SWING_COLOR: str = "#66bb6a"
+    PLOT_COMMON_SWING_COLOR: str = "#663366"
     # Маркеры свингов.
     PLOT_SWING_MARKER_SIZE: int = 32
     PLOT_SWING_MARKER_CLOSED_ALPHA: float = 0.5
