@@ -183,18 +183,6 @@ def _compute_min_move_series(
     return min_move
 
 
-def _is_swing_open(
-        price: float,
-        future_bars: list[Bar]
-) -> bool:
-    for bar in future_bars:
-        body_low = min(bar.open, bar.close)
-        body_high = max(bar.open, bar.close)
-        if body_low <= price <= body_high:
-            return False
-    return True
-
-
 def _refine_swings(bars: list[Bar]) -> list[Bar]:
     length = len(bars)
     if length == 0:
@@ -309,6 +297,18 @@ def _mark_swings_open(
         )
 
     return result
+
+
+def _is_swing_open(
+        price: float,
+        future_bars: list[Bar]
+) -> bool:
+    for bar in future_bars:
+        body_low = min(bar.open, bar.close)
+        body_high = max(bar.open, bar.close)
+        if body_low <= price <= body_high:
+            return False
+    return True
 
 
 # endregion

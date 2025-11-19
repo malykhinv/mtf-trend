@@ -233,13 +233,21 @@ def detect_setup(
     open_high_swings = _filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
     cascade_range_max = retrace_range * cfg.CASCADE_RANGE_RATIO_MAX
     cascade_long = _get_cascade(open_high_swings, cfg.CASCADE_LENGTH_MIN, cascade_range_max)
+    cascade_top = max(cascade_long, key=lambda swing: swing.price).price
+    resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
+    extra_cascade_swings = [
+        swing for swing in open_high_swings
+        if cascade_top < swing.price <= cascade_top + resistance_gap
+    ]
+    cascade_long = cascade_long + [swing for swing in extra_cascade_swings if swing not in cascade_long]
     setup.cascade_swings = cascade_long
-
     if not cascade_long:
         return setup
 
     # Анализ сопротивления над каскадом.
-    resistance_price_min = max(cascade_long, key=lambda swing: swing.price).price
+    cascade_top = max(cascade_long, key=lambda swing: swing.price).price
+    resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
+    resistance_price_min = cascade_top + resistance_gap
     resistance_price_max = main_high_swing.price
     resistance_swings = _filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
     setup.resistance_swings = resistance_swings
@@ -303,15 +311,16 @@ def detect_setup(
         return setup
 
     # Пробой лонгового каскада.
-    nearest_resistance_price = resistance_swings[-1].price
-    nearest_resistance_distance_pct = 100 * (nearest_resistance_price - current_price) / current_price
-    partial_close_side_pct = cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
-    has_partial_close = partial_close_side_pct <= nearest_resistance_distance_pct < profit_pct - partial_close_side_pct
     partial_close_price = None
     breakeven_price = None
-    if has_partial_close:
-        partial_close_price = nearest_resistance_price if has_partial_close else None
-        breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
+    if resistance_swings:
+        nearest_resistance_price = resistance_swings[-1].price
+        nearest_resistance_distance_pct = 100 * (nearest_resistance_price - current_price) / current_price
+        partial_close_side_pct = cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
+        has_partial_close = partial_close_side_pct <= nearest_resistance_distance_pct < profit_pct - partial_close_side_pct
+        if has_partial_close:
+            partial_close_price = nearest_resistance_price if has_partial_close else None
+            breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
     setup = Buy(
         symbol=symbol,
         timeframe=timeframe,

@@ -18,7 +18,7 @@ _test_data: list[TestData] = [
     TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
     TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
     TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
-    TestData('WIFUSDT', Timeframe.M15, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
+    TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
 ]
 
 # region Режимы работы.
@@ -79,8 +79,10 @@ class AppConfig:
     CASCADE_RANGE_RATIO_MAX: float = 0.2
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
+    # Минимальный разрыв от верха каскада до начала сопротивления (в долях отката)
+    RESISTANCE_GAP_RATIO_MIN: float = 0.1
     # Максимальное количество свингов после каскада.
-    RESISTANCE_COUNT_MAX: int = 1
+    RESISTANCE_COUNT_MAX: int = 2
     # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
     SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.3
     # endregion
