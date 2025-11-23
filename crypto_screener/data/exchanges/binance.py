@@ -91,4 +91,4 @@ class Binance(Exchange):
             since=params.get("since"),
             limit=params["limit"],
         )
-        return map_ohlcv(raw)
+        return map_ohlcv(raw, end)

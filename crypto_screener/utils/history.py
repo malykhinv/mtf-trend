@@ -27,7 +27,7 @@ def calculate_limit_grid(
         base_limit: int,
         timeframe: Timeframe
 ) -> list[int]:
-    variants = [base_limit, base_limit * 2, base_limit * 3]
+    variants = [base_limit * 3, base_limit * 2, base_limit]
     limits: list[int] = []
 
     for variant in variants:
