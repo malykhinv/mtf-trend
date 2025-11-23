@@ -59,7 +59,7 @@ class AppConfig:
     TIMEZONE: ZoneInfo = _timezone
 
     # Режим работы.
-    MODE: Mode = _mode_test_symbols
+    MODE: Mode = _mode_test_market
 
     # region Контекст.
     CONTEXT_E_TRADES_MIN: int = 500_000
