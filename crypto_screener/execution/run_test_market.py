@@ -70,7 +70,7 @@ def run_test_market(
         for timeframe in timeframes:
             for timeframe_limit in calculate_limit_grid(limit, timeframe):
                 timeframe_window = calculate_window(window, timeframe, timeframe_limit)
-                log.d(f"Проверка {symbol.symbol} ({symbol.context}) на {timeframe.tf} "
+                log.d(f"Проверка {symbol.symbol} (контекст {symbol.context.value}) на {timeframe.tf} "
                       f"(limit={timeframe_limit}, window={timeframe_window})")
                 try:
                     bars = exchange.get_ohlcv(
