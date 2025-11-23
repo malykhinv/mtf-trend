@@ -2,9 +2,9 @@ from typing import Optional
 
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.setup import Setup, Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import SwingType, Swing
+from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.swing_detector import add_swings
 

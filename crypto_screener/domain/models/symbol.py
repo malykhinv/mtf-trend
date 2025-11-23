@@ -1,7 +1,5 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
-from enum import Enum
-from typing import Iterable
 
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.context import Context
