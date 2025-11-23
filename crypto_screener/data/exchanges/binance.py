@@ -6,8 +6,9 @@ from typing import Iterable, Optional
 import ccxt
 
 from crypto_screener.data.mappers import map_ohlcv
-from crypto_screener.domain.exchange import Exchange, FuturesSymbol
+from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.extractors import extract_float, extract_int
 

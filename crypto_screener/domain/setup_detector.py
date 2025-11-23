@@ -2,6 +2,7 @@ from typing import Optional
 
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.setup import Setup, Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import SwingType, Swing
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -133,7 +134,11 @@ def _filter_by_price(
     return filtered
 
 
-def _get_cascade(swings: list[Swing], length_min: int, range_max: float) -> list[Swing]:
+def _get_cascade(
+        swings: list[Swing],
+        length_min: int,
+        range_max: float
+) -> list[Swing]:
     cascade = []
     if not swings or length_min <= 0 or range_max < 0:
         return cascade
@@ -177,7 +182,8 @@ def _get_cascade(swings: list[Swing], length_min: int, range_max: float) -> list
 def detect_setup(
         symbol: str,
         bars: list[Bar],
-        timeframe: Timeframe
+        timeframe: Timeframe,
+        context: Context
 ) -> Setup:
     setup = Unfilled(
         symbol=symbol,
@@ -190,8 +196,10 @@ def detect_setup(
     )
 
     # Анализ повышения объемов.
-    bars = _trim_by_volume(bars)
-    if not bars:
+    trimmed_bars = _trim_by_volume(bars)
+    if trimmed_bars:
+        bars = trimmed_bars
+    elif not context in {Context.A, Context.B, Context.C}:
         return setup
 
     bars = add_swings(bars, timeframe)

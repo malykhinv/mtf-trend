@@ -1,7 +1,8 @@
 from datetime import timedelta
 
-from crypto_screener.domain.exchange import Exchange, FuturesSymbol
+from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.mode import PlotPolicy
+from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.execution.run_test_symbol import run_test_bars
 from crypto_screener.utils.history import calculate_limit_grid, calculate_window
@@ -53,6 +54,7 @@ def run_test_market(
         return
 
     symbols = exchange.get_futures_symbols()
+    symbols = set_contexts(symbols, listing_age_days_min)
     log.d(f"Получено {len(symbols)} символов до фильтрации.")
 
     symbols = _filter_symbols(
@@ -68,7 +70,8 @@ def run_test_market(
         for timeframe in timeframes:
             for timeframe_limit in calculate_limit_grid(limit, timeframe):
                 timeframe_window = calculate_window(window, timeframe, timeframe_limit)
-                log.d(f"Проверка {symbol.symbol} на {timeframe.tf} (limit={timeframe_limit}, window={timeframe_window})")
+                log.d(f"Проверка {symbol.symbol} ({symbol.context}) на {timeframe.tf} "
+                      f"(limit={timeframe_limit}, window={timeframe_window})")
                 try:
                     bars = exchange.get_ohlcv(
                         symbol=symbol.symbol,
@@ -85,7 +88,8 @@ def run_test_market(
                     continue
 
                 if len(bars) < timeframe_window:
-                    log.e(f"{symbol.symbol} {timeframe.tf}: для теста нужно минимум {timeframe_window} свечей, получено {len(bars)}.")
+                    log.e(f"{symbol.symbol} {timeframe.tf}: "
+                          f"для теста нужно минимум {timeframe_window} свечей, получено {len(bars)}.")
                     continue
 
                 for i in range(timeframe_window - 1, len(bars)):
@@ -95,6 +99,7 @@ def run_test_market(
                         timeframe=timeframe,
                         bars=window_bars,
                         plot_policy=plot_policy,
+                        context=symbol.context,
                         subdir='test_market'
                     )
     log.d("Тест завершен.")

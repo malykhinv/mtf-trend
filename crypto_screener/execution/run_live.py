@@ -4,8 +4,9 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from crypto_screener.domain.capture_state import CaptureState
-from crypto_screener.domain.exchange import Exchange, FuturesSymbol
+from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -28,6 +29,7 @@ def _fetch_filtered_symbols(
         trades_24h_btc_ratio_min: float
 ) -> list[FuturesSymbol]:
     symbols = exchange.get_futures_symbols()
+    symbols = set_contexts(symbols, listing_period_days)
     btc_trades_24h = next((symbol.trades_24h for symbol in symbols if symbol.symbol.startswith("BTC")), 0)
     filtered_symbols = _filter_symbols(
         symbols,
@@ -146,7 +148,7 @@ def run_live(
                 bars = []
                 for timeframe_limit in calculate_limit_grid(limit, timeframe):
                     bars = exchange.get_ohlcv(symbol.symbol, timeframe, timeframe_limit)
-                    setup = detect_setup(symbol.symbol, bars, timeframe)
+                    setup = detect_setup(symbol.symbol, bars, timeframe, symbol.context)
                     if setup:
                         break
                 match setup:

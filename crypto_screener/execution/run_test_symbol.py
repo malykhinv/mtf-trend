@@ -4,6 +4,7 @@ from typing import Optional
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy, TestData
+from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.setup import Setup
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.setup_detector import detect_setup
@@ -29,6 +30,7 @@ def _run_test_symbol(
             timeframe=timeframe,
             bars=bars,
             plot_policy=plot_policy,
+            context=Context.A,  # Для упрощения тестирования
             subdir='test_symbol'
         )
     log.d("Тест завершен.")
@@ -37,8 +39,9 @@ def _detect_setup(
         symbol: str,
         bars: list[Bar],
         timeframe: Timeframe,
+        context: Context
 ) -> Setup:
-    setup = detect_setup(symbol, bars, timeframe)
+    setup = detect_setup(symbol, bars, timeframe, context)
     if setup.is_filled:
         log.d(f"Обнаружен {setup.name.capitalize()}-сетап.")
     return setup
@@ -68,11 +71,12 @@ def run_test_bars(
         timeframe: Timeframe,
         bars: list[Bar],
         plot_policy: PlotPolicy,
+        context: Context,
         subdir: Optional[str] = None
 ) -> None:
     if not bars:
         return
-    setup = _detect_setup(symbol, bars, timeframe)
+    setup = _detect_setup(symbol, bars, timeframe, context)
     match plot_policy:
         case PlotPolicy.ON_ANY:
             _plot(setup, subdir)

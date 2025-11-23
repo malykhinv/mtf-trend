@@ -61,7 +61,12 @@ class AppConfig:
     # Режим работы.
     MODE: Mode = _mode_test_symbols
 
-    # region Объем.
+    # region Контекст.
+    CONTEXT_E_TRADES_MIN: int = 500_000
+    CONTEXT_B_VOLUME_MIN: float = 500_000_000
+    # endregion
+
+    # region Повышенный объем.
     # Минимальная длина окна для нахождения зоны повышенного объема.
     VOLUME_TRIM_SIDE_BARS_MIN: int = 10
     # Порог изменения объема для нахождения зоны повышенного объема.
