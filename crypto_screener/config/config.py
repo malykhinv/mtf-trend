@@ -14,20 +14,20 @@ _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Time
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
-    # TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
-    # TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
-    # TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
-    # TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
-    # TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
-    # TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
-    TestData('ASTERUSDT', Timeframe.M30, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
+    TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
+    TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
+    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
+    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
+    TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
+    TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
+    TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
 ]
 
 # region Режимы работы.
 _mode_live = Live(
     timeframes=_timeframes,
     limit=400,
-    listing_period_days=14,
+    listing_period_days=int(365/12),
     volume_24h_new_usdt_min=5_000_000,
     volume_24h_old_usdt_min=50_000_000,
     trades_24h_min=500_000,
@@ -79,7 +79,7 @@ class AppConfig:
     # Рост цены на основных свингах в зоне повышенного объема.
     PRICE_RISE_PCT_MIN: float = 6.0
     # Соотношение глубины отката к росту.
-    RETRACE_RATIO_MAX: float = 0.5
+    RETRACE_RATIO_MAX: float = 0.75
     # Минимальный уровень отката (снизу-вверх), на котором может располагаться каскад.
     CASCADE_RETRACE_RATIO_MIN: float = 0.4
     # Максимальный разброс цены в каскаде относительно размера отката.
@@ -129,7 +129,7 @@ class AppConfig:
     PLOT_COMMON_SWING_COLOR: str = "#663366"
     # Маркеры свингов.
     PLOT_SWING_MARKER_SIZE: int = 32
-    PLOT_SWING_MARKER_CLOSED_ALPHA: float = 0.5
+    PLOT_SWING_MARKER_CLOSED_ALPHA: float = 0.25
     PLOT_SWING_MARKER_OPEN_ALPHA: float = 1.0
     PLOT_SWING_ZORDER: int = 3
     # Размер и положение свечей.
