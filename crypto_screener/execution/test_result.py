@@ -23,7 +23,7 @@ def evaluate_buy(
         setup: Buy,
         future_bars: list[Bar]
 ) -> Optional[tuple[TradeResult, float]]:
-    entry_price = setup.breakeven_price * (1 + cfg.TEST_SLIPPAGE_PCT / 100)
+    entry_price = setup.cascade_swings[-1].price * (1 + cfg.TEST_SLIPPAGE_PCT / 100)
     stop_loss_price = setup.stop_loss_price
     take_profit_price = setup.take_profit_price
     partial_close_price = setup.partial_close_price

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from crypto_screener.domain.exchange import Exchange
@@ -28,6 +28,8 @@ def _get_future_bars(
         limit: int,
         end: datetime,
 ) -> list[Bar]:
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=timezone.utc)
     future_end = _future_end(end, timeframe, limit)
     future_bars = exchange.get_ohlcv(symbol, timeframe, limit, future_end)
     return [bar for bar in future_bars if bar.time > end]
