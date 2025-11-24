@@ -258,10 +258,11 @@ def detect_setup(
     cascade_top = max(cascade_long, key=lambda swing: swing.price).price
     resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
     resistance_price_min = cascade_top + resistance_gap
-    resistance_price_max = main_high_swing.price
-    resistance_swings = _filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
+    resistance_price_max = main_high_swing.price - resistance_gap
+    resistance_swings = []
+    if resistance_price_min < resistance_price_max:
+        resistance_swings = _filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
     setup.resistance_swings = resistance_swings
-
     has_resistance = len(resistance_swings) > cfg.RESISTANCE_COUNT_MAX
     if has_resistance:
         return setup

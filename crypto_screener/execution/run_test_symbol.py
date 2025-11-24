@@ -73,9 +73,9 @@ def run_test_bars(
         plot_policy: PlotPolicy,
         context: Context,
         subdir: Optional[str] = None
-) -> None:
+) -> Optional[Setup]:
     if not bars:
-        return
+        return None
     setup = _detect_setup(symbol, bars, timeframe, context)
     match plot_policy:
         case PlotPolicy.ON_ANY:
@@ -83,6 +83,7 @@ def run_test_bars(
         case PlotPolicy.ON_FILLED_SETUP:
             if setup.is_filled:
                 _plot(setup, subdir)
+    return setup
 
 
 def run_test_symbols(

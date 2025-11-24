@@ -27,7 +27,7 @@ _test_data: list[TestData] = [
 _mode_live = Live(
     timeframes=_timeframes,
     limit=400,
-    listing_period_days=int(365/12),
+    listing_period_days=int(365 / 12),
     volume_24h_new_usdt_min=5_000_000,
     volume_24h_old_usdt_min=50_000_000,
     trades_24h_min=500_000,
@@ -166,6 +166,10 @@ class AppConfig:
     PLOT_PRICE_HIGH_THRESHOLD: float = 100
     PLOT_PRICE_MID_THRESHOLD: float = 1
     PLOT_DEFAULT_SYMBOL: str = "asset"
+    # endregion
+
+    # region Тест
+    TEST_SLIPPAGE_PCT: float = 0.3
     # endregion
 
 
