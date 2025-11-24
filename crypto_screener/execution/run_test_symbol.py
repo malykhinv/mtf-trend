@@ -1,19 +1,38 @@
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta
 from typing import Optional
 
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy, TestData
-from crypto_screener.domain.models.setup import Setup
+from crypto_screener.domain.models.setup import Buy, Setup
 from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.setup_detector import detect_setup
+from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot
 
 
 # region Private.
+def _future_end(end: datetime, timeframe: Timeframe, limit: int) -> datetime:
+    return end + timedelta(minutes=timeframe.minutes * limit)
+
+
+def _get_future_bars(
+        exchange: Exchange,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int,
+        end: datetime,
+) -> list[Bar]:
+    future_end = _future_end(end, timeframe, limit)
+    future_bars = exchange.get_ohlcv(symbol, timeframe, limit, future_end)
+    return [bar for bar in future_bars if bar.time > end]
+
+
 def _run_test_symbol(
         exchange: Exchange,
         symbol: str,
@@ -21,11 +40,23 @@ def _run_test_symbol(
         limit: int,
         end: datetime,
         plot_policy: PlotPolicy
-) -> None:
+) -> tuple[list[float], defaultdict[TradeResult, int]]:
     log.d(f"Проверка {symbol} на {timeframe.tf}")
+    trade_results: list[float] = []
+    trade_outcomes: defaultdict[TradeResult, int] = defaultdict(int)
+
     for timeframe_limit in calculate_limit_grid(limit, timeframe):
-        bars = exchange.get_ohlcv(symbol, timeframe, timeframe_limit, end)
-        run_test_bars(
+        try:
+            bars = exchange.get_ohlcv(symbol, timeframe, timeframe_limit, end)
+        except Exception as exception:
+            log.e(f"{symbol} {timeframe.tf}: ошибка получения данных: {exception}")
+            continue
+
+        if not bars:
+            log.e(f"{symbol} {timeframe.tf}: не удалось получить свечи.")
+            continue
+
+        setup = run_test_bars(
             symbol=symbol,
             timeframe=timeframe,
             bars=bars,
@@ -33,7 +64,26 @@ def _run_test_symbol(
             context=Context.A,  # Для упрощения тестирования
             subdir='test_symbol'
         )
-    log.d("Тест завершен.")
+
+        if not setup or not isinstance(setup, Buy):
+            continue
+
+        future_bars = _get_future_bars(exchange, symbol, timeframe, timeframe_limit, end)
+        if not future_bars:
+            log.e(f"{symbol} {timeframe.tf}: не удалось получить будущие свечи после {end}.")
+            continue
+
+        outcome = evaluate_buy(setup, future_bars)
+        if not outcome:
+            continue
+
+        trade_result, profit_pct = outcome
+        trade_outcomes[trade_result] += 1
+        trade_results.append(profit_pct)
+        log.i(f"{symbol} {timeframe.tf}: {trade_result.value} ({profit_pct:+.2f}%)")
+
+    return trade_results, trade_outcomes
+
 
 def _detect_setup(
         symbol: str,
@@ -92,6 +142,21 @@ def run_test_symbols(
         limit: int,
         plot_policy: PlotPolicy
 ) -> None:
+    trade_results: list[float] = []
+    trade_outcomes: defaultdict[TradeResult, int] = defaultdict(int)
+
     for data in test_data:
-        _run_test_symbol(exchange, data.symbol, data.timeframe, limit, data.end, plot_policy)
+        symbol_results, symbol_outcomes = _run_test_symbol(
+            exchange,
+            data.symbol,
+            data.timeframe,
+            limit,
+            data.end,
+            plot_policy,
+        )
+        trade_results.extend(symbol_results)
+        for result, count in symbol_outcomes.items():
+            trade_outcomes[result] += count
+
+    log_test_summary(trade_outcomes, trade_results)
     log.d("Тест завершен.")
