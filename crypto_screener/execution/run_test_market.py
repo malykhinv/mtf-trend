@@ -6,7 +6,7 @@ from crypto_screener.config.config import cfg
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy
-from crypto_screener.domain.models.setup import Buy, Setup
+from crypto_screener.domain.models.setup import Buy
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult

@@ -43,7 +43,7 @@ def _detect_setup(
 ) -> Setup:
     setup = detect_setup(symbol, bars, timeframe, context)
     if setup.is_filled:
-        log.d(f"Обнаружен {setup.name.capitalize()}-сетап.")
+        log.d(f"На {symbol} ({timeframe.tf}) обнаружен {setup.name.capitalize()}-сетап.")
     return setup
 
 
@@ -61,7 +61,7 @@ def _plot(
         support_swings=setup.support_swings,
         subdir=subdir
     )
-    log.d("График сохранен.")
+    log.d(f"График {setup.symbol} сохранен.")
 
 
 # endregion
