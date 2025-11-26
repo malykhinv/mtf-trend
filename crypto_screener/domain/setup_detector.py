@@ -145,13 +145,9 @@ def _filter_by_price(
         price_min: float,
         price_max: float
 ) -> list[Swing]:
-    filtered = []
     if price_min <= 0 or price_min >= price_max:
         raise ValueError(f"Некорректные границы цены: {price_min}..{price_max}.")
-    for swing in swings:
-        if price_min <= swing.price <= price_max:
-            filtered.append(swing)
-    return filtered
+    return [swing for swing in swings if price_min <= swing.price <= price_max]
 
 
 def _get_cascade(
