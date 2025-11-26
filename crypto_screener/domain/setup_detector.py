@@ -109,19 +109,12 @@ def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
 
 def _get_open_swings(
         bars: list[Bar],
-        swing_type: SwingType,
-) -> list[Swing] | None:
-    swings = []
-    for index in range(0, len(bars)):
-        swing = bars[index].swing
-        if swing is None:
-            continue
-        if not swing.is_open:
-            continue
-        if swing.type != swing_type:
-            continue
-        swings.append(swing)
-    return swings
+        swing_type: SwingType
+) -> list[Swing]:
+    return [bar.swing for bar in bars
+            if bar.swing is not None
+            and bar.swing.is_open
+            and bar.swing.type == swing_type]
 
 
 def _get_first_open_swing_indexed(
