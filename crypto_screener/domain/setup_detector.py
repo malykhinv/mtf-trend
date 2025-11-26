@@ -73,6 +73,26 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     return bars[best_index:]
 
 
+def _get_shadow_range_pct(bars: list[Bar]) -> float:
+    total_range = 0.0
+    total_shadow = 0.0
+    for bar in bars:
+        bar_range = bar.high - bar.low
+        if bar_range <= 0:
+            continue
+
+        body = abs(bar.open - bar.close)
+        shadow = max(bar_range - body, 0.0)
+
+        total_range += bar_range
+        total_shadow += shadow
+
+    if total_range == 0:
+        return 0.0
+
+    return 100 * total_shadow / total_range
+
+
 def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
     main_low = _get_first_open_swing_indexed(bars, SwingType.LOW)
     if not main_low:
@@ -200,6 +220,10 @@ def detect_setup(
     if trimmed_bars:
         bars = trimmed_bars
     elif not context in {Context.A, Context.B, Context.C}:
+        return setup
+
+    shadows_pct = _get_shadow_range_pct(bars)
+    if shadows_pct > cfg.SHADOW_RANGE_PCT_MAX:
         return setup
 
     bars = add_swings(bars, timeframe)
