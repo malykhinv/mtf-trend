@@ -159,41 +159,28 @@ def _get_cascade(
         length_min: int,
         range_max: float
 ) -> list[Swing]:
-    cascade = []
     if not swings or length_min <= 0 or range_max < 0:
-        return cascade
-
-    best_start = -1
-    best_end = -1
-
-    for start_index in range(len(swings)):
-        min_price = float("inf")
-        max_price = float("-inf")
-        for end_index in range(start_index, len(swings)):
-            price = swings[end_index].price
-            if price < min_price:
-                min_price = price
-            if price > max_price:
-                max_price = price
-
-            if max_price - min_price > range_max:
-                break
-
-            current_length = end_index - start_index + 1
-            if current_length < length_min:
-                continue
-
-            best_length = best_end - best_start + 1 if best_start != -1 else 0
-            if current_length > best_length or (
-                    current_length == best_length and (best_start == -1 or start_index < best_start)):
-                best_start = start_index
-                best_end = end_index
-
-    if best_start == -1:
-        return cascade
-
-    cascade = swings[best_start:best_end + 1]
-    return cascade
+        return []
+    best_start = 0
+    best_length = 0
+    left = 0
+    min_price = float('inf')
+    max_price = float('-inf')
+    for right in range(len(swings)):
+        price = swings[right].price
+        min_price = min(min_price, price)
+        max_price = max(max_price, price)
+        while max_price - min_price > range_max:
+            left_price = swings[left].price
+            if left_price == min_price or left_price == max_price:
+                min_price = min(swings[left+1:right+1], key=lambda x: x.price, default=float('inf')).price
+                max_price = max(swings[left+1:right+1], key=lambda x: x.price, default=float('-inf')).price
+            left += 1
+        current_length = right - left + 1
+        if current_length >= length_min and current_length > best_length:
+            best_start = left
+            best_length = current_length
+    return swings[best_start:best_start + best_length] if best_length > 0 else []
 
 
 # endregion
