@@ -25,7 +25,7 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     for i, v in enumerate(volumes):
         prefix[i + 1] = prefix[i] + v
 
-    best_idx: Optional[int] = None
+    best_index: Optional[int] = None
     best_ratio: float = float("-inf")
 
     for split in range(min_side_bars, length - min_side_bars + 1):
@@ -47,16 +47,16 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
 
         if ratio > best_ratio:
             best_ratio = ratio
-            best_idx = split
+            best_index = split
 
-    if best_idx is None:
+    if best_index is None:
         return []
 
     if best_ratio < cfg.HIGH_VOLUME_THRESHOLD:
         return []
 
-    left_avg = (prefix[best_idx] - prefix[0]) / best_idx
-    right_volumes = volumes[best_idx:]
+    left_avg = (prefix[best_index] - prefix[0]) / best_index
+    right_volumes = volumes[best_index:]
     right_len = len(right_volumes)
     if right_len == 0:
         return []
@@ -70,7 +70,7 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     if high_count / right_len < min_high_fraction:
         return []
 
-    return bars[best_idx:]
+    return bars[best_index:]
 
 
 def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
@@ -80,9 +80,9 @@ def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
     main_high = _get_first_open_swing_indexed(bars, SwingType.HIGH)
     if not main_high:
         return []
-    main_low_idx, _ = main_low
-    main_high_idx, _ = main_high
-    if main_high_idx <= main_low_idx:
+    main_low_index, _ = main_low
+    main_high_index, _ = main_high
+    if main_high_index <= main_low_index:
         return []
     return [main_low, main_high]
 
@@ -92,8 +92,8 @@ def _get_open_swings(
         swing_type: SwingType,
 ) -> list[Swing] | None:
     swings = []
-    for idx in range(0, len(bars)):
-        swing = bars[idx].swing
+    for index in range(0, len(bars)):
+        swing = bars[index].swing
         if swing is None:
             continue
         if not swing.is_open:
@@ -108,15 +108,15 @@ def _get_first_open_swing_indexed(
         bars: list[Bar],
         swing_type: SwingType,
 ) -> tuple[int, Swing] | None:
-    for idx in range(0, len(bars)):
-        swing = bars[idx].swing
+    for index in range(0, len(bars)):
+        swing = bars[index].swing
         if swing is None:
             continue
         if not swing.is_open:
             continue
         if swing.type != swing_type:
             continue
-        return idx, swing
+        return index, swing
     return None
 
 
@@ -146,11 +146,11 @@ def _get_cascade(
     best_start = -1
     best_end = -1
 
-    for start_idx in range(len(swings)):
+    for start_index in range(len(swings)):
         min_price = float("inf")
         max_price = float("-inf")
-        for end_idx in range(start_idx, len(swings)):
-            price = swings[end_idx].price
+        for end_index in range(start_index, len(swings)):
+            price = swings[end_index].price
             if price < min_price:
                 min_price = price
             if price > max_price:
@@ -159,15 +159,15 @@ def _get_cascade(
             if max_price - min_price > range_max:
                 break
 
-            current_length = end_idx - start_idx + 1
+            current_length = end_index - start_index + 1
             if current_length < length_min:
                 continue
 
             best_length = best_end - best_start + 1 if best_start != -1 else 0
             if current_length > best_length or (
-                    current_length == best_length and (best_start == -1 or start_idx < best_start)):
-                best_start = start_idx
-                best_end = end_idx
+                    current_length == best_length and (best_start == -1 or start_index < best_start)):
+                best_start = start_index
+                best_end = end_index
 
     if best_start == -1:
         return cascade
@@ -212,10 +212,9 @@ def detect_setup(
     main_low, main_high = main_rising_swings
     if not main_low or not main_high:
         return setup
-    _, main_low_swing = main_low
+    main_low_index, main_low_swing = main_low
     main_high_index, main_high_swing = main_high
     setup.main_high_swing = main_high_swing
-
     rise = main_high_swing.price - main_low_swing.price
     rise_pct = 100 * rise / main_low_swing.price
     is_rise_valid = rise > 0 and rise_pct >= cfg.PRICE_RISE_PCT_MIN
@@ -225,14 +224,26 @@ def detect_setup(
     # Анализ коррекции.
     correction_bars = bars[main_high_index + 1:]
     correction_low = _get_first_open_swing_indexed(correction_bars, SwingType.LOW)
+    correction_low_index, correction_low_swing = correction_low
     if not correction_low:
         return setup
-    _, correction_low_swing = correction_low
     retrace_range = main_high_swing.price - correction_low_swing.price
     retrace_ratio = retrace_range / rise
     is_retrace_valid = retrace_range >= 0 and retrace_ratio <= cfg.RETRACE_RATIO_MAX
     if not is_retrace_valid:
         return setup
+
+    # Анализ цены до роста.
+    pre_low_window_end = main_low_index
+    pre_low_window_start = max(0, pre_low_window_end - len(correction_bars) + 1)
+    pre_low_window = bars[pre_low_window_start:pre_low_window_end + 1]
+    if pre_low_window:
+        pre_low_above_correction_low_fraction = sum(1 for bar in pre_low_window
+                                                    if bar.low > correction_low_swing.price) / len(pre_low_window)
+        is_pre_low_above_correction_low_valid = (pre_low_above_correction_low_fraction <=
+                                                 cfg.PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX)
+        if not is_pre_low_above_correction_low_valid:
+            return setup
 
     # Анализ лонгового каскада.
     open_high_swings = _get_open_swings(correction_bars, SwingType.HIGH)

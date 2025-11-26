@@ -76,6 +76,8 @@ class AppConfig:
     # endregion
 
     # region Движение цены.
+    # Максимальная доля свечей в предпиковом окне, находящихся выше цен отката.
+    PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX: float = 0.8
     # Рост цены на основных свингах в зоне повышенного объема.
     PRICE_RISE_PCT_MIN: float = 6.0
     # Соотношение глубины отката к росту.
