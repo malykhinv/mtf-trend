@@ -1,5 +1,7 @@
 from typing import Optional
 
+import numpy as np
+
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.setup import Setup, Capture, Buy, Unfilled
@@ -74,23 +76,21 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
 
 
 def _get_shadow_range_pct(bars: list[Bar]) -> float:
-    total_range = 0.0
-    total_shadow = 0.0
-    for bar in bars:
-        bar_range = bar.high - bar.low
-        if bar_range <= 0:
-            continue
-
-        body = abs(bar.open - bar.close)
-        shadow = max(bar_range - body, 0.0)
-
-        total_range += bar_range
-        total_shadow += shadow
-
-    if total_range == 0:
+    if not bars:
         return 0.0
-
-    return 100 * total_shadow / total_range
+    highs = np.array([bar.high for bar in bars])
+    lows = np.array([bar.low for bar in bars])
+    opens = np.array([bar.open for bar in bars])
+    closes = np.array([bar.close for bar in bars])
+    bar_ranges = highs - lows
+    valid_ranges = bar_ranges > 0
+    if not np.any(valid_ranges):
+        return 0.0
+    bodies = np.abs(opens - closes)
+    shadows = np.maximum(bar_ranges - bodies, 0.0)
+    total_range = np.sum(bar_ranges[valid_ranges])
+    total_shadow = np.sum(shadows[valid_ranges])
+    return 100 * total_shadow / total_range if total_range > 0 else 0.0
 
 
 def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
@@ -173,8 +173,8 @@ def _get_cascade(
         while max_price - min_price > range_max:
             left_price = swings[left].price
             if left_price == min_price or left_price == max_price:
-                min_price = min(swings[left+1:right+1], key=lambda x: x.price, default=float('inf')).price
-                max_price = max(swings[left+1:right+1], key=lambda x: x.price, default=float('-inf')).price
+                min_price = min(swings[left + 1:right + 1], key=lambda x: x.price, default=float('inf')).price
+                max_price = max(swings[left + 1:right + 1], key=lambda x: x.price, default=float('-inf')).price
             left += 1
         current_length = right - left + 1
         if current_length >= length_min and current_length > best_length:
