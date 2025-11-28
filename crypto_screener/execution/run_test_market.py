@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import timedelta
 
 from crypto_screener.domain.exchange import Exchange
+from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy
 from crypto_screener.domain.models.setup import Buy
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
@@ -9,7 +10,7 @@ from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.execution.run_test_symbol import run_test_bars
 from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
-from crypto_screener.utils.history import calculate_limit_grid, calculate_window
+from crypto_screener.utils.history import calculate_limit, calculate_window
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.time import utc_now
 
@@ -36,6 +37,37 @@ def _filter_symbols(
     return filtered
 
 
+def _accumulate_history(
+        exchange: Exchange,
+        symbol: str,
+        timeframe: Timeframe,
+        history_months: int,
+        batch_limit: int,
+) -> list[Bar]:
+    history_start = utc_now() - timedelta(days=history_months * 30)
+    end = utc_now()
+    bars: list[Bar] = []
+
+    while True:
+        batch = exchange.get_ohlcv(symbol=symbol, timeframe=timeframe, limit=batch_limit, end=end)
+        if not batch:
+            break
+
+        earliest_batch_time = batch[0].time
+        if bars and bars[0].time == earliest_batch_time:
+            break
+
+        bars = batch + bars
+
+        if earliest_batch_time <= history_start:
+            bars = [bar for bar in bars if bar.time >= history_start]
+            break
+
+        end = earliest_batch_time - timedelta(minutes=timeframe.minutes)
+
+    return bars
+
+
 # endregion
 
 def run_test_market(
@@ -43,6 +75,7 @@ def run_test_market(
         timeframes: list[Timeframe],
         limit: int,
         window: int,
+        history_months: int,
         plot_policy: PlotPolicy,
         volume_24h_usdt_min: float,
         trades_24h_min: int,
@@ -55,6 +88,9 @@ def run_test_market(
         return
     if limit <= 0 or window <= 0:
         log.e("Некорректные данные для количества свеч.")
+        return
+    if history_months <= 0:
+        log.e("Некорректное значение длительности истории.")
         return
 
     symbols = exchange.get_futures_symbols()
@@ -75,56 +111,62 @@ def run_test_market(
 
     for symbol in symbols:
         for timeframe in timeframes:
-            for timeframe_limit in calculate_limit_grid(limit, timeframe):
-                timeframe_window = calculate_window(window, timeframe, timeframe_limit)
-                log.d(f"Проверка {symbol.symbol} (контекст {symbol.context.value}) на {timeframe.tf} "
-                      f"(limit={timeframe_limit}, window={timeframe_window})")
-                try:
-                    bars = exchange.get_ohlcv(
-                        symbol=symbol.symbol,
-                        timeframe=timeframe,
-                        limit=timeframe_limit,
-                        end=utc_now(),
-                    )
-                except Exception as exception:
-                    log.e(f"{symbol.symbol} {timeframe.tf}: ошибка получения данных: {exception}")
+            batch_limit = calculate_limit(limit * 3, timeframe)
+            try:
+                bars = _accumulate_history(
+                    exchange,
+                    symbol.symbol,
+                    timeframe,
+                    history_months,
+                    batch_limit,
+                )
+            except Exception as exception:
+                log.e(f"{symbol.symbol} {timeframe.tf}: ошибка получения данных: {exception}")
+                continue
+
+            if not bars:
+                log.e(f"{symbol.symbol} {timeframe.tf}: не удалось получить свечи.")
+                continue
+
+            timeframe_window = calculate_window(window, timeframe, len(bars))
+            log.d(
+                f"Проверка {symbol.symbol} (контекст {symbol.context.value}) на {timeframe.tf} "
+                f"(history={history_months} мес., window={timeframe_window})"
+            )
+
+            if len(bars) < timeframe_window:
+                log.e(
+                    f"{symbol.symbol} {timeframe.tf}: "
+                    f"для теста нужно минимум {timeframe_window} свечей, получено {len(bars)}."
+                )
+                continue
+
+            for i in range(timeframe_window - 1, len(bars)):
+                window_bars = bars[i - timeframe_window + 1:i + 1]
+                setup = run_test_bars(
+                    symbol=symbol.symbol,
+                    timeframe=timeframe,
+                    bars=window_bars,
+                    plot_policy=plot_policy,
+                    context=symbol.context,
+                    subdir='test_market'
+                )
+
+                if not setup or not isinstance(setup, Buy):
                     continue
 
-                if not bars:
-                    log.e(f"{symbol.symbol} {timeframe.tf}: не удалось получить свечи.")
+                future_bars = bars[i + 1:]
+                if not future_bars:
                     continue
 
-                if len(bars) < timeframe_window:
-                    log.e(f"{symbol.symbol} {timeframe.tf}: "
-                          f"для теста нужно минимум {timeframe_window} свечей, получено {len(bars)}.")
+                outcome = evaluate_buy(setup, future_bars)
+                if not outcome:
                     continue
 
-                for i in range(timeframe_window - 1, len(bars)):
-                    window_bars = bars[i - timeframe_window + 1:i + 1]
-                    setup = run_test_bars(
-                        symbol=symbol.symbol,
-                        timeframe=timeframe,
-                        bars=window_bars,
-                        plot_policy=plot_policy,
-                        context=symbol.context,
-                        subdir='test_market'
-                    )
-
-                    if not setup or not isinstance(setup, Buy):
-                        continue
-
-                    future_bars = bars[i + 1:]
-                    if not future_bars:
-                        continue
-
-                    outcome = evaluate_buy(setup, future_bars)
-                    if not outcome:
-                        continue
-
-                    trade_result, profit_pct = outcome
-                    trade_outcomes[trade_result] += 1
-                    trade_results.append(profit_pct)
-                    log.i(f"{symbol.symbol} {timeframe.tf}: {trade_result.value} ({profit_pct:+.2f}%)")
+                trade_result, profit_pct = outcome
+                trade_outcomes[trade_result] += 1
+                trade_results.append(profit_pct)
+                log.i(f"{symbol.symbol} {timeframe.tf}: {trade_result.value} ({profit_pct:+.2f}%)")
 
     log_test_summary(trade_outcomes, trade_results)
 

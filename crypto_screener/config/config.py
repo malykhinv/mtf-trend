@@ -40,6 +40,7 @@ _mode_test_market = TestMarket(
     timeframes=_timeframes,
     limit=400,
     window=160,
+    history_months=3,
     plot_policy=PlotPolicy.ON_FILLED_SETUP,
     volume_24h_usdt_min=20_000_000,
     trades_24h_min=300_000,
