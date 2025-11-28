@@ -306,13 +306,19 @@ def detect_setup(
     # Пробой лонгового каскада.
     partial_close_price = None
     breakeven_price = None
+    partial_close_side_pct = cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
     if resistance_swings:
         nearest_resistance_price = resistance_swings[-1].price
         nearest_resistance_distance_pct = 100 * (nearest_resistance_price - current_price) / current_price
-        partial_close_side_pct = cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
         has_partial_close = partial_close_side_pct <= nearest_resistance_distance_pct < profit_pct - partial_close_side_pct
         if has_partial_close:
             partial_close_price = nearest_resistance_price if has_partial_close else None
+            breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
+    elif context in {Context.A, Context.B}:
+        main_high_distance_pct = 100 * (main_high_swing.price - current_price) / current_price
+        has_partial_close = partial_close_side_pct <= main_high_distance_pct < profit_pct - partial_close_side_pct
+        if has_partial_close:
+            partial_close_price = main_high_swing.price
             breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
     setup = Buy(
         symbol=symbol,
