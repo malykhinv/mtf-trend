@@ -268,6 +268,10 @@ def detect_setup(
 
     # Анализ риска и вознаграждения.
     profit_price = main_high_swing.price
+    if context == Context.A:
+        profit_price = main_high_swing.price + 2 * (main_high_swing.price - correction_low_swing.price)
+    elif context == Context.B:
+        profit_price = main_high_swing.price + (main_high_swing.price - correction_low_swing.price)
     target_swing = cascade_long[-1]
     loss_price = support_swing.price
     loss_pct = 100 * (loss_price - current_price) / loss_price

@@ -14,13 +14,15 @@ _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Time
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
-    TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
-    TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
-    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
-    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
-    TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
-    TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
-    TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
+    # TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
+    # TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
+    # TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
+    # TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
+    # TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
+    # TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
+    # TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
+    TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=26)),
+    # TestData('TRADOORUSDT', Timeframe.M5, datetime(year=2025, month=11, day=17, hour=9, minute=15)),
 ]
 
 # region Режимы работы.
@@ -77,7 +79,7 @@ class AppConfig:
 
     # region Движение цены.
     # Максимальная доля теней относительно общего диапазона свечей.
-    SHADOW_RANGE_PCT_MAX: float = 40.0
+    SHADOW_RANGE_PCT_MAX: float = 70.0
     # Максимальная доля свечей в предпиковом окне, находящихся выше цен отката.
     PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX: float = 0.8
     # Рост цены на основных свингах в зоне повышенного объема.
