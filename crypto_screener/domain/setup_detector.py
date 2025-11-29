@@ -38,7 +38,10 @@ def _trim_by_volume(bars: list[Bar]) -> list[Bar]:
     right_volumes = volumes[best_index:]
     high_threshold = left_avg * high_volume_factor
     high_count = sum(1 for v in right_volumes if v >= high_threshold)
-    return bars[best_index:] if (high_count / len(right_volumes)) >= min_high_fraction else []
+    if (high_count / len(right_volumes)) < min_high_fraction:
+        return []
+    end_index = min(len(bars), best_index + 2 * (len(bars) - best_index))
+    return bars[best_index:end_index]
 
 
 def _get_shadow_range_pct(bars: list[Bar]) -> float:
