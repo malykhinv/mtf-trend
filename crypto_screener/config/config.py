@@ -82,9 +82,9 @@ class AppConfig:
     # Максимальная доля теней относительно общего диапазона свечей.
     SHADOW_RANGE_PCT_MAX: float = 70.0
     # Максимальная доля свечей в предпиковом окне, находящихся выше цен отката.
-    PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX: float = 0.8
+    PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX: float = 0.2
     # Рост цены на основных свингах в зоне повышенного объема.
-    PRICE_RISE_PCT_MIN: float = 6.0
+    PRICE_RISE_PCT_MIN: float = 15.0
     # Соотношение глубины отката к росту.
     RETRACE_RATIO_MAX: float = 0.75
     # Минимальный уровень отката (снизу-вверх), на котором может располагаться каскад.
