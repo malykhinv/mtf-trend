@@ -185,6 +185,14 @@ def detect_setup(
         return setup
     main_low_index, main_low_swing = main_low
     main_high_index, main_high_swing = main_high
+    
+    # Центрирование относительно main_low_index.
+    start_index = max(0, main_low_index - (len(bars) - main_low_index - 1))
+    bars = bars[start_index:]
+    setup.bars = bars
+    main_low_index -= start_index
+    main_high_index -= start_index
+    
     setup.main_high_swing = main_high_swing
     rise = main_high_swing.price - main_low_swing.price
     rise_pct = 100 * rise / main_low_swing.price
