@@ -135,6 +135,8 @@ class AppConfig:
     PLOT_RESISTANCE_SWING_COLOR: str = "#ef5350"
     PLOT_SUPPORT_SWING_COLOR: str = "#66bb6a"
     PLOT_COMMON_SWING_COLOR: str = "#663366"
+    PLOT_GROWTH_PHASE_COLOR: str = "#808080"
+    PLOT_GROWTH_PHASE_ALPHA: float = 0.05
     # Маркеры свингов.
     PLOT_SWING_MARKER_SIZE: int = 32
     PLOT_SWING_MARKER_CLOSED_ALPHA: float = 0.25

@@ -16,6 +16,7 @@ class Setup(ABC):
     symbol: str
     timeframe: Timeframe
     bars: list[Bar]
+    main_low_swing: Optional[Swing]
     main_high_swing: Optional[Swing]
     cascade_swings: Optional[list[Swing]]
     resistance_swings: Optional[list[Swing]]

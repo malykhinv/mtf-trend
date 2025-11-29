@@ -155,6 +155,7 @@ def detect_setup(
         symbol=symbol,
         timeframe=timeframe,
         bars=bars,
+        main_low_swing=None,
         main_high_swing=None,
         cascade_swings=None,
         resistance_swings=None,
@@ -193,6 +194,7 @@ def detect_setup(
     main_low_index -= start_index
     main_high_index -= start_index
     
+    setup.main_low_swing = main_low_swing
     setup.main_high_swing = main_high_swing
     rise = main_high_swing.price - main_low_swing.price
     rise_pct = 100 * rise / main_low_swing.price
@@ -306,6 +308,7 @@ def detect_setup(
         symbol=symbol,
         timeframe=timeframe,
         bars=bars,
+        main_low_swing=main_low_swing,
         main_high_swing=main_high_swing,
         cascade_swings=cascade_long,
         resistance_swings=resistance_swings,
@@ -338,6 +341,7 @@ def detect_setup(
         symbol=symbol,
         timeframe=timeframe,
         bars=bars,
+        main_low_swing=main_low_swing,
         main_high_swing=main_high_swing,
         cascade_swings=cascade_long,
         resistance_swings=resistance_swings,

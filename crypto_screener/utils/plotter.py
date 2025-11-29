@@ -215,10 +215,11 @@ def plot(
         symbol: str,
         timeframe: Timeframe,
         bars: list[Bar],
-        main_high_swing: Optional[Swing],
-        cascade_swings: Optional[list[Swing]],
-        resistance_swings: Optional[list[Swing]],
-        support_swings: Optional[list[Swing]],
+        main_high_swing: Optional[Swing] = None,
+        main_low_swing: Optional[Swing] = None,
+        cascade_swings: Optional[list[Swing]] = None,
+        resistance_swings: Optional[list[Swing]] = None,
+        support_swings: Optional[list[Swing]] = None,
         subdir: Optional[str] = None,
         setup_name: Optional[str] = None
 ):
@@ -233,6 +234,39 @@ def plot(
     min_price = min(bar.low for bar in bars)
     max_price = max(bar.high for bar in bars)
     y_offset = max((max_price - min_price) * cfg.PLOT_Y_OFFSET_RATIO, cfg.PLOT_Y_OFFSET_MIN)
+
+    if main_low_swing and main_high_swing:
+        start_time = _datetime_to_mpl(main_low_swing.time)
+        end_time = _datetime_to_mpl(main_high_swing.time)
+        price_ax.axvspan(
+            xmin=min(start_time, end_time),
+            xmax=max(start_time, end_time),
+            ymin=0,
+            ymax=1,
+            color=cfg.PLOT_GROWTH_PHASE_COLOR,
+            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA,
+            zorder=0
+        )
+        price_ax.axhline(
+            y=main_low_swing.price,
+            xmin=0,
+            xmax=1,
+            color=cfg.PLOT_GROWTH_PHASE_COLOR,
+            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
+            linestyle='--',
+            linewidth=0.8,
+            zorder=0
+        )
+        price_ax.axhline(
+            y=main_high_swing.price,
+            xmin=0,
+            xmax=1,
+            color=cfg.PLOT_GROWTH_PHASE_COLOR,
+            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
+            linestyle='--',
+            linewidth=0.8,
+            zorder=0
+        )
 
     _draw_candles(price_ax, bars, times, candle_width)
     _format_ax(price_ax, times, min_price, max_price)
@@ -266,6 +300,13 @@ def plot(
         _draw_swing_group(
             ax=price_ax,
             swings=[main_high_swing],
+            color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if main_low_swing:
+        _draw_swing_group(
+            ax=price_ax,
+            swings=[main_low_swing],
             color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
             y_offset=y_offset
         )

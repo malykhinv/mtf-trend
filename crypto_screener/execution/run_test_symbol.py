@@ -107,6 +107,7 @@ def _plot(
         symbol=f"{setup.symbol} {setup.name.capitalize()} ",
         timeframe=setup.timeframe,
         bars=setup.bars,
+        main_low_swing=setup.main_low_swing,
         main_high_swing=setup.main_high_swing,
         cascade_swings=setup.cascade_swings,
         resistance_swings=setup.resistance_swings,
