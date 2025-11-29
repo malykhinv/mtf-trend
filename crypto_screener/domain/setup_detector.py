@@ -202,6 +202,8 @@ def detect_setup(
 
     # Анализ коррекции.
     correction_bars = bars[main_high_index + 1:]
+    if not correction_bars:
+        return setup
     correction_low = _get_first_open_swing_indexed(correction_bars, SwingType.LOW)
     if not correction_low:
         return setup
