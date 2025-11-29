@@ -64,17 +64,34 @@ def _get_shadow_range_pct(bars: list[Bar]) -> float:
 
 
 def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
-    main_low = _get_first_open_swing_indexed(bars, SwingType.LOW)
-    if not main_low:
-        return []
     main_high = _get_first_open_swing_indexed(bars, SwingType.HIGH)
     if not main_high:
         return []
-    main_low_index, _ = main_low
-    main_high_index, _ = main_high
-    if main_high_index <= main_low_index:
+    main_high_index, main_high_swing = main_high
+    
+    min_low_price = float('inf')
+    min_low_swing = None
+    min_low_index = -1
+    
+    for i in range(main_high_index + 1):
+        bar = bars[i]
+        if bar.swing and bar.swing.type == SwingType.LOW and bar.swing.is_open:
+            if bar.low < min_low_price:
+                min_low_price = bar.low
+                min_low_swing = bar.swing
+                min_low_index = i
+    
+    if not min_low_swing or min_low_index == -1:
         return []
-    return [main_low, main_high]
+        
+    main_low_swing = Swing(
+        time=min_low_swing.time,
+        price=min_low_price,
+        type=SwingType.LOW,
+        is_open=True
+    )
+    
+    return [(min_low_index, main_low_swing), main_high]
 
 
 def _get_open_swings(
