@@ -21,8 +21,9 @@ _test_data: list[TestData] = [
     # TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=8, minute=1)),
     # TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
     # TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
-    TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=26)),
+    # TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=26)),
     # TestData('TRADOORUSDT', Timeframe.M5, datetime(year=2025, month=11, day=17, hour=9, minute=15)),
+    TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
 ]
 
 # region Режимы работы.
@@ -62,7 +63,7 @@ class AppConfig:
     TIMEZONE: ZoneInfo = _timezone
 
     # Режим работы.
-    MODE: Mode = _mode_test_market
+    MODE: Mode = _mode_test_symbols
 
     # region Контекст.
     CONTEXT_E_TRADES_MIN: int = 500_000
@@ -119,7 +120,7 @@ class AppConfig:
     PLOT_OUTPUT_DIR: str = ".generated/plot"
     # Размер графика.
     PLOT_WIDTH_INCHES: float = 12
-    PLOT_HEIGHT_INCHES: float = 6
+    PLOT_HEIGHT_INCHES: float = 12
     PLOT_DPI: int = 110
     # Цвета графика.
     PLOT_TICK_COLOR: str = "white"

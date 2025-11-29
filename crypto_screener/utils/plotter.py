@@ -193,7 +193,7 @@ def _format_volume_ax(ax: Axes, volumes: list[float]):
 
 
 def _resolve_output_path(
-        symbol: str,
+        name: str,
         timeframe: Timeframe,
         time: datetime,
         length: int,
@@ -204,8 +204,8 @@ def _resolve_output_path(
         output_dir += f"/{subdir}"
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    symbol = re.sub(r"[^A-Za-z0-9]+", "", symbol.split(":", 1)[0])
-    filename = f"{symbol} {timeframe.tf} {length} {time:%d.%m.%Y %H.%M.%S}.png"
+    clean_name = re.sub(r"[^A-Za-z0-9-_.]+", " ", name.split(":", 1)[0])
+    filename = f"{clean_name} {timeframe.tf} {length} {time:%d.%m.%Y %H.%M.%S}.png"
     return output_dir / filename
 
 
@@ -219,7 +219,8 @@ def plot(
         cascade_swings: Optional[list[Swing]],
         resistance_swings: Optional[list[Swing]],
         support_swings: Optional[list[Swing]],
-        subdir: Optional[str] = None
+        subdir: Optional[str] = None,
+        setup_name: Optional[str] = None
 ):
     if not symbol or not bars:
         raise ValueError("Недостаточно данных для построения графика.")
@@ -287,7 +288,7 @@ def plot(
     fig.tight_layout()
 
     length = len(bars)
-    output_path = _resolve_output_path(symbol, timeframe, bars[-1].time, length, subdir)
+    output_path = _resolve_output_path(setup_name or symbol, timeframe, bars[-1].time, length, subdir)
     fig.savefig(
         fname=output_path,
         facecolor=cfg.PLOT_BACKGROUND_COLOR,
