@@ -104,7 +104,7 @@ def _plot(
         subdir: Optional[str] = None
 ):
     plot(
-        symbol=setup.symbol,
+        symbol=f"{setup.symbol} {setup.name.capitalize()} ",
         timeframe=setup.timeframe,
         bars=setup.bars,
         main_high_swing=setup.main_high_swing,

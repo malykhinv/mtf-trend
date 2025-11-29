@@ -191,9 +191,9 @@ def detect_setup(
     # Анализ коррекции.
     correction_bars = bars[main_high_index + 1:]
     correction_low = _get_first_open_swing_indexed(correction_bars, SwingType.LOW)
-    correction_low_index, correction_low_swing = correction_low
     if not correction_low:
         return setup
+    correction_low_index, correction_low_swing = correction_low
     retrace_range = main_high_swing.price - correction_low_swing.price
     retrace_ratio = retrace_range / rise
     is_retrace_valid = retrace_range >= 0 and retrace_ratio <= cfg.RETRACE_RATIO_MAX
