@@ -216,7 +216,24 @@ def detect_setup(
     setup.main_high_swing = main_high_swing
     rise = main_high_swing.price - main_low_swing.price
     rise_pct = 100 * rise / main_low_swing.price
-    is_rise_valid = rise > 0 and rise_pct >= cfg.PRICE_RISE_PCT_MIN
+    
+    # Проверка максимального отката на участке роста.
+    max_retrace = 0.0
+    max_high = main_low_swing.price
+    for i in range(main_low_index + 1, main_high_index + 1):
+        bar = bars[i]
+        max_high = max(max_high, bar.high)
+        retrace = max_high - bar.low
+        if rise > 0:  # Избегаем деления на ноль
+            retrace_ratio = retrace / rise
+            max_retrace = max(max_retrace, retrace_ratio)
+    
+    is_rise_valid = (
+        rise > 0 and 
+        rise_pct >= cfg.PRICE_RISE_PCT_MIN and
+        max_retrace <= cfg.MAX_RETRACE_RATIO
+    )
+    
     if not is_rise_valid:
         return setup
 
