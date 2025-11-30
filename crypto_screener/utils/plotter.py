@@ -194,10 +194,10 @@ def _format_volume_ax(ax: Axes, volumes: list[float]):
 
 
 def _get_entry_time(postmortem_bars: Optional[list[Bar]], detection_time: Optional[datetime], bars: list[Bar]) -> datetime:
-    if postmortem_bars:
-        return postmortem_bars[0].time
     if detection_time:
         return detection_time
+    if postmortem_bars:
+        return postmortem_bars[0].time
     return bars[-1].time
 
 
