@@ -41,7 +41,7 @@ _mode_test_market = TestMarket(
     timeframes=_timeframes,
     limit=400,
     window=160,
-    history_months=3,
+    history_months=1,
     plot_policy=PlotPolicy.ON_FILLED_SETUP,
     volume_24h_usdt_min=20_000_000,
     trades_24h_min=300_000,
@@ -83,11 +83,11 @@ class AppConfig:
     # Максимальная доля теней относительно общего диапазона свечей.
     SHADOW_RANGE_PCT_MAX: float = 70.0
     # Максимальная доля свечей в предпиковом окне, находящихся выше цен отката.
-    PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX: float = 0.2
+    PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX: float = 0.05
     # Рост цены на основных свингах в зоне повышенного объема.
     PRICE_RISE_PCT_MIN: float = 15.0
     # Максимально допустимый откат на участке роста (относительно размера роста)
-    MAX_RETRACE_RATIO: float = 0.5
+    MAX_RETRACE_RATIO: float = 0.4
     # Соотношение глубины отката к росту.
     RETRACE_RATIO_MAX: float = 0.75
     # Минимальный уровень отката (снизу-вверх), на котором может располагаться каскад.
