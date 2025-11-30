@@ -77,6 +77,7 @@ def _send_notification(
         symbol: str,
         timeframe: Timeframe,
         bars: list[Bar],
+        main_low_swing: Optional[Swing],
         main_high_swing: Optional[Swing],
         cascade_swings: Optional[list[Swing]],
         resistance_swings: Optional[list[Swing]],
@@ -88,6 +89,7 @@ def _send_notification(
             symbol=symbol,
             timeframe=timeframe,
             bars=bars,
+            main_low_swing=main_low_swing,
             main_high_swing=main_high_swing,
             cascade_swings=cascade_swings,
             resistance_swings=resistance_swings,
@@ -160,6 +162,7 @@ def run_live(
 
                     # Найден базовый сетап.
                     case Capture(
+                        main_low_swing=main_low_swing,
                         main_high_swing=main_high_swing,
                         cascade_swings=cascade_swings,
                         resistance_swings=resistance_swings,
@@ -179,6 +182,7 @@ def run_live(
                                 symbol=symbol.symbol,
                                 timeframe=timeframe,
                                 bars=bars,
+                                main_low_swing=main_low_swing,
                                 main_high_swing=main_high_swing,
                                 cascade_swings=cascade_swings,
                                 resistance_swings=resistance_swings,
@@ -188,6 +192,7 @@ def run_live(
 
                     # Найден торговый сетап.
                     case buy_setup @ Buy(
+                        main_low_swing=main_low_swing,
                         main_high_swing=main_high_swing,
                         cascade_swings=cascade_swings,
                         resistance_swings=resistance_swings,
@@ -205,6 +210,7 @@ def run_live(
                             symbol=symbol.symbol,
                             timeframe=timeframe,
                             bars=bars,
+                            main_low_swing=main_low_swing,
                             main_high_swing=main_high_swing,
                             cascade_swings=cascade_swings,
                             resistance_swings=resistance_swings,
