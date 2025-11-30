@@ -2,6 +2,7 @@ import numpy as np
 
 from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.cascade_level import CascadeLevel
 from crypto_screener.domain.models.setup import Setup, Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import SwingType, Swing
 from crypto_screener.domain.models.symbol import Context
@@ -161,40 +162,35 @@ def get_cascade_long(
     min_pullback_bars = cfg.CASCADE_MIN_PULLBACK_BARS
     min_gap_bars = cfg.CASCADE_MIN_GAP_BARS
 
-    levels = []
+    levels: list[CascadeLevel] = []
 
     for index, bar in enumerate(bars):
         if not price_min <= bar.high <= price_max:
             continue
 
-        matched_level = None
-        min_distance = float('inf')
-        for level in levels:
-            distance = abs(bar.high - level['price'])
-            if distance <= touch_tolerance and distance < min_distance:
-                matched_level = level
-                min_distance = distance
+        level_price = bar.high
+        cross_index = None
+        for look_ahead in range(index + 1, len(bars)):
+            look_bar = bars[look_ahead]
+            if look_bar.open > level_price or look_bar.close > level_price:
+                cross_index = look_ahead
+                break
 
-        if matched_level is None:
-            matched_level = {
-                'price': bar.high,
-                'is_crossed': False,
-                'distance': 0.0,
-                'touches_raw': []
-            }
-            levels.append(matched_level)
-            min_distance = 0.0
+        end_index = cross_index if cross_index is not None else len(bars)
+        touches_raw = []
+        for touch_index in range(index, end_index):
+            touch_bar = bars[touch_index]
+            if touch_bar.close > level_price:
+                continue
+            if abs(touch_bar.high - level_price) <= touch_tolerance:
+                touches_raw.append(touch_index)
 
-        matched_level['distance'] = min(matched_level['distance'] or min_distance, min_distance)
-
-        if matched_level['is_crossed']:
-            continue
-
-        if abs(bar.high - matched_level['price']) <= touch_tolerance:
-            matched_level['touches_raw'].append(index)
-
-        if bar.close > matched_level['price'] + touch_tolerance:
-            matched_level['is_crossed'] = True
+        levels.append(CascadeLevel(
+            price=level_price,
+            is_crossed=cross_index is not None,
+            distance=(cross_index - index) if cross_index is not None else (len(bars) - 1 - index),
+            touches_raw=touches_raw,
+        ))
 
     def refine_touches(level_price: float, touches: list[int]) -> list[int]:
         if not touches:
@@ -239,7 +235,9 @@ def get_cascade_long(
     best_third_touch_index = -1
 
     for level in levels:
-        touches = refine_touches(level['price'], level['touches_raw'])
+        if level.is_crossed:
+            continue
+        touches = refine_touches(level.price, level.touches_raw)
         if len(touches) < cfg.CASCADE_LENGTH_MIN:
             continue
         third_touch_index = touches[cfg.CASCADE_LENGTH_MIN - 1]
