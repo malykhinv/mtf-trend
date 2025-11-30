@@ -555,11 +555,11 @@ def _plot(
 
     length = len(combined_bars)
     output_path = _resolve_output_path(
-        setup_name or symbol,
-        timeframe,
-        combined_bars[-1].time,
-        length,
-        subdir,
+        name=f"{symbol} {setup_name}" if setup_name else symbol,
+        timeframe=timeframe,
+        time=combined_bars[-1].time,
+        length=length,
+        subdir=subdir,
     )
     fig.savefig(
         fname=output_path,

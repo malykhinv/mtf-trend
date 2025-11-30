@@ -26,13 +26,13 @@ def _get_future_bars(
         symbol: str,
         timeframe: Timeframe,
         limit: int,
-        end: datetime,
+        last_bar_time: datetime,
 ) -> list[Bar]:
-    if end.tzinfo is None:
-        end = end.replace(tzinfo=timezone.utc)
-    future_end = _future_end(end, timeframe, limit)
+    if last_bar_time.tzinfo is None:
+        last_bar_time = last_bar_time.replace(tzinfo=timezone.utc)
+    future_end = _future_end(last_bar_time, timeframe, limit)
     future_bars = exchange.get_ohlcv(symbol, timeframe, limit, future_end)
-    return [bar for bar in future_bars if bar.time > end]
+    return [bar for bar in future_bars if bar.time > last_bar_time]
 
 
 def _run_test_symbol(
@@ -58,9 +58,13 @@ def _run_test_symbol(
             log.e(f"{symbol} {timeframe.tf}: не удалось получить свечи.")
             continue
 
-        future_bars = _get_future_bars(exchange, symbol, timeframe, timeframe_limit, end)
+        last_bar_time = bars[-1].time
+        future_bars = _get_future_bars(exchange, symbol, timeframe, timeframe_limit, last_bar_time)
         if not future_bars:
-            log.e(f"{symbol} {timeframe.tf}: не удалось получить будущие свечи после {end}.")
+            log.e(
+                f"{symbol} {timeframe.tf}: "
+                f"не удалось получить будущие свечи после {last_bar_time}."
+            )
             continue
 
         setup = run_test_bars(
@@ -71,6 +75,7 @@ def _run_test_symbol(
             context=Context.TEST,
             subdir='test_symbol',
             postmortem_bars=future_bars,
+            detection_time=last_bar_time,
         )
 
         if not setup or not isinstance(setup, Buy):
@@ -149,16 +154,18 @@ def run_test_bars(
         context: Context,
         subdir: Optional[str] = None,
         postmortem_bars: Optional[list[Bar]] = None,
+        detection_time: Optional[datetime] = None,
 ) -> Optional[Setup]:
     if not bars:
         return None
+    detection_time = detection_time or bars[-1].time
     setup = _detect_setup(symbol, bars, timeframe, context)
     match plot_policy:
         case PlotPolicy.ON_ANY:
-            _plot(setup, subdir, postmortem_bars, bars[-1].time)
+            _plot(setup, subdir, postmortem_bars, detection_time)
         case PlotPolicy.ON_FILLED_SETUP:
             if setup.is_filled:
-                _plot(setup, subdir, postmortem_bars, bars[-1].time)
+                _plot(setup, subdir, postmortem_bars, detection_time)
     return setup
 
 
