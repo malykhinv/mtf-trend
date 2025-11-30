@@ -182,7 +182,7 @@ def get_cascade_long(
             touch_bar = bars[touch_index]
             if touch_bar.close > level_price:
                 continue
-            if abs(touch_bar.high - level_price) <= touch_tolerance:
+            if level_price - touch_bar.close <= touch_tolerance:
                 touches_raw.append(touch_index)
 
         levels.append(CascadeLevel(
@@ -216,7 +216,7 @@ def get_cascade_long(
                 consecutive = 0
                 max_consecutive = 0
                 for bar in pullback_bars:
-                    if bar.high <= level_price - min_pullback:
+                    if bar.close <= level_price - min_pullback:
                         consecutive += 1
                         max_consecutive = max(max_consecutive, consecutive)
                     else:
