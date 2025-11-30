@@ -99,14 +99,14 @@ class AppConfig:
     # Допуск по касаниям в долях ATR.
     CASCADE_TOUCH_EPS_NATR: float = 1.0
     # Минимальная глубина отката в долях ATR.
-    CASCADE_MIN_PULLBACK_NATR: float = 1.0
+    CASCADE_MIN_PULLBACK_NATR: float = 3.0
     # Минимальная длительность отката в барах.
-    CASCADE_MIN_PULLBACK_BARS: int = 2
+    CASCADE_MIN_PULLBACK_BARS: int = 3
     # Минимальный разрыв между касаниями в барах.
-    CASCADE_MIN_GAP_BARS: int = 2
+    CASCADE_MIN_GAP_BARS: int = 5
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
-    # Минимальный разрыв от верха каскада до начала сопротивления (в долях отката)
+    # Минимальный разрыв от верха каскада до начала сопротивления (в долях отката).
     RESISTANCE_GAP_RATIO_MIN: float = 0.1
     # Максимальное количество свингов после каскада.
     RESISTANCE_COUNT_MAX: int = 2
