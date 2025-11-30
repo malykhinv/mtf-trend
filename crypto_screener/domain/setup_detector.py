@@ -131,33 +131,137 @@ def _filter_by_price(
     return [swing for swing in swings if price_min <= swing.price <= price_max]
 
 
-def _get_cascade(
-        swings: list[Swing],
-        length_min: int,
-        range_max: float
+def get_cascade_long(
+        bars: list[Bar],
+        price_min: float,
+        price_max: float
 ) -> list[Swing]:
-    if not swings or length_min <= 0 or range_max < 0:
+    if not bars or price_min >= price_max:
         return []
-    best_start = 0
-    best_length = 0
-    left = 0
-    min_price = float('inf')
-    max_price = float('-inf')
-    for right in range(len(swings)):
-        price = swings[right].price
-        min_price = min(min_price, price)
-        max_price = max(max_price, price)
-        while max_price - min_price > range_max:
-            left_price = swings[left].price
-            if left_price == min_price or left_price == max_price:
-                min_price = min(swings[left + 1:right + 1], key=lambda x: x.price, default=float('inf')).price
-                max_price = max(swings[left + 1:right + 1], key=lambda x: x.price, default=float('-inf')).price
-            left += 1
-        current_length = right - left + 1
-        if current_length >= length_min and current_length > best_length:
-            best_start = left
-            best_length = current_length
-    return swings[best_start:best_start + best_length] if best_length > 0 else []
+
+    def _calculate_atr(window: int) -> float:
+        if not bars or window <= 0:
+            return 0.0
+        window = min(window, len(bars))
+        true_ranges = []
+        prev_close = bars[0].close
+        for bar in bars:
+            high_low = bar.high - bar.low
+            high_close = abs(bar.high - prev_close)
+            low_close = abs(bar.low - prev_close)
+            true_ranges.append(max(high_low, high_close, low_close))
+            prev_close = bar.close
+        atr_window = true_ranges[-window:]
+        return float(np.mean(atr_window)) if atr_window else 0.0
+
+    atr_window = 50
+    atr = _calculate_atr(atr_window)
+    touch_tolerance = max(atr, 0.0)
+    min_pullback = max(atr, 0.0)
+    min_pullback_bars = 2
+    min_gap_bars = 2
+
+    levels = []
+
+    for index, bar in enumerate(bars):
+        if not price_min <= bar.high <= price_max:
+            continue
+
+        matched_level = None
+        min_distance = float('inf')
+        for level in levels:
+            distance = abs(bar.high - level['price'])
+            if distance <= touch_tolerance and distance < min_distance:
+                matched_level = level
+                min_distance = distance
+
+        if matched_level is None:
+            matched_level = {
+                'price': bar.high,
+                'is_crossed': False,
+                'distance': 0.0,
+                'touches_raw': []
+            }
+            levels.append(matched_level)
+            min_distance = 0.0
+
+        matched_level['distance'] = min(matched_level['distance'] or min_distance, min_distance)
+
+        if matched_level['is_crossed']:
+            continue
+
+        if abs(bar.high - matched_level['price']) <= touch_tolerance:
+            matched_level['touches_raw'].append(index)
+
+        if bar.close > matched_level['price'] + touch_tolerance:
+            matched_level['is_crossed'] = True
+
+    def refine_touches(level_price: float, touches: list[int]) -> list[int]:
+        if not touches:
+            return []
+        refined = touches[:]
+        while True:
+            changed = False
+            new_touches = []
+            last_touch = None
+            for touch_index in refined:
+                if last_touch is None:
+                    new_touches.append(touch_index)
+                    last_touch = touch_index
+                    continue
+                if touch_index - last_touch < min_gap_bars:
+                    changed = True
+                    continue
+                pullback_bars = bars[last_touch + 1:touch_index]
+                if not pullback_bars:
+                    changed = True
+                    continue
+                pullback_depth = max((level_price - bar.low) for bar in pullback_bars)
+                consecutive = 0
+                max_consecutive = 0
+                for bar in pullback_bars:
+                    if bar.high <= level_price - min_pullback:
+                        consecutive += 1
+                        max_consecutive = max(max_consecutive, consecutive)
+                    else:
+                        consecutive = 0
+                has_pullback = pullback_depth >= min_pullback and max_consecutive >= min_pullback_bars
+                if not has_pullback:
+                    changed = True
+                    continue
+                new_touches.append(touch_index)
+                last_touch = touch_index
+            if not changed:
+                return new_touches
+            refined = new_touches
+
+    best_level_touches = []
+    best_third_touch_index = -1
+
+    for level in levels:
+        touches = refine_touches(level['price'], level['touches_raw'])
+        if len(touches) < 3:
+            continue
+        third_touch_index = touches[2]
+        if third_touch_index > best_third_touch_index:
+            best_level_touches = touches
+            best_third_touch_index = third_touch_index
+
+    if not best_level_touches:
+        return []
+
+    cascade_swings = []
+    for touch_index in best_level_touches:
+        bar = bars[touch_index]
+        swing = bar.swing if bar.swing else Swing(
+            time=bar.time,
+            price=bar.high,
+            type=SwingType.HIGH,
+            is_open=True
+        )
+        cascade_swings.append(swing)
+
+    return cascade_swings
 
 
 # endregion
@@ -264,16 +368,15 @@ def detect_setup(
             return setup
 
     # Анализ лонгового каскада.
-    open_high_swings = _get_open_swings(correction_bars, SwingType.HIGH)
     cascade_price_min = correction_low_swing.price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
     cascade_price_max = main_high_swing.price
-    open_high_swings = _filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
-    cascade_range_max = retrace_range * cfg.CASCADE_RANGE_RATIO_MAX
-    cascade_long = _get_cascade(open_high_swings, cfg.CASCADE_LENGTH_MIN, cascade_range_max)
+    cascade_long = get_cascade_long(correction_bars, cascade_price_min, cascade_price_max)
     if not cascade_long:
         return setup
     cascade_top = max(cascade_long, key=lambda swing: swing.price).price
     resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
+    open_high_swings = _get_open_swings(correction_bars, SwingType.HIGH)
+    open_high_swings = _filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
     extra_cascade_swings = [
         swing for swing in open_high_swings
         if cascade_top < swing.price <= cascade_top + resistance_gap
