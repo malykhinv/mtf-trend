@@ -70,11 +70,11 @@ def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
     if not main_high:
         return []
     main_high_index, main_high_swing = main_high
-    
+
     min_low_price = float('inf')
     min_low_swing = None
     min_low_index = -1
-    
+
     for i in range(main_high_index + 1):
         bar = bars[i]
         if bar.swing and bar.swing.type == SwingType.LOW and bar.swing.is_open:
@@ -82,17 +82,17 @@ def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
                 min_low_price = bar.low
                 min_low_swing = bar.swing
                 min_low_index = i
-    
+
     if not min_low_swing or min_low_index == -1:
         return []
-        
+
     main_low_swing = Swing(
         time=min_low_swing.time,
         price=min_low_price,
         type=SwingType.LOW,
         is_open=True
     )
-    
+
     return [(min_low_index, main_low_swing), main_high]
 
 
@@ -192,31 +192,34 @@ def get_cascade_long(
             touches_raw=touches_raw,
         ))
 
-    def refine_touches(level_price: float, touches: list[int]) -> list[int]:
-        if not touches:
+    def _refine_touches(
+            price: float,
+            touches_count: list[int]
+    ) -> list[int]:
+        if not touches_count:
             return []
-        refined = touches[:]
+        refined = touches_count[:]
         while True:
             changed = False
             new_touches = []
             last_touch = None
-            for touch_index in refined:
+            for touch_idx in refined:
                 if last_touch is None:
-                    new_touches.append(touch_index)
-                    last_touch = touch_index
+                    new_touches.append(touch_idx)
+                    last_touch = touch_idx
                     continue
-                if touch_index - last_touch < min_gap_bars:
+                if touch_idx - last_touch < min_gap_bars:
                     changed = True
                     continue
-                pullback_bars = bars[last_touch + 1:touch_index]
+                pullback_bars = bars[last_touch + 1:touch_idx]
                 if not pullback_bars:
                     changed = True
                     continue
-                pullback_depth = max((level_price - bar.low) for bar in pullback_bars)
+                pullback_depth = max((price - pullback_bar.low) for pullback_bar in pullback_bars)
                 consecutive = 0
                 max_consecutive = 0
-                for bar in pullback_bars:
-                    if bar.close <= level_price - min_pullback:
+                for pullback_bar in pullback_bars:
+                    if pullback_bar.close <= price - min_pullback:
                         consecutive += 1
                         max_consecutive = max(max_consecutive, consecutive)
                     else:
@@ -225,8 +228,8 @@ def get_cascade_long(
                 if not has_pullback:
                     changed = True
                     continue
-                new_touches.append(touch_index)
-                last_touch = touch_index
+                new_touches.append(touch_idx)
+                last_touch = touch_idx
             if not changed:
                 return new_touches
             refined = new_touches
@@ -239,7 +242,7 @@ def get_cascade_long(
     for level in levels:
         if level.is_crossed:
             continue
-        touches = refine_touches(level.price, level.touches_raw)
+        touches = _refine_touches(level.price, level.touches_raw)
         if len(touches) < cfg.CASCADE_LENGTH_MIN:
             continue
         third_touch_index = touches[cfg.CASCADE_LENGTH_MIN - 1]
@@ -320,19 +323,19 @@ def detect_setup(
         return setup
     main_low_index, main_low_swing = main_low
     main_high_index, main_high_swing = main_high
-    
+
     # Центрирование относительно main_low_index.
     start_index = max(0, main_low_index - (len(bars) - main_low_index - 1))
     bars = bars[start_index:]
     setup.bars = bars
     main_low_index -= start_index
     main_high_index -= start_index
-    
+
     setup.main_low_swing = main_low_swing
     setup.main_high_swing = main_high_swing
     rise = main_high_swing.price - main_low_swing.price
     rise_pct = 100 * rise / main_low_swing.price
-    
+
     # Проверка максимального отката на участке роста.
     max_retrace = 0.0
     max_high = main_low_swing.price
@@ -343,13 +346,13 @@ def detect_setup(
         if rise > 0:  # Избегаем деления на ноль
             retrace_ratio = retrace / rise
             max_retrace = max(max_retrace, retrace_ratio)
-    
+
     is_rise_valid = (
-        rise > 0 and 
+        rise > 0 and
         rise_pct >= cfg.PRICE_RISE_PCT_MIN and
         max_retrace <= cfg.MAX_RETRACE_RATIO
     )
-    
+
     if not is_rise_valid:
         return setup
 
