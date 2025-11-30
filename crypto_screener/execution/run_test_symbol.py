@@ -58,21 +58,22 @@ def _run_test_symbol(
             log.e(f"{symbol} {timeframe.tf}: не удалось получить свечи.")
             continue
 
+        future_bars = _get_future_bars(exchange, symbol, timeframe, timeframe_limit, end)
+        if not future_bars:
+            log.e(f"{symbol} {timeframe.tf}: не удалось получить будущие свечи после {end}.")
+            continue
+
         setup = run_test_bars(
             symbol=symbol,
             timeframe=timeframe,
             bars=bars,
             plot_policy=plot_policy,
             context=Context.TEST,
-            subdir='test_symbol'
+            subdir='test_symbol',
+            postmortem_bars=future_bars,
         )
 
         if not setup or not isinstance(setup, Buy):
-            continue
-
-        future_bars = _get_future_bars(exchange, symbol, timeframe, timeframe_limit, end)
-        if not future_bars:
-            log.e(f"{symbol} {timeframe.tf}: не удалось получить будущие свечи после {end}.")
             continue
 
         outcome = evaluate_buy(setup, future_bars)
