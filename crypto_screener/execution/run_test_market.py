@@ -143,19 +143,20 @@ def run_test_market(
 
             for i in range(timeframe_window - 1, len(bars)):
                 window_bars = bars[i - timeframe_window + 1:i + 1]
+                future_bars = bars[i + 1:]
                 setup = run_test_bars(
                     symbol=symbol.symbol,
                     timeframe=timeframe,
                     bars=window_bars,
                     plot_policy=plot_policy,
                     context=symbol.context,
-                    subdir='test_market'
+                    subdir='test_market',
+                    postmortem_bars=future_bars
                 )
 
                 if not setup or not isinstance(setup, Buy):
                     continue
 
-                future_bars = bars[i + 1:]
                 if not future_bars:
                     continue
 

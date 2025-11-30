@@ -215,6 +215,8 @@ def plot(
         symbol: str,
         timeframe: Timeframe,
         bars: list[Bar],
+        postmortem_bars: Optional[list[Bar]] = None,
+        detection_time: Optional[datetime] = None,
         main_high_swing: Optional[Swing] = None,
         main_low_swing: Optional[Swing] = None,
         cascade_swings: Optional[list[Swing]] = None,
@@ -226,13 +228,18 @@ def plot(
     if not symbol or not bars:
         raise ValueError("Недостаточно данных для построения графика.")
 
+    combined_bars = [*bars, *(postmortem_bars or [])]
+
+    if not combined_bars:
+        raise ValueError("Недостаточно данных для построения графика.")
+
     fig, price_ax, volume_ax = _build_figure()
 
-    times = [_datetime_to_mpl(bar.time) for bar in bars]
+    times = [_datetime_to_mpl(bar.time) for bar in combined_bars]
     candle_width = _get_candle_width(times)
 
-    min_price = min(bar.low for bar in bars)
-    max_price = max(bar.high for bar in bars)
+    min_price = min(bar.low for bar in combined_bars)
+    max_price = max(bar.high for bar in combined_bars)
     y_offset = max((max_price - min_price) * cfg.PLOT_Y_OFFSET_RATIO, cfg.PLOT_Y_OFFSET_MIN)
 
     if main_low_swing and main_high_swing:
@@ -268,10 +275,10 @@ def plot(
             zorder=0
         )
 
-    _draw_candles(price_ax, bars, times, candle_width)
+    _draw_candles(price_ax, combined_bars, times, candle_width)
     _format_ax(price_ax, times, min_price, max_price)
 
-    volumes = _draw_volume(volume_ax, bars, times, candle_width)
+    volumes = _draw_volume(volume_ax, combined_bars, times, candle_width)
     _format_volume_ax(volume_ax, volumes)
     _format_time_axis(volume_ax)
 
@@ -311,14 +318,26 @@ def plot(
             y_offset=y_offset
         )
     if not cascade_swings and not resistance_swings and not support_swings:
-        bars = add_swings(bars, timeframe)
-        swings = [bar.swing for bar in bars if bar.swing]
+        base_bars = add_swings(bars, timeframe)
+        swings = [bar.swing for bar in base_bars if bar.swing]
         _draw_swing_group(
             ax=price_ax,
             swings=swings,
             color=cfg.PLOT_COMMON_SWING_COLOR,
             y_offset=y_offset
         )
+
+    if detection_time:
+        detection_mpl = _datetime_to_mpl(detection_time)
+        for ax in (price_ax, volume_ax):
+            ax.axvline(
+                detection_mpl,
+                color=cfg.PLOT_GRID_COLOR,
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.8,
+                zorder=0,
+            )
 
     price_ax.set_title(
         label=f"{symbol.upper()} • {timeframe.tf}",
@@ -328,8 +347,14 @@ def plot(
 
     fig.tight_layout()
 
-    length = len(bars)
-    output_path = _resolve_output_path(setup_name or symbol, timeframe, bars[-1].time, length, subdir)
+    length = len(combined_bars)
+    output_path = _resolve_output_path(
+        setup_name or symbol,
+        timeframe,
+        combined_bars[-1].time,
+        length,
+        subdir,
+    )
     fig.savefig(
         fname=output_path,
         facecolor=cfg.PLOT_BACKGROUND_COLOR,

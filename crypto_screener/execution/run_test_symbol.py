@@ -5,7 +5,7 @@ from typing import Optional
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy, TestData
-from crypto_screener.domain.models.setup import Buy, Setup
+from crypto_screener.domain.models.setup import Setup, Buy
 from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
@@ -101,12 +101,16 @@ def _detect_setup(
 
 def _plot(
         setup: Setup,
-        subdir: Optional[str] = None
+        subdir: Optional[str] = None,
+        postmortem_bars: Optional[list[Bar]] = None,
+        detection_time: Optional[datetime] = None,
 ):
     plot(
         symbol=f"{setup.symbol} {setup.name.capitalize()} ",
         timeframe=setup.timeframe,
         bars=setup.bars,
+        postmortem_bars=postmortem_bars,
+        detection_time=detection_time,
         main_low_swing=setup.main_low_swing,
         main_high_swing=setup.main_high_swing,
         cascade_swings=setup.cascade_swings,
@@ -126,17 +130,18 @@ def run_test_bars(
         bars: list[Bar],
         plot_policy: PlotPolicy,
         context: Context,
-        subdir: Optional[str] = None
+        subdir: Optional[str] = None,
+        postmortem_bars: Optional[list[Bar]] = None,
 ) -> Optional[Setup]:
     if not bars:
         return None
     setup = _detect_setup(symbol, bars, timeframe, context)
     match plot_policy:
         case PlotPolicy.ON_ANY:
-            _plot(setup, subdir)
+            _plot(setup, subdir, postmortem_bars, bars[-1].time)
         case PlotPolicy.ON_FILLED_SETUP:
             if setup.is_filled:
-                _plot(setup, subdir)
+                _plot(setup, subdir, postmortem_bars, bars[-1].time)
     return setup
 
 
