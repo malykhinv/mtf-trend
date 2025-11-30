@@ -216,7 +216,7 @@ def get_cascade_long(
                 consecutive = 0
                 max_consecutive = 0
                 for bar in pullback_bars:
-                    if bar.high <= level_price - min_pullback:
+                    if bar.close <= level_price - min_pullback:
                         consecutive += 1
                         max_consecutive = max(max_consecutive, consecutive)
                     else:
