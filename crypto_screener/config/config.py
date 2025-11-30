@@ -185,6 +185,7 @@ class AppConfig:
     PLOT_PRICE_HIGH_THRESHOLD: float = 100
     PLOT_PRICE_MID_THRESHOLD: float = 1
     PLOT_DEFAULT_SYMBOL: str = "asset"
+    PLOT_POSTMORTEM_EXTRA_BARS: int = 5
     # endregion
 
     # region Тест

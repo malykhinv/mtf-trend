@@ -238,11 +238,32 @@ def _find_target_times(trade_levels: TradeLevels, future_bars: list[Bar]) -> dic
                 target_times["be"] = bar.time
                 break
 
-            if bar.high >= take_profit_price:
-                target_times["tp"] = bar.time
-                break
-
     return target_times
+
+
+def _trim_postmortem_bars(
+        postmortem_bars: Optional[list[Bar]],
+        trade_levels: Optional[TradeLevels],
+) -> Optional[list[Bar]]:
+    if not postmortem_bars or not trade_levels:
+        return postmortem_bars
+
+    target_times = _find_target_times(trade_levels, postmortem_bars)
+    deal_result_time = next(
+        (target_times[target] for target in ("sl", "tp", "be", "pc") if target_times[target]),
+        None,
+    )
+
+    if not deal_result_time:
+        return postmortem_bars
+
+    extra_bars = cfg.PLOT_POSTMORTEM_EXTRA_BARS
+    for index, bar in enumerate(postmortem_bars):
+        if bar.time >= deal_result_time:
+            last_index = min(len(postmortem_bars), index + extra_bars + 1)
+            return postmortem_bars[:last_index]
+
+    return postmortem_bars
 
 
 def _draw_entry_zone(
@@ -389,7 +410,9 @@ def _plot(
     if not symbol or not bars:
         raise ValueError("Недостаточно данных для построения графика.")
 
-    combined_bars = [*bars, *(postmortem_bars or [])]
+    trimmed_postmortem = _trim_postmortem_bars(postmortem_bars, trade_levels)
+
+    combined_bars = [*bars, *(trimmed_postmortem or [])]
 
     if not combined_bars:
         raise ValueError("Недостаточно данных для построения графика.")
@@ -450,14 +473,14 @@ def _plot(
     _draw_candles(price_ax, combined_bars, times, candle_width)
 
     if draw_entry_zones and entry_price is not None and trade_levels:
-        entry_time = _get_entry_time(postmortem_bars, detection_time, bars)
-        horizon_time = _get_horizon_time(postmortem_bars, combined_bars)
+        entry_time = _get_entry_time(trimmed_postmortem, detection_time, bars)
+        horizon_time = _get_horizon_time(trimmed_postmortem, combined_bars)
         _draw_entry_zones(
             ax=price_ax,
             trade_levels=trade_levels,
             entry_time=entry_time,
             horizon_time=horizon_time,
-            postmortem_bars=postmortem_bars or [],
+            postmortem_bars=trimmed_postmortem or [],
         )
     _format_ax(price_ax, times, min_price, max_price)
 
