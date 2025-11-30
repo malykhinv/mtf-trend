@@ -233,6 +233,7 @@ def get_cascade_long(
 
     best_level_touches = []
     best_third_touch_index = -1
+    best_level_price = None
 
     for level in levels:
         if level.is_crossed:
@@ -244,6 +245,7 @@ def get_cascade_long(
         if third_touch_index > best_third_touch_index:
             best_level_touches = touches
             best_third_touch_index = third_touch_index
+            best_level_price = level.price
 
     if not best_level_touches:
         return []
@@ -251,9 +253,9 @@ def get_cascade_long(
     cascade_swings = []
     for touch_index in best_level_touches:
         bar = bars[touch_index]
-        swing = bar.swing if bar.swing else Swing(
+        swing = Swing(
             time=bar.time,
-            price=bar.high,
+            price=best_level_price,
             type=SwingType.HIGH,
             is_open=True
         )
