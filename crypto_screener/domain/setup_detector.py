@@ -154,12 +154,12 @@ def get_cascade_long(
         atr_window = true_ranges[-window:]
         return float(np.mean(atr_window)) if atr_window else 0.0
 
-    atr_window = 50
+    atr_window = cfg.CASCADE_ATR_WINDOW
     atr = _calculate_atr(atr_window)
-    touch_tolerance = max(atr, 0.0)
-    min_pullback = max(atr, 0.0)
-    min_pullback_bars = 2
-    min_gap_bars = 2
+    touch_tolerance = max(cfg.CASCADE_TOUCH_EPS_NATR * atr, 0.0)
+    min_pullback = max(cfg.CASCADE_MIN_PULLBACK_NATR * atr, 0.0)
+    min_pullback_bars = cfg.CASCADE_MIN_PULLBACK_BARS
+    min_gap_bars = cfg.CASCADE_MIN_GAP_BARS
 
     levels = []
 
@@ -240,9 +240,9 @@ def get_cascade_long(
 
     for level in levels:
         touches = refine_touches(level['price'], level['touches_raw'])
-        if len(touches) < 3:
+        if len(touches) < cfg.CASCADE_LENGTH_MIN:
             continue
-        third_touch_index = touches[2]
+        third_touch_index = touches[cfg.CASCADE_LENGTH_MIN - 1]
         if third_touch_index > best_third_touch_index:
             best_level_touches = touches
             best_third_touch_index = third_touch_index

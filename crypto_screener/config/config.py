@@ -94,6 +94,16 @@ class AppConfig:
     CASCADE_RETRACE_RATIO_MIN: float = 0.4
     # Максимальный разброс цены в каскаде относительно размера отката.
     CASCADE_RANGE_RATIO_MAX: float = 0.2
+    # Размер окна ATR для анализа лонгового каскада.
+    CASCADE_ATR_WINDOW: int = 50
+    # Допуск по касаниям в долях ATR.
+    CASCADE_TOUCH_EPS_NATR: float = 1.0
+    # Минимальная глубина отката в долях ATR.
+    CASCADE_MIN_PULLBACK_NATR: float = 1.0
+    # Минимальная длительность отката в барах.
+    CASCADE_MIN_PULLBACK_BARS: int = 2
+    # Минимальный разрыв между касаниями в барах.
+    CASCADE_MIN_GAP_BARS: int = 2
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
     # Минимальный разрыв от верха каскада до начала сопротивления (в долях отката)
