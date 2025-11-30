@@ -136,6 +136,38 @@ def _draw_swing_group(
         )
 
 
+def _draw_cascade_level(ax: Axes, cascade_swings: list[Swing], bars: list[Bar]):
+    if not cascade_swings or not bars:
+        return
+
+    level_price = cascade_swings[0].price
+    start_time = cascade_swings[0].time
+    start_index = next((index for index, bar in enumerate(bars) if bar.time == start_time), None)
+    if start_index is None:
+        return
+
+    end_index = len(bars) - 1
+    for index in range(start_index + 1, len(bars)):
+        bar = bars[index]
+        if bar.open > level_price or bar.close > level_price:
+            end_index = index
+            break
+
+    start_time_mpl = _datetime_to_mpl(bars[start_index].time)
+    end_time_mpl = _datetime_to_mpl(bars[end_index].time)
+
+    ax.hlines(
+        y=level_price,
+        xmin=start_time_mpl,
+        xmax=end_time_mpl,
+        color=cfg.PLOT_CASCADE_LEVEL_COLOR,
+        linewidth=cfg.PLOT_CASCADE_LEVEL_LINEWIDTH,
+        linestyles=cfg.PLOT_CASCADE_LEVEL_LINESTYLE,
+        alpha=cfg.PLOT_CASCADE_LEVEL_ALPHA,
+        zorder=cfg.PLOT_CASCADE_LEVEL_ZORDER,
+    )
+
+
 def _get_candle_width(times: list[float]) -> float:
     if len(times) < cfg.PLOT_CANDLE_FALLBACK_MIN_TIMES:
         minutes_ratio = cfg.PLOT_CANDLE_FALLBACK_INTERVAL_MINUTES / cfg.PLOT_MINUTES_IN_DAY
@@ -495,6 +527,7 @@ def _plot(
     _format_time_axis(volume_ax)
 
     if cascade_swings:
+        _draw_cascade_level(price_ax, cascade_swings, combined_bars)
         _draw_swing_group(
             ax=price_ax,
             swings=cascade_swings,
