@@ -234,6 +234,7 @@ def get_cascade_long(
     best_level_touches = []
     best_third_touch_index = -1
     best_level_price = None
+    best_level_distance = -1
 
     for level in levels:
         if level.is_crossed:
@@ -246,6 +247,17 @@ def get_cascade_long(
             best_level_touches = touches
             best_third_touch_index = third_touch_index
             best_level_price = level.price
+            best_level_distance = level.distance
+            continue
+
+        if third_touch_index == best_third_touch_index:
+            has_more_touches = len(touches) > len(best_level_touches)
+            has_longer_distance = len(touches) == len(best_level_touches) and level.distance > best_level_distance
+            if has_more_touches or has_longer_distance:
+                best_level_touches = touches
+                best_third_touch_index = third_touch_index
+                best_level_price = level.price
+                best_level_distance = level.distance
 
     if not best_level_touches:
         return []
