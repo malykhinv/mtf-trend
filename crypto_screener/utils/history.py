@@ -2,8 +2,8 @@ from crypto_screener.domain.models.timeframe import Timeframe
 
 # region Private.
 _REFERENCE_TIMEFRAME_MINUTES = Timeframe.M15.minutes
-_LIMIT_MIN = 200
-_WINDOW_MIN = 80
+_LIMIT_MIN = 300
+_WINDOW_MIN = 100
 
 
 def _scale_by_timeframe(base_value: int, timeframe: Timeframe, minimum: int) -> int:

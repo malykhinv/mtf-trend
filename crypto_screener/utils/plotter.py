@@ -373,6 +373,7 @@ def _draw_entry_zones(
 
 def _resolve_output_path(
         name: str,
+        setup_name: Optional[str],
         timeframe: Timeframe,
         time: datetime,
         length: int,
@@ -383,7 +384,12 @@ def _resolve_output_path(
         output_dir += f"/{subdir}"
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    clean_name = re.sub(r"[^A-Za-z0-9-_.]+", " ", name.split(":", 1)[0])
+    name_parts = [name.split(":", 1)[0]]
+    if setup_name:
+        name_parts.append(setup_name)
+
+    full_name = " ".join(part.strip() for part in name_parts if part and part.strip())
+    clean_name = re.sub(r"[^A-Za-z0-9-_.]+", " ", full_name)
     filename = f"{clean_name} {timeframe.tf} {length} {time:%d.%m.%Y %H.%M.%S}.png"
     return output_dir / filename
 
@@ -555,7 +561,8 @@ def _plot(
 
     length = len(combined_bars)
     output_path = _resolve_output_path(
-        name=f"{symbol} {setup_name}" if setup_name else symbol,
+        name=symbol,
+        setup_name=setup_name,
         timeframe=timeframe,
         time=combined_bars[-1].time,
         length=length,
