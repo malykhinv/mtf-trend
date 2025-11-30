@@ -112,7 +112,8 @@ def _plot(
         cascade_swings=setup.cascade_swings,
         resistance_swings=setup.resistance_swings,
         support_swings=setup.support_swings,
-        subdir=subdir
+        subdir=subdir,
+        setup_name=setup.name.capitalize()
     )
     log.d(f"График {setup.symbol} сохранен.")
 
