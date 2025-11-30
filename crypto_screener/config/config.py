@@ -141,6 +141,8 @@ class AppConfig:
     PLOT_ENTRY_TP_COLOR: str = "#0b3b2e"
     PLOT_ENTRY_PC_COLOR: str = "#1c54b2"
     PLOT_ENTRY_BE_COLOR: str = "#ffb74d"
+    PLOT_ENTRY_RISK_ZONE_ALPHA: float = 0.14
+    PLOT_ENTRY_REWARD_ZONE_ALPHA: float = 0.12
     PLOT_ENTRY_ZONE_ALPHA: float = 0.12
     PLOT_ENTRY_ZONE_MIN_HEIGHT: float = 1e-5
     PLOT_ENTRY_ZONE_ZORDER: int = 0

@@ -253,6 +253,7 @@ def _draw_entry_zone(
         end_time: datetime,
         *,
         color: str,
+        alpha: float,
 ):
     start_mpl = _datetime_to_mpl(entry_time)
     end_mpl = _datetime_to_mpl(end_time)
@@ -268,7 +269,7 @@ def _draw_entry_zone(
         height=height,
         facecolor=color,
         edgecolor=color,
-        alpha=cfg.PLOT_ENTRY_ZONE_ALPHA,
+        alpha=alpha,
         zorder=cfg.PLOT_ENTRY_ZONE_ZORDER,
     ))
 
@@ -283,10 +284,53 @@ def _draw_entry_zones(
     target_times = _find_target_times(trade_levels, postmortem_bars)
     entry_price = trade_levels.entry_price
 
-    targets: list[tuple[float, Optional[datetime], str]] = [
-        (trade_levels.stop_loss_price, target_times["sl"], cfg.PLOT_ENTRY_SL_COLOR),
-        (trade_levels.take_profit_price, target_times["tp"], cfg.PLOT_ENTRY_TP_COLOR),
-    ]
+    sl_end_time = next(
+        (
+            time
+            for time in (
+                target_times["sl"],
+                target_times["tp"],
+                target_times["pc"],
+                target_times["be"],
+            )
+            if time
+        ),
+        horizon_time,
+    )
+    tp_end_time = next(
+        (
+            time
+            for time in (
+                target_times["tp"],
+                target_times["pc"],
+                target_times["be"],
+            )
+            if time
+        ),
+        horizon_time,
+    )
+
+    _draw_entry_zone(
+        ax=ax,
+        entry_price=entry_price,
+        target_price=trade_levels.stop_loss_price,
+        entry_time=entry_time,
+        end_time=sl_end_time,
+        color=cfg.PLOT_ENTRY_SL_COLOR,
+        alpha=cfg.PLOT_ENTRY_RISK_ZONE_ALPHA,
+    )
+
+    _draw_entry_zone(
+        ax=ax,
+        entry_price=entry_price,
+        target_price=trade_levels.take_profit_price,
+        entry_time=entry_time,
+        end_time=tp_end_time,
+        color=cfg.PLOT_ENTRY_TP_COLOR,
+        alpha=cfg.PLOT_ENTRY_REWARD_ZONE_ALPHA,
+    )
+
+    targets: list[tuple[float, Optional[datetime], str]] = []
 
     if trade_levels.partial_close_price is not None:
         targets.append((trade_levels.partial_close_price, target_times["pc"], cfg.PLOT_ENTRY_PC_COLOR))
@@ -302,6 +346,7 @@ def _draw_entry_zones(
             entry_time=entry_time,
             end_time=end_time,
             color=color,
+            alpha=cfg.PLOT_ENTRY_ZONE_ALPHA,
         )
 
 
