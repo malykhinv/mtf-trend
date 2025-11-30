@@ -191,13 +191,12 @@ def run_live(
                             )
 
                     # Найден торговый сетап.
-                    case buy_setup @ Buy(
+                    case Buy(
                         main_low_swing=main_low_swing,
                         main_high_swing=main_high_swing,
                         cascade_swings=cascade_swings,
                         resistance_swings=resistance_swings,
                         support_swings=support_swings,
-                        trade_levels=trade_levels,
                     ):
                         message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                         log.i(message)
