@@ -13,7 +13,7 @@ from crypto_screener.domain.setup_detector import detect_setup
 from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
-from crypto_screener.utils.plotter import plot
+from crypto_screener.utils.plotter import plot, plot_postmortem
 
 
 # region Private.
@@ -63,7 +63,7 @@ def _run_test_symbol(
             timeframe=timeframe,
             bars=bars,
             plot_policy=plot_policy,
-            context=Context.A,  # Для упрощения тестирования
+            context=Context.TEST,
             subdir='test_symbol'
         )
 
@@ -105,20 +105,36 @@ def _plot(
         postmortem_bars: Optional[list[Bar]] = None,
         detection_time: Optional[datetime] = None,
 ):
-    plot(
-        symbol=f"{setup.symbol} {setup.name.capitalize()} ",
-        timeframe=setup.timeframe,
-        bars=setup.bars,
-        postmortem_bars=postmortem_bars,
-        detection_time=detection_time,
-        main_low_swing=setup.main_low_swing,
-        main_high_swing=setup.main_high_swing,
-        cascade_swings=setup.cascade_swings,
-        resistance_swings=setup.resistance_swings,
-        support_swings=setup.support_swings,
-        subdir=subdir,
-        setup_name=setup.name.capitalize()
-    )
+    if postmortem_bars and isinstance(setup, Buy):
+        plot_postmortem(
+            symbol=f"{setup.symbol} {setup.name.capitalize()} ",
+            timeframe=setup.timeframe,
+            bars=setup.bars,
+            detection_time=detection_time,
+            main_low_swing=setup.main_low_swing,
+            main_high_swing=setup.main_high_swing,
+            cascade_swings=setup.cascade_swings,
+            resistance_swings=setup.resistance_swings,
+            support_swings=setup.support_swings,
+            subdir=subdir,
+            setup_name=setup.name.capitalize(),
+            postmortem_bars=postmortem_bars,
+            trade_levels=setup.trade_levels,
+        )
+    else:
+        plot(
+            symbol=f"{setup.symbol} {setup.name.capitalize()} ",
+            timeframe=setup.timeframe,
+            bars=setup.bars,
+            detection_time=detection_time,
+            main_low_swing=setup.main_low_swing,
+            main_high_swing=setup.main_high_swing,
+            cascade_swings=setup.cascade_swings,
+            resistance_swings=setup.resistance_swings,
+            support_swings=setup.support_swings,
+            subdir=subdir,
+            setup_name=setup.name.capitalize(),
+        )
     log.d(f"График {setup.symbol} сохранен.")
 
 

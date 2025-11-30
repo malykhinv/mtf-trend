@@ -137,6 +137,13 @@ class AppConfig:
     PLOT_COMMON_SWING_COLOR: str = "#663366"
     PLOT_GROWTH_PHASE_COLOR: str = "#808080"
     PLOT_GROWTH_PHASE_ALPHA: float = 0.05
+    PLOT_ENTRY_SL_COLOR: str = "#8b1a1a"
+    PLOT_ENTRY_TP_COLOR: str = "#0b3b2e"
+    PLOT_ENTRY_PC_COLOR: str = "#1c54b2"
+    PLOT_ENTRY_BE_COLOR: str = "#ffb74d"
+    PLOT_ENTRY_ZONE_ALPHA: float = 0.12
+    PLOT_ENTRY_ZONE_MIN_HEIGHT: float = 1e-5
+    PLOT_ENTRY_ZONE_ZORDER: int = 0
     # Маркеры свингов.
     PLOT_SWING_MARKER_SIZE: int = 32
     PLOT_SWING_MARKER_CLOSED_ALPHA: float = 0.25

@@ -6,6 +6,7 @@ from typing import Optional
 import matplotlib
 from matplotlib.figure import Figure
 
+from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.swing_detector import add_swings
 
 matplotlib.use("Agg")
@@ -192,6 +193,118 @@ def _format_volume_ax(ax: Axes, volumes: list[float]):
     ax.yaxis.set_major_formatter(FuncFormatter(_format_volume))
 
 
+def _get_entry_time(postmortem_bars: Optional[list[Bar]], detection_time: Optional[datetime], bars: list[Bar]) -> datetime:
+    if postmortem_bars:
+        return postmortem_bars[0].time
+    if detection_time:
+        return detection_time
+    return bars[-1].time
+
+
+def _get_horizon_time(postmortem_bars: Optional[list[Bar]], combined_bars: list[Bar]) -> datetime:
+    if postmortem_bars:
+        return postmortem_bars[-1].time
+    return combined_bars[-1].time
+
+
+def _find_target_times(trade_levels: TradeLevels, future_bars: list[Bar]) -> dict[str, Optional[datetime]]:
+    stop_loss_price = trade_levels.stop_loss_price
+    take_profit_price = trade_levels.take_profit_price
+    partial_close_price = trade_levels.partial_close_price
+    breakeven_price = trade_levels.breakeven_price
+
+    target_times: dict[str, Optional[datetime]] = {"sl": None, "tp": None, "pc": None, "be": None}
+    has_partial_close = False
+
+    for bar in future_bars:
+        if not has_partial_close:
+            if bar.low <= stop_loss_price:
+                target_times["sl"] = bar.time
+                break
+
+            if partial_close_price is not None and bar.high >= partial_close_price:
+                target_times["pc"] = bar.time
+                has_partial_close = True
+                if bar.high >= take_profit_price:
+                    target_times["tp"] = bar.time
+                    break
+                continue
+
+            if bar.high >= take_profit_price:
+                target_times["tp"] = bar.time
+                break
+        else:
+            if breakeven_price is not None and bar.low <= breakeven_price:
+                target_times["be"] = bar.time
+                break
+
+            if bar.high >= take_profit_price:
+                target_times["tp"] = bar.time
+                break
+
+    return target_times
+
+
+def _draw_entry_zone(
+        ax: Axes,
+        entry_price: float,
+        target_price: float,
+        entry_time: datetime,
+        end_time: datetime,
+        *,
+        color: str,
+):
+    start_mpl = _datetime_to_mpl(entry_time)
+    end_mpl = _datetime_to_mpl(end_time)
+    if end_mpl <= start_mpl:
+        return
+
+    lower_price = min(entry_price, target_price)
+    height = max(abs(target_price - entry_price), cfg.PLOT_ENTRY_ZONE_MIN_HEIGHT)
+
+    ax.add_patch(Rectangle(
+        xy=(start_mpl, lower_price),
+        width=end_mpl - start_mpl,
+        height=height,
+        facecolor=color,
+        edgecolor=color,
+        alpha=cfg.PLOT_ENTRY_ZONE_ALPHA,
+        zorder=cfg.PLOT_ENTRY_ZONE_ZORDER,
+    ))
+
+
+def _draw_entry_zones(
+        ax: Axes,
+        trade_levels: TradeLevels,
+        entry_time: datetime,
+        horizon_time: datetime,
+        postmortem_bars: list[Bar],
+):
+    target_times = _find_target_times(trade_levels, postmortem_bars)
+    entry_price = trade_levels.entry_price
+
+    targets: list[tuple[float, Optional[datetime], str]] = [
+        (trade_levels.stop_loss_price, target_times["sl"], cfg.PLOT_ENTRY_SL_COLOR),
+        (trade_levels.take_profit_price, target_times["tp"], cfg.PLOT_ENTRY_TP_COLOR),
+    ]
+
+    if trade_levels.partial_close_price is not None:
+        targets.append((trade_levels.partial_close_price, target_times["pc"], cfg.PLOT_ENTRY_PC_COLOR))
+    if trade_levels.breakeven_price is not None:
+        targets.append((trade_levels.breakeven_price, target_times["be"], cfg.PLOT_ENTRY_BE_COLOR))
+
+    for target_price, target_time, color in targets:
+        end_time = target_time or horizon_time
+        _draw_entry_zone(
+            ax=ax,
+            entry_price=entry_price,
+            target_price=target_price,
+            entry_time=entry_time,
+            end_time=end_time,
+            color=color,
+        )
+
+
 def _resolve_output_path(
         name: str,
         timeframe: Timeframe,
@@ -211,19 +324,22 @@ def _resolve_output_path(
 
 # endregion
 
-def plot(
+def _plot(
         symbol: str,
         timeframe: Timeframe,
         bars: list[Bar],
-        postmortem_bars: Optional[list[Bar]] = None,
-        detection_time: Optional[datetime] = None,
-        main_high_swing: Optional[Swing] = None,
-        main_low_swing: Optional[Swing] = None,
-        cascade_swings: Optional[list[Swing]] = None,
-        resistance_swings: Optional[list[Swing]] = None,
-        support_swings: Optional[list[Swing]] = None,
-        subdir: Optional[str] = None,
-        setup_name: Optional[str] = None
+        *,
+        postmortem_bars: Optional[list[Bar]],
+        detection_time: Optional[datetime],
+        main_high_swing: Optional[Swing],
+        main_low_swing: Optional[Swing],
+        cascade_swings: Optional[list[Swing]],
+        resistance_swings: Optional[list[Swing]],
+        support_swings: Optional[list[Swing]],
+        subdir: Optional[str],
+        setup_name: Optional[str],
+        trade_levels: Optional[TradeLevels],
+        draw_entry_zones: bool,
 ):
     if not symbol or not bars:
         raise ValueError("Недостаточно данных для построения графика.")
@@ -240,6 +356,17 @@ def plot(
 
     min_price = min(bar.low for bar in combined_bars)
     max_price = max(bar.high for bar in combined_bars)
+
+    entry_price = trade_levels.entry_price if trade_levels else None
+    if trade_levels and entry_price is not None:
+        trade_prices = [trade_levels.take_profit_price, trade_levels.stop_loss_price, entry_price]
+        if trade_levels.partial_close_price is not None:
+            trade_prices.append(trade_levels.partial_close_price)
+        if trade_levels.breakeven_price is not None:
+            trade_prices.append(trade_levels.breakeven_price)
+        min_price = min(min_price, *trade_prices)
+        max_price = max(max_price, *trade_prices)
+
     y_offset = max((max_price - min_price) * cfg.PLOT_Y_OFFSET_RATIO, cfg.PLOT_Y_OFFSET_MIN)
 
     if main_low_swing and main_high_swing:
@@ -276,6 +403,17 @@ def plot(
         )
 
     _draw_candles(price_ax, combined_bars, times, candle_width)
+
+    if draw_entry_zones and entry_price is not None and trade_levels:
+        entry_time = _get_entry_time(postmortem_bars, detection_time, bars)
+        horizon_time = _get_horizon_time(postmortem_bars, combined_bars)
+        _draw_entry_zones(
+            ax=price_ax,
+            trade_levels=trade_levels,
+            entry_time=entry_time,
+            horizon_time=horizon_time,
+            postmortem_bars=postmortem_bars or [],
+        )
     _format_ax(price_ax, times, min_price, max_price)
 
     volumes = _draw_volume(volume_ax, combined_bars, times, candle_width)
@@ -364,3 +502,68 @@ def plot(
     plt.close(fig)
 
     return output_path
+
+
+def plot(
+        symbol: str,
+        timeframe: Timeframe,
+        bars: list[Bar],
+        detection_time: Optional[datetime] = None,
+        main_high_swing: Optional[Swing] = None,
+        main_low_swing: Optional[Swing] = None,
+        cascade_swings: Optional[list[Swing]] = None,
+        resistance_swings: Optional[list[Swing]] = None,
+        support_swings: Optional[list[Swing]] = None,
+        subdir: Optional[str] = None,
+        setup_name: Optional[str] = None,
+):
+    return _plot(
+        symbol=symbol,
+        timeframe=timeframe,
+        bars=bars,
+        postmortem_bars=None,
+        detection_time=detection_time,
+        main_high_swing=main_high_swing,
+        main_low_swing=main_low_swing,
+        cascade_swings=cascade_swings,
+        resistance_swings=resistance_swings,
+        support_swings=support_swings,
+        subdir=subdir,
+        setup_name=setup_name,
+        trade_levels=None,
+        draw_entry_zones=False,
+    )
+
+
+def plot_postmortem(
+        symbol: str,
+        timeframe: Timeframe,
+        bars: list[Bar],
+        postmortem_bars: Optional[list[Bar]] = None,
+        detection_time: Optional[datetime] = None,
+        main_high_swing: Optional[Swing] = None,
+        main_low_swing: Optional[Swing] = None,
+        cascade_swings: Optional[list[Swing]] = None,
+        resistance_swings: Optional[list[Swing]] = None,
+        support_swings: Optional[list[Swing]] = None,
+        subdir: Optional[str] = None,
+        setup_name: Optional[str] = None,
+        *,
+        trade_levels: TradeLevels,
+):
+    return _plot(
+        symbol=symbol,
+        timeframe=timeframe,
+        bars=bars,
+        postmortem_bars=postmortem_bars,
+        detection_time=detection_time,
+        main_high_swing=main_high_swing,
+        main_low_swing=main_low_swing,
+        cascade_swings=cascade_swings,
+        resistance_swings=resistance_swings,
+        support_swings=support_swings,
+        subdir=subdir,
+        setup_name=setup_name,
+        trade_levels=trade_levels,
+        draw_entry_zones=True,
+    )

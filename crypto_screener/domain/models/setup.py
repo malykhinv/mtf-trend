@@ -5,6 +5,7 @@ from typing import Optional
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.models.trade_levels import TradeLevels
 
 
 @dataclass
@@ -40,37 +41,24 @@ class Buy(Setup):
     name: str = field(init=False, default="Buy")
     is_filled: bool = field(init=False, default=True)
 
-    take_profit_price: float
-    stop_loss_price: float
-    partial_close_price: Optional[float]
-    breakeven_price: Optional[float]
+    trade_levels: TradeLevels
 
-    def __post_init__(self) -> None:
-        take_profit_price = self.take_profit_price
-        stop_loss_price = self.stop_loss_price
-        partial_close_price = self.partial_close_price
-        breakeven_price = self.breakeven_price
+    @property
+    def take_profit_price(self) -> float:
+        return self.trade_levels.take_profit_price
 
-        # Проверка соответствия опциональных полей.
-        if partial_close_price is None and breakeven_price is not None:
-            raise ValueError("Не задана цена PC.")
-        if partial_close_price is not None and breakeven_price is None:
-            raise ValueError("Не задана цена BE.")
+    @property
+    def stop_loss_price(self) -> float:
+        return self.trade_levels.stop_loss_price
 
-        # Проверка знака.
-        if take_profit_price <= 0:
-            raise ValueError(f"Цена TP должна быть положительной ({take_profit_price}).")
-        if stop_loss_price <= 0:
-            raise ValueError(f"Цена SL должна быть положительной ({stop_loss_price}).")
-        if partial_close_price is not None and partial_close_price <= 0:
-            raise ValueError(f"Цена PC должна быть положительной ({partial_close_price}).")
-        if breakeven_price is not None and breakeven_price <= 0:
-            raise ValueError(f"Цена BE должна быть положительной ({breakeven_price}).")
+    @property
+    def entry_price(self) -> float:
+        return self.trade_levels.entry_price
 
-        # Проверка соотношений.
-        if partial_close_price is not None and breakeven_price is not None:
-            if not stop_loss_price < breakeven_price < partial_close_price < take_profit_price:
-                raise ValueError("Неправильное соотношение цен SL -> BE -> PC -> TP.")
-        else:
-            if not stop_loss_price < take_profit_price:
-                raise ValueError("Неправильное соотношение цен SL -> TP.")
+    @property
+    def partial_close_price(self) -> Optional[float]:
+        return self.trade_levels.partial_close_price
+
+    @property
+    def breakeven_price(self) -> Optional[float]:
+        return self.trade_levels.breakeven_price

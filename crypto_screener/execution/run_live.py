@@ -81,7 +81,7 @@ def _send_notification(
         cascade_swings: Optional[list[Swing]],
         resistance_swings: Optional[list[Swing]],
         support_swings: Optional[list[Swing]],
-        subdir: Optional[str] = None
+        subdir: Optional[str] = None,
 ) -> None:
     try:
         image_path = plot(
@@ -92,7 +92,7 @@ def _send_notification(
             cascade_swings=cascade_swings,
             resistance_swings=resistance_swings,
             support_swings=support_swings,
-            subdir=subdir
+            subdir=subdir,
         )
         notifier.notify(notification_type, message, image_path)
     except Exception as exception:
@@ -187,15 +187,12 @@ def run_live(
                             )
 
                     # Найден торговый сетап.
-                    case Buy(
+                    case buy_setup @ Buy(
                         main_high_swing=main_high_swing,
                         cascade_swings=cascade_swings,
                         resistance_swings=resistance_swings,
                         support_swings=support_swings,
-                        take_profit_price=take_profit_price,
-                        stop_loss_price=stop_loss_price,
-                        partial_close_price=partial_close_price,
-                        breakeven_price=breakeven_price
+                        trade_levels=trade_levels,
                     ):
                         message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                         log.i(message)

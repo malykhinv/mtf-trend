@@ -6,6 +6,7 @@ from crypto_screener.domain.models.setup import Setup, Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import SwingType, Swing
 from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.swing_detector import add_swings
 
 
@@ -166,7 +167,7 @@ def detect_setup(
         symbol: str,
         bars: list[Bar],
         timeframe: Timeframe,
-        context: Context
+        context: Context,
 ) -> Setup:
     setup = Unfilled(
         symbol=symbol,
@@ -183,7 +184,7 @@ def detect_setup(
     trimmed_bars = _trim_by_volume(bars)
     if trimmed_bars:
         bars = trimmed_bars
-    elif not context in {Context.A, Context.B, Context.C}:
+    elif not context.is_top:
         return setup
 
     # Анализ теней.
@@ -354,6 +355,14 @@ def detect_setup(
         if has_partial_close:
             partial_close_price = main_high_swing.price
             breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
+    entry_slippage_ratio = 1 + cfg.TEST_SLIPPAGE_PCT / 100 if context == Context.TEST else 1
+    trade_levels = TradeLevels(
+        entry_price=target_swing.price * entry_slippage_ratio,
+        take_profit_price=profit_price,
+        stop_loss_price=loss_price,
+        partial_close_price=partial_close_price,
+        breakeven_price=breakeven_price,
+    )
     setup = Buy(
         symbol=symbol,
         timeframe=timeframe,
@@ -363,10 +372,7 @@ def detect_setup(
         cascade_swings=cascade_long,
         resistance_swings=resistance_swings,
         support_swings=open_low_swings,
-        take_profit_price=profit_price,
-        stop_loss_price=loss_price,
-        partial_close_price=partial_close_price,
-        breakeven_price=breakeven_price
+        trade_levels=trade_levels,
     )
 
     return setup
