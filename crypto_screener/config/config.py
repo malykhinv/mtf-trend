@@ -45,7 +45,7 @@ _mode_test_market = TestMarket(
     plot_policy=PlotPolicy.ON_FILLED_SETUP,
     volume_24h_usdt_min=20_000_000,
     trades_24h_min=300_000,
-    listing_age_days_min=30
+    listing_age_days_min=3
 )
 
 _mode_test_symbols = TestSymbols(
@@ -63,7 +63,7 @@ class AppConfig:
     TIMEZONE: ZoneInfo = _timezone
 
     # Режим работы.
-    MODE: Mode = _mode_test_market
+    MODE: Mode = _mode_test_symbols
 
     # region Контекст.
     CONTEXT_E_TRADES_MIN: int = 500_000
@@ -87,7 +87,7 @@ class AppConfig:
     # Рост цены на основных свингах в зоне повышенного объема.
     PRICE_RISE_PCT_MIN: float = 15.0
     # Максимально допустимый откат на участке роста (относительно размера роста)
-    MAX_RETRACE_RATIO: float = 0.4
+    MAX_RETRACE_RATIO: float = 0.7
     # Соотношение глубины отката к росту.
     RETRACE_RATIO_MAX: float = 0.75
     # Минимальный уровень отката (снизу-вверх), на котором может располагаться каскад.
