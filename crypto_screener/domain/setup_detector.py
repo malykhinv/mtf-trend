@@ -137,9 +137,9 @@ def get_cascade_long(
         price_min: float,
         price_max: float
 ) -> list[Swing]:
-    if not bars or price_min >= price_max:
+    if not bars or price_min >= price_max or len(bars) < 2:
         return []
-
+    bars = bars[:-1]
     def _calculate_atr(window: int) -> float:
         if not bars or window <= 0:
             return 0.0
