@@ -248,6 +248,9 @@ def get_cascade_long(
 
     if not best_level_touches or best_level_touches_count < cfg.CASCADE_LENGTH_MIN:
         return []
+    first_touch_index = min(best_level_touches)
+    if first_touch_index >= len(bars) // 1.5:
+        return []
 
     cascade_swings = []
     for touch_index in best_level_touches:
@@ -380,7 +383,7 @@ def detect_setup(
         swing for swing in open_high_swings
         if cascade_top < swing.price <= cascade_top + resistance_gap
     ]
-    cascade_long = cascade_long + [swing for swing in extra_cascade_swings if swing not in cascade_long]
+    cascade_long = [swing for swing in extra_cascade_swings if swing not in cascade_long] + cascade_long
     setup.cascade_swings = cascade_long
     if not cascade_long:
         return setup
@@ -403,9 +406,10 @@ def detect_setup(
     consolidation_range = initial_swing.price - correction_low_swing.price
     open_low_swings = _get_open_swings(correction_bars, SwingType.LOW)
     setup.support_swings = open_low_swings
+    target_swing = cascade_long[-1]
 
     support_price_min = correction_low_swing.price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
-    support_price_max = initial_swing.price
+    support_price_max = target_swing.price
     open_low_swings = _filter_by_price(open_low_swings, support_price_min, support_price_max)
     support_swing = open_low_swings[-1] if open_low_swings else None
     has_support = support_swing is not None
@@ -425,7 +429,6 @@ def detect_setup(
         profit_price = main_high_swing.price + 2 * (main_high_swing.price - correction_low_swing.price)
     elif context == Context.B:
         profit_price = main_high_swing.price + (main_high_swing.price - correction_low_swing.price)
-    target_swing = cascade_long[-1]
     loss_price = support_swing.price
     loss_pct = 100 * (loss_price - current_price) / loss_price
     is_loss_valid = abs(loss_pct) > cfg.LOSS_PCT_MIN

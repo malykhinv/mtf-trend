@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-
+import numpy as np
 import matplotlib
 from matplotlib.figure import Figure
 
@@ -140,7 +140,7 @@ def _draw_cascade_level(ax: Axes, cascade_swings: list[Swing], bars: list[Bar]):
     if not cascade_swings or not bars:
         return
 
-    level_price = cascade_swings[0].price
+    level_price = np.mean([swing.price for swing in cascade_swings])
     start_time = cascade_swings[0].time
     start_index = next((index for index, bar in enumerate(bars) if bar.time == start_time), None)
     if start_index is None:

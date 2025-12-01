@@ -14,16 +14,16 @@ _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Time
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
-    # TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
-    # TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
-    # TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
-    # TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
+    TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
+    TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
+    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
+    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
     TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=9, minute=1)),
-    # TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
-    # TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
-    # TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=26)),
-    # TestData('TRADOORUSDT', Timeframe.M5, datetime(year=2025, month=11, day=17, hour=9, minute=15)),
-    # TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
+    TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
+    TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
+    TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=26)),
+    TestData('TRADOORUSDT', Timeframe.M5, datetime(year=2025, month=11, day=17, hour=9, minute=15)),
+    TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
 ]
 
 # region Режимы работы.
@@ -99,7 +99,7 @@ class AppConfig:
     # Допуск по касаниям в долях ATR.
     CASCADE_TOUCH_EPS_NATR: float = 1.0
     # Минимальная глубина отката в долях ATR.
-    CASCADE_MIN_PULLBACK_NATR: float = 3.0
+    CASCADE_MIN_PULLBACK_NATR: float = 2.5
     # Минимальная длительность отката в барах.
     CASCADE_MIN_PULLBACK_BARS: int = 3
     # Минимальный разрыв между касаниями в барах.
