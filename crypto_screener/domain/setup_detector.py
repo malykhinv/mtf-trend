@@ -139,58 +139,53 @@ def get_cascade_long(
 ) -> list[Swing]:
     if not bars or price_min >= price_max or len(bars) < 2:
         return []
+    
     bars = bars[:-1]
-    def _calculate_atr(window: int) -> float:
+    bars_count = len(bars)
+    
+    def calculate_average_range(window: int) -> float:
         if not bars or window <= 0:
             return 0.0
-        window = min(window, len(bars))
-        true_ranges = []
-        prev_close = bars[0].close
-        for bar in bars:
-            high_low = bar.high - bar.low
-            high_close = abs(bar.high - prev_close)
-            low_close = abs(bar.low - prev_close)
-            true_ranges.append(max(high_low, high_close, low_close))
-            prev_close = bar.close
-        atr_window = true_ranges[-window:]
-        return float(np.mean(atr_window)) if atr_window else 0.0
+        window = min(window, bars_count)
+        ranges = [bar.high - bar.low for bar in bars[-window:]]
+        return float(np.mean(ranges)) if ranges else 0.0
 
-    atr_window = cfg.CASCADE_ATR_WINDOW
-    atr = _calculate_atr(atr_window)
-    touch_tolerance = max(cfg.CASCADE_TOUCH_EPS_NATR * atr, 0.0)
-    min_pullback = max(cfg.CASCADE_MIN_PULLBACK_NATR * atr, 0.0)
+    avg_range = calculate_average_range(cfg.CASCADE_ATR_WINDOW)
+    touch_tolerance = max(cfg.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
+    min_pullback = max(cfg.CASCADE_MIN_PULLBACK_NATR * avg_range, 0.0)
     min_pullback_bars = cfg.CASCADE_MIN_PULLBACK_BARS
     min_gap_bars = cfg.CASCADE_MIN_GAP_BARS
 
     levels: list[CascadeLevel] = []
-
-    for index, bar in enumerate(bars):
-        if not price_min <= bar.high <= price_max:
-            continue
-
-        level_price = bar.high
+    
+    bar_data = [(i, bar.high, bar.open, bar.close)
+               for i, bar in enumerate(bars) 
+               if price_min <= bar.high <= price_max]
+    
+    for index, high_price, open_price, close_price in bar_data:
+        level_price = high_price
         cross_index = None
-        for look_ahead in range(index + 1, len(bars)):
+        
+        for look_ahead in range(index + 1, bars_count):
             look_bar = bars[look_ahead]
             if look_bar.open > level_price or look_bar.close > level_price:
                 cross_index = look_ahead
                 break
-
-        end_index = cross_index if cross_index is not None else len(bars)
-        touches_raw = []
-        for touch_index in range(index, end_index):
-            touch_bar = bars[touch_index]
-            if touch_bar.close > level_price:
-                continue
-            if level_price - touch_bar.close <= touch_tolerance:
-                touches_raw.append(touch_index)
-
-        levels.append(CascadeLevel(
-            price=level_price,
-            is_crossed=cross_index is not None,
-            distance=(cross_index - index) if cross_index is not None else (len(bars) - 1 - index),
-            touches_raw=touches_raw,
-        ))
+        
+        end_idx = cross_index if cross_index is not None else bars_count
+        touches_raw = [
+            i for i in range(index, end_idx)
+            if level_price - bars[i].close <= touch_tolerance
+            and bars[i].close <= level_price
+        ]
+        
+        if touches_raw:
+            levels.append(CascadeLevel(
+                price=level_price,
+                is_crossed=cross_index is not None,
+                distance=(cross_index - index) if cross_index is not None else (bars_count - 1 - index),
+                touches_raw=touches_raw,
+            ))
 
     def _refine_touches(
             price: float,
@@ -246,21 +241,16 @@ def get_cascade_long(
         if len(touches) < cfg.CASCADE_LENGTH_MIN:
             continue
         third_touch_index = touches[cfg.CASCADE_LENGTH_MIN - 1]
-        if third_touch_index > best_third_touch_index:
+        if third_touch_index > best_third_touch_index or \
+           (third_touch_index == best_third_touch_index and (
+               len(touches) > len(best_level_touches) or
+               (len(touches) == len(best_level_touches) and 
+                level.distance > best_level_distance)
+           )):
             best_level_touches = touches
             best_third_touch_index = third_touch_index
             best_level_price = level.price
             best_level_distance = level.distance
-            continue
-
-        if third_touch_index == best_third_touch_index:
-            has_more_touches = len(touches) > len(best_level_touches)
-            has_longer_distance = len(touches) == len(best_level_touches) and level.distance > best_level_distance
-            if has_more_touches or has_longer_distance:
-                best_level_touches = touches
-                best_third_touch_index = third_touch_index
-                best_level_price = level.price
-                best_level_distance = level.distance
 
     if not best_level_touches:
         return []
@@ -314,7 +304,7 @@ def detect_setup(
     bars = add_swings(bars, timeframe)
     setup.bars = bars
 
-    # Анализ роста.
+    # Анализ участка роста.
     main_rising_swings = _get_main_rising_swings_indexed(bars)
     if not main_rising_swings:
         return setup
@@ -331,6 +321,7 @@ def detect_setup(
     main_low_index -= start_index
     main_high_index -= start_index
 
+    # Анализ роста.
     setup.main_low_swing = main_low_swing
     setup.main_high_swing = main_high_swing
     rise = main_high_swing.price - main_low_swing.price
@@ -346,7 +337,6 @@ def detect_setup(
         if rise > 0:  # Избегаем деления на ноль
             retrace_ratio = retrace / rise
             max_retrace = max(max_retrace, retrace_ratio)
-
     is_rise_valid = (
         rise > 0 and
         rise_pct >= cfg.PRICE_RISE_PCT_MIN and
