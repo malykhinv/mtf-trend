@@ -14,15 +14,14 @@ _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Time
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
-    TestData('ICPUSDT', Timeframe.M15, datetime(year=2025, month=11, day=6, hour=12, minute=46)),
-    TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=6)),
-    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=11, minute=16)),
-    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=1)),
-    TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=9, minute=1)),
-    TestData('TAOUSDT', Timeframe.H1, datetime(year=2025, month=10, day=31, hour=14, minute=1)),
-    TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
-    TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=26)),
-    TestData('TRADOORUSDT', Timeframe.M5, datetime(year=2025, month=11, day=17, hour=9, minute=15)),
+    # TestData('ICPUSDT', Timeframe.M5, datetime(year=2025, month=11, day=4, hour=3, minute=14)),
+    # TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=54)),
+    # TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=12, minute=10)),
+    # TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=46)),
+    # TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=9, minute=1)),
+    # TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
+    # TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=21)),
+    # TestData('TRADOORUSDT', Timeframe.M5, datetime(year=2025, month=11, day=17, hour=9, minute=15)),
     TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
 ]
 
@@ -120,7 +119,7 @@ class AppConfig:
     # Минимальное расстояние Entry-TP.
     PROFIT_PCT_MIN: float = 3
     # Минимальное расстояние Entry-SL.
-    LOSS_PCT_MIN: float = 0.5
+    LOSS_PCT_MIN: float = 0.3
     # Минимальное расстояние от Entry и TP до PC при частичном закрытии позиции.
     PARTIAL_CLOSE_SIDE_PCT_MIN: float = 2.0
     # Соотношение цены участков Entry-BE и Entry-PC при частичном закрытии позиции.

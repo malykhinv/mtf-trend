@@ -20,3 +20,7 @@ class Context(Enum):
     @property
     def is_top(self) -> bool:
         return self in {Context.A, Context.B, Context.C, Context.TEST}
+
+    @property
+    def is_test(self) -> bool:
+        return self  == Context.TEST

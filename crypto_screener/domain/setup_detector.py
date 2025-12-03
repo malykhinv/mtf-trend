@@ -249,7 +249,7 @@ def get_cascade_long(
     if not best_level_touches or best_level_touches_count < cfg.CASCADE_LENGTH_MIN:
         return []
     first_touch_index = min(best_level_touches)
-    if first_touch_index >= len(bars) // 1.5:
+    if first_touch_index >= len(bars) // cfg.CASCADE_AGE_DIVIDER:
         return []
 
     cascade_swings = []
@@ -412,6 +412,14 @@ def detect_setup(
     support_price_max = target_swing.price
     open_low_swings = _filter_by_price(open_low_swings, support_price_min, support_price_max)
     support_swing = open_low_swings[-1] if open_low_swings else None
+    if not support_swing:
+        last_red_bar = next((bar for bar in reversed(correction_bars) if bar.close < bar.open), None)
+        support_swing = Swing(
+            time=last_red_bar.time,
+            price=last_red_bar.low,
+            type=SwingType.LOW,
+            is_open=True
+        )
     has_support = support_swing is not None
     if not has_support:
         return setup
@@ -440,7 +448,7 @@ def detect_setup(
         return setup
     reward_risk = abs(profit_pct / loss_pct)
     is_reward_risk_valid = reward_risk >= cfg.REWARD_RISK_RATIO_MIN
-    if not is_reward_risk_valid:
+    if not is_reward_risk_valid and not context.is_test:
         return setup
 
     # Проторговка после отката с лонговым каскадом.
@@ -477,7 +485,7 @@ def detect_setup(
         if has_partial_close:
             partial_close_price = main_high_swing.price
             breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
-    entry_slippage_ratio = 1 + cfg.TEST_SLIPPAGE_PCT / 100 if context == Context.TEST else 1
+    entry_slippage_ratio = 1 + cfg.TEST_SLIPPAGE_PCT / 100 if context.is_test else 1
     trade_levels = TradeLevels(
         entry_price=target_swing.price * entry_slippage_ratio,
         take_profit_price=profit_price,
