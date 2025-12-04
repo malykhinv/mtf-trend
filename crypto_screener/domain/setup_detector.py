@@ -354,6 +354,13 @@ def detect_setup(
     correction_bars = bars[main_high_index + 1:]
     if not correction_bars:
         return setup
+    rise_bars_count = max(0, main_high_index - main_low_index)
+    correction_bars_count = len(correction_bars)
+    rise_correction_ratio = (rise_bars_count / correction_bars_count
+                             if correction_bars_count > 0 else 0)
+    is_rise_age_valid = rise_correction_ratio < cfg.RISE_AGE_LIMIT_MULTIPLIER
+    if not is_rise_age_valid:
+        return setup
     correction_low = _get_first_open_swing_indexed(correction_bars, SwingType.LOW)
     if not correction_low:
         return setup
