@@ -110,9 +110,11 @@ def _plot(
         subdir: Optional[str] = None,
         postmortem_bars: Optional[list[Bar]] = None,
         detection_time: Optional[datetime] = None,
+        *,
+        context: Context,
 ):
     if postmortem_bars and isinstance(setup, Buy):
-        plot_postmortem(
+        output_path = plot_postmortem(
             symbol=f"{setup.symbol} ",
             timeframe=setup.timeframe,
             bars=setup.bars,
@@ -126,9 +128,10 @@ def _plot(
             setup_name=setup.name.capitalize(),
             postmortem_bars=postmortem_bars,
             trade_levels=setup.trade_levels,
+            context=context,
         )
     else:
-        plot(
+        output_path = plot(
             symbol=f"{setup.symbol} {setup.name.capitalize()} ",
             timeframe=setup.timeframe,
             bars=setup.bars,
@@ -140,8 +143,11 @@ def _plot(
             support_swings=setup.support_swings,
             subdir=subdir,
             setup_name=setup.name.capitalize(),
+            context=context,
         )
-    log.d(f"График {setup.symbol} сохранен.")
+    log.d(
+        f"График {setup.symbol} сохранен (контекст {context.value}) в {output_path}".strip()
+    )
 
 
 # endregion
@@ -162,13 +168,13 @@ def run_test_bars(
     setup = _detect_setup(symbol, bars, timeframe, context)
     match plot_policy:
         case PlotPolicy.ON_ANY:
-            _plot(setup, subdir, postmortem_bars, detection_time)
+            _plot(setup, subdir, postmortem_bars, detection_time, context=context)
         case PlotPolicy.ON_FILLED_SETUP:
             if setup.is_filled:
-                _plot(setup, subdir, postmortem_bars, detection_time)
+                _plot(setup, subdir, postmortem_bars, detection_time, context=context)
         case PlotPolicy.ON_TRADE_SETUP:
             if setup.is_trade:
-                _plot(setup, subdir, postmortem_bars, detection_time)
+                _plot(setup, subdir, postmortem_bars, detection_time, context=context)
     return setup
 
 
