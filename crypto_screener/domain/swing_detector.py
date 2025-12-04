@@ -101,8 +101,9 @@ def _add_swings(
     for index, swing_type, price in filtered:
         swing_by_index[index] = Swing(
             time=bars[index].time,
-            price=price,
-            type=swing_type
+            extremum_price=price,
+            close_price=bars[index].close,
+            type=swing_type,
         )
 
     enriched: list[Bar] = []
@@ -194,7 +195,7 @@ def _refine_swings(bars: list[Bar]) -> list[Bar]:
         if swing is not None:
             swing_indices.append(i)
             swing_types.append(swing.type)
-            swing_prices.append(swing.price)
+            swing_prices.append(swing.extremum_price)
 
     swings_count = len(swing_indices)
     if swings_count < 3:
@@ -242,8 +243,9 @@ def _refine_swings(bars: list[Bar]) -> list[Bar]:
     for index, swing_type, price in zip(swing_indices, swing_types, swing_prices):
         swing_by_index[index] = Swing(
             time=bars[index].time,
-            price=price,
-            type=swing_type
+            extremum_price=price,
+            close_price=bars[index].close,
+            type=swing_type,
         )
 
     refined: list[Bar] = []
@@ -279,16 +281,17 @@ def _mark_swings_open(
         else:
             future_bars = bars[index + 1:]
 
-        is_open = _is_swing_open(swing.price, future_bars)
+        is_open = _is_swing_open(swing.extremum_price, future_bars)
 
         result.append(
             replace(
                 bar,
                 swing=Swing(
                     time=swing.time,
-                    price=swing.price,
+                    extremum_price=swing.extremum_price,
+                    close_price=swing.close_price,
                     type=swing.type,
-                    is_open=is_open
+                    is_open=is_open,
                 )
             )
         )

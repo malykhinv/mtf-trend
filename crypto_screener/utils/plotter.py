@@ -124,7 +124,7 @@ def _draw_swing_group(
 
     for swing in swings:
         marker = "v" if swing.type == SwingType.HIGH else "^"
-        y = swing.price + y_offset if swing.type == SwingType.HIGH else swing.price - y_offset
+        y = swing.extremum_price + y_offset if swing.type == SwingType.HIGH else swing.extremum_price - y_offset
         ax.scatter(
             _datetime_to_mpl(swing.time),
             y,
@@ -140,7 +140,7 @@ def _draw_cascade_level(ax: Axes, cascade_swings: list[Swing], bars: list[Bar]):
     if not cascade_swings or not bars:
         return
 
-    level_price = np.mean([swing.price for swing in cascade_swings])
+    level_price = np.mean([swing.extremum_price for swing in cascade_swings])
     start_time = cascade_swings[0].time
     start_index = next((index for index, bar in enumerate(bars) if bar.time == start_time), None)
     if start_index is None:
@@ -488,7 +488,7 @@ def _plot(
             zorder=0
         )
         price_ax.axhline(
-            y=main_low_swing.price,
+            y=main_low_swing.extremum_price,
             xmin=0,
             xmax=1,
             color=cfg.PLOT_GROWTH_PHASE_COLOR,
@@ -498,7 +498,7 @@ def _plot(
             zorder=0
         )
         price_ax.axhline(
-            y=main_high_swing.price,
+            y=main_high_swing.extremum_price,
             xmin=0,
             xmax=1,
             color=cfg.PLOT_GROWTH_PHASE_COLOR,

@@ -88,7 +88,8 @@ def _get_main_rising_swings_indexed(bars: list[Bar]) -> list[tuple[int, Swing]]:
 
     main_low_swing = Swing(
         time=min_low_swing.time,
-        price=min_low_price,
+        extremum_price=min_low_price,
+        close_price=bars[min_low_index].close,
         type=SwingType.LOW,
         is_open=True
     )
@@ -129,7 +130,7 @@ def _filter_by_price(
 ) -> list[Swing]:
     if price_min <= 0 or price_min >= price_max:
         raise ValueError(f"Некорректные границы цены: {price_min}..{price_max}.")
-    return [swing for swing in swings if price_min <= swing.price <= price_max]
+    return [swing for swing in swings if price_min <= swing.extremum_price <= price_max]
 
 
 def get_cascade_long(
@@ -257,7 +258,8 @@ def get_cascade_long(
         bar = bars[touch_index]
         swing = Swing(
             time=bar.time,
-            price=best_level_price,
+            extremum_price=best_level_price,
+            close_price=bar.close,
             type=SwingType.HIGH,
             is_open=True
         )
@@ -321,12 +323,12 @@ def detect_setup(
     # Анализ роста.
     setup.main_low_swing = main_low_swing
     setup.main_high_swing = main_high_swing
-    rise = main_high_swing.price - main_low_swing.price
-    rise_pct = 100 * rise / main_low_swing.price
+    rise = main_high_swing.extremum_price - main_low_swing.extremum_price
+    rise_pct = 100 * rise / main_low_swing.extremum_price
 
     # Проверка максимального отката на участке роста.
     max_retrace = 0.0
-    max_high = main_low_swing.price
+    max_high = main_low_swing.extremum_price
     for i in range(main_low_index + 1, main_high_index + 1):
         bar = bars[i]
         max_high = max(max_high, bar.high)
@@ -351,7 +353,7 @@ def detect_setup(
     if not correction_low:
         return setup
     correction_low_index, correction_low_swing = correction_low
-    retrace_range = main_high_swing.price - correction_low_swing.price
+    retrace_range = main_high_swing.extremum_price - correction_low_swing.extremum_price
     retrace_ratio = retrace_range / rise
     is_retrace_valid = retrace_range >= 0 and retrace_ratio <= cfg.RETRACE_RATIO_MAX
     if not is_retrace_valid:
@@ -363,25 +365,25 @@ def detect_setup(
     pre_low_window = bars[pre_low_window_start:pre_low_window_end + 1]
     if pre_low_window:
         pre_low_above_correction_low_fraction = sum(1 for bar in pre_low_window
-                                                    if bar.low > correction_low_swing.price) / len(pre_low_window)
+                                                    if bar.low > correction_low_swing.extremum_price) / len(pre_low_window)
         is_pre_low_above_correction_low_valid = (pre_low_above_correction_low_fraction <=
                                                  cfg.PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX)
         if not is_pre_low_above_correction_low_valid:
             return setup
 
     # Анализ лонгового каскада.
-    cascade_price_min = correction_low_swing.price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
-    cascade_price_max = main_high_swing.price
+    cascade_price_min = correction_low_swing.extremum_price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
+    cascade_price_max = main_high_swing.extremum_price
     cascade_long = get_cascade_long(correction_bars, cascade_price_min, cascade_price_max)
     if not cascade_long:
         return setup
-    cascade_top = max(cascade_long, key=lambda swing: swing.price).price
+    cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).price
     resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
     open_high_swings = _get_open_swings(correction_bars, SwingType.HIGH)
     open_high_swings = _filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
     extra_cascade_swings = [
         swing for swing in open_high_swings
-        if cascade_top < swing.price <= cascade_top + resistance_gap
+        if cascade_top < swing.extremum_price <= cascade_top + resistance_gap
     ]
     cascade_long = [swing for swing in extra_cascade_swings if swing not in cascade_long] + cascade_long
     setup.cascade_swings = cascade_long
@@ -389,10 +391,10 @@ def detect_setup(
         return setup
 
     # Анализ сопротивления над каскадом.
-    cascade_top = max(cascade_long, key=lambda swing: swing.price).price
+    cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).price
     resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
     resistance_price_min = cascade_top + resistance_gap
-    resistance_price_max = main_high_swing.price - resistance_gap
+    resistance_price_max = main_high_swing.extremum_price - resistance_gap
     resistance_swings = []
     if resistance_price_min < resistance_price_max:
         resistance_swings = _filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
@@ -403,13 +405,13 @@ def detect_setup(
 
     # Анализ поддержки под каскадом.
     initial_swing = cascade_long[0]
-    consolidation_range = initial_swing.price - correction_low_swing.price
+    consolidation_range = initial_swing.extremum_price - correction_low_swing.extremum_price
     open_low_swings = _get_open_swings(correction_bars, SwingType.LOW)
     setup.support_swings = open_low_swings
     target_swing = cascade_long[-1]
 
-    support_price_min = correction_low_swing.price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
-    support_price_max = target_swing.price
+    support_price_min = correction_low_swing.extremum_price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
+    support_price_max = target_swing.extremum_price
     open_low_swings = _filter_by_price(open_low_swings, support_price_min, support_price_max)
     support_swing = open_low_swings[-1] if open_low_swings else None
     if not support_swing:
@@ -418,7 +420,8 @@ def detect_setup(
             return setup
         support_swing = Swing(
             time=last_red_bar.time,
-            price=last_red_bar.low,
+            extremum_price=last_red_bar.low,
+            close_price=last_red_bar.close,
             type=SwingType.LOW,
             is_open=True
         )
@@ -429,17 +432,17 @@ def detect_setup(
     # Анализ пробоя поддержки под каскадом.
     current_bar = correction_bars[-1]
     current_price = current_bar.close
-    has_breakout_short = current_price < support_swing.price
+    has_breakout_short = current_price < support_swing.extremum_price
     if has_breakout_short:
         return setup
 
     # Анализ риска и вознаграждения.
-    profit_price = main_high_swing.price
+    profit_price = main_high_swing.extremum_price
     if context == Context.A:
-        profit_price = main_high_swing.price + 2 * (main_high_swing.price - correction_low_swing.price)
+        profit_price = main_high_swing.extremum_price + 2 * (main_high_swing.extremum_price - correction_low_swing.extremum_price)
     elif context == Context.B:
-        profit_price = main_high_swing.price + (main_high_swing.price - correction_low_swing.price)
-    loss_price = support_swing.price
+        profit_price = main_high_swing.extremum_price + (main_high_swing.extremum_price - correction_low_swing.extremum_price)
+    loss_price = support_swing.extremum_price
     loss_pct = 100 * (loss_price - current_price) / loss_price
     is_loss_valid = abs(loss_pct) > cfg.LOSS_PCT_MIN
     if not is_loss_valid:
@@ -466,7 +469,7 @@ def detect_setup(
     )
 
     # Анализ пробоя лонгового каскада.
-    has_breakout_long = current_price > target_swing.price
+    has_breakout_long = current_price > target_swing.extremum_price
     if not has_breakout_long:
         return setup
 
@@ -482,14 +485,14 @@ def detect_setup(
             partial_close_price = nearest_resistance_price if has_partial_close else None
             breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
     elif context in {Context.A, Context.B}:
-        main_high_distance_pct = 100 * (main_high_swing.price - current_price) / current_price
+        main_high_distance_pct = 100 * (main_high_swing.extremum_price - current_price) / current_price
         has_partial_close = partial_close_side_pct <= main_high_distance_pct < profit_pct - partial_close_side_pct
         if has_partial_close:
-            partial_close_price = main_high_swing.price
+            partial_close_price = main_high_swing.extremum_price
             breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
     entry_slippage_ratio = 1 + cfg.TEST_SLIPPAGE_PCT / 100 if context.is_test else 1
     trade_levels = TradeLevels(
-        entry_price=target_swing.price * entry_slippage_ratio,
+        entry_price=target_swing.extremum_price * entry_slippage_ratio,
         take_profit_price=profit_price,
         stop_loss_price=loss_price,
         partial_close_price=partial_close_price,

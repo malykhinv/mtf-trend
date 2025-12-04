@@ -11,6 +11,7 @@ class SwingType(Enum):
 @dataclass(frozen=True)
 class Swing:
     time: datetime
-    price: float
+    extremum_price: float
+    close_price: float
     type: SwingType
     is_open: bool = False
