@@ -113,7 +113,7 @@ def _plot(
 ):
     if postmortem_bars and isinstance(setup, Buy):
         plot_postmortem(
-            symbol=f"{setup.symbol} {setup.name.capitalize()} ",
+            symbol=f"{setup.symbol} ",
             timeframe=setup.timeframe,
             bars=setup.bars,
             detection_time=detection_time,
@@ -165,6 +165,9 @@ def run_test_bars(
             _plot(setup, subdir, postmortem_bars, detection_time)
         case PlotPolicy.ON_FILLED_SETUP:
             if setup.is_filled:
+                _plot(setup, subdir, postmortem_bars, detection_time)
+        case PlotPolicy.ON_TRADE_SETUP:
+            if setup.is_trade:
                 _plot(setup, subdir, postmortem_bars, detection_time)
     return setup
 

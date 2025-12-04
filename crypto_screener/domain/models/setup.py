@@ -12,6 +12,7 @@ from crypto_screener.domain.models.trade_levels import TradeLevels
 class Setup(ABC):
     name: str = field(init=False)
     is_filled: bool = field(init=False)
+    is_trade: bool = field(init=False)
 
     # Поля конструктора.
     symbol: str
@@ -28,18 +29,21 @@ class Setup(ABC):
 class Unfilled(Setup):
     name: str = field(init=False, default="Undefined")
     is_filled: bool = field(init=False, default=False)
+    is_trade: bool = field(init=False, default=False)
 
 
 @dataclass
 class Capture(Setup):
     name: str = field(init=False, default="Capture")
     is_filled: bool = field(init=False, default=True)
+    is_trade: bool = field(init=False, default=False)
 
 
 @dataclass
 class Buy(Setup):
     name: str = field(init=False, default="Buy")
     is_filled: bool = field(init=False, default=True)
+    is_trade: bool = field(init=False, default=True)
 
     trade_levels: TradeLevels
 
