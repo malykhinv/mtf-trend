@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib
 from matplotlib.figure import Figure
 
+from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.swing_detector import add_swings
 
@@ -406,6 +407,7 @@ def _draw_entry_zones(
 def _resolve_output_path(
         name: str,
         setup_name: Optional[str],
+        context: Optional[Context],
         timeframe: Timeframe,
         time: datetime,
         length: int,
@@ -419,6 +421,8 @@ def _resolve_output_path(
     name_parts = [name.split(":", 1)[0]]
     if setup_name:
         name_parts.append(setup_name)
+    if context:
+        name_parts.append(context.value)
 
     full_name = " ".join(part.strip() for part in name_parts if part and part.strip())
     clean_name = re.sub(r"[^A-Za-z0-9-_.]+", " ", full_name)
@@ -435,6 +439,7 @@ def _plot(
         *,
         postmortem_bars: Optional[list[Bar]],
         detection_time: Optional[datetime],
+        context: Optional[Context],
         main_high_swing: Optional[Swing],
         main_low_swing: Optional[Swing],
         cascade_swings: Optional[list[Swing]],
@@ -596,6 +601,7 @@ def _plot(
     output_path = _resolve_output_path(
         name=symbol,
         setup_name=setup_name,
+        context=context,
         timeframe=timeframe,
         time=combined_bars[-1].time,
         length=length,
@@ -617,6 +623,7 @@ def plot(
         timeframe: Timeframe,
         bars: list[Bar],
         detection_time: Optional[datetime] = None,
+        context: Optional[Context] = None,
         main_high_swing: Optional[Swing] = None,
         main_low_swing: Optional[Swing] = None,
         cascade_swings: Optional[list[Swing]] = None,
@@ -631,6 +638,7 @@ def plot(
         bars=bars,
         postmortem_bars=None,
         detection_time=detection_time,
+        context=context,
         main_high_swing=main_high_swing,
         main_low_swing=main_low_swing,
         cascade_swings=cascade_swings,
@@ -649,6 +657,7 @@ def plot_postmortem(
         bars: list[Bar],
         postmortem_bars: Optional[list[Bar]] = None,
         detection_time: Optional[datetime] = None,
+        context: Optional[Context] = None,
         main_high_swing: Optional[Swing] = None,
         main_low_swing: Optional[Swing] = None,
         cascade_swings: Optional[list[Swing]] = None,
@@ -665,6 +674,7 @@ def plot_postmortem(
         bars=bars,
         postmortem_bars=postmortem_bars,
         detection_time=detection_time,
+        context=context,
         main_high_swing=main_high_swing,
         main_low_swing=main_low_swing,
         cascade_swings=cascade_swings,

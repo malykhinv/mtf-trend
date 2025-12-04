@@ -7,6 +7,7 @@ from crypto_screener.data.providers.coingecko import enrich_symbols_capitalizati
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
@@ -85,6 +86,7 @@ def _send_notification(
         resistance_swings: Optional[list[Swing]],
         support_swings: Optional[list[Swing]],
         subdir: Optional[str] = None,
+        context: Optional[Context] = None,
 ) -> None:
     try:
         image_path = plot(
@@ -97,8 +99,13 @@ def _send_notification(
             resistance_swings=resistance_swings,
             support_swings=support_swings,
             subdir=subdir,
+            context=context,
         )
         notifier.notify(notification_type, message, image_path)
+        if context:
+            log.d(
+                f"График {symbol} сохранен (контекст {context.value}) в {image_path}"
+            )
     except Exception as exception:
         log.e(f"Ошибка при отправке уведомления: {exception}")
 
@@ -189,7 +196,8 @@ def run_live(
                                 cascade_swings=cascade_swings,
                                 resistance_swings=resistance_swings,
                                 support_swings=support_swings,
-                                subdir='event'
+                                subdir='event',
+                                context=symbol.context
                             )
 
                     # Найден торговый сетап.
@@ -216,6 +224,7 @@ def run_live(
                             cascade_swings=cascade_swings,
                             resistance_swings=resistance_swings,
                             support_swings=support_swings,
-                            subdir='order'
+                            subdir='order',
+                            context=symbol.context
                         )
                         capture_state.symbol = None
