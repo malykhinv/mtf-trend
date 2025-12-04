@@ -69,6 +69,12 @@ class AppConfig:
     CONTEXT_VOLUME_MIN: float = 500_000_000
     # endregion
 
+    # region Капитализация.
+    CAPITALIZATION_LOW_MIN: float = 20_000_000
+    CAPITALIZATION_MIDDLE_MIN: float = 1_000_000_000
+    CAPITALIZATION_HIGH_MIN: float = 10_000_000_000
+    # endregion
+
     # region Повышенный объем.
     # Минимальная длина окна для нахождения зоны повышенного объема.
     VOLUME_TRIM_SIDE_BARS_MIN: int = 10

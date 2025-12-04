@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
@@ -29,6 +30,7 @@ def _fetch_filtered_symbols(
         trades_24h_btc_ratio_min: float
 ) -> list[FuturesSymbol]:
     symbols = exchange.get_futures_symbols()
+    symbols = enrich_symbols_capitalization(symbols)
     symbols = set_contexts(symbols, listing_period_days)
     btc_trades_24h = next((symbol.trades_24h for symbol in symbols if symbol.symbol.startswith("BTC")), 0)
     filtered_symbols = _filter_symbols(

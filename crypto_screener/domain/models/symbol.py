@@ -1,7 +1,9 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import Iterable, Mapping
 
 from crypto_screener.config.config import cfg
+from crypto_screener.domain.models.capitalization import Capitalization
 from crypto_screener.domain.models.context import Context
 from crypto_screener.utils.time import utc_now
 
@@ -12,8 +14,35 @@ class FuturesSymbol:
     listing_time: datetime
     volume_usdt_24h: float
     trades_24h: int
+    capitalization: Capitalization = Capitalization.LOW
     context: Context = Context.FROZEN
 
+
+def extract_base_symbol(symbol: str) -> str:
+    return symbol.split("/")[0].split(":")[0].lower()
+
+
+def calculate_capitalization(market_cap: float) -> Capitalization:
+    if market_cap >= cfg.CAPITALIZATION_HIGH_MIN:
+        return Capitalization.HIGH
+    if market_cap >= cfg.CAPITALIZATION_MIDDLE_MIN:
+        return Capitalization.MIDDLE
+    if market_cap >= cfg.CAPITALIZATION_LOW_MIN:
+        return Capitalization.LOW
+    return Capitalization.LOW
+
+
+def assign_capitalizations(
+        symbols: Iterable[FuturesSymbol],
+        market_caps: Mapping[str, float],
+) -> list[FuturesSymbol]:
+    enriched: list[FuturesSymbol] = []
+    for symbol in symbols:
+        base_symbol = extract_base_symbol(symbol.symbol)
+        market_cap = market_caps.get(base_symbol, 0)
+        capitalization = calculate_capitalization(market_cap)
+        enriched.append(replace(symbol, capitalization=capitalization))
+    return enriched
 
 
 def set_contexts(
@@ -29,18 +58,37 @@ def set_contexts(
     enriched: list[FuturesSymbol] = []
     for symbol in symbols_list:
         listing_age_days = (now - symbol.listing_time).days
-        if symbol.trades_24h > btc_trades or symbol.volume_usdt_24h > btc_volume:
-            context = Context.LOW_CAP_A
-        elif symbol.volume_usdt_24h > cfg.CONTEXT_VOLUME_MIN:
-            context = Context.LOW_CAP_B
-        elif symbol.trades_24h > 0.5 * btc_trades:
-            context = Context.LOW_CAP_C
-        elif listing_age_days <= listing_period_days:
+        if listing_age_days <= listing_period_days:
             context = Context.LISTING
-        elif symbol.trades_24h > cfg.CONTEXT_TRADES_MIN:
-            context = Context.LOW_CAP_D
+        elif symbol.capitalization == Capitalization.HIGH:
+            if symbol.trades_24h > btc_trades and symbol.volume_usdt_24h > btc_volume:
+                context = Context.HIGH_CAP_A
+            elif symbol.volume_usdt_24h > cfg.CONTEXT_VOLUME_MIN:
+                context = Context.MIDDLE_CAP_B
+            elif symbol.trades_24h > 0.5 * btc_trades:
+                context = Context.MIDDLE_CAP_C
+            else:
+                context = Context.FROZEN
+        elif symbol.capitalization == Capitalization.MIDDLE:
+            if symbol.trades_24h > btc_trades or symbol.volume_usdt_24h > btc_volume:
+                context = Context.MIDDLE_CAP_A
+            elif symbol.volume_usdt_24h > cfg.CONTEXT_VOLUME_MIN:
+                context = Context.MIDDLE_CAP_B
+            elif symbol.trades_24h > 0.5 * btc_trades:
+                context = Context.MIDDLE_CAP_C
+            else:
+                context = Context.FROZEN
         else:
-            context = Context.FROZEN
+            if symbol.trades_24h > btc_trades or symbol.volume_usdt_24h > btc_volume:
+                context = Context.LOW_CAP_A
+            elif symbol.volume_usdt_24h > cfg.CONTEXT_VOLUME_MIN:
+                context = Context.LOW_CAP_B
+            elif symbol.trades_24h > 0.5 * btc_trades:
+                context = Context.LOW_CAP_C
+            elif symbol.trades_24h > cfg.CONTEXT_TRADES_MIN:
+                context = Context.LOW_CAP_D
+            else:
+                context = Context.FROZEN
 
         enriched.append(replace(symbol, context=context))
 

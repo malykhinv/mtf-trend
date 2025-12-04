@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import timedelta
 
+from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy
@@ -94,6 +95,7 @@ def run_test_market(
         return
 
     symbols = exchange.get_futures_symbols()
+    symbols = enrich_symbols_capitalization(symbols)
     symbols = set_contexts(symbols, listing_age_days_min)
     log.d(f"Получено {len(symbols)} символов до фильтрации.")
 
