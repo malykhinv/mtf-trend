@@ -13,10 +13,10 @@ _LIMIT_MULTIPLIERS: dict[Timeframe, float] = {
 }
 
 _WINDOW_MULTIPLIERS: dict[Timeframe, float] = {
-    Timeframe.H1: 1.25,
-    Timeframe.M30: 2.5,
-    Timeframe.M15: 3.75,
-    Timeframe.M5: 7.5,
+    Timeframe.H1: 5.0,
+    Timeframe.M30: 6.25,
+    Timeframe.M15: 7.5,
+    Timeframe.M5: 9.375,
 }
 
 
