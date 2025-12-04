@@ -65,8 +65,8 @@ class AppConfig:
     MODE: Mode = _mode_test_market
 
     # region Контекст.
-    CONTEXT_E_TRADES_MIN: int = 500_000
-    CONTEXT_B_VOLUME_MIN: float = 500_000_000
+    CONTEXT_TRADES_MIN: int = 500_000
+    CONTEXT_VOLUME_MIN: float = 500_000_000
     # endregion
 
     # region Повышенный объем.

@@ -12,7 +12,7 @@ class FuturesSymbol:
     listing_time: datetime
     volume_usdt_24h: float
     trades_24h: int
-    context: Context = Context.F
+    context: Context = Context.FROZEN
 
 
 
@@ -30,17 +30,17 @@ def set_contexts(
     for symbol in symbols_list:
         listing_age_days = (now - symbol.listing_time).days
         if symbol.trades_24h > btc_trades or symbol.volume_usdt_24h > btc_volume:
-            context = Context.A
-        elif symbol.volume_usdt_24h > cfg.CONTEXT_B_VOLUME_MIN:
-            context = Context.B
+            context = Context.LOW_CAP_A
+        elif symbol.volume_usdt_24h > cfg.CONTEXT_VOLUME_MIN:
+            context = Context.LOW_CAP_B
         elif symbol.trades_24h > 0.5 * btc_trades:
-            context = Context.C
+            context = Context.LOW_CAP_C
         elif listing_age_days <= listing_period_days:
-            context = Context.D
-        elif symbol.trades_24h > cfg.CONTEXT_E_TRADES_MIN:
-            context = Context.E
+            context = Context.LISTING
+        elif symbol.trades_24h > cfg.CONTEXT_TRADES_MIN:
+            context = Context.LOW_CAP_D
         else:
-            context = Context.F
+            context = Context.FROZEN
 
         enriched.append(replace(symbol, context=context))
 

@@ -451,9 +451,9 @@ def detect_setup(
     # Анализ риска и вознаграждения.
     is_main_high_close_crossed = any(bar.high > main_high_swing.close_price for bar in correction_bars)
     profit_price = main_high_swing.extremum_price if is_main_high_close_crossed else main_high_swing.close_price
-    if context == Context.A:
+    if context == Context.LOW_CAP_A:
         profit_price = profit_price + 2 * (main_high_swing.close_price - correction_low_swing.close_price)
-    elif context == Context.B:
+    elif context == Context.LOW_CAP_B:
         profit_price = profit_price + (main_high_swing.close_price - correction_low_swing.close_price)
     loss_price = support_swing.extremum_price
     loss_pct = 100 * (loss_price - current_price) / loss_price
@@ -497,7 +497,7 @@ def detect_setup(
         if has_partial_close:
             partial_close_price = nearest_resistance_price if has_partial_close else None
             breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
-    elif context in {Context.A, Context.B}:
+    elif context in {Context.LOW_CAP_A, Context.LOW_CAP_B}:
         main_high_distance_pct = 100 * (main_high_swing.extremum_price - current_price) / current_price
         has_partial_close = partial_close_side_pct <= main_high_distance_pct < profit_pct - partial_close_side_pct
         if has_partial_close:
