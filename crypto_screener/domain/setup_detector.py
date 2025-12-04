@@ -252,6 +252,11 @@ def get_cascade_long(
     first_touch_index = min(best_level_touches)
     if first_touch_index >= len(bars) // cfg.CASCADE_AGE_DIVIDER:
         return []
+    last_touch_index = max(best_level_touches)
+    last_touch_segment_low = min(bar.low for bar in bars[last_touch_index:])
+    first_touch_segment_low = min(bar.low for bar in bars[first_touch_index:last_touch_index - 1])
+    if last_touch_segment_low <= first_touch_segment_low:
+        return []
 
     cascade_swings = []
     for touch_index in best_level_touches:
@@ -377,7 +382,7 @@ def detect_setup(
     cascade_long = get_cascade_long(correction_bars, cascade_price_min, cascade_price_max)
     if not cascade_long:
         return setup
-    cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).price
+    cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).extremum_price
     resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
     open_high_swings = _get_open_swings(correction_bars, SwingType.HIGH)
     open_high_swings = _filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
@@ -391,7 +396,7 @@ def detect_setup(
         return setup
 
     # Анализ сопротивления над каскадом.
-    cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).price
+    cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).extremum_price
     resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
     resistance_price_min = cascade_top + resistance_gap
     resistance_price_max = main_high_swing.extremum_price - resistance_gap
@@ -479,7 +484,7 @@ def detect_setup(
     breakeven_price = None
     partial_close_side_pct = cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
     if resistance_swings:
-        nearest_resistance_price = resistance_swings[-1].price
+        nearest_resistance_price = resistance_swings[-1].extremum_price
         nearest_resistance_distance_pct = 100 * (nearest_resistance_price - current_price) / current_price
         has_partial_close = partial_close_side_pct <= nearest_resistance_distance_pct < profit_pct - partial_close_side_pct
         if has_partial_close:
