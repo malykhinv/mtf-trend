@@ -372,8 +372,8 @@ def detect_setup(
             return setup
 
     # Анализ лонгового каскада.
-    cascade_price_min = correction_low_swing.extremum_price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
-    cascade_price_max = main_high_swing.extremum_price
+    cascade_price_min = correction_low_swing.close_price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
+    cascade_price_max = main_high_swing.close_price
     cascade_long = get_cascade_long(correction_bars, cascade_price_min, cascade_price_max)
     if not cascade_long:
         return setup
@@ -437,11 +437,12 @@ def detect_setup(
         return setup
 
     # Анализ риска и вознаграждения.
-    profit_price = main_high_swing.extremum_price
+    is_main_high_close_crossed = any(bar.high > main_high_swing.close_price for bar in correction_bars)
+    profit_price = main_high_swing.extremum_price if is_main_high_close_crossed else main_high_swing.close_price
     if context == Context.A:
-        profit_price = main_high_swing.extremum_price + 2 * (main_high_swing.extremum_price - correction_low_swing.extremum_price)
+        profit_price = profit_price + 2 * (main_high_swing.close_price - correction_low_swing.close_price)
     elif context == Context.B:
-        profit_price = main_high_swing.extremum_price + (main_high_swing.extremum_price - correction_low_swing.extremum_price)
+        profit_price = profit_price + (main_high_swing.close_price - correction_low_swing.close_price)
     loss_price = support_swing.extremum_price
     loss_pct = 100 * (loss_price - current_price) / loss_price
     is_loss_valid = abs(loss_pct) > cfg.LOSS_PCT_MIN
