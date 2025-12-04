@@ -414,6 +414,8 @@ def detect_setup(
     support_swing = open_low_swings[-1] if open_low_swings else None
     if not support_swing:
         last_red_bar = next((bar for bar in reversed(correction_bars) if bar.close < bar.open), None)
+        if not last_red_bar:
+            return setup
         support_swing = Swing(
             time=last_red_bar.time,
             price=last_red_bar.low,
