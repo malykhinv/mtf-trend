@@ -405,6 +405,11 @@ def run_live(
                         resistance_swings=resistance_swings,
                         support_swings=support_swings,
                     ):
+                        if trade_permission_service.has_allowance(symbol.symbol, timeframe):
+                            log.d(
+                                f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} из-за активного разрешения на торговлю."
+                            )
+                            continue
                         capture_key = (symbol.symbol, timeframe)
                         message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
                         if capture_key in capture_state.captures:
