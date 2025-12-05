@@ -56,6 +56,11 @@ class TradeExecutionService:
                     margin_mode=MarginMode.CROSS,
                 ),
                 symbol=setup.symbol,
+                acceptable_statuses={
+                    OrderStatus.FILLED,
+                    OrderStatus.NEW,
+                    OrderStatus.PARTIALLY_FILLED,
+                },
             )
             protective_order_ids = self._place_protective_orders(setup, quantity)
             position_id = self._fetch_position_id(setup.symbol)
