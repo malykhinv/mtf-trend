@@ -13,14 +13,13 @@ from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.notifier import Notifier, NotificationType
+from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
 from crypto_screener.domain.setup_detector import detect_setup
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot
 from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.time import utc_now
-
 
 # region Private.
 def _fetch_filtered_symbols(
@@ -88,7 +87,7 @@ def _send_notification(
         support_swings: Optional[list[Swing]],
         subdir: Optional[str] = None,
         context: Optional[Context] = None,
-        has_button: bool = False,
+        keyboard: Optional[Keyboard] = None,
 ) -> Optional[str]:
     try:
         image_path = plot(
@@ -103,9 +102,58 @@ def _send_notification(
             subdir=subdir,
             context=context,
         )
-        return notifier.notify(notification_type, message, image_path, has_button)
+        return notifier.notify(
+            notification_type,
+            message,
+            image_path,
+            keyboard=keyboard,
+            context=context,
+        )
     except Exception as exception:
         log.e(f"Ошибка при отправке уведомления: {exception}")
+    return None
+
+
+def _edit_notification(
+        notifier: Notifier,
+        notification_type: NotificationType,
+        message_id: str,
+        message: str,
+        symbol: str,
+        timeframe: Timeframe,
+        bars: list[Bar],
+        main_low_swing: Optional[Swing],
+        main_high_swing: Optional[Swing],
+        cascade_swings: Optional[list[Swing]],
+        resistance_swings: Optional[list[Swing]],
+        support_swings: Optional[list[Swing]],
+        subdir: Optional[str] = None,
+        context: Optional[Context] = None,
+        keyboard: Optional[Keyboard] = None,
+) -> Optional[str]:
+    try:
+        image_path = plot(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            main_low_swing=main_low_swing,
+            main_high_swing=main_high_swing,
+            cascade_swings=cascade_swings,
+            resistance_swings=resistance_swings,
+            support_swings=support_swings,
+            subdir=subdir,
+            context=context,
+        )
+        return notifier.edit_message(
+            notification_type=notification_type,
+            message_id=message_id,
+            message=message,
+            image_path=image_path,
+            keyboard=keyboard,
+            context=context,
+        )
+    except Exception as exception:
+        log.e(f"Ошибка при редактировании уведомления: {exception}")
     return None
 
 
@@ -154,7 +202,7 @@ def run_live(
         ]
         for (symbol_name, timeframe), active_capture in expired_captures:
             capture_state.remove_capture(symbol_name, timeframe)
-            notifier.remove_button(active_capture.message_link)
+            notifier.remove_button(active_capture.message_id)
             log.i(f"Истек срок слежения за {symbol_name} на {timeframe.tf}, кнопка удалена.")
             notified_once.discard((symbol_name, timeframe, "Capture"))
             if capture_state.symbol == symbol_name and not capture_state.has_symbol_capture(symbol_name):
@@ -180,7 +228,7 @@ def run_live(
                     case Unfilled():
                         removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
                         if removed_capture:
-                            notifier.remove_button(removed_capture.message_link)
+                            notifier.remove_button(removed_capture.message_id)
                             log.i(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена."
                             )
@@ -198,14 +246,34 @@ def run_live(
                         support_swings=support_swings,
                     ):
                         capture_key = (symbol.symbol, timeframe)
+                        message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
                         if capture_key in capture_state.captures:
+                            active_capture = capture_state.captures[capture_key]
+                            if active_capture.message_id:
+                                executor.submit(
+                                    _edit_notification,
+                                    notifier=notifier,
+                                    notification_type=NotificationType.EVENT,
+                                    message_id=active_capture.message_id,
+                                    message=message,
+                                    symbol=symbol.symbol,
+                                    timeframe=timeframe,
+                                    bars=bars,
+                                    main_low_swing=main_low_swing,
+                                    main_high_swing=main_high_swing,
+                                    cascade_swings=cascade_swings,
+                                    resistance_swings=resistance_swings,
+                                    support_swings=support_swings,
+                                    subdir='event',
+                                    context=symbol.context,
+                                    keyboard=cfg.TRADE_KEYBOARD,
+                                ).result()
                             continue
                         if capture_state.symbol is None:
                             capture_state.symbol = symbol.symbol
                         capture_notification_key = (symbol.symbol, timeframe, setup.name)
                         if capture_notification_key not in notified_once:
-                            message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
-                            message_link = executor.submit(
+                            message_id = executor.submit(
                                 _send_notification,
                                 notifier=notifier,
                                 notification_type=NotificationType.EVENT,
@@ -220,12 +288,12 @@ def run_live(
                                 support_swings=support_swings,
                                 subdir='event',
                                 context=symbol.context,
-                                has_button=True,
+                                keyboard=cfg.TRADE_KEYBOARD,
                             ).result()
                             capture_state.add_capture(
                                 symbol=symbol.symbol,
                                 timeframe=timeframe,
-                                message_link=message_link,
+                                message_id=message_id,
                                 timeout_multiplier=cfg.CAPTURE_TIMEOUT_MULTIPLIER,
                             )
                             notified_once.add(capture_notification_key)
@@ -259,7 +327,7 @@ def run_live(
                         ).result()
                         removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
                         if removed_capture:
-                            notifier.remove_button(removed_capture.message_link)
+                            notifier.remove_button(removed_capture.message_id)
                             log.i(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена."
                             )

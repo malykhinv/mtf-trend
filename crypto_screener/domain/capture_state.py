@@ -16,7 +16,7 @@ class CaptureState:
             self,
             symbol: str,
             timeframe: Timeframe,
-            message_link: Optional[str],
+            message_id: Optional[str],
             timeout_multiplier: int
     ) -> None:
         added_at = utc_now()
@@ -24,7 +24,7 @@ class CaptureState:
         self.captures[(symbol, timeframe)] = ActiveCapture(
             added_at=added_at,
             deadline=deadline,
-            message_link=message_link,
+            message_id=message_id,
             is_setup_active=True,
         )
 

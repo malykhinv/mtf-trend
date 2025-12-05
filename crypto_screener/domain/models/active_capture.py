@@ -7,5 +7,5 @@ from typing import Optional
 class ActiveCapture:
     added_at: datetime
     deadline: datetime
-    message_link: Optional[str]
+    message_id: Optional[str]
     is_setup_active: bool = True
