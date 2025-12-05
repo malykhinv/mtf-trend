@@ -344,6 +344,7 @@ def _calculate_split_profit(
 
 def _monitor_active_trade(
         exchange: Exchange,
+        trade_execution_service: TradeExecutionService,
         active_trade: ActiveTrade,
         bars: list[Bar],
 ) -> Optional[tuple[TradeResult, float, float, list[float]]]:
@@ -401,6 +402,26 @@ def _monitor_active_trade(
                 if filled_quantity is not None:
                     remaining_quantity = (active_trade.quantity or 0) - filled_quantity
                     active_trade.remaining_quantity = max(remaining_quantity, 0)
+                    try:
+                        realigned_ids = trade_execution_service.realign_stop_orders(
+                            setup=active_trade.setup,
+                            stop_loss_order_id=active_trade.stop_loss_order_id,
+                            breakeven_order_id=active_trade.breakeven_order_id,
+                            remaining_quantity=active_trade.remaining_quantity,
+                            move_to_breakeven=active_trade.setup.breakeven_price is not None,
+                        )
+                        active_trade.stop_loss_order_id = realigned_ids.get("stop_loss_order_id")
+                        active_trade.stop_loss_order_status = (
+                            OrderStatus.NEW if realigned_ids.get("stop_loss_order_id") else None
+                        )
+                        active_trade.breakeven_order_id = realigned_ids.get("breakeven_order_id")
+                        active_trade.breakeven_order_status = (
+                            OrderStatus.NEW if realigned_ids.get("breakeven_order_id") else None
+                        )
+                    except Exception as exception:
+                        log.e(
+                            f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}"
+                        )
 
         breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.breakeven_order_id)
         if breakeven_info:
@@ -575,7 +596,7 @@ def run_live(
                         break
                 trade_key = (symbol.symbol, timeframe)
                 if trade_key in active_trades:
-                    outcome = _monitor_active_trade(exchange, active_trades[trade_key], bars)
+                    outcome = _monitor_active_trade(exchange, trade_execution_service, active_trades[trade_key], bars)
                     if outcome:
                         trade_result, profit_pct, profit_value, exit_prices = outcome
                         log.i(

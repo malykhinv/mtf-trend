@@ -159,24 +159,6 @@ class TradeExecutionService:
                 },
             )
 
-            if setup.breakeven_price is not None:
-                ids["breakeven_order_id"] = self._place_with_retries(
-                    label="breakeven",
-                    place_order=lambda: self._exchange.place_stop_loss_order(
-                        setup.symbol,
-                        OrderSide.SELL,
-                        quantity - partial_quantity,
-                        stop_price=setup.breakeven_price,
-                        margin_mode=MarginMode.CROSS,
-                    ),
-                    symbol=setup.symbol,
-                    acceptable_statuses={
-                        OrderStatus.FILLED,
-                        OrderStatus.NEW,
-                        OrderStatus.PARTIALLY_FILLED,
-                    },
-                )
-
         return ids
 
     def _place_with_retries(
@@ -219,7 +201,57 @@ class TradeExecutionService:
 
         return order_info.status
 
-    def _cancel_order_safe(self, symbol: str, order_id: str) -> None:
+    def realign_stop_orders(
+            self,
+            setup: Buy,
+            stop_loss_order_id: Optional[str],
+            breakeven_order_id: Optional[str],
+            remaining_quantity: float,
+            move_to_breakeven: bool,
+    ) -> dict[str, Optional[str]]:
+        ids: dict[str, Optional[str]] = {
+            "stop_loss_order_id": None,
+            "breakeven_order_id": None,
+        }
+
+        self._cancel_order_safe(setup.symbol, stop_loss_order_id)
+        self._cancel_order_safe(setup.symbol, breakeven_order_id)
+
+        if remaining_quantity <= 0:
+            log.d(
+                f"Нет оставшегося объема для перестановки стоп-ордера по {setup.symbol} после частичного закрытия."
+            )
+            return ids
+
+        stop_price = setup.breakeven_price if move_to_breakeven and setup.breakeven_price is not None else setup.stop_loss_price
+        label = "breakeven" if move_to_breakeven and setup.breakeven_price is not None else "stop-loss"
+        new_stop_id = self._place_with_retries(
+            label=label,
+            place_order=lambda: self._exchange.place_stop_loss_order(
+                setup.symbol,
+                OrderSide.SELL,
+                remaining_quantity,
+                stop_price=stop_price,
+                margin_mode=MarginMode.CROSS,
+            ),
+            symbol=setup.symbol,
+            acceptable_statuses={
+                OrderStatus.FILLED,
+                OrderStatus.NEW,
+                OrderStatus.PARTIALLY_FILLED,
+            },
+        )
+
+        if move_to_breakeven and setup.breakeven_price is not None:
+            ids["breakeven_order_id"] = new_stop_id
+        else:
+            ids["stop_loss_order_id"] = new_stop_id
+
+        return ids
+
+    def _cancel_order_safe(self, symbol: str, order_id: Optional[str]) -> None:
+        if not order_id:
+            return
         try:
             self._exchange.cancel_order(symbol, order_id)
         except NotImplementedError:
