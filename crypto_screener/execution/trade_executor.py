@@ -214,38 +214,50 @@ class TradeExecutionService:
             remaining_quantity: float,
             move_to_breakeven: bool,
     ) -> dict[str, Optional[str]]:
+        current_ids: dict[str, Optional[str]] = {
+            "stop_loss_order_id": stop_loss_order_id,
+            "breakeven_order_id": breakeven_order_id,
+        }
         ids: dict[str, Optional[str]] = {
             "stop_loss_order_id": None,
             "breakeven_order_id": None,
         }
 
-        self._cancel_order_safe(setup.symbol, stop_loss_order_id)
-        self._cancel_order_safe(setup.symbol, breakeven_order_id)
-
         if remaining_quantity <= 0:
             log.d(
                 f"Нет оставшегося объема для перестановки стоп-ордера по {setup.symbol} после частичного закрытия."
             )
+            self._cancel_order_safe(setup.symbol, stop_loss_order_id)
+            self._cancel_order_safe(setup.symbol, breakeven_order_id)
             return ids
 
         stop_price = setup.breakeven_price if move_to_breakeven and setup.breakeven_price is not None else setup.stop_loss_price
         label = "breakeven" if move_to_breakeven and setup.breakeven_price is not None else "stop-loss"
-        new_stop_id = self._place_with_retries(
-            label=label,
-            place_order=lambda: self._exchange.place_stop_loss_order(
-                setup.symbol,
-                OrderSide.SELL,
-                remaining_quantity,
-                stop_price=stop_price,
-                margin_mode=MarginMode.CROSS,
-            ),
-            symbol=setup.symbol,
-            acceptable_statuses={
-                OrderStatus.FILLED,
-                OrderStatus.NEW,
-                OrderStatus.PARTIALLY_FILLED,
-            },
-        )
+        try:
+            new_stop_id = self._place_with_retries(
+                label=label,
+                place_order=lambda: self._exchange.place_stop_loss_order(
+                    setup.symbol,
+                    OrderSide.SELL,
+                    remaining_quantity,
+                    stop_price=stop_price,
+                    margin_mode=MarginMode.CROSS,
+                ),
+                symbol=setup.symbol,
+                acceptable_statuses={
+                    OrderStatus.FILLED,
+                    OrderStatus.NEW,
+                    OrderStatus.PARTIALLY_FILLED,
+                },
+            )
+        except Exception as exception:
+            log.e(
+                f"Не удалось переставить {label} для {setup.symbol}: {exception}"
+            )
+            return current_ids
+
+        self._cancel_order_safe(setup.symbol, stop_loss_order_id)
+        self._cancel_order_safe(setup.symbol, breakeven_order_id)
 
         if move_to_breakeven and setup.breakeven_price is not None:
             ids["breakeven_order_id"] = new_stop_id
