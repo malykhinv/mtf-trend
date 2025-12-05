@@ -12,6 +12,7 @@ from crypto_screener.domain.models.active_trade import ActiveTrade
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.order_status import OrderStatus
+from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
@@ -351,6 +352,8 @@ def _monitor_active_trade(
     try:
         _update_postmortem_bars(active_trade, bars)
 
+        position: Optional[Position] = None
+
         entry_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.entry_order_id)
         if entry_info:
             _log_status_change("entry", active_trade.entry_order_status and active_trade.entry_order_status.value, entry_info.status.value, entry_info.id)
@@ -360,7 +363,24 @@ def _monitor_active_trade(
             active_trade.status = entry_info.status
 
         if active_trade.entry_order_status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
-            return None
+            if active_trade.entry_order_status in (OrderStatus.NEW, OrderStatus.CANCELED):
+                return None
+
+            try:
+                position = exchange.get_position(active_trade.symbol)
+            except NotImplementedError:
+                position = None
+            except Exception as exception:
+                log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
+                position = None
+
+            if not position or (position.quantity is None and position.pnl is None):
+                return None
+
+            active_trade.entry_order_status = OrderStatus.FILLED
+            active_trade.status = OrderStatus.FILLED
+            active_trade.entry_average_price = position.entry_price or active_trade.entry_average_price
+            active_trade.quantity = position.quantity or active_trade.quantity
 
         take_profit_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.take_profit_order_id)
         if take_profit_info:
@@ -486,13 +506,14 @@ def _monitor_active_trade(
                 active_trade.status = OrderStatus.FILLED
                 return TradeResult.PC_TP, profit_pct, profit_value, exit_prices
 
-        try:
-            position = exchange.get_position(active_trade.symbol)
-        except NotImplementedError:
-            position = None
-        except Exception as exception:
-            log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
-            position = None
+        if position is None:
+            try:
+                position = exchange.get_position(active_trade.symbol)
+            except NotImplementedError:
+                position = None
+            except Exception as exception:
+                log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
+                position = None
 
         if not position and active_trade.entry_order_status == OrderStatus.FILLED:
             if active_trade.exit_average_price:
