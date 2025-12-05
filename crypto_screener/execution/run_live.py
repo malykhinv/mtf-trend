@@ -11,6 +11,7 @@ from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.active_trade import ActiveTrade
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
+from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
@@ -25,7 +26,6 @@ from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
 from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.time import utc_now
-from crypto_screener.execution.test_result import evaluate_buy
 
 # region Private.
 def _fetch_filtered_symbols(
@@ -176,6 +176,30 @@ def _build_trade_keyboard(symbol: str, timeframe: Timeframe, context: Context) -
     return [[(trade_text, callback_data)]]
 
 
+def _get_order_info_safe(exchange: Exchange, symbol: str, order_id: Optional[str]):
+    if not order_id:
+        return None
+    try:
+        return exchange.get_order_status(symbol, order_id)
+    except NotImplementedError:
+        log.d(f"Биржа не поддерживает получение статуса ордера {order_id} по {symbol}.")
+    except Exception as exception:
+        log.e(f"Не удалось получить статус ордера {order_id} по {symbol}: {exception}")
+    return None
+
+
+def _cancel_order_safe(exchange: Exchange, symbol: str, order_id: Optional[str]) -> None:
+    if not order_id:
+        return
+    try:
+        exchange.cancel_order(symbol, order_id)
+        log.i(f"Отменен ордер {order_id} по {symbol}.")
+    except NotImplementedError:
+        log.d(f"Биржа не поддерживает отмену ордера {order_id} по {symbol}.")
+    except Exception as exception:
+        log.e(f"Не удалось отменить ордер {order_id} по {symbol}: {exception}")
+
+
 def _describe_exit(trade_result: TradeResult, trade_levels) -> tuple[str, list[float]]:
     exit_prices: list[float] = []
     match trade_result:
@@ -222,16 +246,20 @@ def _handle_trade_closure(
         active_trade: ActiveTrade,
         trade_result: TradeResult,
         profit_pct: float,
+        profit_value: float,
+        exit_prices: list[float],
 ) -> None:
     setup = active_trade.setup
     trade_levels = setup.trade_levels
-    profit_value = trade_levels.entry_price * profit_pct / 100
-    exit_label, exit_prices = _describe_exit(trade_result, trade_levels)
+    exit_label, expected_prices = _describe_exit(trade_result, trade_levels)
+    actual_exit_prices = exit_prices or expected_prices
+    actual_entry_price = active_trade.entry_average_price or trade_levels.entry_price
 
     message_lines = [
         f"Сделка {setup.symbol} на {setup.timeframe.tf} закрыта: {trade_result.value}",
         f"P&L: {profit_value:+.4f} ({profit_pct:+.2f}%)",
-        f"Выход: {exit_label} ({', '.join(f'{price:.4f}' for price in exit_prices)})" if exit_prices else f"Выход: {exit_label}",
+        f"Выход: {exit_label} ({', '.join(f'{price:.4f}' for price in actual_exit_prices)})" if actual_exit_prices else f"Выход: {exit_label}",
+        f"Entry факт: {actual_entry_price:.4f}",
         "",
         _format_levels(trade_levels),
     ]
@@ -284,14 +312,144 @@ def _update_postmortem_bars(active_trade: ActiveTrade, new_bars: list[Bar]) -> l
     return active_trade.postmortem_bars
 
 
-def _evaluate_active_trade(active_trade: ActiveTrade, bars: list[Bar]) -> Optional[tuple[TradeResult, float]]:
+def _log_status_change(label: str, previous: Optional[str], current: Optional[str], order_id: Optional[str]) -> None:
+    if previous == current or current is None:
+        return
+    log.i(f"Статус {label} ордера {order_id} изменился: {previous} → {current}.")
+
+
+def _calculate_profit(entry_price: float, exit_price: float, quantity: float) -> tuple[float, float]:
+    profit_value = (exit_price - entry_price) * quantity
+    base = entry_price * quantity if entry_price and quantity else 1
+    profit_pct = profit_value / base * 100
+    return profit_value, profit_pct
+
+
+def _monitor_active_trade(
+        exchange: Exchange,
+        active_trade: ActiveTrade,
+        bars: list[Bar],
+) -> Optional[tuple[TradeResult, float, float, list[float]]]:
     try:
-        postmortem_bars = _update_postmortem_bars(active_trade, bars)
-        if not postmortem_bars:
+        _update_postmortem_bars(active_trade, bars)
+
+        entry_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.entry_order_id)
+        if entry_info:
+            _log_status_change("entry", active_trade.entry_order_status and active_trade.entry_order_status.value, entry_info.status.value, entry_info.id)
+            active_trade.entry_order_status = entry_info.status
+            active_trade.entry_average_price = entry_info.average_price or active_trade.entry_average_price
+            active_trade.quantity = entry_info.quantity or active_trade.quantity
+            active_trade.status = entry_info.status
+
+        if active_trade.entry_order_status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
             return None
-        return evaluate_buy(active_trade.setup, postmortem_bars)
+
+        take_profit_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.take_profit_order_id)
+        if take_profit_info:
+            _log_status_change(
+                "take-profit",
+                active_trade.take_profit_order_status and active_trade.take_profit_order_status.value,
+                take_profit_info.status.value,
+                take_profit_info.id,
+            )
+            active_trade.take_profit_order_status = take_profit_info.status
+            if take_profit_info.average_price:
+                active_trade.exit_average_price = take_profit_info.average_price
+
+        stop_loss_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.stop_loss_order_id)
+        if stop_loss_info:
+            _log_status_change(
+                "stop-loss",
+                active_trade.stop_loss_order_status and active_trade.stop_loss_order_status.value,
+                stop_loss_info.status.value,
+                stop_loss_info.id,
+            )
+            active_trade.stop_loss_order_status = stop_loss_info.status
+            if stop_loss_info.average_price:
+                active_trade.exit_average_price = stop_loss_info.average_price
+
+        partial_close_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.partial_close_order_id)
+        if partial_close_info:
+            _log_status_change(
+                "partial-close",
+                active_trade.partial_close_order_status and active_trade.partial_close_order_status.value,
+                partial_close_info.status.value,
+                partial_close_info.id,
+            )
+            active_trade.partial_close_order_status = partial_close_info.status
+            if partial_close_info.average_price:
+                active_trade.exit_average_price = partial_close_info.average_price
+
+        breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.breakeven_order_id)
+        if breakeven_info:
+            _log_status_change(
+                "breakeven",
+                active_trade.breakeven_order_status and active_trade.breakeven_order_status.value,
+                breakeven_info.status.value,
+                breakeven_info.id,
+            )
+            active_trade.breakeven_order_status = breakeven_info.status
+            if breakeven_info.average_price:
+                active_trade.exit_average_price = breakeven_info.average_price
+
+        entry_price = active_trade.entry_average_price or active_trade.setup.entry_price
+        exit_prices: list[float] = []
+
+        if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
+            exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
+            exit_prices.append(exit_price)
+            profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
+            active_trade.status = OrderStatus.FILLED
+            return TradeResult.TP, profit_pct, profit_value, exit_prices
+
+        if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
+            exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
+            exit_prices.append(exit_price)
+            profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
+            active_trade.status = OrderStatus.FILLED
+            return TradeResult.SL, profit_pct, profit_value, exit_prices
+
+        if partial_close_info and partial_close_info.status == OrderStatus.FILLED:
+            exit_price = partial_close_info.average_price or (active_trade.setup.partial_close_price or entry_price)
+            exit_prices.append(exit_price)
+            if breakeven_info and breakeven_info.status == OrderStatus.FILLED:
+                exit_prices.append(breakeven_info.average_price or active_trade.setup.breakeven_price or exit_price)
+                profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
+                active_trade.status = OrderStatus.PARTIALLY_FILLED
+                return TradeResult.PC_BE, profit_pct, profit_value, exit_prices
+            if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
+                exit_prices.append(take_profit_info.average_price or active_trade.setup.take_profit_price)
+                profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
+                active_trade.status = OrderStatus.FILLED
+                return TradeResult.PC_TP, profit_pct, profit_value, exit_prices
+
+        try:
+            position = exchange.get_position(active_trade.symbol)
+        except NotImplementedError:
+            position = None
+        except Exception as exception:
+            log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
+            position = None
+
+        if not position and active_trade.entry_order_status == OrderStatus.FILLED:
+            if active_trade.exit_average_price:
+                exit_price = active_trade.exit_average_price
+                exit_prices.append(exit_price)
+                profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
+            else:
+                profit_value = 0.0
+                profit_pct = 0.0
+            active_trade.status = OrderStatus.FILLED
+            return TradeResult.MANUAL, profit_pct, profit_value, exit_prices
+
+        if position and position.pnl is not None:
+            base = entry_price * active_trade.quantity if active_trade.quantity else 1
+            profit_pct = position.pnl / base * 100
+            return None
+
+        return None
     except Exception as exception:
-        log.e(f"Ошибка при оценке результата сделки {active_trade.symbol}: {exception}")
+        log.e(f"Ошибка при мониторинге сделки {active_trade.symbol}: {exception}")
         return None
 
 
@@ -375,18 +533,22 @@ def run_live(
                         break
                 trade_key = (symbol.symbol, timeframe)
                 if trade_key in active_trades:
-                    outcome = _evaluate_active_trade(active_trades[trade_key], bars)
+                    outcome = _monitor_active_trade(exchange, active_trades[trade_key], bars)
                     if outcome:
-                        trade_result, profit_pct = outcome
+                        trade_result, profit_pct, profit_value, exit_prices = outcome
                         log.i(
                             f"Завершена сделка {symbol.symbol} {timeframe.tf}: "
                             f"{trade_result.value} ({profit_pct:+.2f}%)"
                         )
+                        active_trade = active_trades.pop(trade_key)
+                        active_trade.exit_average_price = active_trade.exit_average_price or (exit_prices[0] if exit_prices else None)
                         _handle_trade_closure(
                             notifier=notifier,
-                            active_trade=active_trades.pop(trade_key),
+                            active_trade=active_trade,
                             trade_result=trade_result,
                             profit_pct=profit_pct,
+                            profit_value=profit_value,
+                            exit_prices=exit_prices,
                         )
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                         capture_state.symbol = None
@@ -529,6 +691,9 @@ def run_live(
                             setup=setup,
                             detection_time=detection_time,
                             context=symbol.context,
+                            placed_at=utc_now(),
+                            quantity=execution_result.quantity,
+                            entry_order_status=OrderStatus.NEW,
                             capture_message_id=capture_message_id,
                             entry_order_id=execution_result.entry_order_id,
                             stop_loss_order_id=execution_result.stop_loss_order_id,
