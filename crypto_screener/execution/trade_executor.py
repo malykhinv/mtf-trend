@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -31,13 +30,9 @@ class TradeExecutionService:
             self,
             exchange: Exchange,
             notifier: Notifier,
-            max_retries: int = cfg.ORDER_MAX_RETRIES,
-            retry_delay_seconds: float = cfg.ORDER_RETRY_DELAY_SECONDS,
     ) -> None:
         self._exchange = exchange
         self._notifier = notifier
-        self._max_retries = max_retries
-        self._retry_delay_seconds = retry_delay_seconds
 
     def execute_buy(self, setup: Buy, context: Context) -> Optional[ExecutionResult]:
         try:
@@ -191,35 +186,30 @@ class TradeExecutionService:
             symbol: str,
             acceptable_statuses: Optional[set[OrderStatus]] = None,
     ) -> str:
-        last_error: Optional[Exception] = None
         acceptable_statuses = acceptable_statuses or {OrderStatus.FILLED}
-        for attempt in range(1, self._max_retries + 1):
-            try:
-                order_id = place_order()
-                status = self._get_order_status(symbol, order_id)
-                if status is None or status in acceptable_statuses:
-                    if status and status != OrderStatus.FILLED:
-                        log.d(
-                            f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, прекращаем повторные попытки."
-                        )
-                    return order_id
-                if status == OrderStatus.CANCELED:
-                    raise RuntimeError(f"Ордер {order_id} для {symbol} отменен биржей")
-                log.d(
-                    f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, попытка {attempt}."
-                )
-                self._cancel_order_safe(symbol, order_id)
-            except Exception as exception:
-                last_error = exception
-                log.e(
-                    f"Ошибка при размещении {label} для {symbol} (попытка {attempt}/{self._max_retries}):"
-                    f" {exception}"
-                )
-            time.sleep(self._retry_delay_seconds)
-
-        raise RuntimeError(
-            f"Не удалось разместить {label} для {symbol} после {self._max_retries} попыток: {last_error}"
-        )
+        try:
+            order_id = place_order()
+            status = self._get_order_status(symbol, order_id)
+            if status is None or status in acceptable_statuses:
+                if status and status != OrderStatus.FILLED:
+                    log.d(
+                        f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, повторные попытки отключены."
+                    )
+                return order_id
+            if status == OrderStatus.CANCELED:
+                raise RuntimeError(f"Ордер {order_id} для {symbol} отменен биржей")
+            log.d(
+                f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, отменяем ордер без повторных попыток."
+            )
+            self._cancel_order_safe(symbol, order_id)
+            raise RuntimeError(
+                f"Ордер {label} {order_id} для {symbol} имеет недопустимый статус {status.value}"
+            )
+        except Exception as exception:
+            log.e(
+                f"Ошибка при размещении {label} для {symbol}: {exception}"
+            )
+            raise
 
     def _get_order_status(self, symbol: str, order_id: str) -> Optional[OrderStatus]:
         try:
