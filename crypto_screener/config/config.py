@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, \
     TestData
+from crypto_screener.domain.notifier import Keyboard
 from crypto_screener.domain.models.timeframe import Timeframe
 
 # Временная зона.
@@ -24,6 +25,8 @@ _test_data: list[TestData] = [
     TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
     TestData('TRADOORUSDT', Timeframe.M15, datetime(year=2025, month=11, day=16, hour=23, minute=35)),
 ]
+
+_trade_keyboard: Keyboard = [[("Торговать", "capture-active")]]
 
 # region Режимы работы.
 _mode_live = Live(
@@ -63,6 +66,9 @@ class AppConfig:
 
     # Режим работы.
     MODE: Mode = _mode_test_market
+
+    # Клавиатуры уведомлений.
+    TRADE_KEYBOARD: Keyboard = _trade_keyboard
 
     # region Контекст.
     CONTEXT_TRADES_MIN: int = 500_000

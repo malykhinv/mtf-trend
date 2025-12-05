@@ -5,6 +5,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from crypto_screener.domain.models.context import Context
+
+Keyboard = list[list[tuple[str, str]]]
+
 
 class NotificationType(Enum):
     EVENT = "EVENT"
@@ -18,10 +22,23 @@ class Notifier(ABC):
             notification_type: NotificationType,
             message: str,
             image_path: Optional[Path] = None,
-            has_button: bool = False
+            keyboard: Optional[Keyboard] = None,
+            context: Optional[Context] = None,
     ) -> Optional[str]:
         ...
 
     @abstractmethod
-    def remove_button(self, message_link: Optional[str]) -> None:
+    def edit_message(
+            self,
+            notification_type: NotificationType,
+            message_id: str,
+            message: Optional[str] = None,
+            image_path: Optional[Path] = None,
+            keyboard: Optional[Keyboard] = None,
+            context: Optional[Context] = None,
+    ) -> Optional[str]:
+        ...
+
+    @abstractmethod
+    def remove_button(self, message_id: Optional[str]) -> None:
         ...
