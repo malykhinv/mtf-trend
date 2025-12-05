@@ -39,3 +39,6 @@ class TradePermissionService:
             return
         self._allowed_trades.clear()
         log.d("Сброшены все разрешения на торговлю.")
+
+    def has_allowance(self, symbol: str, timeframe: Timeframe) -> bool:
+        return (symbol, timeframe) in self._allowed_trades
