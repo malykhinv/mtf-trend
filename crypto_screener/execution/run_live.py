@@ -471,6 +471,11 @@ def run_live(
                         resistance_swings=resistance_swings,
                         support_swings=support_swings,
                     ):
+                        if not trade_permission_service.has_allowance(symbol.symbol, timeframe):
+                            log.i(
+                                f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf}: отсутствует разрешение на торговлю."
+                            )
+                            continue
                         message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                         log.i(message)
                         # TODO Фактическое открытие позиции на бирже.
