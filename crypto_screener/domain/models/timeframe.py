@@ -18,3 +18,10 @@ class Timeframe(Enum):
     @property
     def minutes(self) -> int:
         return self.value[1]
+
+    @classmethod
+    def from_tf(cls, tf: str) -> "Timeframe":
+        for timeframe in cls:
+            if timeframe.tf == tf:
+                return timeframe
+        raise ValueError(f"Неизвестный таймфрейм: {tf}")

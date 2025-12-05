@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from crypto_screener.config.config import AppConfig as cfg
+from crypto_screener.data.notifiers.telegram import TRADE_CALLBACK_PREFIX
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
@@ -15,6 +16,7 @@ from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
 from crypto_screener.domain.setup_detector import detect_setup
+from crypto_screener.execution.trade_permission_service import TradePermissionService
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot
@@ -157,6 +159,12 @@ def _edit_notification(
     return None
 
 
+def _build_trade_keyboard(symbol: str, timeframe: Timeframe, context: Context) -> Keyboard:
+    trade_text = cfg.TRADE_KEYBOARD[0][0][0] if cfg.TRADE_KEYBOARD else "Торговать"
+    callback_data = f"{TRADE_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{context.value}"
+    return [[(trade_text, callback_data)]]
+
+
 # endregion
 
 def run_live(
@@ -189,6 +197,8 @@ def run_live(
         return
 
     capture_state = CaptureState()
+    trade_permission_service = TradePermissionService()
+    notifier.start_callback_handler(trade_permission_service)
     executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(executor)
     notified_once: set[tuple[str, Timeframe, str]] = set()
@@ -203,6 +213,7 @@ def run_live(
         for (symbol_name, timeframe), active_capture in expired_captures:
             capture_state.remove_capture(symbol_name, timeframe)
             notifier.remove_button(active_capture.message_id)
+            trade_permission_service.clear_allowance(symbol_name, timeframe)
             log.i(f"Истек срок слежения за {symbol_name} на {timeframe.tf}, кнопка удалена.")
             notified_once.discard((symbol_name, timeframe, "Capture"))
             if capture_state.symbol == symbol_name and not capture_state.has_symbol_capture(symbol_name):
@@ -232,6 +243,7 @@ def run_live(
                             log.i(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена."
                             )
+                            trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
                         if capture_state.symbol == symbol.symbol and not capture_state.has_symbol_capture(symbol.symbol):
                             capture_state.symbol = None
@@ -266,7 +278,7 @@ def run_live(
                                     support_swings=support_swings,
                                     subdir='event',
                                     context=symbol.context,
-                                    keyboard=cfg.TRADE_KEYBOARD,
+                                    keyboard=_build_trade_keyboard(symbol.symbol, timeframe, symbol.context),
                                 ).result()
                             continue
                         if capture_state.symbol is None:
@@ -288,7 +300,7 @@ def run_live(
                                 support_swings=support_swings,
                                 subdir='event',
                                 context=symbol.context,
-                                keyboard=cfg.TRADE_KEYBOARD,
+                                keyboard=_build_trade_keyboard(symbol.symbol, timeframe, symbol.context),
                             ).result()
                             capture_state.add_capture(
                                 symbol=symbol.symbol,
@@ -308,7 +320,7 @@ def run_live(
                     ):
                         message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                         log.i(message)
-                        # TODO Открытие позиции на бирже.
+                        # TODO Фактическое открытие позиции на бирже.
                         executor.submit(
                             _send_notification,
                             notifier=notifier,
@@ -332,4 +344,5 @@ def run_live(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена."
                             )
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
+                        trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                         capture_state.symbol = None

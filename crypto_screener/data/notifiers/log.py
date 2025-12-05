@@ -37,3 +37,8 @@ class LogNotifier(Notifier):
 
     def remove_button(self, message_id: Optional[str]) -> None:
         log.d(f"Запрос на удаление кнопки у сообщения {message_id}")
+
+    def start_callback_handler(self, trade_permission_service) -> None:
+        log.d(
+            "Запрос на запуск обработчика callback-кнопок без реальной интеграции."
+        )

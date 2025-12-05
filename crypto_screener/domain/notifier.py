@@ -3,11 +3,14 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from crypto_screener.domain.models.context import Context
 
 Keyboard = list[list[tuple[str, str]]]
+
+if TYPE_CHECKING:
+    from crypto_screener.execution.trade_permission_service import TradePermissionService
 
 
 class NotificationType(Enum):
@@ -41,4 +44,8 @@ class Notifier(ABC):
 
     @abstractmethod
     def remove_button(self, message_id: Optional[str]) -> None:
+        ...
+
+    @abstractmethod
+    def start_callback_handler(self, trade_permission_service: "TradePermissionService") -> None:
         ...
