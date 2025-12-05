@@ -36,3 +36,4 @@ class ActiveTrade:
     breakeven_order_id: Optional[str] = None
     breakeven_order_status: Optional[OrderStatus] = None
     position_id: Optional[str] = None
+    remaining_quantity: Optional[float] = None
