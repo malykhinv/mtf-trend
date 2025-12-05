@@ -142,6 +142,16 @@ class AppConfig:
     PARTIAL_CLOSE_SIDE_PCT_MIN: float = 2.0
     # Соотношение цены участков Entry-BE и Entry-PC при частичном закрытии позиции.
     BREAKEVEN_PARTIAL_CLOSE_RATIO: float = 0.5
+    # Размер риска на сделку в USDT.
+    RISK_PER_TRADE_USDT: float = 20.0
+    # Минимальная нотация позиции в USDT.
+    MIN_POSITION_NOTIONAL_USDT: float = 10.0
+    # Минимальное количество монет в позиции.
+    MIN_POSITION_QUANTITY: float = 0.001
+    # Количество повторных попыток размещения ордеров.
+    ORDER_MAX_RETRIES: int = 3
+    # Пауза между повторными попытками размещения ордеров.
+    ORDER_RETRY_DELAY_SECONDS: float = 1.0
     # endregion
 
     # region Построение графиков.

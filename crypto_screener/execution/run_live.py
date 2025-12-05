@@ -19,6 +19,7 @@ from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.setup_detector import detect_setup
 from crypto_screener.execution.trade_permission_service import TradePermissionService
+from crypto_screener.execution.trade_executor import TradeExecutionService
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
@@ -327,6 +328,7 @@ def run_live(
 
     capture_state = CaptureState()
     trade_permission_service = TradePermissionService()
+    trade_execution_service = TradeExecutionService(exchange, notifier)
     notifier.start_callback_handler(trade_permission_service)
     executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(executor)
@@ -485,12 +487,22 @@ def run_live(
                             continue
                         message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                         log.i(message)
-                        # TODO Фактическое открытие позиции на бирже.
+                        execution_result = trade_execution_service.execute_buy(setup, symbol.context)
+                        if not execution_result:
+                            trade_permission_service.clear_allowance(symbol.symbol, timeframe)
+                            continue
+                        success_message = (
+                            f"Открыта позиция в {symbol.symbol} на {timeframe.tf}.\n"
+                            f"Entry order: {execution_result.entry_order_id}\n"
+                            f"SL order: {execution_result.stop_loss_order_id}\n"
+                            f"TP order: {execution_result.take_profit_order_id}"
+                        )
+                        log.i(success_message)
                         executor.submit(
                             _send_notification,
                             notifier=notifier,
                             notification_type=NotificationType.ORDER,
-                            message=message,
+                            message=success_message,
                             symbol=symbol.symbol,
                             timeframe=timeframe,
                             bars=bars,
@@ -518,6 +530,12 @@ def run_live(
                             detection_time=detection_time,
                             context=symbol.context,
                             capture_message_id=capture_message_id,
+                            entry_order_id=execution_result.entry_order_id,
+                            stop_loss_order_id=execution_result.stop_loss_order_id,
+                            take_profit_order_id=execution_result.take_profit_order_id,
+                            partial_close_order_id=execution_result.partial_close_order_id,
+                            breakeven_order_id=execution_result.breakeven_order_id,
+                            position_id=execution_result.position_id,
                         )
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                         capture_state.symbol = None

@@ -49,3 +49,27 @@ class Exchange(ABC):
         ...
 
     @abstractmethod
+    def place_stop_loss_order(
+            self,
+            symbol: str,
+            side: OrderSide,
+            quantity: float,
+            stop_price: float,
+            reduce_only: bool = True,
+            margin_mode: Optional[MarginMode] = None,
+    ) -> str:
+        ...
+
+    @abstractmethod
+    def place_take_profit_order(
+            self,
+            symbol: str,
+            side: OrderSide,
+            quantity: float,
+            price: float,
+            reduce_only: bool = True,
+            margin_mode: Optional[MarginMode] = None,
+    ) -> str:
+        ...
+
+    @abstractmethod
