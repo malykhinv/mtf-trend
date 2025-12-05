@@ -8,6 +8,7 @@ from crypto_screener.data.notifiers.telegram import TRADE_CALLBACK_PREFIX
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
+from crypto_screener.domain.models.active_trade import ActiveTrade
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
@@ -15,13 +16,15 @@ from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
+from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.setup_detector import detect_setup
 from crypto_screener.execution.trade_permission_service import TradePermissionService
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
-from crypto_screener.utils.plotter import plot
+from crypto_screener.utils.plotter import plot, plot_postmortem
 from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.time import utc_now
+from crypto_screener.execution.test_result import evaluate_buy
 
 # region Private.
 def _fetch_filtered_symbols(
@@ -116,6 +119,13 @@ def _send_notification(
     return None
 
 
+def _remove_button_safe(notifier: Notifier, message_id: Optional[str]) -> None:
+    try:
+        notifier.remove_button(message_id)
+    except Exception as exception:
+        log.e(f"Ошибка при удалении кнопки {message_id}: {exception}")
+
+
 def _edit_notification(
         notifier: Notifier,
         notification_type: NotificationType,
@@ -165,6 +175,125 @@ def _build_trade_keyboard(symbol: str, timeframe: Timeframe, context: Context) -
     return [[(trade_text, callback_data)]]
 
 
+def _describe_exit(trade_result: TradeResult, trade_levels) -> tuple[str, list[float]]:
+    exit_prices: list[float] = []
+    match trade_result:
+        case TradeResult.SL:
+            exit_prices = [trade_levels.stop_loss_price]
+            label = "SL"
+        case TradeResult.TP:
+            exit_prices = [trade_levels.take_profit_price]
+            label = "TP"
+        case TradeResult.PC_BE:
+            exit_prices = [
+                price
+                for price in (trade_levels.partial_close_price, trade_levels.breakeven_price)
+                if price is not None
+            ]
+            label = "PC → BE"
+        case TradeResult.PC_TP:
+            exit_prices = [
+                price
+                for price in (trade_levels.partial_close_price, trade_levels.take_profit_price)
+                if price is not None
+            ]
+            label = "PC → TP"
+        case _:
+            label = trade_result.value
+    return label, exit_prices
+
+
+def _format_levels(trade_levels) -> str:
+    lines = [
+        f"Entry: {trade_levels.entry_price:.4f}",
+        f"SL: {trade_levels.stop_loss_price:.4f}",
+        f"TP: {trade_levels.take_profit_price:.4f}",
+    ]
+    if trade_levels.partial_close_price is not None:
+        lines.append(f"PC: {trade_levels.partial_close_price:.4f}")
+    if trade_levels.breakeven_price is not None:
+        lines.append(f"BE: {trade_levels.breakeven_price:.4f}")
+    return "\n".join(lines)
+
+
+def _handle_trade_closure(
+        notifier: Notifier,
+        active_trade: ActiveTrade,
+        trade_result: TradeResult,
+        profit_pct: float,
+) -> None:
+    setup = active_trade.setup
+    trade_levels = setup.trade_levels
+    profit_value = trade_levels.entry_price * profit_pct / 100
+    exit_label, exit_prices = _describe_exit(trade_result, trade_levels)
+
+    message_lines = [
+        f"Сделка {setup.symbol} на {setup.timeframe.tf} закрыта: {trade_result.value}",
+        f"P&L: {profit_value:+.4f} ({profit_pct:+.2f}%)",
+        f"Выход: {exit_label} ({', '.join(f'{price:.4f}' for price in exit_prices)})" if exit_prices else f"Выход: {exit_label}",
+        "",
+        _format_levels(trade_levels),
+    ]
+    message = "\n".join(message_lines)
+    log.i(message)
+
+    try:
+        postmortem_path = plot_postmortem(
+            symbol=setup.symbol,
+            timeframe=setup.timeframe,
+            bars=setup.bars,
+            detection_time=active_trade.detection_time,
+            main_low_swing=setup.main_low_swing,
+            main_high_swing=setup.main_high_swing,
+            cascade_swings=setup.cascade_swings,
+            resistance_swings=setup.resistance_swings,
+            support_swings=setup.support_swings,
+            subdir='order',
+            postmortem_bars=active_trade.postmortem_bars,
+            trade_levels=trade_levels,
+            context=active_trade.context,
+            setup_name=setup.name,
+        )
+    except Exception as exception:
+        log.e(f"Ошибка при построении postmortem графика: {exception}")
+        postmortem_path = None
+
+    _remove_button_safe(notifier, active_trade.capture_message_id)
+
+    try:
+        notifier.notify(
+            notification_type=NotificationType.ORDER,
+            message=message,
+            image_path=postmortem_path,
+            context=active_trade.context,
+        )
+    except Exception as exception:
+        log.e(f"Ошибка при отправке уведомления о закрытии сделки: {exception}")
+
+
+def _update_postmortem_bars(active_trade: ActiveTrade, new_bars: list[Bar]) -> list[Bar]:
+    existing_times = {bar.time for bar in active_trade.postmortem_bars}
+    fresh_bars = [
+        bar for bar in new_bars
+        if bar.time > active_trade.detection_time and bar.time not in existing_times
+    ]
+    if fresh_bars:
+        active_trade.postmortem_bars.extend(fresh_bars)
+        active_trade.postmortem_bars.sort(key=lambda bar: bar.time)
+    return active_trade.postmortem_bars
+
+
+def _evaluate_active_trade(active_trade: ActiveTrade, bars: list[Bar]) -> Optional[tuple[TradeResult, float]]:
+    try:
+        postmortem_bars = _update_postmortem_bars(active_trade, bars)
+        if not postmortem_bars:
+            return None
+        return evaluate_buy(active_trade.setup, postmortem_bars)
+    except Exception as exception:
+        log.e(f"Ошибка при оценке результата сделки {active_trade.symbol}: {exception}")
+        return None
+
+
 # endregion
 
 def run_live(
@@ -202,6 +331,7 @@ def run_live(
     executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(executor)
     notified_once: set[tuple[str, Timeframe, str]] = set()
+    active_trades: dict[tuple[str, Timeframe], ActiveTrade] = {}
 
     while True:
         now = utc_now()
@@ -212,7 +342,7 @@ def run_live(
         ]
         for (symbol_name, timeframe), active_capture in expired_captures:
             capture_state.remove_capture(symbol_name, timeframe)
-            notifier.remove_button(active_capture.message_id)
+            _remove_button_safe(notifier, active_capture.message_id)
             trade_permission_service.clear_allowance(symbol_name, timeframe)
             log.i(f"Истек срок слежения за {symbol_name} на {timeframe.tf}, кнопка удалена.")
             notified_once.discard((symbol_name, timeframe, "Capture"))
@@ -234,12 +364,30 @@ def run_live(
                     setup = detect_setup(symbol.symbol, bars, timeframe, symbol.context)
                     if setup:
                         break
+                trade_key = (symbol.symbol, timeframe)
+                if trade_key in active_trades:
+                    outcome = _evaluate_active_trade(active_trades[trade_key], bars)
+                    if outcome:
+                        trade_result, profit_pct = outcome
+                        log.i(
+                            f"Завершена сделка {symbol.symbol} {timeframe.tf}: "
+                            f"{trade_result.value} ({profit_pct:+.2f}%)"
+                        )
+                        _handle_trade_closure(
+                            notifier=notifier,
+                            active_trade=active_trades.pop(trade_key),
+                            trade_result=trade_result,
+                            profit_pct=profit_pct,
+                        )
+                        trade_permission_service.clear_allowance(symbol.symbol, timeframe)
+                        capture_state.symbol = None
+                        continue
                 match setup:
                     # Сетап не найден.
                     case Unfilled():
                         removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
                         if removed_capture:
-                            notifier.remove_button(removed_capture.message_id)
+                            _remove_button_safe(notifier, removed_capture.message_id)
                             log.i(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена."
                             )
@@ -337,12 +485,22 @@ def run_live(
                             subdir='order',
                             context=symbol.context
                         ).result()
+                        detection_time = bars[-1].time if bars else utc_now()
                         removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
+                        capture_message_id = removed_capture.message_id if removed_capture else None
                         if removed_capture:
-                            notifier.remove_button(removed_capture.message_id)
+                            _remove_button_safe(notifier, removed_capture.message_id)
                             log.i(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена."
                             )
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
+                        active_trades[trade_key] = ActiveTrade(
+                            symbol=symbol.symbol,
+                            timeframe=timeframe,
+                            setup=setup,
+                            detection_time=detection_time,
+                            context=symbol.context,
+                            capture_message_id=capture_message_id,
+                        )
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                         capture_state.symbol = None
