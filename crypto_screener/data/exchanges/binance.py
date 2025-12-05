@@ -115,3 +115,25 @@ class Binance(Exchange):
 
     def get_position(self, symbol: str) -> Optional[Position]:
         raise NotImplementedError("Position retrieval is not implemented for Binance yet")
+
+    def place_stop_loss_order(
+            self,
+            symbol: str,
+            side: OrderSide,
+            quantity: float,
+            stop_price: float,
+            reduce_only: bool = True,
+            margin_mode: Optional[MarginMode] = None,
+    ) -> str:
+        raise NotImplementedError("Stop-loss orders are not implemented for Binance yet")
+
+    def place_take_profit_order(
+            self,
+            symbol: str,
+            side: OrderSide,
+            quantity: float,
+            price: float,
+            reduce_only: bool = True,
+            margin_mode: Optional[MarginMode] = None,
+    ) -> str:
+        raise NotImplementedError("Take-profit orders are not implemented for Binance yet")
