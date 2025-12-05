@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
+from crypto_screener.config.config import AppConfig as cfg
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
@@ -87,7 +88,8 @@ def _send_notification(
         support_swings: Optional[list[Swing]],
         subdir: Optional[str] = None,
         context: Optional[Context] = None,
-) -> None:
+        has_button: bool = False,
+) -> Optional[str]:
     try:
         image_path = plot(
             symbol=symbol,
@@ -101,13 +103,10 @@ def _send_notification(
             subdir=subdir,
             context=context,
         )
-        notifier.notify(notification_type, message, image_path)
-        if context:
-            log.d(
-                f"График {symbol} сохранен (контекст {context.value}) в {image_path}"
-            )
+        return notifier.notify(notification_type, message, image_path, has_button)
     except Exception as exception:
         log.e(f"Ошибка при отправке уведомления: {exception}")
+    return None
 
 
 # endregion
@@ -147,6 +146,20 @@ def run_live(
     notified_once: set[tuple[str, Timeframe, str]] = set()
 
     while True:
+        now = utc_now()
+        expired_captures = [
+            (symbol_timeframe, active_capture)
+            for symbol_timeframe, active_capture in capture_state.captures.items()
+            if now >= active_capture.deadline
+        ]
+        for (symbol_name, timeframe), active_capture in expired_captures:
+            capture_state.remove_capture(symbol_name, timeframe)
+            notifier.remove_button(active_capture.message_link)
+            log.i(f"Истек срок слежения за {symbol_name} на {timeframe.tf}, кнопка удалена.")
+            notified_once.discard((symbol_name, timeframe, "Capture"))
+            if capture_state.symbol == symbol_name and not capture_state.has_symbol_capture(symbol_name):
+                capture_state.symbol = None
+
         if not capture_state.symbol:
             log.d("Запуск цикла анализа отобранных монет.")
 
@@ -165,7 +178,14 @@ def run_live(
                 match setup:
                     # Сетап не найден.
                     case Unfilled():
-                        if capture_state.symbol == symbol.symbol:
+                        removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
+                        if removed_capture:
+                            notifier.remove_button(removed_capture.message_link)
+                            log.i(
+                                f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена."
+                            )
+                            notified_once.discard((symbol.symbol, timeframe, "Capture"))
+                        if capture_state.symbol == symbol.symbol and not capture_state.has_symbol_capture(symbol.symbol):
                             capture_state.symbol = None
                         continue
 
@@ -177,13 +197,15 @@ def run_live(
                         resistance_swings=resistance_swings,
                         support_swings=support_swings,
                     ):
+                        capture_key = (symbol.symbol, timeframe)
+                        if capture_key in capture_state.captures:
+                            continue
                         if capture_state.symbol is None:
                             capture_state.symbol = symbol.symbol
-                        key = (symbol.symbol, timeframe, setup.name)
-                        if key not in notified_once:
-                            notified_once.add(key)
+                        capture_notification_key = (symbol.symbol, timeframe, setup.name)
+                        if capture_notification_key not in notified_once:
                             message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
-                            executor.submit(
+                            message_link = executor.submit(
                                 _send_notification,
                                 notifier=notifier,
                                 notification_type=NotificationType.EVENT,
@@ -197,8 +219,16 @@ def run_live(
                                 resistance_swings=resistance_swings,
                                 support_swings=support_swings,
                                 subdir='event',
-                                context=symbol.context
+                                context=symbol.context,
+                                has_button=True,
+                            ).result()
+                            capture_state.add_capture(
+                                symbol=symbol.symbol,
+                                timeframe=timeframe,
+                                message_link=message_link,
+                                timeout_multiplier=cfg.CAPTURE_TIMEOUT_MULTIPLIER,
                             )
+                            notified_once.add(capture_notification_key)
 
                     # Найден торговый сетап.
                     case Buy(
@@ -226,5 +256,12 @@ def run_live(
                             support_swings=support_swings,
                             subdir='order',
                             context=symbol.context
-                        )
+                        ).result()
+                        removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
+                        if removed_capture:
+                            notifier.remove_button(removed_capture.message_link)
+                            log.i(
+                                f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена."
+                            )
+                            notified_once.discard((symbol.symbol, timeframe, "Capture"))
                         capture_state.symbol = None

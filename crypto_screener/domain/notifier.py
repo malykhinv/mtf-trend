@@ -17,6 +17,11 @@ class Notifier(ABC):
             self,
             notification_type: NotificationType,
             message: str,
-            image_path: Optional[Path] = None
-    ) -> None:
+            image_path: Optional[Path] = None,
+            has_button: bool = False
+    ) -> Optional[str]:
+        ...
+
+    @abstractmethod
+    def remove_button(self, message_link: Optional[str]) -> None:
         ...

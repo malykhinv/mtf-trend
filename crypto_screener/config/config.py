@@ -69,6 +69,10 @@ class AppConfig:
     CONTEXT_VOLUME_MIN: float = 500_000_000
     # endregion
 
+    # region Сетапы.
+    CAPTURE_TIMEOUT_MULTIPLIER: int = 12
+    # endregion
+
     # region Капитализация.
     CAPITALIZATION_LOW_MIN: float = 20_000_000
     CAPITALIZATION_MIDDLE_MIN: float = 1_000_000_000

@@ -12,6 +12,11 @@ class LogNotifier(Notifier):
             self,
             notification_type: NotificationType,
             message: str,
-            image_path: Optional[Path] = None
-    ) -> None:
+            image_path: Optional[Path] = None,
+            has_button: bool = False
+    ) -> Optional[str]:
         log.d(f"Запрос отправки сообщения с типом {notification_type.name.capitalize()}: {message}")
+        return None
+
+    def remove_button(self, message_link: Optional[str]) -> None:
+        log.d(f"Запрос на удаление кнопки у сообщения {message_link}")
