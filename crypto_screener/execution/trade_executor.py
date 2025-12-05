@@ -121,6 +121,11 @@ class TradeExecutionService:
                 margin_mode=MarginMode.CROSS,
             ),
             symbol=setup.symbol,
+            acceptable_statuses={
+                OrderStatus.FILLED,
+                OrderStatus.NEW,
+                OrderStatus.PARTIALLY_FILLED,
+            },
         )
 
         ids["take_profit_order_id"] = self._place_with_retries(
@@ -133,6 +138,11 @@ class TradeExecutionService:
                 margin_mode=MarginMode.CROSS,
             ),
             symbol=setup.symbol,
+            acceptable_statuses={
+                OrderStatus.FILLED,
+                OrderStatus.NEW,
+                OrderStatus.PARTIALLY_FILLED,
+            },
         )
 
         if setup.partial_close_price is not None:
@@ -147,6 +157,11 @@ class TradeExecutionService:
                     margin_mode=MarginMode.CROSS,
                 ),
                 symbol=setup.symbol,
+                acceptable_statuses={
+                    OrderStatus.FILLED,
+                    OrderStatus.NEW,
+                    OrderStatus.PARTIALLY_FILLED,
+                },
             )
 
             if setup.breakeven_price is not None:
@@ -160,6 +175,11 @@ class TradeExecutionService:
                         margin_mode=MarginMode.CROSS,
                     ),
                     symbol=setup.symbol,
+                    acceptable_statuses={
+                        OrderStatus.FILLED,
+                        OrderStatus.NEW,
+                        OrderStatus.PARTIALLY_FILLED,
+                    },
                 )
 
         return ids
@@ -169,15 +189,24 @@ class TradeExecutionService:
             label: str,
             place_order: Callable[[], str],
             symbol: str,
+            acceptable_statuses: Optional[set[OrderStatus]] = None,
     ) -> str:
         last_error: Optional[Exception] = None
+        acceptable_statuses = acceptable_statuses or {OrderStatus.FILLED}
         for attempt in range(1, self._max_retries + 1):
             try:
                 order_id = place_order()
-                if self._is_filled(symbol, order_id):
+                status = self._get_order_status(symbol, order_id)
+                if status is None or status in acceptable_statuses:
+                    if status and status != OrderStatus.FILLED:
+                        log.d(
+                            f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, прекращаем повторные попытки."
+                        )
                     return order_id
+                if status == OrderStatus.CANCELED:
+                    raise RuntimeError(f"Ордер {order_id} для {symbol} отменен биржей")
                 log.d(
-                    f"Ордер {label} {order_id} для {symbol} не исполнен полностью, попытка {attempt}."
+                    f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, попытка {attempt}."
                 )
                 self._cancel_order_safe(symbol, order_id)
             except Exception as exception:
@@ -192,17 +221,13 @@ class TradeExecutionService:
             f"Не удалось разместить {label} для {symbol} после {self._max_retries} попыток: {last_error}"
         )
 
-    def _is_filled(self, symbol: str, order_id: str) -> bool:
+    def _get_order_status(self, symbol: str, order_id: str) -> Optional[OrderStatus]:
         try:
             order_info = self._exchange.get_order_status(symbol, order_id)
         except NotImplementedError:
-            return True
+            return None
 
-        if order_info.status == OrderStatus.FILLED:
-            return True
-        if order_info.status == OrderStatus.CANCELED:
-            raise RuntimeError(f"Ордер {order_id} для {symbol} отменен биржей")
-        return False
+        return order_info.status
 
     def _cancel_order_safe(self, symbol: str, order_id: str) -> None:
         try:
