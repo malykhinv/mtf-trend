@@ -364,7 +364,11 @@ def _monitor_active_trade(
 
         if active_trade.entry_order_status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
             if active_trade.entry_order_status in (OrderStatus.NEW, OrderStatus.CANCELED):
-                return None
+                log.i(
+                    f"Статус входного ордера {active_trade.entry_order_id} —"
+                    f" {active_trade.entry_order_status.value if active_trade.entry_order_status else 'неизвестно'},"
+                    " пробуем определить позицию через exchange.get_position."
+                )
 
             try:
                 position = exchange.get_position(active_trade.symbol)
@@ -374,7 +378,7 @@ def _monitor_active_trade(
                 log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
                 position = None
 
-            if not position or (position.quantity is None and position.pnl is None):
+            if not position or position.entry_price is None or position.quantity is None:
                 return None
 
             active_trade.entry_order_status = OrderStatus.FILLED
