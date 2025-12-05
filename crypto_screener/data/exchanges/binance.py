@@ -9,6 +9,10 @@ from crypto_screener.data.mappers import map_ohlcv
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.symbol import FuturesSymbol
+from crypto_screener.domain.models.margin_mode import MarginMode
+from crypto_screener.domain.models.order_info import OrderInfo
+from crypto_screener.domain.models.order_side import OrderSide
+from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.extractors import extract_float, extract_int
 
@@ -93,3 +97,21 @@ class Binance(Exchange):
             limit=params["limit"],
         )
         return map_ohlcv(raw, end)
+
+    def place_market_order(
+            self,
+            symbol: str,
+            side: OrderSide,
+            quantity: float,
+            margin_mode: Optional[MarginMode] = None,
+    ) -> str:
+        raise NotImplementedError("Market orders are not implemented for Binance yet")
+
+    def cancel_order(self, symbol: str, order_id: str) -> None:
+        raise NotImplementedError("Order cancellation is not implemented for Binance yet")
+
+    def get_order_status(self, symbol: str, order_id: str) -> OrderInfo:
+        raise NotImplementedError("Order status retrieval is not implemented for Binance yet")
+
+    def get_position(self, symbol: str) -> Optional[Position]:
+        raise NotImplementedError("Position retrieval is not implemented for Binance yet")
