@@ -6,3 +6,4 @@ class TradeResult(Enum):
     PC_BE = "PC-BE"
     PC_TP = "PC-TP"
     TP = "TP"
+    MANUAL = "Manual"
