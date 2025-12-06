@@ -5,11 +5,11 @@ from typing import Optional
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy, TestData
+from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Setup, Buy
-from crypto_screener.domain.models.symbol import Context
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
-from crypto_screener.domain.setup_detector import detect_setup
+from crypto_screener.domain.setup_detector import default_strategy
 from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
@@ -96,7 +96,7 @@ def _detect_setup(
         timeframe: Timeframe,
         context: Context
 ) -> Setup:
-    setup = detect_setup(symbol, bars, timeframe, context)
+    setup = default_strategy.detect_setup(symbol, bars, timeframe, context)
     if setup.is_filled:
         log.d(f"На {symbol} ({timeframe.tf}) обнаружен {setup.name.capitalize()}-сетап.")
     return setup
