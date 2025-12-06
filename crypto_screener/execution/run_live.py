@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from typing import Optional
 
 from crypto_screener.config.config import AppConfig as cfg
@@ -15,6 +16,7 @@ from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
+from crypto_screener.domain.models.protective_orders import ProtectiveOrders
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
@@ -343,6 +345,333 @@ def _calculate_split_profit(
     return profit_value, profit_pct
 
 
+@dataclass
+class _TradeMonitorContext:
+    entry_price: float
+    remaining_quantity: Optional[float]
+    protective_orders: ProtectiveOrders
+
+
+def _update_entry_status_and_position(
+        exchange: Exchange,
+        trade_execution_service: TradeExecutionService,
+        active_trade: ActiveTrade,
+) -> tuple[Optional[Position], Optional[tuple[TradeResult, float, float, list[float]]]]:
+    position: Optional[Position] = None
+    protective_orders = active_trade.protective_orders
+
+    entry_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.entry_order_id)
+    if entry_info:
+        _log_status_change(
+            "entry",
+            active_trade.entry_order_status and active_trade.entry_order_status.value,
+            entry_info.status.value,
+            entry_info.id,
+        )
+        active_trade.entry_order_status = entry_info.status
+        active_trade.entry_average_price = entry_info.average_price or active_trade.entry_average_price
+        active_trade.quantity = entry_info.quantity or active_trade.quantity
+        active_trade.status = entry_info.status
+
+    if active_trade.entry_order_status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+        if active_trade.entry_order_status in (OrderStatus.NEW, OrderStatus.CANCELED):
+            log.i(
+                f"Статус входного ордера {active_trade.entry_order_id} —"
+                f" {active_trade.entry_order_status.value if active_trade.entry_order_status else 'неизвестно'},"
+                " пробуем определить позицию через exchange.get_position."
+            )
+
+        try:
+            position = exchange.get_position(active_trade.symbol)
+        except NotImplementedError:
+            position = None
+        except Exception as exception:
+            log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
+            position = None
+
+        if not position or position.entry_price is None or position.quantity is None:
+            if active_trade.entry_order_status in (OrderStatus.NEW, OrderStatus.CANCELED):
+                log.i(
+                    f"Входной ордер {active_trade.entry_order_id} в статусе "
+                    f"{active_trade.entry_order_status.value if active_trade.entry_order_status else 'неизвестно'} "
+                    "и позиция не найдена — завершаем сделку и отменяем связанные ордера."
+                )
+                trade_execution_service._cancel_order_safe(
+                    active_trade.symbol, protective_orders.stop_loss_id
+                )
+                trade_execution_service._cancel_order_safe(
+                    active_trade.symbol, protective_orders.take_profit_id
+                )
+                trade_execution_service._cancel_order_safe(
+                    active_trade.symbol, protective_orders.partial_close_id
+                )
+                trade_execution_service._cancel_order_safe(
+                    active_trade.symbol, protective_orders.breakeven_id
+                )
+                active_trade.status = OrderStatus.CANCELED
+                return position, (TradeResult.MANUAL, 0.0, 0.0, [])
+
+            return position, None
+
+        active_trade.entry_order_status = OrderStatus.FILLED
+        active_trade.status = OrderStatus.FILLED
+        active_trade.entry_average_price = position.entry_price or active_trade.entry_average_price
+        active_trade.quantity = position.quantity or active_trade.quantity
+
+    return position, None
+
+
+def _refresh_protective_orders(
+        exchange: Exchange,
+        active_trade: ActiveTrade,
+        protective_orders: ProtectiveOrders,
+):
+    take_profit_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.take_profit_id)
+    if take_profit_info:
+        _log_status_change(
+            "take-profit",
+            protective_orders.take_profit_status and protective_orders.take_profit_status.value,
+            take_profit_info.status.value,
+            take_profit_info.id,
+        )
+        protective_orders.take_profit_status = take_profit_info.status
+        if take_profit_info.average_price:
+            active_trade.exit_average_price = take_profit_info.average_price
+
+    stop_loss_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.stop_loss_id)
+    if stop_loss_info:
+        _log_status_change(
+            "stop-loss",
+            protective_orders.stop_loss_status and protective_orders.stop_loss_status.value,
+            stop_loss_info.status.value,
+            stop_loss_info.id,
+        )
+        protective_orders.stop_loss_status = stop_loss_info.status
+        if stop_loss_info.average_price:
+            active_trade.exit_average_price = stop_loss_info.average_price
+
+    breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.breakeven_id)
+    if breakeven_info:
+        _log_status_change(
+            "breakeven",
+            protective_orders.breakeven_status and protective_orders.breakeven_status.value,
+            breakeven_info.status.value,
+            breakeven_info.id,
+        )
+        protective_orders.breakeven_status = breakeven_info.status
+        if breakeven_info.average_price:
+            active_trade.exit_average_price = breakeven_info.average_price
+
+    partial_close_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.partial_close_id)
+    if partial_close_info:
+        _log_status_change(
+            "partial-close",
+            protective_orders.partial_close_status and protective_orders.partial_close_status.value,
+            partial_close_info.status.value,
+            partial_close_info.id,
+        )
+        protective_orders.partial_close_status = partial_close_info.status
+        if partial_close_info.average_price:
+            active_trade.exit_average_price = partial_close_info.average_price
+
+    return take_profit_info, stop_loss_info, breakeven_info, partial_close_info
+
+
+def _process_filled_partial_close(
+        trade_execution_service: TradeExecutionService,
+        exchange: Exchange,
+        active_trade: ActiveTrade,
+        context: _TradeMonitorContext,
+        partial_close_info,
+        breakeven_info,
+        stop_loss_info,
+):
+    if not partial_close_info or partial_close_info.status != OrderStatus.FILLED:
+        return breakeven_info
+
+    filled_quantity = partial_close_info.filled or partial_close_info.quantity
+    if filled_quantity is None:
+        return breakeven_info
+
+    remaining_quantity = (active_trade.quantity or 0) - filled_quantity
+    active_trade.remaining_quantity = max(remaining_quantity, 0)
+    context.remaining_quantity = active_trade.remaining_quantity
+
+    try:
+        previous_stop_loss_id = context.protective_orders.stop_loss_id
+        previous_breakeven_id = context.protective_orders.breakeven_id
+        realigned_ids = trade_execution_service.realign_stop_orders(
+            setup=active_trade.setup,
+            stop_loss_order_id=context.protective_orders.stop_loss_id,
+            breakeven_order_id=context.protective_orders.breakeven_id,
+            remaining_quantity=active_trade.remaining_quantity,
+            move_to_breakeven=active_trade.setup.breakeven_price is not None,
+        )
+        log.i(
+            "Результат перестановки стоп-ордеров: "
+            f"SL {previous_stop_loss_id} → {realigned_ids.stop_loss_id}, "
+            f"BE {previous_breakeven_id} → {realigned_ids.breakeven_id}"
+        )
+
+        realigned_stop_loss_id = realigned_ids.stop_loss_id
+        realigned_breakeven_id = realigned_ids.breakeven_id
+
+        if realigned_stop_loss_id != previous_stop_loss_id:
+            context.protective_orders.stop_loss_id = realigned_stop_loss_id
+            context.protective_orders.stop_loss_status = (
+                realigned_ids.stop_loss_status
+                or (OrderStatus.NEW if realigned_stop_loss_id else None)
+            )
+        elif previous_stop_loss_id:
+            refreshed_stop_info = stop_loss_info or _get_order_info_safe(
+                exchange, active_trade.symbol, previous_stop_loss_id
+            )
+            if refreshed_stop_info:
+                context.protective_orders.stop_loss_status = refreshed_stop_info.status
+
+        if realigned_breakeven_id != previous_breakeven_id:
+            context.protective_orders.breakeven_id = realigned_breakeven_id
+            context.protective_orders.breakeven_status = (
+                realigned_ids.breakeven_status
+                or (OrderStatus.NEW if realigned_breakeven_id else None)
+            )
+            breakeven_info = None
+        elif previous_breakeven_id:
+            refreshed_breakeven_info = breakeven_info or _get_order_info_safe(
+                exchange, active_trade.symbol, previous_breakeven_id
+            )
+            if refreshed_breakeven_info:
+                context.protective_orders.breakeven_status = refreshed_breakeven_info.status
+                breakeven_info = refreshed_breakeven_info
+    except Exception as exception:
+        log.e(
+            f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}"
+        )
+
+    return breakeven_info
+
+
+def _calculate_trade_outcome(
+        exchange: Exchange,
+        active_trade: ActiveTrade,
+        position: Optional[Position],
+        context: _TradeMonitorContext,
+        take_profit_info,
+        stop_loss_info,
+        breakeven_info,
+        partial_close_info,
+) -> Optional[tuple[TradeResult, float, float, list[float]]]:
+    entry_price = context.entry_price
+    exit_prices: list[float] = []
+    remaining_quantity_for_remainder = (
+        context.remaining_quantity if context.remaining_quantity is not None else active_trade.quantity
+    )
+
+    if partial_close_info and partial_close_info.status == OrderStatus.FILLED:
+        exit_price = partial_close_info.average_price or (active_trade.setup.partial_close_price or entry_price)
+        exit_prices.append(exit_price)
+        total_quantity = active_trade.quantity or 0
+        partial_quantity = partial_close_info.filled or partial_close_info.quantity or total_quantity * 0.5
+        remaining_quantity = (
+            active_trade.remaining_quantity
+            if active_trade.remaining_quantity is not None
+            else max(total_quantity - partial_quantity, 0)
+        )
+        total_quantity = total_quantity or (partial_quantity + remaining_quantity)
+        remaining_quantity_for_remainder = remaining_quantity
+
+        if breakeven_info and breakeven_info.status == OrderStatus.FILLED:
+            breakeven_exit_price = breakeven_info.average_price or active_trade.setup.breakeven_price or exit_price
+            exit_prices.append(breakeven_exit_price)
+            profit_value, profit_pct = _calculate_split_profit(
+                entry_price,
+                total_quantity,
+                exit_price,
+                partial_quantity,
+                breakeven_exit_price,
+                remaining_quantity,
+            )
+            active_trade.status = OrderStatus.PARTIALLY_FILLED
+            return TradeResult.PC_BE, profit_pct, profit_value, exit_prices
+
+        if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
+            take_profit_exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
+            exit_prices.append(take_profit_exit_price)
+            profit_value, profit_pct = _calculate_split_profit(
+                entry_price,
+                total_quantity,
+                exit_price,
+                partial_quantity,
+                take_profit_exit_price,
+                remaining_quantity,
+            )
+            active_trade.status = OrderStatus.FILLED
+            return TradeResult.PC_TP, profit_pct, profit_value, exit_prices
+
+        if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
+            stop_loss_exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
+            exit_prices.append(stop_loss_exit_price)
+            profit_value, profit_pct = _calculate_split_profit(
+                entry_price,
+                total_quantity,
+                exit_price,
+                partial_quantity,
+                stop_loss_exit_price,
+                remaining_quantity,
+            )
+            active_trade.status = OrderStatus.FILLED
+            return TradeResult.SL, profit_pct, profit_value, exit_prices
+
+    if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
+        exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
+        exit_prices.append(exit_price)
+        profit_value, profit_pct = _calculate_profit(
+            entry_price,
+            exit_price,
+            remaining_quantity_for_remainder if remaining_quantity_for_remainder is not None else active_trade.quantity,
+        )
+        active_trade.status = OrderStatus.FILLED
+        return TradeResult.TP, profit_pct, profit_value, exit_prices
+
+    if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
+        exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
+        exit_prices.append(exit_price)
+        profit_value, profit_pct = _calculate_profit(
+            entry_price,
+            exit_price,
+            remaining_quantity_for_remainder if remaining_quantity_for_remainder is not None else active_trade.quantity,
+        )
+        active_trade.status = OrderStatus.FILLED
+        return TradeResult.SL, profit_pct, profit_value, exit_prices
+
+    if position is None:
+        try:
+            position = exchange.get_position(active_trade.symbol)
+        except NotImplementedError:
+            position = None
+        except Exception as exception:
+            log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
+            position = None
+
+    if not position and active_trade.entry_order_status == OrderStatus.FILLED:
+        if active_trade.exit_average_price:
+            exit_price = active_trade.exit_average_price
+            exit_prices.append(exit_price)
+            profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
+        else:
+            profit_value = 0.0
+            profit_pct = 0.0
+        active_trade.status = OrderStatus.FILLED
+        return TradeResult.MANUAL, profit_pct, profit_value, exit_prices
+
+    if position and position.pnl is not None:
+        base = entry_price * active_trade.quantity if active_trade.quantity else 1
+        profit_pct = position.pnl / base * 100
+        return None
+
+    return None
+
+
 def _monitor_active_trade(
         exchange: Exchange,
         trade_execution_service: TradeExecutionService,
@@ -352,276 +681,44 @@ def _monitor_active_trade(
     try:
         _update_postmortem_bars(active_trade, bars)
 
-        position: Optional[Position] = None
-        protective_orders = active_trade.protective_orders
+        position, early_outcome = _update_entry_status_and_position(exchange, trade_execution_service, active_trade)
+        if early_outcome:
+            return early_outcome
 
-        entry_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.entry_order_id)
-        if entry_info:
-            _log_status_change("entry", active_trade.entry_order_status and active_trade.entry_order_status.value, entry_info.status.value, entry_info.id)
-            active_trade.entry_order_status = entry_info.status
-            active_trade.entry_average_price = entry_info.average_price or active_trade.entry_average_price
-            active_trade.quantity = entry_info.quantity or active_trade.quantity
-            active_trade.status = entry_info.status
-
-        if active_trade.entry_order_status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
-            if active_trade.entry_order_status in (OrderStatus.NEW, OrderStatus.CANCELED):
-                log.i(
-                    f"Статус входного ордера {active_trade.entry_order_id} —"
-                    f" {active_trade.entry_order_status.value if active_trade.entry_order_status else 'неизвестно'},"
-                    " пробуем определить позицию через exchange.get_position."
-                )
-
-            try:
-                position = exchange.get_position(active_trade.symbol)
-            except NotImplementedError:
-                position = None
-            except Exception as exception:
-                log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
-                position = None
-
-            if not position or position.entry_price is None or position.quantity is None:
-                if active_trade.entry_order_status in (OrderStatus.NEW, OrderStatus.CANCELED):
-                    log.i(
-                        f"Входной ордер {active_trade.entry_order_id} в статусе "
-                        f"{active_trade.entry_order_status.value if active_trade.entry_order_status else 'неизвестно'} "
-                        "и позиция не найдена — завершаем сделку и отменяем связанные ордера."
-                    )
-                    trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, protective_orders.stop_loss_id
-                    )
-                    trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, protective_orders.take_profit_id
-                    )
-                    trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, protective_orders.partial_close_id
-                    )
-                    trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, protective_orders.breakeven_id
-                    )
-                    active_trade.status = OrderStatus.CANCELED
-                    return TradeResult.MANUAL, 0.0, 0.0, []
-
-                return None
-
-            active_trade.entry_order_status = OrderStatus.FILLED
-            active_trade.status = OrderStatus.FILLED
-            active_trade.entry_average_price = position.entry_price or active_trade.entry_average_price
-            active_trade.quantity = position.quantity or active_trade.quantity
-
-        take_profit_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.take_profit_id)
-        if take_profit_info:
-            _log_status_change(
-                "take-profit",
-                protective_orders.take_profit_status and protective_orders.take_profit_status.value,
-                take_profit_info.status.value,
-                take_profit_info.id,
-            )
-            protective_orders.take_profit_status = take_profit_info.status
-            if take_profit_info.average_price:
-                active_trade.exit_average_price = take_profit_info.average_price
-
-        stop_loss_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.stop_loss_id)
-        if stop_loss_info:
-            _log_status_change(
-                "stop-loss",
-                protective_orders.stop_loss_status and protective_orders.stop_loss_status.value,
-                stop_loss_info.status.value,
-                stop_loss_info.id,
-            )
-            protective_orders.stop_loss_status = stop_loss_info.status
-            if stop_loss_info.average_price:
-                active_trade.exit_average_price = stop_loss_info.average_price
-
-        breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.breakeven_id)
-        if breakeven_info:
-            _log_status_change(
-                "breakeven",
-                protective_orders.breakeven_status and protective_orders.breakeven_status.value,
-                breakeven_info.status.value,
-                breakeven_info.id,
-            )
-            protective_orders.breakeven_status = breakeven_info.status
-            if breakeven_info.average_price:
-                active_trade.exit_average_price = breakeven_info.average_price
-
-        partial_close_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.partial_close_id)
-        if partial_close_info:
-            _log_status_change(
-                "partial-close",
-                protective_orders.partial_close_status and protective_orders.partial_close_status.value,
-                partial_close_info.status.value,
-                partial_close_info.id,
-            )
-            protective_orders.partial_close_status = partial_close_info.status
-            if partial_close_info.average_price:
-                active_trade.exit_average_price = partial_close_info.average_price
-            if partial_close_info.status == OrderStatus.FILLED:
-                filled_quantity = partial_close_info.filled or partial_close_info.quantity
-                if filled_quantity is not None:
-                    remaining_quantity = (active_trade.quantity or 0) - filled_quantity
-                    active_trade.remaining_quantity = max(remaining_quantity, 0)
-                    try:
-                        previous_stop_loss_id = protective_orders.stop_loss_id
-                        previous_breakeven_id = protective_orders.breakeven_id
-                        realigned_ids = trade_execution_service.realign_stop_orders(
-                            setup=active_trade.setup,
-                            stop_loss_order_id=protective_orders.stop_loss_id,
-                            breakeven_order_id=protective_orders.breakeven_id,
-                            remaining_quantity=active_trade.remaining_quantity,
-                            move_to_breakeven=active_trade.setup.breakeven_price is not None,
-                        )
-                        log.i(
-                            "Результат перестановки стоп-ордеров: "
-                            f"SL {previous_stop_loss_id} → {realigned_ids.stop_loss_id}, "
-                            f"BE {previous_breakeven_id} → {realigned_ids.breakeven_id}"
-                        )
-
-                        realigned_stop_loss_id = realigned_ids.stop_loss_id
-                        realigned_breakeven_id = realigned_ids.breakeven_id
-
-                        if realigned_stop_loss_id != previous_stop_loss_id:
-                            protective_orders.stop_loss_id = realigned_stop_loss_id
-                            protective_orders.stop_loss_status = (
-                                realigned_ids.stop_loss_status
-                                or (OrderStatus.NEW if realigned_stop_loss_id else None)
-                            )
-                        elif previous_stop_loss_id:
-                            refreshed_stop_info = stop_loss_info or _get_order_info_safe(
-                                exchange, active_trade.symbol, previous_stop_loss_id
-                            )
-                            if refreshed_stop_info:
-                                protective_orders.stop_loss_status = refreshed_stop_info.status
-
-                        if realigned_breakeven_id != previous_breakeven_id:
-                            protective_orders.breakeven_id = realigned_breakeven_id
-                            protective_orders.breakeven_status = (
-                                realigned_ids.breakeven_status
-                                or (OrderStatus.NEW if realigned_breakeven_id else None)
-                            )
-                            breakeven_info = None
-                        elif previous_breakeven_id:
-                            refreshed_breakeven_info = breakeven_info or _get_order_info_safe(
-                                exchange, active_trade.symbol, previous_breakeven_id
-                            )
-                            if refreshed_breakeven_info:
-                                protective_orders.breakeven_status = refreshed_breakeven_info.status
-                                breakeven_info = refreshed_breakeven_info
-                    except Exception as exception:
-                        log.e(
-                            f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}"
-                        )
-
-        entry_price = active_trade.entry_average_price or active_trade.setup.entry_price
-        exit_prices: list[float] = []
-        remaining_quantity_for_remainder = (
-            active_trade.remaining_quantity
-            if active_trade.remaining_quantity is not None
-            else active_trade.quantity
+        context = _TradeMonitorContext(
+            entry_price=active_trade.entry_average_price or active_trade.setup.entry_price,
+            remaining_quantity=active_trade.remaining_quantity,
+            protective_orders=active_trade.protective_orders,
         )
 
-        if partial_close_info and partial_close_info.status == OrderStatus.FILLED:
-            exit_price = partial_close_info.average_price or (active_trade.setup.partial_close_price or entry_price)
-            exit_prices.append(exit_price)
-            total_quantity = active_trade.quantity or 0
-            partial_quantity = partial_close_info.filled or partial_close_info.quantity or total_quantity * 0.5
-            remaining_quantity = (
-                active_trade.remaining_quantity
-                if active_trade.remaining_quantity is not None
-                else max(total_quantity - partial_quantity, 0)
-            )
-            total_quantity = total_quantity or (partial_quantity + remaining_quantity)
-            remaining_quantity_for_remainder = remaining_quantity
+        (
+            take_profit_info,
+            stop_loss_info,
+            breakeven_info,
+            partial_close_info,
+        ) = _refresh_protective_orders(exchange, active_trade, context.protective_orders)
 
-            if breakeven_info and breakeven_info.status == OrderStatus.FILLED:
-                breakeven_exit_price = breakeven_info.average_price or active_trade.setup.breakeven_price or exit_price
-                exit_prices.append(breakeven_exit_price)
-                profit_value, profit_pct = _calculate_split_profit(
-                    entry_price,
-                    total_quantity,
-                    exit_price,
-                    partial_quantity,
-                    breakeven_exit_price,
-                    remaining_quantity,
-                )
-                active_trade.status = OrderStatus.PARTIALLY_FILLED
-                return TradeResult.PC_BE, profit_pct, profit_value, exit_prices
+        breakeven_info = _process_filled_partial_close(
+            trade_execution_service=trade_execution_service,
+            exchange=exchange,
+            active_trade=active_trade,
+            context=context,
+            partial_close_info=partial_close_info,
+            breakeven_info=breakeven_info,
+            stop_loss_info=stop_loss_info,
+        )
+        context.remaining_quantity = active_trade.remaining_quantity
 
-            if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
-                take_profit_exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
-                exit_prices.append(take_profit_exit_price)
-                profit_value, profit_pct = _calculate_split_profit(
-                    entry_price,
-                    total_quantity,
-                    exit_price,
-                    partial_quantity,
-                    take_profit_exit_price,
-                    remaining_quantity,
-                )
-                active_trade.status = OrderStatus.FILLED
-                return TradeResult.PC_TP, profit_pct, profit_value, exit_prices
-
-            if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
-                stop_loss_exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
-                exit_prices.append(stop_loss_exit_price)
-                profit_value, profit_pct = _calculate_split_profit(
-                    entry_price,
-                    total_quantity,
-                    exit_price,
-                    partial_quantity,
-                    stop_loss_exit_price,
-                    remaining_quantity,
-                )
-                active_trade.status = OrderStatus.FILLED
-                return TradeResult.SL, profit_pct, profit_value, exit_prices
-
-        if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
-            exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
-            exit_prices.append(exit_price)
-            profit_value, profit_pct = _calculate_profit(
-                entry_price,
-                exit_price,
-                remaining_quantity_for_remainder if remaining_quantity_for_remainder is not None else active_trade.quantity,
-            )
-            active_trade.status = OrderStatus.FILLED
-            return TradeResult.TP, profit_pct, profit_value, exit_prices
-
-        if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
-            exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
-            exit_prices.append(exit_price)
-            profit_value, profit_pct = _calculate_profit(
-                entry_price,
-                exit_price,
-                remaining_quantity_for_remainder if remaining_quantity_for_remainder is not None else active_trade.quantity,
-            )
-            active_trade.status = OrderStatus.FILLED
-            return TradeResult.SL, profit_pct, profit_value, exit_prices
-
-        if position is None:
-            try:
-                position = exchange.get_position(active_trade.symbol)
-            except NotImplementedError:
-                position = None
-            except Exception as exception:
-                log.e(f"Не удалось получить позицию {active_trade.symbol}: {exception}")
-                position = None
-
-        if not position and active_trade.entry_order_status == OrderStatus.FILLED:
-            if active_trade.exit_average_price:
-                exit_price = active_trade.exit_average_price
-                exit_prices.append(exit_price)
-                profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
-            else:
-                profit_value = 0.0
-                profit_pct = 0.0
-            active_trade.status = OrderStatus.FILLED
-            return TradeResult.MANUAL, profit_pct, profit_value, exit_prices
-
-        if position and position.pnl is not None:
-            base = entry_price * active_trade.quantity if active_trade.quantity else 1
-            profit_pct = position.pnl / base * 100
-            return None
-
-        return None
+        return _calculate_trade_outcome(
+            exchange=exchange,
+            active_trade=active_trade,
+            position=position,
+            context=context,
+            take_profit_info=take_profit_info,
+            stop_loss_info=stop_loss_info,
+            breakeven_info=breakeven_info,
+            partial_close_info=partial_close_info,
+        )
     except Exception as exception:
         log.e(f"Ошибка при мониторинге сделки {active_trade.symbol}: {exception}")
         return None
