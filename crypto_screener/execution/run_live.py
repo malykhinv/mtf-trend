@@ -427,6 +427,8 @@ def _monitor_active_trade(
                     remaining_quantity = (active_trade.quantity or 0) - filled_quantity
                     active_trade.remaining_quantity = max(remaining_quantity, 0)
                     try:
+                        previous_stop_loss_id = active_trade.stop_loss_order_id
+                        previous_breakeven_id = active_trade.breakeven_order_id
                         realigned_ids = trade_execution_service.realign_stop_orders(
                             setup=active_trade.setup,
                             stop_loss_order_id=active_trade.stop_loss_order_id,
@@ -434,14 +436,38 @@ def _monitor_active_trade(
                             remaining_quantity=active_trade.remaining_quantity,
                             move_to_breakeven=active_trade.setup.breakeven_price is not None,
                         )
-                        active_trade.stop_loss_order_id = realigned_ids.get("stop_loss_order_id")
-                        active_trade.stop_loss_order_status = (
-                            OrderStatus.NEW if realigned_ids.get("stop_loss_order_id") else None
+                        log.i(
+                            "Результат перестановки стоп-ордеров: "
+                            f"SL {previous_stop_loss_id} → {realigned_ids.get('stop_loss_order_id')}, "
+                            f"BE {previous_breakeven_id} → {realigned_ids.get('breakeven_order_id')}"
                         )
-                        active_trade.breakeven_order_id = realigned_ids.get("breakeven_order_id")
-                        active_trade.breakeven_order_status = (
-                            OrderStatus.NEW if realigned_ids.get("breakeven_order_id") else None
-                        )
+
+                        realigned_stop_loss_id = realigned_ids.get("stop_loss_order_id")
+                        realigned_breakeven_id = realigned_ids.get("breakeven_order_id")
+
+                        if realigned_stop_loss_id != previous_stop_loss_id:
+                            active_trade.stop_loss_order_id = realigned_stop_loss_id
+                            active_trade.stop_loss_order_status = (
+                                OrderStatus.NEW if realigned_stop_loss_id else None
+                            )
+                        elif previous_stop_loss_id:
+                            refreshed_stop_info = stop_loss_info or _get_order_info_safe(
+                                exchange, active_trade.symbol, previous_stop_loss_id
+                            )
+                            if refreshed_stop_info:
+                                active_trade.stop_loss_order_status = refreshed_stop_info.status
+
+                        if realigned_breakeven_id != previous_breakeven_id:
+                            active_trade.breakeven_order_id = realigned_breakeven_id
+                            active_trade.breakeven_order_status = (
+                                OrderStatus.NEW if realigned_breakeven_id else None
+                            )
+                        elif previous_breakeven_id:
+                            refreshed_breakeven_info = breakeven_info or _get_order_info_safe(
+                                exchange, active_trade.symbol, previous_breakeven_id
+                            )
+                            if refreshed_breakeven_info:
+                                active_trade.breakeven_order_status = refreshed_breakeven_info.status
                     except Exception as exception:
                         log.e(
                             f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}"
