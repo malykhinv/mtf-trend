@@ -250,8 +250,6 @@ def get_cascade_long(
     if not best_level_touches or best_level_touches_count < cfg.CASCADE_LENGTH_MIN:
         return []
     first_touch_index = min(best_level_touches)
-    if first_touch_index >= len(bars) // cfg.CASCADE_AGE_DIVIDER:
-        return []
     last_touch_index = max(best_level_touches)
     last_touch_segment_low = min(bar.low for bar in bars[last_touch_index:])
     first_touch_segment_low = min(bar.low for bar in bars[first_touch_index:last_touch_index - 1])
