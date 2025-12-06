@@ -353,6 +353,7 @@ def _monitor_active_trade(
         _update_postmortem_bars(active_trade, bars)
 
         position: Optional[Position] = None
+        protective_orders = active_trade.protective_orders
 
         entry_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.entry_order_id)
         if entry_info:
@@ -386,16 +387,16 @@ def _monitor_active_trade(
                         "и позиция не найдена — завершаем сделку и отменяем связанные ордера."
                     )
                     trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, active_trade.stop_loss_order_id
+                        active_trade.symbol, protective_orders.stop_loss_id
                     )
                     trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, active_trade.take_profit_order_id
+                        active_trade.symbol, protective_orders.take_profit_id
                     )
                     trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, active_trade.partial_close_order_id
+                        active_trade.symbol, protective_orders.partial_close_id
                     )
                     trade_execution_service._cancel_order_safe(
-                        active_trade.symbol, active_trade.breakeven_order_id
+                        active_trade.symbol, protective_orders.breakeven_id
                     )
                     active_trade.status = OrderStatus.CANCELED
                     return TradeResult.MANUAL, 0.0, 0.0, []
@@ -407,51 +408,51 @@ def _monitor_active_trade(
             active_trade.entry_average_price = position.entry_price or active_trade.entry_average_price
             active_trade.quantity = position.quantity or active_trade.quantity
 
-        take_profit_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.take_profit_order_id)
+        take_profit_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.take_profit_id)
         if take_profit_info:
             _log_status_change(
                 "take-profit",
-                active_trade.take_profit_order_status and active_trade.take_profit_order_status.value,
+                protective_orders.take_profit_status and protective_orders.take_profit_status.value,
                 take_profit_info.status.value,
                 take_profit_info.id,
             )
-            active_trade.take_profit_order_status = take_profit_info.status
+            protective_orders.take_profit_status = take_profit_info.status
             if take_profit_info.average_price:
                 active_trade.exit_average_price = take_profit_info.average_price
 
-        stop_loss_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.stop_loss_order_id)
+        stop_loss_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.stop_loss_id)
         if stop_loss_info:
             _log_status_change(
                 "stop-loss",
-                active_trade.stop_loss_order_status and active_trade.stop_loss_order_status.value,
+                protective_orders.stop_loss_status and protective_orders.stop_loss_status.value,
                 stop_loss_info.status.value,
                 stop_loss_info.id,
             )
-            active_trade.stop_loss_order_status = stop_loss_info.status
+            protective_orders.stop_loss_status = stop_loss_info.status
             if stop_loss_info.average_price:
                 active_trade.exit_average_price = stop_loss_info.average_price
 
-        breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.breakeven_order_id)
+        breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.breakeven_id)
         if breakeven_info:
             _log_status_change(
                 "breakeven",
-                active_trade.breakeven_order_status and active_trade.breakeven_order_status.value,
+                protective_orders.breakeven_status and protective_orders.breakeven_status.value,
                 breakeven_info.status.value,
                 breakeven_info.id,
             )
-            active_trade.breakeven_order_status = breakeven_info.status
+            protective_orders.breakeven_status = breakeven_info.status
             if breakeven_info.average_price:
                 active_trade.exit_average_price = breakeven_info.average_price
 
-        partial_close_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.partial_close_order_id)
+        partial_close_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.partial_close_id)
         if partial_close_info:
             _log_status_change(
                 "partial-close",
-                active_trade.partial_close_order_status and active_trade.partial_close_order_status.value,
+                protective_orders.partial_close_status and protective_orders.partial_close_status.value,
                 partial_close_info.status.value,
                 partial_close_info.id,
             )
-            active_trade.partial_close_order_status = partial_close_info.status
+            protective_orders.partial_close_status = partial_close_info.status
             if partial_close_info.average_price:
                 active_trade.exit_average_price = partial_close_info.average_price
             if partial_close_info.status == OrderStatus.FILLED:
@@ -460,40 +461,42 @@ def _monitor_active_trade(
                     remaining_quantity = (active_trade.quantity or 0) - filled_quantity
                     active_trade.remaining_quantity = max(remaining_quantity, 0)
                     try:
-                        previous_stop_loss_id = active_trade.stop_loss_order_id
-                        previous_breakeven_id = active_trade.breakeven_order_id
+                        previous_stop_loss_id = protective_orders.stop_loss_id
+                        previous_breakeven_id = protective_orders.breakeven_id
                         realigned_ids = trade_execution_service.realign_stop_orders(
                             setup=active_trade.setup,
-                            stop_loss_order_id=active_trade.stop_loss_order_id,
-                            breakeven_order_id=active_trade.breakeven_order_id,
+                            stop_loss_order_id=protective_orders.stop_loss_id,
+                            breakeven_order_id=protective_orders.breakeven_id,
                             remaining_quantity=active_trade.remaining_quantity,
                             move_to_breakeven=active_trade.setup.breakeven_price is not None,
                         )
                         log.i(
                             "Результат перестановки стоп-ордеров: "
-                            f"SL {previous_stop_loss_id} → {realigned_ids.get('stop_loss_order_id')}, "
-                            f"BE {previous_breakeven_id} → {realigned_ids.get('breakeven_order_id')}"
+                            f"SL {previous_stop_loss_id} → {realigned_ids.stop_loss_id}, "
+                            f"BE {previous_breakeven_id} → {realigned_ids.breakeven_id}"
                         )
 
-                        realigned_stop_loss_id = realigned_ids.get("stop_loss_order_id")
-                        realigned_breakeven_id = realigned_ids.get("breakeven_order_id")
+                        realigned_stop_loss_id = realigned_ids.stop_loss_id
+                        realigned_breakeven_id = realigned_ids.breakeven_id
 
                         if realigned_stop_loss_id != previous_stop_loss_id:
-                            active_trade.stop_loss_order_id = realigned_stop_loss_id
-                            active_trade.stop_loss_order_status = (
-                                OrderStatus.NEW if realigned_stop_loss_id else None
+                            protective_orders.stop_loss_id = realigned_stop_loss_id
+                            protective_orders.stop_loss_status = (
+                                realigned_ids.stop_loss_status
+                                or (OrderStatus.NEW if realigned_stop_loss_id else None)
                             )
                         elif previous_stop_loss_id:
                             refreshed_stop_info = stop_loss_info or _get_order_info_safe(
                                 exchange, active_trade.symbol, previous_stop_loss_id
                             )
                             if refreshed_stop_info:
-                                active_trade.stop_loss_order_status = refreshed_stop_info.status
+                                protective_orders.stop_loss_status = refreshed_stop_info.status
 
                         if realigned_breakeven_id != previous_breakeven_id:
-                            active_trade.breakeven_order_id = realigned_breakeven_id
-                            active_trade.breakeven_order_status = (
-                                OrderStatus.NEW if realigned_breakeven_id else None
+                            protective_orders.breakeven_id = realigned_breakeven_id
+                            protective_orders.breakeven_status = (
+                                realigned_ids.breakeven_status
+                                or (OrderStatus.NEW if realigned_breakeven_id else None)
                             )
                             breakeven_info = None
                         elif previous_breakeven_id:
@@ -501,7 +504,7 @@ def _monitor_active_trade(
                                 exchange, active_trade.symbol, previous_breakeven_id
                             )
                             if refreshed_breakeven_info:
-                                active_trade.breakeven_order_status = refreshed_breakeven_info.status
+                                protective_orders.breakeven_status = refreshed_breakeven_info.status
                                 breakeven_info = refreshed_breakeven_info
                     except Exception as exception:
                         log.e(
@@ -827,8 +830,8 @@ def run_live(
                         success_message = (
                             f"Открыта позиция в {symbol.symbol} на {timeframe.tf}.\n"
                             f"Entry order: {execution_result.entry_order_id}\n"
-                            f"SL order: {execution_result.stop_loss_order_id}\n"
-                            f"TP order: {execution_result.take_profit_order_id}"
+                            f"SL order: {execution_result.protective_orders.stop_loss_id}\n"
+                            f"TP order: {execution_result.protective_orders.take_profit_id}"
                         )
                         log.i(success_message)
                         executor.submit(
@@ -867,10 +870,7 @@ def run_live(
                             entry_order_status=OrderStatus.NEW,
                             capture_message_id=capture_message_id,
                             entry_order_id=execution_result.entry_order_id,
-                            stop_loss_order_id=execution_result.stop_loss_order_id,
-                            take_profit_order_id=execution_result.take_profit_order_id,
-                            partial_close_order_id=execution_result.partial_close_order_id,
-                            breakeven_order_id=execution_result.breakeven_order_id,
+                            protective_orders=execution_result.protective_orders,
                             position_id=execution_result.position_id,
                         )
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
