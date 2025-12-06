@@ -138,7 +138,11 @@ def _draw_swing_group(
         )
 
 
-def _draw_cascade_level(ax: Axes, cascade_swings: list[Swing], bars: list[Bar]):
+def _draw_cascade_level(
+        ax: Axes,
+        cascade_swings: list[Swing],
+        bars: list[Bar]
+):
     if not cascade_swings or not bars:
         return
 
@@ -179,7 +183,10 @@ def _get_candle_width(times: list[float]) -> float:
     return avg_interval * cfg.PLOT_CANDLE_WIDTH_MULTIPLIER
 
 
-def _format_price(value: float, _: object) -> str:
+def _format_price(
+        value: float,
+        _: object
+) -> str:
     abs_value = abs(value)
     if abs_value >= cfg.PLOT_PRICE_HIGH_THRESHOLD:
         return f"{value:,.{cfg.PLOT_PRICE_DECIMALS_HIGH}f}"
@@ -188,7 +195,10 @@ def _format_price(value: float, _: object) -> str:
     return f"{value:,.{cfg.PLOT_PRICE_DECIMALS_LOW}f}"
 
 
-def _format_volume(value: float, _: object) -> str:
+def _format_volume(
+        value: float,
+        _: object
+) -> str:
     abs_value = abs(value)
     if abs_value >= 1_000_000_000:
         return f"{value / 1_000_000_000:.1f}B"
@@ -203,7 +213,12 @@ def _datetime_to_mpl(time: datetime) -> float:
     return mdates.date2num(time)
 
 
-def _draw_volume(ax: Axes, bars: list[Bar], times: list[float], width: float) -> list[float]:
+def _draw_volume(
+        ax: Axes,
+        bars: list[Bar],
+        times: list[float],
+        width: float
+) -> list[float]:
     volumes = [bar.volume for bar in bars]
     colors = [cfg.PLOT_VOLUME_COLOR for _ in bars]
     ax.bar(
@@ -218,7 +233,10 @@ def _draw_volume(ax: Axes, bars: list[Bar], times: list[float], width: float) ->
     return volumes
 
 
-def _format_volume_ax(ax: Axes, volumes: list[float]):
+def _format_volume_ax(
+        ax: Axes,
+        volumes: list[float]
+):
     if not volumes:
         return
     max_volume = max(volumes)
@@ -227,7 +245,11 @@ def _format_volume_ax(ax: Axes, volumes: list[float]):
     ax.yaxis.set_major_formatter(FuncFormatter(_format_volume))
 
 
-def _get_entry_time(postmortem_bars: Optional[list[Bar]], detection_time: Optional[datetime], bars: list[Bar]) -> datetime:
+def _get_entry_time(
+        postmortem_bars: Optional[list[Bar]],
+        detection_time: Optional[datetime],
+        bars: list[Bar]
+) -> datetime:
     if detection_time:
         return detection_time
     if postmortem_bars:
@@ -235,13 +257,19 @@ def _get_entry_time(postmortem_bars: Optional[list[Bar]], detection_time: Option
     return bars[-1].time
 
 
-def _get_horizon_time(postmortem_bars: Optional[list[Bar]], combined_bars: list[Bar]) -> datetime:
+def _get_horizon_time(
+        postmortem_bars: Optional[list[Bar]],
+        combined_bars: list[Bar]
+) -> datetime:
     if postmortem_bars:
         return postmortem_bars[-1].time
     return combined_bars[-1].time
 
 
-def _find_target_times(trade_levels: TradeLevels, future_bars: list[Bar]) -> dict[str, Optional[datetime]]:
+def _find_target_times(
+        trade_levels: TradeLevels,
+        future_bars: list[Bar]
+) -> dict[str, Optional[datetime]]:
     stop_loss_price = trade_levels.stop_loss_price
     take_profit_price = trade_levels.take_profit_price
     partial_close_price = trade_levels.partial_close_price
@@ -340,28 +368,11 @@ def _draw_entry_zones(
     entry_price = trade_levels.entry_price
 
     sl_end_time = next(
-        (
-            time
-            for time in (
-                target_times["sl"],
-                target_times["tp"],
-                target_times["pc"],
-                target_times["be"],
-            )
-            if time
-        ),
+        (time for time in (target_times["sl"], target_times["tp"], target_times["pc"], target_times["be"]) if time),
         horizon_time,
     )
     tp_end_time = next(
-        (
-            time
-            for time in (
-                target_times["tp"],
-                target_times["pc"],
-                target_times["be"],
-            )
-            if time
-        ),
+        (time for time in (target_times["tp"], target_times["pc"], target_times["be"]) if time),
         horizon_time,
     )
 

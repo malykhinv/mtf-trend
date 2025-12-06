@@ -374,8 +374,9 @@ def detect_setup(
     pre_low_window_start = max(0, pre_low_window_end - len(correction_bars) + 1)
     pre_low_window = bars[pre_low_window_start:pre_low_window_end + 1]
     if pre_low_window:
-        pre_low_above_correction_low_fraction = sum(1 for bar in pre_low_window
-                                                    if bar.low > correction_low_swing.extremum_price) / len(pre_low_window)
+        pre_low_above_correction_low_fraction = (
+                sum(1 for bar in pre_low_window if bar.low > correction_low_swing.extremum_price) / len(pre_low_window)
+        )
         is_pre_low_above_correction_low_valid = (pre_low_above_correction_low_fraction <=
                                                  cfg.PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX)
         if not is_pre_low_above_correction_low_valid:

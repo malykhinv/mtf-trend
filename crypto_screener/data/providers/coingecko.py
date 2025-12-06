@@ -23,6 +23,8 @@ def _load_markets(page: int) -> list[dict[str, Any]]:
     request = Request(f"https://api.coingecko.com/api/v3/coins/markets?{params}")
     with urlopen(request, timeout=10) as response:
         return loads(response.read().decode())
+
+
 # endregion
 
 def fetch_market_caps(base_symbols: Iterable[str]) -> dict[str, float]:

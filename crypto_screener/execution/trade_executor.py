@@ -117,10 +117,10 @@ class TradeExecutionService:
     ) -> None:
         self.cancel_order_safe(setup.symbol, entry_order_id)
         for order_id in (
-            protective_orders.stop_loss_id,
-            protective_orders.take_profit_id,
-            protective_orders.partial_close_id,
-            protective_orders.breakeven_id,
+                protective_orders.stop_loss_id,
+                protective_orders.take_profit_id,
+                protective_orders.partial_close_id,
+                protective_orders.breakeven_id,
         ):
             self.cancel_order_safe(setup.symbol, order_id)
         self._notify_failure(
@@ -135,9 +135,7 @@ class TradeExecutionService:
         stop_loss_price = setup.stop_loss_price
         stop_distance = entry_price - stop_loss_price
         if stop_distance <= 0:
-            raise ValueError(
-                f"Некорректная дистанция до стоп-лосса: Entry {entry_price}, SL {stop_loss_price}"
-            )
+            raise ValueError(f"Некорректная дистанция до стоп-лосса: Entry {entry_price}, SL {stop_loss_price}")
 
         risk_amount = cfg.RISK_PER_TRADE_USDT
         min_notional = cfg.MIN_POSITION_NOTIONAL_USDT
@@ -365,7 +363,7 @@ class TradeExecutionService:
             move_to_breakeven: bool
     ) -> tuple[float, str, bool]:
         move_to_breakeven_target = (
-            move_to_breakeven and setup.breakeven_price is not None
+                move_to_breakeven and setup.breakeven_price is not None
         )
         stop_price = (
             setup.breakeven_price if move_to_breakeven_target else setup.stop_loss_price

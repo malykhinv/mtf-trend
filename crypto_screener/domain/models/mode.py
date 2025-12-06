@@ -11,6 +11,7 @@ class TestData:
     timeframe: Timeframe
     end: datetime
 
+
 class PlotPolicy(Enum):
     ON_ANY = "ON_ANY"
     ON_FILLED_SETUP = "ON_FILLED_SETUP"
@@ -48,6 +49,7 @@ class TestSymbol:
     limit: int
     end: datetime
     plot_policy: PlotPolicy
+
 
 @dataclass(frozen=True)
 class TestSymbols:

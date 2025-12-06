@@ -773,8 +773,8 @@ def _process_filled_partial_close(
         if realigned_stop_loss_id != previous_stop_loss_id:
             context.protective_orders.stop_loss_id = realigned_stop_loss_id
             context.protective_orders.stop_loss_status = (
-                realigned_ids.stop_loss_status
-                or (OrderStatus.NEW if realigned_stop_loss_id else None)
+                    realigned_ids.stop_loss_status
+                    or (OrderStatus.NEW if realigned_stop_loss_id else None)
             )
             protective_order_statuses.stop_loss = None
             protective_order_statuses.stop_loss_status = context.protective_orders.stop_loss_status
@@ -790,8 +790,8 @@ def _process_filled_partial_close(
         if realigned_breakeven_id != previous_breakeven_id:
             context.protective_orders.breakeven_id = realigned_breakeven_id
             context.protective_orders.breakeven_status = (
-                realigned_ids.breakeven_status
-                or (OrderStatus.NEW if realigned_breakeven_id else None)
+                    realigned_ids.breakeven_status
+                    or (OrderStatus.NEW if realigned_breakeven_id else None)
             )
             protective_order_statuses.breakeven = None
             protective_order_statuses.breakeven_status = context.protective_orders.breakeven_status
@@ -1222,7 +1222,8 @@ def run_live(
                             f"{trade_result.value} ({profit_pct:+.2f}%)"
                         )
                         active_trade = active_trades.remove(trade_key)
-                        active_trade.exit_average_price = active_trade.exit_average_price or (exit_prices[0] if exit_prices else None)
+                        active_trade.exit_average_price = active_trade.exit_average_price or (
+                            exit_prices[0] if exit_prices else None)
                         _handle_trade_closure(
                             notifier=notifier,
                             active_trade=active_trade,
@@ -1240,12 +1241,11 @@ def run_live(
                         removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
                         if removed_capture:
                             _remove_button_safe(notifier, removed_capture.message_id)
-                            log.i(
-                                f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена."
-                            )
+                            log.i(f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена.")
                             trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
-                        if capture_state.symbol == symbol.symbol and not capture_state.has_symbol_capture(symbol.symbol):
+                        if (capture_state.symbol == symbol.symbol and
+                                not capture_state.has_symbol_capture(symbol.symbol)):
                             capture_state.symbol = None
                         continue
 
@@ -1258,9 +1258,8 @@ def run_live(
                         support_swings=support_swings,
                     ):
                         if trade_permission_service.has_allowance(symbol.symbol, timeframe):
-                            log.d(
-                                f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} из-за активного разрешения на торговлю."
-                            )
+                            log.d( f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} "
+                                   f"из-за активного разрешения на торговлю.")
                             continue
                         capture_key = CaptureKey(symbol.symbol, timeframe)
                         message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
@@ -1324,9 +1323,8 @@ def run_live(
                         support_swings=support_swings,
                     ):
                         if not trade_permission_service.has_allowance(symbol.symbol, timeframe):
-                            log.i(
-                                f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf}: отсутствует разрешение на торговлю."
-                            )
+                            log.i(f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf}: "
+                                  f"отсутствует разрешение на торговлю.")
                             continue
                         message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
                         log.i(message)
@@ -1362,9 +1360,7 @@ def run_live(
                         capture_message_id = removed_capture.message_id if removed_capture else None
                         if removed_capture:
                             _remove_button_safe(notifier, removed_capture.message_id)
-                            log.i(
-                                f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена."
-                            )
+                            log.i(f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена.")
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
                         active_trades.add(trade_key, ActiveTrade(
                             symbol=symbol.symbol,
