@@ -431,6 +431,18 @@ def _monitor_active_trade(
             if stop_loss_info.average_price:
                 active_trade.exit_average_price = stop_loss_info.average_price
 
+        breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.breakeven_order_id)
+        if breakeven_info:
+            _log_status_change(
+                "breakeven",
+                active_trade.breakeven_order_status and active_trade.breakeven_order_status.value,
+                breakeven_info.status.value,
+                breakeven_info.id,
+            )
+            active_trade.breakeven_order_status = breakeven_info.status
+            if breakeven_info.average_price:
+                active_trade.exit_average_price = breakeven_info.average_price
+
         partial_close_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.partial_close_order_id)
         if partial_close_info:
             _log_status_change(
@@ -483,28 +495,18 @@ def _monitor_active_trade(
                             active_trade.breakeven_order_status = (
                                 OrderStatus.NEW if realigned_breakeven_id else None
                             )
+                            breakeven_info = None
                         elif previous_breakeven_id:
                             refreshed_breakeven_info = breakeven_info or _get_order_info_safe(
                                 exchange, active_trade.symbol, previous_breakeven_id
                             )
                             if refreshed_breakeven_info:
                                 active_trade.breakeven_order_status = refreshed_breakeven_info.status
+                                breakeven_info = refreshed_breakeven_info
                     except Exception as exception:
                         log.e(
                             f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}"
                         )
-
-        breakeven_info = _get_order_info_safe(exchange, active_trade.symbol, active_trade.breakeven_order_id)
-        if breakeven_info:
-            _log_status_change(
-                "breakeven",
-                active_trade.breakeven_order_status and active_trade.breakeven_order_status.value,
-                breakeven_info.status.value,
-                breakeven_info.id,
-            )
-            active_trade.breakeven_order_status = breakeven_info.status
-            if breakeven_info.average_price:
-                active_trade.exit_average_price = breakeven_info.average_price
 
         entry_price = active_trade.entry_average_price or active_trade.setup.entry_price
         exit_prices: list[float] = []
