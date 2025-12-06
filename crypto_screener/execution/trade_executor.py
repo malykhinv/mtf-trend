@@ -69,7 +69,7 @@ class TradeExecutionService:
             raise
 
     def _place_entry_order(self, setup: Buy, quantity: float) -> str:
-        return self._place_with_retries(
+        order_id, _ = self._place_with_retries(
             label="entry",
             place_order=lambda: self._exchange.place_market_order(
                 setup.symbol,
@@ -84,6 +84,7 @@ class TradeExecutionService:
                 OrderStatus.PARTIALLY_FILLED,
             },
         )
+        return order_id
 
     def _place_protective_bundle(
             self,
@@ -155,7 +156,7 @@ class TradeExecutionService:
     def _place_stop_loss(
             self, setup: Buy, quantity: float, orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
-        orders.stop_loss_id = self._place_with_retries(
+        orders.stop_loss_id, orders.stop_loss_status = self._place_with_retries(
             label="stop-loss",
             place_order=lambda: self._exchange.place_stop_loss_order(
                 setup.symbol,
@@ -167,13 +168,12 @@ class TradeExecutionService:
             symbol=setup.symbol,
             acceptable_statuses=self._protective_acceptable_statuses(),
         )
-        orders.stop_loss_status = OrderStatus.NEW
         return orders
 
     def _place_take_profit(
             self, setup: Buy, quantity: float, orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
-        orders.take_profit_id = self._place_with_retries(
+        orders.take_profit_id, orders.take_profit_status = self._place_with_retries(
             label="take-profit",
             place_order=lambda: self._exchange.place_take_profit_order(
                 setup.symbol,
@@ -185,7 +185,6 @@ class TradeExecutionService:
             symbol=setup.symbol,
             acceptable_statuses=self._protective_acceptable_statuses(),
         )
-        orders.take_profit_status = OrderStatus.NEW
         return orders
 
     def _place_partial_close(
@@ -195,7 +194,7 @@ class TradeExecutionService:
             return orders
 
         partial_quantity = quantity * 0.5
-        orders.partial_close_id = self._place_with_retries(
+        orders.partial_close_id, orders.partial_close_status = self._place_with_retries(
             label="partial-close",
             place_order=lambda: self._exchange.place_take_profit_order(
                 setup.symbol,
@@ -207,7 +206,6 @@ class TradeExecutionService:
             symbol=setup.symbol,
             acceptable_statuses=self._protective_acceptable_statuses(),
         )
-        orders.partial_close_status = OrderStatus.NEW
         return orders
 
     def _protective_acceptable_statuses(self) -> set[OrderStatus]:
@@ -223,7 +221,7 @@ class TradeExecutionService:
             place_order: Callable[[], str],
             symbol: str,
             acceptable_statuses: Optional[set[OrderStatus]] = None,
-    ) -> str:
+    ) -> tuple[str, Optional[OrderStatus]]:
         acceptable_statuses = acceptable_statuses or {OrderStatus.FILLED}
         try:
             order_id = place_order()
@@ -233,7 +231,7 @@ class TradeExecutionService:
                     log.d(
                         f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, повторные попытки отключены."
                     )
-                return order_id
+                return order_id, status
             if status == OrderStatus.CANCELED:
                 raise RuntimeError(f"Ордер {order_id} для {symbol} отменен биржей")
             log.d(
@@ -342,7 +340,7 @@ class TradeExecutionService:
             label: str,
     ) -> Optional[str]:
         try:
-            return self._place_with_retries(
+            order_id, _ = self._place_with_retries(
                 label=label,
                 place_order=lambda: self._exchange.place_stop_loss_order(
                     setup.symbol,
@@ -358,6 +356,7 @@ class TradeExecutionService:
                     OrderStatus.PARTIALLY_FILLED,
                 },
             )
+            return order_id
         except Exception as exception:
             log.e(
                 f"Не удалось переставить {label} для {setup.symbol}: {exception}"
