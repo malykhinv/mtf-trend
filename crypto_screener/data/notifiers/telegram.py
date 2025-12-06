@@ -128,13 +128,11 @@ class _CallbackHandler:
 class TgNotifier(Notifier):
     def __init__(
             self,
-            event_token: str,
-            order_token: str,
+            token: str,
             chat_id: str
     ) -> None:
-        self._event_token = event_token
-        self._event_bot = Bot(token=event_token)
-        self._order_bot = Bot(token=order_token)
+        self._token = token
+        self._bot = Bot(token=token)
         self._chat_id = chat_id
         self._callback_handler: Optional[_CallbackHandler] = None
 
@@ -143,7 +141,7 @@ class TgNotifier(Notifier):
             return
 
         self._callback_handler = _CallbackHandler(
-            event_token=self._event_token,
+            event_token=self._token,
             trade_permission_service=trade_permission_service,
         )
         self._callback_handler.start()
@@ -229,14 +227,8 @@ class TgNotifier(Notifier):
             keyboard: Optional[Keyboard] = None,
             context: Optional[Context] = None,
     ) -> Optional[str]:
-        bot = None
-        match notification_type:
-            case NotificationType.EVENT:
-                bot = self._event_bot
-            case NotificationType.ORDER:
-                bot = self._order_bot
         try:
-            message_id = asyncio.run(self._send(bot, message, image_path, keyboard))
+            message_id = asyncio.run(self._send(self._bot, message, image_path, keyboard))
             log.d(f"Отправлено сообщение ({notification_type.name.lower()}): {message}")
             return message_id
         except Exception as exception:
@@ -252,12 +244,7 @@ class TgNotifier(Notifier):
             keyboard: Optional[Keyboard] = None,
             context: Optional[Context] = None,
     ) -> Optional[str]:
-        bot = None
-        match notification_type:
-            case NotificationType.EVENT:
-                bot = self._event_bot
-            case NotificationType.ORDER:
-                bot = self._order_bot
+        bot = self._bot
         try:
             return asyncio.run(
                 self._edit(
@@ -280,7 +267,7 @@ class TgNotifier(Notifier):
             return
         try:
             asyncio.run(
-                self._event_bot.edit_message_reply_markup(
+                self._bot.edit_message_reply_markup(
                     chat_id=self._chat_id,
                     message_id=int(message_id),
                     reply_markup=None,
@@ -292,7 +279,7 @@ class TgNotifier(Notifier):
 
         try:
             asyncio.run(
-                self._order_bot.edit_message_reply_markup(
+                self._bot.edit_message_reply_markup(
                     chat_id=self._chat_id,
                     message_id=int(message_id),
                     reply_markup=None,

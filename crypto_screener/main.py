@@ -19,18 +19,22 @@ from crypto_screener.execution.run_test_symbol import run_test_symbols
 
 # region Private.
 def _initialize_exchange() -> Exchange:
-    api_key = os.getenv("API_KEY", None)
-    api_secret = os.getenv("API_SECRET", None)
-    return Bybit(api_key, api_secret)
-    # return Binance(api_key, api_secret)
+    api_key = os.getenv(cfg.EXCHANGE + "API_KEY", None)
+    api_secret = os.getenv(cfg.EXCHANGE + "API_SECRET", None)
+    match cfg.EXCHANGE:
+        case Binance.__name__.upper():
+            return Binance(api_key, api_secret)
+        case Bybit.__name__.upper():
+            return Bybit(api_key, api_secret)
+        case _:
+            raise NameError
 
 
 def _initialize_notifier() -> Notifier:
-    event_token = os.getenv("TELEGRAM_EVENT_TOKEN", None)
-    order_token = os.getenv("TELEGRAM_ORDER_TOKEN", None)
+    token = os.getenv("TELEGRAM_TOKEN_" + cfg.EXCHANGE, None)
     chat_id = os.getenv("TELEGRAM_CHAT_ID", None)
-    if event_token and order_token and chat_id:
-        return TgNotifier(event_token, order_token, chat_id)
+    if token and chat_id:
+        return TgNotifier(token, chat_id)
     return LogNotifier()
 
 
