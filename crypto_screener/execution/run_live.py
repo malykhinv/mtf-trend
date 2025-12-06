@@ -596,6 +596,8 @@ def _process_filled_partial_close(
             setup=active_trade.setup,
             stop_loss_order_id=context.protective_orders.stop_loss_id,
             breakeven_order_id=context.protective_orders.breakeven_id,
+            stop_loss_status=context.protective_orders.stop_loss_status,
+            breakeven_status=context.protective_orders.breakeven_status,
             remaining_quantity=context.remaining_quantity,
             move_to_breakeven=active_trade.setup.breakeven_price is not None,
         )
