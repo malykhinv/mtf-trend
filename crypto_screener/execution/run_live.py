@@ -10,6 +10,7 @@ from crypto_screener.data.providers.coingecko import enrich_symbols_capitalizati
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.active_trade import ActiveTrade
+from crypto_screener.domain.models.active_trade_registry import ActiveTradeKey, ActiveTradeRegistry
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.order_status import OrderStatus
@@ -762,7 +763,7 @@ def run_live(
     executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(executor)
     notified_once: set[tuple[str, Timeframe, str]] = set()
-    active_trades: dict[tuple[str, Timeframe], ActiveTrade] = {}
+    active_trades = ActiveTradeRegistry()
 
     while True:
         now = utc_now()
@@ -802,9 +803,10 @@ def run_live(
                     setup = detect_setup(symbol.symbol, bars, timeframe, symbol.context)
                     if setup:
                         break
-                trade_key = (symbol.symbol, timeframe)
-                if trade_key in active_trades:
-                    outcome = _monitor_active_trade(exchange, trade_execution_service, active_trades[trade_key], bars)
+                trade_key = ActiveTradeKey(symbol.symbol, timeframe)
+                active_trade = active_trades.get(trade_key)
+                if active_trade:
+                    outcome = _monitor_active_trade(exchange, trade_execution_service, active_trade, bars)
                     if outcome:
                         trade_result, profit_pct, profit_value, exit_prices = outcome
                         log.i(
@@ -956,7 +958,7 @@ def run_live(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена."
                             )
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
-                        active_trades[trade_key] = ActiveTrade(
+                        active_trades.set(trade_key, ActiveTrade(
                             symbol=symbol.symbol,
                             timeframe=timeframe,
                             setup=setup,
@@ -969,6 +971,6 @@ def run_live(
                             entry_order_id=execution_result.entry_order_id,
                             protective_orders=execution_result.protective_orders,
                             position_id=execution_result.position_id,
-                        )
+                        ))
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                         capture_state.symbol = None
