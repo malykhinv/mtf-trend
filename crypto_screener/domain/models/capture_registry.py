@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from crypto_screener.domain.models.active_capture import ActiveCapture
+from crypto_screener.domain.models.capture_storage import CaptureStorage
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
@@ -15,25 +16,25 @@ class CaptureKey:
 
 @dataclass
 class CaptureRegistry:
-    _captures: dict[CaptureKey, ActiveCapture] = field(default_factory=dict)
+    storage: CaptureStorage = field(default_factory=CaptureStorage)
 
     def add(self, key: CaptureKey, capture: ActiveCapture) -> None:
-        self._captures[key] = capture
+        self.storage.add(key, capture)
 
     def get(self, key: CaptureKey) -> Optional[ActiveCapture]:
-        return self._captures.get(key)
+        return self.storage.get(key)
 
     def remove(self, key: CaptureKey) -> Optional[ActiveCapture]:
-        return self._captures.pop(key, None)
+        return self.storage.remove(key)
 
     def has(self, key: CaptureKey) -> bool:
-        return key in self._captures
+        return self.storage.has(key)
 
     def has_symbol(self, symbol: str) -> bool:
-        return any(key.symbol == symbol for key in self._captures)
+        return self.storage.has_symbol(symbol)
 
     def items(self) -> Iterable[tuple[CaptureKey, ActiveCapture]]:
-        return self._captures.items()
+        return self.storage.items()
 
     def __contains__(self, key: CaptureKey) -> bool:  # pragma: no cover - convenience
         return self.has(key)
