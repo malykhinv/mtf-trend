@@ -16,6 +16,7 @@ from crypto_screener.execution.trade_permission_service import TradePermissionSe
 from crypto_screener.utils.logger import log
 
 TRADE_CALLBACK_PREFIX = "capture-active"
+SKIP_CALLBACK_PREFIX = "capture-skip"
 
 
 class _CallbackHandler:
@@ -30,6 +31,12 @@ class _CallbackHandler:
             CallbackQueryHandler(
                 self._handle_trade_request,
                 pattern=fr"^{TRADE_CALLBACK_PREFIX}",
+            )
+        )
+        self._application.add_handler(
+            CallbackQueryHandler(
+                self._handle_skip_request,
+                pattern=fr"^{SKIP_CALLBACK_PREFIX}",
             )
         )
 
@@ -74,6 +81,45 @@ class _CallbackHandler:
             f"Получен запрос на торговлю {symbol} на {timeframe.tf} с контекстом {symbol_context.value}."
         )
         self._trade_permission_service.allow_symbol_for_trading(
+            symbol=symbol,
+            timeframe=timeframe,
+            message_id=message_id,
+            context=symbol_context,
+        )
+
+    async def _handle_skip_request(
+            self,
+            update: Update,
+            context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        query = update.callback_query
+        if not query:
+            return
+
+        await query.answer()
+        callback_data = (query.data or "").split(":")
+        if len(callback_data) != 4:
+            log.e(f"Не удалось разобрать callback_data: {query.data}")
+            return
+
+        _, symbol, timeframe_tf, context_value = callback_data
+        try:
+            timeframe = Timeframe.from_tf(timeframe_tf)
+            symbol_context = Context(context_value)
+        except ValueError as exception:
+            log.e(f"Некорректные данные callback {query.data}: {exception}")
+            return
+
+        message = query.message
+        if not message:
+            log.e("Отсутствует сообщение для callback кнопки игнорирования.")
+            return
+
+        message_id = str(message.message_id)
+        log.d(
+            f"Получен запрос на игнорирование {symbol} на {timeframe.tf} с контекстом {symbol_context.value}."
+        )
+        self._trade_permission_service.ignore_symbol(
             symbol=symbol,
             timeframe=timeframe,
             message_id=message_id,
