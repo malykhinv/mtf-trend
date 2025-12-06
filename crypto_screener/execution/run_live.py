@@ -920,12 +920,12 @@ def run_live(
     while True:
         now = utc_now()
         expired_permissions = trade_permission_service.pop_expired(now)
-        for (symbol_name, timeframe), expired_permission in expired_permissions:
+        for permission_key, expired_permission in expired_permissions:
             _remove_button_safe(notifier, expired_permission.message_id)
             log.i(
-                f"Истекло разрешение на торговлю {symbol_name} на {timeframe.tf}, кнопка удалена."
+                f"Истекло разрешение на торговлю {permission_key.symbol} на {permission_key.timeframe.tf}, кнопка удалена."
             )
-            notified_once.discard((symbol_name, timeframe, "Capture"))
+            notified_once.discard((permission_key.symbol, permission_key.timeframe, "Capture"))
         expired_captures = [
             (capture_key, active_capture)
             for capture_key, active_capture in capture_state.captures.items()
