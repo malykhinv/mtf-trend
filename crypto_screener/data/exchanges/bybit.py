@@ -38,7 +38,7 @@ class Bybit(Exchange):
         symbols: list[FuturesSymbol] = []
 
         for market in markets.values():
-            if not market.get("future"):
+            if not market.get("linear"):
                 continue
 
             symbol = market["symbol"]

@@ -3,7 +3,10 @@ import os
 from dotenv import load_dotenv
 
 from crypto_screener.config.config import cfg
+# noinspection PyUnusedImports
 from crypto_screener.data.exchanges.binance import Binance
+# noinspection PyUnusedImports
+from crypto_screener.data.exchanges.bybit import Bybit
 from crypto_screener.data.notifiers.log import LogNotifier
 from crypto_screener.data.notifiers.telegram import TgNotifier
 from crypto_screener.domain.exchange import Exchange
@@ -18,8 +21,8 @@ from crypto_screener.execution.run_test_symbol import run_test_symbols
 def _initialize_exchange() -> Exchange:
     api_key = os.getenv("API_KEY", None)
     api_secret = os.getenv("API_SECRET", None)
-    # return Bybit(api_key, api_secret)
-    return Binance(api_key, api_secret)
+    return Bybit(api_key, api_secret)
+    # return Binance(api_key, api_secret)
 
 
 def _initialize_notifier() -> Notifier:
