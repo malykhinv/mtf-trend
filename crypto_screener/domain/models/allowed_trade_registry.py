@@ -18,32 +18,13 @@ class AllowedTradeKey:
 
 
 @dataclass
-class AllowedTradeRegistry:
+class AllowedTradesStorage:
     _allowed_trades: dict[AllowedTradeKey, AllowedTrade] = field(default_factory=dict)
 
-    def _build_trade(
-            self,
-            key: AllowedTradeKey,
-            message_id: str,
-            context: Context,
-            issued_at: Optional[datetime] = None,
-    ) -> AllowedTrade:
-        issued_at = issued_at or utc_now()
-        deadline = issued_at + timedelta(minutes=cfg.CAPTURE_TIMEOUT_MULTIPLIER * key.timeframe.minutes)
-        return AllowedTrade(
-            symbol=key.symbol,
-            timeframe=key.timeframe,
-            message_id=message_id,
-            context=context,
-            issued_at=issued_at,
-            deadline=deadline,
-        )
-
-    def add(self, key: AllowedTradeKey, message_id: str, context: Context) -> tuple[AllowedTrade, bool]:
-        trade = self._build_trade(key=key, message_id=message_id, context=context)
+    def add(self, key: AllowedTradeKey, trade: AllowedTrade) -> bool:
         replaced = key in self._allowed_trades
         self._allowed_trades[key] = trade
-        return trade, replaced
+        return replaced
 
     def get(self, key: AllowedTradeKey) -> Optional[AllowedTrade]:
         return self._allowed_trades.get(key)
@@ -73,3 +54,49 @@ class AllowedTradeRegistry:
 
     def is_empty(self) -> bool:
         return not self._allowed_trades
+
+
+@dataclass
+class AllowedTradeRegistry:
+    _storage: AllowedTradesStorage = field(default_factory=AllowedTradesStorage)
+
+    def _build_trade(
+            self,
+            key: AllowedTradeKey,
+            message_id: str,
+            context: Context,
+            issued_at: Optional[datetime] = None,
+    ) -> AllowedTrade:
+        issued_at = issued_at or utc_now()
+        deadline = issued_at + timedelta(minutes=cfg.CAPTURE_TIMEOUT_MULTIPLIER * key.timeframe.minutes)
+        return AllowedTrade(
+            symbol=key.symbol,
+            timeframe=key.timeframe,
+            message_id=message_id,
+            context=context,
+            issued_at=issued_at,
+            deadline=deadline,
+        )
+
+    def add(self, key: AllowedTradeKey, message_id: str, context: Context) -> tuple[AllowedTrade, bool]:
+        trade = self._build_trade(key=key, message_id=message_id, context=context)
+        replaced = self._storage.add(key, trade)
+        return trade, replaced
+
+    def get(self, key: AllowedTradeKey) -> Optional[AllowedTrade]:
+        return self._storage.get(key)
+
+    def remove(self, key: AllowedTradeKey) -> Optional[AllowedTrade]:
+        return self._storage.remove(key)
+
+    def has(self, key: AllowedTradeKey, now: Optional[datetime] = None) -> tuple[bool, Optional[AllowedTrade]]:
+        return self._storage.has(key, now)
+
+    def pop_expired(self, now: datetime) -> list[tuple[AllowedTradeKey, AllowedTrade]]:
+        return self._storage.pop_expired(now)
+
+    def clear(self) -> None:
+        self._storage.clear()
+
+    def is_empty(self) -> bool:
+        return self._storage.is_empty()
