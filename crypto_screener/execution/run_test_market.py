@@ -5,7 +5,7 @@ from crypto_screener.data.providers.coingecko import enrich_symbols_capitalizati
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy
-from crypto_screener.domain.models.setup import Buy
+from crypto_screener.domain.models.setups.ppo import Trade
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
@@ -153,7 +153,7 @@ def run_test_market(
                     postmortem_bars=future_bars
                 )
 
-                if not setup or not isinstance(setup, Buy):
+                if not setup or not isinstance(setup, Trade):
                     continue
 
                 if not future_bars:

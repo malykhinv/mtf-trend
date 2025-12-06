@@ -40,8 +40,8 @@ class Capture(Setup):
 
 
 @dataclass
-class Buy(Setup):
-    name: str = field(init=False, default="Buy")
+class Trade(Setup):
+    name: str = field(init=False, default="Trade")
     is_filled: bool = field(init=False, default=True)
     is_trade: bool = field(init=False, default=True)
 

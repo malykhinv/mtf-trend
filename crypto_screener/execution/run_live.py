@@ -18,7 +18,7 @@ from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
+from crypto_screener.domain.models.setups.ppo import Capture, Trade, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -1315,7 +1315,7 @@ def run_live(
                             notified_once.add(capture_notification_key)
 
                     # Найден торговый сетап.
-                    case Buy(
+                    case Trade(
                         main_low_swing=main_low_swing,
                         main_high_swing=main_high_swing,
                         cascade_swings=cascade_swings,
@@ -1360,7 +1360,7 @@ def run_live(
                         capture_message_id = removed_capture.message_id if removed_capture else None
                         if removed_capture:
                             _remove_button_safe(notifier, removed_capture.message_id)
-                            log.i(f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена.")
+                            log.i(f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Trade, кнопка удалена.")
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
                         active_trades.add(trade_key, ActiveTrade(
                             symbol=symbol.symbol,

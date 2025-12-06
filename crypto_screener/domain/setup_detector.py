@@ -4,7 +4,7 @@ from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_level import CascadeLevel
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setup import Setup, Capture, Buy, Unfilled
+from crypto_screener.domain.models.setups.ppo import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.swing import SwingType, Swing
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels
@@ -511,7 +511,7 @@ def detect_setup(
         partial_close_price=partial_close_price,
         breakeven_price=breakeven_price,
     )
-    setup = Buy(
+    setup = Trade(
         symbol=symbol,
         timeframe=timeframe,
         bars=bars,
