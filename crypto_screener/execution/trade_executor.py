@@ -282,7 +282,7 @@ class TradeExecutionService:
         stop_price, label, is_breakeven_target = self._target_stop_order_details(
             setup, move_to_breakeven
         )
-        new_stop_id = self._place_realigned_stop(
+        new_stop_id, new_stop_status = self._place_realigned_stop(
             setup=setup,
             remaining_quantity=remaining_quantity,
             stop_price=stop_price,
@@ -294,7 +294,9 @@ class TradeExecutionService:
         self._cancel_previous_stops(
             setup.symbol, stop_loss_order_id, breakeven_order_id
         )
-        return self._collect_stop_realign_result(new_stop_id, is_breakeven_target)
+        return self._collect_stop_realign_result(
+            new_stop_id, new_stop_status, is_breakeven_target
+        )
 
     def _current_stop_orders_result(
             self,
@@ -357,9 +359,9 @@ class TradeExecutionService:
             remaining_quantity: float,
             stop_price: float,
             label: str,
-    ) -> Optional[str]:
+    ) -> tuple[Optional[str], Optional[OrderStatus]]:
         try:
-            order_id, _ = self._place_with_retries(
+            order_id, status = self._place_with_retries(
                 label=label,
                 place_order=lambda: self._exchange.place_stop_loss_order(
                     setup.symbol,
@@ -375,12 +377,12 @@ class TradeExecutionService:
                     OrderStatus.PARTIALLY_FILLED,
                 },
             )
-            return order_id
+            return order_id, status
         except Exception as exception:
             log.e(
                 f"Не удалось переставить {label} для {setup.symbol}: {exception}"
             )
-            return None
+            return None, None
 
     def _cancel_previous_stops(
             self,
@@ -392,15 +394,18 @@ class TradeExecutionService:
         self._cancel_order_safe(symbol, breakeven_order_id)
 
     def _collect_stop_realign_result(
-            self, new_stop_id: str, is_breakeven_target: bool
+            self,
+            new_stop_id: str,
+            new_stop_status: Optional[OrderStatus],
+            is_breakeven_target: bool,
     ) -> StopRealignmentResult:
         result = StopRealignmentResult()
         if is_breakeven_target:
             result.breakeven_id = new_stop_id
-            result.breakeven_status = OrderStatus.NEW
+            result.breakeven_status = new_stop_status or OrderStatus.NEW
         else:
             result.stop_loss_id = new_stop_id
-            result.stop_loss_status = OrderStatus.NEW
+            result.stop_loss_status = new_stop_status or OrderStatus.NEW
         return result
 
     def _cancel_order_safe(self, symbol: str, order_id: Optional[str]) -> None:
