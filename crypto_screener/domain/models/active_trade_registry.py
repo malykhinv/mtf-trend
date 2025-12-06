@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from crypto_screener.domain.models.active_trade import ActiveTrade
+from crypto_screener.domain.models.active_trades_storage import ActiveTradesStorage
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
@@ -15,22 +16,22 @@ class ActiveTradeKey:
 
 @dataclass
 class ActiveTrades:
-    _trades: dict[ActiveTradeKey, ActiveTrade] = field(default_factory=dict)
+    _storage: ActiveTradesStorage = field(default_factory=ActiveTradesStorage)
 
     def add(self, key: ActiveTradeKey, trade: ActiveTrade) -> None:
-        self._trades[key] = trade
+        self._storage.add(key, trade)
 
     def get(self, key: ActiveTradeKey) -> Optional[ActiveTrade]:
-        return self._trades.get(key)
+        return self._storage.get(key)
 
     def remove(self, key: ActiveTradeKey) -> Optional[ActiveTrade]:
-        return self._trades.pop(key, None)
+        return self._storage.remove(key)
 
     def has(self, key: ActiveTradeKey) -> bool:
-        return key in self._trades
+        return self._storage.has(key)
 
     def items(self) -> Iterable[tuple[ActiveTradeKey, ActiveTrade]]:
-        return self._trades.items()
+        return self._storage.items()
 
 
 # Backward compatibility
