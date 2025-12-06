@@ -19,6 +19,7 @@ from crypto_screener.domain.models.capture_registry import CaptureKey
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
+from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
@@ -391,7 +392,7 @@ def _poll_protective_order_statuses(
         exchange: Exchange,
         active_trade: ActiveTrade,
         context: _TradeMonitorContext,
-):
+) -> ProtectiveOrderStatuses:
     return _refresh_protective_orders(exchange, active_trade, context)
 
 
@@ -405,18 +406,14 @@ def _handle_partial_close_and_refresh_stops(
         exchange: Exchange,
         active_trade: ActiveTrade,
         context: _TradeMonitorContext,
-        partial_close_info,
-        breakeven_info,
-        stop_loss_info,
+        protective_order_statuses: ProtectiveOrderStatuses,
 ):
     return _process_filled_partial_close(
         trade_execution_service=trade_execution_service,
         exchange=exchange,
         active_trade=active_trade,
         context=context,
-        partial_close_info=partial_close_info,
-        breakeven_info=breakeven_info,
-        stop_loss_info=stop_loss_info,
+        protective_order_statuses=protective_order_statuses,
     )
 
 
@@ -425,20 +422,14 @@ def _calculate_monitor_outcome(
         active_trade: ActiveTrade,
         position: Optional[Position],
         context: _TradeMonitorContext,
-        take_profit_info,
-        stop_loss_info,
-        breakeven_info,
-        partial_close_info,
+        protective_order_statuses: ProtectiveOrderStatuses,
 ):
     return _calculate_trade_outcome(
         exchange=exchange,
         active_trade=active_trade,
         position=position,
         context=context,
-        take_profit_info=take_profit_info,
-        stop_loss_info=stop_loss_info,
-        breakeven_info=breakeven_info,
-        partial_close_info=partial_close_info,
+        protective_order_statuses=protective_order_statuses,
     )
 
 
@@ -515,8 +506,9 @@ def _refresh_protective_orders(
         exchange: Exchange,
         active_trade: ActiveTrade,
         context: _TradeMonitorContext,
-):
+) -> ProtectiveOrderStatuses:
     protective_orders = context.protective_orders
+    protective_order_statuses = ProtectiveOrderStatuses()
 
     take_profit_info = _get_order_info_safe(exchange, active_trade.symbol, protective_orders.take_profit_id)
     if take_profit_info:
@@ -527,6 +519,8 @@ def _refresh_protective_orders(
             take_profit_info.id,
         )
         protective_orders.take_profit_status = take_profit_info.status
+        protective_order_statuses.take_profit = take_profit_info
+        protective_order_statuses.take_profit_status = take_profit_info.status
         if take_profit_info.average_price:
             active_trade.exit_average_price = take_profit_info.average_price
 
@@ -539,6 +533,8 @@ def _refresh_protective_orders(
             stop_loss_info.id,
         )
         protective_orders.stop_loss_status = stop_loss_info.status
+        protective_order_statuses.stop_loss = stop_loss_info
+        protective_order_statuses.stop_loss_status = stop_loss_info.status
         if stop_loss_info.average_price:
             active_trade.exit_average_price = stop_loss_info.average_price
 
@@ -551,6 +547,8 @@ def _refresh_protective_orders(
             breakeven_info.id,
         )
         protective_orders.breakeven_status = breakeven_info.status
+        protective_order_statuses.breakeven = breakeven_info
+        protective_order_statuses.breakeven_status = breakeven_info.status
         if breakeven_info.average_price:
             active_trade.exit_average_price = breakeven_info.average_price
 
@@ -563,10 +561,12 @@ def _refresh_protective_orders(
             partial_close_info.id,
         )
         protective_orders.partial_close_status = partial_close_info.status
+        protective_order_statuses.partial_close = partial_close_info
+        protective_order_statuses.partial_close_status = partial_close_info.status
         if partial_close_info.average_price:
             active_trade.exit_average_price = partial_close_info.average_price
 
-    return take_profit_info, stop_loss_info, breakeven_info, partial_close_info
+    return protective_order_statuses
 
 
 def _process_filled_partial_close(
@@ -574,10 +574,11 @@ def _process_filled_partial_close(
         exchange: Exchange,
         active_trade: ActiveTrade,
         context: _TradeMonitorContext,
-        partial_close_info,
-        breakeven_info,
-        stop_loss_info,
+        protective_order_statuses: ProtectiveOrderStatuses,
 ):
+    partial_close_info = protective_order_statuses.partial_close
+    breakeven_info = protective_order_statuses.breakeven
+    stop_loss_info = protective_order_statuses.stop_loss
     if not partial_close_info or partial_close_info.status != OrderStatus.FILLED:
         return breakeven_info
 
@@ -613,12 +614,16 @@ def _process_filled_partial_close(
                 realigned_ids.stop_loss_status
                 or (OrderStatus.NEW if realigned_stop_loss_id else None)
             )
+            protective_order_statuses.stop_loss = None
+            protective_order_statuses.stop_loss_status = context.protective_orders.stop_loss_status
         elif previous_stop_loss_id:
             refreshed_stop_info = stop_loss_info or _get_order_info_safe(
                 exchange, active_trade.symbol, previous_stop_loss_id
             )
             if refreshed_stop_info:
                 context.protective_orders.stop_loss_status = refreshed_stop_info.status
+                protective_order_statuses.stop_loss = refreshed_stop_info
+                protective_order_statuses.stop_loss_status = refreshed_stop_info.status
 
         if realigned_breakeven_id != previous_breakeven_id:
             context.protective_orders.breakeven_id = realigned_breakeven_id
@@ -626,20 +631,22 @@ def _process_filled_partial_close(
                 realigned_ids.breakeven_status
                 or (OrderStatus.NEW if realigned_breakeven_id else None)
             )
-            breakeven_info = None
+            protective_order_statuses.breakeven = None
+            protective_order_statuses.breakeven_status = context.protective_orders.breakeven_status
         elif previous_breakeven_id:
             refreshed_breakeven_info = breakeven_info or _get_order_info_safe(
                 exchange, active_trade.symbol, previous_breakeven_id
             )
             if refreshed_breakeven_info:
                 context.protective_orders.breakeven_status = refreshed_breakeven_info.status
-                breakeven_info = refreshed_breakeven_info
+                protective_order_statuses.breakeven = refreshed_breakeven_info
+                protective_order_statuses.breakeven_status = refreshed_breakeven_info.status
     except Exception as exception:
         log.e(
             f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}"
         )
 
-    return breakeven_info
+    return protective_order_statuses.breakeven
 
 
 def _calculate_partial_remainder_and_exit_price(
@@ -749,13 +756,11 @@ def _classify_partial_close_stop_loss(
 def _process_partial_close_outcome(
         context: _TradeMonitorContext,
         active_trade: ActiveTrade,
-        take_profit_info,
-        stop_loss_info,
-        breakeven_info,
-        partial_close_info,
+        protective_order_statuses: ProtectiveOrderStatuses,
         remaining_quantity_for_remainder: Optional[float],
         exit_prices: list[float],
 ) -> tuple[Optional[tuple[TradeResult, float, float, list[float]]], Optional[float]]:
+    partial_close_info = protective_order_statuses.partial_close
     if not partial_close_info or partial_close_info.status != OrderStatus.FILLED:
         return None, remaining_quantity_for_remainder
 
@@ -765,7 +770,7 @@ def _process_partial_close_outcome(
 
     breakeven_outcome = _classify_partial_close_breakeven(
         active_trade,
-        breakeven_info,
+        protective_order_statuses.breakeven,
         entry_price,
         exit_price,
         total_quantity,
@@ -778,7 +783,7 @@ def _process_partial_close_outcome(
 
     take_profit_outcome = _classify_partial_close_take_profit(
         active_trade,
-        take_profit_info,
+        protective_order_statuses.take_profit,
         entry_price,
         exit_price,
         total_quantity,
@@ -791,7 +796,7 @@ def _process_partial_close_outcome(
 
     stop_loss_outcome = _classify_partial_close_stop_loss(
         active_trade,
-        stop_loss_info,
+        protective_order_statuses.stop_loss,
         entry_price,
         exit_price,
         total_quantity,
@@ -808,11 +813,11 @@ def _process_partial_close_outcome(
 def _process_full_exit_outcome(
         context: _TradeMonitorContext,
         active_trade: ActiveTrade,
-        take_profit_info,
-        stop_loss_info,
+        protective_order_statuses: ProtectiveOrderStatuses,
         remaining_quantity_for_remainder: Optional[float],
         exit_prices: list[float],
 ) -> Optional[tuple[TradeResult, float, float, list[float]]]:
+    take_profit_info = protective_order_statuses.take_profit
     if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
         exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
         _add_exit_price(exit_prices, exit_price)
@@ -824,6 +829,7 @@ def _process_full_exit_outcome(
         active_trade.status = OrderStatus.FILLED
         return TradeResult.TP, profit_pct, profit_value, exit_prices
 
+    stop_loss_info = protective_order_statuses.stop_loss
     if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
         exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
         _add_exit_price(exit_prices, exit_price)
@@ -878,10 +884,7 @@ def _calculate_trade_outcome(
         active_trade: ActiveTrade,
         position: Optional[Position],
         context: _TradeMonitorContext,
-        take_profit_info,
-        stop_loss_info,
-        breakeven_info,
-        partial_close_info,
+        protective_order_statuses: ProtectiveOrderStatuses,
 ) -> Optional[tuple[TradeResult, float, float, list[float]]]:
     exit_prices: list[float] = []
     remaining_quantity_for_remainder = _remaining_quantity_for_remainder(context, active_trade)
@@ -889,10 +892,7 @@ def _calculate_trade_outcome(
     outcome, remaining_quantity_for_remainder = _process_partial_close_outcome(
         context=context,
         active_trade=active_trade,
-        take_profit_info=take_profit_info,
-        stop_loss_info=stop_loss_info,
-        breakeven_info=breakeven_info,
-        partial_close_info=partial_close_info,
+        protective_order_statuses=protective_order_statuses,
         remaining_quantity_for_remainder=remaining_quantity_for_remainder,
         exit_prices=exit_prices,
     )
@@ -902,8 +902,7 @@ def _calculate_trade_outcome(
     outcome = _process_full_exit_outcome(
         context=context,
         active_trade=active_trade,
-        take_profit_info=take_profit_info,
-        stop_loss_info=stop_loss_info,
+        protective_order_statuses=protective_order_statuses,
         remaining_quantity_for_remainder=remaining_quantity_for_remainder,
         exit_prices=exit_prices,
     )
@@ -934,21 +933,19 @@ def _monitor_active_trade(
 
         context = _prepare_trade_monitor_context(active_trade)
 
-        (
-            take_profit_info,
-            stop_loss_info,
-            breakeven_info,
-            partial_close_info,
-        ) = _poll_protective_order_statuses(exchange, active_trade, context)
+        protective_order_statuses = _poll_protective_order_statuses(exchange, active_trade, context)
 
         breakeven_info = _handle_partial_close_and_refresh_stops(
             trade_execution_service=trade_execution_service,
             exchange=exchange,
             active_trade=active_trade,
             context=context,
-            partial_close_info=partial_close_info,
-            breakeven_info=breakeven_info,
-            stop_loss_info=stop_loss_info,
+            protective_order_statuses=protective_order_statuses,
+        )
+
+        protective_order_statuses.breakeven = breakeven_info
+        protective_order_statuses.breakeven_status = (
+            breakeven_info.status if breakeven_info else context.protective_orders.breakeven_status
         )
 
         _apply_monitor_context(active_trade, context)
@@ -958,10 +955,7 @@ def _monitor_active_trade(
             active_trade=active_trade,
             position=position,
             context=context,
-            take_profit_info=take_profit_info,
-            stop_loss_info=stop_loss_info,
-            breakeven_info=breakeven_info,
-            partial_close_info=partial_close_info,
+            protective_order_statuses=protective_order_statuses,
         )
     except Exception as exception:
         log.e(f"Ошибка при мониторинге сделки {active_trade.symbol}: {exception}")
