@@ -24,7 +24,7 @@ from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
-from crypto_screener.domain.setup_detector import detect_setup
+from crypto_screener.domain.setup_detector import default_strategy
 from crypto_screener.execution.trade_executor import TradeExecutionService
 from crypto_screener.execution.trade_permission_service import TradePermissionService
 from crypto_screener.utils.history import calculate_limit_grid
@@ -1208,7 +1208,7 @@ def run_live(
                 bars = []
                 for timeframe_limit in calculate_limit_grid(limit, timeframe):
                     bars = exchange.get_ohlcv(symbol.symbol, timeframe, timeframe_limit)
-                    setup = detect_setup(symbol.symbol, bars, timeframe, symbol.context)
+                    setup = default_strategy.detect_setup(symbol.symbol, bars, timeframe, symbol.context)
                     if setup:
                         break
                 trade_key = ActiveTradeKey(symbol.symbol, timeframe)
