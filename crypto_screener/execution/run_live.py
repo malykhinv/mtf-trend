@@ -1145,7 +1145,7 @@ def run_live(
         trades_24h_min: int,
         trades_24h_btc_ratio_min: float
 ) -> None:
-    log.d("Запуск в живом режиме.")
+    log.d(f"Запуск в живом режиме на бирже {exchange.get_name()}.")
 
     if not timeframes:
         log.e("Не заданы таймфреймы.")

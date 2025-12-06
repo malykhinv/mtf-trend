@@ -25,15 +25,36 @@ _test_data: list[TestData] = [
     TestData('TRADOORUSDT', Timeframe.M15, datetime(year=2025, month=11, day=16, hour=23, minute=35)),
 ]
 
+# Биржа по умолчанию.
+# _exchange: str = "Binance"
+_exchange: str = "Bybit"
+
+_live_thresholds = {
+    "Binance": dict(
+        volume_24h_new_usdt_min=5_000_000,
+        volume_24h_old_usdt_min=50_000_000,
+        trades_24h_min=500_000,
+        trades_24h_btc_ratio_min=0.5,
+    ),
+    "Bybit": dict(
+        volume_24h_new_usdt_min=2_000_000,
+        volume_24h_old_usdt_min=20_000_000,
+        trades_24h_min=150_000,
+        trades_24h_btc_ratio_min=0.35,
+    ),
+}
+
+_live_cfg = _live_thresholds.get(_exchange, _live_thresholds["Binance"])
+
 # region Режимы работы.
 _mode_live = Live(
     timeframes=_timeframes,
     limit=400,
     listing_period_days=int(365 / 12),
-    volume_24h_new_usdt_min=5_000_000,
-    volume_24h_old_usdt_min=50_000_000,
-    trades_24h_min=500_000,
-    trades_24h_btc_ratio_min=0.5
+    volume_24h_new_usdt_min=_live_cfg["volume_24h_new_usdt_min"],
+    volume_24h_old_usdt_min=_live_cfg["volume_24h_old_usdt_min"],
+    trades_24h_min=_live_cfg["trades_24h_min"],
+    trades_24h_btc_ratio_min=_live_cfg["trades_24h_btc_ratio_min"],
 )
 
 _mode_test_market = TestMarket(
@@ -59,8 +80,7 @@ _mode_test_symbols = TestSymbols(
 @dataclass(frozen=True)
 class AppConfig:
     # Биржа.
-    EXCHANGE: str = "Binance"
-    # EXCHANGE: str = "Bybit"
+    EXCHANGE: str = _exchange
 
     # Временная зона.
     TIMEZONE: ZoneInfo = _timezone
