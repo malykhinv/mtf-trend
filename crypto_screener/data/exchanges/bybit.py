@@ -32,6 +32,10 @@ class Bybit(Exchange):
             }
         )
 
+    @staticmethod
+    def get_name() -> str:
+        return "Bybit"
+
     def get_futures_symbols(self) -> Iterable[FuturesSymbol]:
         markets = self._client.load_markets()
         tickers = self._client.fetch_tickers()

@@ -12,6 +12,11 @@ from crypto_screener.domain.models.timeframe import Timeframe
 
 
 class Exchange(ABC):
+
+    @staticmethod
+    def get_name() -> str:
+        pass
+
     @abstractmethod
     def get_futures_symbols(self) -> list[FuturesSymbol]:
         ...

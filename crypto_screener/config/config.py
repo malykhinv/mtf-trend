@@ -63,8 +63,8 @@ _mode_test_symbols = TestSymbols(
 @dataclass(frozen=True)
 class AppConfig:
     # Биржа.
-    EXCHANGE: str = Binance.__name__.upper()
-    # EXCHANGE: str = Bybit.__name__.upper()
+    EXCHANGE: str = Binance.get_name()
+    # EXCHANGE: str = Bybit.get_name()
 
     # Временная зона.
     TIMEZONE: ZoneInfo = _timezone

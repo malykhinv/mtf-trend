@@ -32,6 +32,10 @@ class Binance(Exchange):
             }
         )
 
+    @staticmethod
+    def get_name() -> str:
+        return "Binance"
+
     def get_futures_symbols(self) -> Iterable[FuturesSymbol]:
         markets = self._client.load_markets()
         tickers = self._client.fetch_tickers()
