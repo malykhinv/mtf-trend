@@ -6,7 +6,7 @@ from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.mode import PlotPolicy, TestData
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setup import Setup, Buy
+from crypto_screener.domain.models.setups.ppo import Setup, Trade
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.setup_detector import default_strategy
@@ -75,7 +75,7 @@ def _run_test_symbol(
             detection_time=last_bar_time,
         )
 
-        if not setup or not isinstance(setup, Buy):
+        if not setup or not isinstance(setup, Trade):
             continue
 
         outcome = evaluate_buy(setup, future_bars)
@@ -110,7 +110,7 @@ def _plot(
         *,
         context: Context,
 ):
-    if postmortem_bars and isinstance(setup, Buy):
+    if postmortem_bars and isinstance(setup, Trade):
         output_path = plot_postmortem(
             symbol=f"{setup.symbol} ",
             timeframe=setup.timeframe,

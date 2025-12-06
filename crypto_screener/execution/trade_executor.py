@@ -10,7 +10,7 @@ from crypto_screener.domain.models.margin_mode import MarginMode
 from crypto_screener.domain.models.order_side import OrderSide
 from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.setup import Buy
+from crypto_screener.domain.models.setups.ppo import Trade
 from crypto_screener.domain.models.stop_realignment_result import StopRealignmentResult
 from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.utils.logger import log
@@ -33,7 +33,7 @@ class TradeExecutionService:
         self._exchange = exchange
         self.notifier = notifier
 
-    def execute_buy(self, setup: Buy, context: Context) -> Optional[ExecutionResult]:
+    def execute_buy(self, setup: Trade, context: Context) -> Optional[ExecutionResult]:
         entry_order_id: Optional[str] = None
         protective_orders = ProtectiveOrders()
         try:
@@ -59,7 +59,7 @@ class TradeExecutionService:
 
     def _determine_position_size(
             self,
-            setup: Buy,
+            setup: Trade,
             context: Context
     ) -> float:
         try:
@@ -74,7 +74,7 @@ class TradeExecutionService:
 
     def _place_entry_order(
             self,
-            setup: Buy,
+            setup: Trade,
             quantity: float
     ) -> str:
         order_id, _ = self._place_with_retries(
@@ -96,7 +96,7 @@ class TradeExecutionService:
 
     def _place_protective_bundle(
             self,
-            setup: Buy,
+            setup: Trade,
             quantity: float,
     ) -> ProtectiveOrders:
         return self._place_protective_orders(setup, quantity)
@@ -109,7 +109,7 @@ class TradeExecutionService:
 
     def _handle_execution_failure(
             self,
-            setup: Buy,
+            setup: Trade,
             context: Context,
             entry_order_id: Optional[str],
             protective_orders: ProtectiveOrders,
@@ -130,7 +130,7 @@ class TradeExecutionService:
         )
 
     @staticmethod
-    def _calculate_position_size(setup: Buy) -> float:
+    def _calculate_position_size(setup: Trade) -> float:
         entry_price = setup.entry_price
         stop_loss_price = setup.stop_loss_price
         stop_distance = entry_price - stop_loss_price
@@ -153,7 +153,7 @@ class TradeExecutionService:
 
     def _place_protective_orders(
             self,
-            setup: Buy,
+            setup: Trade,
             quantity: float,
             orders: Optional[ProtectiveOrders] = None,
     ) -> ProtectiveOrders:
@@ -165,7 +165,7 @@ class TradeExecutionService:
 
     def _place_stop_loss(
             self,
-            setup: Buy,
+            setup: Trade,
             quantity: float,
             orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
@@ -185,7 +185,7 @@ class TradeExecutionService:
 
     def place_take_profit(
             self,
-            setup: Buy,
+            setup: Trade,
             quantity: float,
             orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
@@ -205,7 +205,7 @@ class TradeExecutionService:
 
     def place_partial_close(
             self,
-            setup: Buy,
+            setup: Trade,
             quantity: float,
             orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
@@ -275,7 +275,7 @@ class TradeExecutionService:
 
     def realign_stop_orders(
             self,
-            setup: Buy,
+            setup: Trade,
             stop_loss_order_id: Optional[str],
             breakeven_order_id: Optional[str],
             remaining_quantity: float,
@@ -343,7 +343,7 @@ class TradeExecutionService:
 
     def _handle_no_remaining_quantity(
             self,
-            setup: Buy,
+            setup: Trade,
             stop_loss_order_id: Optional[str],
             breakeven_order_id: Optional[str],
             remaining_quantity: float,
@@ -359,7 +359,7 @@ class TradeExecutionService:
 
     @staticmethod
     def _target_stop_order_details(
-            setup: Buy,
+            setup: Trade,
             move_to_breakeven: bool
     ) -> tuple[float, str, bool]:
         move_to_breakeven_target = (
@@ -373,7 +373,7 @@ class TradeExecutionService:
 
     def _place_realigned_stop(
             self,
-            setup: Buy,
+            setup: Trade,
             remaining_quantity: float,
             stop_price: float,
             label: str,
@@ -446,7 +446,7 @@ class TradeExecutionService:
 
     def _notify_failure(
             self,
-            setup: Buy,
+            setup: Trade,
             context: Context,
             message: str
     ) -> None:

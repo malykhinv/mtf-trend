@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setup import Setup
+from crypto_screener.domain.models.setups.ppo import Setup
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
