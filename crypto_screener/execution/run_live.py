@@ -461,28 +461,25 @@ def _monitor_active_trade(
 
         entry_price = active_trade.entry_average_price or active_trade.setup.entry_price
         exit_prices: list[float] = []
-
-        if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
-            exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
-            exit_prices.append(exit_price)
-            profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
-            active_trade.status = OrderStatus.FILLED
-            return TradeResult.TP, profit_pct, profit_value, exit_prices
-
-        if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
-            exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
-            exit_prices.append(exit_price)
-            profit_value, profit_pct = _calculate_profit(entry_price, exit_price, active_trade.quantity)
-            active_trade.status = OrderStatus.FILLED
-            return TradeResult.SL, profit_pct, profit_value, exit_prices
+        remaining_quantity_for_remainder = (
+            active_trade.remaining_quantity
+            if active_trade.remaining_quantity is not None
+            else active_trade.quantity
+        )
 
         if partial_close_info and partial_close_info.status == OrderStatus.FILLED:
             exit_price = partial_close_info.average_price or (active_trade.setup.partial_close_price or entry_price)
             exit_prices.append(exit_price)
             total_quantity = active_trade.quantity or 0
             partial_quantity = partial_close_info.filled or partial_close_info.quantity or total_quantity * 0.5
-            remaining_quantity = active_trade.remaining_quantity if active_trade.remaining_quantity is not None else max(total_quantity - partial_quantity, 0)
+            remaining_quantity = (
+                active_trade.remaining_quantity
+                if active_trade.remaining_quantity is not None
+                else max(total_quantity - partial_quantity, 0)
+            )
             total_quantity = total_quantity or (partial_quantity + remaining_quantity)
+            remaining_quantity_for_remainder = remaining_quantity
+
             if breakeven_info and breakeven_info.status == OrderStatus.FILLED:
                 breakeven_exit_price = breakeven_info.average_price or active_trade.setup.breakeven_price or exit_price
                 exit_prices.append(breakeven_exit_price)
@@ -496,6 +493,7 @@ def _monitor_active_trade(
                 )
                 active_trade.status = OrderStatus.PARTIALLY_FILLED
                 return TradeResult.PC_BE, profit_pct, profit_value, exit_prices
+
             if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
                 take_profit_exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
                 exit_prices.append(take_profit_exit_price)
@@ -509,6 +507,42 @@ def _monitor_active_trade(
                 )
                 active_trade.status = OrderStatus.FILLED
                 return TradeResult.PC_TP, profit_pct, profit_value, exit_prices
+
+            if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
+                stop_loss_exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
+                exit_prices.append(stop_loss_exit_price)
+                profit_value, profit_pct = _calculate_split_profit(
+                    entry_price,
+                    total_quantity,
+                    exit_price,
+                    partial_quantity,
+                    stop_loss_exit_price,
+                    remaining_quantity,
+                )
+                active_trade.status = OrderStatus.FILLED
+                return TradeResult.SL, profit_pct, profit_value, exit_prices
+
+        if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
+            exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
+            exit_prices.append(exit_price)
+            profit_value, profit_pct = _calculate_profit(
+                entry_price,
+                exit_price,
+                remaining_quantity_for_remainder if remaining_quantity_for_remainder is not None else active_trade.quantity,
+            )
+            active_trade.status = OrderStatus.FILLED
+            return TradeResult.TP, profit_pct, profit_value, exit_prices
+
+        if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
+            exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
+            exit_prices.append(exit_price)
+            profit_value, profit_pct = _calculate_profit(
+                entry_price,
+                exit_price,
+                remaining_quantity_for_remainder if remaining_quantity_for_remainder is not None else active_trade.quantity,
+            )
+            active_trade.status = OrderStatus.FILLED
+            return TradeResult.SL, profit_pct, profit_value, exit_prices
 
         if position is None:
             try:
