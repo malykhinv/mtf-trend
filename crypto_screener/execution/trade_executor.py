@@ -34,24 +34,17 @@ class TradeExecutionService:
         self._notifier = notifier
 
     def execute_buy(self, setup: Buy, context: Context) -> Optional[ExecutionResult]:
-        try:
-            quantity = self._calculate_position_size(setup)
-        except Exception as exception:
-            self._notify_failure(
-                setup,
-                context,
-                f"Не удалось рассчитать размер позиции: {exception}",
-            )
-            return None
-
         entry_order_id: Optional[str] = None
         protective_orders = ProtectiveOrders()
         try:
-            entry_order_id = self._open_entry_order(setup, quantity)
-            protective_orders = self._place_protective_bundle(
-                setup, quantity, protective_orders,
-            )
-            position_id = self._fetch_position_id(setup.symbol)
+            quantity = self._determine_position_size(setup, context)
+        except Exception:
+            return None
+
+        try:
+            entry_order_id = self._place_entry_order(setup, quantity)
+            protective_orders = self._place_protective_bundle(setup, quantity)
+            position_id = self._extract_position_id(setup.symbol)
             return ExecutionResult(
                 quantity=quantity,
                 entry_order_id=entry_order_id,
@@ -64,7 +57,18 @@ class TradeExecutionService:
             )
             return None
 
-    def _open_entry_order(self, setup: Buy, quantity: float) -> str:
+    def _determine_position_size(self, setup: Buy, context: Context) -> float:
+        try:
+            return self._calculate_position_size(setup)
+        except Exception as exception:
+            self._notify_failure(
+                setup,
+                context,
+                f"Не удалось рассчитать размер позиции: {exception}",
+            )
+            raise
+
+    def _place_entry_order(self, setup: Buy, quantity: float) -> str:
         return self._place_with_retries(
             label="entry",
             place_order=lambda: self._exchange.place_market_order(
@@ -85,9 +89,11 @@ class TradeExecutionService:
             self,
             setup: Buy,
             quantity: float,
-            protective_orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
-        return self._place_protective_orders(setup, quantity, protective_orders)
+        return self._place_protective_orders(setup, quantity)
+
+    def _extract_position_id(self, symbol: str) -> Optional[str]:
+        return self._fetch_position_id(symbol)
 
     def _handle_execution_failure(
             self,
