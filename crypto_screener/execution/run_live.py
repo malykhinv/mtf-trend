@@ -18,7 +18,7 @@ from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.setups.ppo import Capture, Trade, Unfilled
+from crypto_screener.domain.models.setups.ppo import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -90,28 +90,14 @@ def _send_notification(
         notifier: Notifier,
         notification_type: NotificationType,
         message: str,
-        symbol: str,
-        timeframe: Timeframe,
-        bars: list[Bar],
-        main_low_swing: Optional[Swing],
-        main_high_swing: Optional[Swing],
-        cascade_swings: Optional[list[Swing]],
-        resistance_swings: Optional[list[Swing]],
-        support_swings: Optional[list[Swing]],
+        setup: Setup,
         subdir: Optional[str] = None,
         context: Optional[Context] = None,
         keyboard: Optional[Keyboard] = None,
 ) -> Optional[str]:
     try:
         image_path = plot(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_low_swing=main_low_swing,
-            main_high_swing=main_high_swing,
-            cascade_swings=cascade_swings,
-            resistance_swings=resistance_swings,
-            support_swings=support_swings,
+            setup=setup,
             subdir=subdir,
             context=context,
         )
@@ -139,28 +125,14 @@ def _edit_notification(
         notification_type: NotificationType,
         message_id: str,
         message: str,
-        symbol: str,
-        timeframe: Timeframe,
-        bars: list[Bar],
-        main_low_swing: Optional[Swing],
-        main_high_swing: Optional[Swing],
-        cascade_swings: Optional[list[Swing]],
-        resistance_swings: Optional[list[Swing]],
-        support_swings: Optional[list[Swing]],
+        setup: Setup,
         subdir: Optional[str] = None,
         context: Optional[Context] = None,
         keyboard: Optional[Keyboard] = None,
 ) -> Optional[str]:
     try:
         image_path = plot(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_low_swing=main_low_swing,
-            main_high_swing=main_high_swing,
-            cascade_swings=cascade_swings,
-            resistance_swings=resistance_swings,
-            support_swings=support_swings,
+            setup=setup,
             subdir=subdir,
             context=context,
         )
@@ -287,20 +259,11 @@ def _handle_trade_closure(
 
     try:
         postmortem_path = plot_postmortem(
-            symbol=setup.symbol,
-            timeframe=setup.timeframe,
-            bars=setup.bars,
+            setup=setup,
             detection_time=active_trade.detection_time,
-            main_low_swing=setup.main_low_swing,
-            main_high_swing=setup.main_high_swing,
-            cascade_swings=setup.cascade_swings,
-            resistance_swings=setup.resistance_swings,
-            support_swings=setup.support_swings,
             subdir='order',
             postmortem_bars=active_trade.postmortem_bars,
-            trade_levels=trade_levels,
             context=active_trade.context,
-            setup_name=setup.name,
         )
     except Exception as exception:
         log.e(f"Ошибка при построении postmortem графика: {exception}")
@@ -1272,14 +1235,7 @@ def run_live(
                                     notification_type=NotificationType.EVENT,
                                     message_id=active_capture.message_id,
                                     message=message,
-                                    symbol=symbol.symbol,
-                                    timeframe=timeframe,
-                                    bars=bars,
-                                    main_low_swing=main_low_swing,
-                                    main_high_swing=main_high_swing,
-                                    cascade_swings=cascade_swings,
-                                    resistance_swings=resistance_swings,
-                                    support_swings=support_swings,
+                                    setup=setup,
                                     subdir='event',
                                     context=symbol.context,
                                     keyboard=_build_trade_keyboard(symbol.symbol, timeframe, symbol.context),
@@ -1294,14 +1250,7 @@ def run_live(
                                 notifier=notifier,
                                 notification_type=NotificationType.EVENT,
                                 message=message,
-                                symbol=symbol.symbol,
-                                timeframe=timeframe,
-                                bars=bars,
-                                main_low_swing=main_low_swing,
-                                main_high_swing=main_high_swing,
-                                cascade_swings=cascade_swings,
-                                resistance_swings=resistance_swings,
-                                support_swings=support_swings,
+                                setup=setup,
                                 subdir='event',
                                 context=symbol.context,
                                 keyboard=_build_trade_keyboard(symbol.symbol, timeframe, symbol.context),
@@ -1344,14 +1293,7 @@ def run_live(
                             notifier=notifier,
                             notification_type=NotificationType.ORDER,
                             message=success_message,
-                            symbol=symbol.symbol,
-                            timeframe=timeframe,
-                            bars=bars,
-                            main_low_swing=main_low_swing,
-                            main_high_swing=main_high_swing,
-                            cascade_swings=cascade_swings,
-                            resistance_swings=resistance_swings,
-                            support_swings=support_swings,
+                            setup=setup,
                             subdir='order',
                             context=symbol.context
                         ).result()
