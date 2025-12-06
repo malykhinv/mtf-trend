@@ -8,6 +8,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from crypto_screener.domain.models.context import Context
+from crypto_screener.domain.models.setups.ppo import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.swing_detector import add_swings
 
@@ -445,23 +446,51 @@ def _resolve_output_path(
 # endregion
 
 def _plot(
-        symbol: str,
-        timeframe: Timeframe,
-        bars: list[Bar],
+        setup: Setup,
         *,
         postmortem_bars: Optional[list[Bar]],
         detection_time: Optional[datetime],
         context: Optional[Context],
-        main_high_swing: Optional[Swing],
-        main_low_swing: Optional[Swing],
-        cascade_swings: Optional[list[Swing]],
-        resistance_swings: Optional[list[Swing]],
-        support_swings: Optional[list[Swing]],
         subdir: Optional[str],
-        setup_name: Optional[str],
-        trade_levels: Optional[TradeLevels],
         draw_entry_zones: bool,
 ):
+    match setup:
+        case Trade(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            main_high_swing=main_high_swing,
+            main_low_swing=main_low_swing,
+            cascade_swings=cascade_swings,
+            resistance_swings=resistance_swings,
+            support_swings=support_swings,
+            trade_levels=trade_levels,
+        ):
+            setup_name = setup.name
+        case Capture(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            main_high_swing=main_high_swing,
+            main_low_swing=main_low_swing,
+            cascade_swings=cascade_swings,
+            resistance_swings=resistance_swings,
+            support_swings=support_swings,
+        ) | Unfilled(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            main_high_swing=main_high_swing,
+            main_low_swing=main_low_swing,
+            cascade_swings=cascade_swings,
+            resistance_swings=resistance_swings,
+            support_swings=support_swings,
+        ):
+            setup_name = setup.name
+            trade_levels = None
+        case _:
+            raise TypeError(f"Неизвестный тип сетапа: {type(setup).__name__}")
+
     if not symbol or not bars:
         raise ValueError("Недостаточно данных для построения графика.")
 
@@ -631,69 +660,33 @@ def _plot(
 
 
 def plot(
-        symbol: str,
-        timeframe: Timeframe,
-        bars: list[Bar],
+        setup: Setup,
         detection_time: Optional[datetime] = None,
         context: Optional[Context] = None,
-        main_high_swing: Optional[Swing] = None,
-        main_low_swing: Optional[Swing] = None,
-        cascade_swings: Optional[list[Swing]] = None,
-        resistance_swings: Optional[list[Swing]] = None,
-        support_swings: Optional[list[Swing]] = None,
         subdir: Optional[str] = None,
-        setup_name: Optional[str] = None,
 ):
     return _plot(
-        symbol=symbol,
-        timeframe=timeframe,
-        bars=bars,
+        setup=setup,
         postmortem_bars=None,
         detection_time=detection_time,
         context=context,
-        main_high_swing=main_high_swing,
-        main_low_swing=main_low_swing,
-        cascade_swings=cascade_swings,
-        resistance_swings=resistance_swings,
-        support_swings=support_swings,
         subdir=subdir,
-        setup_name=setup_name,
-        trade_levels=None,
         draw_entry_zones=False,
     )
 
 
 def plot_postmortem(
-        symbol: str,
-        timeframe: Timeframe,
-        bars: list[Bar],
+        setup: Setup,
         postmortem_bars: Optional[list[Bar]] = None,
         detection_time: Optional[datetime] = None,
         context: Optional[Context] = None,
-        main_high_swing: Optional[Swing] = None,
-        main_low_swing: Optional[Swing] = None,
-        cascade_swings: Optional[list[Swing]] = None,
-        resistance_swings: Optional[list[Swing]] = None,
-        support_swings: Optional[list[Swing]] = None,
         subdir: Optional[str] = None,
-        setup_name: Optional[str] = None,
-        *,
-        trade_levels: TradeLevels,
 ):
     return _plot(
-        symbol=symbol,
-        timeframe=timeframe,
-        bars=bars,
+        setup=setup,
         postmortem_bars=postmortem_bars,
         detection_time=detection_time,
         context=context,
-        main_high_swing=main_high_swing,
-        main_low_swing=main_low_swing,
-        cascade_swings=cascade_swings,
-        resistance_swings=resistance_swings,
-        support_swings=support_swings,
         subdir=subdir,
-        setup_name=setup_name,
-        trade_levels=trade_levels,
         draw_entry_zones=True,
     )

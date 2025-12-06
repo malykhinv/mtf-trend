@@ -112,34 +112,17 @@ def _plot(
 ):
     if postmortem_bars and isinstance(setup, Trade):
         output_path = plot_postmortem(
-            symbol=f"{setup.symbol} ",
-            timeframe=setup.timeframe,
-            bars=setup.bars,
+            setup=setup,
             detection_time=detection_time,
-            main_low_swing=setup.main_low_swing,
-            main_high_swing=setup.main_high_swing,
-            cascade_swings=setup.cascade_swings,
-            resistance_swings=setup.resistance_swings,
-            support_swings=setup.support_swings,
             subdir=subdir,
-            setup_name=setup.name.capitalize(),
             postmortem_bars=postmortem_bars,
-            trade_levels=setup.trade_levels,
             context=context,
         )
     else:
         output_path = plot(
-            symbol=f"{setup.symbol} {setup.name.capitalize()} ",
-            timeframe=setup.timeframe,
-            bars=setup.bars,
+            setup=setup,
             detection_time=detection_time,
-            main_low_swing=setup.main_low_swing,
-            main_high_swing=setup.main_high_swing,
-            cascade_swings=setup.cascade_swings,
-            resistance_swings=setup.resistance_swings,
-            support_swings=setup.support_swings,
             subdir=subdir,
-            setup_name=setup.name.capitalize(),
             context=context,
         )
     log.d(f"График {setup.symbol} сохранен (контекст {context.value}) в {output_path}".strip())
