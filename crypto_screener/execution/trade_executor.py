@@ -148,6 +148,13 @@ class TradeExecutionService:
     ) -> ProtectiveOrders:
         orders = orders or ProtectiveOrders()
 
+        orders = self._place_stop_loss(setup, quantity, orders)
+        orders = self._place_take_profit(setup, quantity, orders)
+        return self._place_partial_close(setup, quantity, orders)
+
+    def _place_stop_loss(
+            self, setup: Buy, quantity: float, orders: ProtectiveOrders,
+    ) -> ProtectiveOrders:
         orders.stop_loss_id = self._place_with_retries(
             label="stop-loss",
             place_order=lambda: self._exchange.place_stop_loss_order(
@@ -158,14 +165,14 @@ class TradeExecutionService:
                 margin_mode=MarginMode.CROSS,
             ),
             symbol=setup.symbol,
-            acceptable_statuses={
-                OrderStatus.FILLED,
-                OrderStatus.NEW,
-                OrderStatus.PARTIALLY_FILLED,
-            },
+            acceptable_statuses=self._protective_acceptable_statuses(),
         )
         orders.stop_loss_status = OrderStatus.NEW
+        return orders
 
+    def _place_take_profit(
+            self, setup: Buy, quantity: float, orders: ProtectiveOrders,
+    ) -> ProtectiveOrders:
         orders.take_profit_id = self._place_with_retries(
             label="take-profit",
             place_order=lambda: self._exchange.place_take_profit_order(
@@ -176,35 +183,39 @@ class TradeExecutionService:
                 margin_mode=MarginMode.CROSS,
             ),
             symbol=setup.symbol,
-            acceptable_statuses={
-                OrderStatus.FILLED,
-                OrderStatus.NEW,
-                OrderStatus.PARTIALLY_FILLED,
-            },
+            acceptable_statuses=self._protective_acceptable_statuses(),
         )
         orders.take_profit_status = OrderStatus.NEW
-
-        if setup.partial_close_price is not None:
-            partial_quantity = quantity * 0.5
-            orders.partial_close_id = self._place_with_retries(
-                label="partial-close",
-                place_order=lambda: self._exchange.place_take_profit_order(
-                    setup.symbol,
-                    OrderSide.SELL,
-                    partial_quantity,
-                    price=setup.partial_close_price,
-                    margin_mode=MarginMode.CROSS,
-                ),
-                symbol=setup.symbol,
-                acceptable_statuses={
-                    OrderStatus.FILLED,
-                    OrderStatus.NEW,
-                    OrderStatus.PARTIALLY_FILLED,
-                },
-            )
-            orders.partial_close_status = OrderStatus.NEW
-
         return orders
+
+    def _place_partial_close(
+            self, setup: Buy, quantity: float, orders: ProtectiveOrders,
+    ) -> ProtectiveOrders:
+        if setup.partial_close_price is None:
+            return orders
+
+        partial_quantity = quantity * 0.5
+        orders.partial_close_id = self._place_with_retries(
+            label="partial-close",
+            place_order=lambda: self._exchange.place_take_profit_order(
+                setup.symbol,
+                OrderSide.SELL,
+                partial_quantity,
+                price=setup.partial_close_price,
+                margin_mode=MarginMode.CROSS,
+            ),
+            symbol=setup.symbol,
+            acceptable_statuses=self._protective_acceptable_statuses(),
+        )
+        orders.partial_close_status = OrderStatus.NEW
+        return orders
+
+    def _protective_acceptable_statuses(self) -> set[OrderStatus]:
+        return {
+            OrderStatus.FILLED,
+            OrderStatus.NEW,
+            OrderStatus.PARTIALLY_FILLED,
+        }
 
     def _place_with_retries(
             self,
