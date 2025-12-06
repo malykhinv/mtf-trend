@@ -29,16 +29,11 @@ class LogNotifier(Notifier):
             keyboard: Optional[Keyboard] = None,
             context: Optional[Context] = None,
     ) -> Optional[str]:
-        log.d(
-            f"Запрос на редактирование сообщения {message_id}"
-            f" с типом {notification_type.name.capitalize()}"
-        )
+        log.d(f"Запрос на редактирование сообщения {message_id} с типом {notification_type.name.capitalize()}")
         return None
 
     def remove_button(self, message_id: Optional[str]) -> None:
         log.d(f"Запрос на удаление кнопки у сообщения {message_id}")
 
     def start_callback_handler(self, trade_permission_service) -> None:
-        log.d(
-            "Запрос на запуск обработчика callback-кнопок без реальной интеграции."
-        )
+        log.d("Запрос на запуск обработчика callback-кнопок без реальной интеграции.")

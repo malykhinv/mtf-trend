@@ -15,6 +15,7 @@ from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.extractors import extract_float, extract_int
+from crypto_screener.utils.logger import log
 
 
 class Bybit(Exchange):
@@ -37,8 +38,12 @@ class Bybit(Exchange):
         return "Bybit"
 
     def get_futures_symbols(self) -> Iterable[FuturesSymbol]:
-        markets = self._client.load_markets()
-        tickers = self._client.fetch_tickers()
+        try:
+            markets = self._client.load_markets()
+            tickers = self._client.fetch_tickers()
+        except Exception as exception:
+            log.e(f"Ошибка при загрузке фьючерсных инструментов Bybit: {exception}")
+            return []
         symbols: list[FuturesSymbol] = []
 
         for market in markets.values():
@@ -92,12 +97,16 @@ class Bybit(Exchange):
             end_ms = int(end.astimezone(timezone.utc).timestamp() * 1000)
             params["since"] = end_ms - timeframe_ms * limit
 
-        raw = self._client.fetch_ohlcv(
-            symbol=symbol,
-            timeframe=timeframe.tf,
-            since=params.get("since"),
-            limit=params["limit"],
-        )
+        try:
+            raw = self._client.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=timeframe.tf,
+                since=params.get("since"),
+                limit=params["limit"],
+            )
+        except Exception as exception:
+            log.e(f"Ошибка при получении OHLCV Bybit для {symbol}: {exception}")
+            return []
         return map_ohlcv(raw, end)
 
     def place_market_order(

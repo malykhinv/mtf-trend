@@ -250,23 +250,17 @@ class TradeExecutionService:
             status = self._get_order_status(symbol, order_id)
             if status is None or status in acceptable_statuses:
                 if status and status != OrderStatus.FILLED:
-                    log.d(
-                        f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, повторные попытки отключены."
-                    )
+                    log.d(f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}.")
                 return order_id, status
             if status == OrderStatus.CANCELED:
                 raise RuntimeError(f"Ордер {order_id} для {symbol} отменен биржей")
-            log.d(
-                f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, отменяем ордер без повторных попыток."
-            )
+            log.d(f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, отменяем ордер.")
             self.cancel_order_safe(symbol, order_id)
             raise RuntimeError(
                 f"Ордер {label} {order_id} для {symbol} имеет недопустимый статус {status.value}"
             )
         except Exception as exception:
-            log.e(
-                f"Ошибка при размещении {label} для {symbol}: {exception}"
-            )
+            log.e(f"Ошибка при размещении {label} для {symbol}: {exception}")
             raise
 
     def _get_order_status(
@@ -359,9 +353,7 @@ class TradeExecutionService:
         if remaining_quantity > 0:
             return None
 
-        log.d(
-            f"Нет оставшегося объема для перестановки стоп-ордера по {setup.symbol} после частичного закрытия."
-        )
+        log.d(f"Нет оставшегося объема для перестановки стоп-ордера по {setup.symbol} после частичного закрытия.")
         self._cancel_previous_stops(
             setup.symbol, stop_loss_order_id, breakeven_order_id
         )
@@ -407,9 +399,7 @@ class TradeExecutionService:
             )
             return order_id, status
         except Exception as exception:
-            log.e(
-                f"Не удалось переставить {label} для {setup.symbol}: {exception}"
-            )
+            log.e(f"Не удалось переставить {label} для {setup.symbol}: {exception}")
             return None, None
 
     def _cancel_previous_stops(

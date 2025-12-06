@@ -61,10 +61,7 @@ def _run_test_symbol(
         last_bar_time = bars[-1].time
         future_bars = _get_future_bars(exchange, symbol, timeframe, timeframe_limit, last_bar_time)
         if not future_bars:
-            log.e(
-                f"{symbol} {timeframe.tf}: "
-                f"не удалось получить будущие свечи после {last_bar_time}."
-            )
+            log.e(f"{symbol} {timeframe.tf}: не удалось получить будущие свечи после {last_bar_time}.")
             continue
 
         setup = run_test_bars(
@@ -145,9 +142,7 @@ def _plot(
             setup_name=setup.name.capitalize(),
             context=context,
         )
-    log.d(
-        f"График {setup.symbol} сохранен (контекст {context.value}) в {output_path}".strip()
-    )
+    log.d(f"График {setup.symbol} сохранен (контекст {context.value}) в {output_path}".strip())
 
 
 # endregion

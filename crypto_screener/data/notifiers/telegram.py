@@ -92,9 +92,7 @@ class _CallbackHandler:
             return
 
         message_id = str(message.message_id)
-        log.d(
-            f"Получен запрос на торговлю {symbol} на {timeframe.tf} с контекстом {symbol_context.value}."
-        )
+        log.d(f"Получен запрос на торговлю {symbol} на {timeframe.tf} с контекстом {symbol_context.value}.")
         self._trade_permission_service.allow_symbol_for_trading(
             symbol=symbol,
             timeframe=timeframe,
@@ -114,9 +112,7 @@ class _CallbackHandler:
             return
 
         message_id = str(message.message_id)
-        log.d(
-            f"Получен запрос на игнорирование {symbol} на {timeframe.tf} с контекстом {symbol_context.value}."
-        )
+        log.d(f"Получен запрос на игнорирование {symbol} на {timeframe.tf} с контекстом {symbol_context.value}.")
         self._trade_permission_service.ignore_symbol(
             symbol=symbol,
             timeframe=timeframe,

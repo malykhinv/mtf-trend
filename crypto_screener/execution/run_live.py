@@ -434,9 +434,7 @@ def _restore_limit_after_cancellation(
 ) -> None:
     remaining_quantity = _remaining_quantity_for_remainder(context, active_trade) or 0
     if remaining_quantity <= 0:
-        log.w(
-            f"Пропускаем восстановление {order_type} по {active_trade.symbol}: нет доступного объема."
-        )
+        log.w(f"Пропускаем восстановление {order_type} по {active_trade.symbol}: нет доступного объема.")
         return
 
     try:
@@ -806,9 +804,7 @@ def _process_filled_partial_close(
                 protective_order_statuses.breakeven = refreshed_breakeven_info
                 protective_order_statuses.breakeven_status = refreshed_breakeven_info.status
     except Exception as exception:
-        log.e(
-            f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}"
-        )
+        log.e(f"Не удалось обновить защитные ордера после частичного закрытия {active_trade.symbol}: {exception}")
 
     return protective_order_statuses.breakeven
 
@@ -1177,16 +1173,12 @@ def run_live(
         expired_permissions = trade_permission_service.pop_expired(now)
         for permission_key, expired_permission in expired_permissions:
             _remove_button_safe(notifier, expired_permission.message_id)
-            log.i(
-                f"Истекло разрешение на торговлю {permission_key.symbol} на {permission_key.timeframe.tf}, кнопка удалена."
-            )
+            log.i(f"Истекло разрешение на торговлю {permission_key.symbol} на {permission_key.timeframe.tf}.")
             notified_once.discard((permission_key.symbol, permission_key.timeframe, "Capture"))
         expired_ignored = trade_permission_service.pop_expired_ignored(now)
         for ignored_key, expired_ignore in expired_ignored:
             _remove_button_safe(notifier, expired_ignore.message_id)
-            log.i(
-                f"Истек срок игнорирования {ignored_key.symbol} на {ignored_key.timeframe.tf}, кнопка удалена."
-            )
+            log.i(f"Истек срок игнорирования {ignored_key.symbol} на {ignored_key.timeframe.tf}.")
         expired_captures = [
             (capture_key, active_capture)
             for capture_key, active_capture in capture_state.captures.items()
@@ -1196,7 +1188,7 @@ def run_live(
             capture_state.remove_capture(capture_key.symbol, capture_key.timeframe)
             _remove_button_safe(notifier, active_capture.message_id)
             trade_permission_service.clear_allowance(capture_key.symbol, capture_key.timeframe)
-            log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}, кнопка удалена.")
+            log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
             if capture_state.symbol == capture_key.symbol and not capture_state.has_symbol_capture(capture_key.symbol):
                 capture_state.symbol = None
@@ -1210,9 +1202,7 @@ def run_live(
         for symbol in active_symbols:
             for timeframe in timeframes:
                 if trade_permission_service.has_ignore(symbol.symbol, timeframe):
-                    log.d(
-                        f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования."
-                    )
+                    log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
                     continue
                 setup = None
                 bars = []

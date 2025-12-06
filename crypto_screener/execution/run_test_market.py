@@ -137,10 +137,7 @@ def run_test_market(
             )
 
             if len(bars) < timeframe_window:
-                log.e(
-                    f"{symbol.symbol} {timeframe.tf}: "
-                    f"для теста нужно минимум {timeframe_window} свечей, получено {len(bars)}."
-                )
+                log.e(f"{symbol.symbol} {timeframe.tf}: нужно {timeframe_window} свечей, получено {len(bars)}.")
                 continue
 
             for i in range(timeframe_window - 1, len(bars)):
