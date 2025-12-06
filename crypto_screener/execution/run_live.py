@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from crypto_screener.config.config import AppConfig as cfg
-from crypto_screener.data.notifiers.telegram import TRADE_CALLBACK_PREFIX
+from crypto_screener.data.notifiers.telegram import SKIP_CALLBACK_PREFIX, TRADE_CALLBACK_PREFIX
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
@@ -178,8 +178,13 @@ def _edit_notification(
 
 def _build_trade_keyboard(symbol: str, timeframe: Timeframe, context: Context) -> Keyboard:
     trade_text = cfg.TRADE_KEYBOARD[0][0][0] if cfg.TRADE_KEYBOARD else "Торговать"
+    skip_text = "Пропустить"
     callback_data = f"{TRADE_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{context.value}"
-    return [[(trade_text, callback_data)]]
+    skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{context.value}"
+    return [[
+        (trade_text, callback_data),
+        (skip_text, skip_callback_data),
+    ]]
 
 
 def _get_order_info_safe(exchange: Exchange, symbol: str, order_id: Optional[str]):
@@ -1013,6 +1018,12 @@ def run_live(
                 f"Истекло разрешение на торговлю {permission_key.symbol} на {permission_key.timeframe.tf}, кнопка удалена."
             )
             notified_once.discard((permission_key.symbol, permission_key.timeframe, "Capture"))
+        expired_ignored = trade_permission_service.pop_expired_ignored(now)
+        for ignored_key, expired_ignore in expired_ignored:
+            _remove_button_safe(notifier, expired_ignore.message_id)
+            log.i(
+                f"Истек срок игнорирования {ignored_key.symbol} на {ignored_key.timeframe.tf}, кнопка удалена."
+            )
         expired_captures = [
             (capture_key, active_capture)
             for capture_key, active_capture in capture_state.captures.items()
@@ -1035,6 +1046,11 @@ def run_live(
                           or capture_state.symbol == symbol.symbol]
         for symbol in active_symbols:
             for timeframe in timeframes:
+                if trade_permission_service.has_ignore(symbol.symbol, timeframe):
+                    log.d(
+                        f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования."
+                    )
+                    continue
                 setup = None
                 bars = []
                 for timeframe_limit in calculate_limit_grid(limit, timeframe):
