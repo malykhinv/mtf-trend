@@ -53,22 +53,10 @@ class TradeExecutionService:
             "breakeven_order_id": None,
         }
         try:
-            entry_order_id = self._place_with_retries(
-                label="entry",
-                place_order=lambda: self._exchange.place_market_order(
-                    setup.symbol,
-                    OrderSide.BUY,
-                    quantity,
-                    margin_mode=MarginMode.CROSS,
-                ),
-                symbol=setup.symbol,
-                acceptable_statuses={
-                    OrderStatus.FILLED,
-                    OrderStatus.NEW,
-                    OrderStatus.PARTIALLY_FILLED,
-                },
+            entry_order_id = self._open_entry_order(setup, quantity)
+            protective_order_ids = self._place_protective_bundle(
+                setup, quantity, protective_order_ids
             )
-            self._place_protective_orders(setup, quantity, protective_order_ids)
             position_id = self._fetch_position_id(setup.symbol)
             return ExecutionResult(
                 quantity=quantity,
@@ -77,17 +65,52 @@ class TradeExecutionService:
                 **protective_order_ids,
             )
         except Exception as exception:
-            self._cancel_order_safe(setup.symbol, entry_order_id)
-            for order_id in protective_order_ids.values():
-                self._cancel_order_safe(setup.symbol, order_id)
-            protective_order_ids = {key: None for key in protective_order_ids}
-            entry_order_id = None
-            self._notify_failure(
-                setup,
-                context,
-                f"Не удалось разместить ордера: {exception}",
+            self._handle_execution_failure(
+                setup, context, entry_order_id, protective_order_ids, exception
             )
             return None
+
+    def _open_entry_order(self, setup: Buy, quantity: float) -> str:
+        return self._place_with_retries(
+            label="entry",
+            place_order=lambda: self._exchange.place_market_order(
+                setup.symbol,
+                OrderSide.BUY,
+                quantity,
+                margin_mode=MarginMode.CROSS,
+            ),
+            symbol=setup.symbol,
+            acceptable_statuses={
+                OrderStatus.FILLED,
+                OrderStatus.NEW,
+                OrderStatus.PARTIALLY_FILLED,
+            },
+        )
+
+    def _place_protective_bundle(
+            self,
+            setup: Buy,
+            quantity: float,
+            protective_order_ids: dict[str, Optional[str]],
+    ) -> dict[str, Optional[str]]:
+        return self._place_protective_orders(setup, quantity, protective_order_ids)
+
+    def _handle_execution_failure(
+            self,
+            setup: Buy,
+            context: Context,
+            entry_order_id: Optional[str],
+            protective_order_ids: dict[str, Optional[str]],
+            exception: Exception,
+    ) -> None:
+        self._cancel_order_safe(setup.symbol, entry_order_id)
+        for order_id in protective_order_ids.values():
+            self._cancel_order_safe(setup.symbol, order_id)
+        self._notify_failure(
+            setup,
+            context,
+            f"Не удалось разместить ордера: {exception}",
+        )
 
     def _calculate_position_size(self, setup: Buy) -> float:
         entry_price = setup.entry_price
