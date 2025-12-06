@@ -379,6 +379,27 @@ def _monitor_active_trade(
                 position = None
 
             if not position or position.entry_price is None or position.quantity is None:
+                if active_trade.entry_order_status in (OrderStatus.NEW, OrderStatus.CANCELED):
+                    log.i(
+                        f"Входной ордер {active_trade.entry_order_id} в статусе "
+                        f"{active_trade.entry_order_status.value if active_trade.entry_order_status else 'неизвестно'} "
+                        "и позиция не найдена — завершаем сделку и отменяем связанные ордера."
+                    )
+                    trade_execution_service._cancel_order_safe(
+                        active_trade.symbol, active_trade.stop_loss_order_id
+                    )
+                    trade_execution_service._cancel_order_safe(
+                        active_trade.symbol, active_trade.take_profit_order_id
+                    )
+                    trade_execution_service._cancel_order_safe(
+                        active_trade.symbol, active_trade.partial_close_order_id
+                    )
+                    trade_execution_service._cancel_order_safe(
+                        active_trade.symbol, active_trade.breakeven_order_id
+                    )
+                    active_trade.status = OrderStatus.CANCELED
+                    return TradeResult.MANUAL, 0.0, 0.0, []
+
                 return None
 
             active_trade.entry_order_status = OrderStatus.FILLED
