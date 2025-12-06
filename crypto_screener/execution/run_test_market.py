@@ -9,6 +9,7 @@ from crypto_screener.domain.models.setups.ppo import Trade
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
+from crypto_screener.domain.strategies.base import Strategy
 from crypto_screener.execution.run_test_symbol import run_test_bars
 from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
 from crypto_screener.utils.history import calculate_limit, calculate_window
@@ -72,6 +73,7 @@ def _accumulate_history(
 # endregion
 
 def run_test_market(
+        strategy: Strategy,
         exchange: Exchange,
         timeframes: list[Timeframe],
         limit: int,
@@ -144,6 +146,7 @@ def run_test_market(
                 window_bars = bars[i - timeframe_window + 1:i + 1]
                 future_bars = bars[i + 1:]
                 setup = run_test_bars(
+                    strategy,
                     symbol=symbol.symbol,
                     timeframe=timeframe,
                     bars=window_bars,
