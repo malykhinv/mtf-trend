@@ -642,6 +642,110 @@ def _process_filled_partial_close(
     return breakeven_info
 
 
+def _calculate_partial_remainder_and_exit_price(
+        context: _TradeMonitorContext,
+        active_trade: ActiveTrade,
+        partial_close_info,
+        exit_prices: list[float],
+) -> tuple[float, float, float, float, float]:
+    entry_price = context.entry_price
+    exit_price = partial_close_info.average_price or (active_trade.setup.partial_close_price or entry_price)
+    _add_exit_price(exit_prices, exit_price)
+
+    total_quantity = active_trade.quantity or 0
+    partial_quantity = partial_close_info.filled or partial_close_info.quantity or total_quantity * 0.5
+    remaining_quantity = (
+        context.remaining_quantity
+        if context.remaining_quantity is not None
+        else max(total_quantity - partial_quantity, 0)
+    )
+    total_quantity = total_quantity or (partial_quantity + remaining_quantity)
+    context.remaining_quantity = remaining_quantity
+
+    return entry_price, exit_price, total_quantity, partial_quantity, remaining_quantity
+
+
+def _classify_partial_close_breakeven(
+        active_trade: ActiveTrade,
+        breakeven_info,
+        entry_price: float,
+        exit_price: float,
+        total_quantity: float,
+        partial_quantity: float,
+        remaining_quantity: float,
+        exit_prices: list[float],
+) -> Optional[tuple[TradeResult, float, float, list[float]]]:
+    if not breakeven_info or breakeven_info.status != OrderStatus.FILLED:
+        return None
+
+    breakeven_exit_price = breakeven_info.average_price or active_trade.setup.breakeven_price or exit_price
+    _add_exit_price(exit_prices, breakeven_exit_price)
+    profit_value, profit_pct = _calculate_split_profit(
+        entry_price,
+        total_quantity,
+        exit_price,
+        partial_quantity,
+        breakeven_exit_price,
+        remaining_quantity,
+    )
+    active_trade.status = OrderStatus.PARTIALLY_FILLED
+    return TradeResult.PC_BE, profit_pct, profit_value, exit_prices
+
+
+def _classify_partial_close_take_profit(
+        active_trade: ActiveTrade,
+        take_profit_info,
+        entry_price: float,
+        exit_price: float,
+        total_quantity: float,
+        partial_quantity: float,
+        remaining_quantity: float,
+        exit_prices: list[float],
+) -> Optional[tuple[TradeResult, float, float, list[float]]]:
+    if not take_profit_info or take_profit_info.status != OrderStatus.FILLED:
+        return None
+
+    take_profit_exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
+    _add_exit_price(exit_prices, take_profit_exit_price)
+    profit_value, profit_pct = _calculate_split_profit(
+        entry_price,
+        total_quantity,
+        exit_price,
+        partial_quantity,
+        take_profit_exit_price,
+        remaining_quantity,
+    )
+    active_trade.status = OrderStatus.FILLED
+    return TradeResult.PC_TP, profit_pct, profit_value, exit_prices
+
+
+def _classify_partial_close_stop_loss(
+        active_trade: ActiveTrade,
+        stop_loss_info,
+        entry_price: float,
+        exit_price: float,
+        total_quantity: float,
+        partial_quantity: float,
+        remaining_quantity: float,
+        exit_prices: list[float],
+) -> Optional[tuple[TradeResult, float, float, list[float]]]:
+    if not stop_loss_info or stop_loss_info.status != OrderStatus.FILLED:
+        return None
+
+    stop_loss_exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
+    _add_exit_price(exit_prices, stop_loss_exit_price)
+    profit_value, profit_pct = _calculate_split_profit(
+        entry_price,
+        total_quantity,
+        exit_price,
+        partial_quantity,
+        stop_loss_exit_price,
+        remaining_quantity,
+    )
+    active_trade.status = OrderStatus.FILLED
+    return TradeResult.SL, profit_pct, profit_value, exit_prices
+
+
 def _process_partial_close_outcome(
         context: _TradeMonitorContext,
         active_trade: ActiveTrade,
@@ -655,61 +759,48 @@ def _process_partial_close_outcome(
     if not partial_close_info or partial_close_info.status != OrderStatus.FILLED:
         return None, remaining_quantity_for_remainder
 
-    entry_price = context.entry_price
-    exit_price = partial_close_info.average_price or (active_trade.setup.partial_close_price or entry_price)
-    _add_exit_price(exit_prices, exit_price)
-    total_quantity = active_trade.quantity or 0
-    partial_quantity = partial_close_info.filled or partial_close_info.quantity or total_quantity * 0.5
-    remaining_quantity = (
-        context.remaining_quantity
-        if context.remaining_quantity is not None
-        else max(total_quantity - partial_quantity, 0)
+    entry_price, exit_price, total_quantity, partial_quantity, remaining_quantity_for_remainder = (
+        _calculate_partial_remainder_and_exit_price(context, active_trade, partial_close_info, exit_prices)
     )
-    total_quantity = total_quantity or (partial_quantity + remaining_quantity)
-    remaining_quantity_for_remainder = remaining_quantity
-    context.remaining_quantity = remaining_quantity_for_remainder
 
-    if breakeven_info and breakeven_info.status == OrderStatus.FILLED:
-        breakeven_exit_price = breakeven_info.average_price or active_trade.setup.breakeven_price or exit_price
-        _add_exit_price(exit_prices, breakeven_exit_price)
-        profit_value, profit_pct = _calculate_split_profit(
-            entry_price,
-            total_quantity,
-            exit_price,
-            partial_quantity,
-            breakeven_exit_price,
-            remaining_quantity,
-        )
-        active_trade.status = OrderStatus.PARTIALLY_FILLED
-        return (TradeResult.PC_BE, profit_pct, profit_value, exit_prices), remaining_quantity_for_remainder
+    breakeven_outcome = _classify_partial_close_breakeven(
+        active_trade,
+        breakeven_info,
+        entry_price,
+        exit_price,
+        total_quantity,
+        partial_quantity,
+        remaining_quantity_for_remainder,
+        exit_prices,
+    )
+    if breakeven_outcome:
+        return breakeven_outcome, remaining_quantity_for_remainder
 
-    if take_profit_info and take_profit_info.status == OrderStatus.FILLED:
-        take_profit_exit_price = take_profit_info.average_price or active_trade.setup.take_profit_price
-        _add_exit_price(exit_prices, take_profit_exit_price)
-        profit_value, profit_pct = _calculate_split_profit(
-            entry_price,
-            total_quantity,
-            exit_price,
-            partial_quantity,
-            take_profit_exit_price,
-            remaining_quantity,
-        )
-        active_trade.status = OrderStatus.FILLED
-        return (TradeResult.PC_TP, profit_pct, profit_value, exit_prices), remaining_quantity_for_remainder
+    take_profit_outcome = _classify_partial_close_take_profit(
+        active_trade,
+        take_profit_info,
+        entry_price,
+        exit_price,
+        total_quantity,
+        partial_quantity,
+        remaining_quantity_for_remainder,
+        exit_prices,
+    )
+    if take_profit_outcome:
+        return take_profit_outcome, remaining_quantity_for_remainder
 
-    if stop_loss_info and stop_loss_info.status == OrderStatus.FILLED:
-        stop_loss_exit_price = stop_loss_info.average_price or active_trade.setup.stop_loss_price
-        _add_exit_price(exit_prices, stop_loss_exit_price)
-        profit_value, profit_pct = _calculate_split_profit(
-            entry_price,
-            total_quantity,
-            exit_price,
-            partial_quantity,
-            stop_loss_exit_price,
-            remaining_quantity,
-        )
-        active_trade.status = OrderStatus.FILLED
-        return (TradeResult.SL, profit_pct, profit_value, exit_prices), remaining_quantity_for_remainder
+    stop_loss_outcome = _classify_partial_close_stop_loss(
+        active_trade,
+        stop_loss_info,
+        entry_price,
+        exit_price,
+        total_quantity,
+        partial_quantity,
+        remaining_quantity_for_remainder,
+        exit_prices,
+    )
+    if stop_loss_outcome:
+        return stop_loss_outcome, remaining_quantity_for_remainder
 
     return None, remaining_quantity_for_remainder
 
