@@ -43,6 +43,7 @@ def _initialize_notifier() -> Notifier:
 def main() -> None:
     load_dotenv()
     exchange = _initialize_exchange()
+    strategy = cfg.STRATEGY
     mode: Mode = cfg.MODE
     match mode:
         # Работа с актуальным рынком.
@@ -57,6 +58,7 @@ def main() -> None:
         ):
             notifier = _initialize_notifier()
             run_live(
+                strategy,
                 exchange,
                 notifier,
                 timeframes,
@@ -80,6 +82,7 @@ def main() -> None:
             listing_age_days_min=listing_age_days_min
         ):
             run_test_market(
+                strategy,
                 exchange,
                 timeframes,
                 limit,
@@ -97,7 +100,7 @@ def main() -> None:
             limit=limit,
             plot_policy=plot_policy
         ):
-            run_test_symbols(exchange, test_data, limit, plot_policy)
+            run_test_symbols(strategy, exchange, test_data, limit, plot_policy)
 
         case _:
             # noinspection PyUnreachableCode

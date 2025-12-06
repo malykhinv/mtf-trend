@@ -5,12 +5,17 @@ from zoneinfo import ZoneInfo
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, \
     TestData
 from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.strategies.base import Strategy
+from crypto_screener.domain.strategies.ppo import PpoStrategy
 
 # Временная зона.
 _timezone: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
 # Таймфреймы.
 _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5]
+
+# Стратегия.
+_strategy = PpoStrategy()
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
@@ -87,6 +92,9 @@ class AppConfig:
 
     # Режим работы.
     MODE: Mode = _mode_live
+
+    # Стратегия.
+    STRATEGY: Strategy = _strategy
 
     # region Контекст.
     CONTEXT_TRADES_MIN: int = 500_000

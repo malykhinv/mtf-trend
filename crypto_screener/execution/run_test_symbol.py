@@ -9,12 +9,11 @@ from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setups.ppo import Setup, Trade
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
-from crypto_screener.domain.setup_detector import default_strategy
+from crypto_screener.domain.strategies.base import Strategy
 from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
-
 
 # region Private.
 def _future_end(end: datetime, timeframe: Timeframe, limit: int) -> datetime:
@@ -36,6 +35,7 @@ def _get_future_bars(
 
 
 def _run_test_symbol(
+        strategy: Strategy,
         exchange: Exchange,
         symbol: str,
         timeframe: Timeframe,
@@ -65,6 +65,7 @@ def _run_test_symbol(
             continue
 
         setup = run_test_bars(
+            strategy,
             symbol=symbol,
             timeframe=timeframe,
             bars=bars,
@@ -91,12 +92,13 @@ def _run_test_symbol(
 
 
 def _detect_setup(
+        strategy: Strategy,
         symbol: str,
         bars: list[Bar],
         timeframe: Timeframe,
-        context: Context
+        context: Context,
 ) -> Setup:
-    setup = default_strategy.detect_setup(symbol, bars, timeframe, context)
+    setup = strategy.detect_setup(symbol, bars, timeframe, context)
     if setup.is_filled:
         log.d(f"На {symbol} ({timeframe.tf}) обнаружен {setup.name.capitalize()}-сетап.")
     return setup
@@ -131,6 +133,7 @@ def _plot(
 # endregion
 
 def run_test_bars(
+        strategy: Strategy,
         symbol: str,
         timeframe: Timeframe,
         bars: list[Bar],
@@ -143,7 +146,7 @@ def run_test_bars(
     if not bars:
         return None
     detection_time = detection_time or bars[-1].time
-    setup = _detect_setup(symbol, bars, timeframe, context)
+    setup = _detect_setup(strategy, symbol, bars, timeframe, context)
     match plot_policy:
         case PlotPolicy.ON_ANY:
             _plot(setup, subdir, postmortem_bars, detection_time, context=context)
@@ -157,6 +160,7 @@ def run_test_bars(
 
 
 def run_test_symbols(
+        strategy: Strategy,
         exchange: Exchange,
         test_data: list[TestData],
         limit: int,
@@ -167,6 +171,7 @@ def run_test_symbols(
 
     for data in test_data:
         symbol_results, symbol_outcomes = _run_test_symbol(
+            strategy,
             exchange,
             data.symbol,
             data.timeframe,
