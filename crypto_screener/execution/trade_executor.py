@@ -46,6 +46,12 @@ class TradeExecutionService:
             return None
 
         entry_order_id: Optional[str] = None
+        protective_order_ids: dict[str, Optional[str]] = {
+            "stop_loss_order_id": None,
+            "take_profit_order_id": None,
+            "partial_close_order_id": None,
+            "breakeven_order_id": None,
+        }
         try:
             entry_order_id = self._place_with_retries(
                 label="entry",
@@ -62,7 +68,7 @@ class TradeExecutionService:
                     OrderStatus.PARTIALLY_FILLED,
                 },
             )
-            protective_order_ids = self._place_protective_orders(setup, quantity)
+            self._place_protective_orders(setup, quantity, protective_order_ids)
             position_id = self._fetch_position_id(setup.symbol)
             return ExecutionResult(
                 quantity=quantity,
@@ -71,8 +77,11 @@ class TradeExecutionService:
                 **protective_order_ids,
             )
         except Exception as exception:
-            if entry_order_id:
-                self._cancel_order_safe(setup.symbol, entry_order_id)
+            self._cancel_order_safe(setup.symbol, entry_order_id)
+            for order_id in protective_order_ids.values():
+                self._cancel_order_safe(setup.symbol, order_id)
+            protective_order_ids = {key: None for key in protective_order_ids}
+            entry_order_id = None
             self._notify_failure(
                 setup,
                 context,
@@ -103,8 +112,13 @@ class TradeExecutionService:
         )
         return quantity
 
-    def _place_protective_orders(self, setup: Buy, quantity: float) -> dict[str, Optional[str]]:
-        ids: dict[str, Optional[str]] = {
+    def _place_protective_orders(
+            self,
+            setup: Buy,
+            quantity: float,
+            ids: Optional[dict[str, Optional[str]]] = None,
+    ) -> dict[str, Optional[str]]:
+        ids = ids or {
             "stop_loss_order_id": None,
             "take_profit_order_id": None,
             "partial_close_order_id": None,
