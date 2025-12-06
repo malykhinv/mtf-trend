@@ -2,8 +2,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
-import numpy as np
+
 import matplotlib
+import numpy as np
 from matplotlib.figure import Figure
 
 from crypto_screener.domain.models.context import Context

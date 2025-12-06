@@ -3,12 +3,12 @@ from datetime import datetime
 from typing import Optional
 
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.symbol import FuturesSymbol
-from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.margin_mode import MarginMode
 from crypto_screener.domain.models.order_info import OrderInfo
 from crypto_screener.domain.models.order_side import OrderSide
 from crypto_screener.domain.models.position import Position
+from crypto_screener.domain.models.symbol import FuturesSymbol
+from crypto_screener.domain.models.timeframe import Timeframe
 
 
 class Exchange(ABC):
@@ -71,5 +71,3 @@ class Exchange(ABC):
             margin_mode: Optional[MarginMode] = None,
     ) -> str:
         ...
-
-    @abstractmethod

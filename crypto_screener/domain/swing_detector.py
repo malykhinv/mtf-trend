@@ -218,6 +218,7 @@ def _refine_swings(bars: list[Bar]) -> list[Bar]:
             continue
 
         best_index = mid_index
+        new_price = 0
         match mid_type:
             case SwingType.LOW:
                 best_value = bars[best_index].low

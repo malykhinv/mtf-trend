@@ -10,8 +10,8 @@ from crypto_screener.domain.models.margin_mode import MarginMode
 from crypto_screener.domain.models.order_side import OrderSide
 from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.stop_realignment_result import StopRealignmentResult
 from crypto_screener.domain.models.setup import Buy
+from crypto_screener.domain.models.stop_realignment_result import StopRealignmentResult
 from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.utils.logger import log
 
@@ -31,7 +31,7 @@ class TradeExecutionService:
             notifier: Notifier,
     ) -> None:
         self._exchange = exchange
-        self._notifier = notifier
+        self.notifier = notifier
 
     def execute_buy(self, setup: Buy, context: Context) -> Optional[ExecutionResult]:
         entry_order_id: Optional[str] = None
@@ -57,7 +57,11 @@ class TradeExecutionService:
             )
             return None
 
-    def _determine_position_size(self, setup: Buy, context: Context) -> float:
+    def _determine_position_size(
+            self,
+            setup: Buy,
+            context: Context
+    ) -> float:
         try:
             return self._calculate_position_size(setup)
         except Exception as exception:
@@ -68,7 +72,11 @@ class TradeExecutionService:
             )
             raise
 
-    def _place_entry_order(self, setup: Buy, quantity: float) -> str:
+    def _place_entry_order(
+            self,
+            setup: Buy,
+            quantity: float
+    ) -> str:
         order_id, _ = self._place_with_retries(
             label="entry",
             place_order=lambda: self._exchange.place_market_order(
@@ -93,7 +101,10 @@ class TradeExecutionService:
     ) -> ProtectiveOrders:
         return self._place_protective_orders(setup, quantity)
 
-    def _extract_position_id(self, symbol: str) -> Optional[str]:
+    def _extract_position_id(
+            self,
+            symbol: str
+    ) -> Optional[str]:
         return self._fetch_position_id(symbol)
 
     def _handle_execution_failure(
@@ -104,21 +115,22 @@ class TradeExecutionService:
             protective_orders: ProtectiveOrders,
             exception: Exception,
     ) -> None:
-        self._cancel_order_safe(setup.symbol, entry_order_id)
+        self.cancel_order_safe(setup.symbol, entry_order_id)
         for order_id in (
             protective_orders.stop_loss_id,
             protective_orders.take_profit_id,
             protective_orders.partial_close_id,
             protective_orders.breakeven_id,
         ):
-            self._cancel_order_safe(setup.symbol, order_id)
+            self.cancel_order_safe(setup.symbol, order_id)
         self._notify_failure(
             setup,
             context,
             f"Не удалось разместить ордера: {exception}",
         )
 
-    def _calculate_position_size(self, setup: Buy) -> float:
+    @staticmethod
+    def _calculate_position_size(setup: Buy) -> float:
         entry_price = setup.entry_price
         stop_loss_price = setup.stop_loss_price
         stop_distance = entry_price - stop_loss_price
@@ -150,11 +162,14 @@ class TradeExecutionService:
         orders = orders or ProtectiveOrders()
 
         orders = self._place_stop_loss(setup, quantity, orders)
-        orders = self._place_take_profit(setup, quantity, orders)
-        return self._place_partial_close(setup, quantity, orders)
+        orders = self.place_take_profit(setup, quantity, orders)
+        return self.place_partial_close(setup, quantity, orders)
 
     def _place_stop_loss(
-            self, setup: Buy, quantity: float, orders: ProtectiveOrders,
+            self,
+            setup: Buy,
+            quantity: float,
+            orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
         orders.stop_loss_id, orders.stop_loss_status = self._place_with_retries(
             label="stop-loss",
@@ -170,8 +185,11 @@ class TradeExecutionService:
         )
         return orders
 
-    def _place_take_profit(
-            self, setup: Buy, quantity: float, orders: ProtectiveOrders,
+    def place_take_profit(
+            self,
+            setup: Buy,
+            quantity: float,
+            orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
         orders.take_profit_id, orders.take_profit_status = self._place_with_retries(
             label="take-profit",
@@ -187,8 +205,11 @@ class TradeExecutionService:
         )
         return orders
 
-    def _place_partial_close(
-            self, setup: Buy, quantity: float, orders: ProtectiveOrders,
+    def place_partial_close(
+            self,
+            setup: Buy,
+            quantity: float,
+            orders: ProtectiveOrders,
     ) -> ProtectiveOrders:
         if setup.partial_close_price is None:
             return orders
@@ -208,7 +229,8 @@ class TradeExecutionService:
         )
         return orders
 
-    def _protective_acceptable_statuses(self) -> set[OrderStatus]:
+    @staticmethod
+    def _protective_acceptable_statuses() -> set[OrderStatus]:
         return {
             OrderStatus.FILLED,
             OrderStatus.NEW,
@@ -237,7 +259,7 @@ class TradeExecutionService:
             log.d(
                 f"Ордер {label} {order_id} для {symbol} имеет статус {status.value}, отменяем ордер без повторных попыток."
             )
-            self._cancel_order_safe(symbol, order_id)
+            self.cancel_order_safe(symbol, order_id)
             raise RuntimeError(
                 f"Ордер {label} {order_id} для {symbol} имеет недопустимый статус {status.value}"
             )
@@ -247,7 +269,11 @@ class TradeExecutionService:
             )
             raise
 
-    def _get_order_status(self, symbol: str, order_id: str) -> Optional[OrderStatus]:
+    def _get_order_status(
+            self,
+            symbol: str,
+            order_id: str
+    ) -> Optional[OrderStatus]:
         try:
             order_info = self._exchange.get_order_status(symbol, order_id)
         except NotImplementedError:
@@ -341,8 +367,10 @@ class TradeExecutionService:
         )
         return StopRealignmentResult()
 
+    @staticmethod
     def _target_stop_order_details(
-            self, setup: Buy, move_to_breakeven: bool
+            setup: Buy,
+            move_to_breakeven: bool
     ) -> tuple[float, str, bool]:
         move_to_breakeven_target = (
             move_to_breakeven and setup.breakeven_price is not None
@@ -390,11 +418,11 @@ class TradeExecutionService:
             stop_loss_order_id: Optional[str],
             breakeven_order_id: Optional[str],
     ) -> None:
-        self._cancel_order_safe(symbol, stop_loss_order_id)
-        self._cancel_order_safe(symbol, breakeven_order_id)
+        self.cancel_order_safe(symbol, stop_loss_order_id)
+        self.cancel_order_safe(symbol, breakeven_order_id)
 
+    @staticmethod
     def _collect_stop_realign_result(
-            self,
             new_stop_id: str,
             new_stop_status: Optional[OrderStatus],
             is_breakeven_target: bool,
@@ -408,7 +436,7 @@ class TradeExecutionService:
             result.stop_loss_status = new_stop_status or OrderStatus.NEW
         return result
 
-    def _cancel_order_safe(self, symbol: str, order_id: Optional[str]) -> None:
+    def cancel_order_safe(self, symbol: str, order_id: Optional[str]) -> None:
         if not order_id:
             return
         try:
@@ -428,7 +456,12 @@ class TradeExecutionService:
             log.e(f"Не удалось получить позицию {symbol}: {exception}")
             return None
 
-    def _notify_failure(self, setup: Buy, context: Context, message: str) -> None:
+    def _notify_failure(
+            self,
+            setup: Buy,
+            context: Context,
+            message: str
+    ) -> None:
         full_message = (
             f"Ошибка открытия позиции {setup.symbol} на {setup.timeframe.tf}: {message}\n"
             f"Уровни: Entry {setup.entry_price:.4f}, SL {setup.stop_loss_price:.4f}, "
@@ -436,7 +469,7 @@ class TradeExecutionService:
         )
         log.e(full_message)
         try:
-            self._notifier.notify(
+            self.notifier.notify(
                 notification_type=NotificationType.ORDER,
                 message=full_message,
                 context=context,

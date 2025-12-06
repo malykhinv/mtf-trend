@@ -26,6 +26,7 @@ class IgnoredSymbolsStorage:
     def remove(self, key: AllowedTradeKey) -> Optional[IgnoredSymbol]:
         return self._ignored_symbols.pop(key, None)
 
+    # noinspection DuplicatedCode
     def has(
             self,
             key: AllowedTradeKey,
@@ -58,8 +59,8 @@ class IgnoredSymbolsStorage:
 class IgnoredSymbolRegistry:
     _storage: IgnoredSymbolsStorage = field(default_factory=IgnoredSymbolsStorage)
 
+    @staticmethod
     def _build_ignored_symbol(
-            self,
             key: AllowedTradeKey,
             message_id: str,
             context: Context,

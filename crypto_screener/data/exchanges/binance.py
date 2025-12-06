@@ -8,11 +8,11 @@ import ccxt
 from crypto_screener.data.mappers import map_ohlcv
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.margin_mode import MarginMode
 from crypto_screener.domain.models.order_info import OrderInfo
 from crypto_screener.domain.models.order_side import OrderSide
 from crypto_screener.domain.models.position import Position
+from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.extractors import extract_float, extract_int
 
@@ -77,6 +77,7 @@ class Binance(Exchange):
             )
         return symbols
 
+    # noinspection DuplicatedCode
     def get_ohlcv(
             self,
             symbol: str,

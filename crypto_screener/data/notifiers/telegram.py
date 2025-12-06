@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 from typing import Optional
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update, MaybeInaccessibleMessage
 from telegram.constants import UpdateType
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
@@ -48,20 +48,26 @@ class _CallbackHandler:
     def _run_polling(self) -> None:
         self._application.run_polling(allowed_updates=[UpdateType.CALLBACK_QUERY])
 
-    async def _handle_trade_request(
-            self,
-            update: Update,
-            context: ContextTypes.DEFAULT_TYPE,
-    ) -> None:
+    @staticmethod
+    async def _get_message_data(update: Update) -> tuple[
+        Optional[str],
+        Optional[MaybeInaccessibleMessage],
+        Optional[Timeframe],
+        Optional[Context],
+    ]:
+        symbol = None
+        message = None
+        timeframe = None
+        symbol_context = None
         query = update.callback_query
         if not query:
-            return
+            return symbol, message, timeframe, symbol_context
 
         await query.answer()
         callback_data = (query.data or "").split(":")
         if len(callback_data) != 4:
             log.e(f"Не удалось разобрать callback_data: {query.data}")
-            return
+            return symbol, message, timeframe, symbol_context
 
         _, symbol, timeframe_tf, context_value = callback_data
         try:
@@ -69,9 +75,18 @@ class _CallbackHandler:
             symbol_context = Context(context_value)
         except ValueError as exception:
             log.e(f"Некорректные данные callback {query.data}: {exception}")
-            return
+            return symbol, message, timeframe, symbol_context
 
         message = query.message
+        return symbol, message, timeframe, symbol_context
+
+    # noinspection PyUnusedLocal
+    async def _handle_trade_request(
+            self,
+            update: Update,
+            context: ContextTypes.DEFAULT_TYPE,
+    ) -> None:
+        symbol, message, timeframe, symbol_context = await self._get_message_data(update)
         if not message:
             log.e("Отсутствует сообщение для callback торговой кнопки.")
             return
@@ -87,30 +102,13 @@ class _CallbackHandler:
             context=symbol_context,
         )
 
+    # noinspection PyUnusedLocal
     async def _handle_skip_request(
             self,
             update: Update,
             context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        query = update.callback_query
-        if not query:
-            return
-
-        await query.answer()
-        callback_data = (query.data or "").split(":")
-        if len(callback_data) != 4:
-            log.e(f"Не удалось разобрать callback_data: {query.data}")
-            return
-
-        _, symbol, timeframe_tf, context_value = callback_data
-        try:
-            timeframe = Timeframe.from_tf(timeframe_tf)
-            symbol_context = Context(context_value)
-        except ValueError as exception:
-            log.e(f"Некорректные данные callback {query.data}: {exception}")
-            return
-
-        message = query.message
+        symbol, message, timeframe, symbol_context = await self._get_message_data(update)
         if not message:
             log.e("Отсутствует сообщение для callback кнопки игнорирования.")
             return
@@ -211,7 +209,8 @@ class TgNotifier(Notifier):
             return message_id
         return None
 
-    def _get_keyboard(self, keyboard: Optional[Keyboard]) -> Optional[InlineKeyboardMarkup]:
+    @staticmethod
+    def _get_keyboard(keyboard: Optional[Keyboard]) -> Optional[InlineKeyboardMarkup]:
         if not keyboard:
             return None
         inline_rows = [
@@ -230,6 +229,7 @@ class TgNotifier(Notifier):
             keyboard: Optional[Keyboard] = None,
             context: Optional[Context] = None,
     ) -> Optional[str]:
+        bot = None
         match notification_type:
             case NotificationType.EVENT:
                 bot = self._event_bot
@@ -252,6 +252,7 @@ class TgNotifier(Notifier):
             keyboard: Optional[Keyboard] = None,
             context: Optional[Context] = None,
     ) -> Optional[str]:
+        bot = None
         match notification_type:
             case NotificationType.EVENT:
                 bot = self._event_bot
@@ -271,7 +272,10 @@ class TgNotifier(Notifier):
             log.e(f"Ошибка при редактировании сообщения {message_id}:\n{exception}")
         return None
 
-    def remove_button(self, message_id: Optional[str]) -> None:
+    def remove_button(
+            self,
+            message_id: Optional[str]
+    ) -> None:
         if not message_id:
             return
         try:

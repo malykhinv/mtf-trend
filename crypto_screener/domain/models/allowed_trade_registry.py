@@ -32,6 +32,7 @@ class AllowedTradesStorage:
     def remove(self, key: AllowedTradeKey) -> Optional[AllowedTrade]:
         return self._allowed_trades.pop(key, None)
 
+    # noinspection DuplicatedCode
     def has(self, key: AllowedTradeKey, now: Optional[datetime] = None) -> tuple[bool, Optional[AllowedTrade]]:
         allowance = self._allowed_trades.get(key)
         if not allowance:
@@ -60,8 +61,8 @@ class AllowedTradesStorage:
 class AllowedTradeRegistry:
     _storage: AllowedTradesStorage = field(default_factory=AllowedTradesStorage)
 
+    @staticmethod
     def _build_trade(
-            self,
             key: AllowedTradeKey,
             message_id: str,
             context: Context,

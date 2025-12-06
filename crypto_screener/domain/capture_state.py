@@ -1,11 +1,12 @@
-from datetime import datetime, timedelta
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional
 
 from crypto_screener.domain.models.active_capture import ActiveCapture
 from crypto_screener.domain.models.capture_registry import CaptureKey, CaptureRegistry
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.time import utc_now
+
 
 @dataclass
 class CaptureState:

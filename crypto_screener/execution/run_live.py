@@ -12,26 +12,27 @@ from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.active_trade import ActiveTrade
 from crypto_screener.domain.models.active_trade_registry import ActiveTradeKey, ActiveTrades
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.capture_registry import CaptureKey
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
-from crypto_screener.domain.models.capture_registry import CaptureKey
+from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
+from crypto_screener.domain.models.protective_orders import ProtectiveOrders
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
-from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
 from crypto_screener.domain.models.trade_result import TradeResult
+from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
 from crypto_screener.domain.setup_detector import detect_setup
-from crypto_screener.execution.trade_permission_service import TradePermissionService
 from crypto_screener.execution.trade_executor import TradeExecutionService
+from crypto_screener.execution.trade_permission_service import TradePermissionService
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
 from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.time import utc_now
+
 
 # region Private.
 def _fetch_filtered_symbols(
@@ -176,8 +177,12 @@ def _edit_notification(
     return None
 
 
-def _build_trade_keyboard(symbol: str, timeframe: Timeframe, context: Context) -> Keyboard:
-    trade_text = cfg.TRADE_KEYBOARD[0][0][0] if cfg.TRADE_KEYBOARD else "Торговать"
+def _build_trade_keyboard(
+        symbol: str,
+        timeframe: Timeframe,
+        context: Context
+) -> Keyboard:
+    trade_text = "Торговать"
     skip_text = "Пропустить"
     callback_data = f"{TRADE_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{context.value}"
     skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{context.value}"
@@ -187,7 +192,11 @@ def _build_trade_keyboard(symbol: str, timeframe: Timeframe, context: Context) -
     ]]
 
 
-def _get_order_info_safe(exchange: Exchange, symbol: str, order_id: Optional[str]):
+def _get_order_info_safe(
+        exchange: Exchange,
+        symbol: str,
+        order_id: Optional[str]
+):
     if not order_id:
         return None
     try:
@@ -213,6 +222,7 @@ def _cancel_order_safe(exchange: Exchange, symbol: str, order_id: Optional[str])
 
 def _describe_exit(trade_result: TradeResult, trade_levels) -> tuple[str, list[float]]:
     exit_prices: list[float] = []
+    label = trade_result.value
     match trade_result:
         case TradeResult.SL:
             exit_prices = [trade_levels.stop_loss_price]
@@ -234,8 +244,6 @@ def _describe_exit(trade_result: TradeResult, trade_levels) -> tuple[str, list[f
                 if price is not None
             ]
             label = "PC → TP"
-        case _:
-            label = trade_result.value
     return label, exit_prices
 
 
@@ -369,7 +377,7 @@ def _notify_protective_recovery(
 ) -> None:
     log.w(message)
     try:
-        trade_execution_service._notifier.notify(
+        trade_execution_service.notifier.notify(
             notification_type=NotificationType.ORDER,
             message=message,
             context=active_trade.context,
@@ -433,7 +441,7 @@ def _restore_limit_after_cancellation(
 
     try:
         if order_type == "take-profit":
-            restored_orders = trade_execution_service._place_take_profit(
+            restored_orders = trade_execution_service.place_take_profit(
                 setup=active_trade.setup,
                 quantity=remaining_quantity,
                 orders=context.protective_orders,
@@ -443,7 +451,7 @@ def _restore_limit_after_cancellation(
             protective_order_statuses.take_profit = None
             protective_order_statuses.take_profit_status = restored_orders.take_profit_status
         elif order_type == "partial-close" and active_trade.setup.partial_close_price is not None:
-            restored_orders = trade_execution_service._place_partial_close(
+            restored_orders = trade_execution_service.place_partial_close(
                 setup=active_trade.setup,
                 quantity=remaining_quantity,
                 orders=context.protective_orders,
@@ -577,16 +585,16 @@ def _update_entry_status_and_position(
                     f"{active_trade.entry_order_status.value if active_trade.entry_order_status else 'неизвестно'} "
                     "и позиция не найдена — завершаем сделку и отменяем связанные ордера."
                 )
-                trade_execution_service._cancel_order_safe(
+                trade_execution_service.cancel_order_safe(
                     active_trade.symbol, protective_orders.stop_loss_id
                 )
-                trade_execution_service._cancel_order_safe(
+                trade_execution_service.cancel_order_safe(
                     active_trade.symbol, protective_orders.take_profit_id
                 )
-                trade_execution_service._cancel_order_safe(
+                trade_execution_service.cancel_order_safe(
                     active_trade.symbol, protective_orders.partial_close_id
                 )
-                trade_execution_service._cancel_order_safe(
+                trade_execution_service.cancel_order_safe(
                     active_trade.symbol, protective_orders.breakeven_id
                 )
                 active_trade.status = OrderStatus.CANCELED
@@ -722,6 +730,7 @@ def _refresh_protective_orders(
     return protective_order_statuses
 
 
+# noinspection DuplicatedCode
 def _process_filled_partial_close(
         trade_execution_service: TradeExecutionService,
         exchange: Exchange,
@@ -854,6 +863,7 @@ def _classify_partial_close_breakeven(
     return TradeResult.PC_BE, profit_pct, profit_value, exit_prices
 
 
+# noinspection DuplicatedCode
 def _classify_partial_close_take_profit(
         active_trade: ActiveTrade,
         take_profit_info,
@@ -881,6 +891,7 @@ def _classify_partial_close_take_profit(
     return TradeResult.PC_TP, profit_pct, profit_value, exit_prices
 
 
+# noinspection DuplicatedCode
 def _classify_partial_close_stop_loss(
         active_trade: ActiveTrade,
         stop_loss_info,
@@ -965,6 +976,7 @@ def _process_partial_close_outcome(
     return None, remaining_quantity_for_remainder
 
 
+# noinspection DuplicatedCode
 def _process_full_exit_outcome(
         context: _TradeMonitorContext,
         active_trade: ActiveTrade,
@@ -1027,8 +1039,6 @@ def _process_final_position_outcome(
         return TradeResult.MANUAL, profit_pct, profit_value, exit_prices
 
     if position and position.pnl is not None:
-        base = context.entry_price * active_trade.quantity if active_trade.quantity else 1
-        profit_pct = position.pnl / base * 100
         return None
 
     return None
