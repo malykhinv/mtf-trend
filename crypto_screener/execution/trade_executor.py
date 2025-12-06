@@ -9,6 +9,8 @@ from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.margin_mode import MarginMode
 from crypto_screener.domain.models.order_side import OrderSide
 from crypto_screener.domain.models.order_status import OrderStatus
+from crypto_screener.domain.models.protective_orders import ProtectiveOrders
+from crypto_screener.domain.models.stop_realignment_result import StopRealignmentResult
 from crypto_screener.domain.models.setup import Buy
 from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.utils.logger import log
@@ -18,10 +20,7 @@ from crypto_screener.utils.logger import log
 class ExecutionResult:
     quantity: float
     entry_order_id: str
-    stop_loss_order_id: Optional[str]
-    take_profit_order_id: Optional[str]
-    partial_close_order_id: Optional[str]
-    breakeven_order_id: Optional[str]
+    protective_orders: ProtectiveOrders
     position_id: Optional[str]
 
 
@@ -46,27 +45,22 @@ class TradeExecutionService:
             return None
 
         entry_order_id: Optional[str] = None
-        protective_order_ids: dict[str, Optional[str]] = {
-            "stop_loss_order_id": None,
-            "take_profit_order_id": None,
-            "partial_close_order_id": None,
-            "breakeven_order_id": None,
-        }
+        protective_orders = ProtectiveOrders()
         try:
             entry_order_id = self._open_entry_order(setup, quantity)
-            protective_order_ids = self._place_protective_bundle(
-                setup, quantity, protective_order_ids
+            protective_orders = self._place_protective_bundle(
+                setup, quantity, protective_orders,
             )
             position_id = self._fetch_position_id(setup.symbol)
             return ExecutionResult(
                 quantity=quantity,
                 entry_order_id=entry_order_id,
+                protective_orders=protective_orders,
                 position_id=position_id,
-                **protective_order_ids,
             )
         except Exception as exception:
             self._handle_execution_failure(
-                setup, context, entry_order_id, protective_order_ids, exception
+                setup, context, entry_order_id, protective_orders, exception
             )
             return None
 
@@ -91,20 +85,25 @@ class TradeExecutionService:
             self,
             setup: Buy,
             quantity: float,
-            protective_order_ids: dict[str, Optional[str]],
-    ) -> dict[str, Optional[str]]:
-        return self._place_protective_orders(setup, quantity, protective_order_ids)
+            protective_orders: ProtectiveOrders,
+    ) -> ProtectiveOrders:
+        return self._place_protective_orders(setup, quantity, protective_orders)
 
     def _handle_execution_failure(
             self,
             setup: Buy,
             context: Context,
             entry_order_id: Optional[str],
-            protective_order_ids: dict[str, Optional[str]],
+            protective_orders: ProtectiveOrders,
             exception: Exception,
     ) -> None:
         self._cancel_order_safe(setup.symbol, entry_order_id)
-        for order_id in protective_order_ids.values():
+        for order_id in (
+            protective_orders.stop_loss_id,
+            protective_orders.take_profit_id,
+            protective_orders.partial_close_id,
+            protective_orders.breakeven_id,
+        ):
             self._cancel_order_safe(setup.symbol, order_id)
         self._notify_failure(
             setup,
@@ -139,16 +138,11 @@ class TradeExecutionService:
             self,
             setup: Buy,
             quantity: float,
-            ids: Optional[dict[str, Optional[str]]] = None,
-    ) -> dict[str, Optional[str]]:
-        ids = ids or {
-            "stop_loss_order_id": None,
-            "take_profit_order_id": None,
-            "partial_close_order_id": None,
-            "breakeven_order_id": None,
-        }
+            orders: Optional[ProtectiveOrders] = None,
+    ) -> ProtectiveOrders:
+        orders = orders or ProtectiveOrders()
 
-        ids["stop_loss_order_id"] = self._place_with_retries(
+        orders.stop_loss_id = self._place_with_retries(
             label="stop-loss",
             place_order=lambda: self._exchange.place_stop_loss_order(
                 setup.symbol,
@@ -164,8 +158,9 @@ class TradeExecutionService:
                 OrderStatus.PARTIALLY_FILLED,
             },
         )
+        orders.stop_loss_status = OrderStatus.NEW
 
-        ids["take_profit_order_id"] = self._place_with_retries(
+        orders.take_profit_id = self._place_with_retries(
             label="take-profit",
             place_order=lambda: self._exchange.place_take_profit_order(
                 setup.symbol,
@@ -181,10 +176,11 @@ class TradeExecutionService:
                 OrderStatus.PARTIALLY_FILLED,
             },
         )
+        orders.take_profit_status = OrderStatus.NEW
 
         if setup.partial_close_price is not None:
             partial_quantity = quantity * 0.5
-            ids["partial_close_order_id"] = self._place_with_retries(
+            orders.partial_close_id = self._place_with_retries(
                 label="partial-close",
                 place_order=lambda: self._exchange.place_take_profit_order(
                     setup.symbol,
@@ -200,8 +196,9 @@ class TradeExecutionService:
                     OrderStatus.PARTIALLY_FILLED,
                 },
             )
+            orders.partial_close_status = OrderStatus.NEW
 
-        return ids
+        return orders
 
     def _place_with_retries(
             self,
@@ -250,15 +247,14 @@ class TradeExecutionService:
             breakeven_order_id: Optional[str],
             remaining_quantity: float,
             move_to_breakeven: bool,
-    ) -> dict[str, Optional[str]]:
-        current_ids: dict[str, Optional[str]] = {
-            "stop_loss_order_id": stop_loss_order_id,
-            "breakeven_order_id": breakeven_order_id,
-        }
-        ids: dict[str, Optional[str]] = {
-            "stop_loss_order_id": None,
-            "breakeven_order_id": None,
-        }
+    ) -> StopRealignmentResult:
+        current_ids = StopRealignmentResult(
+            stop_loss_id=stop_loss_order_id,
+            breakeven_id=breakeven_order_id,
+            stop_loss_status=OrderStatus.NEW if stop_loss_order_id else None,
+            breakeven_status=OrderStatus.NEW if breakeven_order_id else None,
+        )
+        ids = StopRealignmentResult()
 
         if remaining_quantity <= 0:
             log.d(
@@ -297,9 +293,11 @@ class TradeExecutionService:
         self._cancel_order_safe(setup.symbol, breakeven_order_id)
 
         if move_to_breakeven and setup.breakeven_price is not None:
-            ids["breakeven_order_id"] = new_stop_id
+            ids.breakeven_id = new_stop_id
+            ids.breakeven_status = OrderStatus.NEW
         else:
-            ids["stop_loss_order_id"] = new_stop_id
+            ids.stop_loss_id = new_stop_id
+            ids.stop_loss_status = OrderStatus.NEW
 
         return ids
 
