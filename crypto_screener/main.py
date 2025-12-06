@@ -22,9 +22,9 @@ def _initialize_exchange() -> Exchange:
     api_key = os.getenv(cfg.EXCHANGE + "API_KEY", None)
     api_secret = os.getenv(cfg.EXCHANGE + "API_SECRET", None)
     match cfg.EXCHANGE:
-        case Binance.__name__.upper():
+        case Binance.__name__:
             return Binance(api_key, api_secret)
-        case Bybit.__name__.upper():
+        case Bybit.__name__:
             return Bybit(api_key, api_secret)
         case _:
             raise NameError

@@ -2,10 +2,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-# noinspection PyUnusedImports
-from crypto_screener.data.exchanges.binance import Binance
-# noinspection PyUnusedImports
-from crypto_screener.data.exchanges.bybit import Bybit
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, \
     TestData
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -63,8 +59,8 @@ _mode_test_symbols = TestSymbols(
 @dataclass(frozen=True)
 class AppConfig:
     # Биржа.
-    EXCHANGE: str = Binance.get_name()
-    # EXCHANGE: str = Bybit.get_name()
+    EXCHANGE: str = "Binance"
+    # EXCHANGE: str = "Bybit"
 
     # Временная зона.
     TIMEZONE: ZoneInfo = _timezone
