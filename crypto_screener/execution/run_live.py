@@ -362,6 +362,100 @@ def _add_exit_price(exit_prices: list[float], price: Optional[float]) -> None:
         exit_prices.append(price)
 
 
+def _notify_protective_recovery(
+        trade_execution_service: TradeExecutionService,
+        active_trade: ActiveTrade,
+        message: str,
+) -> None:
+    log.w(message)
+    try:
+        trade_execution_service._notifier.notify(
+            notification_type=NotificationType.ORDER,
+            message=message,
+            context=active_trade.context,
+        )
+    except Exception as exception:
+        log.e(f"Не удалось отправить уведомление о восстановлении защиты: {exception}")
+
+
+def _restore_stop_orders_after_cancellation(
+        trade_execution_service: TradeExecutionService,
+        active_trade: ActiveTrade,
+        context: _TradeMonitorContext,
+        protective_order_statuses: ProtectiveOrderStatuses,
+        to_breakeven: bool,
+) -> None:
+    previous_stop_loss_id = context.protective_orders.stop_loss_id
+    previous_breakeven_id = context.protective_orders.breakeven_id
+    remaining_quantity = _remaining_quantity_for_remainder(context, active_trade) or 0
+    realigned_ids = trade_execution_service.realign_stop_orders(
+        setup=active_trade.setup,
+        stop_loss_order_id=context.protective_orders.stop_loss_id,
+        breakeven_order_id=context.protective_orders.breakeven_id,
+        stop_loss_status=context.protective_orders.stop_loss_status,
+        breakeven_status=context.protective_orders.breakeven_status,
+        remaining_quantity=remaining_quantity,
+        move_to_breakeven=to_breakeven,
+    )
+
+    log.i(
+        "Восстанавливаем стоп-ордера после отмены: "
+        f"SL {previous_stop_loss_id} → {realigned_ids.stop_loss_id}, "
+        f"BE {previous_breakeven_id} → {realigned_ids.breakeven_id}"
+    )
+
+    if realigned_ids.stop_loss_id is not None:
+        context.protective_orders.stop_loss_id = realigned_ids.stop_loss_id
+        context.protective_orders.stop_loss_status = realigned_ids.stop_loss_status or OrderStatus.NEW
+        protective_order_statuses.stop_loss = None
+        protective_order_statuses.stop_loss_status = context.protective_orders.stop_loss_status
+
+    if realigned_ids.breakeven_id is not None:
+        context.protective_orders.breakeven_id = realigned_ids.breakeven_id
+        context.protective_orders.breakeven_status = realigned_ids.breakeven_status or OrderStatus.NEW
+        protective_order_statuses.breakeven = None
+        protective_order_statuses.breakeven_status = context.protective_orders.breakeven_status
+
+
+def _restore_limit_after_cancellation(
+        trade_execution_service: TradeExecutionService,
+        active_trade: ActiveTrade,
+        context: _TradeMonitorContext,
+        protective_order_statuses: ProtectiveOrderStatuses,
+        order_type: str,
+) -> None:
+    remaining_quantity = _remaining_quantity_for_remainder(context, active_trade) or 0
+    if remaining_quantity <= 0:
+        log.w(
+            f"Пропускаем восстановление {order_type} по {active_trade.symbol}: нет доступного объема."
+        )
+        return
+
+    try:
+        if order_type == "take-profit":
+            restored_orders = trade_execution_service._place_take_profit(
+                setup=active_trade.setup,
+                quantity=remaining_quantity,
+                orders=context.protective_orders,
+            )
+            context.protective_orders.take_profit_id = restored_orders.take_profit_id
+            context.protective_orders.take_profit_status = restored_orders.take_profit_status
+            protective_order_statuses.take_profit = None
+            protective_order_statuses.take_profit_status = restored_orders.take_profit_status
+        elif order_type == "partial-close" and active_trade.setup.partial_close_price is not None:
+            restored_orders = trade_execution_service._place_partial_close(
+                setup=active_trade.setup,
+                quantity=remaining_quantity,
+                orders=context.protective_orders,
+            )
+            context.protective_orders.partial_close_id = restored_orders.partial_close_id
+            context.protective_orders.partial_close_status = restored_orders.partial_close_status
+            protective_order_statuses.partial_close = None
+            protective_order_statuses.partial_close_status = restored_orders.partial_close_status
+    except Exception as exception:
+        log.e(f"Не удалось восстановить {order_type} по {active_trade.symbol}: {exception}")
+
+
 @dataclass
 class _TradeMonitorContext:
     entry_price: float
@@ -395,10 +489,11 @@ def _update_postmortem_history(active_trade: ActiveTrade, bars: list[Bar]) -> No
 
 def _poll_protective_order_statuses(
         exchange: Exchange,
+        trade_execution_service: TradeExecutionService,
         active_trade: ActiveTrade,
         context: _TradeMonitorContext,
 ) -> ProtectiveOrderStatuses:
-    return _refresh_protective_orders(exchange, active_trade, context)
+    return _refresh_protective_orders(exchange, trade_execution_service, active_trade, context)
 
 
 def _apply_monitor_context(active_trade: ActiveTrade, context: _TradeMonitorContext) -> None:
@@ -509,6 +604,7 @@ def _update_entry_status_and_position(
 
 def _refresh_protective_orders(
         exchange: Exchange,
+        trade_execution_service: TradeExecutionService,
         active_trade: ActiveTrade,
         context: _TradeMonitorContext,
 ) -> ProtectiveOrderStatuses:
@@ -526,6 +622,19 @@ def _refresh_protective_orders(
         protective_orders.take_profit_status = take_profit_info.status
         protective_order_statuses.take_profit = take_profit_info
         protective_order_statuses.take_profit_status = take_profit_info.status
+        if take_profit_info.status == OrderStatus.CANCELED:
+            _notify_protective_recovery(
+                trade_execution_service,
+                active_trade,
+                f"Take-profit {take_profit_info.id} по {active_trade.symbol} отменен — восстанавливаем защиту.",
+            )
+            _restore_limit_after_cancellation(
+                trade_execution_service=trade_execution_service,
+                active_trade=active_trade,
+                context=context,
+                protective_order_statuses=protective_order_statuses,
+                order_type="take-profit",
+            )
         if take_profit_info.average_price:
             active_trade.exit_average_price = take_profit_info.average_price
 
@@ -540,6 +649,19 @@ def _refresh_protective_orders(
         protective_orders.stop_loss_status = stop_loss_info.status
         protective_order_statuses.stop_loss = stop_loss_info
         protective_order_statuses.stop_loss_status = stop_loss_info.status
+        if stop_loss_info.status == OrderStatus.CANCELED:
+            _notify_protective_recovery(
+                trade_execution_service,
+                active_trade,
+                f"Stop-loss {stop_loss_info.id} по {active_trade.symbol} отменен — переставляем защиту.",
+            )
+            _restore_stop_orders_after_cancellation(
+                trade_execution_service=trade_execution_service,
+                active_trade=active_trade,
+                context=context,
+                protective_order_statuses=protective_order_statuses,
+                to_breakeven=False,
+            )
         if stop_loss_info.average_price:
             active_trade.exit_average_price = stop_loss_info.average_price
 
@@ -554,6 +676,19 @@ def _refresh_protective_orders(
         protective_orders.breakeven_status = breakeven_info.status
         protective_order_statuses.breakeven = breakeven_info
         protective_order_statuses.breakeven_status = breakeven_info.status
+        if breakeven_info.status == OrderStatus.CANCELED:
+            _notify_protective_recovery(
+                trade_execution_service,
+                active_trade,
+                f"Breakeven {breakeven_info.id} по {active_trade.symbol} отменен — восстанавливаем защиту.",
+            )
+            _restore_stop_orders_after_cancellation(
+                trade_execution_service=trade_execution_service,
+                active_trade=active_trade,
+                context=context,
+                protective_order_statuses=protective_order_statuses,
+                to_breakeven=True,
+            )
         if breakeven_info.average_price:
             active_trade.exit_average_price = breakeven_info.average_price
 
@@ -568,6 +703,19 @@ def _refresh_protective_orders(
         protective_orders.partial_close_status = partial_close_info.status
         protective_order_statuses.partial_close = partial_close_info
         protective_order_statuses.partial_close_status = partial_close_info.status
+        if partial_close_info.status == OrderStatus.CANCELED:
+            _notify_protective_recovery(
+                trade_execution_service,
+                active_trade,
+                f"Partial-close {partial_close_info.id} по {active_trade.symbol} отменен — пробуем восстановить.",
+            )
+            _restore_limit_after_cancellation(
+                trade_execution_service=trade_execution_service,
+                active_trade=active_trade,
+                context=context,
+                protective_order_statuses=protective_order_statuses,
+                order_type="partial-close",
+            )
         if partial_close_info.average_price:
             active_trade.exit_average_price = partial_close_info.average_price
 
@@ -940,7 +1088,12 @@ def _monitor_active_trade(
 
         context = _prepare_trade_monitor_context(active_trade)
 
-        protective_order_statuses = _poll_protective_order_statuses(exchange, active_trade, context)
+        protective_order_statuses = _poll_protective_order_statuses(
+            exchange,
+            trade_execution_service,
+            active_trade,
+            context,
+        )
 
         breakeven_info = _handle_partial_close_and_refresh_stops(
             trade_execution_service=trade_execution_service,
