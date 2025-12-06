@@ -10,11 +10,12 @@ from crypto_screener.data.providers.coingecko import enrich_symbols_capitalizati
 from crypto_screener.domain.capture_state import CaptureState
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.active_trade import ActiveTrade
-from crypto_screener.domain.models.active_trade_registry import ActiveTradeKey, ActiveTradeRegistry
+from crypto_screener.domain.models.active_trade_registry import ActiveTradeKey, ActiveTrades
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
+from crypto_screener.domain.models.capture_registry import CaptureKey
 from crypto_screener.domain.models.setup import Capture, Buy, Unfilled
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
@@ -836,7 +837,7 @@ def run_live(
     executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(executor)
     notified_once: set[tuple[str, Timeframe, str]] = set()
-    active_trades = ActiveTradeRegistry()
+    active_trades = ActiveTrades()
 
     while True:
         now = utc_now()
@@ -848,17 +849,17 @@ def run_live(
             )
             notified_once.discard((symbol_name, timeframe, "Capture"))
         expired_captures = [
-            (symbol_timeframe, active_capture)
-            for symbol_timeframe, active_capture in capture_state.captures.items()
+            (capture_key, active_capture)
+            for capture_key, active_capture in capture_state.captures.items()
             if now >= active_capture.deadline
         ]
-        for (symbol_name, timeframe), active_capture in expired_captures:
-            capture_state.remove_capture(symbol_name, timeframe)
+        for capture_key, active_capture in expired_captures:
+            capture_state.remove_capture(capture_key.symbol, capture_key.timeframe)
             _remove_button_safe(notifier, active_capture.message_id)
-            trade_permission_service.clear_allowance(symbol_name, timeframe)
-            log.i(f"Истек срок слежения за {symbol_name} на {timeframe.tf}, кнопка удалена.")
-            notified_once.discard((symbol_name, timeframe, "Capture"))
-            if capture_state.symbol == symbol_name and not capture_state.has_symbol_capture(symbol_name):
+            trade_permission_service.clear_allowance(capture_key.symbol, capture_key.timeframe)
+            log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}, кнопка удалена.")
+            notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
+            if capture_state.symbol == capture_key.symbol and not capture_state.has_symbol_capture(capture_key.symbol):
                 capture_state.symbol = None
 
         if not capture_state.symbol:
@@ -886,7 +887,7 @@ def run_live(
                             f"Завершена сделка {symbol.symbol} {timeframe.tf}: "
                             f"{trade_result.value} ({profit_pct:+.2f}%)"
                         )
-                        active_trade = active_trades.pop(trade_key)
+                        active_trade = active_trades.remove(trade_key)
                         active_trade.exit_average_price = active_trade.exit_average_price or (exit_prices[0] if exit_prices else None)
                         _handle_trade_closure(
                             notifier=notifier,
@@ -927,10 +928,10 @@ def run_live(
                                 f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} из-за активного разрешения на торговлю."
                             )
                             continue
-                        capture_key = (symbol.symbol, timeframe)
+                        capture_key = CaptureKey(symbol.symbol, timeframe)
                         message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
                         if capture_key in capture_state.captures:
-                            active_capture = capture_state.captures[capture_key]
+                            active_capture = capture_state.captures.get(capture_key)
                             if active_capture.message_id:
                                 executor.submit(
                                     _edit_notification,
@@ -1031,7 +1032,7 @@ def run_live(
                                 f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Buy, кнопка удалена."
                             )
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
-                        active_trades.set(trade_key, ActiveTrade(
+                        active_trades.add(trade_key, ActiveTrade(
                             symbol=symbol.symbol,
                             timeframe=timeframe,
                             setup=setup,
