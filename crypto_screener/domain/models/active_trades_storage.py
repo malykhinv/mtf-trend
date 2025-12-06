@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 from crypto_screener.domain.models.active_trade import ActiveTrade
 
@@ -25,5 +25,5 @@ class ActiveTradesStorage:
     def has(self, key: "ActiveTradeKey") -> bool:
         return key in self._trades
 
-    def items(self) -> Iterable[tuple["ActiveTradeKey", ActiveTrade]]:
-        return tuple(self._trades.items())
+    def items(self) -> tuple[tuple["ActiveTradeKey", ActiveTrade], ...]:
+        return tuple((key, trade) for key, trade in self._trades.items())
