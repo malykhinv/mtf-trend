@@ -262,9 +262,15 @@ class TradeExecutionService:
             breakeven_order_id: Optional[str],
             remaining_quantity: float,
             move_to_breakeven: bool,
+            stop_loss_status: Optional[OrderStatus] = None,
+            breakeven_status: Optional[OrderStatus] = None,
     ) -> StopRealignmentResult:
         current_ids = self._current_stop_orders_result(
-            stop_loss_order_id, breakeven_order_id
+            setup.symbol,
+            stop_loss_order_id,
+            breakeven_order_id,
+            stop_loss_status,
+            breakeven_status,
         )
 
         early_exit_result = self._handle_no_remaining_quantity(
@@ -292,14 +298,27 @@ class TradeExecutionService:
 
     def _current_stop_orders_result(
             self,
+            symbol: str,
             stop_loss_order_id: Optional[str],
             breakeven_order_id: Optional[str],
+            stop_loss_status: Optional[OrderStatus],
+            breakeven_status: Optional[OrderStatus],
     ) -> StopRealignmentResult:
+        stop_loss_status = stop_loss_status or (
+            self._get_order_status(symbol, stop_loss_order_id)
+            if stop_loss_order_id
+            else None
+        )
+        breakeven_status = breakeven_status or (
+            self._get_order_status(symbol, breakeven_order_id)
+            if breakeven_order_id
+            else None
+        )
         return StopRealignmentResult(
             stop_loss_id=stop_loss_order_id,
             breakeven_id=breakeven_order_id,
-            stop_loss_status=OrderStatus.NEW if stop_loss_order_id else None,
-            breakeven_status=OrderStatus.NEW if breakeven_order_id else None,
+            stop_loss_status=stop_loss_status,
+            breakeven_status=breakeven_status,
         )
 
     def _handle_no_remaining_quantity(
