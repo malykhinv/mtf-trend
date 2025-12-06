@@ -282,6 +282,11 @@ class TgNotifier(Notifier):
                     reply_markup=None,
                 )
             )
+            log.d(f"Удалена кнопка у сообщения {message_id} в event-боте")
+        except Exception as exception:
+            log.e(f"Ошибка при удалении кнопки у сообщения {message_id} в event-боте: {exception}")
+
+        try:
             asyncio.run(
                 self._order_bot.edit_message_reply_markup(
                     chat_id=self._chat_id,
@@ -289,6 +294,6 @@ class TgNotifier(Notifier):
                     reply_markup=None,
                 )
             )
-            log.d(f"Удалена кнопка у сообщения {message_id}")
+            log.d(f"Удалена кнопка у сообщения {message_id} в order-боте")
         except Exception as exception:
-            log.e(f"Ошибка при удалении кнопки у сообщения {message_id}: {exception}")
+            log.e(f"Ошибка при удалении кнопки у сообщения {message_id} в order-боте: {exception}")
