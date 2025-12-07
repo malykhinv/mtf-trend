@@ -2,7 +2,7 @@ from collections import defaultdict
 from typing import Optional
 
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.setups.ppo import Trade
+from crypto_screener.domain.models.setup import Trade
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.utils.logger import log
 

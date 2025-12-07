@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.figure import Figure
 
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setups.ppo import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.swing_detector import add_swings
 

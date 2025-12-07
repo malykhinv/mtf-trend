@@ -19,7 +19,7 @@ from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.setups.ppo import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult

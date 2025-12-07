@@ -2,9 +2,7 @@ from abc import ABC
 from dataclasses import dataclass, field
 from typing import Optional
 
-from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.swing import Swing
-from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.models.setup_data import SetupData
 from crypto_screener.domain.models.trade_levels import TradeLevels
 
 
@@ -15,19 +13,12 @@ class Setup(ABC):
     is_trade: bool = field(init=False)
 
     # Поля конструктора.
-    symbol: str
-    timeframe: Timeframe
-    bars: list[Bar]
-    main_low_swing: Optional[Swing]
-    main_high_swing: Optional[Swing]
-    cascade_swings: Optional[list[Swing]]
-    resistance_swings: Optional[list[Swing]]
-    support_swings: Optional[list[Swing]]
+    data: SetupData
 
 
 @dataclass
 class Unfilled(Setup):
-    name: str = field(init=False, default="Undefined")
+    name: str = field(init=False, default="Unfilled")
     is_filled: bool = field(init=False, default=False)
     is_trade: bool = field(init=False, default=False)
 

@@ -10,7 +10,7 @@ from crypto_screener.domain.models.margin_mode import MarginMode
 from crypto_screener.domain.models.order_side import OrderSide
 from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.setups.ppo import Trade
+from crypto_screener.domain.models.setup import Trade
 from crypto_screener.domain.models.stop_realignment_result import StopRealignmentResult
 from crypto_screener.domain.notifier import Notifier, NotificationType
 from crypto_screener.utils.logger import log

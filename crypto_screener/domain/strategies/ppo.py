@@ -4,7 +4,8 @@ import numpy as np
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_level import CascadeLevel
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setups.ppo import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.setup_data import Ppo
+from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels
@@ -26,14 +27,16 @@ class PpoStrategy(Strategy):
         from crypto_screener.config.config import cfg
 
         setup = Unfilled(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_low_swing=None,
-            main_high_swing=None,
-            cascade_swings=None,
-            resistance_swings=None,
-            support_swings=None
+            data=Ppo(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars=bars,
+                main_low_swing=None,
+                main_high_swing=None,
+                cascade_swings=None,
+                resistance_swings=None,
+                support_swings=None
+            )
         )
 
         # Анализ повышения объемов.
@@ -49,7 +52,7 @@ class PpoStrategy(Strategy):
             return setup
 
         bars = add_swings(bars, timeframe)
-        setup.bars = bars
+        setup.data.bars = bars
 
         # Анализ участка роста.
         main_rising_swings = self._get_main_rising_swings_indexed(bars)
@@ -64,13 +67,13 @@ class PpoStrategy(Strategy):
         # Центрирование относительно main_low_index.
         start_index = max(0, main_low_index - (len(bars) - main_low_index - 1))
         bars = bars[start_index:]
-        setup.bars = bars
+        setup.data.bars = bars
         main_low_index -= start_index
         main_high_index -= start_index
 
         # Анализ роста.
-        setup.main_low_swing = main_low_swing
-        setup.main_high_swing = main_high_swing
+        setup.data.main_low_swing = main_low_swing
+        setup.data.main_high_swing = main_high_swing
         rise = main_high_swing.extremum_price - main_low_swing.extremum_price
         rise_pct = 100 * rise / main_low_swing.extremum_price
 
@@ -147,7 +150,7 @@ class PpoStrategy(Strategy):
             if cascade_top < swing.extremum_price <= cascade_top + resistance_gap
         ]
         cascade_long = [swing for swing in extra_cascade_swings if swing not in cascade_long] + cascade_long
-        setup.cascade_swings = cascade_long
+        setup.data.cascade_swings = cascade_long
         if not cascade_long:
             return setup
 
@@ -159,7 +162,7 @@ class PpoStrategy(Strategy):
         resistance_swings = []
         if resistance_price_min < resistance_price_max:
             resistance_swings = self._filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
-        setup.resistance_swings = resistance_swings
+        setup.data.resistance_swings = resistance_swings
         has_resistance = len(resistance_swings) > cfg.RESISTANCE_COUNT_MAX
         if has_resistance:
             return setup
@@ -168,7 +171,7 @@ class PpoStrategy(Strategy):
         initial_swing = cascade_long[0]
         consolidation_range = initial_swing.extremum_price - correction_low_swing.extremum_price
         open_low_swings = self._get_open_swings(correction_bars, SwingType.LOW)
-        setup.support_swings = open_low_swings
+        setup.data.support_swings = open_low_swings
         target_swing = cascade_long[-1]
 
         support_price_min = correction_low_swing.extremum_price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
@@ -220,14 +223,16 @@ class PpoStrategy(Strategy):
 
         # Проторговка после отката с лонговым каскадом.
         setup = Capture(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_low_swing=main_low_swing,
-            main_high_swing=main_high_swing,
-            cascade_swings=cascade_long,
-            resistance_swings=resistance_swings,
-            support_swings=open_low_swings
+            data=Ppo(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars=bars,
+                main_low_swing=main_low_swing,
+                main_high_swing=main_high_swing,
+                cascade_swings=cascade_long,
+                resistance_swings=resistance_swings,
+                support_swings=open_low_swings
+            )
         )
 
         # Анализ пробоя лонгового каскада.
@@ -246,7 +251,7 @@ class PpoStrategy(Strategy):
             if has_partial_close:
                 partial_close_price = nearest_resistance_price if has_partial_close else None
                 breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
-        elif context in {Context.LOW_CAP_A, Context.LOW_CAP_B}:
+        elif context.is_top:
             main_high_distance_pct = 100 * (main_high_swing.extremum_price - current_price) / current_price
             has_partial_close = partial_close_side_pct <= main_high_distance_pct < profit_pct - partial_close_side_pct
             if has_partial_close:
@@ -261,14 +266,16 @@ class PpoStrategy(Strategy):
             breakeven_price=breakeven_price,
         )
         setup = Trade(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_low_swing=main_low_swing,
-            main_high_swing=main_high_swing,
-            cascade_swings=cascade_long,
-            resistance_swings=resistance_swings,
-            support_swings=open_low_swings,
+            data=Ppo(
+                symbol=symbol,
+                timeframe=timeframe,
+                bars=bars,
+                main_low_swing=main_low_swing,
+                main_high_swing=main_high_swing,
+                cascade_swings=cascade_long,
+                resistance_swings=resistance_swings,
+                support_swings=open_low_swings,
+            ),
             trade_levels=trade_levels,
         )
 

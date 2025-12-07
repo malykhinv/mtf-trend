@@ -8,7 +8,7 @@ from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.setups.ppo import Trade
+from crypto_screener.domain.models.setup import Trade
 from crypto_screener.domain.models.timeframe import Timeframe
 
 
