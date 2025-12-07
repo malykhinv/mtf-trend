@@ -14,7 +14,7 @@ from crypto_screener.domain.utils.volume import trim_by_volume
 
 
 class PpoStrategy(Strategy):
-    name = "ppo"
+    name = "ППО"
 
     def detect_setup(
             self,

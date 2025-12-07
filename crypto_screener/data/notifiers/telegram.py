@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Dict, Optional, TypeVar
+from urllib.parse import unquote
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update, MaybeInaccessibleMessage
 from telegram.constants import UpdateType
@@ -64,12 +65,14 @@ class _CallbackHandler:
             return symbol, message, timeframe, symbol_context
 
         await query.answer()
-        callback_data = (query.data or "").split(":")
+        callback_data = (query.data or "").split(":", 3)
         if len(callback_data) != 4:
             log.e(f"Не удалось разобрать callback_data: {query.data}")
             return symbol, message, timeframe, symbol_context
 
-        _, symbol, timeframe_tf, context_value = callback_data
+        _, encoded_symbol, timeframe_tf, encoded_context = callback_data
+        symbol = unquote(encoded_symbol)
+        context_value = unquote(encoded_context)
         try:
             timeframe = Timeframe.from_tf(timeframe_tf)
             symbol_context = Context(context_value)
@@ -151,8 +154,22 @@ class TgNotifier(Notifier):
         self._bot = Bot(token=token)
         self._chat_id = chat_id
         self._callback_handler: Optional[_CallbackHandler] = None
+        self._loop = asyncio.new_event_loop()
+        self._loop_ready = threading.Event()
+        self._loop_thread = threading.Thread(
+            target=self._run_loop,
+            name="tg-notifier-loop",
+            daemon=True,
+        )
+        self._loop_thread.start()
+        self._loop_ready.wait()
+        self._message_states: Dict[str, tuple[Optional[str], Optional[tuple[tuple[tuple[str, str], ...], ...]]]] = {}
+        self._state_lock = threading.Lock()
 
-    def start_callback_handler(self, trade_permission_service: TradePermissionService) -> None:
+    def start_callback_handler(
+            self,
+            trade_permission_service: TradePermissionService
+    ) -> None:
         if self._callback_handler:
             return
 
@@ -163,6 +180,68 @@ class TgNotifier(Notifier):
         self._callback_handler.start()
 
     # region Private.
+    def _run_loop(self) -> None:
+        asyncio.set_event_loop(self._loop)
+        self._loop_ready.set()
+        self._loop.run_forever()
+
+    T = TypeVar("T")
+
+    def _submit(
+            self,
+            coro: Awaitable[T]
+    ) -> T:
+        if not self._loop_ready.is_set():
+            self._loop_ready.wait()
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result()
+
+    @staticmethod
+    def _normalize_keyboard(keyboard: Optional[Keyboard]) -> Optional[tuple[tuple[tuple[str, str], ...], ...]]:
+        if not keyboard:
+            return None
+        return tuple(tuple((text, callback) for text, callback in row) for row in keyboard)
+
+    def _should_skip_edit(
+            self,
+            message_id: str,
+            message: Optional[str],
+            keyboard: Optional[Keyboard],
+            image_path: Optional[Path],
+    ) -> bool:
+        if image_path is not None:
+            return False
+        with self._state_lock:
+            state = self._message_states.get(message_id)
+            if not state:
+                return False
+            current_message, current_keyboard = state
+            if message is not None and message != current_message:
+                return False
+            normalized_keyboard = self._normalize_keyboard(keyboard)
+            return normalized_keyboard == current_keyboard
+
+    def _update_state(
+            self,
+            message_id: str,
+            message: Optional[str],
+            keyboard: Optional[Keyboard],
+    ) -> None:
+        normalized_keyboard = self._normalize_keyboard(keyboard)
+        with self._state_lock:
+            current_message, _ = self._message_states.get(message_id, (None, None))
+            new_message = current_message if message is None else message
+            self._message_states[message_id] = (new_message, normalized_keyboard)
+
+    def _clear_keyboard_state(
+            self,
+            message_id: str
+    ) -> None:
+        with self._state_lock:
+            if message_id in self._message_states:
+                current_message, _ = self._message_states[message_id]
+                self._message_states[message_id] = (current_message, None)
+
     async def _send(
             self,
             bot: Bot,
@@ -244,8 +323,10 @@ class TgNotifier(Notifier):
             context: Optional[Context] = None,
     ) -> Optional[str]:
         try:
-            message_id = asyncio.run(self._send(self._bot, message, image_path, keyboard))
+            message_id = self._submit(self._send(self._bot, message, image_path, keyboard))
             log.d(f"Отправлено сообщение ({notification_type.name.lower()}): {message}")
+            if message_id:
+                self._update_state(message_id, message, keyboard)
             return message_id
         except Exception as exception:
             log.e(f"Ошибка при отправке сообщения:\n{exception}")
@@ -262,7 +343,9 @@ class TgNotifier(Notifier):
     ) -> Optional[str]:
         bot = self._bot
         try:
-            return asyncio.run(
+            if self._should_skip_edit(message_id, message, keyboard, image_path):
+                return message_id
+            edited_message_id = self._submit(
                 self._edit(
                     bot=bot,
                     message_id=message_id,
@@ -271,6 +354,9 @@ class TgNotifier(Notifier):
                     keyboard=keyboard,
                 )
             )
+            if edited_message_id:
+                self._update_state(message_id, message, keyboard)
+            return edited_message_id
         except Exception as exception:
             log.e(f"Ошибка при редактировании сообщения {message_id}:\n{exception}")
         return None
@@ -282,25 +368,27 @@ class TgNotifier(Notifier):
         if not message_id:
             return
         try:
-            asyncio.run(
+            self._submit(
                 self._bot.edit_message_reply_markup(
                     chat_id=self._chat_id,
                     message_id=int(message_id),
                     reply_markup=None,
                 )
             )
+            self._clear_keyboard_state(message_id)
             log.d(f"Удалена кнопка у сообщения {message_id} в event-боте")
         except Exception as exception:
             log.e(f"Ошибка при удалении кнопки у сообщения {message_id} в event-боте: {exception}")
 
         try:
-            asyncio.run(
+            self._submit(
                 self._bot.edit_message_reply_markup(
                     chat_id=self._chat_id,
                     message_id=int(message_id),
                     reply_markup=None,
                 )
             )
+            self._clear_keyboard_state(message_id)
             log.d(f"Удалена кнопка у сообщения {message_id} в order-боте")
         except Exception as exception:
             log.e(f"Ошибка при удалении кнопки у сообщения {message_id} в order-боте: {exception}")
