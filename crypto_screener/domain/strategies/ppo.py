@@ -9,9 +9,8 @@ from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels
-from crypto_screener.domain.strategies.base import Strategy
+from crypto_screener.domain.strategies.strategy import Strategy
 from crypto_screener.domain.swing_detector import add_swings
-from crypto_screener.domain.utils.volume import trim_by_volume
 
 
 class PpoStrategy(Strategy):
@@ -40,7 +39,7 @@ class PpoStrategy(Strategy):
         )
 
         # Анализ повышения объемов.
-        trimmed_bars = trim_by_volume(bars)
+        trimmed_bars = self.trim_by_volume(bars)
         if trimmed_bars:
             bars = trimmed_bars
         elif not context.is_top:

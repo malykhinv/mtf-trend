@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, \
     TestData
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.strategies.base import Strategy
+from crypto_screener.domain.strategies.strategy import Strategy
 from crypto_screener.domain.strategies.ppo import PpoStrategy
 
 # Временная зона.

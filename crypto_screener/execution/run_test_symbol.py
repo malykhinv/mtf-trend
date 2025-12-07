@@ -9,7 +9,7 @@ from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Setup, Trade
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
-from crypto_screener.domain.strategies.base import Strategy
+from crypto_screener.domain.strategies.strategy import Strategy
 from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
