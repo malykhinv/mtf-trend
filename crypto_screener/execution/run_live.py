@@ -1271,7 +1271,7 @@ def run_live(
                             _remove_button(notifier, removed_capture.message_id)
                             log.i(f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Trade, кнопка удалена.")
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
-                        active_trades.add(trade_key, ActiveTrade(
+                        trade = ActiveTrade(
                             symbol=symbol.symbol,
                             timeframe=timeframe,
                             setup=setup,
@@ -1284,6 +1284,7 @@ def run_live(
                             entry_order_id=execution_result.entry_order_id,
                             protective_orders=execution_result.protective_orders,
                             position_id=execution_result.position_id,
-                        ))
+                        )
+                        active_trades.add(trade_key, trade)
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                         capture_state.symbol = None
