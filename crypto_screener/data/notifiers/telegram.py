@@ -99,6 +99,7 @@ class _CallbackHandler:
             message_id=message_id,
             context=symbol_context,
         )
+        await self._show_skip_only_keyboard(message, symbol, timeframe, symbol_context)
 
     # noinspection PyUnusedLocal
     async def _handle_skip_request(
@@ -119,6 +120,25 @@ class _CallbackHandler:
             message_id=message_id,
             context=symbol_context,
         )
+        self._trade_permission_service.clear_allowance(symbol, timeframe)
+
+    async def _show_skip_only_keyboard(
+            self,
+            message: MaybeInaccessibleMessage,
+            symbol: Optional[str],
+            timeframe: Optional[Timeframe],
+            symbol_context: Optional[Context],
+    ) -> None:
+        if not (symbol and timeframe and symbol_context):
+            return
+        skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{symbol_context.value}"
+        skip_keyboard = InlineKeyboardMarkup.from_button(
+            InlineKeyboardButton(text="Пропустить", callback_data=skip_callback_data)
+        )
+        try:
+            await message.edit_reply_markup(reply_markup=skip_keyboard)
+        except Exception as exception:
+            log.e(f"Не удалось обновить кнопки для {symbol} на {timeframe.tf}: {exception}")
 
 
 class TgNotifier(Notifier):
