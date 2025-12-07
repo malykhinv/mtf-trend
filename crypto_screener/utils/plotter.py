@@ -9,6 +9,7 @@ from matplotlib.figure import Figure
 
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.setup_data import Ppo
 from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.swing_detector import add_swings
 
@@ -26,6 +27,216 @@ from crypto_screener.domain.models.timeframe import Timeframe
 
 
 # region Private.
+def _plot(
+        setup: Setup,
+        *,
+        postmortem_bars: Optional[list[Bar]],
+        detection_time: Optional[datetime],
+        context: Optional[Context],
+        subdir: Optional[str],
+        draw_entry_zones: bool,
+):
+    match setup:
+        case Trade(data=data, trade_levels=trade_levels):
+            setup_name = setup.name
+        case Capture(data=data) | Unfilled(data=data):
+            setup_name = setup.name
+            trade_levels = None
+        case _:
+            raise TypeError(f"Неизвестный тип сетапа: {type(setup).__name__}")
+    match setup.data:
+        case Ppo():
+            _plot_ppo(
+                setup_name,
+                setup.data,
+                trade_levels,
+                postmortem_bars,
+                detection_time,
+                context,
+                subdir,
+                draw_entry_zones
+            )
+        case _:
+            return
+
+def _plot_ppo(
+        setup_name: str,
+        data: Ppo,
+        trade_levels: TradeLevels,
+        postmortem_bars: Optional[list[Bar]],
+        detection_time: Optional[datetime],
+        context: Optional[Context],
+        subdir: Optional[str],
+        draw_entry_zones: bool,
+):
+    if not data.symbol or not data.bars:
+        raise ValueError("Недостаточно данных для построения графика.")
+
+    trimmed_postmortem = _trim_postmortem_bars(postmortem_bars, trade_levels)
+
+    combined_bars = [*data.bars, *(trimmed_postmortem or [])]
+
+    if not combined_bars:
+        raise ValueError("Недостаточно данных для построения графика.")
+
+    fig, price_ax, volume_ax = _build_figure()
+
+    times = [_datetime_to_mpl(bar.time) for bar in combined_bars]
+    candle_width = _get_candle_width(times)
+
+    min_price = min(bar.low for bar in combined_bars)
+    max_price = max(bar.high for bar in combined_bars)
+
+    entry_price = trade_levels.entry_price if trade_levels else None
+    if trade_levels and entry_price is not None:
+        trade_prices = [trade_levels.take_profit_price, trade_levels.stop_loss_price, entry_price]
+        if trade_levels.partial_close_price is not None:
+            trade_prices.append(trade_levels.partial_close_price)
+        if trade_levels.breakeven_price is not None:
+            trade_prices.append(trade_levels.breakeven_price)
+        min_price = min(min_price, *trade_prices)
+        max_price = max(max_price, *trade_prices)
+
+    y_offset = max((max_price - min_price) * cfg.PLOT_Y_OFFSET_RATIO, cfg.PLOT_Y_OFFSET_MIN)
+
+    if data.main_low_swing and data.main_high_swing:
+        start_time = _datetime_to_mpl(data.main_low_swing.time)
+        end_time = _datetime_to_mpl(data.main_high_swing.time)
+        price_ax.axvspan(
+            xmin=min(start_time, end_time),
+            xmax=max(start_time, end_time),
+            ymin=0,
+            ymax=1,
+            color=cfg.PLOT_GROWTH_PHASE_COLOR,
+            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA,
+            zorder=0
+        )
+        price_ax.axhline(
+            y=data.main_low_swing.extremum_price,
+            xmin=0,
+            xmax=1,
+            color=cfg.PLOT_GROWTH_PHASE_COLOR,
+            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
+            linestyle='--',
+            linewidth=0.8,
+            zorder=0
+        )
+        price_ax.axhline(
+            y=data.main_high_swing.extremum_price,
+            xmin=0,
+            xmax=1,
+            color=cfg.PLOT_GROWTH_PHASE_COLOR,
+            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
+            linestyle='--',
+            linewidth=0.8,
+            zorder=0
+        )
+
+    _draw_candles(price_ax, combined_bars, times, candle_width)
+
+    if draw_entry_zones and entry_price is not None and trade_levels:
+        entry_time = _get_entry_time(trimmed_postmortem, detection_time, data.bars)
+        horizon_time = _get_horizon_time(trimmed_postmortem, combined_bars)
+        _draw_entry_zones(
+            ax=price_ax,
+            trade_levels=trade_levels,
+            entry_time=entry_time,
+            horizon_time=horizon_time,
+            postmortem_bars=trimmed_postmortem or [],
+        )
+    _format_ax(price_ax, times, min_price, max_price)
+
+    volumes = _draw_volume(volume_ax, combined_bars, times, candle_width)
+    _format_volume_ax(volume_ax, volumes)
+    _format_time_axis(volume_ax)
+
+    if data.cascade_swings:
+        _draw_cascade_level(price_ax, data.cascade_swings, combined_bars)
+        _draw_swing_group(
+            ax=price_ax,
+            swings=data.cascade_swings,
+            color=cfg.PLOT_CASCADE_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if data.resistance_swings:
+        _draw_swing_group(
+            ax=price_ax,
+            swings=data.resistance_swings,
+            color=cfg.PLOT_RESISTANCE_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if data.support_swings:
+        _draw_swing_group(
+            ax=price_ax,
+            swings=data.support_swings,
+            color=cfg.PLOT_SUPPORT_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if data.main_high_swing:
+        _draw_swing_group(
+            ax=price_ax,
+            swings=[data.main_high_swing],
+            color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if data.main_low_swing:
+        _draw_swing_group(
+            ax=price_ax,
+            swings=[data.main_low_swing],
+            color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
+            y_offset=y_offset
+        )
+    if not data.cascade_swings and not data.resistance_swings and not data.support_swings:
+        base_bars = add_swings(data.bars, data.timeframe)
+        swings = [bar.swing for bar in base_bars if bar.swing]
+        _draw_swing_group(
+            ax=price_ax,
+            swings=swings,
+            color=cfg.PLOT_COMMON_SWING_COLOR,
+            y_offset=y_offset
+        )
+
+    if detection_time:
+        detection_mpl = _datetime_to_mpl(detection_time)
+        for ax in (price_ax, volume_ax):
+            ax.axvline(
+                detection_mpl,
+                color=cfg.PLOT_GRID_COLOR,
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.8,
+                zorder=0,
+            )
+
+    price_ax.set_title(
+        label=f"{data.symbol.upper()} • {data.timeframe.tf}",
+        color=cfg.PLOT_TITLE_COLOR,
+        pad=cfg.PLOT_TITLE_PAD
+    )
+
+    fig.tight_layout()
+
+    length = len(combined_bars)
+    output_path = _resolve_output_path(
+        name=data.symbol,
+        setup_name=setup_name,
+        context=context,
+        timeframe=data.timeframe,
+        time=combined_bars[-1].time,
+        length=length,
+        subdir=subdir,
+    )
+    fig.savefig(
+        fname=output_path,
+        facecolor=cfg.PLOT_BACKGROUND_COLOR,
+        dpi=cfg.PLOT_DPI,
+        bbox_inches="tight"
+    )
+    plt.close(fig)
+
+    return output_path
+
+
 def _style_ax(ax: Axes) -> None:
     ax.set_facecolor(cfg.PLOT_BACKGROUND_COLOR)
     ax.grid(
@@ -347,15 +558,17 @@ def _draw_entry_zone(
     lower_price = min(entry_price, target_price)
     height = max(abs(target_price - entry_price), cfg.PLOT_ENTRY_ZONE_MIN_HEIGHT)
 
-    ax.add_patch(Rectangle(
-        xy=(start_mpl, lower_price),
-        width=end_mpl - start_mpl,
-        height=height,
-        facecolor=color,
-        edgecolor=color,
-        alpha=alpha,
-        zorder=cfg.PLOT_ENTRY_ZONE_ZORDER,
-    ))
+    ax.add_patch(
+        Rectangle(
+            xy=(start_mpl, lower_price),
+            width=end_mpl - start_mpl,
+            height=height,
+            facecolor=color,
+            edgecolor=color,
+            alpha=alpha,
+            zorder=cfg.PLOT_ENTRY_ZONE_ZORDER,
+        )
+    )
 
 
 def _draw_entry_zones(
@@ -444,220 +657,6 @@ def _resolve_output_path(
 
 
 # endregion
-
-def _plot(
-        setup: Setup,
-        *,
-        postmortem_bars: Optional[list[Bar]],
-        detection_time: Optional[datetime],
-        context: Optional[Context],
-        subdir: Optional[str],
-        draw_entry_zones: bool,
-):
-    match setup:
-        case Trade(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_high_swing=main_high_swing,
-            main_low_swing=main_low_swing,
-            cascade_swings=cascade_swings,
-            resistance_swings=resistance_swings,
-            support_swings=support_swings,
-            trade_levels=trade_levels,
-        ):
-            setup_name = setup.name
-        case Capture(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_high_swing=main_high_swing,
-            main_low_swing=main_low_swing,
-            cascade_swings=cascade_swings,
-            resistance_swings=resistance_swings,
-            support_swings=support_swings,
-        ) | Unfilled(
-            symbol=symbol,
-            timeframe=timeframe,
-            bars=bars,
-            main_high_swing=main_high_swing,
-            main_low_swing=main_low_swing,
-            cascade_swings=cascade_swings,
-            resistance_swings=resistance_swings,
-            support_swings=support_swings,
-        ):
-            setup_name = setup.name
-            trade_levels = None
-        case _:
-            raise TypeError(f"Неизвестный тип сетапа: {type(setup).__name__}")
-
-    if not symbol or not bars:
-        raise ValueError("Недостаточно данных для построения графика.")
-
-    trimmed_postmortem = _trim_postmortem_bars(postmortem_bars, trade_levels)
-
-    combined_bars = [*bars, *(trimmed_postmortem or [])]
-
-    if not combined_bars:
-        raise ValueError("Недостаточно данных для построения графика.")
-
-    fig, price_ax, volume_ax = _build_figure()
-
-    times = [_datetime_to_mpl(bar.time) for bar in combined_bars]
-    candle_width = _get_candle_width(times)
-
-    min_price = min(bar.low for bar in combined_bars)
-    max_price = max(bar.high for bar in combined_bars)
-
-    entry_price = trade_levels.entry_price if trade_levels else None
-    if trade_levels and entry_price is not None:
-        trade_prices = [trade_levels.take_profit_price, trade_levels.stop_loss_price, entry_price]
-        if trade_levels.partial_close_price is not None:
-            trade_prices.append(trade_levels.partial_close_price)
-        if trade_levels.breakeven_price is not None:
-            trade_prices.append(trade_levels.breakeven_price)
-        min_price = min(min_price, *trade_prices)
-        max_price = max(max_price, *trade_prices)
-
-    y_offset = max((max_price - min_price) * cfg.PLOT_Y_OFFSET_RATIO, cfg.PLOT_Y_OFFSET_MIN)
-
-    if main_low_swing and main_high_swing:
-        start_time = _datetime_to_mpl(main_low_swing.time)
-        end_time = _datetime_to_mpl(main_high_swing.time)
-        price_ax.axvspan(
-            xmin=min(start_time, end_time),
-            xmax=max(start_time, end_time),
-            ymin=0,
-            ymax=1,
-            color=cfg.PLOT_GROWTH_PHASE_COLOR,
-            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA,
-            zorder=0
-        )
-        price_ax.axhline(
-            y=main_low_swing.extremum_price,
-            xmin=0,
-            xmax=1,
-            color=cfg.PLOT_GROWTH_PHASE_COLOR,
-            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
-            linestyle='--',
-            linewidth=0.8,
-            zorder=0
-        )
-        price_ax.axhline(
-            y=main_high_swing.extremum_price,
-            xmin=0,
-            xmax=1,
-            color=cfg.PLOT_GROWTH_PHASE_COLOR,
-            alpha=cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
-            linestyle='--',
-            linewidth=0.8,
-            zorder=0
-        )
-
-    _draw_candles(price_ax, combined_bars, times, candle_width)
-
-    if draw_entry_zones and entry_price is not None and trade_levels:
-        entry_time = _get_entry_time(trimmed_postmortem, detection_time, bars)
-        horizon_time = _get_horizon_time(trimmed_postmortem, combined_bars)
-        _draw_entry_zones(
-            ax=price_ax,
-            trade_levels=trade_levels,
-            entry_time=entry_time,
-            horizon_time=horizon_time,
-            postmortem_bars=trimmed_postmortem or [],
-        )
-    _format_ax(price_ax, times, min_price, max_price)
-
-    volumes = _draw_volume(volume_ax, combined_bars, times, candle_width)
-    _format_volume_ax(volume_ax, volumes)
-    _format_time_axis(volume_ax)
-
-    if cascade_swings:
-        _draw_cascade_level(price_ax, cascade_swings, combined_bars)
-        _draw_swing_group(
-            ax=price_ax,
-            swings=cascade_swings,
-            color=cfg.PLOT_CASCADE_SWING_COLOR,
-            y_offset=y_offset
-        )
-    if resistance_swings:
-        _draw_swing_group(
-            ax=price_ax,
-            swings=resistance_swings,
-            color=cfg.PLOT_RESISTANCE_SWING_COLOR,
-            y_offset=y_offset
-        )
-    if support_swings:
-        _draw_swing_group(
-            ax=price_ax,
-            swings=support_swings,
-            color=cfg.PLOT_SUPPORT_SWING_COLOR,
-            y_offset=y_offset
-        )
-    if main_high_swing:
-        _draw_swing_group(
-            ax=price_ax,
-            swings=[main_high_swing],
-            color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
-            y_offset=y_offset
-        )
-    if main_low_swing:
-        _draw_swing_group(
-            ax=price_ax,
-            swings=[main_low_swing],
-            color=cfg.PLOT_MAIN_HIGH_SWING_COLOR,
-            y_offset=y_offset
-        )
-    if not cascade_swings and not resistance_swings and not support_swings:
-        base_bars = add_swings(bars, timeframe)
-        swings = [bar.swing for bar in base_bars if bar.swing]
-        _draw_swing_group(
-            ax=price_ax,
-            swings=swings,
-            color=cfg.PLOT_COMMON_SWING_COLOR,
-            y_offset=y_offset
-        )
-
-    if detection_time:
-        detection_mpl = _datetime_to_mpl(detection_time)
-        for ax in (price_ax, volume_ax):
-            ax.axvline(
-                detection_mpl,
-                color=cfg.PLOT_GRID_COLOR,
-                linestyle="--",
-                linewidth=1.2,
-                alpha=0.8,
-                zorder=0,
-            )
-
-    price_ax.set_title(
-        label=f"{symbol.upper()} • {timeframe.tf}",
-        color=cfg.PLOT_TITLE_COLOR,
-        pad=cfg.PLOT_TITLE_PAD
-    )
-
-    fig.tight_layout()
-
-    length = len(combined_bars)
-    output_path = _resolve_output_path(
-        name=symbol,
-        setup_name=setup_name,
-        context=context,
-        timeframe=timeframe,
-        time=combined_bars[-1].time,
-        length=length,
-        subdir=subdir,
-    )
-    fig.savefig(
-        fname=output_path,
-        facecolor=cfg.PLOT_BACKGROUND_COLOR,
-        dpi=cfg.PLOT_DPI,
-        bbox_inches="tight"
-    )
-    plt.close(fig)
-
-    return output_path
-
 
 def plot(
         setup: Setup,
