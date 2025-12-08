@@ -7,7 +7,7 @@ from typing import Awaitable, Dict, Optional, TypeVar
 from urllib.parse import unquote
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update, MaybeInaccessibleMessage
-from telegram.constants import UpdateType
+from telegram.constants import ParseMode, UpdateType
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from crypto_screener.domain.models.context import Context
@@ -256,12 +256,14 @@ class TgNotifier(Notifier):
                     chat_id=self._chat_id,
                     photo=photo,
                     caption=message,
+                    parse_mode=ParseMode.HTML,
                     reply_markup=reply_markup,
                 )
             return str(sent_message.message_id)
         sent_message = await bot.send_message(
             chat_id=self._chat_id,
             text=message,
+            parse_mode=ParseMode.HTML,
             reply_markup=reply_markup,
         )
         return str(sent_message.message_id)
@@ -277,7 +279,7 @@ class TgNotifier(Notifier):
         reply_markup = self._get_keyboard(keyboard)
         if image_path:
             with image_path.open("rb") as photo:
-                media = InputMediaPhoto(media=photo, caption=message)
+                media = InputMediaPhoto(media=photo, caption=message, parse_mode=ParseMode.HTML)
                 sent_message = await bot.edit_message_media(
                     chat_id=self._chat_id,
                     message_id=int(message_id),
@@ -290,6 +292,7 @@ class TgNotifier(Notifier):
                 chat_id=self._chat_id,
                 message_id=int(message_id),
                 text=message,
+                parse_mode=ParseMode.HTML,
                 reply_markup=reply_markup,
             )
             return message_id

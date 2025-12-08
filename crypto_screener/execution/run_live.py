@@ -27,6 +27,12 @@ from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
 from crypto_screener.domain.strategies.strategy import Strategy
 from crypto_screener.execution.trade_executor import TradeExecutionService
 from crypto_screener.execution.trade_permission_service import TradePermissionService
+from crypto_screener.utils.telegram_messages import (
+    build_capture_message,
+    build_protective_recovery_message,
+    build_trade_closure_message,
+    build_trade_opened_message,
+)
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
@@ -238,19 +244,6 @@ def _summarize_exit_levels(
     return label, exit_prices
 
 
-def _format_levels(trade_levels) -> str:
-    lines = [
-        f"Entry: {trade_levels.entry_price:.4f}",
-        f"SL: {trade_levels.stop_loss_price:.4f}",
-        f"TP: {trade_levels.take_profit_price:.4f}",
-    ]
-    if trade_levels.partial_close_price is not None:
-        lines.append(f"PC: {trade_levels.partial_close_price:.4f}")
-    if trade_levels.breakeven_price is not None:
-        lines.append(f"BE: {trade_levels.breakeven_price:.4f}")
-    return "\n".join(lines)
-
-
 def _notify_trade_closure(
         notifier: Notifier,
         active_trade: ActiveTrade,
@@ -258,6 +251,7 @@ def _notify_trade_closure(
         profit_pct: float,
         profit_value: float,
         exit_prices: list[float],
+        exchange_name: str,
 ) -> None:
     setup = active_trade.setup
     trade_levels = setup.trade_levels
@@ -265,15 +259,16 @@ def _notify_trade_closure(
     actual_exit_prices = exit_prices or expected_prices
     actual_entry_price = active_trade.entry_average_price or trade_levels.entry_price
 
-    message_lines = [
-        f"Сделка {setup.symbol} на {setup.timeframe.tf} закрыта: {trade_result.value}",
-        f"P&L: {profit_value:+.4f} ({profit_pct:+.2f}%)",
-        f"Выход: {exit_label} ({', '.join(f'{price:.4f}' for price in actual_exit_prices)})" if actual_exit_prices else f"Выход: {exit_label}",
-        f"Entry факт: {actual_entry_price:.4f}",
-        "",
-        _format_levels(trade_levels),
-    ]
-    message = "\n".join(message_lines)
+    message = build_trade_closure_message(
+        active_trade=active_trade,
+        trade_result=trade_result,
+        profit_pct=profit_pct,
+        profit_value=profit_value,
+        exit_label=exit_label,
+        exit_prices=actual_exit_prices,
+        actual_entry_price=actual_entry_price,
+        exchange_name=exchange_name,
+    )
     log.i(message)
 
     try:
@@ -363,9 +358,15 @@ def _get_remaining_quantity(
 def _notify_protective_recovery(
         trade_execution_service: TradeExecutionService,
         active_trade: ActiveTrade,
-        message: str,
+        reason: str,
+        exchange_name: str,
 ) -> None:
-    log.w(message)
+    log.w(reason)
+    message = build_protective_recovery_message(
+        active_trade=active_trade,
+        reason=reason,
+        exchange_name=exchange_name,
+    )
     try:
         trade_execution_service.notifier.notify(
             notification_type=NotificationType.ORDER,
@@ -553,6 +554,7 @@ def _refresh_protective_orders(
         trade_execution_service: TradeExecutionService,
         active_trade: ActiveTrade,
         context: _TradeMonitorContext,
+        exchange_name: str,
 ) -> ProtectiveOrderStatuses:
     protective_orders = context.protective_orders
     protective_order_statuses = ProtectiveOrderStatuses()
@@ -573,6 +575,7 @@ def _refresh_protective_orders(
                 trade_execution_service,
                 active_trade,
                 f"Take-profit {take_profit_info.id} по {active_trade.symbol} отменен — восстанавливаем защиту.",
+                exchange_name,
             )
             _restore_limit_orders(
                 trade_execution_service=trade_execution_service,
@@ -600,6 +603,7 @@ def _refresh_protective_orders(
                 trade_execution_service,
                 active_trade,
                 f"Stop-loss {stop_loss_info.id} по {active_trade.symbol} отменен — переставляем защиту.",
+                exchange_name,
             )
             _restore_stop_orders(
                 trade_execution_service=trade_execution_service,
@@ -627,6 +631,7 @@ def _refresh_protective_orders(
                 trade_execution_service,
                 active_trade,
                 f"Breakeven {breakeven_info.id} по {active_trade.symbol} отменен — восстанавливаем защиту.",
+                exchange_name,
             )
             _restore_stop_orders(
                 trade_execution_service=trade_execution_service,
@@ -654,6 +659,7 @@ def _refresh_protective_orders(
                 trade_execution_service,
                 active_trade,
                 f"Partial-close {partial_close_info.id} по {active_trade.symbol} отменен — пробуем восстановить.",
+                exchange_name,
             )
             _restore_limit_orders(
                 trade_execution_service=trade_execution_service,
@@ -1024,6 +1030,7 @@ def _monitor_active_trade(
         trade_execution_service: TradeExecutionService,
         active_trade: ActiveTrade,
         bars: list[Bar],
+        exchange_name: str,
 ) -> Optional[tuple[TradeResult, float, float, list[float]]]:
     try:
         _update_postmortem_bars(active_trade, bars)
@@ -1039,6 +1046,7 @@ def _monitor_active_trade(
             trade_execution_service,
             active_trade,
             context,
+            exchange_name,
         )
 
         breakeven_info = _process_filled_partial_close(
@@ -1083,7 +1091,8 @@ def run_live(
         trades_24h_min: int,
         trades_24h_btc_ratio_min: float
 ) -> None:
-    log.d(f"Запуск в живом режиме на бирже {exchange.get_name()}.")
+    exchange_name = exchange.get_name()
+    log.d(f"Запуск в живом режиме на бирже {exchange_name}.")
 
     if not timeframes:
         log.e("Не заданы таймфреймы.")
@@ -1156,7 +1165,13 @@ def run_live(
                 trade_key = ActiveTradeKey(symbol.symbol, timeframe)
                 active_trade = active_trades.get(trade_key)
                 if active_trade:
-                    outcome = _monitor_active_trade(exchange, trade_execution_service, active_trade, bars)
+                    outcome = _monitor_active_trade(
+                        exchange,
+                        trade_execution_service,
+                        active_trade,
+                        bars,
+                        exchange_name,
+                    )
                     if outcome:
                         trade_result, profit_pct, profit_value, exit_prices = outcome
                         log.i(
@@ -1173,6 +1188,7 @@ def run_live(
                             profit_pct=profit_pct,
                             profit_value=profit_value,
                             exit_prices=exit_prices,
+                            exchange_name=exchange_name,
                         )
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                         capture_state.symbol = None
@@ -1198,7 +1214,7 @@ def run_live(
                                    f"из-за активного разрешения на торговлю.")
                             continue
                         capture_key = CaptureKey(symbol.symbol, timeframe)
-                        message = f"Включено слежение за {symbol.symbol} на {timeframe.tf}."
+                        message = build_capture_message(symbol, timeframe, exchange_name)
                         if capture_key in capture_state.captures:
                             active_capture = capture_state.captures.get(capture_key)
                             if active_capture.message_id:
@@ -1242,17 +1258,16 @@ def run_live(
                             log.i(f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf}: "
                                   f"отсутствует разрешение на торговлю.")
                             continue
-                        message = f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}."
-                        log.i(message)
+                        log.i(f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}.")
                         execution_result = trade_execution_service.execute_buy(setup, symbol.context)
                         if not execution_result:
                             trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                             continue
-                        success_message = (
-                            f"Открыта позиция в {symbol.symbol} на {timeframe.tf}.\n"
-                            f"Entry order: {execution_result.entry_order_id}\n"
-                            f"SL order: {execution_result.protective_orders.stop_loss_id}\n"
-                            f"TP order: {execution_result.protective_orders.take_profit_id}"
+                        success_message = build_trade_opened_message(
+                            setup=setup,
+                            timeframe=timeframe,
+                            execution_result=execution_result,
+                            exchange_name=exchange_name,
                         )
                         log.i(success_message)
                         executor.submit(
