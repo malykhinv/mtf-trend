@@ -8,7 +8,7 @@ from crypto_screener.config.config import AppConfig as cfg
 from crypto_screener.domain.models.allowed_trade_registry import AllowedTradeKey
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.ignored_symbol import IgnoredSymbol
-from crypto_screener.utils.time import utc_now
+from crypto_screener.utils.time import ensure_utc, utc_now
 
 
 @dataclass
@@ -35,16 +35,17 @@ class IgnoredSymbolsStorage:
         ignored_symbol = self._ignored_symbols.get(key)
         if not ignored_symbol:
             return False, None
-        check_time = now or utc_now()
+        check_time = ensure_utc(now) if now else utc_now()
         if check_time >= ignored_symbol.deadline:
             expired = self._ignored_symbols.pop(key)
             return False, expired
         return True, ignored_symbol
 
     def pop_expired(self, now: datetime) -> list[tuple[AllowedTradeKey, IgnoredSymbol]]:
+        check_time = ensure_utc(now)
         expired: list[tuple[AllowedTradeKey, IgnoredSymbol]] = []
         for key, ignored_symbol in list(self._ignored_symbols.items()):
-            if now >= ignored_symbol.deadline:
+            if check_time >= ignored_symbol.deadline:
                 expired.append((key, self._ignored_symbols.pop(key)))
         return expired
 
@@ -66,7 +67,7 @@ class IgnoredSymbolRegistry:
             context: Context,
             issued_at: Optional[datetime] = None,
     ) -> IgnoredSymbol:
-        issued_at = issued_at or utc_now()
+        issued_at = ensure_utc(issued_at) if issued_at else utc_now()
         deadline = issued_at + timedelta(minutes=cfg.CAPTURE_TIMEOUT_MULTIPLIER * key.timeframe.minutes)
         return IgnoredSymbol(
             symbol=key.symbol,
