@@ -10,6 +10,7 @@ from crypto_screener.domain.models.ignored_symbol import IgnoredSymbol
 from crypto_screener.domain.models.ignored_symbol_registry import IgnoredSymbolRegistry
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.logger import log
+from crypto_screener.utils.time import ensure_utc, utc_now
 
 
 class TradePermissionService:
@@ -101,9 +102,11 @@ class TradePermissionService:
     def has_ignore(
             self,
             symbol: str,
-            timeframe: Timeframe
+            timeframe: Timeframe,
+            now: Optional[datetime] = None,
     ) -> bool:
-        has_ignore, expired_ignore = self._ignored_symbols.has(AllowedTradeKey(symbol, timeframe))
+        check_time = ensure_utc(now) if now else utc_now()
+        has_ignore, expired_ignore = self._ignored_symbols.has(AllowedTradeKey(symbol, timeframe), check_time)
         if expired_ignore:
             self._log_expired_ignore(expired_ignore)
             return False
@@ -120,9 +123,10 @@ class TradePermissionService:
 
     def pop_expired_ignored(
             self,
-            now: datetime
+            now: Optional[datetime] = None,
     ) -> list[tuple[AllowedTradeKey, IgnoredSymbol]]:
-        expired = self._ignored_symbols.pop_expired(now)
+        check_time = ensure_utc(now) if now else utc_now()
+        expired = self._ignored_symbols.pop_expired(check_time)
         for _, ignored_symbol in expired:
             self._log_expired_ignore(ignored_symbol)
         return expired
