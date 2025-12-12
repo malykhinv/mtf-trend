@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from heapq import heapify, heappop, heappush
+from queue import SimpleQueue
 from time import sleep
 from typing import Optional
 from urllib.parse import quote
@@ -27,6 +27,7 @@ from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
 from crypto_screener.domain.strategies.strategy import Strategy
+from crypto_screener.execution.scheduler import Scheduler
 from crypto_screener.execution.trade_executor import TradeExecutionService
 from crypto_screener.execution.trade_permission_service import TradePermissionService
 from crypto_screener.utils.telegram_messages import (
@@ -1081,7 +1082,6 @@ def _monitor_active_trade(
 
 # endregion
 
-
 def _run_analysis_task(
         symbol: FuturesSymbol,
         timeframe: Timeframe,
@@ -1112,32 +1112,6 @@ def _run_analysis_task(
     except Exception as exception:
         log.e(f"Ошибка в задаче анализа {symbol.symbol} на {timeframe.tf}: {exception}")
     return bars, setup, outcome
-
-
-def _schedule_task(
-        scheduled_tasks: list[ScheduledTask],
-        symbol: FuturesSymbol,
-        timeframe: Timeframe,
-        has_active_capture: bool,
-) -> None:
-    interval = cfg.POLL_INTERVALS[timeframe]
-    if has_active_capture:
-        interval = cfg.CAPTURE_POLL_INTERVALS.get(timeframe, interval / 2)
-    heappush(
-        scheduled_tasks,
-        ScheduledTask(
-            next_run_at=utc_now() + interval,
-            priority=-int(interval.total_seconds()) if has_active_capture else 0,
-            symbol=symbol,
-            timeframe=timeframe,
-        )
-    )
-
-
-def _get_next_sleep_timeout(scheduled_tasks: list[ScheduledTask]) -> float:
-    if not scheduled_tasks:
-        return 0.5
-    return min(max(0.0, (scheduled_tasks[0].next_run_at - utc_now()).total_seconds()), 1.0)
 
 
 def run_live(
@@ -1187,13 +1161,13 @@ def run_live(
     notified_once: set[tuple[str, Timeframe, str]] = set()
     active_trades = ActiveTrades()
 
-    scheduled_tasks = [
+    scheduler = Scheduler([
         ScheduledTask(next_run_at=utc_now(), symbol=symbol, timeframe=timeframe)
         for symbol in filtered_symbols
         for timeframe in timeframes
-    ]
-    heapify(scheduled_tasks)
+    ])
 
+    ready_queue: SimpleQueue[ScheduledTask] = SimpleQueue()
     pending_tasks: dict = {}
 
     while True:
@@ -1220,48 +1194,14 @@ def run_live(
             log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
 
-        while (
-                scheduled_tasks
-                and scheduled_tasks[0].next_run_at <= now
-                and len(pending_tasks) < cfg.LIVE_MAX_WORKERS
-        ):
-            task = heappop(scheduled_tasks)
-            symbol = task.symbol
-            timeframe = task.timeframe
-            capture_key = CaptureKey(symbol.symbol, timeframe)
-            active_capture = capture_state.get_capture(capture_key)
-
-            if capture_state.is_empty() and not cycle_started:
-                log.d("Запуск цикла анализа отобранных монет.")
-                cycle_started = True
-
-            if trade_permission_service.has_ignore(symbol.symbol, timeframe):
-                log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
-                _schedule_task(
-                    scheduled_tasks,
-                    symbol,
-                    timeframe,
-                    has_active_capture=bool(active_capture),
-                )
-                continue
-
-            active_trade = active_trades.get(ActiveTradeKey(symbol.symbol, timeframe))
-            future = analysis_executor.submit(
-                _run_analysis_task,
-                symbol,
-                timeframe,
-                limit,
-                strategy,
-                exchange,
-                active_trade,
-                trade_execution_service,
-                exchange_name,
-            )
-            pending_tasks[future] = (symbol, timeframe, capture_key)
+        for task in scheduler.pop_ready(now):
+            ready_queue.put(task)
 
         done_futures = [future for future in list(pending_tasks.keys()) if future.done()]
         for future in done_futures:
-            symbol, timeframe, capture_key = pending_tasks.pop(future)
+            task, capture_key = pending_tasks.pop(future)
+            symbol = task.symbol
+            timeframe = task.timeframe
             bars: list[Bar] = []
             setup: Optional[Setup] = None
             outcome = None
@@ -1410,11 +1350,43 @@ def run_live(
                         active_trades.add(trade_key, trade)
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
             finally:
-                _schedule_task(
-                    scheduled_tasks,
-                    symbol,
-                    timeframe,
+                scheduler.reschedule(
+                    task,
                     has_active_capture=bool(capture_state.get_capture(capture_key)),
                 )
 
-        sleep(_get_next_sleep_timeout(scheduled_tasks) if not pending_tasks else 0.1)
+        while not ready_queue.empty() and len(pending_tasks) < cfg.LIVE_MAX_WORKERS:
+            task = ready_queue.get()
+            symbol = task.symbol
+            timeframe = task.timeframe
+            capture_key = CaptureKey(symbol.symbol, timeframe)
+            active_capture = capture_state.get_capture(capture_key)
+
+            if capture_state.is_empty() and not cycle_started:
+                log.d("Запуск цикла анализа отобранных монет.")
+                cycle_started = True
+
+            if trade_permission_service.has_ignore(symbol.symbol, timeframe):
+                log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
+                scheduler.reschedule(
+                    task,
+                    has_active_capture=bool(active_capture),
+                )
+                continue
+
+            active_trade = active_trades.get(ActiveTradeKey(symbol.symbol, timeframe))
+            future = analysis_executor.submit(
+                _run_analysis_task,
+                symbol,
+                timeframe,
+                limit,
+                strategy,
+                exchange,
+                active_trade,
+                trade_execution_service,
+                exchange_name,
+            )
+            pending_tasks[future] = (task, capture_key)
+
+        sleep_time = 0.1 if pending_tasks or not ready_queue.empty() else scheduler.get_next_sleep_timeout()
+        sleep(sleep_time)
