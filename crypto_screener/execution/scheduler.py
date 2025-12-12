@@ -7,6 +7,7 @@ from typing import Optional
 from crypto_screener.config.config import AppConfig as cfg
 from crypto_screener.domain.models.scheduled_task import ScheduledTask
 from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.utils.logger import log
 from crypto_screener.utils.time import utc_now
 
 
@@ -35,7 +36,12 @@ class Scheduler:
         interval = cfg.POLL_INTERVALS[task.timeframe]
         if has_active_capture:
             interval = cfg.CAPTURE_POLL_INTERVALS.get(task.timeframe, interval / 2)
-        task.priority = -int(interval.total_seconds()) if has_active_capture else 0
+        task.priority = -1 if has_active_capture else 0
+        if has_active_capture:
+            log.d(
+                f"Переназначена capture-задача {task.symbol.symbol} на {task.timeframe.tf} "
+                f"с интервалом {interval} и приоритетом {task.priority}."
+            )
         base_time = task.due_at or task.next_run_at
         task.next_run_at = base_time + interval
         task.due_at = None
