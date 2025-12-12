@@ -1120,7 +1120,7 @@ def _schedule_task(
         timeframe: Timeframe,
         has_active_capture: bool,
 ) -> None:
-    interval = cfg.TIMEFRAME_INTERVALS[timeframe]
+    interval = cfg.POLL_INTERVALS[timeframe]
     if has_active_capture:
         interval /= cfg.CAPTURE_PRIORITY_DIVISOR
     heappush(
@@ -1157,6 +1157,12 @@ def run_live(
 
     if not timeframes:
         log.e("Не заданы таймфреймы.")
+        return
+
+    missing_intervals = [timeframe for timeframe in timeframes if timeframe not in cfg.POLL_INTERVALS]
+    if missing_intervals:
+        missing_labels = ", ".join(sorted(timeframe.tf for timeframe in missing_intervals))
+        log.e(f"Не заданы интервалы опроса для таймфреймов: {missing_labels}.")
         return
 
     filtered_symbols = _fetch_filtered_symbols(
