@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from heapq import heappop, heappush
+from heapq import heapify, heappop, heappush
 from time import sleep
 from typing import Optional
 from urllib.parse import quote
@@ -1114,6 +1114,10 @@ def _run_analysis_task(
     return bars, setup, outcome
 
 
+def _ready_task_priority_key(task: ScheduledTask):
+    return task.priority, task.due_at or task.next_run_at
+
+
 def run_live(
         strategy: Strategy,
         exchange: Exchange,
@@ -1212,10 +1216,28 @@ def run_live(
                     heappush(retained_ready_heap, task)
             ready_heap = retained_ready_heap
 
-        free_slots = cfg.LIVE_MAX_WORKERS - len(pending_tasks) - len(ready_heap)
-        capacity = max(0, free_slots)
-        for task in scheduler.pop_ready(now, capacity=capacity):
-            heappush(ready_heap, task)
+        free_workers = cfg.LIVE_MAX_WORKERS - len(pending_tasks)
+        ready_capacity = cfg.LIVE_MAX_WORKERS
+
+        capacity = free_workers if free_workers > 0 else (1 if capture_state.captures else 0)
+        ready_tasks = scheduler.pop_ready(now, capacity=capacity)
+
+        for task in ready_tasks:
+            if len(ready_heap) < ready_capacity:
+                heappush(ready_heap, task)
+                continue
+
+            worst_index, worst_task = max(
+                enumerate(ready_heap),
+                key=lambda item: _ready_task_priority_key(item[1]),
+            )
+
+            if _ready_task_priority_key(task) < _ready_task_priority_key(worst_task):
+                ready_heap[worst_index] = task
+                heapify(ready_heap)
+                scheduler.push(worst_task)
+            else:
+                scheduler.push(task)
 
         done_futures = [future for future in list(pending_tasks.keys()) if future.done()]
         for future in done_futures:
