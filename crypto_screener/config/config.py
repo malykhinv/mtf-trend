@@ -28,6 +28,16 @@ _poll_intervals: dict[Timeframe, timedelta] = {
     Timeframe.H4: timedelta(hours=1),
 }
 
+# Интервалы опроса Capture для анализа таймфреймов.
+_capture_poll_intervals: dict[Timeframe, timedelta] = {
+    Timeframe.M1: timedelta(seconds=1),
+    Timeframe.M5: timedelta(seconds=1),
+    Timeframe.M15: timedelta(seconds=10),
+    Timeframe.M30: timedelta(seconds=20),
+    Timeframe.H1: timedelta(minutes=1),
+    Timeframe.H4: timedelta(minutes=5),
+}
+
 # Стратегия.
 _strategy = PpoStrategy()
 
@@ -110,12 +120,14 @@ class AppConfig:
     # Интервалы опроса.
     POLL_INTERVALS: dict[Timeframe, timedelta] = _poll_intervals
 
+    # Интервалы опроса для Capture.
+    CAPTURE_POLL_INTERVALS: dict[Timeframe, timedelta] = _capture_poll_intervals
+
     # Режим работы.
     MODE: Mode = _mode_live
 
     # Пул потоков.
     LIVE_MAX_WORKERS: int = 4
-    CAPTURE_PRIORITY_DIVISOR: float = 2.0
 
     # Стратегия.
     STRATEGY: Strategy = _strategy
