@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Optional
 
 from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -11,3 +12,4 @@ class ScheduledTask:
     priority: int = field(default=0)
     symbol: FuturesSymbol = field(compare=False)
     timeframe: Timeframe = field(compare=False)
+    due_at: Optional[datetime] = field(default=None, compare=False)
