@@ -100,6 +100,10 @@ class AppConfig:
     # Режим работы.
     MODE: Mode = _mode_live
 
+    # Пул потоков.
+    LIVE_MAX_WORKERS: int = 4
+    CAPTURE_PRIORITY_DIVISOR: float = 2.0
+
     # Стратегия.
     STRATEGY: Strategy = _strategy
 

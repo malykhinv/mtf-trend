@@ -1081,6 +1081,65 @@ def _monitor_active_trade(
 
 # endregion
 
+
+def _run_analysis_task(
+        symbol: FuturesSymbol,
+        timeframe: Timeframe,
+        limit: int,
+        strategy: Strategy,
+        exchange: Exchange,
+        active_trade: Optional[ActiveTrade],
+        trade_execution_service: TradeExecutionService,
+        exchange_name: str,
+):
+    bars: list[Bar] = []
+    setup: Optional[Setup] = None
+    outcome = None
+    try:
+        for timeframe_limit in calculate_limit_grid(limit, timeframe):
+            bars = exchange.get_ohlcv(symbol.symbol, timeframe, timeframe_limit)
+            setup = strategy.detect_setup(symbol.symbol, bars, timeframe, symbol.context)
+            if setup:
+                break
+        if active_trade:
+            outcome = _monitor_active_trade(
+                exchange,
+                trade_execution_service,
+                active_trade,
+                bars,
+                exchange_name,
+            )
+    except Exception as exception:
+        log.e(f"Ошибка в задаче анализа {symbol.symbol} на {timeframe.tf}: {exception}")
+    return bars, setup, outcome
+
+
+def _schedule_task(
+        scheduled_tasks: list[ScheduledTask],
+        symbol: FuturesSymbol,
+        timeframe: Timeframe,
+        has_active_capture: bool,
+) -> None:
+    interval = cfg.TIMEFRAME_INTERVALS[timeframe]
+    if has_active_capture:
+        interval /= cfg.CAPTURE_PRIORITY_DIVISOR
+    heappush(
+        scheduled_tasks,
+        ScheduledTask(
+            next_run_at=utc_now() + interval,
+            priority=-1 if has_active_capture else 0,
+            symbol=symbol,
+            timeframe=timeframe,
+        )
+    )
+
+
+def _get_next_sleep_timeout(scheduled_tasks: list[ScheduledTask]) -> float:
+    if not scheduled_tasks:
+        return 0.5
+    return min(max(0.0, (scheduled_tasks[0].next_run_at - utc_now()).total_seconds()), 1.0)
+
+
 def run_live(
         strategy: Strategy,
         exchange: Exchange,
@@ -1116,8 +1175,9 @@ def run_live(
     trade_permission_service = TradePermissionService()
     trade_execution_service = TradeExecutionService(exchange, notifier)
     notifier.start_callback_handler(trade_permission_service)
-    executor = ThreadPoolExecutor(max_workers=2)
-    handle_sig(executor)
+    analysis_executor = ThreadPoolExecutor(max_workers=cfg.LIVE_MAX_WORKERS)
+    notification_executor = ThreadPoolExecutor(max_workers=2)
+    handle_sig(analysis_executor)
     notified_once: set[tuple[str, Timeframe, str]] = set()
     active_trades = ActiveTrades()
 
@@ -1128,7 +1188,10 @@ def run_live(
     ]
     heapify(scheduled_tasks)
 
+    pending_tasks: dict = {}
+
     while True:
+        cycle_started = False
         now = utc_now()
         expired_permissions = trade_permission_service.pop_expired(now)
         for permission_key, expired_permission in expired_permissions:
@@ -1151,61 +1214,86 @@ def run_live(
             log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
 
-        cycle_started = False
-        while scheduled_tasks and scheduled_tasks[0].next_run_at <= now:
+        while (
+                scheduled_tasks
+                and scheduled_tasks[0].next_run_at <= now
+                and len(pending_tasks) < cfg.LIVE_MAX_WORKERS
+        ):
             task = heappop(scheduled_tasks)
             symbol = task.symbol
             timeframe = task.timeframe
+            capture_key = CaptureKey(symbol.symbol, timeframe)
+            active_capture = capture_state.get_capture(capture_key)
 
             if capture_state.is_empty() and not cycle_started:
                 log.d("Запуск цикла анализа отобранных монет.")
                 cycle_started = True
 
+            if trade_permission_service.has_ignore(symbol.symbol, timeframe):
+                log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
+                _schedule_task(
+                    scheduled_tasks,
+                    symbol,
+                    timeframe,
+                    has_active_capture=bool(active_capture),
+                )
+                continue
+
+            active_trade = active_trades.get(ActiveTradeKey(symbol.symbol, timeframe))
+            future = analysis_executor.submit(
+                _run_analysis_task,
+                symbol,
+                timeframe,
+                limit,
+                strategy,
+                exchange,
+                active_trade,
+                trade_execution_service,
+                exchange_name,
+            )
+            pending_tasks[future] = (symbol, timeframe, capture_key)
+
+        done_futures = [future for future in list(pending_tasks.keys()) if future.done()]
+        for future in done_futures:
+            symbol, timeframe, capture_key = pending_tasks.pop(future)
+            bars: list[Bar] = []
+            setup: Optional[Setup] = None
+            outcome = None
+
             try:
-                capture_key = CaptureKey(symbol.symbol, timeframe)
-                active_capture = capture_state.get_capture(capture_key)
-                if active_capture and now < active_capture.deadline:
-                    log.d(f"Продолжаем мониторинг Capture {symbol.symbol} на {timeframe.tf}.")
-                if trade_permission_service.has_ignore(symbol.symbol, timeframe):
-                    log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
-                    continue
-                setup = None
-                bars = []
-                for timeframe_limit in calculate_limit_grid(limit, timeframe):
-                    bars = exchange.get_ohlcv(symbol.symbol, timeframe, timeframe_limit)
-                    setup = strategy.detect_setup(symbol.symbol, bars, timeframe, symbol.context)
-                    if setup:
-                        break
-                trade_key = ActiveTradeKey(symbol.symbol, timeframe)
-                active_trade = active_trades.get(trade_key)
-                if active_trade:
-                    outcome = _monitor_active_trade(
-                        exchange,
-                        trade_execution_service,
-                        active_trade,
-                        bars,
-                        exchange_name,
+                bars, setup, outcome = future.result()
+            except Exception as exception:
+                log.e(f"Не удалось обработать задачу {symbol.symbol} на {timeframe.tf}: {exception}")
+
+            active_capture = capture_state.get_capture(capture_key)
+            if active_capture and now < active_capture.deadline:
+                log.d(f"Продолжаем мониторинг Capture {symbol.symbol} на {timeframe.tf}.")
+
+            trade_key = ActiveTradeKey(symbol.symbol, timeframe)
+            active_trade = active_trades.get(trade_key)
+
+            try:
+                if outcome:
+                    trade_result, profit_pct, profit_value, exit_prices = outcome
+                    log.i(
+                        f"Завершена сделка {symbol.symbol} {timeframe.tf}: "
+                        f"{trade_result.value} ({profit_pct:+.2f}%)"
                     )
-                    if outcome:
-                        trade_result, profit_pct, profit_value, exit_prices = outcome
-                        log.i(
-                            f"Завершена сделка {symbol.symbol} {timeframe.tf}: "
-                            f"{trade_result.value} ({profit_pct:+.2f}%)"
-                        )
-                        active_trade = active_trades.remove(trade_key)
-                        active_trade.exit_average_price = active_trade.exit_average_price or (
-                            exit_prices[0] if exit_prices else None)
-                        _notify_trade_closure(
-                            notifier=notifier,
-                            active_trade=active_trade,
-                            trade_result=trade_result,
-                            profit_pct=profit_pct,
-                            profit_value=profit_value,
-                            exit_prices=exit_prices,
-                            exchange_name=exchange_name,
-                        )
-                        trade_permission_service.clear_allowance(symbol.symbol, timeframe)
-                        continue
+                    active_trade = active_trades.remove(trade_key)
+                    active_trade.exit_average_price = active_trade.exit_average_price or (
+                        exit_prices[0] if exit_prices else None)
+                    _notify_trade_closure(
+                        notifier=notifier,
+                        active_trade=active_trade,
+                        trade_result=trade_result,
+                        profit_pct=profit_pct,
+                        profit_value=profit_value,
+                        exit_prices=exit_prices,
+                        exchange_name=exchange_name,
+                    )
+                    trade_permission_service.clear_allowance(symbol.symbol, timeframe)
+                    continue
+
                 match setup:
                     # Сетап не найден.
                     case Unfilled():
@@ -1220,15 +1308,16 @@ def run_live(
                     # Найден базовый сетап.
                     case Capture():
                         if trade_permission_service.has_allowance(symbol.symbol, timeframe):
-                            log.d( f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} "
-                                   f"из-за активного разрешения на торговлю.")
+                            log.d(
+                                f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} "
+                                f"из-за активного разрешения на торговлю."
+                            )
                             continue
-                        capture_key = CaptureKey(symbol.symbol, timeframe)
                         message = build_capture_message(symbol, timeframe, exchange_name)
                         if capture_key in capture_state.captures:
                             active_capture = capture_state.captures.get(capture_key)
-                            if active_capture.message_id:
-                                executor.submit(
+                            if active_capture and active_capture.message_id:
+                                notification_executor.submit(
                                     _edit_notification,
                                     notifier=notifier,
                                     notification_type=NotificationType.EVENT,
@@ -1242,7 +1331,7 @@ def run_live(
                             continue
                         capture_notification_key = (symbol.symbol, timeframe, setup.name)
                         if capture_notification_key not in notified_once:
-                            message_id = executor.submit(
+                            message_id = notification_executor.submit(
                                 _send_notification,
                                 notifier=notifier,
                                 notification_type=NotificationType.EVENT,
@@ -1263,8 +1352,10 @@ def run_live(
                     # Найден торговый сетап.
                     case Trade():
                         if not trade_permission_service.has_allowance(symbol.symbol, timeframe):
-                            log.i(f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf}: "
-                                  f"отсутствует разрешение на торговлю.")
+                            log.i(
+                                f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf}: "
+                                f"отсутствует разрешение на торговлю."
+                            )
                             continue
                         log.i(f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}.")
                         execution_result = trade_execution_service.execute_buy(setup, symbol.context)
@@ -1278,7 +1369,7 @@ def run_live(
                             exchange_name=exchange_name,
                         )
                         log.i(success_message)
-                        executor.submit(
+                        notification_executor.submit(
                             _send_notification,
                             notifier=notifier,
                             notification_type=NotificationType.ORDER,
@@ -1292,7 +1383,9 @@ def run_live(
                         capture_message_id = removed_capture.message_id if removed_capture else None
                         if removed_capture:
                             _remove_button(notifier, removed_capture.message_id)
-                            log.i(f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Trade, кнопка удалена.")
+                            log.i(
+                                f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Trade, кнопка удалена."
+                            )
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
                         trade = ActiveTrade(
                             symbol=symbol.symbol,
@@ -1311,18 +1404,11 @@ def run_live(
                         active_trades.add(trade_key, trade)
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
             finally:
-                next_run_at = utc_now() + cfg.TIMEFRAME_INTERVALS[timeframe]
-                heappush(
+                _schedule_task(
                     scheduled_tasks,
-                    ScheduledTask(
-                        next_run_at=next_run_at,
-                        symbol=symbol,
-                        timeframe=timeframe,
-                    )
+                    symbol,
+                    timeframe,
+                    has_active_capture=bool(capture_state.get_capture(capture_key)),
                 )
-                now = utc_now()
 
-        if scheduled_tasks:
-            sleep_seconds = max(0.0, (scheduled_tasks[0].next_run_at - now).total_seconds())
-            if sleep_seconds > 0:
-                sleep(min(sleep_seconds, 60))
+        sleep(_get_next_sleep_timeout(scheduled_tasks) if not pending_tasks else 0.1)
