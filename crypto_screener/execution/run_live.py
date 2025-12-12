@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from heapq import heapify, heappop, heappush
+from time import sleep
 from typing import Optional
 from urllib.parse import quote
 
@@ -38,6 +41,18 @@ from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
 from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.time import utc_now
+
+TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = {
+    timeframe: timedelta(minutes=timeframe.minutes)
+    for timeframe in Timeframe
+}
+
+
+@dataclass(order=True)
+class ScheduledTask:
+    next_run_at: datetime
+    symbol: FuturesSymbol = field(compare=False)
+    timeframe: Timeframe = field(compare=False)
 
 # region Private.
 def _fetch_filtered_symbols(
@@ -1119,6 +1134,13 @@ def run_live(
     notified_once: set[tuple[str, Timeframe, str]] = set()
     active_trades = ActiveTrades()
 
+    scheduled_tasks = [
+        ScheduledTask(next_run_at=utc_now(), symbol=symbol, timeframe=timeframe)
+        for symbol in filtered_symbols
+        for timeframe in timeframes
+    ]
+    heapify(scheduled_tasks)
+
     while True:
         now = utc_now()
         expired_permissions = trade_permission_service.pop_expired(now)
@@ -1142,11 +1164,17 @@ def run_live(
             log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
 
-        if capture_state.is_empty():
-            log.d("Запуск цикла анализа отобранных монет.")
+        cycle_started = False
+        while scheduled_tasks and scheduled_tasks[0].next_run_at <= now:
+            task = heappop(scheduled_tasks)
+            symbol = task.symbol
+            timeframe = task.timeframe
 
-        for symbol in filtered_symbols:
-            for timeframe in timeframes:
+            if capture_state.is_empty() and not cycle_started:
+                log.d("Запуск цикла анализа отобранных монет.")
+                cycle_started = True
+
+            try:
                 capture_key = CaptureKey(symbol.symbol, timeframe)
                 active_capture = capture_state.get_capture(capture_key)
                 if active_capture and now < active_capture.deadline:
@@ -1295,3 +1323,19 @@ def run_live(
                         )
                         active_trades.add(trade_key, trade)
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
+            finally:
+                next_run_at = utc_now() + TIMEFRAME_INTERVALS[timeframe]
+                heappush(
+                    scheduled_tasks,
+                    ScheduledTask(
+                        next_run_at=next_run_at,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                    )
+                )
+                now = utc_now()
+
+        if scheduled_tasks:
+            sleep_seconds = max(0.0, (scheduled_tasks[0].next_run_at - now).total_seconds())
+            if sleep_seconds > 0:
+                sleep(min(sleep_seconds, 60))
