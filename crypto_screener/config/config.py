@@ -18,6 +18,16 @@ _timeframe_intervals: dict[Timeframe, timedelta] = {
     for timeframe in Timeframe
 }
 
+# Интервалы опроса для анализа таймфреймов.
+_poll_intervals: dict[Timeframe, timedelta] = {
+    Timeframe.M1: timedelta(seconds=30),
+    Timeframe.M5: timedelta(minutes=2),
+    Timeframe.M15: timedelta(minutes=5),
+    Timeframe.M30: timedelta(minutes=10),
+    Timeframe.H1: timedelta(minutes=15),
+    Timeframe.H4: timedelta(hours=1),
+}
+
 # Стратегия.
 _strategy = PpoStrategy()
 
@@ -96,6 +106,9 @@ class AppConfig:
 
     # Интервалы таймфреймов.
     TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = _timeframe_intervals
+
+    # Интервалы опроса.
+    POLL_INTERVALS: dict[Timeframe, timedelta] = _poll_intervals
 
     # Режим работы.
     MODE: Mode = _mode_live
