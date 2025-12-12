@@ -1187,12 +1187,30 @@ def run_live(
             for capture_key, active_capture in capture_state.captures.items()
             if now >= active_capture.deadline
         ]
+        expired_capture_keys: set[tuple[str, Timeframe]] = set()
+        if expired_captures:
+            log.i(
+                f"Истекло Capture событий: {len(expired_captures)}. "
+                "Возвращаем интервалы опроса к базовым значениям."
+            )
         for capture_key, active_capture in expired_captures:
+            expired_capture_keys.add((capture_key.symbol, capture_key.timeframe))
             capture_state.remove_capture(capture_key)
             _remove_button(notifier, active_capture.message_id)
             trade_permission_service.clear_allowance(capture_key.symbol, capture_key.timeframe)
             log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
+            scheduler.downgrade_capture(capture_key.symbol, capture_key.timeframe, now=now)
+
+        if expired_capture_keys:
+            retained_ready_heap: list[ScheduledTask] = []
+            while ready_heap:
+                task = heappop(ready_heap)
+                if (task.symbol.symbol, task.timeframe) in expired_capture_keys:
+                    scheduler.reschedule(task, has_active_capture=False)
+                else:
+                    heappush(retained_ready_heap, task)
+            ready_heap = retained_ready_heap
 
         free_slots = cfg.LIVE_MAX_WORKERS - len(pending_tasks) - len(ready_heap)
         capacity = max(0, free_slots)
