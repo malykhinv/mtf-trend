@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from heapq import heapify, heappop, heappush
 from typing import Optional
 
 from crypto_screener.config.config import AppConfig as cfg
 from crypto_screener.domain.models.scheduled_task import ScheduledTask
+from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.time import utc_now
 
 
@@ -38,6 +40,25 @@ class Scheduler:
         task.next_run_at = base_time + interval
         task.due_at = None
         self.push(task)
+
+    def downgrade_capture(
+            self,
+            symbol: str,
+            timeframe: Timeframe,
+            now: Optional[datetime] = None,
+    ) -> None:
+        now = now or utc_now()
+        interval = cfg.POLL_INTERVALS[timeframe]
+        base_tasks = False
+        for task in self._tasks:
+            if task.symbol.symbol == symbol and task.timeframe == timeframe:
+                task.priority = 0
+                base_time = max(now, task.due_at or task.next_run_at)
+                task.next_run_at = base_time + interval
+                task.due_at = None
+                base_tasks = True
+        if base_tasks:
+            heapify(self._tasks)
 
     def get_next_sleep_timeout(self) -> float:
         if not self._tasks:
