@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
 from heapq import heapify, heappop, heappush
 from time import sleep
 from typing import Optional
@@ -23,6 +21,7 @@ from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.scheduled_task import ScheduledTask
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
@@ -41,18 +40,6 @@ from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
 from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.time import utc_now
-
-TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = {
-    timeframe: timedelta(minutes=timeframe.minutes)
-    for timeframe in Timeframe
-}
-
-
-@dataclass(order=True)
-class ScheduledTask:
-    next_run_at: datetime
-    symbol: FuturesSymbol = field(compare=False)
-    timeframe: Timeframe = field(compare=False)
 
 # region Private.
 def _fetch_filtered_symbols(
@@ -1324,7 +1311,7 @@ def run_live(
                         active_trades.add(trade_key, trade)
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
             finally:
-                next_run_at = utc_now() + TIMEFRAME_INTERVALS[timeframe]
+                next_run_at = utc_now() + cfg.TIMEFRAME_INTERVALS[timeframe]
                 heappush(
                     scheduled_tasks,
                     ScheduledTask(

@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, \
@@ -13,6 +13,10 @@ _timezone: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
 # Таймфреймы.
 _timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5]
+_timeframe_intervals: dict[Timeframe, timedelta] = {
+    timeframe: timedelta(minutes=timeframe.minutes)
+    for timeframe in Timeframe
+}
 
 # Стратегия.
 _strategy = PpoStrategy()
@@ -89,6 +93,9 @@ class AppConfig:
 
     # Временная зона.
     TIMEZONE: ZoneInfo = _timezone
+
+    # Интервалы таймфреймов.
+    TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = _timeframe_intervals
 
     # Режим работы.
     MODE: Mode = _mode_live
