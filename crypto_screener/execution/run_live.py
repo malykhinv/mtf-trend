@@ -1122,12 +1122,12 @@ def _schedule_task(
 ) -> None:
     interval = cfg.POLL_INTERVALS[timeframe]
     if has_active_capture:
-        interval /= cfg.CAPTURE_PRIORITY_DIVISOR
+        interval = cfg.CAPTURE_POLL_INTERVALS.get(timeframe, interval / 2)
     heappush(
         scheduled_tasks,
         ScheduledTask(
             next_run_at=utc_now() + interval,
-            priority=-1 if has_active_capture else 0,
+            priority=-int(interval.total_seconds()) if has_active_capture else 0,
             symbol=symbol,
             timeframe=timeframe,
         )
