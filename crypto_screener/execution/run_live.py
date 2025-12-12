@@ -1136,22 +1136,21 @@ def run_live(
             if now >= active_capture.deadline
         ]
         for capture_key, active_capture in expired_captures:
-            capture_state.remove_capture(capture_key.symbol, capture_key.timeframe)
+            capture_state.remove_capture(capture_key)
             _remove_button(notifier, active_capture.message_id)
             trade_permission_service.clear_allowance(capture_key.symbol, capture_key.timeframe)
             log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
-            if capture_state.symbol == capture_key.symbol and not capture_state.has_symbol_capture(capture_key.symbol):
-                capture_state.symbol = None
 
-        if not capture_state.symbol:
+        if capture_state.is_empty():
             log.d("Запуск цикла анализа отобранных монет.")
 
-        active_symbols = [symbol for symbol in filtered_symbols
-                          if not capture_state.symbol
-                          or capture_state.symbol == symbol.symbol]
-        for symbol in active_symbols:
+        for symbol in filtered_symbols:
             for timeframe in timeframes:
+                capture_key = CaptureKey(symbol.symbol, timeframe)
+                active_capture = capture_state.get_capture(capture_key)
+                if active_capture and now < active_capture.deadline:
+                    log.d(f"Продолжаем мониторинг Capture {symbol.symbol} на {timeframe.tf}.")
                 if trade_permission_service.has_ignore(symbol.symbol, timeframe):
                     log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
                     continue
@@ -1191,20 +1190,16 @@ def run_live(
                             exchange_name=exchange_name,
                         )
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
-                        capture_state.symbol = None
                         continue
                 match setup:
                     # Сетап не найден.
                     case Unfilled():
-                        removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
+                        removed_capture = capture_state.remove_capture(capture_key)
                         if removed_capture:
                             _remove_button(notifier, removed_capture.message_id)
                             log.i(f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена.")
                             trade_permission_service.clear_allowance(symbol.symbol, timeframe)
                             notified_once.discard((symbol.symbol, timeframe, "Capture"))
-                        if (capture_state.symbol == symbol.symbol and
-                                not capture_state.has_symbol_capture(symbol.symbol)):
-                            capture_state.symbol = None
                         continue
 
                     # Найден базовый сетап.
@@ -1230,8 +1225,6 @@ def run_live(
                                     keyboard=_build_keyboard(symbol.symbol, timeframe, symbol.context),
                                 ).result()
                             continue
-                        if capture_state.symbol is None:
-                            capture_state.symbol = symbol.symbol
                         capture_notification_key = (symbol.symbol, timeframe, setup.name)
                         if capture_notification_key not in notified_once:
                             message_id = executor.submit(
@@ -1280,7 +1273,7 @@ def run_live(
                             context=symbol.context
                         ).result()
                         detection_time = bars[-1].time if bars else utc_now()
-                        removed_capture = capture_state.remove_capture(symbol.symbol, timeframe)
+                        removed_capture = capture_state.remove_capture(capture_key)
                         capture_message_id = removed_capture.message_id if removed_capture else None
                         if removed_capture:
                             _remove_button(notifier, removed_capture.message_id)
@@ -1302,4 +1295,3 @@ def run_live(
                         )
                         active_trades.add(trade_key, trade)
                         trade_permission_service.clear_allowance(symbol.symbol, timeframe)
-                        capture_state.symbol = None
