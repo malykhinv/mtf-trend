@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
-from queue import SimpleQueue
+from heapq import heappop, heappush
 from time import sleep
 from typing import Optional
 from urllib.parse import quote
@@ -1167,7 +1167,7 @@ def run_live(
         for timeframe in timeframes
     ])
 
-    ready_queue: SimpleQueue[ScheduledTask] = SimpleQueue()
+    ready_heap: list[ScheduledTask] = []
     pending_tasks: dict = {}
 
     while True:
@@ -1194,8 +1194,10 @@ def run_live(
             log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
 
-        for task in scheduler.pop_ready(now):
-            ready_queue.put(task)
+        free_slots = cfg.LIVE_MAX_WORKERS - len(pending_tasks) - len(ready_heap)
+        capacity = max(0, free_slots)
+        for task in scheduler.pop_ready(now, capacity=capacity):
+            heappush(ready_heap, task)
 
         done_futures = [future for future in list(pending_tasks.keys()) if future.done()]
         for future in done_futures:
@@ -1355,8 +1357,8 @@ def run_live(
                     has_active_capture=bool(capture_state.get_capture(capture_key)),
                 )
 
-        while not ready_queue.empty() and len(pending_tasks) < cfg.LIVE_MAX_WORKERS:
-            task = ready_queue.get()
+        while ready_heap and len(pending_tasks) < cfg.LIVE_MAX_WORKERS:
+            task = heappop(ready_heap)
             symbol = task.symbol
             timeframe = task.timeframe
             capture_key = CaptureKey(symbol.symbol, timeframe)
@@ -1388,5 +1390,5 @@ def run_live(
             )
             pending_tasks[future] = (task, capture_key)
 
-        sleep_time = 0.1 if pending_tasks or not ready_queue.empty() else scheduler.get_next_sleep_timeout()
+        sleep_time = 0.1 if pending_tasks or ready_heap else scheduler.get_next_sleep_timeout()
         sleep(sleep_time)
