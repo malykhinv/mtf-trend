@@ -125,8 +125,8 @@ class _CallbackHandler:
         )
         self._trade_permission_service.clear_allowance(symbol, timeframe)
 
+    @staticmethod
     async def _show_skip_only_keyboard(
-            self,
             message: MaybeInaccessibleMessage,
             symbol: Optional[str],
             timeframe: Optional[Timeframe],

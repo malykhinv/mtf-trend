@@ -5,8 +5,8 @@ from zoneinfo import ZoneInfo
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, \
     TestData
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.strategies.strategy import Strategy
 from crypto_screener.domain.strategies.ppo import PpoStrategy
+from crypto_screener.domain.strategies.strategy import Strategy
 
 # Временная зона.
 _timezone: ZoneInfo = ZoneInfo("Europe/Belgrade")

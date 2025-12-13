@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from html import escape
 from typing import Iterable, Optional
 
-from crypto_screener.execution.trade_executor import ExecutionResult
 from crypto_screener.domain.models.active_trade import ActiveTrade
 from crypto_screener.domain.models.setup import Trade
 from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
+from crypto_screener.execution.trade_executor import ExecutionResult
 
 
 # region Private.

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import numpy as np
+
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_level import CascadeLevel
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setup_data import Ppo
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.setup_data import Ppo
 from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels

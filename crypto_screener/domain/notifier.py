@@ -10,7 +10,7 @@ from crypto_screener.domain.models.context import Context
 Keyboard = list[list[tuple[str, str]]]
 
 if TYPE_CHECKING:
-    from crypto_screener.execution.trade_permission_service import TradePermissionService
+    pass
 
 
 class NotificationType(Enum):

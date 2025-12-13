@@ -4,8 +4,8 @@ from typing import Optional
 
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.mode import PlotPolicy, TestData
 from crypto_screener.domain.models.context import Context
+from crypto_screener.domain.models.mode import PlotPolicy, TestData
 from crypto_screener.domain.models.setup import Setup, Trade
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
@@ -14,6 +14,7 @@ from crypto_screener.execution.test_result import evaluate_buy, log_test_summary
 from crypto_screener.utils.history import calculate_limit_grid
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.plotter import plot, plot_postmortem
+
 
 # region Private.
 def _future_end(end: datetime, timeframe: Timeframe, limit: int) -> datetime:

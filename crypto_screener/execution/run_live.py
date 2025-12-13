@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from heapq import heapify, heappop, heappush
 from time import sleep
 from typing import Optional
@@ -20,8 +21,8 @@ from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.protective_order_statuses import ProtectiveOrderStatuses
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
-from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.scheduled_task import ScheduledTask
+from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
@@ -30,17 +31,18 @@ from crypto_screener.domain.strategies.strategy import Strategy
 from crypto_screener.execution.scheduler import Scheduler
 from crypto_screener.execution.trade_executor import TradeExecutionService
 from crypto_screener.execution.trade_permission_service import TradePermissionService
+from crypto_screener.utils.history import calculate_limit_grid
+from crypto_screener.utils.logger import log
+from crypto_screener.utils.plotter import plot, plot_postmortem
+from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.telegram_messages import (
     build_capture_message,
     build_protective_recovery_message,
     build_trade_closure_message,
     build_trade_opened_message,
 )
-from crypto_screener.utils.history import calculate_limit_grid
-from crypto_screener.utils.logger import log
-from crypto_screener.utils.plotter import plot, plot_postmortem
-from crypto_screener.utils.signals import handle_sig
 from crypto_screener.utils.time import utc_now
+
 
 # region Private.
 def _fetch_filtered_symbols(
