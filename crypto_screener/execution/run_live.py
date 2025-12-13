@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import datetime
 from heapq import heapify, heappop, heappush
 from time import sleep
 from typing import Optional
 from urllib.parse import quote
 
-from crypto_screener.config.config import AppConfig as cfg
+from crypto_screener.config.config import cfg
 from crypto_screener.data.notifiers.telegram import SKIP_CALLBACK_PREFIX, TRADE_CALLBACK_PREFIX
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
@@ -1116,8 +1117,9 @@ def _run_analysis_task(
     return bars, setup, outcome
 
 
-def _ready_task_priority_key(task: ScheduledTask):
-    return task.priority, task.due_at or task.next_run_at
+def _ready_task_priority_key(task: ScheduledTask) -> tuple[int, datetime]:
+    due_at = task.due_at if task.due_at is not None else task.next_run_at
+    return task.priority, due_at
 
 
 def run_live(
@@ -1175,9 +1177,9 @@ def run_live(
 
     ready_heap: list[ScheduledTask] = []
     pending_tasks: dict = {}
+    cycle_started = False
 
     while True:
-        cycle_started = False
         now = utc_now()
         expired_permissions = trade_permission_service.pop_expired(now)
         for permission_key, expired_permission in expired_permissions:
@@ -1207,6 +1209,9 @@ def run_live(
             log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
             notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
             scheduler.downgrade_capture(capture_key.symbol, capture_key.timeframe, now=now)
+
+        if not capture_state.is_empty():
+            cycle_started = False
 
         if expired_capture_keys:
             retained_ready_heap: list[ScheduledTask] = []
@@ -1260,7 +1265,6 @@ def run_live(
                 log.d(f"Продолжаем мониторинг Capture {symbol.symbol} на {timeframe.tf}.")
 
             trade_key = ActiveTradeKey(symbol.symbol, timeframe)
-            active_trade = active_trades.get(trade_key)
 
             try:
                 if outcome:
@@ -1337,6 +1341,7 @@ def run_live(
                                 message_id=message_id,
                                 timeout_multiplier=cfg.CAPTURE_TIMEOUT_MULTIPLIER,
                             )
+                            cycle_started = False
                             notified_once.add(capture_notification_key)
 
                     # Найден торговый сетап.
@@ -1412,11 +1417,10 @@ def run_live(
 
             if trade_permission_service.has_ignore(symbol.symbol, timeframe):
                 log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
-                scheduler.reschedule(
-                    task,
-                    has_active_capture=bool(active_capture),
-                )
+                scheduler.reschedule(task, has_active_capture=bool(active_capture))
                 continue
+
+            log.d(f"Проверяем {symbol.symbol} на {timeframe.tf}.")
 
             active_trade = active_trades.get(ActiveTradeKey(symbol.symbol, timeframe))
             future = analysis_executor.submit(

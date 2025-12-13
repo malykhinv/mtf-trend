@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
-from typing import Awaitable, Dict, Optional, TypeVar
+from typing import Awaitable, Dict, Optional, TypeVar, cast
 from urllib.parse import unquote
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update, MaybeInaccessibleMessage
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Message, Update, \
+    MaybeInaccessibleMessage
 from telegram.constants import ParseMode, UpdateType
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
@@ -138,8 +139,16 @@ class _CallbackHandler:
         skip_keyboard = InlineKeyboardMarkup.from_button(
             InlineKeyboardButton(text="Пропустить", callback_data=skip_callback_data)
         )
+        if not hasattr(message, "edit_reply_markup"):
+            log.w(
+                "Получено недоступное сообщение для обновления кнопок, edit_reply_markup отсутствует."
+            )
+            return
+
+        editable_message = cast(Message, message)
+
         try:
-            await message.edit_reply_markup(reply_markup=skip_keyboard)
+            await editable_message.edit_reply_markup(reply_markup=skip_keyboard)
         except Exception as exception:
             log.e(f"Не удалось обновить кнопки для {symbol} на {timeframe.tf}: {exception}")
 

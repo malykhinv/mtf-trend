@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from crypto_screener.domain.models.setup_data import SetupData
+from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels
 
 
@@ -37,6 +38,14 @@ class Trade(Setup):
     is_trade: bool = field(init=False, default=True)
 
     trade_levels: TradeLevels
+
+    @property
+    def symbol(self) -> str:
+        return self.data.symbol
+
+    @property
+    def timeframe(self) -> Timeframe:
+        return self.data.timeframe
 
     @property
     def take_profit_price(self) -> float:

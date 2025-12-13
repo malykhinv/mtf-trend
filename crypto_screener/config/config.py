@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -115,13 +115,13 @@ class AppConfig:
     TIMEZONE: ZoneInfo = _timezone
 
     # Интервалы таймфреймов.
-    TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = _timeframe_intervals
+    TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _timeframe_intervals.copy())
 
     # Интервалы опроса.
-    POLL_INTERVALS: dict[Timeframe, timedelta] = _poll_intervals
+    POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _poll_intervals.copy())
 
     # Интервалы опроса для Capture.
-    CAPTURE_POLL_INTERVALS: dict[Timeframe, timedelta] = _capture_poll_intervals
+    CAPTURE_POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _capture_poll_intervals.copy())
 
     # Режим работы.
     MODE: Mode = _mode_live
@@ -283,7 +283,7 @@ class AppConfig:
     PLOT_VOLUME_ALPHA: float = 0.5
     PLOT_VOLUME_PAD_RATIO: float = 0.05
     PLOT_VOLUME_ZORDER: int = 1
-    PLOT_HEIGHT_RATIOS: tuple[int, int] = (3, 1)
+    PLOT_HEIGHT_RATIOS: tuple[int, ...] = field(default_factory=lambda: (3, 1))
     PLOT_SUBPLOT_HSPACE: float = 0.03
     PLOT_PRICE_DECIMALS_HIGH: int = 2
     PLOT_PRICE_DECIMALS_MID: int = 4

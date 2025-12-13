@@ -4,7 +4,7 @@ from datetime import datetime
 from heapq import heapify, heappop, heappush
 from typing import Optional
 
-from crypto_screener.config.config import AppConfig as cfg
+from crypto_screener.config.config import cfg
 from crypto_screener.domain.models.scheduled_task import ScheduledTask
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.logger import log
