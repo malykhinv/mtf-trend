@@ -127,7 +127,7 @@ class AppConfig:
     MODE: Mode = _mode_live
 
     # Пул потоков.
-    LIVE_MAX_WORKERS: int = 4
+    LIVE_MAX_WORKERS: int = 1
 
     # Стратегия.
     STRATEGY: Strategy = _strategy

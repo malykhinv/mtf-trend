@@ -24,7 +24,7 @@ from crypto_screener.domain.models.protective_order_statuses import ProtectiveOr
 from crypto_screener.domain.models.protective_orders import ProtectiveOrders
 from crypto_screener.domain.models.scheduled_task import ScheduledTask
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
-from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts
+from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts, extract_base_symbol
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
@@ -1420,7 +1420,7 @@ def run_live(
                 scheduler.reschedule(task, has_active_capture=bool(active_capture))
                 continue
 
-            log.d(f"Проверяем {symbol.symbol} на {timeframe.tf}.")
+            log.d(f"Проверяем {extract_base_symbol(symbol.symbol).upper()} на {timeframe.tf}.")
 
             active_trade = active_trades.get(ActiveTradeKey(symbol.symbol, timeframe))
             future = analysis_executor.submit(
