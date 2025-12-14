@@ -46,7 +46,6 @@ def main() -> None:
     strategies = app_cfg.STRATEGIES
     if not strategies:
         raise ValueError("В конфигурации не задано ни одной стратегии.")
-    strategy = strategies[0]
     mode: Mode = app_cfg.MODE
     match mode:
         # Работа с актуальным рынком.
@@ -61,7 +60,7 @@ def main() -> None:
         ):
             notifier = _initialize_notifier()
             run_live(
-                strategy,
+                strategies,
                 exchange,
                 notifier,
                 timeframes,
@@ -85,7 +84,7 @@ def main() -> None:
             listing_age_days_min=listing_age_days_min
         ):
             run_test_market(
-                strategy,
+                strategies,
                 exchange,
                 timeframes,
                 limit,
@@ -103,7 +102,7 @@ def main() -> None:
             limit=limit,
             plot_policy=plot_policy
         ):
-            run_test_symbols(strategy, exchange, test_data, limit, plot_policy)
+            run_test_symbols(strategies, exchange, test_data, limit, plot_policy)
 
         case _:
             # noinspection PyUnreachableCode

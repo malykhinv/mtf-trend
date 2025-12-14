@@ -72,6 +72,7 @@ class IgnoredSymbolRegistry:
         return IgnoredSymbol(
             symbol=key.symbol,
             timeframe=key.timeframe,
+            strategy=key.strategy,
             message_id=message_id,
             context=context,
             issued_at=issued_at,

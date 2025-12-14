@@ -16,6 +16,7 @@ from crypto_screener.domain.models.timeframe import Timeframe
 class ActiveTrade:
     symbol: str
     timeframe: Timeframe
+    strategy: str
     setup: Trade
     detection_time: datetime
     context: Context

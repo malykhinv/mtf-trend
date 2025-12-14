@@ -56,22 +56,24 @@ class _CallbackHandler:
         Optional[MaybeInaccessibleMessage],
         Optional[Timeframe],
         Optional[Context],
+        Optional[str],
     ]:
         symbol = None
         message = None
         timeframe = None
         symbol_context = None
+        strategy = None
         query = update.callback_query
         if not query:
-            return symbol, message, timeframe, symbol_context
+            return symbol, message, timeframe, symbol_context, strategy
 
         await query.answer()
-        callback_data = (query.data or "").split(":", 3)
-        if len(callback_data) != 4:
+        callback_data = (query.data or "").split(":", 4)
+        if len(callback_data) != 5:
             log.e(f"Не удалось разобрать callback_data: {query.data}")
-            return symbol, message, timeframe, symbol_context
+            return symbol, message, timeframe, symbol_context, strategy
 
-        _, encoded_symbol, timeframe_tf, encoded_context = callback_data
+        _, encoded_symbol, timeframe_tf, encoded_context, strategy = callback_data
         symbol = unquote(encoded_symbol)
         context_value = unquote(encoded_context)
         try:
@@ -79,10 +81,10 @@ class _CallbackHandler:
             symbol_context = Context(context_value)
         except ValueError as exception:
             log.e(f"Некорректные данные callback {query.data}: {exception}")
-            return symbol, message, timeframe, symbol_context
+            return symbol, message, timeframe, symbol_context, strategy
 
         message = query.message
-        return symbol, message, timeframe, symbol_context
+        return symbol, message, timeframe, symbol_context, strategy
 
     # noinspection PyUnusedLocal
     async def _handle_trade_request(
@@ -90,20 +92,24 @@ class _CallbackHandler:
             update: Update,
             context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        symbol, message, timeframe, symbol_context = await self._get_message_data(update)
+        symbol, message, timeframe, symbol_context, strategy = await self._get_message_data(update)
         if not message:
             log.e("Отсутствует сообщение для callback торговой кнопки.")
             return
 
         message_id = str(message.message_id)
-        log.d(f"Получен запрос на торговлю {symbol} на {timeframe.tf} с контекстом {symbol_context.value}.")
+        log.d(
+            f"Получен запрос на торговлю {symbol} на {timeframe.tf} "
+            f"с контекстом {symbol_context.value} для стратегии {strategy}."
+        )
         self._trade_permission_service.allow_symbol_for_trading(
             symbol=symbol,
             timeframe=timeframe,
+            strategy=strategy or "",
             message_id=message_id,
             context=symbol_context,
         )
-        await self._show_skip_only_keyboard(message, symbol, timeframe, symbol_context)
+        await self._show_skip_only_keyboard(message, symbol, timeframe, symbol_context, strategy or "")
 
     # noinspection PyUnusedLocal
     async def _handle_skip_request(
@@ -111,20 +117,24 @@ class _CallbackHandler:
             update: Update,
             context: ContextTypes.DEFAULT_TYPE,
     ) -> None:
-        symbol, message, timeframe, symbol_context = await self._get_message_data(update)
+        symbol, message, timeframe, symbol_context, strategy = await self._get_message_data(update)
         if not message:
             log.e("Отсутствует сообщение для callback кнопки игнорирования.")
             return
 
         message_id = str(message.message_id)
-        log.d(f"Получен запрос на игнорирование {symbol} на {timeframe.tf} с контекстом {symbol_context.value}.")
+        log.d(
+            f"Получен запрос на игнорирование {symbol} на {timeframe.tf} "
+            f"с контекстом {symbol_context.value} для стратегии {strategy}."
+        )
         self._trade_permission_service.ignore_symbol(
             symbol=symbol,
             timeframe=timeframe,
+            strategy=strategy or "",
             message_id=message_id,
             context=symbol_context,
         )
-        self._trade_permission_service.clear_allowance(symbol, timeframe)
+        self._trade_permission_service.clear_allowance(symbol, timeframe, strategy or "")
 
     @staticmethod
     async def _show_skip_only_keyboard(
@@ -132,10 +142,11 @@ class _CallbackHandler:
             symbol: Optional[str],
             timeframe: Optional[Timeframe],
             symbol_context: Optional[Context],
+            strategy: str,
     ) -> None:
         if not (symbol and timeframe and symbol_context):
             return
-        skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{symbol_context.value}"
+        skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{symbol_context.value}:{strategy}"
         skip_keyboard = InlineKeyboardMarkup.from_button(
             InlineKeyboardButton(
                 text="Пропустить",

@@ -100,14 +100,16 @@ def _filter_symbols(
 def _build_keyboard(
         symbol: str,
         timeframe: Timeframe,
-        context: Context
+        context: Context,
+        strategy: Strategy,
 ) -> Keyboard:
     trade_text = "Торговать"
     skip_text = "Пропустить"
     encoded_symbol = quote(symbol, safe="")
     encoded_context = quote(context.value, safe="")
-    callback_data = f"{TRADE_CALLBACK_PREFIX}:{encoded_symbol}:{timeframe.tf}:{encoded_context}"
-    skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{encoded_symbol}:{timeframe.tf}:{encoded_context}"
+    encoded_strategy = quote(strategy.name, safe="")
+    callback_data = f"{TRADE_CALLBACK_PREFIX}:{encoded_symbol}:{timeframe.tf}:{encoded_context}:{encoded_strategy}"
+    skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{encoded_symbol}:{timeframe.tf}:{encoded_context}:{encoded_strategy}"
     return [[(trade_text, callback_data), (skip_text, skip_callback_data)]]
 
 
@@ -258,6 +260,7 @@ def _notify_trade_closure(
         profit_value: float,
         exit_prices: list[float],
         exchange_name: str,
+        strategy_name: str | None = None,
 ) -> None:
     setup = active_trade.setup
     trade_levels = setup.trade_levels
@@ -274,6 +277,7 @@ def _notify_trade_closure(
         exit_prices=actual_exit_prices,
         actual_entry_price=actual_entry_price,
         exchange_name=exchange_name,
+        strategy_name=strategy_name,
     )
     log.i(message)
 
@@ -366,12 +370,14 @@ def _notify_protective_recovery(
         active_trade: ActiveTrade,
         reason: str,
         exchange_name: str,
+        strategy_name: str | None = None,
 ) -> None:
     log.d(reason)
     message = build_protective_recovery_message(
         active_trade=active_trade,
         reason=reason,
         exchange_name=exchange_name,
+        strategy_name=strategy_name,
     )
     try:
         trade_execution_service.notifier.notify(
@@ -582,6 +588,7 @@ def _refresh_protective_orders(
                 active_trade,
                 f"Take-profit {take_profit_info.id} по {active_trade.symbol} отменен — восстанавливаем защиту.",
                 exchange_name,
+                strategy_name=active_trade.strategy,
             )
             _restore_limit_orders(
                 trade_execution_service=trade_execution_service,
@@ -610,6 +617,7 @@ def _refresh_protective_orders(
                 active_trade,
                 f"Stop-loss {stop_loss_info.id} по {active_trade.symbol} отменен — переставляем защиту.",
                 exchange_name,
+                strategy_name=active_trade.strategy,
             )
             _restore_stop_orders(
                 trade_execution_service=trade_execution_service,
@@ -638,6 +646,7 @@ def _refresh_protective_orders(
                 active_trade,
                 f"Breakeven {breakeven_info.id} по {active_trade.symbol} отменен — восстанавливаем защиту.",
                 exchange_name,
+                strategy_name=active_trade.strategy,
             )
             _restore_stop_orders(
                 trade_execution_service=trade_execution_service,
@@ -666,6 +675,7 @@ def _refresh_protective_orders(
                 active_trade,
                 f"Partial-close {partial_close_info.id} по {active_trade.symbol} отменен — пробуем восстановить.",
                 exchange_name,
+                strategy_name=active_trade.strategy,
             )
             _restore_limit_orders(
                 trade_execution_service=trade_execution_service,
@@ -1085,36 +1095,54 @@ def _monitor_active_trade(
 
 # endregion
 
+@dataclass
+class AnalysisResult:
+    strategy_name: str
+    bars: list[Bar]
+    setup: Optional[Setup]
+    outcome: Optional[tuple[TradeResult, float, float, list[float]]]
+
+
 def _run_analysis_task(
         symbol: FuturesSymbol,
         timeframe: Timeframe,
         limit: int,
-        strategy: Strategy,
+        strategies: list[Strategy],
         exchange: Exchange,
-        active_trade: Optional[ActiveTrade],
+        active_trades: dict[str, Optional[ActiveTrade]],
         trade_execution_service: TradeExecutionService,
         exchange_name: str,
 ):
-    bars: list[Bar] = []
-    setup: Optional[Setup] = None
-    outcome = None
+    results: list[AnalysisResult] = []
+    bars_cache: dict[int, list[Bar]] = {}
     try:
-        for timeframe_limit in calculate_limit_grid(limit, timeframe):
-            bars = exchange.get_ohlcv(symbol.symbol, timeframe, timeframe_limit)
-            setup = strategy.detect_setup(symbol.symbol, bars, timeframe, symbol.context)
-            if setup:
-                break
-        if active_trade:
-            outcome = _monitor_active_trade(
-                exchange,
-                trade_execution_service,
-                active_trade,
-                bars,
-                exchange_name,
-            )
+        for strategy in strategies:
+            bars: list[Bar] = []
+            setup: Optional[Setup] = None
+            outcome = None
+            for timeframe_limit in calculate_limit_grid(limit, timeframe):
+                bars = bars_cache.get(timeframe_limit) or exchange.get_ohlcv(
+                    symbol.symbol,
+                    timeframe,
+                    timeframe_limit,
+                )
+                bars_cache[timeframe_limit] = bars
+                setup = strategy.detect_setup(symbol.symbol, bars, timeframe, symbol.context)
+                if setup:
+                    break
+            active_trade = active_trades.get(strategy.name)
+            if active_trade:
+                outcome = _monitor_active_trade(
+                    exchange,
+                    trade_execution_service,
+                    active_trade,
+                    bars,
+                    exchange_name,
+                )
+            results.append(AnalysisResult(strategy.name, bars, setup, outcome))
     except Exception as exception:
         log.e(f"Ошибка в задаче анализа {symbol.symbol} на {timeframe.tf}: {exception}")
-    return bars, setup, outcome
+    return results
 
 
 def _ready_task_priority_key(task: ScheduledTask) -> tuple[int, datetime]:
@@ -1123,7 +1151,7 @@ def _ready_task_priority_key(task: ScheduledTask) -> tuple[int, datetime]:
 
 
 def run_live(
-        strategy: Strategy,
+        strategies: list[Strategy],
         exchange: Exchange,
         notifier: Notifier,
         timeframes: list[Timeframe],
@@ -1137,6 +1165,9 @@ def run_live(
     exchange_name = exchange.get_name()
     log.d(f"Запуск в живом режиме на бирже {exchange_name}.")
 
+    if not strategies:
+        log.e("Не заданы стратегии.")
+        return
     if not timeframes:
         log.e("Не заданы таймфреймы.")
         return
@@ -1147,6 +1178,7 @@ def run_live(
         log.e(f"Не заданы интервалы опроса для таймфреймов: {missing_labels}.")
         return
 
+    strategy_by_name = {strategy.name: strategy for strategy in strategies}
     filtered_symbols = _fetch_filtered_symbols(
         exchange,
         listing_period_days,
@@ -1166,7 +1198,7 @@ def run_live(
     analysis_executor = ThreadPoolExecutor(max_workers=app_cfg.LIVE_MAX_WORKERS)
     notification_executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(analysis_executor)
-    notified_once: set[tuple[str, Timeframe, str]] = set()
+    notified_once: set[tuple[str, Timeframe, str, str]] = set()
     active_trades = ActiveTrades()
 
     scheduler = Scheduler([
@@ -1184,31 +1216,55 @@ def run_live(
         expired_permissions = trade_permission_service.pop_expired(now)
         for permission_key, expired_permission in expired_permissions:
             _remove_button(notifier, expired_permission.message_id)
-            log.i(f"Истекло разрешение на торговлю {permission_key.symbol} на {permission_key.timeframe.tf}.")
-            notified_once.discard((permission_key.symbol, permission_key.timeframe, "Capture"))
+            log.i(
+                f"Истекло разрешение на торговлю {permission_key.symbol} на {permission_key.timeframe.tf} "
+                f"по стратегии {permission_key.strategy}."
+            )
+            notified_once.discard((
+                permission_key.symbol,
+                permission_key.timeframe,
+                permission_key.strategy,
+                "Capture",
+            ))
         expired_ignored = trade_permission_service.pop_expired_ignored(now)
         for ignored_key, expired_ignore in expired_ignored:
             _remove_button(notifier, expired_ignore.message_id)
-            log.i(f"Истек срок игнорирования {ignored_key.symbol} на {ignored_key.timeframe.tf}.")
+            log.i(
+                f"Истек срок игнорирования {ignored_key.symbol} на {ignored_key.timeframe.tf} "
+                f"по стратегии {ignored_key.strategy}."
+            )
         expired_captures = [
             (capture_key, active_capture)
             for capture_key, active_capture in capture_state.captures.items()
             if now >= active_capture.deadline
         ]
-        expired_capture_keys: set[tuple[str, Timeframe]] = set()
+        expired_capture_keys: set[CaptureKey] = set()
         if expired_captures:
             log.i(
                 f"Истекло Capture событий: {len(expired_captures)}. "
                 "Возвращаем интервалы опроса к базовым значениям."
             )
         for capture_key, active_capture in expired_captures:
-            expired_capture_keys.add((capture_key.symbol, capture_key.timeframe))
+            expired_capture_keys.add(capture_key)
             capture_state.remove_capture(capture_key)
             _remove_button(notifier, active_capture.message_id)
-            trade_permission_service.clear_allowance(capture_key.symbol, capture_key.timeframe)
-            log.i(f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf}.")
-            notified_once.discard((capture_key.symbol, capture_key.timeframe, "Capture"))
-            scheduler.downgrade_capture(capture_key.symbol, capture_key.timeframe, now=now)
+            trade_permission_service.clear_allowance(
+                capture_key.symbol,
+                capture_key.timeframe,
+                capture_key.strategy,
+            )
+            log.i(
+                f"Истек срок слежения за {capture_key.symbol} на {capture_key.timeframe.tf} "
+                f"по стратегии {capture_key.strategy}."
+            )
+            notified_once.discard((
+                capture_key.symbol,
+                capture_key.timeframe,
+                capture_key.strategy,
+                "Capture",
+            ))
+            if not capture_state.has_timeframe_capture(capture_key.symbol, capture_key.timeframe):
+                scheduler.downgrade_capture(capture_key.symbol, capture_key.timeframe, now=now)
 
         if not capture_state.is_empty():
             cycle_started = False
@@ -1217,7 +1273,10 @@ def run_live(
             retained_ready_heap: list[ScheduledTask] = []
             while ready_heap:
                 task = heappop(ready_heap)
-                if (task.symbol.symbol, task.timeframe) in expired_capture_keys:
+                if any(
+                    capture_key.symbol == task.symbol.symbol and capture_key.timeframe == task.timeframe
+                    for capture_key in expired_capture_keys
+                ) and not capture_state.has_timeframe_capture(task.symbol.symbol, task.timeframe):
                     scheduler.reschedule(task, has_active_capture=False)
                 else:
                     heappush(retained_ready_heap, task)
@@ -1225,161 +1284,202 @@ def run_live(
 
         done_futures = [future for future in list(pending_tasks.keys()) if future.done()]
         for future in done_futures:
-            task, capture_key = pending_tasks.pop(future)
+            task, _ = pending_tasks.pop(future)
             symbol = task.symbol
             timeframe = task.timeframe
-            bars: list[Bar] = []
-            setup: Optional[Setup] = None
-            outcome = None
 
             try:
-                bars, setup, outcome = future.result()
+                analysis_results = future.result()
             except Exception as exception:
                 log.e(f"Не удалось обработать задачу {symbol.symbol} на {timeframe.tf}: {exception}")
+                scheduler.reschedule(
+                    task,
+                    has_active_capture=capture_state.has_timeframe_capture(symbol.symbol, timeframe),
+                )
+                continue
 
-            active_capture = capture_state.get_capture(capture_key)
-            if active_capture and now < active_capture.deadline:
-                log.d(f"Продолжаем мониторинг Capture {symbol.symbol} на {timeframe.tf}.")
+            for result in analysis_results:
+                bars = result.bars
+                setup = result.setup
+                outcome = result.outcome
+                strategy_name = result.strategy_name
+                strategy = strategy_by_name.get(strategy_name)
 
-            trade_key = ActiveTradeKey(symbol.symbol, timeframe)
-
-            try:
-                if outcome:
-                    trade_result, profit_pct, profit_value, exit_prices = outcome
-                    log.i(
-                        f"Завершена сделка {symbol.symbol} {timeframe.tf}: "
-                        f"{trade_result.value} ({profit_pct:+.2f}%)"
+                capture_key = CaptureKey(symbol.symbol, timeframe, strategy_name)
+                active_capture = capture_state.get_capture(capture_key)
+                if active_capture and now < active_capture.deadline:
+                    log.d(
+                        f"Продолжаем мониторинг Capture {symbol.symbol} на {timeframe.tf} "
+                        f"({strategy_name})."
                     )
-                    active_trade = active_trades.remove(trade_key)
-                    active_trade.exit_average_price = active_trade.exit_average_price or (
-                        exit_prices[0] if exit_prices else None)
-                    _notify_trade_closure(
-                        notifier=notifier,
-                        active_trade=active_trade,
-                        trade_result=trade_result,
-                        profit_pct=profit_pct,
-                        profit_value=profit_value,
-                        exit_prices=exit_prices,
-                        exchange_name=exchange_name,
-                    )
-                    trade_permission_service.clear_allowance(symbol.symbol, timeframe)
-                    continue
 
-                match setup:
-                    # Сетап не найден.
-                    case Unfilled():
-                        removed_capture = capture_state.remove_capture(capture_key)
-                        if removed_capture:
-                            _remove_button(notifier, removed_capture.message_id)
-                            log.i(f"Сетап {symbol.symbol} на {timeframe.tf} потерян, кнопка удалена.")
-                            trade_permission_service.clear_allowance(symbol.symbol, timeframe)
-                            notified_once.discard((symbol.symbol, timeframe, "Capture"))
+                trade_key = ActiveTradeKey(symbol.symbol, timeframe, strategy_name)
+
+                try:
+                    if outcome:
+                        trade_result, profit_pct, profit_value, exit_prices = outcome
+                        log.i(
+                            f"Завершена сделка {symbol.symbol} {timeframe.tf} ({strategy_name}): "
+                            f"{trade_result.value} ({profit_pct:+.2f}%)"
+                        )
+                        active_trade = active_trades.remove(trade_key)
+                        if not active_trade:
+                            continue
+                        active_trade.exit_average_price = active_trade.exit_average_price or (
+                            exit_prices[0] if exit_prices else None)
+                        _notify_trade_closure(
+                            notifier=notifier,
+                            active_trade=active_trade,
+                            trade_result=trade_result,
+                            profit_pct=profit_pct,
+                            profit_value=profit_value,
+                            exit_prices=exit_prices,
+                            exchange_name=exchange_name,
+                            strategy_name=strategy_name,
+                        )
+                        trade_permission_service.clear_allowance(symbol.symbol, timeframe, strategy_name)
                         continue
 
-                    # Найден базовый сетап.
-                    case Capture():
-                        if trade_permission_service.has_allowance(symbol.symbol, timeframe):
-                            log.d(
-                                f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} "
-                                f"из-за активного разрешения на торговлю."
-                            )
+                    match setup:
+                        case Unfilled():
+                            removed_capture = capture_state.remove_capture(capture_key)
+                            if removed_capture:
+                                _remove_button(notifier, removed_capture.message_id)
+                                log.i(
+                                    f"Сетап {symbol.symbol} на {timeframe.tf} ({strategy_name}) потерян, кнопка удалена."
+                                )
+                                trade_permission_service.clear_allowance(symbol.symbol, timeframe, strategy_name)
+                                notified_once.discard((symbol.symbol, timeframe, strategy_name, "Capture"))
                             continue
-                        message = build_capture_message(symbol, timeframe, exchange_name)
-                        if capture_key in capture_state.captures:
-                            active_capture = capture_state.captures.get(capture_key)
-                            if active_capture and active_capture.message_id:
-                                notification_executor.submit(
-                                    _edit_notification,
+
+                        case Capture():
+                            if trade_permission_service.has_allowance(symbol.symbol, timeframe, strategy_name):
+                                log.d(
+                                    f"Пропущено уведомление Capture для {symbol.symbol} на {timeframe.tf} "
+                                    f"({strategy_name}) из-за активного разрешения на торговлю."
+                                )
+                                continue
+                            message = build_capture_message(
+                                symbol,
+                                timeframe,
+                                exchange_name,
+                                strategy_name=strategy_name,
+                            )
+                            if capture_key in capture_state.captures:
+                                active_capture = capture_state.captures.get(capture_key)
+                                if active_capture and active_capture.message_id:
+                                    notification_executor.submit(
+                                        _edit_notification,
+                                        notifier=notifier,
+                                        notification_type=NotificationType.EVENT,
+                                        message_id=active_capture.message_id,
+                                        message=message,
+                                        setup=setup,
+                                        subdir='event',
+                                        context=symbol.context,
+                                        keyboard=_build_keyboard(
+                                            symbol.symbol,
+                                            timeframe,
+                                            symbol.context,
+                                            strategy or strategy_by_name.get(strategy_name) or strategies[0],
+                                        ),
+                                    ).result()
+                                continue
+                            capture_notification_key = (symbol.symbol, timeframe, strategy_name, "Capture")
+                            if capture_notification_key not in notified_once:
+                                message_id = notification_executor.submit(
+                                    _send_notification,
                                     notifier=notifier,
                                     notification_type=NotificationType.EVENT,
-                                    message_id=active_capture.message_id,
                                     message=message,
                                     setup=setup,
                                     subdir='event',
                                     context=symbol.context,
-                                    keyboard=_build_keyboard(symbol.symbol, timeframe, symbol.context),
+                                    keyboard=_build_keyboard(
+                                        symbol.symbol,
+                                        timeframe,
+                                        symbol.context,
+                                        strategy or strategy_by_name.get(strategy_name) or strategies[0],
+                                    ),
                                 ).result()
-                            continue
-                        capture_notification_key = (symbol.symbol, timeframe, setup.name)
-                        if capture_notification_key not in notified_once:
-                            message_id = notification_executor.submit(
+                                capture_state.add_capture(
+                                    symbol=symbol.symbol,
+                                    timeframe=timeframe,
+                                    strategy=strategy_name,
+                                    message_id=message_id,
+                                    timeout_multiplier=ppo_cfg.CAPTURE_TIMEOUT_MULTIPLIER,
+                                )
+                                cycle_started = False
+                                notified_once.add(capture_notification_key)
+
+                        case Trade():
+                            if not trade_permission_service.has_allowance(symbol.symbol, timeframe, strategy_name):
+                                log.i(
+                                    f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf} ({strategy_name}): "
+                                    f"отсутствует разрешение на торговлю."
+                                )
+                                continue
+                            log.i(
+                                f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf} ({strategy_name})."
+                            )
+                            execution_result = trade_execution_service.execute_buy(setup, symbol.context)
+                            if not execution_result:
+                                trade_permission_service.clear_allowance(symbol.symbol, timeframe, strategy_name)
+                                continue
+                            success_message = build_trade_opened_message(
+                                setup=setup,
+                                timeframe=timeframe,
+                                execution_result=execution_result,
+                                exchange_name=exchange_name,
+                                strategy_name=strategy_name,
+                            )
+                            log.i(success_message)
+                            notification_executor.submit(
                                 _send_notification,
                                 notifier=notifier,
-                                notification_type=NotificationType.EVENT,
-                                message=message,
+                                notification_type=NotificationType.ORDER,
+                                message=success_message,
                                 setup=setup,
-                                subdir='event',
-                                context=symbol.context,
-                                keyboard=_build_keyboard(symbol.symbol, timeframe, symbol.context),
+                                subdir='order',
+                                context=symbol.context
                             ).result()
-                            capture_state.add_capture(
+                            detection_time = bars[-1].time if bars else utc_now()
+                            removed_capture = capture_state.remove_capture(capture_key)
+                            capture_message_id = removed_capture.message_id if removed_capture else None
+                            if removed_capture:
+                                _remove_button(notifier, removed_capture.message_id)
+                                log.i(
+                                    f"Сетап {symbol.symbol} на {timeframe.tf} ({strategy_name}) закрыт из-за сигнала Trade, "
+                                    f"кнопка удалена."
+                                )
+                                notified_once.discard((symbol.symbol, timeframe, strategy_name, "Capture"))
+                            trade = ActiveTrade(
                                 symbol=symbol.symbol,
                                 timeframe=timeframe,
-                                message_id=message_id,
-                                timeout_multiplier=ppo_cfg.CAPTURE_TIMEOUT_MULTIPLIER,
+                                strategy=strategy_name,
+                                setup=setup,
+                                detection_time=detection_time,
+                                context=symbol.context,
+                                placed_at=utc_now(),
+                                quantity=execution_result.quantity,
+                                entry_order_status=OrderStatus.NEW,
+                                capture_message_id=capture_message_id,
+                                entry_order_id=execution_result.entry_order_id,
+                                protective_orders=execution_result.protective_orders,
+                                position_id=execution_result.position_id,
                             )
-                            cycle_started = False
-                            notified_once.add(capture_notification_key)
+                            active_trades.add(trade_key, trade)
+                            trade_permission_service.clear_allowance(symbol.symbol, timeframe, strategy_name)
+                except Exception as exception:
+                    log.e(
+                        f"Ошибка при обработке результата {symbol.symbol} {timeframe.tf} ({strategy_name}): "
+                        f"{exception}"
+                    )
 
-                    # Найден торговый сетап.
-                    case Trade():
-                        if not trade_permission_service.has_allowance(symbol.symbol, timeframe):
-                            log.i(
-                                f"Отказ в открытии сделки {symbol.symbol} на {timeframe.tf}: "
-                                f"отсутствует разрешение на торговлю."
-                            )
-                            continue
-                        log.i(f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf}.")
-                        execution_result = trade_execution_service.execute_buy(setup, symbol.context)
-                        if not execution_result:
-                            trade_permission_service.clear_allowance(symbol.symbol, timeframe)
-                            continue
-                        success_message = build_trade_opened_message(
-                            setup=setup,
-                            timeframe=timeframe,
-                            execution_result=execution_result,
-                            exchange_name=exchange_name,
-                        )
-                        log.i(success_message)
-                        notification_executor.submit(
-                            _send_notification,
-                            notifier=notifier,
-                            notification_type=NotificationType.ORDER,
-                            message=success_message,
-                            setup=setup,
-                            subdir='order',
-                            context=symbol.context
-                        ).result()
-                        detection_time = bars[-1].time if bars else utc_now()
-                        removed_capture = capture_state.remove_capture(capture_key)
-                        capture_message_id = removed_capture.message_id if removed_capture else None
-                        if removed_capture:
-                            _remove_button(notifier, removed_capture.message_id)
-                            log.i(
-                                f"Сетап {symbol.symbol} на {timeframe.tf} закрыт из-за сигнала Trade, кнопка удалена."
-                            )
-                            notified_once.discard((symbol.symbol, timeframe, "Capture"))
-                        trade = ActiveTrade(
-                            symbol=symbol.symbol,
-                            timeframe=timeframe,
-                            setup=setup,
-                            detection_time=detection_time,
-                            context=symbol.context,
-                            placed_at=utc_now(),
-                            quantity=execution_result.quantity,
-                            entry_order_status=OrderStatus.NEW,
-                            capture_message_id=capture_message_id,
-                            entry_order_id=execution_result.entry_order_id,
-                            protective_orders=execution_result.protective_orders,
-                            position_id=execution_result.position_id,
-                        )
-                        active_trades.add(trade_key, trade)
-                        trade_permission_service.clear_allowance(symbol.symbol, timeframe)
-            finally:
-                scheduler.reschedule(
-                    task,
-                    has_active_capture=bool(capture_state.get_capture(capture_key)),
-                )
+            scheduler.reschedule(
+                task,
+                has_active_capture=capture_state.has_timeframe_capture(symbol.symbol, timeframe),
+            )
 
         free_workers = app_cfg.LIVE_MAX_WORKERS - len(pending_tasks)
         ready_capacity = app_cfg.LIVE_MAX_WORKERS
@@ -1408,33 +1508,44 @@ def run_live(
             task = heappop(ready_heap)
             symbol = task.symbol
             timeframe = task.timeframe
-            capture_key = CaptureKey(symbol.symbol, timeframe)
-            active_capture = capture_state.get_capture(capture_key)
 
             if capture_state.is_empty() and not cycle_started:
                 log.d("Запуск цикла анализа отобранных монет.")
                 cycle_started = True
 
-            if trade_permission_service.has_ignore(symbol.symbol, timeframe):
-                log.d(f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования.")
-                scheduler.reschedule(task, has_active_capture=bool(active_capture))
+            strategies_to_run = [
+                strategy
+                for strategy in strategies
+                if not trade_permission_service.has_ignore(symbol.symbol, timeframe, strategy.name, now)
+            ]
+            if not strategies_to_run:
+                log.d(
+                    f"Пропущен анализ {symbol.symbol} на {timeframe.tf} из-за активного игнорирования всех стратегий."
+                )
+                scheduler.reschedule(
+                    task,
+                    has_active_capture=capture_state.has_timeframe_capture(symbol.symbol, timeframe),
+                )
                 continue
 
             log.d(f"Проверяем {extract_base_symbol(symbol.symbol).upper()} на {timeframe.tf}.")
 
-            active_trade = active_trades.get(ActiveTradeKey(symbol.symbol, timeframe))
+            active_trades_map = {
+                strategy.name: active_trades.get(ActiveTradeKey(symbol.symbol, timeframe, strategy.name))
+                for strategy in strategies_to_run
+            }
             future = analysis_executor.submit(
                 _run_analysis_task,
                 symbol,
                 timeframe,
                 limit,
-                strategy,
+                strategies_to_run,
                 exchange,
-                active_trade,
+                active_trades_map,
                 trade_execution_service,
                 exchange_name,
             )
-            pending_tasks[future] = (task, capture_key)
+            pending_tasks[future] = (task, None)
 
         sleep_time = 0.1 if pending_tasks or ready_heap else scheduler.get_next_sleep_timeout()
         sleep(sleep_time)
