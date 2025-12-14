@@ -2,7 +2,7 @@ import os
 
 from dotenv import load_dotenv
 
-from crypto_screener.config.config import cfg
+from crypto_screener.config import app_cfg
 # noinspection PyUnusedImports
 from crypto_screener.data.exchanges.binance import Binance
 # noinspection PyUnusedImports
@@ -19,9 +19,9 @@ from crypto_screener.execution.run_test_symbol import run_test_symbols
 
 # region Private.
 def _initialize_exchange() -> Exchange:
-    api_key = os.getenv(cfg.EXCHANGE + "API_KEY", None)
-    api_secret = os.getenv(cfg.EXCHANGE + "API_SECRET", None)
-    match cfg.EXCHANGE:
+    api_key = os.getenv(app_cfg.EXCHANGE + "API_KEY", None)
+    api_secret = os.getenv(app_cfg.EXCHANGE + "API_SECRET", None)
+    match app_cfg.EXCHANGE:
         case Binance.__name__:
             return Binance(api_key, api_secret)
         case Bybit.__name__:
@@ -31,7 +31,7 @@ def _initialize_exchange() -> Exchange:
 
 
 def _initialize_notifier() -> Notifier:
-    token = os.getenv("TELEGRAM_TOKEN_" + cfg.EXCHANGE, None)
+    token = os.getenv("TELEGRAM_TOKEN_" + app_cfg.EXCHANGE, None)
     chat_id = os.getenv("TELEGRAM_CHAT_ID", None)
     if token and chat_id:
         return TgNotifier(token, chat_id)
@@ -43,8 +43,8 @@ def _initialize_notifier() -> Notifier:
 def main() -> None:
     load_dotenv()
     exchange = _initialize_exchange()
-    strategy = cfg.STRATEGY
-    mode: Mode = cfg.MODE
+    strategy = app_cfg.STRATEGY
+    mode: Mode = app_cfg.MODE
     match mode:
         # Работа с актуальным рынком.
         case Live(

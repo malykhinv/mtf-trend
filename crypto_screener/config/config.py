@@ -107,31 +107,7 @@ _mode_test_symbols = TestSymbols(
 # endregion
 
 @dataclass(frozen=True)
-class AppConfig:
-    # Биржа.
-    EXCHANGE: str = _exchange
-
-    # Временная зона.
-    TIMEZONE: ZoneInfo = _timezone
-
-    # Интервалы таймфреймов.
-    TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _timeframe_intervals.copy())
-
-    # Интервалы опроса.
-    POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _poll_intervals.copy())
-
-    # Интервалы опроса для Capture.
-    CAPTURE_POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _capture_poll_intervals.copy())
-
-    # Режим работы.
-    MODE: Mode = _mode_live
-
-    # Пул потоков.
-    LIVE_MAX_WORKERS: int = 1
-
-    # Стратегия.
-    STRATEGY: Strategy = _strategy
-
+class PpoConfig:
     # region Контекст.
     CONTEXT_TRADES_MIN: int = 500_000
     CONTEXT_VOLUME_MIN: float = 500_000_000
@@ -299,4 +275,38 @@ class AppConfig:
     # endregion
 
 
-cfg = AppConfig()
+_ppo_config = PpoConfig()
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    # Биржа.
+    EXCHANGE: str = _exchange
+
+    # Временная зона.
+    TIMEZONE: ZoneInfo = _timezone
+
+    # Интервалы таймфреймов.
+    TIMEFRAME_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _timeframe_intervals.copy())
+
+    # Интервалы опроса.
+    POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _poll_intervals.copy())
+
+    # Интервалы опроса для Capture.
+    CAPTURE_POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _capture_poll_intervals.copy())
+
+    # Режим работы.
+    MODE: Mode = _mode_live
+
+    # Пул потоков.
+    LIVE_MAX_WORKERS: int = 1
+
+    # Стратегия.
+    STRATEGY: Strategy = _strategy
+
+    # Конфигурация стратегии.
+    STRATEGY_CONFIG: PpoConfig = field(default_factory=lambda: _ppo_config)
+
+
+app_cfg = AppConfig()
+ppo_cfg = _ppo_config
