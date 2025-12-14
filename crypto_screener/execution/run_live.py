@@ -8,7 +8,7 @@ from time import sleep
 from typing import Optional
 from urllib.parse import quote
 
-from crypto_screener.config.config import cfg
+from crypto_screener.config import app_cfg, ppo_cfg
 from crypto_screener.data.notifiers.telegram import SKIP_CALLBACK_PREFIX, TRADE_CALLBACK_PREFIX
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
@@ -1141,7 +1141,7 @@ def run_live(
         log.e("Не заданы таймфреймы.")
         return
 
-    missing_intervals = [timeframe for timeframe in timeframes if timeframe not in cfg.POLL_INTERVALS]
+    missing_intervals = [timeframe for timeframe in timeframes if timeframe not in app_cfg.POLL_INTERVALS]
     if missing_intervals:
         missing_labels = ", ".join(sorted(timeframe.tf for timeframe in missing_intervals))
         log.e(f"Не заданы интервалы опроса для таймфреймов: {missing_labels}.")
@@ -1163,7 +1163,7 @@ def run_live(
     trade_permission_service = TradePermissionService()
     trade_execution_service = TradeExecutionService(exchange, notifier)
     notifier.start_callback_handler(trade_permission_service)
-    analysis_executor = ThreadPoolExecutor(max_workers=cfg.LIVE_MAX_WORKERS)
+    analysis_executor = ThreadPoolExecutor(max_workers=app_cfg.LIVE_MAX_WORKERS)
     notification_executor = ThreadPoolExecutor(max_workers=2)
     handle_sig(analysis_executor)
     notified_once: set[tuple[str, Timeframe, str]] = set()
@@ -1316,7 +1316,7 @@ def run_live(
                                 symbol=symbol.symbol,
                                 timeframe=timeframe,
                                 message_id=message_id,
-                                timeout_multiplier=cfg.CAPTURE_TIMEOUT_MULTIPLIER,
+                                timeout_multiplier=ppo_cfg.CAPTURE_TIMEOUT_MULTIPLIER,
                             )
                             cycle_started = False
                             notified_once.add(capture_notification_key)
@@ -1381,8 +1381,8 @@ def run_live(
                     has_active_capture=bool(capture_state.get_capture(capture_key)),
                 )
 
-        free_workers = cfg.LIVE_MAX_WORKERS - len(pending_tasks)
-        ready_capacity = cfg.LIVE_MAX_WORKERS
+        free_workers = app_cfg.LIVE_MAX_WORKERS - len(pending_tasks)
+        ready_capacity = app_cfg.LIVE_MAX_WORKERS
 
         capacity = free_workers if free_workers > 0 else (1 if capture_state.captures else 0)
         ready_tasks = scheduler.pop_ready(now, capacity=capacity)
@@ -1404,7 +1404,7 @@ def run_live(
             else:
                 scheduler.push(task)
 
-        while ready_heap and len(pending_tasks) < cfg.LIVE_MAX_WORKERS:
+        while ready_heap and len(pending_tasks) < app_cfg.LIVE_MAX_WORKERS:
             task = heappop(ready_heap)
             symbol = task.symbol
             timeframe = task.timeframe

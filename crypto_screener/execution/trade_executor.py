@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from crypto_screener.config.config import AppConfig as cfg
+from crypto_screener.config import ppo_cfg
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.margin_mode import MarginMode
@@ -137,9 +137,9 @@ class TradeExecutionService:
         if stop_distance <= 0:
             raise ValueError(f"Некорректная дистанция до стоп-лосса: Entry {entry_price}, SL {stop_loss_price}")
 
-        risk_amount = cfg.RISK_PER_TRADE_USDT
-        min_notional = cfg.MIN_POSITION_NOTIONAL_USDT
-        min_quantity = cfg.MIN_POSITION_QUANTITY
+        risk_amount = ppo_cfg.RISK_PER_TRADE_USDT
+        min_notional = ppo_cfg.MIN_POSITION_NOTIONAL_USDT
+        min_quantity = ppo_cfg.MIN_POSITION_QUANTITY
 
         quantity_by_risk = risk_amount / stop_distance
         quantity_by_notional = min_notional / entry_price
