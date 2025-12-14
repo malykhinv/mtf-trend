@@ -161,7 +161,7 @@ def run_test_bars(
 
 
 def run_test_symbols(
-        strategy: Strategy,
+        strategies: list[Strategy],
         exchange: Exchange,
         test_data: list[TestData],
         limit: int,
@@ -170,19 +170,20 @@ def run_test_symbols(
     trade_results: list[float] = []
     trade_outcomes: defaultdict[TradeResult, int] = defaultdict(int)
 
-    for data in test_data:
-        symbol_results, symbol_outcomes = _run_test_symbol(
-            strategy,
-            exchange,
-            data.symbol,
-            data.timeframe,
-            limit,
-            data.end,
-            plot_policy,
-        )
-        trade_results.extend(symbol_results)
-        for result, count in symbol_outcomes.items():
-            trade_outcomes[result] += count
+    for strategy in strategies:
+        for data in test_data:
+            symbol_results, symbol_outcomes = _run_test_symbol(
+                strategy,
+                exchange,
+                data.symbol,
+                data.timeframe,
+                limit,
+                data.end,
+                plot_policy,
+            )
+            trade_results.extend(symbol_results)
+            for result, count in symbol_outcomes.items():
+                trade_outcomes[result] += count
 
     log_test_summary(trade_outcomes, trade_results)
     log.d("Тест завершен.")

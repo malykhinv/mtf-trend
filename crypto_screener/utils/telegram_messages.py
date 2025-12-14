@@ -76,12 +76,14 @@ def _trade_levels_block(setup: Trade) -> str:
 def build_capture_message(
         symbol: FuturesSymbol,
         timeframe: Timeframe,
-        exchange_name: str
+        exchange_name: str,
+        strategy_name: str | None = None,
 ) -> str:
     link = _tradingview_link(symbol.symbol, exchange_name)
     lines = [
         "<b>Включено слежение</b>",
         f"Инструмент: {link}",
+        f"Стратегия: {escape(strategy_name or '')}",
         f"Биржа: {escape(exchange_name)}",
         f"Таймфрейм: {escape(timeframe.tf)}",
         f"Контекст: {escape(symbol.context.value)}",
@@ -97,12 +99,14 @@ def build_trade_opened_message(
         timeframe: Timeframe,
         execution_result: ExecutionResult,
         exchange_name: str,
+        strategy_name: str | None = None,
 ) -> str:
     link = _tradingview_link(setup.data.symbol, exchange_name)
     trade_levels = setup.trade_levels
     lines = [
         "<b>Позиция открыта</b>",
         f"Инструмент: {link}",
+        f"Стратегия: {escape(strategy_name or '')}",
         f"Биржа: {escape(exchange_name)}",
         f"Таймфрейм: {escape(timeframe.tf)}",
         f"Количество: {execution_result.quantity:.4f}",
@@ -135,6 +139,7 @@ def build_trade_closure_message(
         exit_prices: Iterable[float],
         actual_entry_price: float,
         exchange_name: str,
+        strategy_name: str | None = None,
 ) -> str:
     link = _tradingview_link(active_trade.symbol, exchange_name)
     exit_prices_text = ", ".join(f"{price:.4f}" for price in exit_prices) if exit_prices else "—"
@@ -142,6 +147,7 @@ def build_trade_closure_message(
     lines = [
         "<b>Сделка закрыта</b>",
         f"Инструмент: {link} ({escape(active_trade.timeframe.tf)})",
+        f"Стратегия: {escape(strategy_name or '')}",
         f"Результат: {escape(trade_result.value)} — {escape(exit_label)}",
         f"P&L: {profit_value:+.4f} ({profit_pct:+.2f}%)",
         f"Выходные цены: {exit_prices_text}",
@@ -156,13 +162,15 @@ def build_trade_closure_message(
 def build_protective_recovery_message(
         active_trade: ActiveTrade,
         reason: str,
-        exchange_name: str
+        exchange_name: str,
+        strategy_name: str | None = None,
 ) -> str:
     link = _tradingview_link(active_trade.symbol, exchange_name)
     return "\n".join(
         [
             "<b>Восстановление защиты</b>",
             f"Инструмент: {link} ({escape(active_trade.timeframe.tf)})",
+            f"Стратегия: {escape(strategy_name or '')}",
             f"Причина: {escape(reason)}",
         ]
     )

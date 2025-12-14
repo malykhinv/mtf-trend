@@ -15,6 +15,7 @@ from crypto_screener.utils.time import utc_now
 class AllowedTradeKey:
     symbol: str
     timeframe: Timeframe
+    strategy: str
 
 
 @dataclass
@@ -73,6 +74,7 @@ class AllowedTradeRegistry:
         return AllowedTrade(
             symbol=key.symbol,
             timeframe=key.timeframe,
+            strategy=key.strategy,
             message_id=message_id,
             context=context,
             issued_at=issued_at,

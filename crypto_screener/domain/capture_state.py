@@ -29,12 +29,13 @@ class CaptureState:
             self,
             symbol: str,
             timeframe: Timeframe,
+            strategy: str,
             message_id: Optional[str],
             timeout_multiplier: int
     ) -> None:
         added_at = utc_now()
         deadline = added_at + timedelta(minutes=timeout_multiplier * timeframe.minutes)
-        capture_key = CaptureKey(symbol, timeframe)
+        capture_key = CaptureKey(symbol, timeframe, strategy)
         self.captures.add(capture_key, ActiveCapture(
             added_at=added_at,
             deadline=deadline,
@@ -62,6 +63,12 @@ class CaptureState:
 
     def has_symbol_capture(self, symbol: str) -> bool:
         return any(self._filtered_items(symbol=symbol))
+
+    def has_timeframe_capture(self, symbol: str, timeframe: Timeframe) -> bool:
+        return any(
+            capture_key.symbol == symbol and capture_key.timeframe == timeframe
+            for capture_key, _ in self.captures.items()
+        )
 
     def is_empty(self) -> bool:
         return not any(self.captures.items())

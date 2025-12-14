@@ -73,7 +73,7 @@ def _accumulate_history(
 # endregion
 
 def run_test_market(
-        strategy: Strategy,
+        strategies: list[Strategy],
         exchange: Exchange,
         timeframes: list[Timeframe],
         limit: int,
@@ -86,6 +86,9 @@ def run_test_market(
 ) -> None:
     log.d("Запуск тестирования рынка.")
 
+    if not strategies:
+        log.e("Не заданы стратегии.")
+        return
     if not timeframes:
         log.e("Не заданы таймфреймы.")
         return
@@ -142,34 +145,38 @@ def run_test_market(
                 log.e(f"{symbol.symbol} {timeframe.tf}: нужно {timeframe_window} свечей, получено {len(bars)}.")
                 continue
 
-            for i in range(timeframe_window - 1, len(bars)):
-                window_bars = bars[i - timeframe_window + 1:i + 1]
-                future_bars = bars[i + 1:]
-                setup = run_test_bars(
-                    strategy,
-                    symbol=symbol.symbol,
-                    timeframe=timeframe,
-                    bars=window_bars,
-                    plot_policy=plot_policy,
-                    context=symbol.context,
-                    subdir='test_market',
-                    postmortem_bars=future_bars
-                )
+            for strategy in strategies:
+                for i in range(timeframe_window - 1, len(bars)):
+                    window_bars = bars[i - timeframe_window + 1:i + 1]
+                    future_bars = bars[i + 1:]
+                    setup = run_test_bars(
+                        strategy,
+                        symbol=symbol.symbol,
+                        timeframe=timeframe,
+                        bars=window_bars,
+                        plot_policy=plot_policy,
+                        context=symbol.context,
+                        subdir='test_market',
+                        postmortem_bars=future_bars
+                    )
 
-                if not setup or not isinstance(setup, Trade):
-                    continue
+                    if not setup or not isinstance(setup, Trade):
+                        continue
 
-                if not future_bars:
-                    continue
+                    if not future_bars:
+                        continue
 
-                outcome = evaluate_buy(setup, future_bars)
-                if not outcome:
-                    continue
+                    outcome = evaluate_buy(setup, future_bars)
+                    if not outcome:
+                        continue
 
-                trade_result, profit_pct = outcome
-                trade_outcomes[trade_result] += 1
-                trade_results.append(profit_pct)
-                log.i(f"{symbol.symbol} {timeframe.tf}: {trade_result.value} ({profit_pct:+.2f}%)")
+                    trade_result, profit_pct = outcome
+                    trade_outcomes[trade_result] += 1
+                    trade_results.append(profit_pct)
+                    log.i(
+                        f"{symbol.symbol} {timeframe.tf} ({strategy.name}): "
+                        f"{trade_result.value} ({profit_pct:+.2f}%)"
+                    )
 
     log_test_summary(trade_outcomes, trade_results)
 

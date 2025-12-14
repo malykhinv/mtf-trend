@@ -11,6 +11,7 @@ from crypto_screener.domain.models.timeframe import Timeframe
 class AllowedTrade:
     symbol: str
     timeframe: Timeframe
+    strategy: str
     message_id: str
     context: Context
     issued_at: datetime
