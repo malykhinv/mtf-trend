@@ -11,6 +11,7 @@ from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.margin_mode import MarginMode
 from crypto_screener.domain.models.order_info import OrderInfo
 from crypto_screener.domain.models.order_side import OrderSide
+from crypto_screener.domain.models.order_status import OrderStatus
 from crypto_screener.domain.models.position import Position
 from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
@@ -119,16 +120,79 @@ class Binance(Exchange):
             quantity: float,
             margin_mode: Optional[MarginMode] = None,
     ) -> str:
-        raise NotImplementedError("Market orders are not implemented for Binance yet")
+        if not symbol or quantity <= 0:
+            raise ValueError("Некорректные параметры ордера: symbol и quantity должны быть заданы")
+
+        params: dict[str, object] = {
+            "reduceOnly": False,
+        }
+        if margin_mode:
+            params["marginMode"] = margin_mode.value
+            try:
+                self._client.set_margin_mode(margin_mode.value, symbol)
+            except Exception as exception:
+                log.e(f"Не удалось установить режим маржи {margin_mode.value} для {symbol}: {exception}")
+
+        try:
+            order = self._client.create_order(
+                symbol=symbol,
+                type="market",
+                side=side.value,
+                amount=quantity,
+                params=params,
+            )
+            return str(order.get("id"))
+        except Exception as exception:
+            log.e(f"Ошибка при выставлении рыночного ордера Binance для {symbol}: {exception}")
+            raise
 
     def cancel_order(self, symbol: str, order_id: str) -> None:
-        raise NotImplementedError("Order cancellation is not implemented for Binance yet")
+        if not symbol or not order_id:
+            raise ValueError("symbol и order_id должны быть заданы для отмены ордера")
+
+        try:
+            self._client.cancel_order(order_id, symbol)
+        except Exception as exception:
+            log.e(f"Ошибка при отмене ордера {order_id} на Binance для {symbol}: {exception}")
+            raise
 
     def get_order_status(self, symbol: str, order_id: str) -> OrderInfo:
-        raise NotImplementedError("Order status retrieval is not implemented for Binance yet")
+        if not symbol or not order_id:
+            raise ValueError("symbol и order_id должны быть заданы для получения статуса")
+
+        try:
+            order = self._client.fetch_order(order_id, symbol)
+        except Exception as exception:
+            log.e(f"Ошибка при получении статуса ордера {order_id} на Binance для {symbol}: {exception}")
+            raise
+
+        return self._map_order(order)
 
     def get_position(self, symbol: str) -> Optional[Position]:
-        raise NotImplementedError("Position retrieval is not implemented for Binance yet")
+        if not symbol:
+            raise ValueError("symbol должен быть задан для получения позиции")
+
+        try:
+            positions = self._client.fetch_positions([symbol])
+        except Exception as exception:
+            log.e(f"Ошибка при получении позиции Binance для {symbol}: {exception}")
+            return None
+
+        for position in positions:
+            contracts = extract_float(position.get("contracts"), position.get("info", {}).get("positionAmt"))
+            if not contracts:
+                continue
+            entry_price = extract_float(position.get("entryPrice")) or 0.0
+            unrealized = extract_float(position.get("unrealizedPnl")) or 0.0
+            leverage = extract_float(position.get("leverage"))
+            return Position(
+                symbol=position.get("symbol", symbol),
+                quantity=contracts,
+                entry_price=entry_price,
+                pnl=unrealized,
+                leverage=leverage,
+            )
+        return None
 
     def place_stop_loss_order(
             self,
@@ -139,7 +203,32 @@ class Binance(Exchange):
             reduce_only: bool = True,
             margin_mode: Optional[MarginMode] = None,
     ) -> str:
-        raise NotImplementedError("Stop-loss orders are not implemented for Binance yet")
+        if not symbol or quantity <= 0 or stop_price <= 0:
+            raise ValueError("Некорректные параметры стоп-ордера")
+
+        params: dict[str, object] = {
+            "stopPrice": stop_price,
+            "reduceOnly": reduce_only,
+        }
+        if margin_mode:
+            params["marginMode"] = margin_mode.value
+            try:
+                self._client.set_margin_mode(margin_mode.value, symbol)
+            except Exception as exception:
+                log.e(f"Не удалось установить режим маржи {margin_mode.value} для {symbol}: {exception}")
+
+        try:
+            order = self._client.create_order(
+                symbol=symbol,
+                type="stop_market",
+                side=side.value,
+                amount=quantity,
+                params=params,
+            )
+            return str(order.get("id"))
+        except Exception as exception:
+            log.e(f"Ошибка при выставлении стоп-ордера Binance для {symbol}: {exception}")
+            raise
 
     def place_take_profit_order(
             self,
@@ -150,4 +239,60 @@ class Binance(Exchange):
             reduce_only: bool = True,
             margin_mode: Optional[MarginMode] = None,
     ) -> str:
-        raise NotImplementedError("Take-profit orders are not implemented for Binance yet")
+        if not symbol or quantity <= 0 or price <= 0:
+            raise ValueError("Некорректные параметры тейк-профит ордера")
+
+        params: dict[str, object] = {
+            "stopPrice": price,
+            "reduceOnly": reduce_only,
+        }
+        if margin_mode:
+            params["marginMode"] = margin_mode.value
+            try:
+                self._client.set_margin_mode(margin_mode.value, symbol)
+            except Exception as exception:
+                log.e(f"Не удалось установить режим маржи {margin_mode.value} для {symbol}: {exception}")
+
+        try:
+            order = self._client.create_order(
+                symbol=symbol,
+                type="take_profit_market",
+                side=side.value,
+                amount=quantity,
+                params=params,
+            )
+            return str(order.get("id"))
+        except Exception as exception:
+            log.e(f"Ошибка при выставлении тейк-профит ордера Binance для {symbol}: {exception}")
+            raise
+
+    @staticmethod
+    def _map_order_status(status: str) -> OrderStatus:
+        status_normalized = (status or "").lower()
+        if status_normalized in {"open", "new", "pending"}:
+            return OrderStatus.NEW
+        if status_normalized in {"closed", "filled"}:
+            return OrderStatus.FILLED
+        if status_normalized in {"canceled", "cancelled"}:
+            return OrderStatus.CANCELED
+        if status_normalized in {"partial", "partially_filled", "partial_fill"}:
+            return OrderStatus.PARTIALLY_FILLED
+        return OrderStatus.NEW
+
+    def _map_order(self, order: dict) -> OrderInfo:
+        status = self._map_order_status(order.get("status"))
+        amount = extract_float(order.get("amount"), order.get("info", {}).get("origQty")) or 0.0
+        filled = extract_float(order.get("filled"), order.get("info", {}).get("executedQty")) or 0.0
+        average = extract_float(order.get("average"), order.get("price"))
+        side_value = (order.get("side") or "").lower()
+        side = OrderSide.BUY if side_value == OrderSide.BUY.value else OrderSide.SELL
+
+        return OrderInfo(
+            id=str(order.get("id")),
+            symbol=order.get("symbol", ""),
+            side=side,
+            quantity=amount,
+            filled=filled,
+            status=status,
+            average_price=average,
+        )
