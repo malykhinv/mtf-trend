@@ -137,13 +137,11 @@ class _CallbackHandler:
             return
         skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{symbol}:{timeframe.tf}:{symbol_context.value}"
         skip_keyboard = InlineKeyboardMarkup.from_button(
-            InlineKeyboardButton(text="Пропустить", callback_data=skip_callback_data)
-        )
-        if not hasattr(message, "edit_reply_markup"):
-            log.w(
-                "Получено недоступное сообщение для обновления кнопок, edit_reply_markup отсутствует."
+            InlineKeyboardButton(
+                text="Пропустить",
+                callback_data=skip_callback_data
             )
-            return
+        )
 
         editable_message = cast(Message, message)
 

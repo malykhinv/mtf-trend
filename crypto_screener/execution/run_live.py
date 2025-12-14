@@ -367,7 +367,7 @@ def _notify_protective_recovery(
         reason: str,
         exchange_name: str,
 ) -> None:
-    log.w(reason)
+    log.d(reason)
     message = build_protective_recovery_message(
         active_trade=active_trade,
         reason=reason,
@@ -431,7 +431,7 @@ def _restore_limit_orders(
 ) -> None:
     remaining_quantity = _get_remaining_quantity(context, active_trade) or 0
     if remaining_quantity <= 0:
-        log.w(f"Пропускаем восстановление {order_type} по {active_trade.symbol}: нет доступного объема.")
+        log.d(f"Пропускаем восстановление {order_type} по {active_trade.symbol}: нет доступного объема.")
         return
 
     try:
