@@ -43,7 +43,10 @@ def _initialize_notifier() -> Notifier:
 def main() -> None:
     load_dotenv()
     exchange = _initialize_exchange()
-    strategy = app_cfg.STRATEGY
+    strategies = app_cfg.STRATEGIES
+    if not strategies:
+        raise ValueError("В конфигурации не задано ни одной стратегии.")
+    strategy = strategies[0]
     mode: Mode = app_cfg.MODE
     match mode:
         # Работа с актуальным рынком.

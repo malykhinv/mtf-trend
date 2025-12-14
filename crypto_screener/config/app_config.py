@@ -1,11 +1,11 @@
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Mapping
 from zoneinfo import ZoneInfo
 
-from crypto_screener.config.ppo_config import PpoConfig, ppo_cfg
+from crypto_screener.config.strategy_registry import DEFAULT_STRATEGIES, DEFAULT_STRATEGY_CONFIGS
 from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, TestData
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.strategies.ppo import PpoStrategy
 from crypto_screener.domain.strategies.strategy import Strategy
 
 # Временная зона.
@@ -37,9 +37,6 @@ _capture_poll_intervals: dict[Timeframe, timedelta] = {
     Timeframe.H1: timedelta(minutes=1),
     Timeframe.H4: timedelta(minutes=5),
 }
-
-# Стратегия.
-_strategy = PpoStrategy()
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
@@ -130,11 +127,11 @@ class AppConfig:
     # Пул потоков.
     LIVE_MAX_WORKERS: int = 1
 
-    # Стратегия.
-    STRATEGY: Strategy = _strategy
+    # Стратегии.
+    STRATEGIES: list[Strategy] = field(default_factory=lambda: list(DEFAULT_STRATEGIES))
 
-    # Конфигурация стратегии.
-    STRATEGY_CONFIG: PpoConfig = field(default_factory=lambda: ppo_cfg)
+    # Конфигурации стратегий.
+    STRATEGY_CONFIGS: Mapping[str, object] = field(default_factory=lambda: DEFAULT_STRATEGY_CONFIGS.copy())
 
 
 app_cfg = AppConfig()
