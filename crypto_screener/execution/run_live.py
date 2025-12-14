@@ -8,7 +8,7 @@ from time import sleep
 from typing import Optional
 from urllib.parse import quote
 
-from crypto_screener.config import app_cfg, ppo_cfg
+from crypto_screener.config import app_cfg
 from crypto_screener.data.notifiers.telegram import SKIP_CALLBACK_PREFIX, TRADE_CALLBACK_PREFIX
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.capture_state import CaptureState
@@ -28,7 +28,7 @@ from crypto_screener.domain.models.symbol import FuturesSymbol, set_contexts, ex
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
 from crypto_screener.domain.notifier import Keyboard, Notifier, NotificationType
-from crypto_screener.domain.strategies.strategy import Strategy
+from crypto_screener.domain.strategies.strategy import Strategy, StrategyRuntimeConfig
 from crypto_screener.execution.scheduler import Scheduler
 from crypto_screener.execution.trade_executor import TradeExecutionService
 from crypto_screener.execution.trade_permission_service import TradePermissionService
@@ -111,6 +111,25 @@ def _build_keyboard(
     callback_data = f"{TRADE_CALLBACK_PREFIX}:{encoded_symbol}:{timeframe.tf}:{encoded_context}:{encoded_strategy}"
     skip_callback_data = f"{SKIP_CALLBACK_PREFIX}:{encoded_symbol}:{timeframe.tf}:{encoded_context}:{encoded_strategy}"
     return [[(trade_text, callback_data), (skip_text, skip_callback_data)]]
+
+
+def _resolve_strategy(
+        strategy: Strategy | None,
+        strategy_by_name: dict[str, Strategy],
+        strategies: list[Strategy],
+        strategy_name: str,
+) -> Strategy:
+    return strategy or strategy_by_name.get(strategy_name) or strategies[0]
+
+
+def _get_runtime_config(
+        strategy: Strategy | None,
+        strategy_by_name: dict[str, Strategy],
+        strategies: list[Strategy],
+        strategy_name: str,
+) -> StrategyRuntimeConfig:
+    resolved_strategy = _resolve_strategy(strategy, strategy_by_name, strategies, strategy_name)
+    return resolved_strategy.get_runtime_config()
 
 
 def _send_notification(
@@ -1304,6 +1323,13 @@ def run_live(
                 outcome = result.outcome
                 strategy_name = result.strategy_name
                 strategy = strategy_by_name.get(strategy_name)
+                resolved_strategy = _resolve_strategy(
+                    strategy,
+                    strategy_by_name,
+                    strategies,
+                    strategy_name,
+                )
+                runtime_config = resolved_strategy.get_runtime_config()
 
                 capture_key = CaptureKey(symbol.symbol, timeframe, strategy_name)
                 active_capture = capture_state.get_capture(capture_key)
@@ -1381,7 +1407,7 @@ def run_live(
                                             symbol.symbol,
                                             timeframe,
                                             symbol.context,
-                                            strategy or strategy_by_name.get(strategy_name) or strategies[0],
+                                            resolved_strategy,
                                         ),
                                     ).result()
                                 continue
@@ -1399,7 +1425,7 @@ def run_live(
                                         symbol.symbol,
                                         timeframe,
                                         symbol.context,
-                                        strategy or strategy_by_name.get(strategy_name) or strategies[0],
+                                        resolved_strategy,
                                     ),
                                 ).result()
                                 capture_state.add_capture(
@@ -1407,7 +1433,7 @@ def run_live(
                                     timeframe=timeframe,
                                     strategy=strategy_name,
                                     message_id=message_id,
-                                    timeout_multiplier=ppo_cfg.CAPTURE_TIMEOUT_MULTIPLIER,
+                                    timeout_multiplier=runtime_config.capture_timeout_multiplier,
                                 )
                                 cycle_started = False
                                 notified_once.add(capture_notification_key)
@@ -1422,7 +1448,11 @@ def run_live(
                             log.i(
                                 f"Попытка открытия позиции в {symbol.symbol} на {timeframe.tf} ({strategy_name})."
                             )
-                            execution_result = trade_execution_service.execute_buy(setup, symbol.context)
+                            execution_result = trade_execution_service.execute_buy(
+                                setup,
+                                symbol.context,
+                                runtime_config,
+                            )
                             if not execution_result:
                                 trade_permission_service.clear_allowance(symbol.symbol, timeframe, strategy_name)
                                 continue

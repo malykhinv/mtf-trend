@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from crypto_screener.config import ppo_cfg
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.margin_mode import MarginMode
@@ -13,6 +12,7 @@ from crypto_screener.domain.models.protective_orders import ProtectiveOrders
 from crypto_screener.domain.models.setup import Trade
 from crypto_screener.domain.models.stop_realignment_result import StopRealignmentResult
 from crypto_screener.domain.notifier import Notifier, NotificationType
+from crypto_screener.domain.strategies.strategy import StrategyRuntimeConfig
 from crypto_screener.utils.logger import log
 
 
@@ -33,11 +33,11 @@ class TradeExecutionService:
         self._exchange = exchange
         self.notifier = notifier
 
-    def execute_buy(self, setup: Trade, context: Context) -> Optional[ExecutionResult]:
+    def execute_buy(self, setup: Trade, context: Context, runtime_config: StrategyRuntimeConfig) -> Optional[ExecutionResult]:
         entry_order_id: Optional[str] = None
         protective_orders = ProtectiveOrders()
         try:
-            quantity = self._determine_position_size(setup, context)
+            quantity = self._determine_position_size(setup, context, runtime_config)
         except Exception:
             return None
 
@@ -60,10 +60,11 @@ class TradeExecutionService:
     def _determine_position_size(
             self,
             setup: Trade,
-            context: Context
+            context: Context,
+            runtime_config: StrategyRuntimeConfig,
     ) -> float:
         try:
-            return self._calculate_position_size(setup)
+            return self._calculate_position_size(setup, runtime_config)
         except Exception as exception:
             self._notify_failure(
                 setup,
@@ -130,16 +131,16 @@ class TradeExecutionService:
         )
 
     @staticmethod
-    def _calculate_position_size(setup: Trade) -> float:
+    def _calculate_position_size(setup: Trade, runtime_config: StrategyRuntimeConfig) -> float:
         entry_price = setup.entry_price
         stop_loss_price = setup.stop_loss_price
         stop_distance = entry_price - stop_loss_price
         if stop_distance <= 0:
             raise ValueError(f"Некорректная дистанция до стоп-лосса: Entry {entry_price}, SL {stop_loss_price}")
 
-        risk_amount = ppo_cfg.RISK_PER_TRADE_USDT
-        min_notional = ppo_cfg.MIN_POSITION_NOTIONAL_USDT
-        min_quantity = ppo_cfg.MIN_POSITION_QUANTITY
+        risk_amount = runtime_config.risk_per_trade_usdt
+        min_notional = runtime_config.min_position_notional_usdt
+        min_quantity = runtime_config.min_position_quantity
 
         quantity_by_risk = risk_amount / stop_distance
         quantity_by_notional = min_notional / entry_price
