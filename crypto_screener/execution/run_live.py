@@ -1223,29 +1223,6 @@ def run_live(
                     heappush(retained_ready_heap, task)
             ready_heap = retained_ready_heap
 
-        free_workers = cfg.LIVE_MAX_WORKERS - len(pending_tasks)
-        ready_capacity = cfg.LIVE_MAX_WORKERS
-
-        capacity = free_workers if free_workers > 0 else (1 if capture_state.captures else 0)
-        ready_tasks = scheduler.pop_ready(now, capacity=capacity)
-
-        for task in ready_tasks:
-            if len(ready_heap) < ready_capacity:
-                heappush(ready_heap, task)
-                continue
-
-            worst_index, worst_task = max(
-                enumerate(ready_heap),
-                key=lambda item: _ready_task_priority_key(item[1]),
-            )
-
-            if _ready_task_priority_key(task) < _ready_task_priority_key(worst_task):
-                ready_heap[worst_index] = task
-                heapify(ready_heap)
-                scheduler.push(worst_task)
-            else:
-                scheduler.push(task)
-
         done_futures = [future for future in list(pending_tasks.keys()) if future.done()]
         for future in done_futures:
             task, capture_key = pending_tasks.pop(future)
@@ -1403,6 +1380,29 @@ def run_live(
                     task,
                     has_active_capture=bool(capture_state.get_capture(capture_key)),
                 )
+
+        free_workers = cfg.LIVE_MAX_WORKERS - len(pending_tasks)
+        ready_capacity = cfg.LIVE_MAX_WORKERS
+
+        capacity = free_workers if free_workers > 0 else (1 if capture_state.captures else 0)
+        ready_tasks = scheduler.pop_ready(now, capacity=capacity)
+
+        for task in ready_tasks:
+            if len(ready_heap) < ready_capacity:
+                heappush(ready_heap, task)
+                continue
+
+            worst_index, worst_task = max(
+                enumerate(ready_heap),
+                key=lambda item: _ready_task_priority_key(item[1]),
+            )
+
+            if _ready_task_priority_key(task) < _ready_task_priority_key(worst_task):
+                ready_heap[worst_index] = task
+                heapify(ready_heap)
+                scheduler.push(worst_task)
+            else:
+                scheduler.push(task)
 
         while ready_heap and len(pending_tasks) < cfg.LIVE_MAX_WORKERS:
             task = heappop(ready_heap)
