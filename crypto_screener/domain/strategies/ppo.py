@@ -24,7 +24,7 @@ class PpoStrategy(Strategy):
             timeframe: Timeframe,
             context: Context,
     ) -> Setup:
-        from crypto_screener.config.config import cfg
+        from crypto_screener.config import ppo_cfg
 
         setup = Unfilled(
             data=Ppo(
@@ -48,7 +48,7 @@ class PpoStrategy(Strategy):
 
         # Анализ теней.
         shadows_pct = self._get_shadow_range_pct(bars)
-        if shadows_pct > cfg.SHADOW_RANGE_PCT_MAX:
+        if shadows_pct > ppo_cfg.SHADOW_RANGE_PCT_MAX:
             return setup
 
         bars = add_swings(bars, timeframe)
@@ -89,8 +89,8 @@ class PpoStrategy(Strategy):
                 max_retrace = max(max_retrace, retrace_ratio)
         is_rise_valid = (
                 rise > 0 and
-                rise_pct >= cfg.PRICE_RISE_PCT_MIN and
-                max_retrace <= cfg.MAX_RETRACE_RATIO
+                rise_pct >= ppo_cfg.PRICE_RISE_PCT_MIN and
+                max_retrace <= ppo_cfg.MAX_RETRACE_RATIO
         )
 
         if not is_rise_valid:
@@ -104,7 +104,7 @@ class PpoStrategy(Strategy):
         correction_bars_count = len(correction_bars)
         rise_correction_ratio = (rise_bars_count / correction_bars_count
                                  if correction_bars_count > 0 else 0)
-        is_rise_age_valid = rise_correction_ratio < cfg.RISE_AGE_LIMIT_MULTIPLIER
+        is_rise_age_valid = rise_correction_ratio < ppo_cfg.RISE_AGE_LIMIT_MULTIPLIER
         if not is_rise_age_valid:
             return setup
         correction_low = self._get_first_open_swing_indexed(correction_bars, SwingType.LOW)
@@ -113,7 +113,7 @@ class PpoStrategy(Strategy):
         correction_low_index, correction_low_swing = correction_low
         retrace_range = main_high_swing.extremum_price - correction_low_swing.extremum_price
         retrace_ratio = retrace_range / rise
-        is_retrace_valid = retrace_range >= 0 and retrace_ratio <= cfg.RETRACE_RATIO_MAX
+        is_retrace_valid = retrace_range >= 0 and retrace_ratio <= ppo_cfg.RETRACE_RATIO_MAX
         if not is_retrace_valid:
             return setup
 
@@ -126,23 +126,22 @@ class PpoStrategy(Strategy):
                     sum(1 for bar in pre_low_window if bar.low > correction_low_swing.extremum_price) / len(pre_low_window)
             )
             is_pre_low_above_correction_low_valid = (pre_low_above_correction_low_fraction <=
-                                                     cfg.PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX)
+                                                     ppo_cfg.PRE_LOW_ABOVE_CORRECTION_LOW_FRACTION_MAX)
             if not is_pre_low_above_correction_low_valid:
                 return setup
 
         # Анализ лонгового каскада.
-        cascade_price_min = correction_low_swing.close_price + retrace_range * cfg.CASCADE_RETRACE_RATIO_MIN
+        cascade_price_min = correction_low_swing.close_price + retrace_range * ppo_cfg.CASCADE_RETRACE_RATIO_MIN
         cascade_price_max = main_high_swing.close_price
         cascade_long = self._get_cascade_long(
             correction_bars,
             cascade_price_min,
             cascade_price_max,
-            cfg,
         )
         if not cascade_long:
             return setup
         cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).extremum_price
-        resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
+        resistance_gap = retrace_range * ppo_cfg.RESISTANCE_GAP_RATIO_MIN
         open_high_swings = self._get_open_swings(correction_bars, SwingType.HIGH)
         open_high_swings = self._filter_by_price(open_high_swings, cascade_price_min, cascade_price_max)
         extra_cascade_swings = [
@@ -156,14 +155,14 @@ class PpoStrategy(Strategy):
 
         # Анализ сопротивления над каскадом.
         cascade_top = max(cascade_long, key=lambda swing: swing.extremum_price).extremum_price
-        resistance_gap = retrace_range * cfg.RESISTANCE_GAP_RATIO_MIN
+        resistance_gap = retrace_range * ppo_cfg.RESISTANCE_GAP_RATIO_MIN
         resistance_price_min = cascade_top + resistance_gap
         resistance_price_max = main_high_swing.extremum_price - resistance_gap
         resistance_swings = []
         if resistance_price_min < resistance_price_max:
             resistance_swings = self._filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
         setup.data.resistance_swings = resistance_swings
-        has_resistance = len(resistance_swings) > cfg.RESISTANCE_COUNT_MAX
+        has_resistance = len(resistance_swings) > ppo_cfg.RESISTANCE_COUNT_MAX
         if has_resistance:
             return setup
 
@@ -174,7 +173,7 @@ class PpoStrategy(Strategy):
         setup.data.support_swings = open_low_swings
         target_swing = cascade_long[-1]
 
-        support_price_min = correction_low_swing.extremum_price + consolidation_range * cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
+        support_price_min = correction_low_swing.extremum_price + consolidation_range * ppo_cfg.SUPPORT_CONSOLIDATION_RATIO_MIN
         support_price_max = target_swing.extremum_price
         open_low_swings = self._filter_by_price(open_low_swings, support_price_min, support_price_max)
         support_swing = open_low_swings[-1] if open_low_swings else None
@@ -209,15 +208,15 @@ class PpoStrategy(Strategy):
             profit_price = profit_price + (main_high_swing.close_price - correction_low_swing.close_price)
         loss_price = support_swing.extremum_price
         loss_pct = 100 * (loss_price - current_price) / loss_price
-        is_loss_valid = abs(loss_pct) > cfg.LOSS_PCT_MIN
+        is_loss_valid = abs(loss_pct) > ppo_cfg.LOSS_PCT_MIN
         if not is_loss_valid:
             return setup
         profit_pct = 100 * (profit_price - current_price) / current_price
-        is_profit_valid = profit_pct > cfg.PROFIT_PCT_MIN
+        is_profit_valid = profit_pct > ppo_cfg.PROFIT_PCT_MIN
         if not is_profit_valid:
             return setup
         reward_risk = abs(profit_pct / loss_pct)
-        is_reward_risk_valid = reward_risk >= cfg.REWARD_RISK_RATIO_MIN
+        is_reward_risk_valid = reward_risk >= ppo_cfg.REWARD_RISK_RATIO_MIN
         if not is_reward_risk_valid and not context.is_test:
             return setup
 
@@ -243,21 +242,21 @@ class PpoStrategy(Strategy):
         # Пробой лонгового каскада.
         partial_close_price = None
         breakeven_price = None
-        partial_close_side_pct = cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
+        partial_close_side_pct = ppo_cfg.PARTIAL_CLOSE_SIDE_PCT_MIN
         if resistance_swings:
             nearest_resistance_price = resistance_swings[-1].extremum_price
             nearest_resistance_distance_pct = 100 * (nearest_resistance_price - current_price) / current_price
             has_partial_close = partial_close_side_pct <= nearest_resistance_distance_pct < profit_pct - partial_close_side_pct
             if has_partial_close:
                 partial_close_price = nearest_resistance_price if has_partial_close else None
-                breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
+                breakeven_price = current_price + ppo_cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
         elif context.is_top:
             main_high_distance_pct = 100 * (main_high_swing.extremum_price - current_price) / current_price
             has_partial_close = partial_close_side_pct <= main_high_distance_pct < profit_pct - partial_close_side_pct
             if has_partial_close:
                 partial_close_price = main_high_swing.extremum_price
-                breakeven_price = current_price + cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
-        entry_slippage_ratio = 1 + cfg.TEST_SLIPPAGE_PCT / 100 if context.is_test else 1
+                breakeven_price = current_price + ppo_cfg.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
+        entry_slippage_ratio = 1 + ppo_cfg.TEST_SLIPPAGE_PCT / 100 if context.is_test else 1
         trade_levels = TradeLevels(
             entry_price=target_swing.extremum_price * entry_slippage_ratio,
             take_profit_price=profit_price,
@@ -375,7 +374,6 @@ class PpoStrategy(Strategy):
             bars: list[Bar],
             price_min: float,
             price_max: float,
-            cfg,
     ) -> list[Swing]:
         if not bars or price_min >= price_max or len(bars) < 2:
             return []
@@ -390,11 +388,11 @@ class PpoStrategy(Strategy):
             ranges = [bar.high - bar.low for bar in bars[-window:]]
             return float(np.mean(ranges)) if ranges else 0.0
 
-        avg_range = calculate_average_range(cfg.CASCADE_ATR_WINDOW)
-        touch_tolerance = max(cfg.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
-        min_pullback = max(cfg.CASCADE_MIN_PULLBACK_NATR * avg_range, 0.0)
-        min_pullback_bars = cfg.CASCADE_MIN_PULLBACK_BARS
-        min_gap_bars = cfg.CASCADE_MIN_GAP_BARS
+        avg_range = calculate_average_range(ppo_cfg.CASCADE_ATR_WINDOW)
+        touch_tolerance = max(ppo_cfg.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
+        min_pullback = max(ppo_cfg.CASCADE_MIN_PULLBACK_NATR * avg_range, 0.0)
+        min_pullback_bars = ppo_cfg.CASCADE_MIN_PULLBACK_BARS
+        min_gap_bars = ppo_cfg.CASCADE_MIN_GAP_BARS
         levels: list[CascadeLevel] = []
         bar_data = [(i, bar.high, bar.open, bar.close)
                     for i, bar in enumerate(bars)
@@ -486,7 +484,7 @@ class PpoStrategy(Strategy):
                 best_level_touches_count = touches_count
                 best_level_price = level.price
 
-        if not best_level_touches or best_level_touches_count < cfg.CASCADE_LENGTH_MIN:
+        if not best_level_touches or best_level_touches_count < ppo_cfg.CASCADE_LENGTH_MIN:
             return []
         first_touch_index = min(best_level_touches)
         last_touch_index = max(best_level_touches)

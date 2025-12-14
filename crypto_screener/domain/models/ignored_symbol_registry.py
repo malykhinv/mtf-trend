@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
-from crypto_screener.config.config import AppConfig as cfg
+from crypto_screener.config import ppo_cfg
 from crypto_screener.domain.models.allowed_trade_registry import AllowedTradeKey
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.ignored_symbol import IgnoredSymbol
@@ -68,7 +68,7 @@ class IgnoredSymbolRegistry:
             issued_at: Optional[datetime] = None,
     ) -> IgnoredSymbol:
         issued_at = ensure_utc(issued_at) if issued_at else utc_now()
-        deadline = issued_at + timedelta(minutes=cfg.CAPTURE_TIMEOUT_MULTIPLIER * key.timeframe.minutes)
+        deadline = issued_at + timedelta(minutes=ppo_cfg.CAPTURE_TIMEOUT_MULTIPLIER * key.timeframe.minutes)
         return IgnoredSymbol(
             symbol=key.symbol,
             timeframe=key.timeframe,

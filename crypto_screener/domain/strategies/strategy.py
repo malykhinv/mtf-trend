@@ -13,9 +13,9 @@ class Strategy(ABC):
 
     @staticmethod
     def trim_by_volume(bars: list[Bar]) -> list[Bar]:
-        from crypto_screener.config.config import cfg
+        from crypto_screener.config import ppo_cfg
         length = len(bars)
-        min_side_bars = cfg.VOLUME_TRIM_SIDE_BARS_MIN
+        min_side_bars = ppo_cfg.VOLUME_TRIM_SIDE_BARS_MIN
         if length < 2 * min_side_bars:
             return []
         volumes = [bar.volume for bar in bars]
@@ -24,8 +24,8 @@ class Strategy(ABC):
             prefix[i + 1] = prefix[i] + v
         best_ratio = -1.0
         best_index = -1
-        high_volume_factor = cfg.HIGH_VOLUME_THRESHOLD
-        min_high_fraction = cfg.HIGH_VOLUME_FRACTION_MIN
+        high_volume_factor = ppo_cfg.HIGH_VOLUME_THRESHOLD
+        min_high_fraction = ppo_cfg.HIGH_VOLUME_FRACTION_MIN
         for split in range(min_side_bars, length - min_side_bars + 1):
             left_avg = (prefix[split] - prefix[0]) / split
             if left_avg <= 0:

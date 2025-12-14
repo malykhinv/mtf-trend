@@ -4,7 +4,7 @@ from datetime import datetime
 from heapq import heapify, heappop, heappush
 from typing import Optional
 
-from crypto_screener.config.config import cfg
+from crypto_screener.config import app_cfg
 from crypto_screener.domain.models.scheduled_task import ScheduledTask
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.utils.logger import log
@@ -33,9 +33,9 @@ class Scheduler:
         return ready
 
     def reschedule(self, task: ScheduledTask, has_active_capture: bool) -> None:
-        interval = cfg.POLL_INTERVALS[task.timeframe]
+        interval = app_cfg.POLL_INTERVALS[task.timeframe]
         if has_active_capture:
-            interval = cfg.CAPTURE_POLL_INTERVALS.get(task.timeframe, interval / 2)
+            interval = app_cfg.CAPTURE_POLL_INTERVALS.get(task.timeframe, interval / 2)
         task.priority = -1 if has_active_capture else 0
         if has_active_capture:
             log.d(
@@ -54,7 +54,7 @@ class Scheduler:
             now: Optional[datetime] = None,
     ) -> None:
         now = now or utc_now()
-        interval = cfg.POLL_INTERVALS[timeframe]
+        interval = app_cfg.POLL_INTERVALS[timeframe]
         base_tasks = False
         for task in self._tasks:
             if task.symbol.symbol == symbol and task.timeframe == timeframe:
