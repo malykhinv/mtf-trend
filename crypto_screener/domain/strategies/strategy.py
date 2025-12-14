@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Setup
 from crypto_screener.domain.models.timeframe import Timeframe
+
+
+@dataclass(frozen=True)
+class StrategyRuntimeConfig:
+    capture_timeout_multiplier: int
+    risk_per_trade_usdt: float
+    min_position_notional_usdt: float
+    min_position_quantity: float
 
 
 class Strategy(ABC):
@@ -56,3 +65,7 @@ class Strategy(ABC):
             context: Context,
     ) -> Setup:
         """Определяет сетап для заданного символа."""
+
+    @abstractmethod
+    def get_runtime_config(self) -> StrategyRuntimeConfig:
+        """Возвращает параметры исполнения стратегии."""
