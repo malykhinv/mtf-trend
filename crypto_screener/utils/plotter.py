@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional, Protocol, Type
+from typing import Callable, Optional, Protocol, Type, runtime_checkable
 
 import matplotlib
 import numpy as np
@@ -42,6 +42,7 @@ PlotHandler = Callable[
 ]
 
 
+@runtime_checkable
 class PlotData(Protocol):
     symbol: str
     timeframe: Timeframe
