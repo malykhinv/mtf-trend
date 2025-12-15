@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -85,84 +85,6 @@ class PpoConfig:
     ORDER_MAX_RETRIES: int = 3
     # Пауза между повторными попытками размещения ордеров.
     ORDER_RETRY_DELAY_SECONDS: float = 1.0
-    # endregion
-
-    # region Построение графиков.
-    # Папка для графиков.
-    PLOT_OUTPUT_DIR: str = ".generated/plot"
-    # Размер графика.
-    PLOT_WIDTH_INCHES: float = 12
-    PLOT_HEIGHT_INCHES: float = 12
-    PLOT_DPI: int = 110
-    # Цвета графика.
-    PLOT_TICK_COLOR: str = "white"
-    PLOT_TITLE_COLOR: str = "white"
-    PLOT_COLOR_UP: str = "#078772"
-    PLOT_COLOR_DOWN: str = "#d42f2f"
-    PLOT_BACKGROUND_COLOR: str = "#0f0f0f"
-    PLOT_GRID_COLOR: str = "#2f2f2f"
-    PLOT_VOLUME_COLOR: str = "#2f2f2f"
-    PLOT_MAIN_HIGH_SWING_COLOR: str = "#ffe082"
-    PLOT_CASCADE_SWING_COLOR: str = "#64b5f6"
-    PLOT_CASCADE_LEVEL_COLOR: str = "#64b5f6"
-    PLOT_CASCADE_LEVEL_LINEWIDTH: float = 1.6
-    PLOT_CASCADE_LEVEL_LINESTYLE: str = "--"
-    PLOT_CASCADE_LEVEL_ALPHA: float = 0.7
-    PLOT_CASCADE_LEVEL_ZORDER: int = 1
-    PLOT_RESISTANCE_SWING_COLOR: str = "#ef5350"
-    PLOT_SUPPORT_SWING_COLOR: str = "#66bb6a"
-    PLOT_COMMON_SWING_COLOR: str = "#663366"
-    PLOT_GROWTH_PHASE_COLOR: str = "#808080"
-    PLOT_GROWTH_PHASE_ALPHA: float = 0.05
-    PLOT_ENTRY_SL_COLOR: str = "#8b1a1a"
-    PLOT_ENTRY_TP_COLOR: str = "#0b3b2e"
-    PLOT_ENTRY_PC_COLOR: str = "#1c54b2"
-    PLOT_ENTRY_BE_COLOR: str = "#ffb74d"
-    PLOT_ENTRY_RISK_ZONE_ALPHA: float = 0.14
-    PLOT_ENTRY_REWARD_ZONE_ALPHA: float = 0.12
-    PLOT_ENTRY_ZONE_ALPHA: float = 0.12
-    PLOT_ENTRY_ZONE_MIN_HEIGHT: float = 1e-5
-    PLOT_ENTRY_ZONE_ZORDER: int = 0
-    # Маркеры свингов.
-    PLOT_SWING_MARKER_SIZE: int = 32
-    PLOT_SWING_MARKER_CLOSED_ALPHA: float = 0.25
-    PLOT_SWING_MARKER_OPEN_ALPHA: float = 1.0
-    PLOT_SWING_ZORDER: int = 3
-    # Размер и положение свечей.
-    PLOT_CANDLE_WIDTH_MULTIPLIER: float = 0.6
-    PLOT_CANDLE_WICK_LINEWIDTH: float = 1.1
-    PLOT_CANDLE_BODY_MIN_HEIGHT: float = 1e-5
-    PLOT_CANDLE_BODY_X_OFFSET_RATIO: float = 0.5
-    PLOT_CANDLE_WICK_ZORDER: int = 1
-    PLOT_CANDLE_BODY_ZORDER: int = 2
-    PLOT_CANDLE_FALLBACK_MIN_TIMES: int = 2
-    PLOT_CANDLE_FALLBACK_INTERVAL_MINUTES: int = 1
-    PLOT_MINUTES_IN_DAY: int = 24 * 60
-    # Форматирование осей.
-    PLOT_X_AXIS_TIME_FORMAT: str = "%d %b %H:%M"
-    PLOT_X_AXIS_MINTICKS: int = 4
-    PLOT_X_AXIS_MAXTICKS: int = 8
-    PLOT_X_AXIS_LABEL_ROTATION: int = 0
-    PLOT_TICK_LABELSIZE: int = 9
-    PLOT_PRICE_PAD_RATIO: float = 0.05
-    PLOT_PRICE_PAD_MIN: float = 1e-3
-    PLOT_TITLE_PAD: int = 12
-    PLOT_GRID_LINEWIDTH: float = 0.6
-    PLOT_GRID_ALPHA: float = 0.4
-    PLOT_Y_OFFSET_RATIO: float = 0.015
-    PLOT_Y_OFFSET_MIN: float = 1e-4
-    PLOT_VOLUME_ALPHA: float = 0.5
-    PLOT_VOLUME_PAD_RATIO: float = 0.05
-    PLOT_VOLUME_ZORDER: int = 1
-    PLOT_HEIGHT_RATIOS: tuple[int, ...] = field(default_factory=lambda: (3, 1))
-    PLOT_SUBPLOT_HSPACE: float = 0.03
-    PLOT_PRICE_DECIMALS_HIGH: int = 2
-    PLOT_PRICE_DECIMALS_MID: int = 4
-    PLOT_PRICE_DECIMALS_LOW: int = 6
-    PLOT_PRICE_HIGH_THRESHOLD: float = 100
-    PLOT_PRICE_MID_THRESHOLD: float = 1
-    PLOT_DEFAULT_SYMBOL: str = "asset"
-    PLOT_POSTMORTEM_EXTRA_BARS: int = 5
     # endregion
 
     # region Тест

@@ -1,15 +1,21 @@
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Protocol, Type
 
 import matplotlib
 import numpy as np
 from matplotlib.figure import Figure
 
+from crypto_screener.config import app_cfg, ppo_plot_theme
+from crypto_screener.config.plot_theme import PlotTheme
+from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
-from crypto_screener.domain.models.setup_data import Ppo
+from crypto_screener.domain.models.setup_data import Ppo, SetupData
+from crypto_screener.domain.models.swing import Swing, SwingType
+from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.swing_detector import add_swings
 
@@ -20,10 +26,33 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import FuncFormatter
 from matplotlib.axes import Axes
-from crypto_screener.config import app_cfg, ppo_cfg
-from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.swing import Swing, SwingType
-from crypto_screener.domain.models.timeframe import Timeframe
+PlotHandler = Callable[
+    [
+        str,
+        "PlotData",
+        Optional[TradeLevels],
+        Optional[list[Bar]],
+        Optional[datetime],
+        Optional[Context],
+        Optional[str],
+        bool,
+        PlotTheme,
+    ],
+    Path,
+]
+
+
+class PlotData(Protocol):
+    symbol: str
+    timeframe: Timeframe
+    bars: list[Bar]
+
+
+@dataclass(frozen=True)
+class PlotStrategy:
+    data_type: Type[PlotData]
+    handler: PlotHandler
+    theme: PlotTheme
 
 
 # region Private.
@@ -44,45 +73,47 @@ def _plot(
             trade_levels = None
         case _:
             raise TypeError(f"Неизвестный тип сетапа: {type(setup).__name__}")
-    match setup.data:
-        case Ppo():
-            _plot_ppo(
-                setup_name,
-                setup.data,
-                trade_levels,
-                postmortem_bars,
-                detection_time,
-                context,
-                subdir,
-                draw_entry_zones
-            )
-        case _:
-            return
+    strategy = _find_strategy(setup.data)
+    if not strategy:
+        return
+
+    return strategy.handler(
+        setup_name,
+        setup.data,
+        trade_levels,
+        postmortem_bars,
+        detection_time,
+        context,
+        subdir,
+        draw_entry_zones,
+        strategy.theme,
+    )
 
 def _plot_ppo(
         setup_name: str,
         data: Ppo,
-        trade_levels: TradeLevels,
+        trade_levels: Optional[TradeLevels],
         postmortem_bars: Optional[list[Bar]],
         detection_time: Optional[datetime],
         context: Optional[Context],
         subdir: Optional[str],
         draw_entry_zones: bool,
+        theme: PlotTheme,
 ):
     if not data.symbol or not data.bars:
         raise ValueError("Недостаточно данных для построения графика.")
 
-    trimmed_postmortem = _trim_postmortem_bars(postmortem_bars, trade_levels)
+    trimmed_postmortem = _trim_postmortem_bars(postmortem_bars, trade_levels, theme)
 
     combined_bars = [*data.bars, *(trimmed_postmortem or [])]
 
     if not combined_bars:
         raise ValueError("Недостаточно данных для построения графика.")
 
-    fig, price_ax, volume_ax = _build_figure()
+    fig, price_ax, volume_ax = _build_figure(theme)
 
     times = [_datetime_to_mpl(bar.time) for bar in combined_bars]
-    candle_width = _get_candle_width(times)
+    candle_width = _get_candle_width(times, theme)
 
     min_price = min(bar.low for bar in combined_bars)
     max_price = max(bar.high for bar in combined_bars)
@@ -97,7 +128,7 @@ def _plot_ppo(
         min_price = min(min_price, *trade_prices)
         max_price = max(max_price, *trade_prices)
 
-    y_offset = max((max_price - min_price) * ppo_cfg.PLOT_Y_OFFSET_RATIO, ppo_cfg.PLOT_Y_OFFSET_MIN)
+    y_offset = max((max_price - min_price) * theme.y_offset_ratio, theme.y_offset_min)
 
     if data.main_low_swing and data.main_high_swing:
         start_time = _datetime_to_mpl(data.main_low_swing.time)
@@ -107,16 +138,16 @@ def _plot_ppo(
             xmax=max(start_time, end_time),
             ymin=0,
             ymax=1,
-            color=ppo_cfg.PLOT_GROWTH_PHASE_COLOR,
-            alpha=ppo_cfg.PLOT_GROWTH_PHASE_ALPHA,
+            color=theme.growth_phase_color,
+            alpha=theme.growth_phase_alpha,
             zorder=0
         )
         price_ax.axhline(
             y=data.main_low_swing.extremum_price,
             xmin=0,
             xmax=1,
-            color=ppo_cfg.PLOT_GROWTH_PHASE_COLOR,
-            alpha=ppo_cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
+            color=theme.growth_phase_color,
+            alpha=theme.growth_phase_alpha * 1.5,
             linestyle='--',
             linewidth=0.8,
             zorder=0
@@ -125,14 +156,14 @@ def _plot_ppo(
             y=data.main_high_swing.extremum_price,
             xmin=0,
             xmax=1,
-            color=ppo_cfg.PLOT_GROWTH_PHASE_COLOR,
-            alpha=ppo_cfg.PLOT_GROWTH_PHASE_ALPHA * 1.5,
+            color=theme.growth_phase_color,
+            alpha=theme.growth_phase_alpha * 1.5,
             linestyle='--',
             linewidth=0.8,
             zorder=0
         )
 
-    _draw_candles(price_ax, combined_bars, times, candle_width)
+    _draw_candles(price_ax, combined_bars, times, candle_width, theme)
 
     if draw_entry_zones and entry_price is not None and trade_levels:
         entry_time = _get_entry_time(trimmed_postmortem, detection_time, data.bars)
@@ -143,48 +174,54 @@ def _plot_ppo(
             entry_time=entry_time,
             horizon_time=horizon_time,
             postmortem_bars=trimmed_postmortem or [],
+            theme=theme,
         )
-    _format_ax(price_ax, times, min_price, max_price)
+    _format_ax(price_ax, times, min_price, max_price, theme)
 
-    volumes = _draw_volume(volume_ax, combined_bars, times, candle_width)
-    _format_volume_ax(volume_ax, volumes)
-    _format_time_axis(volume_ax)
+    volumes = _draw_volume(volume_ax, combined_bars, times, candle_width, theme)
+    _format_volume_ax(volume_ax, volumes, theme)
+    _format_time_axis(volume_ax, theme)
 
     if data.cascade_swings:
-        _draw_cascade_level(price_ax, data.cascade_swings, combined_bars)
+        _draw_cascade_level(price_ax, data.cascade_swings, combined_bars, theme)
         _draw_swing_group(
             ax=price_ax,
             swings=data.cascade_swings,
-            color=ppo_cfg.PLOT_CASCADE_SWING_COLOR,
-            y_offset=y_offset
+            color=theme.cascade_swing_color,
+            y_offset=y_offset,
+            theme=theme,
         )
     if data.resistance_swings:
         _draw_swing_group(
             ax=price_ax,
             swings=data.resistance_swings,
-            color=ppo_cfg.PLOT_RESISTANCE_SWING_COLOR,
-            y_offset=y_offset
+            color=theme.resistance_swing_color,
+            y_offset=y_offset,
+            theme=theme,
         )
     if data.support_swings:
         _draw_swing_group(
             ax=price_ax,
             swings=data.support_swings,
-            color=ppo_cfg.PLOT_SUPPORT_SWING_COLOR,
-            y_offset=y_offset
+            color=theme.support_swing_color,
+            y_offset=y_offset,
+            theme=theme,
         )
     if data.main_high_swing:
         _draw_swing_group(
             ax=price_ax,
             swings=[data.main_high_swing],
-            color=ppo_cfg.PLOT_MAIN_HIGH_SWING_COLOR,
-            y_offset=y_offset
+            color=theme.main_high_swing_color,
+            y_offset=y_offset,
+            theme=theme,
         )
     if data.main_low_swing:
         _draw_swing_group(
             ax=price_ax,
             swings=[data.main_low_swing],
-            color=ppo_cfg.PLOT_MAIN_HIGH_SWING_COLOR,
-            y_offset=y_offset
+            color=theme.main_high_swing_color,
+            y_offset=y_offset,
+            theme=theme,
         )
     if not data.cascade_swings and not data.resistance_swings and not data.support_swings:
         base_bars = add_swings(data.bars, data.timeframe)
@@ -192,8 +229,9 @@ def _plot_ppo(
         _draw_swing_group(
             ax=price_ax,
             swings=swings,
-            color=ppo_cfg.PLOT_COMMON_SWING_COLOR,
-            y_offset=y_offset
+            color=theme.common_swing_color,
+            y_offset=y_offset,
+            theme=theme,
         )
 
     if detection_time:
@@ -201,7 +239,7 @@ def _plot_ppo(
         for ax in (price_ax, volume_ax):
             ax.axvline(
                 detection_mpl,
-                color=ppo_cfg.PLOT_GRID_COLOR,
+                color=theme.grid_color,
                 linestyle="--",
                 linewidth=1.2,
                 alpha=0.8,
@@ -210,8 +248,8 @@ def _plot_ppo(
 
     price_ax.set_title(
         label=f"{data.symbol.upper()} • {data.timeframe.tf}",
-        color=ppo_cfg.PLOT_TITLE_COLOR,
-        pad=ppo_cfg.PLOT_TITLE_PAD
+        color=theme.title_color,
+        pad=theme.title_pad,
     )
 
     fig.tight_layout()
@@ -224,12 +262,13 @@ def _plot_ppo(
         timeframe=data.timeframe,
         time=combined_bars[-1].time,
         length=length,
+        theme=theme,
         subdir=subdir,
     )
     fig.savefig(
         fname=output_path,
-        facecolor=ppo_cfg.PLOT_BACKGROUND_COLOR,
-        dpi=ppo_cfg.PLOT_DPI,
+        facecolor=theme.background_color,
+        dpi=theme.dpi,
         bbox_inches="tight"
     )
     plt.close(fig)
@@ -237,35 +276,51 @@ def _plot_ppo(
     return output_path
 
 
-def _style_ax(ax: Axes) -> None:
-    ax.set_facecolor(ppo_cfg.PLOT_BACKGROUND_COLOR)
+PLOT_STRATEGIES: list[PlotStrategy] = [
+    PlotStrategy(data_type=Ppo, handler=_plot_ppo, theme=ppo_plot_theme),
+]
+
+
+def register_plot_strategy(strategy: PlotStrategy) -> None:
+    PLOT_STRATEGIES.append(strategy)
+
+
+def _find_strategy(data: SetupData) -> Optional[PlotStrategy]:
+    for strategy in PLOT_STRATEGIES:
+        if isinstance(data, strategy.data_type):
+            return strategy
+    return None
+
+
+def _style_ax(ax: Axes, theme: PlotTheme) -> None:
+    ax.set_facecolor(theme.background_color)
     ax.grid(
         visible=True,
-        color=ppo_cfg.PLOT_GRID_COLOR,
+        color=theme.grid_color,
         linestyle=":",
-        linewidth=ppo_cfg.PLOT_GRID_LINEWIDTH,
-        alpha=ppo_cfg.PLOT_GRID_ALPHA
+        linewidth=theme.grid_linewidth,
+        alpha=theme.grid_alpha,
     )
     for spine in ax.spines.values():
-        spine.set_color(ppo_cfg.PLOT_GRID_COLOR)
-    ax.tick_params(colors=ppo_cfg.PLOT_TICK_COLOR, labelsize=ppo_cfg.PLOT_TICK_LABELSIZE)
+        spine.set_color(theme.grid_color)
+    ax.tick_params(colors=theme.tick_color, labelsize=theme.tick_labelsize)
 
 
-def _build_figure() -> tuple[Figure, Axes, Axes]:
+def _build_figure(theme: PlotTheme) -> tuple[Figure, Axes, Axes]:
     fig, (price_ax, volume_ax) = plt.subplots(
         nrows=2,
         ncols=1,
-        figsize=(ppo_cfg.PLOT_WIDTH_INCHES, ppo_cfg.PLOT_HEIGHT_INCHES),
-        dpi=ppo_cfg.PLOT_DPI,
+        figsize=(theme.width_inches, theme.height_inches),
+        dpi=theme.dpi,
         gridspec_kw={
-            "height_ratios": ppo_cfg.PLOT_HEIGHT_RATIOS,
-            "hspace": ppo_cfg.PLOT_SUBPLOT_HSPACE
+            "height_ratios": theme.height_ratios,
+            "hspace": theme.subplot_hspace,
         },
         sharex=True,
     )
-    fig.patch.set_facecolor(ppo_cfg.PLOT_BACKGROUND_COLOR)
-    _style_ax(price_ax)
-    _style_ax(volume_ax)
+    fig.patch.set_facecolor(theme.background_color)
+    _style_ax(price_ax, theme)
+    _style_ax(volume_ax, theme)
     return fig, price_ax, volume_ax
 
 
@@ -273,26 +328,27 @@ def _draw_candles(
         ax: Axes,
         bars: list[Bar],
         times: list[float],
-        width: float
+        width: float,
+        theme: PlotTheme,
 ):
     for bar, time_value in zip(bars, times):
-        color = ppo_cfg.PLOT_COLOR_UP if bar.close >= bar.open else ppo_cfg.PLOT_COLOR_DOWN
+        color = theme.color_up if bar.close >= bar.open else theme.color_down
         ax.plot(
             [time_value, time_value],
             [bar.low, bar.high],
             color=color,
-            linewidth=ppo_cfg.PLOT_CANDLE_WICK_LINEWIDTH,
-            zorder=ppo_cfg.PLOT_CANDLE_WICK_ZORDER
+            linewidth=theme.candle_wick_linewidth,
+            zorder=theme.candle_wick_zorder,
         )
-        body_height = max(abs(bar.close - bar.open), ppo_cfg.PLOT_CANDLE_BODY_MIN_HEIGHT)
+        body_height = max(abs(bar.close - bar.open), theme.candle_body_min_height)
         ax.add_patch(
             Rectangle(
-                xy=(time_value - width * ppo_cfg.PLOT_CANDLE_BODY_X_OFFSET_RATIO, min(bar.open, bar.close)),
+                xy=(time_value - width * theme.candle_body_x_offset_ratio, min(bar.open, bar.close)),
                 width=width,
                 height=body_height,
                 facecolor=color,
                 edgecolor=color,
-                zorder=ppo_cfg.PLOT_CANDLE_BODY_ZORDER,
+                zorder=theme.candle_body_zorder,
             )
         )
 
@@ -301,29 +357,30 @@ def _format_ax(
         ax: Axes,
         times: list[float],
         min_price: float,
-        max_price: float
+        max_price: float,
+        theme: PlotTheme,
 ):
-    pad = max((max_price - min_price) * ppo_cfg.PLOT_PRICE_PAD_RATIO, ppo_cfg.PLOT_PRICE_PAD_MIN)
+    pad = max((max_price - min_price) * theme.price_pad_ratio, theme.price_pad_min)
     ax.set_ylim(min_price - pad, max_price + pad)
-    width = _get_candle_width(times)
+    width = _get_candle_width(times, theme)
     ax.set_xlim(times[0] - width, times[-1] + width)
-    ax.yaxis.set_major_formatter(FuncFormatter(_format_price))
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda value, _: _format_price(value, theme)))
     ax.tick_params(labelbottom=False)
 
 
-def _format_time_axis(ax: Axes):
+def _format_time_axis(ax: Axes, theme: PlotTheme):
     locator = mdates.AutoDateLocator(
-        minticks=ppo_cfg.PLOT_X_AXIS_MINTICKS,
-        maxticks=ppo_cfg.PLOT_X_AXIS_MAXTICKS
+        minticks=theme.x_axis_minticks,
+        maxticks=theme.x_axis_maxticks,
     )
     formatter = mdates.DateFormatter(
-        fmt=ppo_cfg.PLOT_X_AXIS_TIME_FORMAT,
+        fmt=theme.x_axis_time_format,
         tz=app_cfg.TIMEZONE
     )
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(formatter)
     for label in ax.get_xticklabels():
-        label.set_rotation(ppo_cfg.PLOT_X_AXIS_LABEL_ROTATION)
+        label.set_rotation(theme.x_axis_label_rotation)
 
 
 def _draw_swing_group(
@@ -332,6 +389,7 @@ def _draw_swing_group(
         *,
         color: str,
         y_offset: float,
+        theme: PlotTheme,
 ):
     if not swings:
         return
@@ -343,17 +401,18 @@ def _draw_swing_group(
             _datetime_to_mpl(swing.time),
             y,
             marker=marker,
-            s=ppo_cfg.PLOT_SWING_MARKER_SIZE,
+            s=theme.swing_marker_size,
             color=color,
-            alpha=ppo_cfg.PLOT_SWING_MARKER_CLOSED_ALPHA if not swing.is_open else ppo_cfg.PLOT_SWING_MARKER_OPEN_ALPHA,
-            zorder=ppo_cfg.PLOT_SWING_ZORDER,
+            alpha=theme.swing_marker_closed_alpha if not swing.is_open else theme.swing_marker_open_alpha,
+            zorder=theme.swing_zorder,
         )
 
 
 def _draw_cascade_level(
         ax: Axes,
         cascade_swings: list[Swing],
-        bars: list[Bar]
+        bars: list[Bar],
+        theme: PlotTheme,
 ):
     if not cascade_swings or not bars:
         return
@@ -378,33 +437,30 @@ def _draw_cascade_level(
         y=level_price,
         xmin=start_time_mpl,
         xmax=end_time_mpl,
-        color=ppo_cfg.PLOT_CASCADE_LEVEL_COLOR,
-        linewidth=ppo_cfg.PLOT_CASCADE_LEVEL_LINEWIDTH,
-        linestyles=ppo_cfg.PLOT_CASCADE_LEVEL_LINESTYLE,
-        alpha=ppo_cfg.PLOT_CASCADE_LEVEL_ALPHA,
-        zorder=ppo_cfg.PLOT_CASCADE_LEVEL_ZORDER,
+        color=theme.cascade_level_color,
+        linewidth=theme.cascade_level_linewidth,
+        linestyles=theme.cascade_level_linestyle,
+        alpha=theme.cascade_level_alpha,
+        zorder=theme.cascade_level_zorder,
     )
 
 
-def _get_candle_width(times: list[float]) -> float:
-    if len(times) < ppo_cfg.PLOT_CANDLE_FALLBACK_MIN_TIMES:
-        minutes_ratio = ppo_cfg.PLOT_CANDLE_FALLBACK_INTERVAL_MINUTES / ppo_cfg.PLOT_MINUTES_IN_DAY
-        return minutes_ratio * ppo_cfg.PLOT_CANDLE_WIDTH_MULTIPLIER
+def _get_candle_width(times: list[float], theme: PlotTheme) -> float:
+    if len(times) < theme.candle_fallback_min_times:
+        minutes_ratio = theme.candle_fallback_interval_minutes / theme.minutes_in_day
+        return minutes_ratio * theme.candle_width_multiplier
     intervals = [times[i + 1] - times[i] for i in range(len(times) - 1)]
     avg_interval = sum(intervals) / len(intervals)
-    return avg_interval * ppo_cfg.PLOT_CANDLE_WIDTH_MULTIPLIER
+    return avg_interval * theme.candle_width_multiplier
 
 
-def _format_price(
-        value: float,
-        _: object
-) -> str:
+def _format_price(value: float, theme: PlotTheme) -> str:
     abs_value = abs(value)
-    if abs_value >= ppo_cfg.PLOT_PRICE_HIGH_THRESHOLD:
-        return f"{value:,.{ppo_cfg.PLOT_PRICE_DECIMALS_HIGH}f}"
-    if abs_value >= ppo_cfg.PLOT_PRICE_MID_THRESHOLD:
-        return f"{value:,.{ppo_cfg.PLOT_PRICE_DECIMALS_MID}f}"
-    return f"{value:,.{ppo_cfg.PLOT_PRICE_DECIMALS_LOW}f}"
+    if abs_value >= theme.price_high_threshold:
+        return f"{value:,.{theme.price_decimals_high}f}"
+    if abs_value >= theme.price_mid_threshold:
+        return f"{value:,.{theme.price_decimals_mid}f}"
+    return f"{value:,.{theme.price_decimals_low}f}"
 
 
 def _format_volume(
@@ -429,30 +485,32 @@ def _draw_volume(
         ax: Axes,
         bars: list[Bar],
         times: list[float],
-        width: float
+        width: float,
+        theme: PlotTheme,
 ) -> list[float]:
     volumes = [bar.volume for bar in bars]
-    colors = [ppo_cfg.PLOT_VOLUME_COLOR for _ in bars]
+    colors = [theme.volume_color for _ in bars]
     ax.bar(
         times,
         volumes,
         width=width,
         color=colors,
-        alpha=ppo_cfg.PLOT_VOLUME_ALPHA,
+        alpha=theme.volume_alpha,
         align="center",
-        zorder=ppo_cfg.PLOT_VOLUME_ZORDER,
+        zorder=theme.volume_zorder,
     )
     return volumes
 
 
 def _format_volume_ax(
         ax: Axes,
-        volumes: list[float]
+        volumes: list[float],
+        theme: PlotTheme,
 ):
     if not volumes:
         return
     max_volume = max(volumes)
-    pad = max_volume * ppo_cfg.PLOT_VOLUME_PAD_RATIO if max_volume > 0 else ppo_cfg.PLOT_VOLUME_PAD_RATIO
+    pad = max_volume * theme.volume_pad_ratio if max_volume > 0 else theme.volume_pad_ratio
     ax.set_ylim(0, max_volume + pad)
     ax.yaxis.set_major_formatter(FuncFormatter(_format_volume))
 
@@ -518,6 +576,7 @@ def _find_target_times(
 def _trim_postmortem_bars(
         postmortem_bars: Optional[list[Bar]],
         trade_levels: Optional[TradeLevels],
+        theme: PlotTheme,
 ) -> Optional[list[Bar]]:
     if not postmortem_bars or not trade_levels:
         return postmortem_bars
@@ -531,7 +590,7 @@ def _trim_postmortem_bars(
     if not deal_result_time:
         return postmortem_bars
 
-    extra_bars = ppo_cfg.PLOT_POSTMORTEM_EXTRA_BARS
+    extra_bars = theme.postmortem_extra_bars
     for index, bar in enumerate(postmortem_bars):
         if bar.time >= deal_result_time:
             last_index = min(len(postmortem_bars), index + extra_bars + 1)
@@ -549,6 +608,7 @@ def _draw_entry_zone(
         *,
         color: str,
         alpha: float,
+        theme: PlotTheme,
 ):
     start_mpl = _datetime_to_mpl(entry_time)
     end_mpl = _datetime_to_mpl(end_time)
@@ -556,7 +616,7 @@ def _draw_entry_zone(
         return
 
     lower_price = min(entry_price, target_price)
-    height = max(abs(target_price - entry_price), ppo_cfg.PLOT_ENTRY_ZONE_MIN_HEIGHT)
+    height = max(abs(target_price - entry_price), theme.entry_zone_min_height)
 
     ax.add_patch(
         Rectangle(
@@ -566,7 +626,7 @@ def _draw_entry_zone(
             facecolor=color,
             edgecolor=color,
             alpha=alpha,
-            zorder=ppo_cfg.PLOT_ENTRY_ZONE_ZORDER,
+            zorder=theme.entry_zone_zorder,
         )
     )
 
@@ -577,6 +637,7 @@ def _draw_entry_zones(
         entry_time: datetime,
         horizon_time: datetime,
         postmortem_bars: list[Bar],
+        theme: PlotTheme,
 ):
     target_times = _find_target_times(trade_levels, postmortem_bars)
     entry_price = trade_levels.entry_price
@@ -596,8 +657,9 @@ def _draw_entry_zones(
         target_price=trade_levels.stop_loss_price,
         entry_time=entry_time,
         end_time=sl_end_time,
-        color=ppo_cfg.PLOT_ENTRY_SL_COLOR,
-        alpha=ppo_cfg.PLOT_ENTRY_RISK_ZONE_ALPHA,
+        color=theme.entry_sl_color,
+        alpha=theme.entry_risk_zone_alpha,
+        theme=theme,
     )
 
     _draw_entry_zone(
@@ -606,16 +668,17 @@ def _draw_entry_zones(
         target_price=trade_levels.take_profit_price,
         entry_time=entry_time,
         end_time=tp_end_time,
-        color=ppo_cfg.PLOT_ENTRY_TP_COLOR,
-        alpha=ppo_cfg.PLOT_ENTRY_REWARD_ZONE_ALPHA,
+        color=theme.entry_tp_color,
+        alpha=theme.entry_reward_zone_alpha,
+        theme=theme,
     )
 
     targets: list[tuple[float, Optional[datetime], str]] = []
 
     if trade_levels.partial_close_price is not None:
-        targets.append((trade_levels.partial_close_price, target_times["pc"], ppo_cfg.PLOT_ENTRY_PC_COLOR))
+        targets.append((trade_levels.partial_close_price, target_times["pc"], theme.entry_pc_color))
     if trade_levels.breakeven_price is not None:
-        targets.append((trade_levels.breakeven_price, target_times["be"], ppo_cfg.PLOT_ENTRY_BE_COLOR))
+        targets.append((trade_levels.breakeven_price, target_times["be"], theme.entry_be_color))
 
     for target_price, target_time, color in targets:
         end_time = target_time or horizon_time
@@ -626,7 +689,8 @@ def _draw_entry_zones(
             entry_time=entry_time,
             end_time=end_time,
             color=color,
-            alpha=ppo_cfg.PLOT_ENTRY_ZONE_ALPHA,
+            alpha=theme.entry_zone_alpha,
+            theme=theme,
         )
 
 
@@ -637,14 +701,16 @@ def _resolve_output_path(
         timeframe: Timeframe,
         time: datetime,
         length: int,
-        subdir: Optional[str] = None
+        theme: PlotTheme,
+        subdir: Optional[str] = None,
 ) -> Path:
-    output_dir = ppo_cfg.PLOT_OUTPUT_DIR
+    output_dir = theme.output_dir
     if subdir:
         output_dir += f"/{subdir}"
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    name_parts = [name.split(":", 1)[0]]
+    resolved_name = (name or theme.default_symbol).split(":", 1)[0]
+    name_parts = [resolved_name]
     if setup_name:
         name_parts.append(setup_name)
     if context:
