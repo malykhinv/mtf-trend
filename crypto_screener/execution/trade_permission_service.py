@@ -29,6 +29,12 @@ class TradePermissionService:
         log.e(f"Неизвестная стратегия {strategy} для разрешений на торговлю.")
         return None
 
+    def _get_timeout_multiplier(self, strategy: str) -> int | None:
+        runtime_config = self._get_runtime_config(strategy)
+        if not runtime_config:
+            return None
+        return runtime_config.capture_timeout_multiplier
+
     def allow_symbol_for_trading(
             self,
             symbol: str,
@@ -37,14 +43,14 @@ class TradePermissionService:
             message_id: str,
             context: Context,
     ) -> None:
-        runtime_config = self._get_runtime_config(strategy)
-        if not runtime_config:
+        timeout_multiplier = self._get_timeout_multiplier(strategy)
+        if timeout_multiplier is None:
             return
         trade, replaced = self._allowed_trades.add(
             key=AllowedTradeKey(symbol, timeframe, strategy),
             message_id=message_id,
             context=context,
-            runtime_config=runtime_config,
+            timeout_multiplier=timeout_multiplier,
         )
         if replaced:
             log.d(
@@ -62,14 +68,14 @@ class TradePermissionService:
             message_id: str,
             context: Context,
     ) -> None:
-        runtime_config = self._get_runtime_config(strategy)
-        if not runtime_config:
+        timeout_multiplier = self._get_timeout_multiplier(strategy)
+        if timeout_multiplier is None:
             return
         ignored_symbol, replaced = self._ignored_symbols.add(
             key=AllowedTradeKey(symbol, timeframe, strategy),
             message_id=message_id,
             context=context,
-            runtime_config=runtime_config,
+            timeout_multiplier=timeout_multiplier,
         )
         if replaced:
             log.d(
