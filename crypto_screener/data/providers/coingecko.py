@@ -4,11 +4,8 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from crypto_screener.domain.models.symbol import (
-    FuturesSymbol,
-    assign_capitalizations,
-    extract_base_symbol,
-)
+from crypto_screener.config.symbol_config import CapitalizationThresholds, symbol_cfg
+from crypto_screener.domain.models.symbol import FuturesSymbol, assign_capitalizations, extract_base_symbol
 
 
 # region Private.
@@ -58,8 +55,12 @@ def fetch_market_caps(base_symbols: Iterable[str]) -> dict[str, float]:
     return market_caps
 
 
-def enrich_symbols_capitalization(symbols: Iterable[FuturesSymbol]) -> list[FuturesSymbol]:
+def enrich_symbols_capitalization(
+        symbols: Iterable[FuturesSymbol],
+        capitalization_thresholds: CapitalizationThresholds | None = None,
+) -> list[FuturesSymbol]:
     symbols_list = list(symbols)
     base_symbols = {extract_base_symbol(symbol.symbol) for symbol in symbols_list}
     market_caps = fetch_market_caps(base_symbols)
-    return assign_capitalizations(symbols_list, market_caps)
+    thresholds = capitalization_thresholds or symbol_cfg.capitalization
+    return assign_capitalizations(symbols_list, market_caps, thresholds)

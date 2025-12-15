@@ -1,6 +1,7 @@
 from collections import defaultdict
 from datetime import timedelta
 
+from crypto_screener.config.symbol_config import symbol_cfg
 from crypto_screener.data.providers.coingecko import enrich_symbols_capitalization
 from crypto_screener.domain.exchange import Exchange
 from crypto_screener.domain.models.bar import Bar
@@ -100,8 +101,8 @@ def run_test_market(
         return
 
     symbols = exchange.get_futures_symbols()
-    symbols = enrich_symbols_capitalization(symbols)
-    symbols = set_contexts(symbols, listing_age_days_min)
+    symbols = enrich_symbols_capitalization(symbols, symbol_cfg.capitalization)
+    symbols = set_contexts(symbols, listing_age_days_min, symbol_cfg.context)
     log.d(f"Получено {len(symbols)} символов до фильтрации.")
 
     symbols = _filter_symbols(
