@@ -9,14 +9,25 @@ from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.ignored_symbol import IgnoredSymbol
 from crypto_screener.domain.models.ignored_symbol_registry import IgnoredSymbolRegistry
 from crypto_screener.domain.models.timeframe import Timeframe
+from crypto_screener.domain.strategies.strategy import Strategy, StrategyRuntimeConfig
 from crypto_screener.utils.logger import log
 from crypto_screener.utils.time import ensure_utc, utc_now
 
 
 class TradePermissionService:
-    def __init__(self) -> None:
+    def __init__(self, strategies: list[Strategy]) -> None:
         self._allowed_trades = AllowedTradeRegistry()
         self._ignored_symbols = IgnoredSymbolRegistry()
+        self._runtime_configs: dict[str, StrategyRuntimeConfig] = {
+            strategy.name: strategy.get_runtime_config() for strategy in strategies
+        }
+
+    def _get_runtime_config(self, strategy: str) -> StrategyRuntimeConfig | None:
+        runtime_config = self._runtime_configs.get(strategy)
+        if runtime_config:
+            return runtime_config
+        log.e(f"Неизвестная стратегия {strategy} для разрешений на торговлю.")
+        return None
 
     def allow_symbol_for_trading(
             self,
@@ -26,10 +37,14 @@ class TradePermissionService:
             message_id: str,
             context: Context,
     ) -> None:
+        runtime_config = self._get_runtime_config(strategy)
+        if not runtime_config:
+            return
         trade, replaced = self._allowed_trades.add(
             key=AllowedTradeKey(symbol, timeframe, strategy),
             message_id=message_id,
             context=context,
+            runtime_config=runtime_config,
         )
         if replaced:
             log.d(
@@ -47,10 +62,14 @@ class TradePermissionService:
             message_id: str,
             context: Context,
     ) -> None:
+        runtime_config = self._get_runtime_config(strategy)
+        if not runtime_config:
+            return
         ignored_symbol, replaced = self._ignored_symbols.add(
             key=AllowedTradeKey(symbol, timeframe, strategy),
             message_id=message_id,
             context=context,
+            runtime_config=runtime_config,
         )
         if replaced:
             log.d(

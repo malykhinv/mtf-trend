@@ -1211,7 +1211,7 @@ def run_live(
         return
 
     capture_state = CaptureState()
-    trade_permission_service = TradePermissionService()
+    trade_permission_service = TradePermissionService(strategies)
     trade_execution_service = TradeExecutionService(exchange, notifier)
     notifier.start_callback_handler(trade_permission_service)
     analysis_executor = ThreadPoolExecutor(max_workers=app_cfg.LIVE_MAX_WORKERS)

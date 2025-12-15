@@ -17,14 +17,20 @@ class StrategyRuntimeConfig:
     min_position_quantity: float
 
 
+@dataclass(frozen=True)
+class StrategyVolumeConfig:
+    min_side_bars: int
+    high_volume_factor: float
+    min_high_fraction: float
+
+
 class Strategy(ABC):
     name: str
 
-    @staticmethod
-    def trim_by_volume(bars: list[Bar]) -> list[Bar]:
-        from crypto_screener.config import ppo_cfg
+    def trim_by_volume(self, bars: list[Bar]) -> list[Bar]:
+        volume_config = self.get_volume_config()
         length = len(bars)
-        min_side_bars = ppo_cfg.VOLUME_TRIM_SIDE_BARS_MIN
+        min_side_bars = volume_config.min_side_bars
         if length < 2 * min_side_bars:
             return []
         volumes = [bar.volume for bar in bars]
@@ -33,8 +39,8 @@ class Strategy(ABC):
             prefix[i + 1] = prefix[i] + v
         best_ratio = -1.0
         best_index = -1
-        high_volume_factor = ppo_cfg.HIGH_VOLUME_THRESHOLD
-        min_high_fraction = ppo_cfg.HIGH_VOLUME_FRACTION_MIN
+        high_volume_factor = volume_config.high_volume_factor
+        min_high_fraction = volume_config.min_high_fraction
         for split in range(min_side_bars, length - min_side_bars + 1):
             left_avg = (prefix[split] - prefix[0]) / split
             if left_avg <= 0:
@@ -69,3 +75,7 @@ class Strategy(ABC):
     @abstractmethod
     def get_runtime_config(self) -> StrategyRuntimeConfig:
         """Возвращает параметры исполнения стратегии."""
+
+    @abstractmethod
+    def get_volume_config(self) -> StrategyVolumeConfig:
+        """Возвращает параметры для анализа объемов."""
