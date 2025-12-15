@@ -375,8 +375,8 @@ class PpoStrategy(Strategy):
 
         return [(min_low_index, main_low_swing), main_high]
 
-    @staticmethod
     def _get_cascade_long(
+            self,
             bars: list[Bar],
             price_min: float,
             price_max: float,
