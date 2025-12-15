@@ -11,7 +11,11 @@ from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.config.ppo_config import PpoConfig, ppo_cfg
-from crypto_screener.domain.strategies.strategy import Strategy, StrategyRuntimeConfig
+from crypto_screener.domain.strategies.strategy import (
+    Strategy,
+    StrategyRuntimeConfig,
+    StrategyVolumeConfig,
+)
 from crypto_screener.domain.swing_detector import add_swings
 
 
@@ -515,4 +519,11 @@ class PpoStrategy(Strategy):
             risk_per_trade_usdt=self._config.RISK_PER_TRADE_USDT,
             min_position_notional_usdt=self._config.MIN_POSITION_NOTIONAL_USDT,
             min_position_quantity=self._config.MIN_POSITION_QUANTITY,
+        )
+
+    def get_volume_config(self) -> StrategyVolumeConfig:
+        return StrategyVolumeConfig(
+            min_side_bars=self._config.VOLUME_TRIM_SIDE_BARS_MIN,
+            high_volume_factor=self._config.HIGH_VOLUME_THRESHOLD,
+            min_high_fraction=self._config.HIGH_VOLUME_FRACTION_MIN,
         )
