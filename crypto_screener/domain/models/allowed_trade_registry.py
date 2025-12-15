@@ -7,7 +7,6 @@ from typing import Optional
 from crypto_screener.domain.models.allowed_trade import AllowedTrade
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.strategies.strategy import StrategyRuntimeConfig
 from crypto_screener.utils.time import utc_now
 
 
@@ -67,12 +66,12 @@ class AllowedTradeRegistry:
             key: AllowedTradeKey,
             message_id: str,
             context: Context,
-            runtime_config: StrategyRuntimeConfig,
+            timeout_multiplier: int,
             issued_at: Optional[datetime] = None,
     ) -> AllowedTrade:
         issued_at = issued_at or utc_now()
         deadline = issued_at + timedelta(
-            minutes=runtime_config.capture_timeout_multiplier * key.timeframe.minutes,
+            minutes=timeout_multiplier * key.timeframe.minutes,
         )
         return AllowedTrade(
             symbol=key.symbol,
@@ -89,13 +88,13 @@ class AllowedTradeRegistry:
             key: AllowedTradeKey,
             message_id: str,
             context: Context,
-            runtime_config: StrategyRuntimeConfig,
+            timeout_multiplier: int,
     ) -> tuple[AllowedTrade, bool]:
         trade = self._build_trade(
             key=key,
             message_id=message_id,
             context=context,
-            runtime_config=runtime_config,
+            timeout_multiplier=timeout_multiplier,
         )
         replaced = self._storage.add(key, trade)
         return trade, replaced

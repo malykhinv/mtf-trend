@@ -7,7 +7,6 @@ from typing import Optional
 from crypto_screener.domain.models.allowed_trade_registry import AllowedTradeKey
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.ignored_symbol import IgnoredSymbol
-from crypto_screener.domain.strategies.strategy import StrategyRuntimeConfig
 from crypto_screener.utils.time import ensure_utc, utc_now
 
 
@@ -65,12 +64,12 @@ class IgnoredSymbolRegistry:
             key: AllowedTradeKey,
             message_id: str,
             context: Context,
-            runtime_config: StrategyRuntimeConfig,
+            timeout_multiplier: int,
             issued_at: Optional[datetime] = None,
     ) -> IgnoredSymbol:
         issued_at = ensure_utc(issued_at) if issued_at else utc_now()
         deadline = issued_at + timedelta(
-            minutes=runtime_config.capture_timeout_multiplier * key.timeframe.minutes,
+            minutes=timeout_multiplier * key.timeframe.minutes,
         )
         return IgnoredSymbol(
             symbol=key.symbol,
@@ -87,13 +86,13 @@ class IgnoredSymbolRegistry:
             key: AllowedTradeKey,
             message_id: str,
             context: Context,
-            runtime_config: StrategyRuntimeConfig,
+            timeout_multiplier: int,
     ) -> tuple[IgnoredSymbol, bool]:
         ignored_symbol = self._build_ignored_symbol(
             key=key,
             message_id=message_id,
             context=context,
-            runtime_config=runtime_config,
+            timeout_multiplier=timeout_multiplier,
         )
         replaced = self._storage.add(key, ignored_symbol)
         return ignored_symbol, replaced
