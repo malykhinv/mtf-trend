@@ -52,7 +52,11 @@ def _accumulate_history(
     bars: list[Bar] = []
 
     while True:
-        batch = exchange.get_ohlcv(symbol=symbol, timeframe=timeframe, limit=batch_limit, end=end)
+        remaining_minutes = (end - history_start).total_seconds() // 60
+        remaining_bars = max(1, int(remaining_minutes // timeframe.minutes))
+        limit = min(batch_limit, remaining_bars)
+
+        batch = exchange.get_ohlcv(symbol=symbol, timeframe=timeframe, limit=limit, end=end)
         if not batch:
             break
 
