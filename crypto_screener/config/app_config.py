@@ -86,8 +86,8 @@ _mode_live = Live(
 _mode_test_market = TestMarket(
     timeframes=_timeframes,
     limit=400,
-    window=160,
-    history_months=1,
+    window=400,
+    history_days=3,
     plot_policy=PlotPolicy.ON_TRADE_SETUP,
     volume_24h_usdt_min=20_000_000,
     trades_24h_min=300_000,
@@ -122,7 +122,7 @@ class AppConfig:
     CAPTURE_POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _capture_poll_intervals.copy())
 
     # Режим работы.
-    MODE: Mode = _mode_live
+    MODE: Mode = _mode_test_market
 
     # Пул потоков.
     LIVE_MAX_WORKERS: int = 1

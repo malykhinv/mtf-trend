@@ -44,10 +44,10 @@ def _accumulate_history(
         exchange: Exchange,
         symbol: str,
         timeframe: Timeframe,
-        history_months: int,
+        history_days: int,
         batch_limit: int,
 ) -> list[Bar]:
-    history_start = utc_now() - timedelta(days=history_months * 30)
+    history_start = utc_now() - timedelta(days=history_days)
     end = utc_now()
     bars: list[Bar] = []
 
@@ -79,7 +79,7 @@ def run_test_market(
         timeframes: list[Timeframe],
         limit: int,
         window: int,
-        history_months: int,
+        history_days: int,
         plot_policy: PlotPolicy,
         volume_24h_usdt_min: float,
         trades_24h_min: int,
@@ -96,7 +96,7 @@ def run_test_market(
     if limit <= 0 or window <= 0:
         log.e("Некорректные данные для количества свеч.")
         return
-    if history_months <= 0:
+    if history_days <= 0:
         log.e("Некорректное значение длительности истории.")
         return
 
@@ -125,7 +125,7 @@ def run_test_market(
                     exchange,
                     symbol.symbol,
                     timeframe,
-                    history_months,
+                    history_days,
                     batch_limit,
                 )
             except Exception as exception:
@@ -139,7 +139,7 @@ def run_test_market(
             timeframe_window = calculate_window(window, timeframe, len(bars))
             log.d(
                 f"Проверка {symbol.symbol} (контекст {symbol.context.value}) на {timeframe.tf} "
-                f"(history={history_months} мес., window={timeframe_window})"
+                f"(history={history_days} д., window={timeframe_window})"
             )
 
             if len(bars) < timeframe_window:

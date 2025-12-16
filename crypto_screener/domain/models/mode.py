@@ -35,7 +35,7 @@ class TestMarket:
     timeframes: list[Timeframe]
     limit: int
     window: int
-    history_months: int
+    history_days: int
     plot_policy: PlotPolicy
     volume_24h_usdt_min: float | None
     trades_24h_min: int | None

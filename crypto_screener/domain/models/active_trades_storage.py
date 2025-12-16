@@ -6,7 +6,7 @@ from typing import Optional, TYPE_CHECKING
 from crypto_screener.domain.models.active_trade import ActiveTrade
 
 if TYPE_CHECKING:
-    from crypto_screener.domain.models.active_trade_registry import ActiveTradeKey
+    pass
 
 
 @dataclass

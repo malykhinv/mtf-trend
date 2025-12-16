@@ -6,7 +6,7 @@ from typing import Iterable, Optional, TYPE_CHECKING
 from crypto_screener.domain.models.active_capture import ActiveCapture
 
 if TYPE_CHECKING:
-    from crypto_screener.domain.models.capture_registry import CaptureKey
+    pass
 
 
 @dataclass
