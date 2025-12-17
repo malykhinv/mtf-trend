@@ -122,7 +122,7 @@ class AppConfig:
     CAPTURE_POLL_INTERVALS: dict[Timeframe, timedelta] = field(default_factory=lambda: _capture_poll_intervals.copy())
 
     # Режим работы.
-    MODE: Mode = _mode_test_market
+    MODE: Mode = _mode_test_symbols
 
     # Пул потоков.
     LIVE_MAX_WORKERS: int = 1

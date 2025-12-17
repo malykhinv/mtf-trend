@@ -128,7 +128,7 @@ def _plot(
             subdir=subdir,
             context=context,
         )
-    log.d(f"График {setup.symbol} сохранен (контекст {context.value}) в {output_path}".strip())
+    log.d(f"График {setup.data.symbol} сохранен (контекст {context.value}) в {output_path}".strip())
 
 
 # endregion
