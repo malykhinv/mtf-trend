@@ -454,25 +454,20 @@ class GuStrategy(Strategy):
             cascade_type: CascadeType,
     ) -> list[dict[str, float]]:
         window_extremes: list[dict[str, float]] = []
-        for start_index, end_index, window_start, window_end in time_groups:
-            candidate_indices = [
-                index
-                for index in range(start_index, end_index + 1)
-                if window_start <= bars[index].time <= window_end
-            ]
-            if start_index not in candidate_indices:
-                candidate_indices.insert(0, start_index)
-            if not candidate_indices:
+        for start_index, end_index, _window_start, _window_end in time_groups:
+            # Экстремумы окна: лонг — максимум окна, шорт — минимум окна (аналогично дневным экстремумам).
+            window_indices = list(range(start_index, end_index + 1))
+            if not window_indices:
                 continue
             if cascade_type is CascadeType.LONG:
-                window_price = max(bars[index].high for index in candidate_indices)
-                for index in candidate_indices:
+                window_price = max(bars[index].high for index in window_indices)
+                for index in window_indices:
                     if bars[index].high == window_price:
                         window_extremes.append({"index": float(index), "price": float(window_price)})
                         break
             else:
-                window_price = min(bars[index].low for index in candidate_indices)
-                for index in candidate_indices:
+                window_price = min(bars[index].low for index in window_indices)
+                for index in window_indices:
                     if bars[index].low == window_price:
                         window_extremes.append({"index": float(index), "price": float(window_price)})
                         break
