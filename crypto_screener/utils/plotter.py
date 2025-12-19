@@ -38,7 +38,7 @@ PlotHandler = Callable[
         bool,
         PlotTheme,
     ],
-    Path,
+    Optional[Path],
 ]
 
 
@@ -65,7 +65,7 @@ def _plot(
         context: Optional[Context],
         subdir: Optional[str],
         draw_entry_zones: bool,
-):
+) -> Optional[Path]:
     match setup:
         case Trade(data=data, trade_levels=trade_levels):
             setup_name = setup.name
@@ -730,7 +730,7 @@ def plot(
         detection_time: Optional[datetime] = None,
         context: Optional[Context] = None,
         subdir: Optional[str] = None,
-):
+) -> Optional[Path]:
     return _plot(
         setup=setup,
         postmortem_bars=None,
@@ -747,7 +747,7 @@ def plot_postmortem(
         detection_time: Optional[datetime] = None,
         context: Optional[Context] = None,
         subdir: Optional[str] = None,
-):
+) -> Optional[Path]:
     return _plot(
         setup=setup,
         postmortem_bars=postmortem_bars,
