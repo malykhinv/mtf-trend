@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Optional
 
 import ccxt  # type: ignore
@@ -277,17 +278,20 @@ class Bybit(Exchange):
             return OrderStatus.PARTIALLY_FILLED
         return OrderStatus.NEW
 
-    def _map_order(self, order: dict) -> OrderInfo:
-        status = self._map_order_status(order.get("status"))
-        amount = extract_float(order.get("amount"), order.get("info", {}).get("qty")) or 0.0
-        filled = extract_float(order.get("filled"), order.get("info", {}).get("cumExecQty")) or 0.0
-        average = extract_float(order.get("average"), order.get("price"))
-        side_value = (order.get("side") or "").lower()
+    def _map_order(self, order: dict[str, object]) -> OrderInfo:
+        order_data = order if isinstance(order, dict) else dict(order)
+        info = order_data.get("info")
+        info_data = info if isinstance(info, Mapping) else {}
+        status = self._map_order_status(order_data.get("status"))
+        amount = extract_float(order_data.get("amount"), info_data.get("qty")) or 0.0
+        filled = extract_float(order_data.get("filled"), info_data.get("cumExecQty")) or 0.0
+        average = extract_float(order_data.get("average"), order_data.get("price"))
+        side_value = (order_data.get("side") or "").lower()
         side = OrderSide.BUY if side_value == OrderSide.BUY.value else OrderSide.SELL
 
         return OrderInfo(
-            id=str(order.get("id")),
-            symbol=order.get("symbol", ""),
+            id=str(order_data.get("id")),
+            symbol=order_data.get("symbol", ""),
             side=side,
             quantity=amount,
             filled=filled,
