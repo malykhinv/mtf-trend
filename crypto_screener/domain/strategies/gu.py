@@ -436,7 +436,7 @@ class GuStrategy(Strategy):
     ) -> list[tuple[int, int, datetime, datetime]]:
         if not bars:
             return []
-        groups: list[tuple[int, int, object, object]] = []
+        groups: list[tuple[int, int, datetime, datetime]] = []
         start_index = 0
         while start_index < len(bars):
             start_time = bars[start_index].time
