@@ -255,7 +255,7 @@ class GuStrategy(Strategy):
         partial_close_price = None
         breakeven_price = None
         partial_close_side_pct = self._config.PARTIAL_CLOSE_SIDE_PCT_MIN
-        todo() # пока что partial close не делаем, сделаем позднее.
+        # TODO пока что partial close не делаем, сделаем позднее.
         entry_slippage_ratio = 1 + self._config.TEST_SLIPPAGE_PCT / 100 if context.is_test else 1
         trade_levels = TradeLevels(
             entry_price=target_swing.extremum_price * entry_slippage_ratio,
