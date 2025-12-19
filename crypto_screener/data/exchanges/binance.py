@@ -134,6 +134,7 @@ class Binance(Exchange):
                 log.e(f"Не удалось установить режим маржи {margin_mode.value} для {symbol}: {exception}")
 
         try:
+            # noinspection PyTypeChecker
             order = self._client.create_order(
                 symbol=symbol,
                 type="market",
@@ -218,9 +219,10 @@ class Binance(Exchange):
                 log.e(f"Не удалось установить режим маржи {margin_mode.value} для {symbol}: {exception}")
 
         try:
+            # noinspection PyTypeChecker
             order = self._client.create_order(
                 symbol=symbol,
-                type="stop_market",
+                type="market",
                 side=side.value,
                 amount=quantity,
                 params=params,
@@ -254,9 +256,10 @@ class Binance(Exchange):
                 log.e(f"Не удалось установить режим маржи {margin_mode.value} для {symbol}: {exception}")
 
         try:
+            # noinspection PyTypeChecker
             order = self._client.create_order(
                 symbol=symbol,
-                type="take_profit_market",
+                type="market",
                 side=side.value,
                 amount=quantity,
                 params=params,
