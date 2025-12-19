@@ -2,7 +2,7 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
-class PuConfig:
+class GuConfig:
     # region Контекст.
     CONTEXT_TRADES_MIN: int = 500_000
     CONTEXT_VOLUME_MIN: float = 500_000_000
@@ -104,4 +104,5 @@ class PuConfig:
     # endregion
 
 
-pu_cfg = PuConfig()
+gu_cfg = GuConfig()
+pu_cfg = gu_cfg
