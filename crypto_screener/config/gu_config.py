@@ -79,6 +79,10 @@ class PuConfig:
     PROFIT_PCT_MIN: float = 3
     # Минимальное расстояние Entry-SL.
     LOSS_PCT_MIN: float = 0.3
+    # Множитель ширины каскада для TP в top-контексте или при повышенном объеме.
+    TP_MULTIPLIER_TOP_HIGH_VOLUME: float = 2.0
+    # Множитель ширины каскада для TP в остальных случаях.
+    TP_MULTIPLIER_DEFAULT: float = 2 / 3
     # Минимальное расстояние от Entry и TP до PC при частичном закрытии позиции.
     PARTIAL_CLOSE_SIDE_PCT_MIN: float = 2.0
     # Соотношение цены участков Entry-BE и Entry-PC при частичном закрытии позиции.

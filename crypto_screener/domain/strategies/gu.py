@@ -205,10 +205,40 @@ class GuStrategy(Strategy):
         )
 
         # Анализ риска и вознаграждения.
-        todo() # сделать блок. потенциалы:
-        # TP для top-контекстов и has_high_volume - 2 * ширина каскада (считается как top-bottom на участке от первого свинга каскада до текущей свечи)
-        # TP для остальных случаем - 2/3 * ширина каскада
-        # SL всегда support_swing.extremum_price
+        highs = [bar.high for bar in cascade_bars]
+        lows = [bar.low for bar in cascade_bars]
+        cascade_range = max(highs) - min(lows) if highs and lows else 0.0
+        if cascade_range <= 0:
+            return setup
+        entry_price = target_swing.extremum_price
+        is_tp_top = context.is_top or has_high_volume
+        tp_multiplier = (
+            self._config.TP_MULTIPLIER_TOP_HIGH_VOLUME
+            if is_tp_top
+            else self._config.TP_MULTIPLIER_DEFAULT
+        )
+        if cascade.is_long:
+            profit_price = entry_price + tp_multiplier * cascade_range
+            loss_price = support_swing.extremum_price
+            profit_pct = 100 * (profit_price - entry_price) / entry_price
+            loss_pct = 100 * (loss_price - entry_price) / entry_price
+        else:
+            profit_price = entry_price - tp_multiplier * cascade_range
+            loss_price = support_swing.extremum_price
+            profit_pct = 100 * (entry_price - profit_price) / entry_price
+            loss_pct = 100 * (loss_price - entry_price) / entry_price
+        if loss_pct == 0:
+            return setup
+        is_loss_valid = abs(loss_pct) > self._config.LOSS_PCT_MIN
+        if not is_loss_valid:
+            return setup
+        is_profit_valid = profit_pct > self._config.PROFIT_PCT_MIN
+        if not is_profit_valid:
+            return setup
+        reward_risk = abs(profit_pct / loss_pct)
+        is_reward_risk_valid = reward_risk >= self._config.REWARD_RISK_RATIO_MIN
+        if not is_reward_risk_valid and not context.is_test:
+            return setup
 
         # Анализ пробоя каскада.
         if cascade.is_long:
