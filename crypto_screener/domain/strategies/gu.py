@@ -36,6 +36,12 @@ class Cascade:
         return self.direction is CascadeType.SHORT
 
 
+@dataclass(frozen=True)
+class CascadeExtreme:
+    index: int
+    price: float
+
+
 class GuStrategy(Strategy):
     name = "ГУ"
 
@@ -452,8 +458,8 @@ class GuStrategy(Strategy):
             time_groups: list[tuple[int, int, datetime, datetime]],
             *,
             cascade_type: CascadeType,
-    ) -> list[dict[str, float]]:
-        window_extremes: list[dict[str, float]] = []
+    ) -> list[CascadeExtreme]:
+        window_extremes: list[CascadeExtreme] = []
         for start_index, end_index, _window_start, _window_end in time_groups:
             # Экстремумы окна: лонг — максимум окна, шорт — минимум окна (аналогично дневным экстремумам).
             window_indices = list(range(start_index, end_index + 1))
@@ -463,13 +469,13 @@ class GuStrategy(Strategy):
                 window_price = max(bars[index].high for index in window_indices)
                 for index in window_indices:
                     if bars[index].high == window_price:
-                        window_extremes.append({"index": float(index), "price": float(window_price)})
+                        window_extremes.append(CascadeExtreme(index=index, price=float(window_price)))
                         break
             else:
                 window_price = min(bars[index].low for index in window_indices)
                 for index in window_indices:
                     if bars[index].low == window_price:
-                        window_extremes.append({"index": float(index), "price": float(window_price)})
+                        window_extremes.append(CascadeExtreme(index=index, price=float(window_price)))
                         break
         return window_extremes
 
@@ -479,21 +485,21 @@ class GuStrategy(Strategy):
             day_groups: list[tuple[int, int]],
             *,
             cascade_type: CascadeType,
-    ) -> list[dict[str, float]]:
-        daily_extremes: list[dict[str, float]] = []
+    ) -> list[CascadeExtreme]:
+        daily_extremes: list[CascadeExtreme] = []
         for start_index, end_index in day_groups:
             day_bars = bars[start_index:end_index + 1]
             if cascade_type is CascadeType.LONG:
                 day_price = max(bar.high for bar in day_bars)
                 for index in range(start_index, end_index + 1):
                     if bars[index].high == day_price:
-                        daily_extremes.append({"index": float(index), "price": float(day_price)})
+                        daily_extremes.append(CascadeExtreme(index=index, price=float(day_price)))
                         break
             else:
                 day_price = min(bar.low for bar in day_bars)
                 for index in range(start_index, end_index + 1):
                     if bars[index].low == day_price:
-                        daily_extremes.append({"index": float(index), "price": float(day_price)})
+                        daily_extremes.append(CascadeExtreme(index=index, price=float(day_price)))
                         break
         return daily_extremes
 
@@ -503,7 +509,7 @@ class GuStrategy(Strategy):
             *,
             cascade_type: CascadeType,
             grouping_mode: CascadeGroupingMode,
-    ) -> list[dict[str, float]]:
+    ) -> list[CascadeExtreme]:
         if grouping_mode is CascadeGroupingMode.ROLLING_WINDOW:
             time_groups = self._group_bars_by_time_window(
                 bars,
@@ -612,20 +618,20 @@ class GuStrategy(Strategy):
             best_last_time = None
 
             for start_day in range(len(cascade_extremes) - 1):
-                level_price = cascade_extremes[start_day]["price"]
-                next_day_price = cascade_extremes[start_day + 1]["price"]
+                level_price = cascade_extremes[start_day].price
+                next_day_price = cascade_extremes[start_day + 1].price
                 if abs(next_day_price - level_price) > touch_tolerance:
                     continue
 
                 touch_indices = []
                 for day_idx in range(start_day, len(cascade_extremes)):
-                    day_price = cascade_extremes[day_idx]["price"]
+                    day_price = cascade_extremes[day_idx].price
                     if is_long and day_price > level_price + touch_tolerance:
                         break
                     if not is_long and day_price < level_price - touch_tolerance:
                         break
                     if abs(day_price - level_price) <= touch_tolerance:
-                        touch_indices.append(int(cascade_extremes[day_idx]["index"]))
+                        touch_indices.append(cascade_extremes[day_idx].index)
 
                 if len(touch_indices) < min_touches:
                     continue
