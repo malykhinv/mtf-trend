@@ -33,9 +33,18 @@ class TradeLevels:
         if breakeven_price is not None and breakeven_price <= 0:
             raise ValueError(f"Цена BE должна быть положительной ({breakeven_price}).")
 
+        is_long = stop_loss_price < entry_price < take_profit_price
+        is_short = stop_loss_price > entry_price > take_profit_price
+
         if partial_close_price is not None and breakeven_price is not None:
-            if not stop_loss_price < entry_price < breakeven_price < partial_close_price < take_profit_price:
-                raise ValueError("Неправильное соотношение цен SL -> BE -> PC -> TP.")
+            if is_long:
+                if not stop_loss_price < entry_price < breakeven_price < partial_close_price < take_profit_price:
+                    raise ValueError("Неправильное соотношение цен SL -> BE -> PC -> TP.")
+            elif is_short:
+                if not stop_loss_price > entry_price > breakeven_price > partial_close_price > take_profit_price:
+                    raise ValueError("Неправильное соотношение цен SL -> BE -> PC -> TP.")
+            else:
+                raise ValueError("Неправильное соотношение цен SL -> TP.")
         else:
-            if not stop_loss_price < entry_price < take_profit_price:
+            if not (is_long or is_short):
                 raise ValueError("Неправильное соотношение цен SL -> TP.")
