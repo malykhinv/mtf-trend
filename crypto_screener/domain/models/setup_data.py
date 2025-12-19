@@ -20,3 +20,8 @@ class Ppo(SetupData):
     cascade_swings: Optional[list[Swing]]
     resistance_swings: Optional[list[Swing]]
     support_swings: Optional[list[Swing]]
+
+@dataclass
+class Gu(SetupData):
+    cascade_swings: Optional[list[Swing]]
+    support_swings: Optional[list[Swing]]
