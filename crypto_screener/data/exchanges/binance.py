@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable, Optional
+from typing import Optional
 
 import ccxt
 
@@ -38,7 +38,7 @@ class Binance(Exchange):
     def get_name() -> str:
         return "Binance"
 
-    def get_futures_symbols(self) -> Iterable[FuturesSymbol]:
+    def get_futures_symbols(self) -> list[FuturesSymbol]:
         try:
             markets = self._client.load_markets()
             tickers = self._client.fetch_tickers()
