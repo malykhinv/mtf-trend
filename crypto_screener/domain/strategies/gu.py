@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 import numpy as np
 
@@ -421,6 +422,63 @@ class GuStrategy(Strategy):
         return groups
 
     @staticmethod
+    def _group_bars_by_time_window(
+            bars: list[Bar],
+            *,
+            min_hours: int = 12,
+            max_hours: int = 36,
+    ) -> list[tuple[int, int, datetime, datetime]]:
+        if not bars:
+            return []
+        groups: list[tuple[int, int, object, object]] = []
+        start_index = 0
+        while start_index < len(bars):
+            start_time = bars[start_index].time
+            window_start = start_time + timedelta(hours=min_hours)
+            window_end = start_time + timedelta(hours=max_hours)
+            end_index = start_index
+            for index in range(start_index + 1, len(bars)):
+                if bars[index].time <= window_end:
+                    end_index = index
+                else:
+                    break
+            groups.append((start_index, end_index, window_start, window_end))
+            start_index = end_index + 1
+        return groups
+
+    @staticmethod
+    def _get_window_extremes(
+            bars: list[Bar],
+            time_groups: list[tuple[int, int, datetime, datetime]],
+            *,
+            cascade_type: CascadeType,
+    ) -> list[dict[str, float]]:
+        window_extremes: list[dict[str, float]] = []
+        for start_index, end_index, window_start, window_end in time_groups:
+            candidate_indices = [
+                index
+                for index in range(start_index, end_index + 1)
+                if window_start <= bars[index].time <= window_end
+            ]
+            if start_index not in candidate_indices:
+                candidate_indices.insert(0, start_index)
+            if not candidate_indices:
+                continue
+            if cascade_type is CascadeType.LONG:
+                window_price = max(bars[index].high for index in candidate_indices)
+                for index in candidate_indices:
+                    if bars[index].high == window_price:
+                        window_extremes.append({"index": float(index), "price": float(window_price)})
+                        break
+            else:
+                window_price = min(bars[index].low for index in candidate_indices)
+                for index in candidate_indices:
+                    if bars[index].low == window_price:
+                        window_extremes.append({"index": float(index), "price": float(window_price)})
+                        break
+        return window_extremes
+
+    @staticmethod
     def _get_daily_extremes(
             bars: list[Bar],
             day_groups: list[tuple[int, int]],
@@ -526,8 +584,8 @@ class GuStrategy(Strategy):
         min_touches = max(self._config.CASCADE_LENGTH_MIN, 3)
         is_long = cascade_type is CascadeType.LONG
 
-        day_groups = self._group_bars_by_day(bars)
-        daily_extremes = self._get_daily_extremes(bars, day_groups, cascade_type=cascade_type)
+        time_groups = self._group_bars_by_time_window(bars)
+        daily_extremes = self._get_window_extremes(bars, time_groups, cascade_type=cascade_type)
         if len(daily_extremes) < min_touches:
             return []
 
