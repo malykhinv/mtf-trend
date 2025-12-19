@@ -85,20 +85,44 @@ class GuStrategy(Strategy):
         setup.data.cascade_swings = cascade.swings
 
         # Центрирование относительно начала каскада.
-        todo()
+        first_touch_index = next(
+            (index for index, bar in enumerate(bars) if bar.time == cascade.swings[0].time),
+            None,
+        )
+        if first_touch_index is None:
+            return setup
+        start_index = max(0, first_touch_index - (len(bars) - first_touch_index - 1))
+        bars = bars[start_index:]
+        setup.data.bars = bars
+        first_touch_index -= start_index
+
+        cascade_bars = bars[first_touch_index:]
+        if not cascade_bars:
+            return setup
 
         # Анализ поддержки под каскадом.
-        todo() # переписать этот блок правильно с учетом типа каскада (лонговый или шортовый - определить по свингам в нем).
-        todo() # блок должен определить свинги, относящиеся к поддержке этого каскада на финальном участке
         initial_swing = cascade.swings[0]
         support_swing = None
         target_swing = cascade.swings[-1]
-        open_low_swings: list[Swing] = []
+        support_swings: list[Swing] = []
         if cascade.is_long:
-            todo()
-            consolidation_range = initial_swing.extremum_price - cascade_low_swing.extremum_price
             open_low_swings = self._get_open_swings(cascade_bars, SwingType.LOW)
-            setup.data.support_swings = open_low_swings
+            cascade_low_swing = min(open_low_swings, key=lambda swing: swing.extremum_price, default=None)
+            if not cascade_low_swing:
+                lowest_bar = min(cascade_bars, key=lambda bar: bar.low, default=None)
+                if not lowest_bar:
+                    return setup
+                cascade_low_swing = Swing(
+                    time=lowest_bar.time,
+                    extremum_price=lowest_bar.low,
+                    close_price=lowest_bar.close,
+                    type=SwingType.LOW,
+                    is_open=True,
+                )
+            consolidation_range = initial_swing.extremum_price - cascade_low_swing.extremum_price
+            if consolidation_range <= 0:
+                return setup
+            support_swings = open_low_swings
 
             support_price_min = cascade_low_swing.extremum_price + consolidation_range * self._config.SUPPORT_CONSOLIDATION_RATIO_MIN
             support_price_max = target_swing.extremum_price
@@ -116,7 +140,43 @@ class GuStrategy(Strategy):
                     is_open=True
                 )
         elif cascade.is_short:
-            todo()
+            open_high_swings = self._get_open_swings(cascade_bars, SwingType.HIGH)
+            cascade_high_swing = max(open_high_swings, key=lambda swing: swing.extremum_price, default=None)
+            if not cascade_high_swing:
+                highest_bar = max(cascade_bars, key=lambda bar: bar.high, default=None)
+                if not highest_bar:
+                    return setup
+                cascade_high_swing = Swing(
+                    time=highest_bar.time,
+                    extremum_price=highest_bar.high,
+                    close_price=highest_bar.close,
+                    type=SwingType.HIGH,
+                    is_open=True,
+                )
+            consolidation_range = cascade_high_swing.extremum_price - initial_swing.extremum_price
+            if consolidation_range <= 0:
+                return setup
+            support_swings = open_high_swings
+
+            resistance_price_min = target_swing.extremum_price
+            resistance_price_max = cascade_high_swing.extremum_price - consolidation_range * self._config.SUPPORT_CONSOLIDATION_RATIO_MIN
+            if resistance_price_min < resistance_price_max:
+                open_high_swings = self._filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
+            else:
+                open_high_swings = []
+            support_swing = open_high_swings[-1] if open_high_swings else None
+            if not support_swing:
+                last_green_bar = next((bar for bar in reversed(cascade_bars) if bar.close > bar.open), None)
+                if not last_green_bar:
+                    return setup
+                support_swing = Swing(
+                    time=last_green_bar.time,
+                    extremum_price=last_green_bar.high,
+                    close_price=last_green_bar.close,
+                    type=SwingType.HIGH,
+                    is_open=True
+                )
+        setup.data.support_swings = support_swings
         has_support = support_swing is not None
         if not has_support:
             return setup
@@ -124,7 +184,6 @@ class GuStrategy(Strategy):
         # Анализ пробоя поддержки каскада.
         current_bar = bars[-1]
         current_price = current_bar.close
-        todo() # надо нормально реализовать is_long и is_short
         if cascade.is_long:
             has_breakout_short = current_price < support_swing.extremum_price
             if has_breakout_short:
@@ -141,7 +200,7 @@ class GuStrategy(Strategy):
                 timeframe=timeframe,
                 bars=bars,
                 cascade_swings=cascade.swings,
-                support_swings=open_low_swings
+                support_swings=support_swings
             )
         )
 
@@ -180,7 +239,7 @@ class GuStrategy(Strategy):
                 timeframe=timeframe,
                 bars=bars,
                 cascade_swings=cascade.swings,
-                support_swings=open_low_swings,
+                support_swings=support_swings,
             ),
             trade_levels=trade_levels,
         )
