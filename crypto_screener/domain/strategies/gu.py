@@ -405,7 +405,7 @@ class GuStrategy(Strategy):
             return None
 
         def key(cascade: Cascade) -> tuple[float, object]:
-            duration = cascade.swings[-1].time - cascade.swings[0].time
+            duration = (cascade.swings[-1].time - cascade.swings[0].time).total_seconds()
             last_time = cascade.swings[-1].time
             return duration, last_time
 

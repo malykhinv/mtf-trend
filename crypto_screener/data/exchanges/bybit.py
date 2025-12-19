@@ -158,7 +158,8 @@ class Bybit(Exchange):
             raise ValueError("symbol и order_id должны быть заданы для получения статуса")
 
         try:
-            order = self._client.fetch_order(order_id, symbol)
+            order_raw = self._client.fetch_order(order_id, symbol)
+            order = order_raw if isinstance(order_raw, dict) else dict(order_raw)
         except Exception as exception:
             log.e(f"Ошибка при получении статуса ордера {order_id} на Bybit для {symbol}: {exception}")
             raise
@@ -278,11 +279,14 @@ class Bybit(Exchange):
             return OrderStatus.PARTIALLY_FILLED
         return OrderStatus.NEW
 
-    def _map_order(self, order: dict[str, object]) -> OrderInfo:
+    def _map_order(
+            self,
+            order: dict[str, object]
+    ) -> OrderInfo:
         order_data = order if isinstance(order, dict) else dict(order)
         info = order_data.get("info")
         info_data = info if isinstance(info, Mapping) else {}
-        status = self._map_order_status(order_data.get("status"))
+        status = self._map_order_status(str(order_data.get("status") or ""))
         amount = extract_float(order_data.get("amount"), info_data.get("qty")) or 0.0
         filled = extract_float(order_data.get("filled"), info_data.get("cumExecQty")) or 0.0
         average = extract_float(order_data.get("average"), order_data.get("price"))
@@ -291,7 +295,7 @@ class Bybit(Exchange):
 
         return OrderInfo(
             id=str(order_data.get("id")),
-            symbol=order_data.get("symbol", ""),
+            symbol=str(order_data.get("symbol", "")),
             side=side,
             quantity=amount,
             filled=filled,
