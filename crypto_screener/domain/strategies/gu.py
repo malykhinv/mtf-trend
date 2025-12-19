@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 import numpy as np
 
-from crypto_screener.config.gu_config import GuConfig, gu_cfg
+from crypto_screener.config.gu_config import CascadeGroupingMode, GuConfig, gu_cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
@@ -502,6 +502,23 @@ class GuStrategy(Strategy):
                         break
         return daily_extremes
 
+    def _get_cascade_extremes(
+            self,
+            bars: list[Bar],
+            *,
+            cascade_type: CascadeType,
+            grouping_mode: CascadeGroupingMode,
+    ) -> list[dict[str, float]]:
+        if grouping_mode is CascadeGroupingMode.ROLLING_WINDOW:
+            time_groups = self._group_bars_by_time_window(
+                bars,
+                min_hours=self._config.CASCADE_ROLLING_WINDOW_MIN_HOURS,
+                max_hours=self._config.CASCADE_ROLLING_WINDOW_MAX_HOURS,
+            )
+            return self._get_window_extremes(bars, time_groups, cascade_type=cascade_type)
+        day_groups = self._group_bars_by_day(bars)
+        return self._get_daily_extremes(bars, day_groups, cascade_type=cascade_type)
+
     @staticmethod
     def _calculate_pullbacks(
             bars: list[Bar],
@@ -583,78 +600,86 @@ class GuStrategy(Strategy):
         touch_tolerance = max(self._config.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
         min_touches = max(self._config.CASCADE_LENGTH_MIN, 3)
         is_long = cascade_type is CascadeType.LONG
-
-        time_groups = self._group_bars_by_time_window(bars)
-        daily_extremes = self._get_window_extremes(bars, time_groups, cascade_type=cascade_type)
-        if len(daily_extremes) < min_touches:
-            return []
-
-        best_candidate = None
-        best_duration = None
-        best_last_time = None
-
-        for start_day in range(len(daily_extremes) - 1):
-            level_price = daily_extremes[start_day]["price"]
-            next_day_price = daily_extremes[start_day + 1]["price"]
-            if abs(next_day_price - level_price) > touch_tolerance:
-                continue
-
-            touch_indices = []
-            for day_idx in range(start_day, len(daily_extremes)):
-                day_price = daily_extremes[day_idx]["price"]
-                if is_long and day_price > level_price + touch_tolerance:
-                    break
-                if not is_long and day_price < level_price - touch_tolerance:
-                    break
-                if abs(day_price - level_price) <= touch_tolerance:
-                    touch_indices.append(int(daily_extremes[day_idx]["index"]))
-
-            if len(touch_indices) < min_touches:
-                continue
-
-            pullbacks = self._calculate_pullbacks(
+        for grouping_mode in (
+                CascadeGroupingMode.ROLLING_WINDOW,
+                CascadeGroupingMode.CALENDAR,
+        ):
+            cascade_extremes = self._get_cascade_extremes(
                 bars,
-                touch_indices,
-                level_price,
                 cascade_type=cascade_type,
+                grouping_mode=grouping_mode,
             )
-            if not pullbacks:
-                continue
-            if not self._passes_pullback_rules(pullbacks):
-                continue
-            if not self._is_price_squeezed(pullbacks, cascade_type=cascade_type):
+            if len(cascade_extremes) < min_touches:
                 continue
 
-            first_index = touch_indices[0]
-            last_index = touch_indices[-1]
-            duration = bars[last_index].time - bars[first_index].time
-            last_time = bars[last_index].time
-            if best_duration is None or duration > best_duration:
-                best_candidate = (touch_indices, level_price)
-                best_duration = duration
-                best_last_time = last_time
-            elif duration == best_duration and best_last_time is not None and last_time > best_last_time:
-                best_candidate = (touch_indices, level_price)
-                best_duration = duration
-                best_last_time = last_time
+            best_candidate = None
+            best_duration = None
+            best_last_time = None
 
-        if not best_candidate:
-            return []
+            for start_day in range(len(cascade_extremes) - 1):
+                level_price = cascade_extremes[start_day]["price"]
+                next_day_price = cascade_extremes[start_day + 1]["price"]
+                if abs(next_day_price - level_price) > touch_tolerance:
+                    continue
 
-        touch_indices, level_price = best_candidate
-        swing_type = SwingType.HIGH if is_long else SwingType.LOW
-        cascade_swings = []
-        for touch_index in touch_indices:
-            bar = bars[touch_index]
-            cascade_swings.append(Swing(
-                time=bar.time,
-                extremum_price=level_price,
-                close_price=bar.close,
-                type=swing_type,
-                is_open=True
-            ))
+                touch_indices = []
+                for day_idx in range(start_day, len(cascade_extremes)):
+                    day_price = cascade_extremes[day_idx]["price"]
+                    if is_long and day_price > level_price + touch_tolerance:
+                        break
+                    if not is_long and day_price < level_price - touch_tolerance:
+                        break
+                    if abs(day_price - level_price) <= touch_tolerance:
+                        touch_indices.append(int(cascade_extremes[day_idx]["index"]))
 
-        return cascade_swings
+                if len(touch_indices) < min_touches:
+                    continue
+
+                pullbacks = self._calculate_pullbacks(
+                    bars,
+                    touch_indices,
+                    level_price,
+                    cascade_type=cascade_type,
+                )
+                if not pullbacks:
+                    continue
+                if not self._passes_pullback_rules(pullbacks):
+                    continue
+                if not self._is_price_squeezed(pullbacks, cascade_type=cascade_type):
+                    continue
+
+                first_index = touch_indices[0]
+                last_index = touch_indices[-1]
+                duration = bars[last_index].time - bars[first_index].time
+                last_time = bars[last_index].time
+                if best_duration is None or duration > best_duration:
+                    best_candidate = (touch_indices, level_price)
+                    best_duration = duration
+                    best_last_time = last_time
+                elif duration == best_duration and best_last_time is not None and last_time > best_last_time:
+                    best_candidate = (touch_indices, level_price)
+                    best_duration = duration
+                    best_last_time = last_time
+
+            if not best_candidate:
+                continue
+
+            touch_indices, level_price = best_candidate
+            swing_type = SwingType.HIGH if is_long else SwingType.LOW
+            cascade_swings = []
+            for touch_index in touch_indices:
+                bar = bars[touch_index]
+                cascade_swings.append(Swing(
+                    time=bar.time,
+                    extremum_price=level_price,
+                    close_price=bar.close,
+                    type=swing_type,
+                    is_open=True
+                ))
+
+            return cascade_swings
+
+        return []
 
     def get_runtime_config(self) -> StrategyRuntimeConfig:
         return StrategyRuntimeConfig(
