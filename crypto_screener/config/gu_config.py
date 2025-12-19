@@ -1,4 +1,10 @@
 from dataclasses import dataclass
+from enum import Enum
+
+
+class CascadeGroupingMode(str, Enum):
+    CALENDAR = "calendar"
+    ROLLING_WINDOW = "rolling_window"
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,12 @@ class GuConfig:
     RESISTANCE_COUNT_MAX: int = 2
     # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
     SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.3
+    # Режим группировки каскадов.
+    CASCADE_GROUPING_MODE: CascadeGroupingMode = CascadeGroupingMode.ROLLING_WINDOW
+    # Минимальная длительность окна группировки каскадов.
+    CASCADE_ROLLING_WINDOW_MIN_HOURS: int = 12
+    # Максимальная длительность окна группировки каскадов.
+    CASCADE_ROLLING_WINDOW_MAX_HOURS: int = 36
     # endregion
 
     # region Позиции.
