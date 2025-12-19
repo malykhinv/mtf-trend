@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 
 from crypto_screener.config.gu_config import PuConfig, pu_cfg
@@ -17,6 +19,20 @@ from crypto_screener.domain.strategies.strategy import (
     StrategyVolumeConfig,
 )
 from crypto_screener.domain.swing_detector import add_swings
+
+
+@dataclass(frozen=True)
+class Cascade:
+    swings: list[Swing]
+    direction: CascadeType
+
+    @property
+    def is_long(self) -> bool:
+        return self.direction is CascadeType.LONG
+
+    @property
+    def is_short(self) -> bool:
+        return self.direction is CascadeType.SHORT
 
 
 class GuStrategy(Strategy):
@@ -66,7 +82,7 @@ class GuStrategy(Strategy):
         if not cascade:
             return setup
 
-        setup.data.cascade_swings = cascade
+        setup.data.cascade_swings = cascade.swings
 
         # Центрирование относительно начала каскада.
         todo()
@@ -74,14 +90,15 @@ class GuStrategy(Strategy):
         # Анализ поддержки под каскадом.
         todo() # переписать этот блок правильно с учетом типа каскада (лонговый или шортовый - определить по свингам в нем).
         todo() # блок должен определить свинги, относящиеся к поддержке этого каскада на финальном участке
-        initial_swing = cascade_long[0]
+        initial_swing = cascade.swings[0]
         support_swing = None
+        target_swing = cascade.swings[-1]
+        open_low_swings: list[Swing] = []
         if cascade.is_long:
             todo()
             consolidation_range = initial_swing.extremum_price - cascade_low_swing.extremum_price
             open_low_swings = self._get_open_swings(cascade_bars, SwingType.LOW)
             setup.data.support_swings = open_low_swings
-            target_swing = cascade_long[-1]
 
             support_price_min = cascade_low_swing.extremum_price + consolidation_range * self._config.SUPPORT_CONSOLIDATION_RATIO_MIN
             support_price_max = target_swing.extremum_price
@@ -123,7 +140,7 @@ class GuStrategy(Strategy):
                 symbol=symbol,
                 timeframe=timeframe,
                 bars=bars,
-                cascade_swings=cascade,
+                cascade_swings=cascade.swings,
                 support_swings=open_low_swings
             )
         )
@@ -162,7 +179,7 @@ class GuStrategy(Strategy):
                 symbol=symbol,
                 timeframe=timeframe,
                 bars=bars,
-                cascade_swings=cascade,
+                cascade_swings=cascade.swings,
                 support_swings=open_low_swings,
             ),
             trade_levels=trade_levels,
@@ -270,14 +287,33 @@ class GuStrategy(Strategy):
     def _get_cascade_long(
             self,
             bars: list[Bar]
-    ) -> list[Swing]:
-        return self._get_cascade(bars, cascade_type=CascadeType.LONG)
+    ) -> Cascade | None:
+        swings = self._get_cascade(bars, cascade_type=CascadeType.LONG)
+        if not swings:
+            return None
+        return Cascade(swings=swings, direction=CascadeType.LONG)
 
     def _get_cascade_short(
             self,
             bars: list[Bar]
-    ) -> list[Swing]:
-        return self._get_cascade(bars, cascade_type=CascadeType.SHORT)
+    ) -> Cascade | None:
+        swings = self._get_cascade(bars, cascade_type=CascadeType.SHORT)
+        if not swings:
+            return None
+        return Cascade(swings=swings, direction=CascadeType.SHORT)
+
+    @staticmethod
+    def _longest(*cascades: Cascade | None) -> Cascade | None:
+        candidates = [cascade for cascade in cascades if cascade and cascade.swings]
+        if not candidates:
+            return None
+
+        def key(cascade: Cascade) -> tuple[float, object]:
+            duration = cascade.swings[-1].time - cascade.swings[0].time
+            last_time = cascade.swings[-1].time
+            return duration, last_time
+
+        return max(candidates, key=key)
 
     @staticmethod
     def _group_bars_by_day(bars: list[Bar]) -> list[tuple[int, int]]:
