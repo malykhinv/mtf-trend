@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from crypto_screener.config.gu_config import PuConfig, pu_cfg
+from crypto_screener.config.gu_config import GuConfig, gu_cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
@@ -38,7 +38,7 @@ class Cascade:
 class GuStrategy(Strategy):
     name = "ГУ"
 
-    def __init__(self, config: PuConfig = pu_cfg) -> None:
+    def __init__(self, config: GuConfig = gu_cfg) -> None:
         self._config = config
 
     def detect_setup(
