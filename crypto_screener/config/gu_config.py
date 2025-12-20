@@ -39,6 +39,8 @@ class GuConfig:
     CASCADE_PULLBACK_NEXT_RATIO_MIN: float = 0.1
     # Максимальная доля отката после третьего и далее относительно второго.
     CASCADE_PULLBACK_NEXT_RATIO_MAX: float = 0.9
+    # Минимальная глубина первых откатов в долях ATR.
+    CASCADE_MIN_PULLBACK_NATR: float = 2.5
     # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
     SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.3
     # Минимальная длительность окна группировки каскадов.

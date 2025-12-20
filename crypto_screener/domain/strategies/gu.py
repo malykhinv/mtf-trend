@@ -560,12 +560,16 @@ class GuStrategy(Strategy):
     def _passes_pullback_rules(
             self,
             pullbacks: list[tuple[float, float]],
+            avg_range: float,
     ) -> bool:
         if len(pullbacks) < 2:
             return False
         first_depth = pullbacks[0][0]
         second_depth = pullbacks[1][0]
         if first_depth <= 0 or second_depth <= 0:
+            return False
+        min_pullback = self._config.CASCADE_MIN_PULLBACK_NATR * avg_range
+        if first_depth < min_pullback or second_depth < min_pullback:
             return False
         ratio = second_depth / first_depth
         if not (
@@ -673,7 +677,7 @@ class GuStrategy(Strategy):
                 )
                 if not pullbacks:
                     continue
-                if not self._passes_pullback_rules(pullbacks):
+                if not self._passes_pullback_rules(pullbacks, avg_range):
                     continue
                 if not self._is_price_squeezed(pullbacks, cascade_type=cascade_type):
                     continue
