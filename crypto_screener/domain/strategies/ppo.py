@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.cascade_level import CascadeLevel
+from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.setup_data import Ppo
@@ -17,6 +17,10 @@ from crypto_screener.domain.strategies.strategy import (
     StrategyVolumeConfig,
 )
 from crypto_screener.domain.swing_detector import add_swings
+from crypto_screener.domain.strategies.cascade_detector import (
+    CascadeDetector,
+    CascadeDetectorConfig,
+)
 
 
 class PpoStrategy(Strategy):
@@ -24,6 +28,9 @@ class PpoStrategy(Strategy):
 
     def __init__(self, config: PpoConfig = ppo_cfg) -> None:
         self._config = config
+        self._cascade_detector = CascadeDetector(
+            CascadeDetectorConfig.from_strategy_config(config)
+        )
 
     def detect_setup(
             self,
@@ -140,10 +147,11 @@ class PpoStrategy(Strategy):
         # Анализ лонгового каскада.
         cascade_price_min = correction_low_swing.close_price + retrace_range * self._config.CASCADE_RETRACE_RATIO_MIN
         cascade_price_max = main_high_swing.close_price
-        cascade_long = self._get_cascade_long(
+        cascade_long = self._cascade_detector.detect(
             correction_bars,
-            cascade_price_min,
-            cascade_price_max,
+            cascade_type=CascadeType.LONG,
+            price_min=cascade_price_min,
+            price_max=cascade_price_max,
         )
         if not cascade_long:
             return setup
@@ -422,144 +430,6 @@ class PpoStrategy(Strategy):
         )
 
         return [(main_low_index, main_low_swing), (max_high_index, main_high_swing)]
-
-    def _get_cascade_long(
-            self,
-            bars: list[Bar],
-            price_min: float,
-            price_max: float,
-    ) -> list[Swing]:
-        if not bars or price_min >= price_max or len(bars) < 2:
-            return []
-
-        bars = bars[:-1]
-        bars_count = len(bars)
-
-        def calculate_average_range(window: int) -> float:
-            if not bars or window <= 0:
-                return 0.0
-            window = min(window, bars_count)
-            ranges = [bar.high - bar.low for bar in bars[-window:]]
-            return float(np.mean(ranges)) if ranges else 0.0
-
-        avg_range = calculate_average_range(self._config.CASCADE_ATR_WINDOW)
-        touch_tolerance = max(self._config.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
-        min_pullback = max(self._config.CASCADE_MIN_PULLBACK_NATR * avg_range, 0.0)
-        min_pullback_bars = self._config.CASCADE_MIN_PULLBACK_BARS
-        min_gap_bars = self._config.CASCADE_MIN_GAP_BARS
-        levels: list[CascadeLevel] = []
-        bar_data = [(i, bar.high, bar.open, bar.close)
-                    for i, bar in enumerate(bars)
-                    if price_min <= bar.high <= price_max]
-        for index, high_price, open_price, close_price in bar_data:
-            level_price = high_price
-            cross_index = None
-            atr_crossed = False
-            for look_ahead in range(index + 1, bars_count):
-                look_bar = bars[look_ahead]
-                if look_bar.high > level_price + avg_range or look_bar.high > level_price + avg_range:
-                    atr_crossed = True
-                    break
-                if look_bar.high > level_price or look_bar.high > level_price:
-                    cross_index = look_ahead
-                    break
-            if atr_crossed:
-                continue
-            end_idx = cross_index if cross_index is not None else bars_count
-            touches_raw = [
-                i for i in range(index, end_idx)
-                if level_price - bars[i].close <= touch_tolerance
-                   and bars[i].close <= level_price
-            ]
-            if touches_raw:
-                levels.append(CascadeLevel(
-                    price=level_price,
-                    is_crossed=cross_index is not None,
-                    distance=(cross_index - index) if cross_index is not None else (bars_count - 1 - index),
-                    touches_raw=touches_raw,
-                ))
-
-        def _refine_touches(
-                price: float,
-                touches_count: list[int]
-        ) -> list[int]:
-            if not touches_count:
-                return []
-            refined = touches_count[:]
-            while True:
-                changed = False
-                new_touches = []
-                last_touch = None
-                for touch_idx in refined:
-                    if last_touch is None:
-                        new_touches.append(touch_idx)
-                        last_touch = touch_idx
-                        continue
-                    if touch_idx - last_touch < min_gap_bars:
-                        changed = True
-                        continue
-                    pullback_bars = bars[last_touch + 1:touch_idx]
-                    if not pullback_bars:
-                        changed = True
-                        continue
-                    pullback_depth = max((price - pullback_bar.low) for pullback_bar in pullback_bars)
-                    consecutive = 0
-                    max_consecutive = 0
-                    for pullback_bar in pullback_bars:
-                        if pullback_bar.close <= price - min_pullback:
-                            consecutive += 1
-                            max_consecutive = max(max_consecutive, consecutive)
-                        else:
-                            consecutive = 0
-                    has_pullback = pullback_depth >= min_pullback and max_consecutive >= min_pullback_bars
-                    if not has_pullback:
-                        changed = True
-                        continue
-                    new_touches.append(touch_idx)
-                    last_touch = touch_idx
-                if not changed:
-                    return new_touches
-                refined = new_touches
-
-        best_level_touches = []
-        best_level_touches_count = 0
-        best_level_price = None
-
-        for level in levels:
-            if level.is_crossed:
-                continue
-            touches = _refine_touches(level.price, level.touches_raw)
-            touches_count = len(touches)
-
-            if touches_count > best_level_touches_count or \
-                    (touches_count == best_level_touches_count and
-                     (not best_level_touches or touches[-1] > best_level_touches[-1])):
-                best_level_touches = touches
-                best_level_touches_count = touches_count
-                best_level_price = level.price
-
-        if not best_level_touches or best_level_touches_count < self._config.CASCADE_LENGTH_MIN:
-            return []
-        first_touch_index = min(best_level_touches)
-        last_touch_index = max(best_level_touches)
-        last_touch_segment_low = min(bar.low for bar in bars[last_touch_index:])
-        first_touch_segment_low = min(bar.low for bar in bars[first_touch_index:last_touch_index - 1])
-        if last_touch_segment_low <= first_touch_segment_low:
-            return []
-
-        cascade_swings = []
-        for touch_index in best_level_touches:
-            bar = bars[touch_index]
-            swing = Swing(
-                time=bar.time,
-                extremum_price=best_level_price,
-                close_price=bar.close,
-                type=SwingType.HIGH,
-                is_open=True
-            )
-            cascade_swings.append(swing)
-
-        return cascade_swings
 
     def get_runtime_config(self) -> StrategyRuntimeConfig:
         return StrategyRuntimeConfig(

@@ -45,6 +45,14 @@ class PpoConfig:
     CASCADE_MIN_GAP_BARS: int = 5
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
+    # Минимальная доля отката после второго касания относительно первого.
+    CASCADE_PULLBACK_SECOND_RATIO_MIN: float = 0.5
+    # Максимальная доля отката после второго касания относительно первого.
+    CASCADE_PULLBACK_SECOND_RATIO_MAX: float = 1.0
+    # Минимальная доля отката после третьего и далее относительно второго.
+    CASCADE_PULLBACK_NEXT_RATIO_MIN: float = 0.1
+    # Максимальная доля отката после третьего и далее относительно второго.
+    CASCADE_PULLBACK_NEXT_RATIO_MAX: float = 0.9
     # Минимальный разрыв от верха каскада до начала сопротивления (в долях отката).
     RESISTANCE_GAP_RATIO_MIN: float = 0.1
     # Максимальное количество свингов после каскада.
