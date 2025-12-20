@@ -601,6 +601,7 @@ class GuStrategy(Strategy):
         touch_tolerance = max(self._config.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
         min_touches = max(self._config.CASCADE_LENGTH_MIN, 3)
         is_long = cascade_type is CascadeType.LONG
+        swing_type = SwingType.HIGH if is_long else SwingType.LOW
         for grouping_mode in (
                 CascadeGroupingMode.ROLLING_WINDOW,
                 CascadeGroupingMode.CALENDAR,
@@ -636,6 +637,16 @@ class GuStrategy(Strategy):
                 if len(touch_indices) < min_touches:
                     continue
 
+                first_index = touch_indices[0]
+                first_swing = bars[first_index].swing
+                if (
+                        first_swing is None
+                        or not first_swing.is_open
+                        or first_swing.type != swing_type
+                        or abs(first_swing.extremum_price - level_price) > touch_tolerance
+                ):
+                    continue
+
                 pullbacks = self._calculate_pullbacks(
                     bars,
                     touch_indices,
@@ -649,7 +660,6 @@ class GuStrategy(Strategy):
                 if not self._is_price_squeezed(pullbacks, cascade_type=cascade_type):
                     continue
 
-                first_index = touch_indices[0]
                 last_index = touch_indices[-1]
                 duration = bars[last_index].time - bars[first_index].time
                 last_time = bars[last_index].time
@@ -666,7 +676,6 @@ class GuStrategy(Strategy):
                 continue
 
             touch_indices, level_price = best_candidate
-            swing_type = SwingType.HIGH if is_long else SwingType.LOW
             cascade_swings = []
             for touch_index in touch_indices:
                 bar = bars[touch_index]
