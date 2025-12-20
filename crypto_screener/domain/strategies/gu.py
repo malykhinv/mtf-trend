@@ -431,17 +431,16 @@ class GuStrategy(Strategy):
     def _group_bars_by_time_window(
             bars: list[Bar],
             *,
-            min_hours: int = 12,
-            max_hours: int = 36,
+            window_hours: int,
     ) -> list[tuple[int, int, datetime, datetime]]:
-        if not bars:
+        if not bars or window_hours <= 0:
             return []
         groups: list[tuple[int, int, datetime, datetime]] = []
         start_index = 0
         while start_index < len(bars):
             start_time = bars[start_index].time
-            window_start = start_time + timedelta(hours=min_hours)
-            window_end = start_time + timedelta(hours=max_hours)
+            window_start = start_time
+            window_end = start_time + timedelta(hours=window_hours)
             end_index = start_index
             for index in range(start_index + 1, len(bars)):
                 if bars[index].time <= window_end:
@@ -539,13 +538,15 @@ class GuStrategy(Strategy):
             *,
             cascade_type: CascadeType,
             grouping_mode: CascadeGroupingMode,
+            window_hours: int | None = None,
     ) -> list[CascadeExtreme]:
         swing_extremes = self._get_swing_extremes(bars, cascade_type=cascade_type)
         if grouping_mode is CascadeGroupingMode.ROLLING_WINDOW:
+            if window_hours is None:
+                window_hours = self._config.CASCADE_ROLLING_WINDOW_MAX_HOURS
             time_groups = self._group_bars_by_time_window(
                 bars,
-                min_hours=self._config.CASCADE_ROLLING_WINDOW_MIN_HOURS,
-                max_hours=self._config.CASCADE_ROLLING_WINDOW_MAX_HOURS,
+                window_hours=window_hours,
             )
             window_extremes = self._get_window_extremes(bars, time_groups, cascade_type=cascade_type)
             return self._merge_extremes(bars, window_extremes, swing_extremes)
@@ -639,17 +640,25 @@ class GuStrategy(Strategy):
         min_touches = max(self._config.CASCADE_LENGTH_MIN, 3)
         is_long = cascade_type is CascadeType.LONG
         swing_type = SwingType.HIGH if is_long else SwingType.LOW
-        for grouping_mode in (
-                CascadeGroupingMode.ROLLING_WINDOW,
-                CascadeGroupingMode.CALENDAR,
-        ):
-            cascade_extremes = self._get_cascade_extremes(
-                bars,
-                cascade_type=cascade_type,
-                grouping_mode=grouping_mode,
-            )
+
+        def rolling_window_sizes() -> list[int]:
+            min_hours = self._config.CASCADE_ROLLING_WINDOW_MIN_HOURS
+            max_hours = self._config.CASCADE_ROLLING_WINDOW_MAX_HOURS
+            if min_hours <= 0 or max_hours <= 0:
+                return []
+            if max_hours <= min_hours:
+                return [max_hours]
+            sizes: list[int] = []
+            size = max_hours
+            while size > min_hours:
+                sizes.append(size)
+                size -= min_hours
+            sizes.append(min_hours)
+            return sizes
+
+        def find_cascade(cascade_extremes: list[CascadeExtreme]) -> list[Swing]:
             if len(cascade_extremes) < min_touches:
-                continue
+                return []
 
             best_candidate = None
             best_duration = None
@@ -736,7 +745,7 @@ class GuStrategy(Strategy):
                     best_last_time = last_time
 
             if not best_candidate:
-                continue
+                return []
 
             touch_indices, level_price, first_swing = best_candidate
             cascade_swings = [first_swing]
@@ -754,6 +763,31 @@ class GuStrategy(Strategy):
                 ))
 
             return cascade_swings
+        for grouping_mode in (
+                CascadeGroupingMode.ROLLING_WINDOW,
+                CascadeGroupingMode.CALENDAR,
+        ):
+            if grouping_mode is CascadeGroupingMode.ROLLING_WINDOW:
+                for window_hours in rolling_window_sizes():
+                    cascade_extremes = self._get_cascade_extremes(
+                        bars,
+                        cascade_type=cascade_type,
+                        grouping_mode=grouping_mode,
+                        window_hours=window_hours,
+                    )
+                    cascade_swings = find_cascade(cascade_extremes)
+                    if cascade_swings:
+                        return cascade_swings
+                continue
+
+            cascade_extremes = self._get_cascade_extremes(
+                bars,
+                cascade_type=cascade_type,
+                grouping_mode=grouping_mode,
+            )
+            cascade_swings = find_cascade(cascade_extremes)
+            if cascade_swings:
+                return cascade_swings
 
         return []
 
