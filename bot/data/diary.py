@@ -184,6 +184,16 @@ class WorkbookDiaryBackend(DiaryBackend):
         ),
         ("Minimum risk/reward", "thresholds_min_rr", config.MIN_RR),
         (
+            "Minimum trend strength (abs)",
+            "thresholds_min_trend_strength",
+            config.MIN_TREND_STRENGTH,
+        ),
+        (
+            "Countertrend only",
+            "thresholds_countertrend_only",
+            config.COUNTERTREND_ONLY,
+        ),
+        (
             "Minimum order size (USDT)",
             "thresholds_min_order_usdt",
             config.MIN_ORDER_USDT,
@@ -283,6 +293,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         "long_filter_upper_wick_pass",
         "long_filter_lower_wick_pass",
         "long_filter_rr_pass",
+        "long_filter_trend_strength_pass",
         "short_filter_green_move_pass",
         "short_filter_volume_spike_pass",
         "short_filter_anomaly_relative_volume_pass",
@@ -293,6 +304,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         "short_filter_upper_wick_pass",
         "short_filter_lower_wick_pass",
         "short_filter_rr_pass",
+        "short_filter_trend_strength_pass",
         "long_rr",
         "short_rr",
         "long_pnl_pct",
@@ -314,6 +326,8 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_relative_volume",
         "thresholds_min_atr_mult",
         "thresholds_min_anomaly_upper_wick_pct",
+        "thresholds_min_trend_strength",
+        "thresholds_countertrend_only",
     ]
 
     def __init__(self, base_path: Path, *, anomalies_filename: str = "anomalies.xlsx") -> None:
@@ -626,80 +640,92 @@ class WorkbookDiaryBackend(DiaryBackend):
             f'=IFERROR((I{row_index}-H{row_index})/(G{row_index}-I{row_index}),"")'
         )
         long_filter_green_move_formula = (
-            f"=IF($AQ{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
+            f"=IF($AS{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
         )
         long_filter_volume_spike_formula = (
-            f"=IF($AR{row_index}>={threshold_cells['thresholds_min_volume_spike']},TRUE,FALSE)"
+            f"=IF($AT{row_index}>={threshold_cells['thresholds_min_volume_spike']},TRUE,FALSE)"
         )
         long_filter_anomaly_relative_volume_formula = (
-            f"=IF($AR{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']},TRUE,FALSE)"
+            f"=IF($AT{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']},TRUE,FALSE)"
         )
         long_filter_relative_volume_min_formula = (
-            f"=IF($AR{row_index}>={threshold_cells['thresholds_min_relative_volume']},TRUE,FALSE)"
+            f"=IF($AT{row_index}>={threshold_cells['thresholds_min_relative_volume']},TRUE,FALSE)"
         )
         long_filter_relative_volume_max_formula = (
-            f"=IF($AR{row_index}<={threshold_cells['thresholds_max_relative_volume']},TRUE,FALSE)"
+            f"=IF($AT{row_index}<={threshold_cells['thresholds_max_relative_volume']},TRUE,FALSE)"
         )
         long_filter_anomaly_atr_formula = (
-            f"=IF($AS{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']},TRUE,FALSE)"
+            f"=IF($AU{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']},TRUE,FALSE)"
         )
         long_filter_atr_formula = (
-            f"=IF($AS{row_index}>{threshold_cells['thresholds_min_atr_mult']},TRUE,FALSE)"
+            f"=IF($AU{row_index}>{threshold_cells['thresholds_min_atr_mult']},TRUE,FALSE)"
         )
         long_filter_pct_move_min_formula = (
-            f"=IF($AQ{row_index}>={threshold_cells['thresholds_min_pct_move']},TRUE,FALSE)"
+            f"=IF($AS{row_index}>={threshold_cells['thresholds_min_pct_move']},TRUE,FALSE)"
         )
         long_filter_pct_move_max_formula = (
-            f"=IF($AQ{row_index}<={threshold_cells['thresholds_max_pct_move']},TRUE,FALSE)"
+            f"=IF($AS{row_index}<={threshold_cells['thresholds_max_pct_move']},TRUE,FALSE)"
         )
         long_filter_upper_wick_formula = (
-            f"=IF($AT{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']},TRUE,FALSE)"
+            f"=IF($AV{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']},TRUE,FALSE)"
         )
         long_filter_lower_wick_formula = (
-            f"=IF($AV{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
+            f"=IF($AX{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
         )
         long_filter_rr_formula = (
-            f"=IF($AK{row_index}>{threshold_cells['thresholds_min_rr']},TRUE,FALSE)"
+            f"=IF($AM{row_index}>{threshold_cells['thresholds_min_rr']},TRUE,FALSE)"
+        )
+        long_filter_trend_strength_formula = (
+            f"=IF({threshold_cells['thresholds_min_trend_strength']}<=0,TRUE,"
+            f"IF({threshold_cells['thresholds_countertrend_only']},"
+            f"$BB{row_index}<=-{threshold_cells['thresholds_min_trend_strength']},"
+            f"$BB{row_index}>={threshold_cells['thresholds_min_trend_strength']}))"
         )
         short_filter_green_move_formula = (
-            f"=IF($AQ{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
+            f"=IF($AS{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
         )
         short_filter_volume_spike_formula = (
-            f"=IF($AR{row_index}>={threshold_cells['thresholds_min_volume_spike']},TRUE,FALSE)"
+            f"=IF($AT{row_index}>={threshold_cells['thresholds_min_volume_spike']},TRUE,FALSE)"
         )
         short_filter_anomaly_relative_volume_formula = (
-            f"=IF($AR{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']},TRUE,FALSE)"
+            f"=IF($AT{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']},TRUE,FALSE)"
         )
         short_filter_relative_volume_formula = (
-            f"=IF(OR($AR{row_index}<{threshold_cells['thresholds_min_relative_volume']},"
-            f"$AR{row_index}>{threshold_cells['thresholds_max_relative_volume']}),TRUE,FALSE)"
+            f"=IF(OR($AT{row_index}<{threshold_cells['thresholds_min_relative_volume']},"
+            f"$AT{row_index}>{threshold_cells['thresholds_max_relative_volume']}),TRUE,FALSE)"
         )
         short_filter_anomaly_atr_formula = (
-            f"=IF($AS{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']},TRUE,FALSE)"
+            f"=IF($AU{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']},TRUE,FALSE)"
         )
         short_filter_atr_formula = (
-            f"=IF($AS{row_index}<{threshold_cells['thresholds_min_atr_mult']},TRUE,FALSE)"
+            f"=IF($AU{row_index}<{threshold_cells['thresholds_min_atr_mult']},TRUE,FALSE)"
         )
         short_filter_pct_move_formula = (
-            f"=IF(OR($AQ{row_index}>{threshold_cells['thresholds_max_pct_move']},"
-            f"$AQ{row_index}<{threshold_cells['thresholds_min_pct_move']}),TRUE,FALSE)"
+            f"=IF(OR($AS{row_index}>{threshold_cells['thresholds_max_pct_move']},"
+            f"$AS{row_index}<{threshold_cells['thresholds_min_pct_move']}),TRUE,FALSE)"
         )
         short_filter_upper_wick_formula = (
-            f"=IF($AT{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']},TRUE,FALSE)"
+            f"=IF($AV{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']},TRUE,FALSE)"
         )
         short_filter_lower_wick_formula = (
-            f"=IF($AV{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
+            f"=IF($AX{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
         )
         short_filter_rr_formula = (
-            f"=IF($AL{row_index}>={threshold_cells['thresholds_min_rr']},TRUE,FALSE)"
+            f"=IF($AN{row_index}>={threshold_cells['thresholds_min_rr']},TRUE,FALSE)"
+        )
+        short_filter_trend_strength_formula = (
+            f"=IF({threshold_cells['thresholds_min_trend_strength']}<=0,TRUE,"
+            f"IF({threshold_cells['thresholds_countertrend_only']},"
+            f"$BB{row_index}>={threshold_cells['thresholds_min_trend_strength']},"
+            f"$BB{row_index}<=-{threshold_cells['thresholds_min_trend_strength']}))"
         )
         long_filters_pass_formula = "=AND(" + ",".join(
             f"{column}{row_index}"
-            for column in ("O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z")
+            for column in ("O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "AA")
         ) + ")"
         short_filters_pass_formula = "=AND(" + ",".join(
             f"{column}{row_index}"
-            for column in ("AA", "AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ")
+            for column in ("AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL")
         ) + ")"
         long_trade_executed_formula = f"=IF($K{row_index},TRUE,FALSE)"
         short_trade_executed_formula = f"=IF($L{row_index},TRUE,FALSE)"
@@ -710,29 +736,35 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_min_anomaly_upper_wick_formula = (
             f"={threshold_cells['thresholds_min_anomaly_upper_wick_pct']}"
         )
+        thresholds_min_trend_strength_formula = (
+            f"={threshold_cells['thresholds_min_trend_strength']}"
+        )
+        thresholds_countertrend_formula = (
+            f"={threshold_cells['thresholds_countertrend_only']}"
+        )
         long_pnl_formula = (
             f'=IF($M{row_index},'
             f'IF($I{row_index}=0,"",'
-            f'IF($AY{row_index}="HIGH_FIRST",(G{row_index}-I{row_index})/I{row_index}*100,'
-            f'IF(OR($AY{row_index}="LOW_FIRST",$AY{row_index}="BOTH"),(H{row_index}-I{row_index})/I{row_index}*100,0))),'
+            f'IF($BA{row_index}="HIGH_FIRST",(G{row_index}-I{row_index})/I{row_index}*100,'
+            f'IF(OR($BA{row_index}="LOW_FIRST",$BA{row_index}="BOTH"),(H{row_index}-I{row_index})/I{row_index}*100,0))),'
             f'"")'
         )
         short_pnl_formula = (
             f'=IF($N{row_index},'
             f'IF($I{row_index}=0,"",'
-            f'IF($AY{row_index}="LOW_FIRST",(I{row_index}-H{row_index})/I{row_index}*100,'
-            f'IF(OR($AY{row_index}="HIGH_FIRST",$AY{row_index}="BOTH"),(I{row_index}-G{row_index})/I{row_index}*100,0))),'
+            f'IF($BA{row_index}="LOW_FIRST",(I{row_index}-H{row_index})/I{row_index}*100,'
+            f'IF(OR($BA{row_index}="HIGH_FIRST",$BA{row_index}="BOTH"),(I{row_index}-G{row_index})/I{row_index}*100,0))),'
             f'"")'
         )
         long_equity_formula = (
-            f"=IF(ISNUMBER(AO{row_index-1}),"
-            f"IF($M{row_index},AO{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AM{row_index}/100),AO{row_index-1}),"
-            f"IF($M{row_index},{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AM{row_index}/100),{threshold_cells['thresholds_initial_deposit']}))"
+            f"=IF(ISNUMBER(AQ{row_index-1}),"
+            f"IF($M{row_index},AQ{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AO{row_index}/100),AQ{row_index-1}),"
+            f"IF($M{row_index},{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AO{row_index}/100),{threshold_cells['thresholds_initial_deposit']}))"
         )
         short_equity_formula = (
-            f"=IF(ISNUMBER(AP{row_index-1}),"
-            f"IF($N{row_index},AP{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AN{row_index}/100),AP{row_index-1}),"
-            f"IF($N{row_index},{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AN{row_index}/100),{threshold_cells['thresholds_initial_deposit']}))"
+            f"=IF(ISNUMBER(AR{row_index-1}),"
+            f"IF($N{row_index},AR{row_index-1}*(1+{threshold_cells['thresholds_position_fraction']}*AP{row_index}/100),AR{row_index-1}),"
+            f"IF($N{row_index},{threshold_cells['thresholds_initial_deposit']}*(1+{threshold_cells['thresholds_position_fraction']}*AP{row_index}/100),{threshold_cells['thresholds_initial_deposit']}))"
         )
         return [
             self._format_dt(row.timestamp),
@@ -761,6 +793,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             long_filter_upper_wick_formula,
             long_filter_lower_wick_formula,
             long_filter_rr_formula,
+            long_filter_trend_strength_formula,
             short_filter_green_move_formula,
             short_filter_volume_spike_formula,
             short_filter_anomaly_relative_volume_formula,
@@ -771,6 +804,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             short_filter_upper_wick_formula,
             short_filter_lower_wick_formula,
             short_filter_rr_formula,
+            short_filter_trend_strength_formula,
             long_rr_formula,
             short_rr_formula,
             long_pnl_formula,
@@ -792,6 +826,8 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds_min_relative_formula,
             thresholds_min_atr_formula,
             thresholds_min_anomaly_upper_wick_formula,
+            thresholds_min_trend_strength_formula,
+            thresholds_countertrend_formula,
         ]
     @staticmethod
     def _set_named_range(workbook: Workbook, *, name: str, sheet_title: str, column_letter: str, row: int) -> None:
