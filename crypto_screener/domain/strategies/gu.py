@@ -503,6 +503,36 @@ class GuStrategy(Strategy):
                         break
         return daily_extremes
 
+    @staticmethod
+    def _get_swing_extremes(
+            bars: list[Bar],
+            *,
+            cascade_type: CascadeType,
+    ) -> list[CascadeExtreme]:
+        swing_type = SwingType.HIGH if cascade_type is CascadeType.LONG else SwingType.LOW
+        swing_extremes: list[CascadeExtreme] = []
+        for index, bar in enumerate(bars):
+            swing = bar.swing
+            if swing is None:
+                continue
+            if not swing.is_open:
+                continue
+            if swing.type != swing_type:
+                continue
+            swing_extremes.append(CascadeExtreme(index=index, price=float(swing.extremum_price)))
+        return swing_extremes
+
+    @staticmethod
+    def _merge_extremes(
+            bars: list[Bar],
+            *extremes: list[CascadeExtreme],
+    ) -> list[CascadeExtreme]:
+        unique: dict[tuple[int, float], CascadeExtreme] = {}
+        for extremes_list in extremes:
+            for extreme in extremes_list:
+                unique[(extreme.index, extreme.price)] = extreme
+        return sorted(unique.values(), key=lambda item: bars[item.index].time)
+
     def _get_cascade_extremes(
             self,
             bars: list[Bar],
@@ -510,15 +540,18 @@ class GuStrategy(Strategy):
             cascade_type: CascadeType,
             grouping_mode: CascadeGroupingMode,
     ) -> list[CascadeExtreme]:
+        swing_extremes = self._get_swing_extremes(bars, cascade_type=cascade_type)
         if grouping_mode is CascadeGroupingMode.ROLLING_WINDOW:
             time_groups = self._group_bars_by_time_window(
                 bars,
                 min_hours=self._config.CASCADE_ROLLING_WINDOW_MIN_HOURS,
                 max_hours=self._config.CASCADE_ROLLING_WINDOW_MAX_HOURS,
             )
-            return self._get_window_extremes(bars, time_groups, cascade_type=cascade_type)
+            window_extremes = self._get_window_extremes(bars, time_groups, cascade_type=cascade_type)
+            return self._merge_extremes(bars, window_extremes, swing_extremes)
         day_groups = self._group_bars_by_day(bars)
-        return self._get_daily_extremes(bars, day_groups, cascade_type=cascade_type)
+        daily_extremes = self._get_daily_extremes(bars, day_groups, cascade_type=cascade_type)
+        return self._merge_extremes(bars, daily_extremes, swing_extremes)
 
     @staticmethod
     def _calculate_pullbacks(
