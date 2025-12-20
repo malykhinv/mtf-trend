@@ -8,12 +8,12 @@ import matplotlib
 import numpy as np
 from matplotlib.figure import Figure
 
-from crypto_screener.config import app_cfg, ppo_plot_theme
+from crypto_screener.config import app_cfg, gu_plot_theme, ppo_plot_theme
 from crypto_screener.config.plot_theme import PlotTheme
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
-from crypto_screener.domain.models.setup_data import Ppo, SetupData
+from crypto_screener.domain.models.setup_data import Gu, Ppo, SetupData
 from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_levels import TradeLevels
@@ -277,8 +277,138 @@ def _plot_ppo(
     return output_path
 
 
+def _plot_gu(
+        setup_name: str,
+        data: Gu,
+        trade_levels: Optional[TradeLevels],
+        postmortem_bars: Optional[list[Bar]],
+        detection_time: Optional[datetime],
+        context: Optional[Context],
+        subdir: Optional[str],
+        draw_entry_zones: bool,
+        theme: PlotTheme,
+):
+    if not data.symbol or not data.bars:
+        raise ValueError("Недостаточно данных для построения графика.")
+
+    trimmed_postmortem = _trim_postmortem_bars(postmortem_bars, trade_levels, theme)
+    combined_bars = [*data.bars, *(trimmed_postmortem or [])]
+
+    if not combined_bars:
+        raise ValueError("Недостаточно данных для построения графика.")
+
+    fig, price_ax, volume_ax = _build_figure(theme)
+
+    times = [_datetime_to_mpl(bar.time) for bar in combined_bars]
+    candle_width = _get_candle_width(times, theme)
+
+    min_price = min(bar.low for bar in combined_bars)
+    max_price = max(bar.high for bar in combined_bars)
+
+    entry_price = trade_levels.entry_price if trade_levels else None
+    if trade_levels and entry_price is not None:
+        trade_prices = [trade_levels.take_profit_price, trade_levels.stop_loss_price, entry_price]
+        if trade_levels.partial_close_price is not None:
+            trade_prices.append(trade_levels.partial_close_price)
+        if trade_levels.breakeven_price is not None:
+            trade_prices.append(trade_levels.breakeven_price)
+        min_price = min(min_price, *trade_prices)
+        max_price = max(max_price, *trade_prices)
+
+    y_offset = max((max_price - min_price) * theme.y_offset_ratio, theme.y_offset_min)
+
+    _draw_candles(price_ax, combined_bars, times, candle_width, theme)
+
+    if draw_entry_zones and entry_price is not None and trade_levels:
+        entry_time = _get_entry_time(trimmed_postmortem, detection_time, data.bars)
+        horizon_time = _get_horizon_time(trimmed_postmortem, combined_bars)
+        _draw_entry_zones(
+            ax=price_ax,
+            trade_levels=trade_levels,
+            entry_time=entry_time,
+            horizon_time=horizon_time,
+            postmortem_bars=trimmed_postmortem or [],
+            theme=theme,
+        )
+    _format_ax(price_ax, times, min_price, max_price, theme)
+
+    volumes = _draw_volume(volume_ax, combined_bars, times, candle_width, theme)
+    _format_volume_ax(volume_ax, volumes, theme)
+    _format_time_axis(volume_ax, theme)
+
+    if data.cascade_swings:
+        _draw_cascade_level(price_ax, data.cascade_swings, combined_bars, theme)
+        _draw_swing_group(
+            ax=price_ax,
+            swings=data.cascade_swings,
+            color=theme.cascade_swing_color,
+            y_offset=y_offset,
+            theme=theme,
+        )
+    if data.support_swings:
+        _draw_swing_group(
+            ax=price_ax,
+            swings=data.support_swings,
+            color=theme.support_swing_color,
+            y_offset=y_offset,
+            theme=theme,
+        )
+    if not data.cascade_swings and not data.support_swings:
+        base_bars = add_swings(data.bars, data.timeframe)
+        swings = [bar.swing for bar in base_bars if bar.swing]
+        _draw_swing_group(
+            ax=price_ax,
+            swings=swings,
+            color=theme.common_swing_color,
+            y_offset=y_offset,
+            theme=theme,
+        )
+
+    if detection_time:
+        detection_mpl = _datetime_to_mpl(detection_time)
+        for ax in (price_ax, volume_ax):
+            ax.axvline(
+                detection_mpl,
+                color=theme.grid_color,
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.8,
+                zorder=0,
+            )
+
+    price_ax.set_title(
+        label=f"{data.symbol.upper()} • {data.timeframe.tf}",
+        color=theme.title_color,
+        pad=theme.title_pad,
+    )
+
+    fig.tight_layout()
+
+    length = len(combined_bars)
+    output_path = _resolve_output_path(
+        name=data.symbol,
+        setup_name=setup_name,
+        context=context,
+        timeframe=data.timeframe,
+        time=combined_bars[-1].time,
+        length=length,
+        theme=theme,
+        subdir=subdir,
+    )
+    fig.savefig(
+        fname=output_path,
+        facecolor=theme.background_color,
+        dpi=theme.dpi,
+        bbox_inches="tight"
+    )
+    plt.close(fig)
+
+    return output_path
+
+
 PLOT_STRATEGIES: list[PlotStrategy] = [
     PlotStrategy(data_type=Ppo, handler=_plot_ppo, theme=ppo_plot_theme),
+    PlotStrategy(data_type=Gu, handler=_plot_gu, theme=gu_plot_theme),
 ]
 
 
