@@ -148,7 +148,10 @@ class GuStrategy(Strategy):
 
             support_price_min = cascade_low_swing.extremum_price + consolidation_range * self._config.SUPPORT_CONSOLIDATION_RATIO_MIN
             support_price_max = target_swing.extremum_price
-            open_low_swings = self._filter_by_price(open_low_swings, support_price_min, support_price_max)
+            if support_price_min < support_price_max:
+                open_low_swings = self._filter_by_price(open_low_swings, support_price_min, support_price_max)
+            else:
+                open_low_swings = []
             support_swing = open_low_swings[-1] if open_low_swings else None
             if not support_swing:
                 last_red_bar = next((bar for bar in reversed(cascade_bars) if bar.close < bar.open), None)
