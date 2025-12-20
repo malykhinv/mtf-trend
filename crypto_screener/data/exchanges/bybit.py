@@ -283,19 +283,18 @@ class Bybit(Exchange):
             self,
             order: dict[str, object]
     ) -> OrderInfo:
-        order_data = order if isinstance(order, dict) else dict(order)
-        info = order_data.get("info")
+        info = order.get("info")
         info_data = info if isinstance(info, Mapping) else {}
-        status = self._map_order_status(str(order_data.get("status") or ""))
-        amount = extract_float(order_data.get("amount"), info_data.get("qty")) or 0.0
-        filled = extract_float(order_data.get("filled"), info_data.get("cumExecQty")) or 0.0
-        average = extract_float(order_data.get("average"), order_data.get("price"))
-        side_value = (order_data.get("side") or "").lower()
+        status = self._map_order_status(str(order.get("status") or ""))
+        amount = extract_float(order.get("amount"), info_data.get("qty")) or 0.0
+        filled = extract_float(order.get("filled"), info_data.get("cumExecQty")) or 0.0
+        average = extract_float(order.get("average"), order.get("price"))
+        side_value = (order.get("side") or "").lower()
         side = OrderSide.BUY if side_value == OrderSide.BUY.value else OrderSide.SELL
 
         return OrderInfo(
-            id=str(order_data.get("id")),
-            symbol=str(order_data.get("symbol", "")),
+            id=str(order.get("id")),
+            symbol=str(order.get("symbol", "")),
             side=side,
             quantity=amount,
             filled=filled,
