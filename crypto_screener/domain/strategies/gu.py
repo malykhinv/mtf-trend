@@ -19,10 +19,6 @@ from crypto_screener.domain.strategies.strategy import (
     StrategyVolumeConfig,
 )
 from crypto_screener.domain.swing_detector import add_swings
-from crypto_screener.domain.strategies.cascade_detector import (
-    CascadeDetector,
-    CascadeDetectorConfig,
-)
 
 
 @dataclass(frozen=True)
@@ -44,9 +40,6 @@ class GuStrategy(Strategy):
 
     def __init__(self, config: GuConfig = gu_cfg) -> None:
         self._config = config
-        self._cascade_detector = CascadeDetector(
-            CascadeDetectorConfig.from_strategy_config(config)
-        )
 
     def detect_setup(
             self,
@@ -98,8 +91,8 @@ class GuStrategy(Strategy):
         setup.data.bars = bars
 
         # Анализ каскадов.
-        cascade_long = self._get_cascade(bars, cascade_type=CascadeType.LONG)
-        cascade_short = self._get_cascade(bars, cascade_type=CascadeType.SHORT)
+        cascade_long = self._find_cascade_by_open_swings(bars, cascade_type=CascadeType.LONG)
+        cascade_short = self._find_cascade_by_open_swings(bars, cascade_type=CascadeType.SHORT)
         cascade = self._longest(cascade_long, cascade_short)
         if not cascade:
             return setup
@@ -390,17 +383,54 @@ class GuStrategy(Strategy):
 
         return [(min_low_index, main_low_swing), main_high]
 
-    @staticmethod
-    def _get_cascade(
+    def _find_cascade_by_open_swings(
             self,
             bars: list[Bar],
             *,
             cascade_type: CascadeType,
     ) -> Cascade | None:
-        swings = self._cascade_detector.detect(bars, cascade_type=cascade_type)
-        if not swings:
+        if not bars:
             return None
-        return Cascade(swings=swings, direction=cascade_type)
+        swing_type = SwingType.HIGH if cascade_type is CascadeType.LONG else SwingType.LOW
+        open_swings = [
+            (index, bar.swing)
+            for index, bar in enumerate(bars)
+            if bar.swing is not None
+            and bar.swing.is_open
+            and bar.swing.type == swing_type
+        ]
+        min_cascade_length = self._config.CASCADE_LENGTH_MIN
+        if len(open_swings) < min_cascade_length:
+            return None
+        avg_range = self._calculate_average_range(bars, self._config.CASCADE_ATR_WINDOW)
+        touch_tolerance = max(self._config.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
+        min_width_bars = self._config.CASCADE_MIN_WIDTH_BARS
+        min_width_hours = self._config.CASCADE_MIN_WIDTH_HOURS
+
+        for start in range(len(open_swings) - min_cascade_length + 1):
+            window = open_swings[start:start + min_cascade_length]
+            first_index, first_swing = window[0]
+            last_index, last_swing = window[-1]
+            bars_index_delta = last_index - first_index
+            time_delta_hours = (last_swing.time - first_swing.time).total_seconds() / 3600
+            if min_width_bars > 0 and bars_index_delta < min_width_bars:
+                continue
+            if min_width_hours > 0 and time_delta_hours < min_width_hours:
+                continue
+
+            prices = [swing.extremum_price for _, swing in window]
+            level = float(np.median(prices)) if prices else 0.0
+            if all(abs(price - level) <= touch_tolerance for price in prices):
+                return Cascade(swings=[swing for _, swing in window], direction=cascade_type)
+        return None
+
+    @staticmethod
+    def _calculate_average_range(bars: list[Bar], window: int) -> float:
+        if not bars or window <= 0:
+            return 0.0
+        window = min(window, len(bars))
+        ranges = [bar.high - bar.low for bar in bars[-window:]]
+        return float(np.mean(ranges)) if ranges else 0.0
 
     @staticmethod
     def _longest(*cascades: Cascade | None) -> Cascade | None:

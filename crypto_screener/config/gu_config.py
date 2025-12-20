@@ -39,6 +39,10 @@ class GuConfig:
     CASCADE_MIN_PULLBACK_BARS: int = 3
     # Минимальный разрыв между касаниями в барах.
     CASCADE_MIN_GAP_BARS: int = 5
+    # Минимальная ширина каскада в барах.
+    CASCADE_MIN_WIDTH_BARS: int = 10
+    # Минимальная ширина каскада по времени (часы).
+    CASCADE_MIN_WIDTH_HOURS: float = 0.0
     # Минимальное соотношение отступа поддержки от низа проторговки к размеру проторговки.
     SUPPORT_CONSOLIDATION_RATIO_MIN: float = 0.3
     # endregion
