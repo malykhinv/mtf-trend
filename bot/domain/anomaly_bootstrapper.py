@@ -308,6 +308,7 @@ class AnomalyLiveBootstrapper:
                     pct_to_low_break=pct_to_low_break,
                     pct_to_high_break=pct_to_high_break,
                     break_direction=break_direction,
+                    trend_strength=0.0,
                 )
                 rows.append(
                     LoggedAnomaly(
