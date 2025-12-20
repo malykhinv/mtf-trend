@@ -672,20 +672,23 @@ class GuStrategy(Strategy):
                 duration = bars[last_index].time - bars[first_index].time
                 last_time = bars[last_index].time
                 if best_duration is None or duration > best_duration:
-                    best_candidate = (touch_indices, level_price)
+                    best_candidate = (touch_indices, level_price, first_swing)
                     best_duration = duration
                     best_last_time = last_time
                 elif duration == best_duration and best_last_time is not None and last_time > best_last_time:
-                    best_candidate = (touch_indices, level_price)
+                    best_candidate = (touch_indices, level_price, first_swing)
                     best_duration = duration
                     best_last_time = last_time
 
             if not best_candidate:
                 continue
 
-            touch_indices, level_price = best_candidate
-            cascade_swings = []
+            touch_indices, level_price, first_swing = best_candidate
+            cascade_swings = [first_swing]
+            first_index = touch_indices[0]
             for touch_index in touch_indices:
+                if touch_index == first_index:
+                    continue
                 bar = bars[touch_index]
                 cascade_swings.append(Swing(
                     time=bar.time,
