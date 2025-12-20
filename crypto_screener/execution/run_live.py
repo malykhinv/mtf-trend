@@ -530,7 +530,10 @@ def _update_entry_status(
         )
         active_trade.entry_order_status = entry_info.status
         active_trade.entry_average_price = entry_info.average_price or active_trade.entry_average_price
-        active_trade.quantity = entry_info.quantity or active_trade.quantity
+        if entry_info.status == OrderStatus.PARTIALLY_FILLED:
+            active_trade.quantity = entry_info.filled or entry_info.quantity or active_trade.quantity
+        else:
+            active_trade.quantity = entry_info.quantity or active_trade.quantity
         active_trade.status = entry_info.status
 
     if active_trade.entry_order_status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
