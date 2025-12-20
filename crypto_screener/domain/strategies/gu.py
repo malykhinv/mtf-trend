@@ -6,7 +6,6 @@ import numpy as np
 
 from crypto_screener.config.gu_config import GuConfig, gu_cfg
 from crypto_screener.domain.models.bar import Bar
-from crypto_screener.domain.models.cascade_level import CascadeLevel
 from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
@@ -20,6 +19,10 @@ from crypto_screener.domain.strategies.strategy import (
     StrategyVolumeConfig,
 )
 from crypto_screener.domain.swing_detector import add_swings
+from crypto_screener.domain.strategies.cascade_detector import (
+    CascadeDetector,
+    CascadeDetectorConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,9 @@ class GuStrategy(Strategy):
 
     def __init__(self, config: GuConfig = gu_cfg) -> None:
         self._config = config
+        self._cascade_detector = CascadeDetector(
+            CascadeDetectorConfig.from_strategy_config(config)
+        )
 
     def detect_setup(
             self,
@@ -76,10 +82,25 @@ class GuStrategy(Strategy):
         bars = add_swings(bars, timeframe)
         setup.data.bars = bars
 
+        # Анализ участка роста.
+        main_rising_swings = self._get_main_rising_swings_indexed(bars)
+        if not main_rising_swings:
+            return setup
+        _main_low, main_high = main_rising_swings
+        main_high_index, _ = main_high
+
+        # Анализ коррекции.
+        correction_bars = bars[main_high_index + 1:]
+        if not correction_bars:
+            return setup
+
+        bars = correction_bars
+        setup.data.bars = bars
+
         # Анализ каскадов.
-        cascade_long = self._get_cascade_long(bars)
-        cascade_short = self._get_cascade_short(bars) # написать метод по аналогии с _get_cascade_long. Выделить общие методы
-        cascade = self._longest(cascade_long, cascade_short) # сравнить по длине каскада (во временном диапазоне) и выбрать больший
+        cascade_long = self._get_cascade(bars, cascade_type=CascadeType.LONG)
+        cascade_short = self._get_cascade(bars, cascade_type=CascadeType.SHORT)
+        cascade = self._longest(cascade_long, cascade_short)
         if not cascade:
             return setup
 
@@ -367,288 +388,16 @@ class GuStrategy(Strategy):
         return [(min_low_index, main_low_swing), main_high]
 
     @staticmethod
-    def _calculate_average_range(bars: list[Bar], window: int) -> float:
-        if not bars or window <= 0:
-            return 0.0
-        window = min(window, len(bars))
-        ranges = [bar.high - bar.low for bar in bars[-window:]]
-        return float(np.mean(ranges)) if ranges else 0.0
-
-    def _get_cascade_long(
+    def _get_cascade(
             self,
-            bars: list[Bar]
+            bars: list[Bar],
+            *,
+            cascade_type: CascadeType,
     ) -> Cascade | None:
-        swings = self._detect_cascade_swings(bars, cascade_type=CascadeType.LONG)
+        swings = self._cascade_detector.detect(bars, cascade_type=cascade_type)
         if not swings:
             return None
-        return Cascade(swings=swings, direction=CascadeType.LONG)
-
-    def _get_cascade_short(
-            self,
-            bars: list[Bar]
-    ) -> Cascade | None:
-        swings = self._detect_cascade_swings(bars, cascade_type=CascadeType.SHORT)
-        if not swings:
-            return None
-        return Cascade(swings=swings, direction=CascadeType.SHORT)
-
-    def _detect_cascade_swings(
-            self,
-            bars: list[Bar],
-            *,
-            cascade_type: CascadeType,
-    ) -> list[Swing]:
-        if not bars or len(bars) < 2:
-            return []
-
-        bars = bars[:-1]
-        if not bars:
-            return []
-
-        bars_count = len(bars)
-        avg_range = self._calculate_average_range(bars, self._config.CASCADE_ATR_WINDOW)
-        touch_tolerance = max(self._config.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
-        min_pullback = max(self._config.CASCADE_MIN_PULLBACK_NATR * avg_range, 0.0)
-        min_pullback_bars = self._config.CASCADE_MIN_PULLBACK_BARS
-        min_gap_bars = self._config.CASCADE_MIN_GAP_BARS
-        min_touches = max(self._config.CASCADE_LENGTH_MIN, 3)
-        is_long = cascade_type is CascadeType.LONG
-
-        bar_data = []
-        for index, bar in enumerate(bars):
-            price = bar.high if is_long else bar.low
-            bar_data.append((index, price))
-
-        levels: list[CascadeLevel] = []
-        for index, level_price in bar_data:
-            cross_index = None
-            atr_crossed = False
-            for look_ahead in range(index + 1, bars_count):
-                look_bar = bars[look_ahead]
-                if is_long:
-                    if look_bar.high > level_price + avg_range:
-                        atr_crossed = True
-                        break
-                    if look_bar.high > level_price:
-                        cross_index = look_ahead
-                        break
-                else:
-                    if look_bar.low < level_price - avg_range:
-                        atr_crossed = True
-                        break
-                    if look_bar.low < level_price:
-                        cross_index = look_ahead
-                        break
-            if atr_crossed:
-                continue
-            end_idx = cross_index if cross_index is not None else bars_count
-            if is_long:
-                touches_raw = [
-                    i for i in range(index, end_idx)
-                    if level_price - bars[i].close <= touch_tolerance
-                    and bars[i].close <= level_price
-                ]
-            else:
-                touches_raw = [
-                    i for i in range(index, end_idx)
-                    if bars[i].close - level_price <= touch_tolerance
-                    and bars[i].close >= level_price
-                ]
-            if touches_raw:
-                levels.append(CascadeLevel(
-                    price=level_price,
-                    is_crossed=cross_index is not None,
-                    distance=(cross_index - index) if cross_index is not None else (bars_count - 1 - index),
-                    touches_raw=touches_raw,
-                ))
-
-        best_level_touches = []
-        best_level_touches_count = 0
-        best_level_price = None
-
-        for level in levels:
-            if level.is_crossed:
-                continue
-            touches = self._refine_touches(
-                bars,
-                level.price,
-                level.touches_raw,
-                min_gap_bars=min_gap_bars,
-                min_pullback=min_pullback,
-                min_pullback_bars=min_pullback_bars,
-                cascade_type=cascade_type,
-            )
-            touches_count = len(touches)
-
-            if touches_count > best_level_touches_count or (
-                    touches_count == best_level_touches_count and
-                    (not best_level_touches or touches[-1] > best_level_touches[-1])
-            ):
-                best_level_touches = touches
-                best_level_touches_count = touches_count
-                best_level_price = level.price
-
-        if not best_level_touches or best_level_touches_count < min_touches or best_level_price is None:
-            return []
-
-        if not self._passes_pullback_ratios(
-                bars,
-                best_level_touches,
-                best_level_price,
-                avg_range,
-                cascade_type=cascade_type,
-        ):
-            return []
-
-        first_touch_index = min(best_level_touches)
-        last_touch_index = max(best_level_touches)
-        if is_long:
-            last_touch_segment_extreme = min(bar.low for bar in bars[last_touch_index:])
-            first_touch_segment_extreme = min(bar.low for bar in bars[first_touch_index:last_touch_index - 1])
-            if last_touch_segment_extreme <= first_touch_segment_extreme:
-                return []
-        else:
-            last_touch_segment_extreme = max(bar.high for bar in bars[last_touch_index:])
-            first_touch_segment_extreme = max(bar.high for bar in bars[first_touch_index:last_touch_index - 1])
-            if last_touch_segment_extreme >= first_touch_segment_extreme:
-                return []
-
-        swing_type = SwingType.HIGH if is_long else SwingType.LOW
-        cascade_swings = []
-        for touch_index in best_level_touches:
-            bar = bars[touch_index]
-            swing = Swing(
-                time=bar.time,
-                extremum_price=best_level_price,
-                close_price=bar.close,
-                type=swing_type,
-                is_open=True,
-            )
-            cascade_swings.append(swing)
-
-        return cascade_swings
-
-    @staticmethod
-    def _refine_touches(
-            bars: list[Bar],
-            price: float,
-            touches_count: list[int],
-            *,
-            min_gap_bars: int,
-            min_pullback: float,
-            min_pullback_bars: int,
-            cascade_type: CascadeType,
-    ) -> list[int]:
-        if not touches_count:
-            return []
-        is_long = cascade_type is CascadeType.LONG
-        refined = touches_count[:]
-        while True:
-            changed = False
-            new_touches = []
-            last_touch = None
-            for touch_idx in refined:
-                if last_touch is None:
-                    new_touches.append(touch_idx)
-                    last_touch = touch_idx
-                    continue
-                if touch_idx - last_touch < min_gap_bars:
-                    changed = True
-                    continue
-                pullback_bars = bars[last_touch + 1:touch_idx]
-                if not pullback_bars:
-                    changed = True
-                    continue
-                if is_long:
-                    pullback_depth = max((price - pullback_bar.low) for pullback_bar in pullback_bars)
-                else:
-                    pullback_depth = max((pullback_bar.high - price) for pullback_bar in pullback_bars)
-                consecutive = 0
-                max_consecutive = 0
-                for pullback_bar in pullback_bars:
-                    if is_long:
-                        is_pullback = pullback_bar.close <= price - min_pullback
-                    else:
-                        is_pullback = pullback_bar.close >= price + min_pullback
-                    if is_pullback:
-                        consecutive += 1
-                        max_consecutive = max(max_consecutive, consecutive)
-                    else:
-                        consecutive = 0
-                has_pullback = pullback_depth >= min_pullback and max_consecutive >= min_pullback_bars
-                if not has_pullback:
-                    changed = True
-                    continue
-                new_touches.append(touch_idx)
-                last_touch = touch_idx
-            if not changed:
-                return new_touches
-            refined = new_touches
-
-    def _calculate_pullbacks(
-            self,
-            bars: list[Bar],
-            touch_indices: list[int],
-            level_price: float,
-            *,
-            cascade_type: CascadeType,
-    ) -> list[float]:
-        pullbacks: list[float] = []
-        for left_idx, right_idx in zip(touch_indices, touch_indices[1:]):
-            segment = bars[left_idx + 1:right_idx]
-            if not segment:
-                return []
-            if cascade_type is CascadeType.LONG:
-                segment_extreme = min(bar.low for bar in segment)
-                depth = level_price - segment_extreme
-            else:
-                segment_extreme = max(bar.high for bar in segment)
-                depth = segment_extreme - level_price
-            if depth <= 0:
-                return []
-            pullbacks.append(depth)
-        return pullbacks
-
-    def _passes_pullback_ratios(
-            self,
-            bars: list[Bar],
-            touch_indices: list[int],
-            level_price: float,
-            avg_range: float,
-            *,
-            cascade_type: CascadeType,
-    ) -> bool:
-        pullbacks = self._calculate_pullbacks(
-            bars,
-            touch_indices,
-            level_price,
-            cascade_type=cascade_type,
-        )
-        if len(pullbacks) < 2:
-            return False
-        first_depth = pullbacks[0]
-        second_depth = pullbacks[1]
-        if first_depth <= 0 or second_depth <= 0:
-            return False
-        min_pullback = self._config.CASCADE_MIN_PULLBACK_NATR * avg_range
-        if first_depth < min_pullback or second_depth < min_pullback:
-            return False
-        ratio = second_depth / first_depth
-        if not (
-                self._config.CASCADE_PULLBACK_SECOND_RATIO_MIN
-                <= ratio
-                <= self._config.CASCADE_PULLBACK_SECOND_RATIO_MAX
-        ):
-            return False
-        for depth in pullbacks[2:]:
-            ratio = depth / second_depth
-            if not (
-                    self._config.CASCADE_PULLBACK_NEXT_RATIO_MIN
-                    <= ratio
-                    <= self._config.CASCADE_PULLBACK_NEXT_RATIO_MAX
-            ):
-                return False
-        return True
+        return Cascade(swings=swings, direction=cascade_type)
 
     @staticmethod
     def _longest(*cascades: Cascade | None) -> Cascade | None:

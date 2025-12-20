@@ -1,10 +1,4 @@
 from dataclasses import dataclass
-from enum import Enum
-
-
-class CascadeGroupingMode(str, Enum):
-    CALENDAR = "calendar"
-    ROLLING_WINDOW = "rolling_window"
 
 
 @dataclass(frozen=True)
