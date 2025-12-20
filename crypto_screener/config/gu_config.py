@@ -23,8 +23,6 @@ class GuConfig:
     CASCADE_ATR_WINDOW: int = 50
     # Допуск по касаниям в долях ATR.
     CASCADE_TOUCH_EPS_NATR: float = 1.0
-    # Максимальное перебитие уровня в долях ATR.
-    CASCADE_OVERTOUCH_NATR: float = 0.5
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
     # Минимальная доля отката после второго касания относительно первого.
