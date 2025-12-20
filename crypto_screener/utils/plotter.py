@@ -258,6 +258,7 @@ def _plot_ppo(
     length = len(combined_bars)
     output_path = _resolve_output_path(
         name=data.symbol,
+        strategy_name=type(data).__name__,
         setup_name=setup_name,
         context=context,
         timeframe=data.timeframe,
@@ -387,6 +388,7 @@ def _plot_gu(
     length = len(combined_bars)
     output_path = _resolve_output_path(
         name=data.symbol,
+        strategy_name=type(data).__name__,
         setup_name=setup_name,
         context=context,
         timeframe=data.timeframe,
@@ -829,6 +831,7 @@ def _draw_entry_zones(
 
 def _resolve_output_path(
         name: str,
+        strategy_name: Optional[str],
         setup_name: Optional[str],
         context: Optional[Context],
         timeframe: Timeframe,
@@ -844,6 +847,8 @@ def _resolve_output_path(
     output_dir.mkdir(parents=True, exist_ok=True)
     resolved_name = (name or theme.default_symbol).split(":", 1)[0]
     name_parts = [resolved_name]
+    if strategy_name:
+        name_parts.append(strategy_name)
     if setup_name:
         name_parts.append(setup_name)
     if context:
