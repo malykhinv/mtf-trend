@@ -662,6 +662,7 @@ class GuStrategy(Strategy):
                     continue
 
                 touch_indices = []
+                overtouch_tolerance = self._config.CASCADE_OVERTOUCH_NATR * avg_range
                 for day_idx in range(start_day, len(cascade_extremes)):
                     day_price = cascade_extremes[day_idx].price
                     if is_long and day_price > level_price + touch_tolerance:
@@ -681,6 +682,13 @@ class GuStrategy(Strategy):
 
                 if len(touch_indices) < min_touches:
                     continue
+
+                if is_long:
+                    if any(bars[index].high - level_price > overtouch_tolerance for index in touch_indices):
+                        continue
+                else:
+                    if any(level_price - bars[index].low > overtouch_tolerance for index in touch_indices):
+                        continue
 
                 if is_long:
                     touch_prices = [bars[index].high for index in touch_indices]
