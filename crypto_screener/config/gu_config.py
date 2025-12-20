@@ -28,7 +28,7 @@ class GuConfig:
     # Размер окна ATR для анализа лонгового каскада.
     CASCADE_ATR_WINDOW: int = 50
     # Допуск по касаниям в долях ATR.
-    CASCADE_TOUCH_EPS_NATR: float = 1.0
+    CASCADE_TOUCH_EPS_NATR: float = 6.0
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
     # Минимальная доля отката после второго касания относительно первого.

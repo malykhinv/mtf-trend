@@ -631,8 +631,16 @@ class GuStrategy(Strategy):
                         break
                     if not is_long and day_price < level_price - touch_tolerance:
                         break
-                    if abs(day_price - level_price) <= touch_tolerance:
-                        touch_indices.append(cascade_extremes[day_idx].index)
+                    if abs(day_price - level_price) > touch_tolerance:
+                        continue
+                    bar = bars[cascade_extremes[day_idx].index]
+                    close_price = bar.close
+                    if is_long:
+                        if close_price <= level_price and (level_price - close_price) <= touch_tolerance:
+                            touch_indices.append(cascade_extremes[day_idx].index)
+                    else:
+                        if close_price >= level_price and (close_price - level_price) <= touch_tolerance:
+                            touch_indices.append(cascade_extremes[day_idx].index)
 
                 if len(touch_indices) < min_touches:
                     continue

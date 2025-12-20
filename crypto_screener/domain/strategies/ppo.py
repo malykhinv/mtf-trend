@@ -61,7 +61,8 @@ class PpoStrategy(Strategy):
         setup.data.bars = bars
 
         # Анализ участка роста.
-        main_rising_swings = self._get_main_rising_swings_indexed(bars)
+        main_rising_swings = (self._get_main_rising_swings_indexed_by_high(bars) or
+                              self._get_main_rising_swings_indexed_by_low(bars))
         if not main_rising_swings:
             return setup
         main_low, main_high = main_rising_swings
@@ -343,9 +344,11 @@ class PpoStrategy(Strategy):
         total_shadow = np.sum(shadows[valid_ranges])
         return 100 * total_shadow / total_range if total_range > 0 else 0.0
 
-    @classmethod
-    def _get_main_rising_swings_indexed(cls, bars: list[Bar]) -> list[tuple[int, Swing]]:
-        main_high = cls._get_first_open_swing_indexed(bars, SwingType.HIGH)
+    def _get_main_rising_swings_indexed_by_high(
+            self,
+            bars: list[Bar]
+    ) -> list[tuple[int, Swing]]:
+        main_high = self._get_first_open_swing_indexed(bars, SwingType.HIGH)
         if not main_high:
             return []
         main_high_index, main_high_swing = main_high
@@ -374,6 +377,51 @@ class PpoStrategy(Strategy):
         )
 
         return [(min_low_index, main_low_swing), main_high]
+
+
+    def _get_main_rising_swings_indexed_by_low(
+            self,
+            bars: list[Bar]
+    ) -> list[tuple[int, Swing]]:
+        main_low = self._get_first_open_swing_indexed(bars, SwingType.LOW)
+        if not main_low:
+            return []
+        main_low_index, main_low_swing_raw = main_low
+
+        max_high_price = float('-inf')
+        max_high_swing = None
+        max_high_index = -1
+
+        for i in range(main_low_index, len(bars)):
+            bar = bars[i]
+            swing = bar.swing
+            if swing and swing.type == SwingType.HIGH and swing.is_open:
+                if bar.high > max_high_price:
+                    max_high_price = bar.high
+                    max_high_swing = swing
+                    max_high_index = i
+
+        if not max_high_swing or max_high_index == -1:
+            return []
+
+        main_low_price = bars[main_low_index].low
+        main_low_swing = Swing(
+            time=main_low_swing_raw.time,
+            extremum_price=main_low_price,
+            close_price=bars[main_low_index].close,
+            type=SwingType.LOW,
+            is_open=True
+        )
+
+        main_high_swing = Swing(
+            time=max_high_swing.time,
+            extremum_price=max_high_price,
+            close_price=bars[max_high_index].close,
+            type=SwingType.HIGH,
+            is_open=True
+        )
+
+        return [(main_low_index, main_low_swing), (max_high_index, main_high_swing)]
 
     def _get_cascade_long(
             self,

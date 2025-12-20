@@ -50,8 +50,9 @@ _test_data: list[TestData] = [
     # TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=21)),
     # TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
     # TestData('TRADOORUSDT', Timeframe.M15, datetime(year=2025, month=11, day=16, hour=23, minute=35)),
+    TestData('MONUSDT', Timeframe.M5, datetime(year=2025, month=12, day=2, hour=10, minute=55)),
     # ГУ.
-    TestData('PIPPINUSDT', Timeframe.M30, datetime(year=2025, month=12, day=15, hour=12, minute=0)),
+    # TestData('PIPPINUSDT', Timeframe.M30, datetime(year=2025, month=12, day=15, hour=12, minute=0)),
 ]
 
 # Биржа по умолчанию.
