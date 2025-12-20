@@ -3,19 +3,8 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class PpoConfig:
-    # region Контекст.
-    CONTEXT_TRADES_MIN: int = 500_000
-    CONTEXT_VOLUME_MIN: float = 500_000_000
-    # endregion
-
     # region Сетапы.
     CAPTURE_TIMEOUT_MULTIPLIER: int = 12
-    # endregion
-
-    # region Капитализация.
-    CAPITALIZATION_LOW_MIN: float = 20_000_000
-    CAPITALIZATION_MIDDLE_MIN: float = 1_000_000_000
-    CAPITALIZATION_HIGH_MIN: float = 10_000_000_000
     # endregion
 
     # region Повышенный объем.
@@ -81,10 +70,6 @@ class PpoConfig:
     MIN_POSITION_NOTIONAL_USDT: float = 10.0
     # Минимальное количество монет в позиции.
     MIN_POSITION_QUANTITY: float = 0.001
-    # Количество повторных попыток размещения ордеров.
-    ORDER_MAX_RETRIES: int = 3
-    # Пауза между повторными попытками размещения ордеров.
-    ORDER_RETRY_DELAY_SECONDS: float = 1.0
     # endregion
 
     # region Тест

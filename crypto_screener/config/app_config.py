@@ -4,7 +4,7 @@ from typing import Mapping
 from zoneinfo import ZoneInfo
 
 from crypto_screener.config.strategy_registry import DEFAULT_STRATEGIES, DEFAULT_STRATEGY_CONFIGS
-from crypto_screener.domain.models.mode import Live, Mode, TestMarket, PlotPolicy, TestSymbols, TestData
+from crypto_screener.domain.models.mode import Mode, PlotPolicy, TestSymbols, TestData, Live, TestMarket
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.strategies.strategy import Strategy
 
