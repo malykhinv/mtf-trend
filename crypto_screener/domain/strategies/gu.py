@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 import numpy as np
 
-from crypto_screener.config.gu_config import CascadeGroupingMode, GuConfig, gu_cfg
+from crypto_screener.config.gu_config import GuConfig, gu_cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
@@ -20,6 +19,10 @@ from crypto_screener.domain.strategies.strategy import (
     StrategyVolumeConfig,
 )
 from crypto_screener.domain.swing_detector import add_swings
+from crypto_screener.domain.strategies.cascade_detector import (
+    CascadeDetector,
+    CascadeDetectorConfig,
+)
 
 
 @dataclass(frozen=True)
@@ -36,17 +39,14 @@ class Cascade:
         return self.direction is CascadeType.SHORT
 
 
-@dataclass(frozen=True)
-class CascadeExtreme:
-    index: int
-    price: float
-
-
 class GuStrategy(Strategy):
     name = "ГУ"
 
     def __init__(self, config: GuConfig = gu_cfg) -> None:
         self._config = config
+        self._cascade_detector = CascadeDetector(
+            CascadeDetectorConfig.from_strategy_config(config)
+        )
 
     def detect_setup(
             self,
@@ -384,7 +384,10 @@ class GuStrategy(Strategy):
             self,
             bars: list[Bar]
     ) -> Cascade | None:
-        swings = self._get_cascade(bars, cascade_type=CascadeType.LONG)
+        swings = self._cascade_detector.detect(
+            bars,
+            cascade_type=CascadeType.LONG,
+        )
         if not swings:
             return None
         return Cascade(swings=swings, direction=CascadeType.LONG)
@@ -393,7 +396,10 @@ class GuStrategy(Strategy):
             self,
             bars: list[Bar]
     ) -> Cascade | None:
-        swings = self._get_cascade(bars, cascade_type=CascadeType.SHORT)
+        swings = self._cascade_detector.detect(
+            bars,
+            cascade_type=CascadeType.SHORT,
+        )
         if not swings:
             return None
         return Cascade(swings=swings, direction=CascadeType.SHORT)
@@ -410,386 +416,6 @@ class GuStrategy(Strategy):
             return duration, last_time
 
         return max(candidates, key=key)
-
-    @staticmethod
-    def _group_bars_by_day(bars: list[Bar]) -> list[tuple[int, int]]:
-        if not bars:
-            return []
-        groups: list[tuple[int, int]] = []
-        start_index = 0
-        current_date = bars[0].time.date()
-        for index, bar in enumerate(bars):
-            bar_date = bar.time.date()
-            if bar_date != current_date:
-                groups.append((start_index, index - 1))
-                current_date = bar_date
-                start_index = index
-        groups.append((start_index, len(bars) - 1))
-        return groups
-
-    @staticmethod
-    def _group_bars_by_time_window(
-            bars: list[Bar],
-            *,
-            window_hours: int,
-    ) -> list[tuple[int, int, datetime, datetime]]:
-        if not bars or window_hours <= 0:
-            return []
-        groups: list[tuple[int, int, datetime, datetime]] = []
-        start_index = 0
-        while start_index < len(bars):
-            start_time = bars[start_index].time
-            window_start = start_time
-            window_end = start_time + timedelta(hours=window_hours)
-            end_index = start_index
-            for index in range(start_index + 1, len(bars)):
-                if bars[index].time <= window_end:
-                    end_index = index
-                else:
-                    break
-            groups.append((start_index, end_index, window_start, window_end))
-            start_index = end_index + 1
-        return groups
-
-    @staticmethod
-    def _get_window_extremes(
-            bars: list[Bar],
-            time_groups: list[tuple[int, int, datetime, datetime]],
-            *,
-            cascade_type: CascadeType,
-    ) -> list[CascadeExtreme]:
-        window_extremes: list[CascadeExtreme] = []
-        for start_index, end_index, _window_start, _window_end in time_groups:
-            # Экстремумы окна: лонг — максимум окна, шорт — минимум окна (аналогично дневным экстремумам).
-            window_indices = list(range(start_index, end_index + 1))
-            if not window_indices:
-                continue
-            if cascade_type is CascadeType.LONG:
-                window_price = max(bars[index].high for index in window_indices)
-                for index in window_indices:
-                    if bars[index].high == window_price:
-                        window_extremes.append(CascadeExtreme(index=index, price=float(window_price)))
-                        break
-            else:
-                window_price = min(bars[index].low for index in window_indices)
-                for index in window_indices:
-                    if bars[index].low == window_price:
-                        window_extremes.append(CascadeExtreme(index=index, price=float(window_price)))
-                        break
-        return window_extremes
-
-    @staticmethod
-    def _get_daily_extremes(
-            bars: list[Bar],
-            day_groups: list[tuple[int, int]],
-            *,
-            cascade_type: CascadeType,
-    ) -> list[CascadeExtreme]:
-        daily_extremes: list[CascadeExtreme] = []
-        for start_index, end_index in day_groups:
-            day_bars = bars[start_index:end_index + 1]
-            if cascade_type is CascadeType.LONG:
-                day_price = max(bar.high for bar in day_bars)
-                for index in range(start_index, end_index + 1):
-                    if bars[index].high == day_price:
-                        daily_extremes.append(CascadeExtreme(index=index, price=float(day_price)))
-                        break
-            else:
-                day_price = min(bar.low for bar in day_bars)
-                for index in range(start_index, end_index + 1):
-                    if bars[index].low == day_price:
-                        daily_extremes.append(CascadeExtreme(index=index, price=float(day_price)))
-                        break
-        return daily_extremes
-
-    @staticmethod
-    def _get_swing_extremes(
-            bars: list[Bar],
-            *,
-            cascade_type: CascadeType,
-    ) -> list[CascadeExtreme]:
-        swing_type = SwingType.HIGH if cascade_type is CascadeType.LONG else SwingType.LOW
-        swing_extremes: list[CascadeExtreme] = []
-        for index, bar in enumerate(bars):
-            swing = bar.swing
-            if swing is None:
-                continue
-            if not swing.is_open:
-                continue
-            if swing.type != swing_type:
-                continue
-            swing_extremes.append(CascadeExtreme(index=index, price=float(swing.extremum_price)))
-        return swing_extremes
-
-    @staticmethod
-    def _merge_extremes(
-            bars: list[Bar],
-            *extremes: list[CascadeExtreme],
-    ) -> list[CascadeExtreme]:
-        unique: dict[tuple[int, float], CascadeExtreme] = {}
-        for extremes_list in extremes:
-            for extreme in extremes_list:
-                unique[(extreme.index, extreme.price)] = extreme
-        return sorted(unique.values(), key=lambda item: bars[item.index].time)
-
-    def _get_cascade_extremes(
-            self,
-            bars: list[Bar],
-            *,
-            cascade_type: CascadeType,
-            grouping_mode: CascadeGroupingMode,
-            window_hours: int | None = None,
-    ) -> list[CascadeExtreme]:
-        swing_extremes = self._get_swing_extremes(bars, cascade_type=cascade_type)
-        if grouping_mode is CascadeGroupingMode.ROLLING_WINDOW:
-            if window_hours is None:
-                window_hours = self._config.CASCADE_ROLLING_WINDOW_MAX_HOURS
-            time_groups = self._group_bars_by_time_window(
-                bars,
-                window_hours=window_hours,
-            )
-            window_extremes = self._get_window_extremes(bars, time_groups, cascade_type=cascade_type)
-            return self._merge_extremes(bars, window_extremes, swing_extremes)
-        day_groups = self._group_bars_by_day(bars)
-        daily_extremes = self._get_daily_extremes(bars, day_groups, cascade_type=cascade_type)
-        return self._merge_extremes(bars, daily_extremes, swing_extremes)
-
-    @staticmethod
-    def _calculate_pullbacks(
-            bars: list[Bar],
-            touch_indices: list[int],
-            level_price: float,
-            *,
-            cascade_type: CascadeType,
-    ) -> list[tuple[float, float]]:
-        pullbacks: list[tuple[float, float]] = []
-        for left_idx, right_idx in zip(touch_indices, touch_indices[1:]):
-            segment = bars[left_idx + 1:right_idx]
-            if not segment:
-                return []
-            if cascade_type is CascadeType.LONG:
-                segment_extreme = min(bar.low for bar in segment)
-                depth = level_price - segment_extreme
-            else:
-                segment_extreme = max(bar.high for bar in segment)
-                depth = segment_extreme - level_price
-            if depth <= 0:
-                return []
-            pullbacks.append((depth, segment_extreme))
-        return pullbacks
-
-    @staticmethod
-    def _is_price_squeezed(
-            pullbacks: list[tuple[float, float]],
-            *,
-            cascade_type: CascadeType,
-    ) -> bool:
-        extremes = [extreme for _, extreme in pullbacks]
-        if len(extremes) < 2:
-            return False
-        if cascade_type is CascadeType.LONG:
-            return all(curr >= prev for prev, curr in zip(extremes, extremes[1:]))
-        return all(curr <= prev for prev, curr in zip(extremes, extremes[1:]))
-
-    def _passes_pullback_rules(
-            self,
-            pullbacks: list[tuple[float, float]],
-            avg_range: float,
-    ) -> bool:
-        if len(pullbacks) < 2:
-            return False
-        first_depth = pullbacks[0][0]
-        second_depth = pullbacks[1][0]
-        if first_depth <= 0 or second_depth <= 0:
-            return False
-        min_pullback = self._config.CASCADE_MIN_PULLBACK_NATR * avg_range
-        if first_depth < min_pullback or second_depth < min_pullback:
-            return False
-        ratio = second_depth / first_depth
-        if not (
-                self._config.CASCADE_PULLBACK_SECOND_RATIO_MIN
-                <= ratio
-                <= self._config.CASCADE_PULLBACK_SECOND_RATIO_MAX
-        ):
-            return False
-        for depth, _ in pullbacks[2:]:
-            ratio = depth / second_depth
-            if not (
-                    self._config.CASCADE_PULLBACK_NEXT_RATIO_MIN
-                    <= ratio
-                    <= self._config.CASCADE_PULLBACK_NEXT_RATIO_MAX
-            ):
-                return False
-        return True
-
-    def _get_cascade(
-            self,
-            bars: list[Bar],
-            *,
-            cascade_type: CascadeType,
-    ) -> list[Swing]:
-        if not bars or len(bars) < 2:
-            return []
-
-        bars = bars[:-1]
-        if not bars:
-            return []
-
-        avg_range = self._calculate_average_range(bars, self._config.CASCADE_ATR_WINDOW)
-        touch_tolerance = max(self._config.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
-        min_touches = max(self._config.CASCADE_LENGTH_MIN, 3)
-        is_long = cascade_type is CascadeType.LONG
-        swing_type = SwingType.HIGH if is_long else SwingType.LOW
-
-        def rolling_window_sizes() -> list[int]:
-            min_hours = self._config.CASCADE_ROLLING_WINDOW_MIN_HOURS
-            max_hours = self._config.CASCADE_ROLLING_WINDOW_MAX_HOURS
-            if min_hours <= 0 or max_hours <= 0:
-                return []
-            if max_hours <= min_hours:
-                return [max_hours]
-            sizes: list[int] = []
-            size = max_hours
-            while size > min_hours:
-                sizes.append(size)
-                size -= min_hours
-            sizes.append(min_hours)
-            return sizes
-
-        def find_cascade(cascade_extremes: list[CascadeExtreme]) -> list[Swing]:
-            if len(cascade_extremes) < min_touches:
-                return []
-
-            best_candidate = None
-            best_duration = None
-            best_last_time = None
-
-            for start_day in range(len(cascade_extremes) - 1):
-                level_price = cascade_extremes[start_day].price
-                next_day_price = cascade_extremes[start_day + 1].price
-                if abs(next_day_price - level_price) > touch_tolerance:
-                    continue
-
-                touch_indices = []
-                overtouch_tolerance = self._config.CASCADE_OVERTOUCH_NATR * avg_range
-                for day_idx in range(start_day, len(cascade_extremes)):
-                    day_price = cascade_extremes[day_idx].price
-                    if is_long and day_price > level_price + touch_tolerance:
-                        break
-                    if not is_long and day_price < level_price - touch_tolerance:
-                        break
-                    if abs(day_price - level_price) > touch_tolerance:
-                        continue
-                    bar = bars[cascade_extremes[day_idx].index]
-                    close_price = bar.close
-                    if is_long:
-                        if close_price <= level_price and (level_price - close_price) <= touch_tolerance:
-                            touch_indices.append(cascade_extremes[day_idx].index)
-                    else:
-                        if close_price >= level_price and (close_price - level_price) <= touch_tolerance:
-                            touch_indices.append(cascade_extremes[day_idx].index)
-
-                if len(touch_indices) < min_touches:
-                    continue
-
-                if is_long:
-                    if any(bars[index].high - level_price > overtouch_tolerance for index in touch_indices):
-                        continue
-                else:
-                    if any(level_price - bars[index].low > overtouch_tolerance for index in touch_indices):
-                        continue
-
-                if is_long:
-                    touch_prices = [bars[index].high for index in touch_indices]
-                else:
-                    touch_prices = [bars[index].low for index in touch_indices]
-                if not touch_prices:
-                    continue
-                level_price = float(np.median(touch_prices))
-                if any(abs(price - level_price) > touch_tolerance for price in touch_prices):
-                    continue
-
-                first_index = touch_indices[0]
-                first_swing = bars[first_index].swing
-                if (
-                        first_swing is None
-                        or not first_swing.is_open
-                        or first_swing.type != swing_type
-                        or abs(first_swing.extremum_price - level_price) > touch_tolerance
-                ):
-                    continue
-
-                pullbacks = self._calculate_pullbacks(
-                    bars,
-                    touch_indices,
-                    level_price,
-                    cascade_type=cascade_type,
-                )
-                if not pullbacks:
-                    continue
-                if not self._passes_pullback_rules(pullbacks, avg_range):
-                    continue
-                if not self._is_price_squeezed(pullbacks, cascade_type=cascade_type):
-                    continue
-
-                last_index = touch_indices[-1]
-                duration = bars[last_index].time - bars[first_index].time
-                last_time = bars[last_index].time
-                if best_duration is None or duration > best_duration:
-                    best_candidate = (touch_indices, level_price, first_swing)
-                    best_duration = duration
-                    best_last_time = last_time
-                elif duration == best_duration and best_last_time is not None and last_time > best_last_time:
-                    best_candidate = (touch_indices, level_price, first_swing)
-                    best_duration = duration
-                    best_last_time = last_time
-
-            if not best_candidate:
-                return []
-
-            touch_indices, level_price, first_swing = best_candidate
-            cascade_swings = [first_swing]
-            first_index = touch_indices[0]
-            for touch_index in touch_indices:
-                if touch_index == first_index:
-                    continue
-                bar = bars[touch_index]
-                cascade_swings.append(Swing(
-                    time=bar.time,
-                    extremum_price=level_price,
-                    close_price=bar.close,
-                    type=swing_type,
-                    is_open=True
-                ))
-
-            return cascade_swings
-        for grouping_mode in (
-                CascadeGroupingMode.ROLLING_WINDOW,
-                CascadeGroupingMode.CALENDAR,
-        ):
-            if grouping_mode is CascadeGroupingMode.ROLLING_WINDOW:
-                for window_hours in rolling_window_sizes():
-                    cascade_extremes = self._get_cascade_extremes(
-                        bars,
-                        cascade_type=cascade_type,
-                        grouping_mode=grouping_mode,
-                        window_hours=window_hours,
-                    )
-                    cascade_swings = find_cascade(cascade_extremes)
-                    if cascade_swings:
-                        return cascade_swings
-                continue
-
-            cascade_extremes = self._get_cascade_extremes(
-                bars,
-                cascade_type=cascade_type,
-                grouping_mode=grouping_mode,
-            )
-            cascade_swings = find_cascade(cascade_extremes)
-            if cascade_swings:
-                return cascade_swings
-
-        return []
 
     def get_runtime_config(self) -> StrategyRuntimeConfig:
         return StrategyRuntimeConfig(
