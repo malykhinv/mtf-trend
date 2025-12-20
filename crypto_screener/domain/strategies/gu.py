@@ -645,6 +645,16 @@ class GuStrategy(Strategy):
                 if len(touch_indices) < min_touches:
                     continue
 
+                if is_long:
+                    touch_prices = [bars[index].high for index in touch_indices]
+                else:
+                    touch_prices = [bars[index].low for index in touch_indices]
+                if not touch_prices:
+                    continue
+                level_price = float(np.median(touch_prices))
+                if any(abs(price - level_price) > touch_tolerance for price in touch_prices):
+                    continue
+
                 first_index = touch_indices[0]
                 first_swing = bars[first_index].swing
                 if (
