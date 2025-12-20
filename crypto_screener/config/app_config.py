@@ -40,15 +40,18 @@ _capture_poll_intervals: dict[Timeframe, timedelta] = {
 
 # Данные для тестирования конкретных символов.
 _test_data: list[TestData] = [
-    TestData('ICPUSDT', Timeframe.M5, datetime(year=2025, month=11, day=4, hour=3, minute=14)),
-    TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=54)),
-    TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=12, minute=10)),
-    TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=46)),
-    TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=9, minute=1)),
-    TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
-    TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=21)),
-    TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
-    TestData('TRADOORUSDT', Timeframe.M15, datetime(year=2025, month=11, day=16, hour=23, minute=35)),
+    # ППО.
+    # TestData('ICPUSDT', Timeframe.M5, datetime(year=2025, month=11, day=4, hour=3, minute=14)),
+    # TestData('KAIAUSDT', Timeframe.M5, datetime(year=2025, month=6, day=10, hour=23, minute=54)),
+    # TestData('MOODENGUSDT', Timeframe.M5, datetime(year=2025, month=5, day=11, hour=12, minute=10)),
+    # TestData('PNUTUSDT', Timeframe.M15, datetime(year=2025, month=5, day=11, hour=12, minute=46)),
+    # TestData('WIFUSDT', Timeframe.H1, datetime(year=2024, month=9, day=24, hour=9, minute=1)),
+    # TestData('ASTERUSDT', Timeframe.M15, datetime(year=2025, month=9, day=23, hour=7, minute=1)),
+    # TestData('TNSRUSDT', Timeframe.M5, datetime(year=2025, month=11, day=20, hour=6, minute=21)),
+    # TestData('LSKUSDT', Timeframe.M5, datetime(year=2025, month=11, day=29, hour=14, minute=26)),
+    # TestData('TRADOORUSDT', Timeframe.M15, datetime(year=2025, month=11, day=16, hour=23, minute=35)),
+    # ГУ.
+    TestData('PIPPINUSDT', Timeframe.M30, datetime(year=2025, month=12, day=15, hour=12, minute=0)),
 ]
 
 # Биржа по умолчанию.

@@ -115,4 +115,3 @@ class GuConfig:
 
 
 gu_cfg = GuConfig()
-pu_cfg = gu_cfg
