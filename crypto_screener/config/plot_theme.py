@@ -91,3 +91,4 @@ class PlotTheme:
 
 
 ppo_plot_theme = PlotTheme()
+gu_plot_theme = PlotTheme()
