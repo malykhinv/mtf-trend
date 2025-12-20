@@ -29,6 +29,7 @@ class BarMetrics:
     pct_to_low_break: float
     pct_to_high_break: float
     break_direction: BreakDirection
+    trend_strength: float
 
 
 @dataclass(frozen=True, slots=True)

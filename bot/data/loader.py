@@ -34,6 +34,7 @@ _EMPTY_METRICS = BarMetrics(
     pct_to_low_break=0.0,
     pct_to_high_break=0.0,
     break_direction=BreakDirection.NONE,
+    trend_strength=0.0,
 )
 
 
@@ -55,6 +56,11 @@ class _BarMetricsHelper:
         self._true_range_sum: float = 0.0
         self._prev_close: float | None = None
         self._enable_break_direction = enable_break_direction
+        self._ema_periods = (20, 50, 100, 200)
+        self._ema_values: dict[int, float | None] = {period: None for period in self._ema_periods}
+        self._ema_weights: dict[int, float] = {
+            period: 2.0 / (period + 1) for period in self._ema_periods
+        }
 
     def calculate(
         self,
@@ -83,6 +89,7 @@ class _BarMetricsHelper:
             high=high,
             low=low,
         )
+        trend_strength = self._calc_trend_strength(close=close)
         return BarMetrics(
             pct_move=pct_move,
             relative_volume=relative_volume,
@@ -93,6 +100,7 @@ class _BarMetricsHelper:
             pct_to_low_break=pct_to_low_break,
             pct_to_high_break=pct_to_high_break,
             break_direction=BreakDirection.NONE,
+            trend_strength=trend_strength,
         )
 
     def _update_volume(self, volume: float) -> float:
@@ -168,6 +176,45 @@ class _BarMetricsHelper:
         pct_to_low = (close - low) / close * 100.0 if close > 0.0 else 0.0
         pct_to_high = (high - close) / close * 100.0 if close > 0.0 else 0.0
         return pct_to_low, pct_to_high
+
+    def _calc_trend_strength(self, *, close: float) -> float:
+        ema_values = {
+            period: self._update_ema(period=period, close=close) for period in self._ema_periods
+        }
+        ema20 = ema_values[20]
+        ema50 = ema_values[50]
+        ema100 = ema_values[100]
+        ema200 = ema_values[200]
+        if any(value is None for value in (ema20, ema50, ema100, ema200)):
+            return 0.0
+        deltas = [
+            self._pct_delta(ema20, ema50),
+            self._pct_delta(ema50, ema100),
+            self._pct_delta(ema100, ema200),
+        ]
+        if all(delta >= 0.0 for delta in deltas) and any(delta > 0.0 for delta in deltas):
+            strength = sum(deltas) / len(deltas)
+        elif all(delta <= 0.0 for delta in deltas) and any(delta < 0.0 for delta in deltas):
+            strength = sum(deltas) / len(deltas)
+        else:
+            return 0.0
+        return max(-100.0, min(100.0, strength * 100.0))
+
+    def _update_ema(self, *, period: int, close: float) -> float:
+        prev = self._ema_values[period]
+        if prev is None:
+            ema = close
+        else:
+            alpha = self._ema_weights[period]
+            ema = close * alpha + prev * (1 - alpha)
+        self._ema_values[period] = ema
+        return ema
+
+    @staticmethod
+    def _pct_delta(short_ema: float, long_ema: float) -> float:
+        if long_ema == 0.0:
+            return 0.0
+        return (short_ema - long_ema) / long_ema
 
 
 class BreakDirectionResolver:

@@ -412,6 +412,7 @@ def parse_anomaly_samples(
                 pct_to_low_break=pct_to_low_break,
                 pct_to_high_break=pct_to_high_break,
                 break_direction=break_direction,
+                trend_strength=0.0,
             )
 
             samples.append(
@@ -917,4 +918,3 @@ def _parse_timestamp(value: object) -> datetime | None:
 
 def _float(value: object) -> float:
     return float(value) if value is not None else 0.0
-
