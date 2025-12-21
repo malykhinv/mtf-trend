@@ -225,7 +225,7 @@ def _plot_ppo(
             theme=theme,
         )
     if not data.cascade_swings and not data.resistance_swings and not data.support_swings:
-        base_bars = add_swings(data.bars, data.timeframe)
+        base_bars = add_swings(data.bars, data.timeframe, cross_tolerance_natr=0.0)
         swings = [bar.swing for bar in base_bars if bar.swing]
         _draw_swing_group(
             ax=price_ax,
@@ -355,7 +355,7 @@ def _plot_gu(
             theme=theme,
         )
     if not data.cascade_swings and not data.support_swings:
-        base_bars = add_swings(data.bars, data.timeframe)
+        base_bars = add_swings(data.bars, data.timeframe, cross_tolerance_natr=0.0)
         swings = [bar.swing for bar in base_bars if bar.swing]
         _draw_swing_group(
             ax=price_ax,

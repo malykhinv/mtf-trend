@@ -19,6 +19,8 @@ class GuConfig:
     # region Движение цены.
     # Максимальная доля теней относительно общего диапазона свечей.
     SHADOW_RANGE_PCT_MAX: float = 70.0
+    # Допуск на пересечение свинга в долях ATR.
+    SWING_CROSS_TOLERANCE_NATR: float = 1.0
     # Размер окна ATR для анализа лонгового каскада.
     CASCADE_ATR_WINDOW: int = 50
     # Допуск по касаниям в долях ATR.

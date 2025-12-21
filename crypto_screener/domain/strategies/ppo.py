@@ -64,7 +64,11 @@ class PpoStrategy(Strategy):
         if shadows_pct > self._config.SHADOW_RANGE_PCT_MAX:
             return setup
 
-        bars = add_swings(bars, timeframe)
+        bars = add_swings(
+            bars,
+            timeframe,
+            cross_tolerance_natr=self._config.SWING_CROSS_TOLERANCE_NATR,
+        )
         setup.data.bars = bars
 
         # Анализ участка роста.

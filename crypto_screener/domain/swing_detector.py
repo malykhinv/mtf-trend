@@ -260,6 +260,8 @@ def _refine_swings(bars: list[Bar]) -> list[Bar]:
 def _mark_swings_open(
         bars: list[Bar],
         open_lag: int,
+        cross_tolerance_natr: float,
+        atr_series: list[float | None],
 ) -> list[Bar]:
     length = len(bars)
     if length == 0:
@@ -277,12 +279,21 @@ def _mark_swings_open(
             future_end = length - open_lag
             if index + 1 < future_end:
                 future_bars = bars[index + 1:future_end]
+                future_atr = atr_series[index + 1:future_end]
             else:
                 future_bars = []
+                future_atr = []
         else:
             future_bars = bars[index + 1:]
+            future_atr = atr_series[index + 1:]
 
-        is_open = _is_swing_open(swing.extremum_price, future_bars)
+        is_open = _is_swing_open(
+            swing.extremum_price,
+            swing.type,
+            future_bars,
+            future_atr,
+            cross_tolerance_natr,
+        )
 
         result.append(
             replace(
@@ -302,13 +313,19 @@ def _mark_swings_open(
 
 def _is_swing_open(
         price: float,
-        future_bars: list[Bar]
+        swing_type: SwingType,
+        future_bars: list[Bar],
+        future_atr: list[float | None],
+        cross_tolerance_natr: float,
 ) -> bool:
-    for bar in future_bars:
-        body_low = min(bar.open, bar.close)
-        body_high = max(bar.open, bar.close)
-        if body_low <= price <= body_high:
-            return False
+    for bar, atr in zip(future_bars, future_atr):
+        tolerance = cross_tolerance_natr * (atr or 0.0)
+        if swing_type == SwingType.LOW:
+            if bar.low <= price - tolerance:
+                return False
+        else:
+            if bar.high >= price + tolerance:
+                return False
     return True
 
 
@@ -317,6 +334,7 @@ def _is_swing_open(
 def add_swings(
         bars: list[Bar],
         timeframe: Timeframe,
+        cross_tolerance_natr: float = 0.0,
 ) -> list[Bar]:
     config = _SWING_PARAMS.get(timeframe)
     if config is None:
@@ -328,5 +346,48 @@ def add_swings(
         atr_window=config.atr_window,
     )
     refined = _refine_swings(enriched)
-    marked_open = _mark_swings_open(refined, config.open_lag)
+    atr_series = _compute_atr_series(refined, config.atr_window)
+    marked_open = _mark_swings_open(
+        refined,
+        config.open_lag,
+        cross_tolerance_natr,
+        atr_series,
+    )
     return marked_open
+
+
+def _compute_atr_series(
+        bars: list[Bar],
+        atr_window: int,
+) -> list[float | None]:
+    n = len(bars)
+    if n < 2 or atr_window <= 0:
+        return [None] * n
+
+    trs: list[float] = [0.0] * n
+    prev_close = bars[0].close
+    for i in range(1, n):
+        bar = bars[i]
+        tr = max(
+            bar.high - bar.low,
+            abs(bar.high - prev_close),
+            abs(bar.low - prev_close),
+        )
+        trs[i] = tr
+        prev_close = bar.close
+
+    atr_series: list[float | None] = [None] * n
+    window_sum = 0.0
+    count = 0
+
+    for i in range(1, n):
+        window_sum += trs[i]
+        count += 1
+
+        if count > atr_window:
+            window_sum -= trs[i - atr_window]
+            count -= 1
+
+        atr_series[i] = window_sum / count
+
+    return atr_series
