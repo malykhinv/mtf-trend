@@ -425,6 +425,101 @@ class GuStrategy(Strategy):
             prices = [swing.extremum_price for _, swing in window]
             level = float(np.median(prices)) if prices else 0.0
             if all(abs(price - level) <= touch_tolerance for price in prices):
+                first_retracement = 0.0
+                after_last_retracement = 0.0
+                bars_after_first = bars[first_index + 1:]
+                bars_after_last = bars[last_index + 1:]
+                if cascade_type is CascadeType.LONG:
+                    first_retracement_swing = next(
+                        (
+                            bar.swing
+                            for bar in bars_after_first
+                            if bar.swing
+                            and bar.swing.is_open
+                            and bar.swing.type is SwingType.LOW
+                        ),
+                        None,
+                    )
+                    if first_retracement_swing:
+                        first_retracement_price = first_retracement_swing.extremum_price
+                    else:
+                        first_retracement_price = min(
+                            (bar.low for bar in bars_after_first),
+                            default=first_swing.extremum_price,
+                        )
+                    first_retracement = max(
+                        0.0,
+                        first_swing.extremum_price - first_retracement_price,
+                    )
+
+                    after_last_swing = next(
+                        (
+                            bar.swing
+                            for bar in bars_after_last
+                            if bar.swing
+                            and bar.swing.is_open
+                            and bar.swing.type is SwingType.LOW
+                        ),
+                        None,
+                    )
+                    if after_last_swing:
+                        after_last_price = after_last_swing.extremum_price
+                    else:
+                        after_last_price = min(
+                            (bar.low for bar in bars_after_last),
+                            default=last_swing.extremum_price,
+                        )
+                    after_last_retracement = max(
+                        0.0,
+                        last_swing.extremum_price - after_last_price,
+                    )
+                else:
+                    first_retracement_swing = next(
+                        (
+                            bar.swing
+                            for bar in bars_after_first
+                            if bar.swing
+                            and bar.swing.is_open
+                            and bar.swing.type is SwingType.HIGH
+                        ),
+                        None,
+                    )
+                    if first_retracement_swing:
+                        first_retracement_price = first_retracement_swing.extremum_price
+                    else:
+                        first_retracement_price = max(
+                            (bar.high for bar in bars_after_first),
+                            default=first_swing.extremum_price,
+                        )
+                    first_retracement = max(
+                        0.0,
+                        first_retracement_price - first_swing.extremum_price,
+                    )
+
+                    after_last_swing = next(
+                        (
+                            bar.swing
+                            for bar in bars_after_last
+                            if bar.swing
+                            and bar.swing.is_open
+                            and bar.swing.type is SwingType.HIGH
+                        ),
+                        None,
+                    )
+                    if after_last_swing:
+                        after_last_price = after_last_swing.extremum_price
+                    else:
+                        after_last_price = max(
+                            (bar.high for bar in bars_after_last),
+                            default=last_swing.extremum_price,
+                        )
+                    after_last_retracement = max(
+                        0.0,
+                        after_last_price - last_swing.extremum_price,
+                    )
+
+                if after_last_retracement > 0.5 * first_retracement:
+                    continue
                 return Cascade(swings=[swing for _, swing in window], direction=cascade_type)
         return None
 
