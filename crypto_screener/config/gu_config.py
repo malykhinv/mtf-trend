@@ -27,6 +27,8 @@ class GuConfig:
     CASCADE_TOUCH_EPS_NATR: float = 1.0
     # Минимальное число свингов для образования каскада.
     CASCADE_LENGTH_MIN: int = 3
+    # Делитель для минимального разрыва между свингами в каскаде.
+    CASCADE_SWING_GAP_DIVISOR: int = 6
     # Минимальная доля отката после второго касания относительно первого.
     CASCADE_PULLBACK_SECOND_RATIO_MIN: float = 0.5
     # Максимальная доля отката после второго касания относительно первого.
