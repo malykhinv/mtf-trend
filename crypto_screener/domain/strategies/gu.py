@@ -412,8 +412,18 @@ class GuStrategy(Strategy):
         min_width_hours = self._config.CASCADE_MIN_WIDTH_HOURS
 
         for start in range(len(open_swings) - min_cascade_length + 1):
-            window = open_swings[start:start + min_cascade_length]
-            first_index, first_swing = window[0]
+            first_index, first_swing = open_swings[start]
+            second_index, second_swing = open_swings[start + 1]
+            third_index, third_swing = open_swings[start + 2]
+            distance_from_first = third_index - first_index
+            min_gap = max(distance_from_first // self._config.CASCADE_SWING_GAP_DIVISOR, 1)
+            if second_index - first_index < min_gap or third_index - second_index < min_gap:
+                continue
+            window = [
+                (first_index, first_swing),
+                (second_index, second_swing),
+                (third_index, third_swing),
+            ]
             last_index, last_swing = window[-1]
             bars_index_delta = last_index - first_index
             time_delta_hours = (last_swing.time - first_swing.time).total_seconds() / 3600
