@@ -640,8 +640,7 @@ def _draw_cascade_level(
         return
 
     start_swing = cascade_swings[0]
-    level_swings = cascade_swings[1:] if len(cascade_swings) > 1 else cascade_swings
-    level_price = np.mean([swing.extremum_price for swing in level_swings])
+    level_price = start_swing.extremum_price
     start_time = start_swing.time
     start_index = next((index for index, bar in enumerate(bars) if bar.time == start_time), None)
     if start_index is None:
