@@ -47,6 +47,8 @@ class PpoConfig:
     CASCADE_RANGE_RATIO_MAX: float = 0.2
     # Размер окна ATR для анализа лонгового каскада.
     CASCADE_ATR_WINDOW: int = 50
+    # Минимальная высота первой свечи каскада в долях ATR.
+    CASCADE_FIRST_CANDLE_MIN_HEIGHT_NATR: float = 1.0
     # Допуск по касаниям в долях ATR.
     CASCADE_TOUCH_EPS_NATR: float = 1.0
     # Минимальная глубина отката в долях ATR.

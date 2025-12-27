@@ -107,12 +107,12 @@ class GuStrategy(Strategy):
         if not clusters:
             return None
 
-        def latest_time(cluster: list[Extremum]) -> float:
-            return max(extremum.time.timestamp() for extremum in cluster)
+        def latest_time(cluster: list[Extremum]) -> datetime:
+            return max(extremum.time for extremum in cluster)
 
         latest_cluster = max(clusters, key=latest_time)
-        prices = [extremum.price for extremum in latest_cluster]
-        return float(np.mean(prices)) if prices else None
+        ordered_cluster = sorted(latest_cluster, key=lambda extremum: extremum.time)
+        return float(ordered_cluster[0].price) if ordered_cluster else None
 
     def _find_open_extremums(self, bars: list[Bar]) -> list[Extremum]:
         extremums: list[Extremum] = []

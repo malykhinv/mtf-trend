@@ -394,6 +394,31 @@ def _plot_gu(
         )
     _format_ax(price_ax, times, min_price, max_price, theme)
 
+    level_price = getattr(data, "level_price", None)
+    if level_price is not None:
+        price_ax.axhline(
+            y=level_price,
+            xmin=0,
+            xmax=1,
+            color=theme.cascade_level_color,
+            linestyle=theme.cascade_level_linestyle,
+            linewidth=theme.cascade_level_linewidth,
+            alpha=theme.cascade_level_alpha,
+            zorder=theme.cascade_level_zorder,
+        )
+        label_x = times[-1] + candle_width
+        price_ax.text(
+            label_x,
+            level_price,
+            f"Level {level_price:.4f}",
+            color=theme.cascade_level_color,
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            alpha=0.9,
+            zorder=theme.cascade_level_zorder,
+        )
+
     volumes = _draw_volume(volume_ax, combined_bars, times, candle_width, theme)
     _format_volume_ax(volume_ax, volumes, theme)
     _format_time_axis(volume_ax, theme)
