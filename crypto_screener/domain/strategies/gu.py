@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
+
 import numpy as np
 
 from crypto_screener.config.gu_config import GuConfig, gu_cfg
@@ -8,13 +11,18 @@ from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Setup, Unfilled
 from crypto_screener.domain.models.setup_data import Gu
-from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.strategies.strategy import (
     Strategy,
     StrategyRuntimeConfig,
     StrategyVolumeConfig,
 )
+
+
+@dataclass(frozen=True)
+class Extremum:
+    time: datetime
+    price: float
 
 
 class GuStrategy(Strategy):
@@ -38,7 +46,7 @@ class GuStrategy(Strategy):
             bars=bars,
             direction=self._direction,
             level_price=None,
-            open_swings=None,
+            open_extremums=None,
         )
         setup = Unfilled(data=setup_data)
 
@@ -49,11 +57,10 @@ class GuStrategy(Strategy):
         if avg_range <= 0:
             return setup
 
-        swing_type = SwingType.LOW if self._direction is CascadeType.LONG else SwingType.HIGH
-        open_swings = self._get_open_swings(bars, swing_type)
-        setup.data.open_swings = open_swings
+        open_extremums = self._find_open_extremums(bars)
+        setup.data.open_extremums = [extremum.price for extremum in open_extremums]
 
-        level = self._find_nearest_level(open_swings, avg_range)
+        level = self._find_nearest_level(open_extremums, avg_range)
         if level is None:
             return setup
         setup.data.level_price = level
@@ -73,56 +80,61 @@ class GuStrategy(Strategy):
 
         return Capture(data=setup.data)
 
-    def _find_nearest_level(self, swings: list[Swing], avg_range: float) -> float | None:
+    def _find_nearest_level(self, extremums: list[Extremum], avg_range: float) -> float | None:
         tolerance = avg_range * self._config.LEVEL_TOLERANCE_NATR
-        if tolerance <= 0 or len(swings) < self._config.LEVEL_MIN_SWINGS:
+        if tolerance <= 0 or len(extremums) < self._config.LEVEL_MIN_SWINGS:
             return None
 
-        clusters = self._cluster_swings_by_price(swings, tolerance, self._config.LEVEL_MIN_SWINGS)
+        clusters = self._cluster_extremums_by_price(
+            extremums, tolerance, self._config.LEVEL_MIN_SWINGS
+        )
         if not clusters:
             return None
 
-        def latest_time(cluster: list[Swing]) -> float:
-            return max(swing.time.timestamp() for swing in cluster)
+        def latest_time(cluster: list[Extremum]) -> float:
+            return max(extremum.time.timestamp() for extremum in cluster)
 
         latest_cluster = max(clusters, key=latest_time)
-        prices = [swing.extremum_price for swing in latest_cluster]
+        prices = [extremum.price for extremum in latest_cluster]
         return float(np.mean(prices)) if prices else None
 
-    @staticmethod
-    def _get_open_swings(bars: list[Bar], swing_type: SwingType) -> list[Swing]:
-        return [
-            bar.swing
-            for bar in bars
-            if bar.swing is not None
-            and bar.swing.is_open
-            and bar.swing.type == swing_type
-        ]
+    def _find_open_extremums(self, bars: list[Bar]) -> list[Extremum]:
+        extremums: list[Extremum] = []
+        for index, bar in enumerate(bars):
+            price = self._get_directional_extremum(bar)
+            overlapped = any(later_bar.low <= price <= later_bar.high for later_bar in bars[index + 1 :])
+            if not overlapped:
+                extremums.append(Extremum(time=bar.time, price=price))
+
+        return extremums
+
+    def _get_directional_extremum(self, bar: Bar) -> float:
+        return bar.low if self._direction is CascadeType.LONG else bar.high
 
     @staticmethod
-    def _cluster_swings_by_price(
-            swings: list[Swing],
+    def _cluster_extremums_by_price(
+            extremums: list[Extremum],
             tolerance: float,
             min_count: int,
-    ) -> list[list[Swing]]:
-        if not swings:
+    ) -> list[list[Extremum]]:
+        if not extremums:
             return []
 
-        sorted_swings = sorted(swings, key=lambda swing: swing.extremum_price)
-        clusters: list[list[Swing]] = []
-        current_cluster: list[Swing] = []
+        sorted_extremums = sorted(extremums, key=lambda extremum: extremum.price)
+        clusters: list[list[Extremum]] = []
+        current_cluster: list[Extremum] = []
 
-        for swing in sorted_swings:
+        for extremum in sorted_extremums:
             if not current_cluster:
-                current_cluster.append(swing)
+                current_cluster.append(extremum)
                 continue
 
-            median_price = float(np.median([s.extremum_price for s in current_cluster]))
-            if abs(swing.extremum_price - median_price) <= tolerance:
-                current_cluster.append(swing)
+            median_price = float(np.median([e.price for e in current_cluster]))
+            if abs(extremum.price - median_price) <= tolerance:
+                current_cluster.append(extremum)
             else:
                 clusters.append(current_cluster)
-                current_cluster = [swing]
+                current_cluster = [extremum]
 
         if current_cluster:
             clusters.append(current_cluster)
