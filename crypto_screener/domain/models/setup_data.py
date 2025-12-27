@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.swing import Swing
 from crypto_screener.domain.models.timeframe import Timeframe
 
@@ -23,5 +24,6 @@ class Ppo(SetupData):
 
 @dataclass
 class Gu(SetupData):
-    cascade_swings: Optional[list[Swing]]
-    support_swings: Optional[list[Swing]]
+    direction: CascadeType
+    level_price: Optional[float]
+    open_swings: Optional[list[Swing]]

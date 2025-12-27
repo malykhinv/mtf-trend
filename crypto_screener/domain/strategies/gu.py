@@ -1,45 +1,28 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 
 from crypto_screener.config.gu_config import GuConfig, gu_cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.setup import Capture, Setup, Unfilled
 from crypto_screener.domain.models.setup_data import Gu
 from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.domain.strategies.strategy import (
     Strategy,
     StrategyRuntimeConfig,
     StrategyVolumeConfig,
 )
-from crypto_screener.domain.swing_detector import add_swings
-
-
-@dataclass(frozen=True)
-class Cascade:
-    swings: list[Swing]
-    direction: CascadeType
-
-    @property
-    def is_long(self) -> bool:
-        return self.direction is CascadeType.LONG
-
-    @property
-    def is_short(self) -> bool:
-        return self.direction is CascadeType.SHORT
 
 
 class GuStrategy(Strategy):
     name = "ГУ"
 
-    def __init__(self, config: GuConfig = gu_cfg) -> None:
+    def __init__(self, config: GuConfig = gu_cfg, direction: CascadeType = CascadeType.LONG) -> None:
         self._config = config
+        self._direction = direction
 
     def detect_setup(
             self,
@@ -48,261 +31,66 @@ class GuStrategy(Strategy):
             timeframe: Timeframe,
             context: Context,
     ) -> Setup:
-        setup = Unfilled(
-            data=Gu(
-                symbol=symbol,
-                timeframe=timeframe,
-                bars=bars,
-                cascade_swings=None,
-                support_swings=None
-            )
+        bars = bars[-self._config.LEVEL_LOOKBACK_BARS:]
+        setup_data = Gu(
+            symbol=symbol,
+            timeframe=timeframe,
+            bars=bars,
+            direction=self._direction,
+            level_price=None,
+            open_swings=None,
         )
+        setup = Unfilled(data=setup_data)
 
-        # Анализ повышения объемов.
-        trimmed_bars = self.trim_by_volume(bars)
-        has_high_volume = False
-        if trimmed_bars:
-            bars = trimmed_bars
-            has_high_volume = True
-        elif not context.is_top:
+        if len(bars) < self._config.LEVEL_MIN_SWINGS:
             return setup
 
-        # Анализ теней.
-        shadows_pct = self._get_shadow_range_pct(bars)
-        if shadows_pct > self._config.SHADOW_RANGE_PCT_MAX:
+        avg_range = self._calculate_average_range(bars, self._config.LEVEL_ATR_WINDOW)
+        if avg_range <= 0:
             return setup
 
-        bars = add_swings(
-            bars,
-            timeframe,
-            cross_tolerance_natr=self._config.SWING_CROSS_TOLERANCE_NATR,
-        )
-        setup.data.bars = bars
+        swing_type = SwingType.LOW if self._direction is CascadeType.LONG else SwingType.HIGH
+        open_swings = self._get_open_swings(bars, swing_type)
+        setup.data.open_swings = open_swings
 
-        # Анализ участка роста.
-        main_rising_swings = self._get_main_rising_swings_indexed(bars)
-        if not main_rising_swings:
+        level = self._find_nearest_level(open_swings, avg_range)
+        if level is None:
             return setup
-        _main_low, main_high = main_rising_swings
-        main_high_index, _ = main_high
+        setup.data.level_price = level
 
-        # Анализ коррекции.
-        correction_bars = bars[main_high_index + 1:]
-        if not correction_bars:
+        capture_distance = avg_range * self._config.LEVEL_CAPTURE_DISTANCE_NATR
+        cross_eps = avg_range * self._config.LEVEL_CROSS_EPS_NATR
+        current_price = bars[-1].close
+        price_delta = current_price - level
+
+        if abs(price_delta) > capture_distance:
             return setup
 
-        bars = correction_bars
-        setup.data.bars = bars
-
-        # Анализ каскадов.
-        cascade_long = self._find_cascade_by_open_swings(bars, cascade_type=CascadeType.LONG)
-        cascade_short = self._find_cascade_by_open_swings(bars, cascade_type=CascadeType.SHORT)
-        cascade = self._longest(cascade_long, cascade_short)
-        if not cascade:
+        if self._direction is CascadeType.LONG and price_delta < -cross_eps:
+            return setup
+        if self._direction is CascadeType.SHORT and price_delta > cross_eps:
             return setup
 
-        setup.data.cascade_swings = cascade.swings
+        return Capture(data=setup.data)
 
-        # Центрирование относительно начала каскада.
-        first_touch_index = next(
-            (index for index, bar in enumerate(bars) if bar.time == cascade.swings[0].time),
-            None,
-        )
-        if first_touch_index is None:
-            return setup
-        start_index = max(0, first_touch_index - (len(bars) - first_touch_index - 1))
-        bars = bars[start_index:]
-        setup.data.bars = bars
-        first_touch_index -= start_index
+    def _find_nearest_level(self, swings: list[Swing], avg_range: float) -> float | None:
+        tolerance = avg_range * self._config.LEVEL_TOLERANCE_NATR
+        if tolerance <= 0 or len(swings) < self._config.LEVEL_MIN_SWINGS:
+            return None
 
-        cascade_bars = bars[first_touch_index:]
-        if not cascade_bars:
-            return setup
+        clusters = self._cluster_swings_by_price(swings, tolerance, self._config.LEVEL_MIN_SWINGS)
+        if not clusters:
+            return None
 
-        # Анализ поддержки под каскадом.
-        initial_swing = cascade.swings[0]
-        support_swing = None
-        target_swing = cascade.swings[-1]
-        support_swings: list[Swing] = []
-        if cascade.is_long:
-            open_low_swings = self._get_open_swings(cascade_bars, SwingType.LOW)
-            cascade_low_swing = min(open_low_swings, key=lambda swing: swing.extremum_price, default=None)
-            if not cascade_low_swing:
-                lowest_bar = min(cascade_bars, key=lambda bar: bar.low, default=None)
-                if not lowest_bar:
-                    return setup
-                cascade_low_swing = Swing(
-                    time=lowest_bar.time,
-                    extremum_price=lowest_bar.low,
-                    close_price=lowest_bar.close,
-                    type=SwingType.LOW,
-                    is_open=True,
-                )
-            consolidation_range = initial_swing.extremum_price - cascade_low_swing.extremum_price
-            if consolidation_range <= 0:
-                return setup
-            support_swings = open_low_swings
+        def latest_time(cluster: list[Swing]) -> float:
+            return max(swing.time.timestamp() for swing in cluster)
 
-            support_price_min = cascade_low_swing.extremum_price + consolidation_range * self._config.SUPPORT_CONSOLIDATION_RATIO_MIN
-            support_price_max = target_swing.extremum_price
-            if support_price_min < support_price_max:
-                open_low_swings = self._filter_by_price(open_low_swings, support_price_min, support_price_max)
-            else:
-                open_low_swings = []
-            support_swing = open_low_swings[-1] if open_low_swings else None
-            if not support_swing:
-                last_red_bar = next((bar for bar in reversed(cascade_bars) if bar.close < bar.open), None)
-                if not last_red_bar:
-                    return setup
-                support_swing = Swing(
-                    time=last_red_bar.time,
-                    extremum_price=last_red_bar.low,
-                    close_price=last_red_bar.close,
-                    type=SwingType.LOW,
-                    is_open=True
-                )
-        elif cascade.is_short:
-            open_high_swings = self._get_open_swings(cascade_bars, SwingType.HIGH)
-            cascade_high_swing = max(open_high_swings, key=lambda swing: swing.extremum_price, default=None)
-            if not cascade_high_swing:
-                highest_bar = max(cascade_bars, key=lambda bar: bar.high, default=None)
-                if not highest_bar:
-                    return setup
-                cascade_high_swing = Swing(
-                    time=highest_bar.time,
-                    extremum_price=highest_bar.high,
-                    close_price=highest_bar.close,
-                    type=SwingType.HIGH,
-                    is_open=True,
-                )
-            consolidation_range = cascade_high_swing.extremum_price - initial_swing.extremum_price
-            if consolidation_range <= 0:
-                return setup
-            support_swings = open_high_swings
-
-            resistance_price_min = target_swing.extremum_price
-            resistance_price_max = cascade_high_swing.extremum_price - consolidation_range * self._config.SUPPORT_CONSOLIDATION_RATIO_MIN
-            if resistance_price_min < resistance_price_max:
-                open_high_swings = self._filter_by_price(open_high_swings, resistance_price_min, resistance_price_max)
-            else:
-                open_high_swings = []
-            support_swing = open_high_swings[-1] if open_high_swings else None
-            if not support_swing:
-                last_green_bar = next((bar for bar in reversed(cascade_bars) if bar.close > bar.open), None)
-                if not last_green_bar:
-                    return setup
-                support_swing = Swing(
-                    time=last_green_bar.time,
-                    extremum_price=last_green_bar.high,
-                    close_price=last_green_bar.close,
-                    type=SwingType.HIGH,
-                    is_open=True
-                )
-        setup.data.support_swings = support_swings
-        has_support = support_swing is not None
-        if not has_support:
-            return setup
-
-        # Анализ пробоя поддержки каскада.
-        current_bar = bars[-1]
-        current_price = current_bar.close
-        if cascade.is_long:
-            has_breakout_short = current_price < support_swing.extremum_price
-            if has_breakout_short:
-                return setup
-        if cascade.is_short:
-            has_breakout_long = current_price > support_swing.extremum_price
-            if has_breakout_long:
-                return setup
-
-        # Горизонтальный уровень.
-        setup = Capture(
-            data=Gu(
-                symbol=symbol,
-                timeframe=timeframe,
-                bars=bars,
-                cascade_swings=cascade.swings,
-                support_swings=support_swings
-            )
-        )
-
-        # Анализ риска и вознаграждения.
-        highs = [bar.high for bar in cascade_bars]
-        lows = [bar.low for bar in cascade_bars]
-        cascade_range = max(highs) - min(lows) if highs and lows else 0.0
-        if cascade_range <= 0:
-            return setup
-        entry_price = target_swing.extremum_price
-        is_tp_top = context.is_top or has_high_volume
-        tp_multiplier = (
-            self._config.TP_MULTIPLIER_TOP_HIGH_VOLUME
-            if is_tp_top
-            else self._config.TP_MULTIPLIER_DEFAULT
-        )
-        if cascade.is_long:
-            profit_price = entry_price + tp_multiplier * cascade_range
-            loss_price = support_swing.extremum_price
-            profit_pct = 100 * (profit_price - entry_price) / entry_price
-            loss_pct = 100 * (loss_price - entry_price) / entry_price
-        else:
-            profit_price = entry_price - tp_multiplier * cascade_range
-            loss_price = support_swing.extremum_price
-            profit_pct = 100 * (entry_price - profit_price) / entry_price
-            loss_pct = 100 * (loss_price - entry_price) / entry_price
-        if loss_pct == 0:
-            return setup
-        is_loss_valid = abs(loss_pct) > self._config.LOSS_PCT_MIN
-        if not is_loss_valid:
-            return setup
-        is_profit_valid = profit_pct > self._config.PROFIT_PCT_MIN
-        if not is_profit_valid:
-            return setup
-        reward_risk = abs(profit_pct / loss_pct)
-        is_reward_risk_valid = reward_risk >= self._config.REWARD_RISK_RATIO_MIN
-        if not is_reward_risk_valid and not context.is_test:
-            return setup
-
-        # Анализ пробоя каскада.
-        if cascade.is_long:
-            has_breakout_long = current_price > target_swing.extremum_price
-            if not has_breakout_long:
-                return setup
-        elif cascade.is_short:
-            has_breakout_short = current_price < target_swing.extremum_price
-            if not has_breakout_short:
-                return setup
-
-        # Пробой лонгового каскада.
-        partial_close_price = None
-        breakeven_price = None
-        partial_close_side_pct = self._config.PARTIAL_CLOSE_SIDE_PCT_MIN
-        # TODO пока что partial close не делаем, сделаем позднее.
-        entry_slippage_ratio = 1 + self._config.TEST_SLIPPAGE_PCT / 100 if context.is_test else 1
-        trade_levels = TradeLevels(
-            entry_price=target_swing.extremum_price * entry_slippage_ratio,
-            take_profit_price=profit_price,
-            stop_loss_price=loss_price,
-            partial_close_price=partial_close_price,
-            breakeven_price=breakeven_price,
-        )
-        setup = Trade(
-            data=Gu(
-                symbol=symbol,
-                timeframe=timeframe,
-                bars=bars,
-                cascade_swings=cascade.swings,
-                support_swings=support_swings,
-            ),
-            trade_levels=trade_levels,
-        )
-
-        return setup
+        latest_cluster = max(clusters, key=latest_time)
+        prices = [swing.extremum_price for swing in latest_cluster]
+        return float(np.mean(prices)) if prices else None
 
     @staticmethod
-    def _get_open_swings(
-            bars: list[Bar],
-            swing_type: SwingType,
-    ) -> list[Swing]:
+    def _get_open_swings(bars: list[Bar], swing_type: SwingType) -> list[Swing]:
         return [
             bar.swing
             for bar in bars
@@ -312,226 +100,34 @@ class GuStrategy(Strategy):
         ]
 
     @staticmethod
-    def _get_first_open_swing_indexed(
-            bars: list[Bar],
-            swing_type: SwingType,
-    ) -> tuple[int, Swing] | None:
-        for index, bar in enumerate(bars):
-            swing = bar.swing
-            if swing is None:
-                continue
-            if not swing.is_open:
-                continue
-            if swing.type != swing_type:
-                continue
-            return index, swing
-        return None
-
-    @staticmethod
-    def _filter_by_price(
+    def _cluster_swings_by_price(
             swings: list[Swing],
-            price_min: float,
-            price_max: float,
-    ) -> list[Swing]:
-        if price_min <= 0 or price_min >= price_max:
-            raise ValueError(f"Некорректные границы цены: {price_min}..{price_max}.")
-        return [swing for swing in swings if price_min <= swing.extremum_price <= price_max]
-
-    @staticmethod
-    def _get_shadow_range_pct(bars: list[Bar]) -> float:
-        if not bars:
-            return 0.0
-        highs = np.array([bar.high for bar in bars])
-        lows = np.array([bar.low for bar in bars])
-        opens = np.array([bar.open for bar in bars])
-        closes = np.array([bar.close for bar in bars])
-        bar_ranges = highs - lows
-        valid_ranges = bar_ranges > 0
-        if not np.any(valid_ranges):
-            return 0.0
-        bodies = np.abs(opens - closes)
-        shadows = np.maximum(bar_ranges - bodies, 0.0)
-        total_range = np.sum(bar_ranges[valid_ranges])
-        total_shadow = np.sum(shadows[valid_ranges])
-        return 100 * total_shadow / total_range if total_range > 0 else 0.0
-
-    @classmethod
-    def _get_main_rising_swings_indexed(cls, bars: list[Bar]) -> list[tuple[int, Swing]]:
-        main_high = cls._get_first_open_swing_indexed(bars, SwingType.HIGH)
-        if not main_high:
-            return []
-        main_high_index, main_high_swing = main_high
-
-        min_low_price = float('inf')
-        min_low_swing = None
-        min_low_index = -1
-
-        for i in range(main_high_index + 1):
-            bar = bars[i]
-            if bar.swing and bar.swing.type == SwingType.LOW and bar.swing.is_open:
-                if bar.low < min_low_price:
-                    min_low_price = bar.low
-                    min_low_swing = bar.swing
-                    min_low_index = i
-
-        if not min_low_swing or min_low_index == -1:
+            tolerance: float,
+            min_count: int,
+    ) -> list[list[Swing]]:
+        if not swings:
             return []
 
-        main_low_swing = Swing(
-            time=min_low_swing.time,
-            extremum_price=min_low_price,
-            close_price=bars[min_low_index].close,
-            type=SwingType.LOW,
-            is_open=True
-        )
+        sorted_swings = sorted(swings, key=lambda swing: swing.extremum_price)
+        clusters: list[list[Swing]] = []
+        current_cluster: list[Swing] = []
 
-        return [(min_low_index, main_low_swing), main_high]
-
-    def _find_cascade_by_open_swings(
-            self,
-            bars: list[Bar],
-            *,
-            cascade_type: CascadeType,
-    ) -> Cascade | None:
-        if not bars:
-            return None
-        swing_type = SwingType.HIGH if cascade_type is CascadeType.LONG else SwingType.LOW
-        open_swings = [
-            (index, bar.swing)
-            for index, bar in enumerate(bars)
-            if bar.swing is not None
-            and bar.swing.is_open
-            and bar.swing.type == swing_type
-        ]
-        min_cascade_length = self._config.CASCADE_LENGTH_MIN
-        if len(open_swings) < min_cascade_length:
-            return None
-        avg_range = self._calculate_average_range(bars, self._config.CASCADE_ATR_WINDOW)
-        touch_tolerance = max(self._config.CASCADE_TOUCH_EPS_NATR * avg_range, 0.0)
-        min_width_bars = self._config.CASCADE_MIN_WIDTH_BARS
-        min_width_hours = self._config.CASCADE_MIN_WIDTH_HOURS
-
-        for start in range(len(open_swings) - min_cascade_length + 1):
-            first_index, first_swing = open_swings[start]
-            second_index, second_swing = open_swings[start + 1]
-            third_index, third_swing = open_swings[start + 2]
-            distance_from_first = third_index - first_index
-            min_gap = max(distance_from_first // self._config.CASCADE_SWING_GAP_DIVISOR, 1)
-            if second_index - first_index < min_gap or third_index - second_index < min_gap:
-                continue
-            window = [
-                (first_index, first_swing),
-                (second_index, second_swing),
-                (third_index, third_swing),
-            ]
-            last_index, last_swing = window[-1]
-            bars_index_delta = last_index - first_index
-            time_delta_hours = (last_swing.time - first_swing.time).total_seconds() / 3600
-            if min_width_bars > 0 and bars_index_delta < min_width_bars:
-                continue
-            if min_width_hours > 0 and time_delta_hours < min_width_hours:
+        for swing in sorted_swings:
+            if not current_cluster:
+                current_cluster.append(swing)
                 continue
 
-            prices = [swing.extremum_price for _, swing in window]
-            level = float(np.median(prices)) if prices else 0.0
-            if all(abs(price - level) <= touch_tolerance for price in prices):
-                first_retracement = 0.0
-                after_last_retracement = 0.0
-                bars_after_first = bars[first_index + 1:]
-                bars_after_last = bars[last_index + 1:]
-                if cascade_type is CascadeType.LONG:
-                    first_retracement_swing = next(
-                        (
-                            bar.swing
-                            for bar in bars_after_first
-                            if bar.swing
-                            and bar.swing.is_open
-                            and bar.swing.type is SwingType.LOW
-                        ),
-                        None,
-                    )
-                    if first_retracement_swing:
-                        first_retracement_price = first_retracement_swing.extremum_price
-                    else:
-                        first_retracement_price = min(
-                            (bar.low for bar in bars_after_first),
-                            default=first_swing.extremum_price,
-                        )
-                    first_retracement = max(
-                        0.0,
-                        first_swing.extremum_price - first_retracement_price,
-                    )
+            median_price = float(np.median([s.extremum_price for s in current_cluster]))
+            if abs(swing.extremum_price - median_price) <= tolerance:
+                current_cluster.append(swing)
+            else:
+                clusters.append(current_cluster)
+                current_cluster = [swing]
 
-                    after_last_swing = next(
-                        (
-                            bar.swing
-                            for bar in bars_after_last
-                            if bar.swing
-                            and bar.swing.is_open
-                            and bar.swing.type is SwingType.LOW
-                        ),
-                        None,
-                    )
-                    if after_last_swing:
-                        after_last_price = after_last_swing.extremum_price
-                    else:
-                        after_last_price = min(
-                            (bar.low for bar in bars_after_last),
-                            default=last_swing.extremum_price,
-                        )
-                    after_last_retracement = max(
-                        0.0,
-                        last_swing.extremum_price - after_last_price,
-                    )
-                else:
-                    first_retracement_swing = next(
-                        (
-                            bar.swing
-                            for bar in bars_after_first
-                            if bar.swing
-                            and bar.swing.is_open
-                            and bar.swing.type is SwingType.HIGH
-                        ),
-                        None,
-                    )
-                    if first_retracement_swing:
-                        first_retracement_price = first_retracement_swing.extremum_price
-                    else:
-                        first_retracement_price = max(
-                            (bar.high for bar in bars_after_first),
-                            default=first_swing.extremum_price,
-                        )
-                    first_retracement = max(
-                        0.0,
-                        first_retracement_price - first_swing.extremum_price,
-                    )
+        if current_cluster:
+            clusters.append(current_cluster)
 
-                    after_last_swing = next(
-                        (
-                            bar.swing
-                            for bar in bars_after_last
-                            if bar.swing
-                            and bar.swing.is_open
-                            and bar.swing.type is SwingType.HIGH
-                        ),
-                        None,
-                    )
-                    if after_last_swing:
-                        after_last_price = after_last_swing.extremum_price
-                    else:
-                        after_last_price = max(
-                            (bar.high for bar in bars_after_last),
-                            default=last_swing.extremum_price,
-                        )
-                    after_last_retracement = max(
-                        0.0,
-                        after_last_price - last_swing.extremum_price,
-                    )
-
-                if after_last_retracement > 0.5 * first_retracement:
-                    continue
-                return Cascade(swings=[swing for _, swing in window], direction=cascade_type)
-        return None
+        return [cluster for cluster in clusters if len(cluster) >= min_count]
 
     @staticmethod
     def _calculate_average_range(bars: list[Bar], window: int) -> float:
@@ -540,19 +136,6 @@ class GuStrategy(Strategy):
         window = min(window, len(bars))
         ranges = [bar.high - bar.low for bar in bars[-window:]]
         return float(np.mean(ranges)) if ranges else 0.0
-
-    @staticmethod
-    def _longest(*cascades: Cascade | None) -> Cascade | None:
-        candidates = [cascade for cascade in cascades if cascade and cascade.swings]
-        if not candidates:
-            return None
-
-        def key(cascade: Cascade) -> tuple[float, object]:
-            duration = (cascade.swings[-1].time - cascade.swings[0].time).total_seconds()
-            last_time = cascade.swings[-1].time
-            return duration, last_time
-
-        return max(candidates, key=key)
 
     def get_runtime_config(self) -> StrategyRuntimeConfig:
         return StrategyRuntimeConfig(

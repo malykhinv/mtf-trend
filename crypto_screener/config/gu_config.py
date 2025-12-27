@@ -5,6 +5,18 @@ from dataclasses import dataclass
 class GuConfig:
     # region Сетапы.
     CAPTURE_TIMEOUT_MULTIPLIER: int = 12
+    # Количество баров для анализа уровня.
+    LEVEL_LOOKBACK_BARS: int = 90
+    # Размер окна ATR для анализа уровня.
+    LEVEL_ATR_WINDOW: int = 14
+    # Допуск по цене для кластеризации экстремумов в долях ATR.
+    LEVEL_TOLERANCE_NATR: float = 0.2
+    # Допуск для пересечения уровня в долях ATR.
+    LEVEL_CROSS_EPS_NATR: float = 0.1
+    # Радиус формирования Capture в долях ATR.
+    LEVEL_CAPTURE_DISTANCE_NATR: float = 0.2
+    # Минимальное количество экстремумов в уровне.
+    LEVEL_MIN_SWINGS: int = 3
     # endregion
 
     # region Повышенный объем.
