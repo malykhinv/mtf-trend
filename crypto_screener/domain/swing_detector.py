@@ -21,6 +21,7 @@ _SWING_PARAMS = {
     Timeframe.M30: _SwingDetectionConfig(window=2, atr_multiplier=1.4, atr_window=30, open_lag=2),
     Timeframe.H1: _SwingDetectionConfig(window=2, atr_multiplier=1.2, atr_window=20, open_lag=1),
     Timeframe.H4: _SwingDetectionConfig(window=2, atr_multiplier=1.0, atr_window=14, open_lag=1),
+    Timeframe.D1: _SwingDetectionConfig(window=2, atr_multiplier=1.0, atr_window=14, open_lag=1),
 }
 
 
