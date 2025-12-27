@@ -1,5 +1,5 @@
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 from crypto_screener.domain.models.bar import Bar
@@ -17,18 +17,22 @@ class SetupData(ABC):
 
 @dataclass
 class Ppo(SetupData):
-    main_low_swing: Optional[Swing]
-    main_high_swing: Optional[Swing]
-    cascade_swings: Optional[list[Swing]]
-    resistance_swings: Optional[list[Swing]]
-    support_swings: Optional[list[Swing]]
+    main_low_swing: Optional[Swing] = None
+    main_high_swing: Optional[Swing] = None
+    cascade_swings: list[Swing] = field(default_factory=list)
+    resistance_swings: list[Swing] = field(default_factory=list)
+    support_swings: list[Swing] = field(default_factory=list)
+    level_price: Optional[float] = None
+    current_price: Optional[float] = None
 
 
 @dataclass
 class Gu(SetupData):
     direction: CascadeType
-    level_price: Optional[float]
-    open_extremums: Optional[list[float]]
+    level_price: Optional[float] = None
+    open_extremums: Optional[list[float]] = None
+    cascade_swings: list[Swing] = field(default_factory=list)
+    support_swings: list[Swing] = field(default_factory=list)
     atr: Optional[float] = None
     current_price: Optional[float] = None
     distance_to_level: Optional[float] = None
