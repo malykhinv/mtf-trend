@@ -201,7 +201,7 @@ def _plot_ppo(
         price_ax.text(
             times[-1],
             level_price,
-            f"Level {level_price:.4f}",
+            f"{level_price:.4f}",
             color=theme.cascade_level_color,
             ha="right",
             va="bottom",
@@ -410,7 +410,7 @@ def _plot_gu(
         price_ax.text(
             label_x,
             level_price,
-            f"Level {level_price:.4f}",
+            f"{level_price:.4f}",
             color=theme.cascade_level_color,
             ha="left",
             va="bottom",

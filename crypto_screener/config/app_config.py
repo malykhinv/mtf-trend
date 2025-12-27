@@ -64,8 +64,8 @@ _test_data: list[TestData] = [
 ]
 
 # Биржа по умолчанию.
-_exchange: str = "Binance"
-# _exchange: str = "Bybit"
+# _exchange: str = "Binance"
+_exchange: str = "Bybit"
 
 _live_thresholds = {
     "Binance": dict(
