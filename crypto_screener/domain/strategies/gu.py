@@ -47,6 +47,10 @@ class GuStrategy(Strategy):
             direction=self._direction,
             level_price=None,
             open_extremums=None,
+            atr=None,
+            current_price=None,
+            distance_to_level=None,
+            distance_atr_ratio=None,
         )
         setup = Unfilled(data=setup_data)
 
@@ -54,6 +58,7 @@ class GuStrategy(Strategy):
             return setup
 
         avg_range = self._calculate_average_range(bars, self._config.LEVEL_ATR_WINDOW)
+        setup.data.atr = avg_range
         if avg_range <= 0:
             return setup
 
@@ -68,7 +73,10 @@ class GuStrategy(Strategy):
         capture_distance = avg_range * self._config.LEVEL_CAPTURE_DISTANCE_NATR
         cross_eps = avg_range * self._config.LEVEL_CROSS_EPS_NATR
         current_price = bars[-1].close
+        setup.data.current_price = current_price
         price_delta = current_price - level
+        setup.data.distance_to_level = price_delta
+        setup.data.distance_atr_ratio = price_delta / avg_range if avg_range else None
 
         if abs(price_delta) > capture_distance:
             return setup

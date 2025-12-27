@@ -5,7 +5,9 @@ from html import escape
 from typing import Iterable, Optional
 
 from crypto_screener.domain.models.active_trade import ActiveTrade
-from crypto_screener.domain.models.setup import Trade
+from crypto_screener.domain.models.cascade_type import CascadeType
+from crypto_screener.domain.models.setup import Capture, Setup, Trade
+from crypto_screener.domain.models.setup_data import Gu
 from crypto_screener.domain.models.symbol import FuturesSymbol
 from crypto_screener.domain.models.timeframe import Timeframe
 from crypto_screener.domain.models.trade_result import TradeResult
@@ -47,6 +49,19 @@ def _format_listing_age(listing_time: datetime) -> str:
     return f"{days} дн. назад"
 
 
+def _format_direction(direction: CascadeType) -> str:
+    return "Long" if direction is CascadeType.LONG else "Short"
+
+
+def _format_distance(price_delta: Optional[float], distance_atr_ratio: Optional[float]) -> str:
+    if price_delta is None:
+        return "—"
+    absolute_delta = abs(price_delta)
+    if distance_atr_ratio is None:
+        return f"{absolute_delta:.4f}"
+    return f"{absolute_delta:.4f} ({distance_atr_ratio:+.2f} ATR)"
+
+
 def _tradingview_link(
         symbol: str,
         exchange_name: str
@@ -78,6 +93,7 @@ def build_capture_message(
         timeframe: Timeframe,
         exchange_name: str,
         strategy_name: str | None = None,
+        setup: Setup | None = None,
 ) -> str:
     link = _tradingview_link(symbol.symbol, exchange_name)
     lines = [
@@ -91,6 +107,19 @@ def build_capture_message(
         f"Сделок 24ч: {_format_trades(symbol.trades_24h)}",
         f"Листинг: {_format_listing_age(symbol.listing_time)}",
     ]
+
+    if isinstance(setup, Capture) and isinstance(setup.data, Gu):
+        gu_data = setup.data
+        current_price = gu_data.current_price or (gu_data.bars[-1].close if gu_data.bars else None)
+        lines.extend([
+            "",
+            "<b>Параметры ГУ</b>",
+            f"Направление: {_format_direction(gu_data.direction)}",
+            f"Уровень: {_format_price(gu_data.level_price)}",
+            f"Текущая цена: {_format_price(current_price)}",
+            f"ATR: {_format_price(gu_data.atr)}",
+            f"Расстояние до уровня: {_format_distance(gu_data.distance_to_level, gu_data.distance_atr_ratio)}",
+        ])
     return "\n".join(lines)
 
 
