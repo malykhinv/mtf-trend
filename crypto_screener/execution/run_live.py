@@ -1140,6 +1140,12 @@ def _run_analysis_task(
     bars_cache: dict[int, list[Bar]] = {}
     try:
         for strategy in strategies:
+            if not strategy.is_timeframe_allowed(timeframe):
+                log.d(
+                    f"Пропуск анализа {symbol.symbol} на {timeframe.tf}: таймфрейм не поддерживается "
+                    f"стратегией {strategy.name}."
+                )
+                continue
             bars: list[Bar] = []
             setup: Optional[Setup] = None
             outcome = None

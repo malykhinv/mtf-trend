@@ -98,7 +98,13 @@ def _detect_setup(
         bars: list[Bar],
         timeframe: Timeframe,
         context: Context,
-) -> Setup:
+) -> Optional[Setup]:
+    if not strategy.is_timeframe_allowed(timeframe):
+        log.d(
+            f"Пропуск анализа {symbol} на {timeframe.tf}: таймфрейм не поддерживается "
+            f"стратегией {strategy.name}."
+        )
+        return None
     setup = strategy.detect_setup(symbol, bars, timeframe, context)
     if setup.is_filled:
         log.d(f"На {symbol} ({timeframe.tf}) обнаружен {setup.name.capitalize()}-сетап.")
@@ -148,6 +154,8 @@ def run_test_bars(
         return None
     detection_time = detection_time or bars[-1].time
     setup = _detect_setup(strategy, symbol, bars, timeframe, context)
+    if not setup:
+        return None
     match plot_policy:
         case PlotPolicy.ON_ANY:
             _plot(setup, subdir, postmortem_bars, detection_time, context=context)

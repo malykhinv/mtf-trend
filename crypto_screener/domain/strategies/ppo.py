@@ -31,6 +31,10 @@ class PpoStrategy(Strategy):
             CascadeDetectorConfig.from_strategy_config(config)
         )
 
+    @property
+    def allowed_timeframes(self) -> tuple[Timeframe, ...]:
+        return self._config.ALLOWED_TIMEFRAMES
+
     def detect_setup(
             self,
             symbol: str,

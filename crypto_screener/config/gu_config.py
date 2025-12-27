@@ -1,8 +1,13 @@
 from dataclasses import dataclass
 
+from crypto_screener.domain.models.timeframe import Timeframe
+
 
 @dataclass(frozen=True)
 class GuConfig:
+    # Допустимые таймфреймы.
+    ALLOWED_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.D1,)
+
     # region Сетапы.
     CAPTURE_TIMEOUT_MULTIPLIER: int = 12
     # Количество баров для анализа уровня.

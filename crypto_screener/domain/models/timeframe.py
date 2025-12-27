@@ -10,6 +10,7 @@ class Timeframe(Enum):
     M30 = ("30m", 30)
     H1 = ("1h", 60)
     H4 = ("4h", 240)
+    D1 = ("1d", 1440)
 
     @property
     def tf(self) -> str:

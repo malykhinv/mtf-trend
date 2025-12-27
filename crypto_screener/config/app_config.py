@@ -12,7 +12,7 @@ from crypto_screener.domain.strategies.strategy import Strategy
 _timezone: ZoneInfo = ZoneInfo("Europe/Belgrade")
 
 # Таймфреймы.
-_timeframes: list[Timeframe] = [Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5]
+_timeframes: list[Timeframe] = [Timeframe.D1, Timeframe.H1, Timeframe.M30, Timeframe.M15, Timeframe.M5]
 _timeframe_intervals: dict[Timeframe, timedelta] = {
     timeframe: timedelta(minutes=timeframe.minutes)
     for timeframe in Timeframe
@@ -26,6 +26,7 @@ _poll_intervals: dict[Timeframe, timedelta] = {
     Timeframe.M30: timedelta(minutes=10),
     Timeframe.H1: timedelta(minutes=15),
     Timeframe.H4: timedelta(hours=1),
+    Timeframe.D1: timedelta(hours=6),
 }
 
 # Интервалы опроса Capture для анализа таймфреймов.
@@ -36,6 +37,7 @@ _capture_poll_intervals: dict[Timeframe, timedelta] = {
     Timeframe.M30: timedelta(seconds=20),
     Timeframe.H1: timedelta(minutes=1),
     Timeframe.H4: timedelta(minutes=5),
+    Timeframe.D1: timedelta(minutes=30),
 }
 
 # Данные для тестирования конкретных символов.
