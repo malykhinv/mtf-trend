@@ -1394,6 +1394,7 @@ def run_live(
                                 timeframe,
                                 exchange_name,
                                 strategy_name=strategy_name,
+                                setup=setup,
                             )
                             if capture_key in capture_state.captures:
                                 active_capture = capture_state.captures.get(capture_key)

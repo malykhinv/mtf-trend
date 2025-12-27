@@ -29,3 +29,7 @@ class Gu(SetupData):
     direction: CascadeType
     level_price: Optional[float]
     open_extremums: Optional[list[float]]
+    atr: Optional[float] = None
+    current_price: Optional[float] = None
+    distance_to_level: Optional[float] = None
+    distance_atr_ratio: Optional[float] = None
