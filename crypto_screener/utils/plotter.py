@@ -188,12 +188,25 @@ def _plot_ppo(
     level_price = getattr(data, "level_price", None)
     current_price = getattr(data, "current_price", None) or (data.bars[-1].close if data.bars else None)
     if level_price is not None and not cascade_swings:
-        _draw_level_with_bounds(
-            ax=price_ax,
-            level_price=level_price,
-            bars=combined_bars,
-            theme=theme,
-            start_index=0,
+        price_ax.axhline(
+            y=level_price,
+            xmin=0,
+            xmax=1,
+            color=theme.cascade_level_color,
+            linestyle=theme.cascade_level_linestyle,
+            linewidth=theme.cascade_level_linewidth,
+            alpha=theme.cascade_level_alpha,
+            zorder=theme.cascade_level_zorder,
+        )
+        price_ax.text(
+            times[-1],
+            level_price,
+            f"{level_price:.4f}",
+            color=theme.cascade_level_color,
+            ha="right",
+            va="bottom",
+            fontsize=9,
+            alpha=0.9,
         )
     if current_price is not None:
         price_ax.axhline(
@@ -385,12 +398,27 @@ def _plot_gu(
 
     level_price = data.level_price
     if level_price is not None and not cascade_swings:
-        _draw_level_with_bounds(
-            ax=price_ax,
-            level_price=level_price,
-            bars=combined_bars,
-            theme=theme,
-            start_index=0,
+        price_ax.axhline(
+            y=level_price,
+            xmin=0,
+            xmax=1,
+            color=theme.cascade_level_color,
+            linestyle=theme.cascade_level_linestyle,
+            linewidth=theme.cascade_level_linewidth,
+            alpha=theme.cascade_level_alpha,
+            zorder=theme.cascade_level_zorder,
+        )
+        label_x = times[-1] + candle_width
+        price_ax.text(
+            label_x,
+            level_price,
+            f"{level_price:.4f}",
+            color=theme.cascade_level_color,
+            ha="left",
+            va="bottom",
+            fontsize=9,
+            alpha=0.9,
+            zorder=theme.cascade_level_zorder,
         )
 
     volumes = _draw_volume(volume_ax, combined_bars, times, candle_width, theme)
@@ -603,15 +631,20 @@ def _draw_swing_group(
         )
 
 
-def _draw_level_with_bounds(
+def _draw_cascade_level(
         ax: Axes,
-        level_price: float,
+        cascade_swings: list[Swing],
         bars: list[Bar],
         theme: PlotTheme,
-        *,
-        start_index: int,
 ):
-    if not bars or start_index >= len(bars):
+    if not cascade_swings or not bars:
+        return
+
+    start_swing = cascade_swings[0]
+    level_price = start_swing.extremum_price
+    start_time = start_swing.time
+    start_index = next((index for index, bar in enumerate(bars) if bar.time == start_time), None)
+    if start_index is None:
         return
 
     end_index = len(bars) - 1
@@ -645,31 +678,6 @@ def _draw_level_with_bounds(
         fontsize=9,
         alpha=0.9,
         zorder=theme.cascade_level_zorder,
-    )
-
-
-def _draw_cascade_level(
-        ax: Axes,
-        cascade_swings: list[Swing],
-        bars: list[Bar],
-        theme: PlotTheme,
-):
-    if not cascade_swings or not bars:
-        return
-
-    start_swing = cascade_swings[0]
-    level_price = start_swing.extremum_price
-    start_time = start_swing.time
-    start_index = next((index for index, bar in enumerate(bars) if bar.time == start_time), None)
-    if start_index is None:
-        return
-
-    _draw_level_with_bounds(
-        ax=ax,
-        level_price=level_price,
-        bars=bars,
-        theme=theme,
-        start_index=start_index,
     )
 
 
