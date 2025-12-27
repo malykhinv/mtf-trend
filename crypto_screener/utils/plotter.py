@@ -187,7 +187,7 @@ def _plot_ppo(
 
     level_price = getattr(data, "level_price", None)
     current_price = getattr(data, "current_price", None) or (data.bars[-1].close if data.bars else None)
-    if level_price is not None:
+    if level_price is not None and not cascade_swings:
         price_ax.axhline(
             y=level_price,
             xmin=0,
@@ -394,8 +394,10 @@ def _plot_gu(
         )
     _format_ax(price_ax, times, min_price, max_price, theme)
 
+    cascade_swings = getattr(data, "cascade_swings", None)
+
     level_price = getattr(data, "level_price", None)
-    if level_price is not None:
+    if level_price is not None and not cascade_swings:
         price_ax.axhline(
             y=level_price,
             xmin=0,
@@ -423,7 +425,6 @@ def _plot_gu(
     _format_volume_ax(volume_ax, volumes, theme)
     _format_time_axis(volume_ax, theme)
 
-    cascade_swings = getattr(data, "cascade_swings", None)
     support_swings = getattr(data, "support_swings", None)
 
     if cascade_swings:
@@ -664,6 +665,18 @@ def _draw_cascade_level(
         linewidth=theme.cascade_level_linewidth,
         linestyles=theme.cascade_level_linestyle,
         alpha=theme.cascade_level_alpha,
+        zorder=theme.cascade_level_zorder,
+    )
+
+    ax.text(
+        end_time_mpl,
+        level_price,
+        f"{level_price:.4f}",
+        color=theme.cascade_level_color,
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        alpha=0.9,
         zorder=theme.cascade_level_zorder,
     )
 
