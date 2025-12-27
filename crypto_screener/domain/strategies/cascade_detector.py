@@ -14,6 +14,7 @@ from crypto_screener.domain.models.swing import Swing, SwingType
 @dataclass(frozen=True)
 class CascadeDetectorConfig:
     atr_window: int
+    first_candle_min_height_natr: float
     touch_eps_natr: float
     min_pullback_natr: float
     min_pullback_bars: int
@@ -28,6 +29,7 @@ class CascadeDetectorConfig:
     def from_strategy_config(cls, config: object) -> "CascadeDetectorConfig":
         return cls(
             atr_window=config.CASCADE_ATR_WINDOW,
+            first_candle_min_height_natr=config.CASCADE_FIRST_CANDLE_MIN_HEIGHT_NATR,
             touch_eps_natr=config.CASCADE_TOUCH_EPS_NATR,
             min_pullback_natr=config.CASCADE_MIN_PULLBACK_NATR,
             min_pullback_bars=config.CASCADE_MIN_PULLBACK_BARS,
@@ -190,6 +192,8 @@ class CascadeDetector:
                 best_level_touches_count = touches_count
                 best_level_price = level.price
 
+        best_level_touches = sorted(best_level_touches)
+
         if not best_level_touches or best_level_touches_count < min_touches or best_level_price is None:
             return []
 
@@ -204,6 +208,28 @@ class CascadeDetector:
 
         first_touch_index = min(best_level_touches)
         last_touch_index = max(best_level_touches)
+
+        first_touch_bar = bars[first_touch_index]
+        first_candle_height = first_touch_bar.high - first_touch_bar.low
+        min_first_candle_height = self._config.first_candle_min_height_natr * avg_range
+        if first_candle_height < min_first_candle_height:
+            return []
+
+        cascade_highs = [bars[index].high for index in best_level_touches]
+        cascade_lows = [bars[index].low for index in best_level_touches]
+        pre_cascade_start = first_touch_index - best_level_touches_count
+        if pre_cascade_start < 0:
+            return []
+        pre_cascade_bars = bars[pre_cascade_start:first_touch_index]
+        # Предварительная валидация: предшествующие бары не должны пересекать экстремумы каскада.
+        if is_long:
+            cascade_high_threshold = min(cascade_highs)
+            if any(bar.high >= cascade_high_threshold for bar in pre_cascade_bars):
+                return []
+        else:
+            cascade_low_threshold = max(cascade_lows)
+            if any(bar.low <= cascade_low_threshold for bar in pre_cascade_bars):
+                return []
         if is_long:
             last_touch_segment_extreme = min(bar.low for bar in bars[last_touch_index:])
             first_touch_segment_extreme = min(bar.low for bar in bars[first_touch_index:last_touch_index - 1])

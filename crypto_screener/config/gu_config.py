@@ -40,6 +40,8 @@ class GuConfig:
     SWING_CROSS_TOLERANCE_NATR: float = 1.0
     # Размер окна ATR для анализа лонгового каскада.
     CASCADE_ATR_WINDOW: int = 50
+    # Минимальная высота первой свечи каскада в долях ATR.
+    CASCADE_FIRST_CANDLE_MIN_HEIGHT_NATR: float = 1.0
     # Допуск по касаниям в долях ATR.
     CASCADE_TOUCH_EPS_NATR: float = 1.0
     # Минимальное число свингов для образования каскада.
