@@ -5,11 +5,10 @@ import numpy as np
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
-from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
+from crypto_screener.domain.models.setup import Capture, Setup, Unfilled
 from crypto_screener.domain.models.setup_data import Ppo
 from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.domain.models.trade_levels import TradeLevels
 from crypto_screener.config.ppo_config import PpoConfig, ppo_cfg
 from crypto_screener.domain.strategies.strategy import (
     Strategy,
@@ -257,45 +256,6 @@ class PpoStrategy(Strategy):
         has_breakout_long = current_price > target_swing.extremum_price
         if not has_breakout_long:
             return setup
-
-        # Пробой лонгового каскада.
-        partial_close_price = None
-        breakeven_price = None
-        partial_close_side_pct = self._config.PARTIAL_CLOSE_SIDE_PCT_MIN
-        if resistance_swings:
-            nearest_resistance_price = resistance_swings[-1].extremum_price
-            nearest_resistance_distance_pct = 100 * (nearest_resistance_price - current_price) / current_price
-            has_partial_close = partial_close_side_pct <= nearest_resistance_distance_pct < profit_pct - partial_close_side_pct
-            if has_partial_close:
-                partial_close_price = nearest_resistance_price if has_partial_close else None
-                breakeven_price = current_price + self._config.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
-        elif context.is_top:
-            main_high_distance_pct = 100 * (main_high_swing.extremum_price - current_price) / current_price
-            has_partial_close = partial_close_side_pct <= main_high_distance_pct < profit_pct - partial_close_side_pct
-            if has_partial_close:
-                partial_close_price = main_high_swing.extremum_price
-                breakeven_price = current_price + self._config.BREAKEVEN_PARTIAL_CLOSE_RATIO * (partial_close_price - current_price)
-        entry_slippage_ratio = 1 + self._config.TEST_SLIPPAGE_PCT / 100 if context.is_test else 1
-        trade_levels = TradeLevels(
-            entry_price=target_swing.extremum_price * entry_slippage_ratio,
-            take_profit_price=profit_price,
-            stop_loss_price=loss_price,
-            partial_close_price=partial_close_price,
-            breakeven_price=breakeven_price,
-        )
-        setup = Trade(
-            data=Ppo(
-                symbol=symbol,
-                timeframe=timeframe,
-                bars=bars,
-                main_low_swing=main_low_swing,
-                main_high_swing=main_high_swing,
-                cascade_swings=cascade_long,
-                resistance_swings=resistance_swings,
-                support_swings=open_low_swings,
-            ),
-            trade_levels=trade_levels,
-        )
 
         return setup
 
