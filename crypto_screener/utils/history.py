@@ -6,7 +6,7 @@ _LIMIT_MIN = 300
 _WINDOW_MIN = 100
 
 _LIMIT_MULTIPLIERS: dict[Timeframe, float] = {
-    Timeframe.D1: 0.5,
+    Timeframe.D1: 1.0,
     Timeframe.H4: 1.0,
     Timeframe.H1: 1.0,
     Timeframe.M30: 2.0,
@@ -15,7 +15,7 @@ _LIMIT_MULTIPLIERS: dict[Timeframe, float] = {
 }
 
 _WINDOW_MULTIPLIERS: dict[Timeframe, float] = {
-    Timeframe.D1: 0.5,
+    Timeframe.D1: 1.0,
     Timeframe.H4: 1.25,
     Timeframe.H1: 5.0,
     Timeframe.M30: 6.25,
