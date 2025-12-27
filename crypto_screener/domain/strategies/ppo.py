@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from crypto_screener.config.ppo_config import PpoConfig, ppo_cfg
 from crypto_screener.domain.models.bar import Bar
 from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
@@ -9,17 +10,16 @@ from crypto_screener.domain.models.setup import Capture, Setup, Unfilled
 from crypto_screener.domain.models.setup_data import Ppo
 from crypto_screener.domain.models.swing import Swing, SwingType
 from crypto_screener.domain.models.timeframe import Timeframe
-from crypto_screener.config.ppo_config import PpoConfig, ppo_cfg
+from crypto_screener.domain.strategies.cascade_detector import (
+    CascadeDetector,
+    CascadeDetectorConfig,
+)
 from crypto_screener.domain.strategies.strategy import (
     Strategy,
     StrategyRuntimeConfig,
     StrategyVolumeConfig,
 )
 from crypto_screener.domain.swing_detector import add_swings
-from crypto_screener.domain.strategies.cascade_detector import (
-    CascadeDetector,
-    CascadeDetectorConfig,
-)
 
 
 class PpoStrategy(Strategy):

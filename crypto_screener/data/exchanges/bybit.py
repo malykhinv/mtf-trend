@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Optional
 
 import ccxt  # type: ignore
