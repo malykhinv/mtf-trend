@@ -610,18 +610,16 @@ def _draw_level_with_bounds(
         theme: PlotTheme,
         *,
         start_index: int,
-        stop_on_breakout: bool = True,
 ):
     if not bars or start_index >= len(bars):
         return
 
     end_index = len(bars) - 1
-    if stop_on_breakout:
-        for index in range(start_index + 1, len(bars)):
-            bar = bars[index]
-            if bar.open > level_price or bar.close > level_price:
-                end_index = index
-                break
+    for index in range(start_index + 1, len(bars)):
+        bar = bars[index]
+        if bar.open > level_price or bar.close > level_price:
+            end_index = index
+            break
 
     start_time_mpl = _datetime_to_mpl(bars[start_index].time)
     end_time_mpl = _datetime_to_mpl(bars[end_index].time)
@@ -672,7 +670,6 @@ def _draw_cascade_level(
         bars=bars,
         theme=theme,
         start_index=start_index,
-        stop_on_breakout=False,
     )
 
 
