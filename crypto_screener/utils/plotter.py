@@ -131,9 +131,15 @@ def _plot_ppo(
 
     y_offset = max((max_price - min_price) * theme.y_offset_ratio, theme.y_offset_min)
 
-    if data.main_low_swing and data.main_high_swing:
-        start_time = _datetime_to_mpl(data.main_low_swing.time)
-        end_time = _datetime_to_mpl(data.main_high_swing.time)
+    cascade_swings = getattr(data, "cascade_swings", None)
+    resistance_swings = getattr(data, "resistance_swings", None)
+    support_swings = getattr(data, "support_swings", None)
+    main_low_swing = getattr(data, "main_low_swing", None)
+    main_high_swing = getattr(data, "main_high_swing", None)
+
+    if main_low_swing and main_high_swing:
+        start_time = _datetime_to_mpl(main_low_swing.time)
+        end_time = _datetime_to_mpl(main_high_swing.time)
         price_ax.axvspan(
             xmin=min(start_time, end_time),
             xmax=max(start_time, end_time),
@@ -144,7 +150,7 @@ def _plot_ppo(
             zorder=0
         )
         price_ax.axhline(
-            y=data.main_low_swing.extremum_price,
+            y=main_low_swing.extremum_price,
             xmin=0,
             xmax=1,
             color=theme.growth_phase_color,
@@ -154,7 +160,7 @@ def _plot_ppo(
             zorder=0
         )
         price_ax.axhline(
-            y=data.main_high_swing.extremum_price,
+            y=main_high_swing.extremum_price,
             xmin=0,
             xmax=1,
             color=theme.growth_phase_color,
@@ -183,48 +189,48 @@ def _plot_ppo(
     _format_volume_ax(volume_ax, volumes, theme)
     _format_time_axis(volume_ax, theme)
 
-    if data.cascade_swings:
-        _draw_cascade_level(price_ax, data.cascade_swings, combined_bars, theme)
+    if cascade_swings:
+        _draw_cascade_level(price_ax, cascade_swings, combined_bars, theme)
         _draw_swing_group(
             ax=price_ax,
-            swings=data.cascade_swings,
+            swings=cascade_swings,
             color=theme.cascade_swing_color,
             y_offset=y_offset,
             theme=theme,
         )
-    if data.resistance_swings:
+    if resistance_swings:
         _draw_swing_group(
             ax=price_ax,
-            swings=data.resistance_swings,
+            swings=resistance_swings,
             color=theme.resistance_swing_color,
             y_offset=y_offset,
             theme=theme,
         )
-    if data.support_swings:
+    if support_swings:
         _draw_swing_group(
             ax=price_ax,
-            swings=data.support_swings,
+            swings=support_swings,
             color=theme.support_swing_color,
             y_offset=y_offset,
             theme=theme,
         )
-    if data.main_high_swing:
+    if main_high_swing:
         _draw_swing_group(
             ax=price_ax,
-            swings=[data.main_high_swing],
+            swings=[main_high_swing],
             color=theme.main_high_swing_color,
             y_offset=y_offset,
             theme=theme,
         )
-    if data.main_low_swing:
+    if main_low_swing:
         _draw_swing_group(
             ax=price_ax,
-            swings=[data.main_low_swing],
+            swings=[main_low_swing],
             color=theme.main_high_swing_color,
             y_offset=y_offset,
             theme=theme,
         )
-    if not data.cascade_swings and not data.resistance_swings and not data.support_swings:
+    if not cascade_swings and not resistance_swings and not support_swings:
         base_bars = add_swings(data.bars, data.timeframe, cross_tolerance_natr=0.0)
         swings = [bar.swing for bar in base_bars if bar.swing]
         _draw_swing_group(
@@ -337,24 +343,27 @@ def _plot_gu(
     _format_volume_ax(volume_ax, volumes, theme)
     _format_time_axis(volume_ax, theme)
 
-    if data.cascade_swings:
-        _draw_cascade_level(price_ax, data.cascade_swings, combined_bars, theme)
+    cascade_swings = getattr(data, "cascade_swings", None)
+    support_swings = getattr(data, "support_swings", None)
+
+    if cascade_swings:
+        _draw_cascade_level(price_ax, cascade_swings, combined_bars, theme)
         _draw_swing_group(
             ax=price_ax,
-            swings=data.cascade_swings,
+            swings=cascade_swings,
             color=theme.cascade_swing_color,
             y_offset=y_offset,
             theme=theme,
         )
-    if data.support_swings:
+    if support_swings:
         _draw_swing_group(
             ax=price_ax,
-            swings=data.support_swings,
+            swings=support_swings,
             color=theme.support_swing_color,
             y_offset=y_offset,
             theme=theme,
         )
-    if not data.cascade_swings and not data.support_swings:
+    if not cascade_swings and not support_swings:
         base_bars = add_swings(data.bars, data.timeframe, cross_tolerance_natr=0.0)
         swings = [bar.swing for bar in base_bars if bar.swing]
         _draw_swing_group(
