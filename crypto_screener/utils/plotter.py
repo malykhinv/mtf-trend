@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 from crypto_screener.config import app_cfg, gu_plot_theme, ppo_plot_theme
 from crypto_screener.config.plot_theme import PlotTheme
 from crypto_screener.domain.models.bar import Bar
+from crypto_screener.domain.models.cascade_type import CascadeType
 from crypto_screener.domain.models.context import Context
 from crypto_screener.domain.models.setup import Capture, Setup, Trade, Unfilled
 from crypto_screener.domain.models.setup_data import Gu, Ppo, SetupData
@@ -380,6 +381,12 @@ def _plot_gu(
     y_offset = max((max_price - min_price) * theme.y_offset_ratio, theme.y_offset_min)
 
     _draw_candles(price_ax, combined_bars, times, candle_width, theme)
+    _scatter_gu_extremums(
+        ax=price_ax,
+        extremums=data.open_extremums or [],
+        direction=data.direction,
+        theme=theme,
+    )
 
     if draw_entry_zones and entry_price is not None and trade_levels:
         entry_time = _get_entry_time(trimmed_postmortem, detection_time, data.bars)
@@ -666,6 +673,32 @@ def _draw_cascade_level(
         linestyles=theme.cascade_level_linestyle,
         alpha=theme.cascade_level_alpha,
         zorder=theme.cascade_level_zorder,
+    )
+
+
+def _scatter_gu_extremums(
+        *,
+        ax: Axes,
+        extremums: list[tuple[datetime, float]],
+        direction: CascadeType,
+        theme: PlotTheme,
+) -> None:
+    if not extremums:
+        return
+
+    times = [_datetime_to_mpl(time) for time, _ in extremums]
+    prices = [price for _, price in extremums]
+    marker = "v" if direction is CascadeType.LONG else "^"
+    ax.scatter(
+        times,
+        prices,
+        marker=marker,
+        s=theme.swing_marker_size,
+        color=theme.cascade_level_color,
+        edgecolors=theme.cascade_level_color,
+        alpha=theme.swing_marker_open_alpha,
+        zorder=theme.swing_zorder,
+        linewidths=0.8,
     )
 
 
