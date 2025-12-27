@@ -17,6 +17,11 @@ class Exchange(ABC):
     def get_name() -> str:
         pass
 
+    @property
+    @abstractmethod
+    def supports_trades_filter(self) -> bool:
+        ...
+
     @abstractmethod
     def get_futures_symbols(self) -> list[FuturesSymbol]:
         ...

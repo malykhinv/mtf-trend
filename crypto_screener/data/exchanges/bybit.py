@@ -39,6 +39,10 @@ class Bybit(Exchange):
     def get_name() -> str:
         return "Bybit"
 
+    @property
+    def supports_trades_filter(self) -> bool:
+        return False
+
     def get_futures_symbols(self) -> list[FuturesSymbol]:
         try:
             markets = self._client.load_markets()

@@ -38,6 +38,10 @@ class Binance(Exchange):
     def get_name() -> str:
         return "Binance"
 
+    @property
+    def supports_trades_filter(self) -> bool:
+        return True
+
     def get_futures_symbols(self) -> list[FuturesSymbol]:
         try:
             markets = self._client.load_markets()
