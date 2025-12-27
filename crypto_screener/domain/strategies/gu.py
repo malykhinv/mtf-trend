@@ -143,11 +143,23 @@ class GuStrategy(Strategy):
 
     @staticmethod
     def _calculate_average_range(bars: list[Bar], window: int) -> float:
-        if not bars or window <= 0:
+        if len(bars) < 2 or window <= 0:
             return 0.0
-        window = min(window, len(bars))
-        ranges = [bar.high - bar.low for bar in bars[-window:]]
-        return float(np.mean(ranges)) if ranges else 0.0
+        window = min(window, len(bars) - 1)
+        start_index = len(bars) - window
+
+        true_ranges: list[float] = []
+        for index in range(start_index, len(bars)):
+            bar = bars[index]
+            prev_close = bars[index - 1].close
+            true_range = max(
+                bar.high - bar.low,
+                abs(bar.high - prev_close),
+                abs(bar.low - prev_close),
+            )
+            true_ranges.append(true_range)
+
+        return float(np.mean(true_ranges)) if true_ranges else 0.0
 
     def get_runtime_config(self) -> StrategyRuntimeConfig:
         return StrategyRuntimeConfig(
