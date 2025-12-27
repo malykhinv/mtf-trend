@@ -71,7 +71,9 @@ class GuStrategy(Strategy):
             return setup
 
         open_extremums = self._find_open_extremums(bars)
-        setup.data.open_extremums = [extremum.price for extremum in open_extremums]
+        setup.data.open_extremums = [
+            (extremum.time, extremum.price) for extremum in open_extremums
+        ]
 
         level = self._find_nearest_level(open_extremums, avg_range)
         if level is None:

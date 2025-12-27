@@ -1,5 +1,6 @@
 from abc import ABC
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 from crypto_screener.domain.models.bar import Bar
@@ -30,7 +31,7 @@ class Ppo(SetupData):
 class Gu(SetupData):
     direction: CascadeType
     level_price: Optional[float] = None
-    open_extremums: Optional[list[float]] = None
+    open_extremums: Optional[list[tuple[datetime, float]]] = None
     cascade_swings: list[Swing] = field(default_factory=list)
     support_swings: list[Swing] = field(default_factory=list)
     atr: Optional[float] = None
