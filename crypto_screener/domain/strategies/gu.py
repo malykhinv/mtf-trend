@@ -32,6 +32,10 @@ class GuStrategy(Strategy):
         self._config = config
         self._direction = direction
 
+    @property
+    def allowed_timeframes(self) -> tuple[Timeframe, ...]:
+        return self._config.ALLOWED_TIMEFRAMES
+
     def detect_setup(
             self,
             symbol: str,

@@ -27,6 +27,14 @@ class StrategyVolumeConfig:
 class Strategy(ABC):
     name: str
 
+    @property
+    @abstractmethod
+    def allowed_timeframes(self) -> tuple[Timeframe, ...]:
+        """Возвращает поддерживаемые таймфреймы."""
+
+    def is_timeframe_allowed(self, timeframe: Timeframe) -> bool:
+        return timeframe in self.allowed_timeframes
+
     def trim_by_volume(self, bars: list[Bar]) -> list[Bar]:
         volume_config = self.get_volume_config()
         length = len(bars)

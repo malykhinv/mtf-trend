@@ -1,8 +1,18 @@
 from dataclasses import dataclass
 
+from crypto_screener.domain.models.timeframe import Timeframe
+
 
 @dataclass(frozen=True)
 class PpoConfig:
+    # Допустимые таймфреймы.
+    ALLOWED_TIMEFRAMES: tuple[Timeframe, ...] = (
+        Timeframe.H1,
+        Timeframe.M30,
+        Timeframe.M15,
+        Timeframe.M5,
+    )
+
     # region Сетапы.
     CAPTURE_TIMEOUT_MULTIPLIER: int = 12
     # endregion
