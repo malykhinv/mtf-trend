@@ -47,11 +47,6 @@ class PpoStrategy(Strategy):
                 symbol=symbol,
                 timeframe=timeframe,
                 bars=bars,
-                main_low_swing=None,
-                main_high_swing=None,
-                cascade_swings=None,
-                resistance_swings=None,
-                support_swings=None
             )
         )
 
