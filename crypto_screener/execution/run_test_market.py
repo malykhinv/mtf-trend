@@ -109,13 +109,24 @@ def run_test_market(
     symbols = set_contexts(symbols, listing_age_days_min, symbol_cfg.context)
     log.d(f"Получено {len(symbols)} символов до фильтрации.")
 
+    skip_trades_filter = exchange.get_name() == "Bybit"
+    trades_filter = None if skip_trades_filter else trades_24h_min
+
     symbols = _filter_symbols(
         symbols,
         volume_24h_usdt_min,
-        trades_24h_min,
+        trades_filter,
         listing_age_days_min,
     )
-    log.d(f"Фильтры: объем ≥ {volume_24h_usdt_min}, сделки ≥ {trades_24h_min}, возраст ≥ {listing_age_days_min} дней")
+    if skip_trades_filter:
+        log.d(
+            f"Фильтры: объем ≥ {volume_24h_usdt_min}, возраст ≥ {listing_age_days_min} дней. "
+            "Фильтр по числу сделок отключен для Bybit."
+        )
+    else:
+        log.d(
+            f"Фильтры: объем ≥ {volume_24h_usdt_min}, сделки ≥ {trades_24h_min}, возраст ≥ {listing_age_days_min} дней"
+        )
     log.d(f"После фильтрации осталось {len(symbols)} символов.")
 
     trade_results: list[float] = []
