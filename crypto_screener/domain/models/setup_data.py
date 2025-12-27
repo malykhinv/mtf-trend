@@ -33,5 +33,3 @@ class Gu(SetupData):
     current_price: Optional[float] = None
     distance_to_level: Optional[float] = None
     distance_atr_ratio: Optional[float] = None
-    cascade_swings: Optional[list[Swing]] = None
-    support_swings: Optional[list[Swing]] = None
