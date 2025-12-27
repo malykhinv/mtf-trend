@@ -131,11 +131,11 @@ def _plot_ppo(
 
     y_offset = max((max_price - min_price) * theme.y_offset_ratio, theme.y_offset_min)
 
-    cascade_swings = getattr(data, "cascade_swings", None)
-    resistance_swings = getattr(data, "resistance_swings", None)
-    support_swings = getattr(data, "support_swings", None)
-    main_low_swing = getattr(data, "main_low_swing", None)
-    main_high_swing = getattr(data, "main_high_swing", None)
+    cascade_swings = data.cascade_swings
+    resistance_swings = data.resistance_swings
+    support_swings = data.support_swings
+    main_low_swing = data.main_low_swing
+    main_high_swing = data.main_high_swing
 
     if main_low_swing and main_high_swing:
         start_time = _datetime_to_mpl(main_low_swing.time)
@@ -394,9 +394,9 @@ def _plot_gu(
         )
     _format_ax(price_ax, times, min_price, max_price, theme)
 
-    cascade_swings = getattr(data, "cascade_swings", None)
+    cascade_swings = data.cascade_swings
 
-    level_price = getattr(data, "level_price", None)
+    level_price = data.level_price
     if level_price is not None and not cascade_swings:
         price_ax.axhline(
             y=level_price,
@@ -425,7 +425,7 @@ def _plot_gu(
     _format_volume_ax(volume_ax, volumes, theme)
     _format_time_axis(volume_ax, theme)
 
-    support_swings = getattr(data, "support_swings", None)
+    support_swings = data.support_swings
 
     if cascade_swings:
         _draw_cascade_level(price_ax, cascade_swings, combined_bars, theme)
