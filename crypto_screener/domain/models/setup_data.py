@@ -14,6 +14,7 @@ class SetupData(ABC):
     timeframe: Timeframe
     bars: list[Bar]
 
+
 @dataclass
 class Ppo(SetupData):
     main_low_swing: Optional[Swing]
@@ -22,8 +23,9 @@ class Ppo(SetupData):
     resistance_swings: Optional[list[Swing]]
     support_swings: Optional[list[Swing]]
 
+
 @dataclass
 class Gu(SetupData):
     direction: CascadeType
     level_price: Optional[float]
-    open_swings: Optional[list[Swing]]
+    open_extremums: Optional[list[float]]
