@@ -28,7 +28,11 @@ class Extremum:
 class GuStrategy(Strategy):
     name = "ГУ"
 
-    def __init__(self, config: GuConfig = gu_cfg, direction: CascadeType = CascadeType.LONG) -> None:
+    def __init__(
+            self,
+            config: GuConfig = gu_cfg,
+            direction: CascadeType = CascadeType.LONG
+    ) -> None:
         self._config = config
         self._direction = direction
 
