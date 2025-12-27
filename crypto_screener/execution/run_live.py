@@ -59,6 +59,7 @@ def _fetch_filtered_symbols(
     symbols = enrich_symbols_capitalization(symbols, symbol_cfg.capitalization)
     symbols = set_contexts(symbols, listing_period_days, symbol_cfg.context)
     btc_trades_24h = next((symbol.trades_24h for symbol in symbols if symbol.symbol.startswith("BTC")), 0)
+    skip_trades_filter = exchange.get_name() == "Bybit"
     filtered_symbols = _filter_symbols(
         symbols,
         listing_period_days,
@@ -66,7 +67,8 @@ def _fetch_filtered_symbols(
         volume_24h_old_usdt_min,
         trades_24h_min,
         trades_24h_btc_ratio_min,
-        btc_trades_24h
+        btc_trades_24h,
+        skip_trades_filter,
     )
     log.i(f"Отобрано {len(filtered_symbols)} символов из {len(symbols)}.")
     return filtered_symbols
@@ -79,7 +81,8 @@ def _filter_symbols(
         volume_24h_old_usdt_min: int,
         trades_24h_min: int,
         trades_24h_btc_ratio_min: float,
-        btc_trades_24h: int
+        btc_trades_24h: int,
+        skip_trades_filter: bool,
 ) -> list[FuturesSymbol]:
     filtered: list[FuturesSymbol] = []
 
@@ -92,7 +95,7 @@ def _filter_symbols(
         else:
             if symbol.volume_usdt_24h < volume_24h_old_usdt_min:
                 continue
-            if symbol.trades_24h < min(trades_24h_min, int(trades_24h_btc_ratio_min * btc_trades_24h)):
+            if not skip_trades_filter and symbol.trades_24h < min(trades_24h_min, int(trades_24h_btc_ratio_min * btc_trades_24h)):
                 continue
             filtered.append(symbol)
     return filtered
