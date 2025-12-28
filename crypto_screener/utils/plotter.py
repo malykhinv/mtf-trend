@@ -380,7 +380,16 @@ def _plot_gu(
 
     y_offset = max((max_price - min_price) * theme.y_offset_ratio, theme.y_offset_min)
 
-    _draw_candles(price_ax, combined_bars, times, candle_width, theme)
+    cascade_times = {swing.time for swing in data.cascade_swings} if data.cascade_swings else None
+
+    _draw_candles(
+        price_ax,
+        combined_bars,
+        times,
+        candle_width,
+        theme,
+        highlight_times=cascade_times,
+    )
     _scatter_gu_extremums(
         ax=price_ax,
         extremums=data.open_extremums or [],
@@ -559,15 +568,20 @@ def _draw_candles(
         times: list[float],
         width: float,
         theme: PlotTheme,
+        *,
+        highlight_times: Optional[set[datetime]] = None,
 ):
     for bar, time_value in zip(bars, times):
         color = theme.color_up if bar.close >= bar.open else theme.color_down
+        is_highlighted = highlight_times is None or bar.time in highlight_times
+        alpha = theme.candle_active_alpha if is_highlighted else theme.candle_inactive_alpha
         ax.plot(
             [time_value, time_value],
             [bar.low, bar.high],
             color=color,
             linewidth=theme.candle_wick_linewidth,
             zorder=theme.candle_wick_zorder,
+            alpha=alpha,
         )
         body_height = max(abs(bar.close - bar.open), theme.candle_body_min_height)
         ax.add_patch(
@@ -578,6 +592,7 @@ def _draw_candles(
                 facecolor=color,
                 edgecolor=color,
                 zorder=theme.candle_body_zorder,
+                alpha=alpha,
             )
         )
 
