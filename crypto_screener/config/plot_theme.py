@@ -36,6 +36,8 @@ class PlotTheme:
     # region Прозрачность и z-order.
     cascade_level_alpha: float = 0.7
     cascade_level_zorder: int = 1
+    candle_active_alpha: float = 1.0
+    candle_inactive_alpha: float = 0.35
     grid_linewidth: float = 0.6
     grid_alpha: float = 0.4
     growth_phase_alpha: float = 0.05
