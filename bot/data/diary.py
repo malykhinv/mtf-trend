@@ -656,6 +656,12 @@ class WorkbookDiaryBackend(DiaryBackend):
         atr_mult_column = get_column_letter(
             self._ANOMALIES_HEADERS.index("metrics_atr_mult") + 1
         )
+        metrics_pct_move_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("metrics_pct_move") + 1
+        )
+        metrics_relative_volume_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("metrics_relative_volume") + 1
+        )
         break_direction_column = get_column_letter(
             self._ANOMALIES_HEADERS.index("metrics_break_direction") + 1
         )
@@ -688,31 +694,31 @@ class WorkbookDiaryBackend(DiaryBackend):
             f")"
         )
         long_filter_green_move_formula = (
-            f"=IF($AC{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
+            f"=IF(${metrics_pct_move_column}{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
         )
         long_filter_volume_spike_formula = (
-            f"=IF($AD{row_index}>={threshold_cells['thresholds_min_volume_spike']},TRUE,FALSE)"
+            f"=IF(${metrics_relative_volume_column}{row_index}>={threshold_cells['thresholds_min_volume_spike']},TRUE,FALSE)"
         )
         long_filter_anomaly_relative_volume_formula = (
-            f"=IF($AD{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']},TRUE,FALSE)"
+            f"=IF(${metrics_relative_volume_column}{row_index}>={threshold_cells['thresholds_min_anomaly_relative_volume']},TRUE,FALSE)"
         )
         long_filter_relative_volume_min_formula = (
-            f"=IF($AD{row_index}>={threshold_cells['thresholds_min_relative_volume']},TRUE,FALSE)"
+            f"=IF(${metrics_relative_volume_column}{row_index}>={threshold_cells['thresholds_min_relative_volume']},TRUE,FALSE)"
         )
         long_filter_relative_volume_max_formula = (
-            f"=IF($AD{row_index}<={threshold_cells['thresholds_max_relative_volume']},TRUE,FALSE)"
+            f"=IF(${metrics_relative_volume_column}{row_index}<={threshold_cells['thresholds_max_relative_volume']},TRUE,FALSE)"
         )
         long_filter_anomaly_atr_formula = (
-            f"=IF($AE{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']},TRUE,FALSE)"
+            f"=IF(${atr_mult_column}{row_index}>={threshold_cells['thresholds_min_anomaly_atr_mult']},TRUE,FALSE)"
         )
         long_filter_atr_formula = (
-            f"=IF($AE{row_index}>{threshold_cells['thresholds_min_atr_mult']},TRUE,FALSE)"
+            f"=IF(${atr_mult_column}{row_index}>{threshold_cells['thresholds_min_atr_mult']},TRUE,FALSE)"
         )
         long_filter_pct_move_min_formula = (
-            f"=IF($AC{row_index}>={threshold_cells['thresholds_min_pct_move']},TRUE,FALSE)"
+            f"=IF(${metrics_pct_move_column}{row_index}>={threshold_cells['thresholds_min_pct_move']},TRUE,FALSE)"
         )
         long_filter_pct_move_max_formula = (
-            f"=IF($AC{row_index}<={threshold_cells['thresholds_max_pct_move']},TRUE,FALSE)"
+            f"=IF(${metrics_pct_move_column}{row_index}<={threshold_cells['thresholds_max_pct_move']},TRUE,FALSE)"
         )
         long_filter_upper_wick_formula = (
             f"=IF(AND({min_anomaly_upper_wick_cell},"
