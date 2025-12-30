@@ -79,20 +79,11 @@ class SignalAnalyzer:
             <= metrics.relative_volume
             <= thresholds.max_relative_volume
         )
-        volume_outside_bounds = (
-            metrics.relative_volume < thresholds.min_relative_volume
-            or metrics.relative_volume > thresholds.max_relative_volume
-        )
         atr_above_min = metrics.atr_mult > thresholds.min_atr_mult
-        atr_below_min = metrics.atr_mult < thresholds.min_atr_mult
         pct_move_within_bounds = (
             thresholds.min_pct_move
             <= metrics.pct_move
             <= thresholds.max_pct_move
-        )
-        pct_move_outside_bounds = (
-            metrics.pct_move > thresholds.max_pct_move
-            or metrics.pct_move < thresholds.min_pct_move
         )
         upper_wick_ok = metrics.upper_wick_pct < thresholds.max_upper_wick_pct
         lower_wick_ok = metrics.lower_wick_pct < thresholds.max_lower_wick_pct
@@ -104,51 +95,24 @@ class SignalAnalyzer:
             and upper_wick_ok
             and lower_wick_ok
         )
-        allow_short = (
-            volume_outside_bounds
-            and atr_below_min
-            and pct_move_outside_bounds
-            and upper_wick_ok
-            and lower_wick_ok
-        )
-
-        if not allow_long and not allow_short:
+        if not allow_long:
             return None, anomaly
 
-        if allow_long:
-            direction = SignalDirection.LONG
-            levels = SignalLevels(
-                entry_price=bar.close,
-                take_profit_price=bar.high,
+        direction = SignalDirection.LONG
+        levels = SignalLevels(
+            entry_price=bar.close,
+            take_profit_price=bar.high,
             stop_loss_price=bar.low,
         )
-        else:
-            direction = SignalDirection.SHORT
-            atr = 0.0
-            if metrics.atr_mult > 0:
-                range_value = max(bar.high - bar.low, 0.0)
-                atr = range_value / metrics.atr_mult if metrics.atr_mult != 0 else 0.0
-            take_profit_price = bar.close - atr * thresholds.take_profit_atr_mult
-            levels = SignalLevels(
-                entry_price=bar.close,
-                take_profit_price=take_profit_price,
-                stop_loss_price=bar.high,
-            )
 
         entry_price = levels.entry_price
         take_profit_price = levels.take_profit_price
         stop_loss_price = levels.stop_loss_price
 
-        if direction is SignalDirection.LONG:
-            risk = entry_price - stop_loss_price
-            if risk == 0:
-                return None, anomaly
-            reward = take_profit_price - entry_price
-        else:
-            risk = stop_loss_price - entry_price
-            if risk == 0:
-                return None, anomaly
-            reward = entry_price - take_profit_price
+        risk = entry_price - stop_loss_price
+        if risk == 0:
+            return None, anomaly
+        reward = take_profit_price - entry_price
 
         rr = reward / risk
 
