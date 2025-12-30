@@ -132,7 +132,8 @@ class TelegramNotifier(Notifier):
                 "Пороги: "
                 f"Δ% ≥ {thresholds.min_pct_move:.2f}, "
                 f"ATRx ≥ {thresholds.min_atr_mult:.2f}, "
-                f"RelVol ≥ {thresholds.min_relative_volume:.2f}"
+                f"RelVol ≥ {thresholds.min_relative_volume:.2f}, "
+                f"TPx {thresholds.take_profit_atr_mult:.2f}"
             ),
         ]
         return "\n".join(lines)
