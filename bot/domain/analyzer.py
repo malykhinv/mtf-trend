@@ -29,6 +29,24 @@ class AnalyzerSettings:
     max_upper_wick_pct: float = config.MAX_UPPER_WICK_PCT
     max_lower_wick_pct: float = config.MAX_LOWER_WICK_PCT
 
+    @classmethod
+    def from_snapshot(cls, snapshot: ThresholdSnapshot) -> "AnalyzerSettings":
+        return cls(
+            min_green_move_pct=snapshot.min_green_move_pct,
+            min_volume_spike=snapshot.min_volume_spike,
+            min_anomaly_relative_volume=config.ANOMALY_MIN_RELATIVE_VOLUME,
+            min_anomaly_atr_mult=config.ANOMALY_MIN_ATR_MULT,
+            min_anomaly_upper_wick_pct=config.ANOMALY_MIN_UPPER_WICK_PCT,
+            min_relative_volume=snapshot.min_relative_volume,
+            max_relative_volume=snapshot.max_relative_volume,
+            min_atr_mult=snapshot.min_atr_mult,
+            take_profit_atr_mult=snapshot.take_profit_atr_mult,
+            min_pct_move=snapshot.min_pct_move,
+            max_pct_move=snapshot.max_pct_move,
+            max_upper_wick_pct=snapshot.max_upper_wick_pct,
+            max_lower_wick_pct=snapshot.max_lower_wick_pct,
+        )
+
     def snapshot(self) -> ThresholdSnapshot:
         return ThresholdSnapshot(
             min_green_move_pct=self.min_green_move_pct,
@@ -99,15 +117,15 @@ class SignalAnalyzer:
             return None, anomaly
 
         direction = SignalDirection.LONG
+        entry_price = bar.close
+        stop_loss_price = bar.low
+        take_profit_offset = metrics.atr_mult * thresholds.take_profit_atr_mult
+        take_profit_price = entry_price + take_profit_offset
         levels = SignalLevels(
-            entry_price=bar.close,
-            take_profit_price=bar.high,
-            stop_loss_price=bar.low,
+            entry_price=entry_price,
+            take_profit_price=take_profit_price,
+            stop_loss_price=stop_loss_price,
         )
-
-        entry_price = levels.entry_price
-        take_profit_price = levels.take_profit_price
-        stop_loss_price = levels.stop_loss_price
 
         risk = entry_price - stop_loss_price
         if risk == 0:
