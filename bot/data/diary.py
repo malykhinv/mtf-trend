@@ -187,6 +187,21 @@ class WorkbookDiaryBackend(DiaryBackend):
             "thresholds_max_lower_wick_pct",
             config.MAX_LOWER_WICK_PCT,
         ),
+        (
+            "Pinbar max body (%)",
+            "thresholds_max_pinbar_body_pct",
+            config.PINBAR_MAX_BODY_PCT,
+        ),
+        (
+            "Pinbar min lower wick (%)",
+            "thresholds_min_pinbar_lower_wick_pct",
+            config.PINBAR_MIN_LOWER_WICK_PCT,
+        ),
+        (
+            "Pinbar max upper wick (%)",
+            "thresholds_max_pinbar_upper_wick_pct",
+            config.PINBAR_MAX_UPPER_WICK_PCT,
+        ),
         ("Minimum risk/reward", "thresholds_min_rr", config.MIN_RR),
         (
             "Minimum trend strength (abs)",
@@ -296,6 +311,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         "long_filter_pct_move_max_pass",
         "long_filter_upper_wick_pass",
         "long_filter_lower_wick_pass",
+        "long_filter_pinbar_shape_pass",
         "long_filter_rr_pass",
         "long_filter_trend_strength_pass",
         "long_rr",
@@ -311,6 +327,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         "metrics_pct_to_high_break",
         "metrics_break_direction",
         "metrics_trend_strength",
+        "pinbar_body_pct",
+        "pinbar_upper_wick_pct",
+        "pinbar_lower_wick_pct",
         "min_anomaly_upper_wick_pass",
         "thresholds_min_green_move_pct",
         "thresholds_min_volume_spike",
@@ -320,6 +339,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_anomaly_upper_wick_pct",
         "thresholds_min_trend_strength",
         "thresholds_countertrend_only",
+        "thresholds_max_pinbar_body_pct",
+        "thresholds_min_pinbar_lower_wick_pct",
+        "thresholds_max_pinbar_upper_wick_pct",
     ]
 
     def __init__(self, base_path: Path, *, anomalies_filename: str = "anomalies.xlsx") -> None:
@@ -628,6 +650,27 @@ class WorkbookDiaryBackend(DiaryBackend):
             self._ANOMALIES_HEADERS.index("min_anomaly_upper_wick_pass") + 1
         )
         min_anomaly_upper_wick_cell = f"${min_anomaly_upper_wick_column}{row_index}"
+        pinbar_filter_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("long_filter_pinbar_shape_pass") + 1
+        )
+        pinbar_body_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("pinbar_body_pct") + 1
+        )
+        pinbar_upper_wick_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("pinbar_upper_wick_pct") + 1
+        )
+        pinbar_lower_wick_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("pinbar_lower_wick_pct") + 1
+        )
+        metrics_body_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("metrics_body_pct") + 1
+        )
+        metrics_upper_wick_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("metrics_upper_wick_pct") + 1
+        )
+        metrics_lower_wick_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("metrics_lower_wick_pct") + 1
+        )
         long_rr_formula = (
             f'=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}),"")'
         )
@@ -665,6 +708,14 @@ class WorkbookDiaryBackend(DiaryBackend):
         long_filter_lower_wick_formula = (
             f"=IF($AH{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
         )
+        pinbar_body_formula = f"=${metrics_body_column}{row_index}"
+        pinbar_upper_wick_formula = f"=${metrics_upper_wick_column}{row_index}"
+        pinbar_lower_wick_formula = f"=${metrics_lower_wick_column}{row_index}"
+        long_filter_pinbar_shape_formula = (
+            f"=IF(AND({pinbar_body_column}{row_index}<={threshold_cells['thresholds_max_pinbar_body_pct']},"
+            f"{pinbar_lower_wick_column}{row_index}>={threshold_cells['thresholds_min_pinbar_lower_wick_pct']},"
+            f"{pinbar_upper_wick_column}{row_index}<={threshold_cells['thresholds_max_pinbar_upper_wick_pct']}),TRUE,FALSE)"
+        )
         long_filter_rr_formula = (
             f"=IF($Z{row_index}>{threshold_cells['thresholds_min_rr']},TRUE,FALSE)"
         )
@@ -691,6 +742,7 @@ class WorkbookDiaryBackend(DiaryBackend):
                 "X",
                 "Y",
                 min_anomaly_upper_wick_column,
+                pinbar_filter_column,
             )
         ) + ")"
         long_trade_executed_formula = f"=IF($K{row_index},TRUE,FALSE)"
@@ -749,6 +801,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             long_filter_pct_move_max_formula,
             long_filter_upper_wick_formula,
             long_filter_lower_wick_formula,
+            long_filter_pinbar_shape_formula,
             long_filter_rr_formula,
             long_filter_trend_strength_formula,
             long_rr_formula,
@@ -764,6 +817,9 @@ class WorkbookDiaryBackend(DiaryBackend):
             metrics.pct_to_high_break,
             metrics.break_direction.name,
             metrics.trend_strength,
+            pinbar_body_formula,
+            pinbar_upper_wick_formula,
+            pinbar_lower_wick_formula,
             min_anomaly_upper_wick_pass_formula,
             thresholds_min_green_formula,
             thresholds_min_volume_formula,
@@ -773,6 +829,9 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds_min_anomaly_upper_wick_formula,
             thresholds_min_trend_strength_formula,
             thresholds_countertrend_formula,
+            f"={threshold_cells['thresholds_max_pinbar_body_pct']}",
+            f"={threshold_cells['thresholds_min_pinbar_lower_wick_pct']}",
+            f"={threshold_cells['thresholds_max_pinbar_upper_wick_pct']}",
         ]
     @staticmethod
     def _set_named_range(workbook: Workbook, *, name: str, sheet_title: str, column_letter: str, row: int) -> None:
