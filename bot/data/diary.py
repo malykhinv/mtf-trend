@@ -653,6 +653,12 @@ class WorkbookDiaryBackend(DiaryBackend):
         pinbar_filter_column = get_column_letter(
             self._ANOMALIES_HEADERS.index("long_filter_pinbar_shape_pass") + 1
         )
+        atr_mult_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("metrics_atr_mult") + 1
+        )
+        break_direction_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("metrics_break_direction") + 1
+        )
         pinbar_body_column = get_column_letter(
             self._ANOMALIES_HEADERS.index("pinbar_body_pct") + 1
         )
@@ -671,8 +677,15 @@ class WorkbookDiaryBackend(DiaryBackend):
         metrics_lower_wick_column = get_column_letter(
             self._ANOMALIES_HEADERS.index("metrics_lower_wick_pct") + 1
         )
+        take_profit_atr_mult_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("thresholds_take_profit_atr_mult") + 1
+        )
         long_rr_formula = (
-            f'=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}),"")'
+            f"=IFERROR("
+            f"IF(${atr_mult_column}{row_index}=0,\"\","
+            f"(({take_profit_atr_mult_column}{row_index}*(G{row_index}-H{row_index})/${atr_mult_column}{row_index})/"
+            f"(I{row_index}-H{row_index}))),\"\")"
+            f")"
         )
         long_filter_green_move_formula = (
             f"=IF($AC{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
@@ -765,11 +778,16 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_countertrend_formula = (
             f"={threshold_cells['thresholds_countertrend_only']}"
         )
+        take_profit_price_formula = (
+            f"I{row_index}+IF(${atr_mult_column}{row_index}=0,0,"
+            f"(G{row_index}-H{row_index})/${atr_mult_column}{row_index}*${take_profit_atr_mult_column}{row_index})"
+        )
+        break_direction_cell = f"${break_direction_column}{row_index}"
         long_pnl_formula = (
             f'=IF($L{row_index},'
             f'IF($I{row_index}=0,"",'
-            f'IF($AK{row_index}="HIGH_FIRST",(G{row_index}-I{row_index})/I{row_index}*100,'
-            f'IF(OR($AK{row_index}="LOW_FIRST",$AK{row_index}="BOTH"),(H{row_index}-I{row_index})/I{row_index}*100,0))),'
+            f'IF({break_direction_cell}="HIGH_FIRST",(MIN(G{row_index},{take_profit_price_formula})-I{row_index})/I{row_index}*100,'
+            f'IF(OR({break_direction_cell}="LOW_FIRST",{break_direction_cell}="BOTH"),(H{row_index}-I{row_index})/I{row_index}*100,0))),'
             f'"")'
         )
         long_equity_formula = (
