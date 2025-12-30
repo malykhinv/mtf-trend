@@ -327,6 +327,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         "metrics_pct_to_high_break",
         "metrics_break_direction",
         "metrics_trend_strength",
+        "min_anomaly_upper_wick_pass",
         "thresholds_min_green_move_pct",
         "thresholds_min_volume_spike",
         "thresholds_min_relative_volume",
@@ -641,6 +642,10 @@ class WorkbookDiaryBackend(DiaryBackend):
         metrics = row.metrics
         thresholds = row.thresholds
         threshold_cells = self._ANOMALY_THRESHOLD_CELL_MAP
+        min_anomaly_upper_wick_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("min_anomaly_upper_wick_pass") + 1
+        )
+        min_anomaly_upper_wick_cell = f"${min_anomaly_upper_wick_column}{row_index}"
         long_rr_formula = (
             f'=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}),"")'
         )
@@ -676,7 +681,8 @@ class WorkbookDiaryBackend(DiaryBackend):
             f"=IF($AS{row_index}<={threshold_cells['thresholds_max_pct_move']},TRUE,FALSE)"
         )
         long_filter_upper_wick_formula = (
-            f"=IF($AV{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']},TRUE,FALSE)"
+            f"=IF(AND({min_anomaly_upper_wick_cell},"
+            f"$AV{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']}),TRUE,FALSE)"
         )
         long_filter_lower_wick_formula = (
             f"=IF($AX{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
@@ -714,7 +720,8 @@ class WorkbookDiaryBackend(DiaryBackend):
             f"$AS{row_index}<{threshold_cells['thresholds_min_pct_move']}),TRUE,FALSE)"
         )
         short_filter_upper_wick_formula = (
-            f"=IF($AV{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']},TRUE,FALSE)"
+            f"=IF(AND({min_anomaly_upper_wick_cell},"
+            f"$AV{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']}),TRUE,FALSE)"
         )
         short_filter_lower_wick_formula = (
             f"=IF($AX{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
@@ -730,11 +737,39 @@ class WorkbookDiaryBackend(DiaryBackend):
         )
         long_filters_pass_formula = "=AND(" + ",".join(
             f"{column}{row_index}"
-            for column in ("O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "AA")
+            for column in (
+                "O",
+                "P",
+                "Q",
+                "R",
+                "S",
+                "T",
+                "U",
+                "V",
+                "W",
+                "X",
+                "Y",
+                "Z",
+                "AA",
+                min_anomaly_upper_wick_column,
+            )
         ) + ")"
         short_filters_pass_formula = "=AND(" + ",".join(
             f"{column}{row_index}"
-            for column in ("AB", "AC", "AD", "AE", "AF", "AG", "AH", "AI", "AJ", "AK", "AL")
+            for column in (
+                "AB",
+                "AC",
+                "AD",
+                "AE",
+                "AF",
+                "AG",
+                "AH",
+                "AI",
+                "AJ",
+                "AK",
+                "AL",
+                min_anomaly_upper_wick_column,
+            )
         ) + ")"
         long_trade_executed_formula = f"=IF($K{row_index},TRUE,FALSE)"
         short_trade_executed_formula = f"=IF($L{row_index},TRUE,FALSE)"
@@ -742,6 +777,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_min_volume_formula = f"={threshold_cells['thresholds_min_volume_spike']}"
         thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_relative_volume']}"
         thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_atr_mult']}"
+        min_anomaly_upper_wick_pass_formula = (
+            f"=IF($AV{row_index}>={threshold_cells['thresholds_min_anomaly_upper_wick_pct']},TRUE,FALSE)"
+        )
         thresholds_min_anomaly_upper_wick_formula = (
             f"={threshold_cells['thresholds_min_anomaly_upper_wick_pct']}"
         )
@@ -835,6 +873,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             metrics.pct_to_high_break,
             metrics.break_direction.name,
             metrics.trend_strength,
+            min_anomaly_upper_wick_pass_formula,
             thresholds_min_green_formula,
             thresholds_min_volume_formula,
             thresholds_min_relative_formula,
