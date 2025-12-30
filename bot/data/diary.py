@@ -722,10 +722,10 @@ class WorkbookDiaryBackend(DiaryBackend):
         )
         long_filter_upper_wick_formula = (
             f"=IF(AND({min_anomaly_upper_wick_cell},"
-            f"$AF{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']}),TRUE,FALSE)"
+            f"${metrics_upper_wick_column}{row_index}<{threshold_cells['thresholds_max_upper_wick_pct']}),TRUE,FALSE)"
         )
         long_filter_lower_wick_formula = (
-            f"=IF($AH{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
+            f"=IF(${metrics_lower_wick_column}{row_index}<{threshold_cells['thresholds_max_lower_wick_pct']},TRUE,FALSE)"
         )
         pinbar_body_formula = f"=${metrics_body_column}{row_index}"
         pinbar_upper_wick_formula = f"=${metrics_upper_wick_column}{row_index}"
@@ -770,7 +770,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_min_relative_formula = f"={threshold_cells['thresholds_min_relative_volume']}"
         thresholds_min_atr_formula = f"={threshold_cells['thresholds_min_atr_mult']}"
         min_anomaly_upper_wick_pass_formula = (
-            f"=IF($AF{row_index}>={threshold_cells['thresholds_min_anomaly_upper_wick_pct']},TRUE,FALSE)"
+            f"=IF(${metrics_upper_wick_column}{row_index}>={threshold_cells['thresholds_min_anomaly_upper_wick_pct']},TRUE,FALSE)"
         )
         thresholds_min_anomaly_upper_wick_formula = (
             f"={threshold_cells['thresholds_min_anomaly_upper_wick_pct']}"
