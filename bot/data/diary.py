@@ -683,6 +683,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         metrics_lower_wick_column = get_column_letter(
             self._ANOMALIES_HEADERS.index("metrics_lower_wick_pct") + 1
         )
+        long_rr_column = get_column_letter(
+            self._ANOMALIES_HEADERS.index("long_rr") + 1
+        )
         take_profit_atr_mult_column = get_column_letter(
             self._ANOMALIES_HEADERS.index("thresholds_take_profit_atr_mult") + 1
         )
@@ -736,7 +739,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             f"{pinbar_upper_wick_column}{row_index}<={threshold_cells['thresholds_max_pinbar_upper_wick_pct']}),TRUE,FALSE)"
         )
         long_filter_rr_formula = (
-            f"=IF($Z{row_index}>{threshold_cells['thresholds_min_rr']},TRUE,FALSE)"
+            f"=IF(${long_rr_column}{row_index}>{threshold_cells['thresholds_min_rr']},TRUE,FALSE)"
         )
         long_filter_trend_strength_formula = (
             f"=IF({threshold_cells['thresholds_min_trend_strength']}<=0,TRUE,"
