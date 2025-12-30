@@ -23,6 +23,7 @@ class AnalyzerSettings:
     min_relative_volume: float = config.MIN_REL_VOL
     max_relative_volume: float = config.MAX_REL_VOL
     min_atr_mult: float = config.MIN_ATR_MULT
+    take_profit_atr_mult: float = config.TAKE_PROFIT_ATR_MULT
     min_pct_move: float = config.MIN_PCT_MOVE
     max_pct_move: float = config.MAX_PCT_MOVE
     max_upper_wick_pct: float = config.MAX_UPPER_WICK_PCT
@@ -35,6 +36,7 @@ class AnalyzerSettings:
             min_relative_volume=self.min_relative_volume,
             max_relative_volume=self.max_relative_volume,
             min_atr_mult=self.min_atr_mult,
+            take_profit_atr_mult=self.take_profit_atr_mult,
             min_pct_move=self.min_pct_move,
             max_pct_move=self.max_pct_move,
             max_upper_wick_pct=self.max_upper_wick_pct,
@@ -118,13 +120,18 @@ class SignalAnalyzer:
             levels = SignalLevels(
                 entry_price=bar.close,
                 take_profit_price=bar.high,
-                stop_loss_price=bar.low,
-            )
+            stop_loss_price=bar.low,
+        )
         else:
             direction = SignalDirection.SHORT
+            atr = 0.0
+            if metrics.atr_mult > 0:
+                range_value = max(bar.high - bar.low, 0.0)
+                atr = range_value / metrics.atr_mult if metrics.atr_mult != 0 else 0.0
+            take_profit_price = bar.close - atr * thresholds.take_profit_atr_mult
             levels = SignalLevels(
                 entry_price=bar.close,
-                take_profit_price=bar.low,
+                take_profit_price=take_profit_price,
                 stop_loss_price=bar.high,
             )
 

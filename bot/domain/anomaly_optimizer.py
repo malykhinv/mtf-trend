@@ -57,6 +57,7 @@ class ThresholdCandidate:
     max_relative_volume: float
     min_anomaly_atr_mult: float
     min_atr_mult: float
+    take_profit_atr_mult: float
     min_pct_move: float
     max_pct_move: float
     min_anomaly_upper_wick_pct: float
@@ -152,6 +153,7 @@ THRESHOLD_GRID_METADATA: dict[str, GridFieldMetadata] = {
     "min_relative_volume": _bounded_metadata(step=1.0, minimum=5.0, maximum=20.0),
     "max_relative_volume": _bounded_metadata(step=10.0, minimum=100.0, maximum=200.0),
     "min_atr_mult": _bounded_metadata(step=0.1, minimum=3.0, maximum=5.0),
+    "take_profit_atr_mult": _bounded_metadata(step=0.5, minimum=1.0, maximum=10.0),
     "min_pct_move": _bounded_metadata(step=1.0, minimum=0.0, maximum=20.0),
     "max_pct_move": _bounded_metadata(step=1.0, minimum=10.0, maximum=30.0),
     "max_upper_wick_pct": _percentage_metadata(step=10.0, minimum=50.0, maximum=100.0),
@@ -192,6 +194,7 @@ _THRESHOLD_FIELD_TO_NAME = {
     "max_relative_volume": "thresholds_max_relative_volume",
     "min_anomaly_atr_mult": "thresholds_min_anomaly_atr_mult",
     "min_atr_mult": "thresholds_min_atr_mult",
+    "take_profit_atr_mult": "thresholds_take_profit_atr_mult",
     "min_pct_move": "thresholds_min_pct_move",
     "max_pct_move": "thresholds_max_pct_move",
     "min_anomaly_upper_wick_pct": "thresholds_min_anomaly_upper_wick_pct",
@@ -510,7 +513,7 @@ def evaluate_candidate(
             "upper_wick": metrics.upper_wick_pct < candidate.max_upper_wick_pct,
             "lower_wick": metrics.lower_wick_pct < candidate.max_lower_wick_pct,
         }
-        long_rr = _compute_rr(sample.close, sample.high, sample.low, long=True)
+        long_rr = _compute_rr(sample, long=True, take_profit_atr_mult=candidate.take_profit_atr_mult)
         long_filters["rr"] = long_rr is not None and long_rr > candidate.min_rr
         long_filters_pass = all(long_filters.values())
         long_trade_executed = long_filters_pass
@@ -554,12 +557,12 @@ def evaluate_candidate(
             "upper_wick": metrics.upper_wick_pct < candidate.max_upper_wick_pct,
             "lower_wick": metrics.lower_wick_pct < candidate.max_lower_wick_pct,
         }
-        short_rr = _compute_rr(sample.close, sample.high, sample.low, long=False)
+        short_rr = _compute_rr(sample, long=False, take_profit_atr_mult=candidate.take_profit_atr_mult)
         short_filters["rr"] = short_rr is not None and short_rr >= candidate.min_rr
         short_filters_pass = all(short_filters.values())
         short_trade_executed = short_filters_pass
         short_pnl_pct = (
-            _compute_short_pnl(sample)
+            _compute_short_pnl(sample, candidate.take_profit_atr_mult)
             if short_trade_executed and sample.close != 0
             else None
         )
@@ -859,15 +862,26 @@ def write_threshold_candidate(workbook_path: Path, candidate: ThresholdCandidate
         workbook.close()
 
 
-def _compute_rr(close: float, high: float, low: float, *, long: bool) -> float | None:
+def _compute_atr_value(sample: AnomalySample) -> float:
+    range_value = max(sample.high - sample.low, 0.0)
+    if sample.metrics.atr_mult <= 0:
+        return 0.0
+    return range_value / sample.metrics.atr_mult
+
+
+def _compute_rr(
+    sample: AnomalySample, *, long: bool, take_profit_atr_mult: float
+) -> float | None:
+    close = sample.close
     if close == 0:
         return None
     if long:
-        risk = close - low
-        reward = high - close
+        risk = close - sample.low
+        reward = sample.high - close
     else:
-        risk = high - close
-        reward = close - low
+        risk = sample.high - close
+        atr_value = _compute_atr_value(sample)
+        reward = atr_value * take_profit_atr_mult
     if risk <= 0:
         return None
     return reward / risk
@@ -885,13 +899,19 @@ def _compute_long_pnl(sample: AnomalySample) -> float | None:
     return 0.0
 
 
-def _compute_short_pnl(sample: AnomalySample) -> float | None:
+def _compute_short_pnl(
+    sample: AnomalySample, take_profit_atr_mult: float
+) -> float | None:
     close = sample.close
     if close == 0:
         return None
+    atr_value = _compute_atr_value(sample)
+    if atr_value <= 0:
+        return None
+    take_profit_price = close - atr_value * take_profit_atr_mult
     direction = sample.break_direction
-    if direction is BreakDirection.LOW_FIRST:
-        return (close - sample.low) / close * 100
+    if direction is BreakDirection.LOW_FIRST and sample.low <= take_profit_price:
+        return (close - take_profit_price) / close * 100
     if direction in (BreakDirection.HIGH_FIRST, BreakDirection.BOTH):
         return (close - sample.high) / close * 100
     return 0.0

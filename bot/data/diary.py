@@ -168,6 +168,11 @@ class WorkbookDiaryBackend(DiaryBackend):
             config.MAX_REL_VOL,
         ),
         ("Minimum ATR multiple", "thresholds_min_atr_mult", config.MIN_ATR_MULT),
+        (
+            "Take profit ATR multiple",
+            "thresholds_take_profit_atr_mult",
+            config.TAKE_PROFIT_ATR_MULT,
+        ),
         ("Minimum percent move", "thresholds_min_pct_move", config.MIN_PCT_MOVE),
         ("Maximum percent move", "thresholds_max_pct_move", config.MAX_PCT_MOVE),
         ("Initial deposit (USDT)", "thresholds_initial_deposit", 100.0),
@@ -236,6 +241,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_relative_volume",
         "thresholds_max_relative_volume",
         "thresholds_min_atr_mult",
+        "thresholds_take_profit_atr_mult",
         "thresholds_min_pct_move",
         "thresholds_max_pct_move",
         "thresholds_max_upper_wick_pct",
@@ -325,6 +331,7 @@ class WorkbookDiaryBackend(DiaryBackend):
         "thresholds_min_volume_spike",
         "thresholds_min_relative_volume",
         "thresholds_min_atr_mult",
+        "thresholds_take_profit_atr_mult",
         "thresholds_min_anomaly_upper_wick_pct",
         "thresholds_min_trend_strength",
         "thresholds_countertrend_only",
@@ -598,6 +605,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds.min_relative_volume,
             thresholds.max_relative_volume,
             thresholds.min_atr_mult,
+            thresholds.take_profit_atr_mult,
             thresholds.min_pct_move,
             thresholds.max_pct_move,
             thresholds.max_upper_wick_pct,
@@ -637,7 +645,8 @@ class WorkbookDiaryBackend(DiaryBackend):
             f'=IFERROR((G{row_index}-I{row_index})/(I{row_index}-H{row_index}),"")'
         )
         short_rr_formula = (
-            f'=IFERROR((I{row_index}-H{row_index})/(G{row_index}-I{row_index}),"")'
+            f'=IFERROR((IF($AU{row_index}=0,0,(G{row_index}-H{row_index})/$AU{row_index})'
+            f'*{threshold_cells['thresholds_take_profit_atr_mult']})/(G{row_index}-I{row_index}),"")'
         )
         long_filter_green_move_formula = (
             f"=IF($AS{row_index}>={threshold_cells['thresholds_min_green_move_pct']},TRUE,FALSE)"
@@ -736,6 +745,9 @@ class WorkbookDiaryBackend(DiaryBackend):
         thresholds_min_anomaly_upper_wick_formula = (
             f"={threshold_cells['thresholds_min_anomaly_upper_wick_pct']}"
         )
+        thresholds_take_profit_atr_mult_formula = (
+            f"={threshold_cells['thresholds_take_profit_atr_mult']}"
+        )
         thresholds_min_trend_strength_formula = (
             f"={threshold_cells['thresholds_min_trend_strength']}"
         )
@@ -752,9 +764,11 @@ class WorkbookDiaryBackend(DiaryBackend):
         short_pnl_formula = (
             f'=IF($N{row_index},'
             f'IF($I{row_index}=0,"",'
-            f'IF($BA{row_index}="LOW_FIRST",(I{row_index}-H{row_index})/I{row_index}*100,'
-            f'IF(OR($BA{row_index}="HIGH_FIRST",$BA{row_index}="BOTH"),(I{row_index}-G{row_index})/I{row_index}*100,0))),'
-            f'"")'
+            f'LET(atr,IF($AU{row_index}=0,0,($G{row_index}-$H{row_index})/$AU{row_index}),'
+            f'tp, $I{row_index}-(atr*{threshold_cells['thresholds_take_profit_atr_mult']}),'
+            f'IF($BA{row_index}="LOW_FIRST",'
+            f'IF($H{row_index}<=tp,($I{row_index}-tp)/$I{row_index}*100,(I{row_index}-H{row_index})/I{row_index}*100),'
+            f'IF(OR($BA{row_index}="HIGH_FIRST",$BA{row_index}="BOTH"),(I{row_index}-G{row_index})/I{row_index}*100,0)))),""))'
         )
         long_equity_formula = (
             f"=IF(ISNUMBER(AQ{row_index-1}),"
@@ -825,6 +839,7 @@ class WorkbookDiaryBackend(DiaryBackend):
             thresholds_min_volume_formula,
             thresholds_min_relative_formula,
             thresholds_min_atr_formula,
+            thresholds_take_profit_atr_mult_formula,
             thresholds_min_anomaly_upper_wick_formula,
             thresholds_min_trend_strength_formula,
             thresholds_countertrend_formula,
