@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pandas as pd
 
 from constants import (
@@ -33,6 +35,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     """Breakout/retest-lite LONG strategy with TP1/TP2 and BE support."""
 
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
+    _logger = logging.getLogger(__name__)
 
     def __init__(self, *, commission_rate: float, slippage: float, strategy_timezone: str, simulation_timezone: str) -> None:
         self._commission_rate = commission_rate
@@ -68,6 +71,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return prepared
 
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
+        """Generate closed trades from historical candles.
+
+        Signals are always created on a retest candle and queued for execution on the
+        next candle open via ``pending_signal``. If data ends before that next candle
+        appears, the strategy works in **strict mode**: it does not force an entry on
+        the last candle and records the skipped signal with
+        ``signal_not_executed_end_of_data`` in logs.
+        """
         self.validate_config(params)
         prepared = self.prepare_data(data)
         if len(prepared) < params.lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
@@ -152,7 +163,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     }
 
         if pending_signal is not None:
-            pending_signal = None
+            self._logger.info(
+                "signal_not_executed_end_of_data symbol=%s entry_time=%s entry_price=%.8f",
+                params.symbol,
+                pending_signal.entry_time.isoformat(),
+                float(pending_signal.entry_price),
+            )
 
         if sim.position is not None:
             final_row = prepared.iloc[-1]
