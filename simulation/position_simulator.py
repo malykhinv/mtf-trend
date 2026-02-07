@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -170,14 +171,17 @@ class StatefulPositionSimulator(PositionSimulator):
             msg = "No active position to close."
             raise RuntimeError(msg)
 
+        price_eps = 1e-8
+
         remaining_size = self.position.size.value - self._closed_size
         if remaining_size > 0:
             self._close_leg(size=remaining_size, target_price=price)
 
         result_type = self.trade_classifier.classify_result_type(
             tp1_done=self.position.tp1_done,
-            exit_at_breakeven=self.position.sl_moved_to_be and price == self.position.stop_loss.value,
-            exit_at_tp2=price == self.position.take_profit_2.value,
+            exit_at_breakeven=self.position.sl_moved_to_be
+            and math.isclose(price, self.position.stop_loss.value, abs_tol=price_eps),
+            exit_at_tp2=math.isclose(price, self.position.take_profit_2.value, abs_tol=price_eps),
         )
         trade_result = self.trade_classifier.build_result(
             position=self.position,
