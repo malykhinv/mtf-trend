@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from domain.abstract.position_simulator import PositionSimulator
 from domain.enums.position_side import PositionSide
@@ -163,8 +164,8 @@ class StatefulPositionSimulator(PositionSimulator):
         self._closed_size = 0.0
         self._last_exit_price = position.entry_price.value
 
-    def close_position(self, price: float) -> TradeResult:
-        """Close remaining position at given price and return classified trade result."""
+    def close_position(self, price: float, exit_time: datetime) -> TradeResult:
+        """Close remaining position at given price and close timestamp, then return classified trade result."""
         if self.position is None:
             msg = "No active position to close."
             raise RuntimeError(msg)
@@ -181,7 +182,7 @@ class StatefulPositionSimulator(PositionSimulator):
         trade_result = self.trade_classifier.build_result(
             position=self.position,
             exit_price=self._last_exit_price,
-            exit_time=datetime_to_timezone(self.position.entry_time, self.simulation_timezone),
+            exit_time=datetime_to_timezone(exit_time, self.simulation_timezone),
             result_type=result_type,
             pnl=self._realized_pnl,
         )
