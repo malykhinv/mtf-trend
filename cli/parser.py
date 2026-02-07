@@ -8,15 +8,30 @@ from collections.abc import Callable
 from config import AppConfig
 from cli import commands
 
-Handler = Callable[[AppConfig], int]
+Handler = Callable[[AppConfig, argparse.Namespace], int]
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mtf-trend")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for command_name in ("fetch-data", "update-cache", "run-backtest", "make-report", "check-quality"):
-        subparsers.add_parser(command_name)
+    fetch = subparsers.add_parser("fetch-data", help="Загрузка данных с бирж и CoinGecko")
+    fetch.add_argument("--top-n", type=int, default=50)
+    fetch.add_argument("--days", type=int, default=60)
+
+    update = subparsers.add_parser("update-cache", help="Инкрементальное обновление кэша")
+    update.add_argument("--top-n", type=int, default=50)
+    update.add_argument("--days", type=int, default=7)
+
+    run_bt = subparsers.add_parser("run-backtest", help="Запуск бектеста по данным в кэше")
+    run_bt.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
+
+    report = subparsers.add_parser("make-report", help="Сформировать JSON-отчет по результатам бектеста")
+    report.add_argument("--input", default=None, help="Путь к CSV с результатами")
+    report.add_argument("--output", default=None, help="Путь к JSON отчету")
+
+    quality = subparsers.add_parser("check-quality", help="Проверка качества кэша")
+    quality.add_argument("--symbols", nargs="*", default=None)
 
     return parser
 

@@ -11,7 +11,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
     handler = resolve_handler(args.command)
-    return handler(config)
+    return handler(config, args)
 
 
 if __name__ == "__main__":
