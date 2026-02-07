@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timezone
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -16,12 +16,41 @@ class DataValidator:
     """Validate common anomalies in OHLCV/OI data."""
 
     def validate(self, symbol: str, timeframe: Timeframe, data: pd.DataFrame) -> list[DataQualityIssue]:
-        if data.empty or "timestamp" not in data.columns:
+        if data.empty:
             return []
 
         normalized = data.reset_index(drop=True)
         issues: list[DataQualityIssue] = []
+
+        def add_dataset_issue(issue_type: str, severity: DataQualitySeverity, description: str) -> None:
+            issues.append(
+                DataQualityIssue(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    issue_type=issue_type,
+                    severity=severity,
+                    timestamp=datetime.fromtimestamp(0, tz=timezone.utc),
+                    description=description,
+                )
+            )
+
+        if "timestamp" not in normalized.columns:
+            add_dataset_issue(
+                "missing_timestamp_column",
+                DataQualitySeverity.ERROR,
+                "Отсутствует колонка timestamp: данные нельзя валидировать по времени, дальнейшие проверки остановлены.",
+            )
+            return issues
+
         ts = pd.to_datetime(normalized["timestamp"], unit="ms", utc=True, errors="coerce")
+        if ts.notna().sum() == 0:
+            add_dataset_issue(
+                "invalid_timestamp_series",
+                DataQualitySeverity.ERROR,
+                "Колонка timestamp не распознана (все значения NaT): данные нельзя валидировать по времени, дальнейшие проверки остановлены.",
+            )
+            return issues
+
         numeric_columns = {
             col: pd.to_numeric(normalized[col], errors="coerce")
             for col in ("open", "high", "low", "close", "volume", "open_interest")
