@@ -13,6 +13,7 @@ from typing import Callable
 import pandas as pd
 
 from config import AppConfig
+from constants import DEFAULT_QUALITY_REPORT_OUTPUT_FILE, DEFAULT_REPORT_OUTPUT_FILE, OI_STALE_RATIO_THRESHOLD
 from data.clients.coingecko_client import CoinGeckoClient
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.fetchers.market_data_fetcher import MarketDataFetcher
@@ -215,7 +216,7 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
             "trade_results_distribution": distribution,
         }
 
-        output_path = Path(args.output) if args.output else config.backtest.results_dir / "report.json"
+        output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"make-report: сохранено {output_path}")
@@ -260,7 +261,7 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
                 )
 
         stale_ratio = (oi.ffill().diff().fillna(0) == 0).mean()
-        if stale_ratio > 0.98:
+        if stale_ratio > OI_STALE_RATIO_THRESHOLD:
             issues.append(
                 {
                     "issue_type": "oi_alignment_stale_series",
@@ -392,7 +393,7 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
             "recommendations": _build_quality_recommendations(summary, symbols_report),
         }
 
-        output_path = Path(args.output) if args.output else config.backtest.results_dir / "quality_report.json"
+        output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
         _save_quality_report(report, output_path)
 
         logger.info(f"check-quality: итог issues={total_issues} gaps={total_gaps}")

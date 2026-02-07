@@ -12,6 +12,7 @@ from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
+from constants import TP1_CLOSE_RATIO
 from simulation.order_processor import OrderProcessor
 from simulation.trade_classifier import TradeClassifier
 from utils.formatters import datetime_to_timezone
@@ -95,7 +96,7 @@ class StatefulPositionSimulator(PositionSimulator):
 
     def _take_tp1(self) -> None:
         assert self.position is not None
-        tp1_size = self.position.size.value * 0.5
+        tp1_size = self.position.size.value * TP1_CLOSE_RATIO
         self._close_leg(size=tp1_size, target_price=self.position.take_profit_1.value)
         self.position.tp1_done = True
         self.position.sl_moved_to_be = True

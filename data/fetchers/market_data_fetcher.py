@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from constants import FETCH_ALL_MAX_WORKERS
 from domain.abstract.market_data_client import MarketDataClient
 from domain.enums.timeframe import Timeframe
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
@@ -66,7 +67,7 @@ class MarketDataFetcher:
     ) -> dict[str, Any]:
         self._logger.info(f"Загрузка старт: {len(symbols)} символов, TF={timeframe.value}")
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=FETCH_ALL_MAX_WORKERS) as executor:
             ohlcv_future = executor.submit(
                 self._ohlcv_fetcher.fetch_many,
                 symbols,
