@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 
@@ -33,13 +36,56 @@ class CoinGeckoClient(MarketDataClient):
 
     BASE_URL = COINGECKO_BASE_URL
 
-    def __init__(self, api_key: str = "", cache_ttl_hours: int = 24) -> None:
+    def __init__(self, api_key: str = "", cache_ttl_hours: int = 24, cache_path: str | Path | None = None) -> None:
         self._api_key = api_key
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
         self._market_cap_cache: dict[str, tuple[float, datetime]] = {}
         self._symbol_to_id: dict[str, str] = {}
+        self._cache_path = Path(cache_path) if cache_path else None
+        self._logger = logging.getLogger(self.__class__.__name__)
+        self._load_market_cap_cache()
 
     # region Private
+
+    def _load_market_cap_cache(self) -> None:
+        if self._cache_path is None or not self._cache_path.exists():
+            return
+
+        try:
+            raw_payload = json.loads(self._cache_path.read_text(encoding="utf-8"))
+            if not isinstance(raw_payload, dict):
+                raise ValueError("cache payload must be an object")
+
+            loaded_cache: dict[str, tuple[float, datetime]] = {}
+            for symbol, payload in raw_payload.items():
+                if not isinstance(symbol, str) or not isinstance(payload, list) or len(payload) != 2:
+                    continue
+
+                market_cap, expires_at = payload
+                if not isinstance(expires_at, str):
+                    continue
+
+                expires_at_dt = datetime.fromisoformat(expires_at)
+                if expires_at_dt.tzinfo is None:
+                    expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+
+                loaded_cache[symbol.upper()] = (float(market_cap), expires_at_dt)
+
+            self._market_cap_cache = loaded_cache
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            self._logger.warning("Failed to load CoinGecko cache from %s: %s", self._cache_path, exc)
+            self._market_cap_cache = {}
+
+    def _save_market_cap_cache(self) -> None:
+        if self._cache_path is None:
+            return
+
+        serialized_cache = {
+            symbol: [market_cap, expires_at.isoformat()]
+            for symbol, (market_cap, expires_at) in self._market_cap_cache.items()
+        }
+        self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+        self._cache_path.write_text(json.dumps(serialized_cache, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _headers(self) -> dict[str, str]:
         headers = {COINGECKO_HEADER_ACCEPT_KEY: COINGECKO_HEADER_ACCEPT_JSON}
@@ -99,6 +145,7 @@ class CoinGeckoClient(MarketDataClient):
 
         market_cap = float(payload[0].get("market_cap") or 0.0)
         self._market_cap_cache[normalized] = (market_cap, now + self._cache_ttl)
+        self._save_market_cap_cache()
         return market_cap
 
     def get_top_coins_by_market_cap(self, limit: int) -> list[str]:
