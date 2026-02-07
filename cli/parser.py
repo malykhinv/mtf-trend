@@ -31,7 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--output", default=None, help="Путь к JSON отчету")
 
     quality = subparsers.add_parser("check-quality", help="Проверка качества кэша")
-    quality.add_argument("--symbols", nargs="*", default=None)
+    quality.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
+    quality.add_argument(
+        "--output",
+        default=None,
+        help="Путь к отчету качества (.json или .csv). По умолчанию: <results_dir>/quality_report.json",
+    )
 
     return parser
 
