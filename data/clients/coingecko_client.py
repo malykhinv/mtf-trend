@@ -137,6 +137,57 @@ class CoinGeckoClient(MarketDataClient):
             headers[COINGECKO_HEADER_API_KEY] = self._api_key
         return headers
 
+    def _candidate_has_usdt_market(self, coin_id: str, base_symbol: str) -> bool:
+        response = requests.get(
+            f"{self.BASE_URL}/coins/{coin_id}/tickers",
+            headers=self._headers(),
+            timeout=COINGECKO_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        for ticker in response.json().get("tickers", []):
+            base = str(ticker.get("base") or "").lower()
+            target = str(ticker.get("target") or "").lower()
+            if base == base_symbol and target == "usdt":
+                return True
+        return False
+
+    def _select_candidate_by_market_metrics(self, candidates: list[dict[str, str]]) -> dict[str, str] | None:
+        candidate_ids = [candidate["id"] for candidate in candidates if candidate.get("id")]
+        if not candidate_ids:
+            return None
+
+        response = requests.get(
+            f"{self.BASE_URL}/coins/markets",
+            headers=self._headers(),
+            params={
+                COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
+                COINGECKO_PARAM_IDS: ",".join(candidate_ids),
+                COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
+                COINGECKO_PARAM_PER_PAGE: len(candidate_ids),
+                COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
+            },
+            timeout=COINGECKO_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+
+        metrics_by_id = {
+            str(item.get("id") or ""): item
+            for item in response.json()
+            if item.get("id")
+        }
+        if not metrics_by_id:
+            return None
+
+        def score(candidate: dict[str, str]) -> tuple[float, float, float, str]:
+            metrics = metrics_by_id.get(candidate["id"], {})
+            rank = metrics.get("market_cap_rank")
+            total_volume = float(metrics.get("total_volume") or 0.0)
+            market_cap = float(metrics.get("market_cap") or 0.0)
+            normalized_rank = float(rank) if isinstance(rank, (int, float)) and rank > 0 else float("inf")
+            return (normalized_rank, -total_volume, -market_cap, candidate["id"])
+
+        return min(candidates, key=score)
+
     def _resolve_coin_id(self, symbol: str) -> str:
         normalized = self._normalize_symbol(symbol)
         if normalized in self._symbol_to_id:
@@ -156,25 +207,73 @@ class CoinGeckoClient(MarketDataClient):
                     {
                         "id": str(item.get("id") or ""),
                         "name": str(item.get("name") or ""),
+                        "symbol": item_symbol,
                     }
                 )
 
         if not candidates:
             raise ValueError(f"Unable to resolve CoinGecko ID for symbol: {symbol}")
 
+        selected = candidates[0]
+        resolved_by_strategy = len(candidates) == 1
         if len(candidates) > 1:
-            self._logger.warning(
-                "Ambiguous CoinGecko symbol resolve for '%s' (normalized='%s'). Candidates: %s",
-                symbol,
-                normalized,
-                candidates,
-            )
+            if symbol.upper().endswith("/USDT") or symbol.upper().endswith("USDT"):
+                usdt_candidates = [
+                    candidate
+                    for candidate in sorted(candidates, key=lambda candidate: candidate["id"])
+                    if self._candidate_has_usdt_market(candidate["id"], normalized)
+                ]
+                if len(usdt_candidates) == 1:
+                    selected = usdt_candidates[0]
+                    resolved_by_strategy = True
+                    self._logger.info(
+                        "Resolved CoinGecko symbol '%s' via exact %s/USDT market match: %s",
+                        symbol,
+                        normalized.upper(),
+                        selected["id"],
+                    )
+                elif len(usdt_candidates) > 1:
+                    selected = usdt_candidates[0]
+                    resolved_by_strategy = True
+                    self._logger.warning(
+                        "Multiple CoinGecko candidates matched %s/USDT for '%s'; using deterministic fallback: %s",
+                        normalized.upper(),
+                        symbol,
+                        selected["id"],
+                    )
+
+            if not resolved_by_strategy:
+                by_metrics = self._select_candidate_by_market_metrics(candidates)
+                if by_metrics:
+                    selected = by_metrics
+                    resolved_by_strategy = True
+                    self._logger.info(
+                        "Resolved ambiguous CoinGecko symbol '%s' by market rank/liquidity: %s",
+                        symbol,
+                        selected["id"],
+                    )
+
+            if not resolved_by_strategy:
+                deterministic_fallback = sorted(candidates, key=lambda candidate: candidate["id"])[0]
+                if not deterministic_fallback.get("id"):
+                    raise ValueError(
+                        f"Ambiguous CoinGecko ID for symbol '{symbol}' (normalized='{normalized}') could not be resolved. "
+                        f"Candidates: {candidates}"
+                    )
+
+                selected = deterministic_fallback
+                self._logger.warning(
+                    "Ambiguous CoinGecko symbol '%s' unresolved by market heuristics; fallback to deterministic candidate: %s",
+                    symbol,
+                    selected["id"],
+                )
+
+        if not selected.get("id"):
             raise ValueError(
-                f"Ambiguous CoinGecko ID for symbol '{symbol}' (normalized='{normalized}'). "
-                f"Candidates: {[candidate['id'] for candidate in candidates]}"
+                f"Unable to resolve CoinGecko ID for symbol '{symbol}' (normalized='{normalized}') from candidates: {candidates}"
             )
 
-        self._symbol_to_id[normalized] = candidates[0]["id"]
+        self._symbol_to_id[normalized] = selected["id"]
 
         return self._symbol_to_id[normalized]
 
