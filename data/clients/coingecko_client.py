@@ -49,6 +49,14 @@ class CoinGeckoClient(MarketDataClient):
 
     # region Private
 
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        return (
+            symbol.lower()
+            .replace(SIMULATION_COIN_SUFFIX_SLASH_USDT, "")
+            .replace(SIMULATION_COIN_SUFFIX_USDT, "")
+        )
+
     def _load_market_cap_cache(self) -> None:
         if self._cache_path is None or not self._cache_path.exists():
             return
@@ -61,7 +69,9 @@ class CoinGeckoClient(MarketDataClient):
 
             now = datetime.now(tz=timezone.utc)
             loaded_cache: dict[str, tuple[float, datetime]] = {}
-            for row in raw_payload[["symbol", "market_cap", "expires_at"]].itertuples(index=False):
+            has_coin_id = "coin_id" in raw_payload.columns
+            load_columns = ["symbol", "market_cap", "expires_at", "coin_id"] if has_coin_id else ["symbol", "market_cap", "expires_at"]
+            for row in raw_payload[load_columns].itertuples(index=False):
                 symbol = row.symbol
                 if not isinstance(symbol, str) or not symbol:
                     continue
@@ -80,6 +90,10 @@ class CoinGeckoClient(MarketDataClient):
                     continue
 
                 loaded_cache[symbol.upper()] = (float(row.market_cap), expires_at)
+                if has_coin_id:
+                    coin_id = str(row.coin_id or "")
+                    if coin_id:
+                        self._symbol_to_id[self._normalize_symbol(symbol)] = coin_id
 
             self._market_cap_cache = loaded_cache
         except (OSError, ValueError, TypeError) as exc:
@@ -95,10 +109,11 @@ class CoinGeckoClient(MarketDataClient):
                 "symbol": symbol,
                 "market_cap": market_cap,
                 "expires_at": pd.Timestamp(expires_at).tz_convert(timezone.utc),
+                "coin_id": self._symbol_to_id.get(self._normalize_symbol(symbol), ""),
             }
             for symbol, (market_cap, expires_at) in self._market_cap_cache.items()
         ]
-        cache_frame = pd.DataFrame.from_records(records, columns=["symbol", "market_cap", "expires_at"])
+        cache_frame = pd.DataFrame.from_records(records, columns=["symbol", "market_cap", "expires_at", "coin_id"])
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         temp_file = tempfile.NamedTemporaryFile(
             mode="wb",
@@ -123,7 +138,7 @@ class CoinGeckoClient(MarketDataClient):
         return headers
 
     def _resolve_coin_id(self, symbol: str) -> str:
-        normalized = symbol.lower().replace(SIMULATION_COIN_SUFFIX_SLASH_USDT, "").replace(SIMULATION_COIN_SUFFIX_USDT, "")
+        normalized = self._normalize_symbol(symbol)
         if normalized in self._symbol_to_id:
             return self._symbol_to_id[normalized]
 
@@ -133,14 +148,33 @@ class CoinGeckoClient(MarketDataClient):
             timeout=COINGECKO_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
+        candidates = []
         for item in response.json():
             item_symbol = str(item.get("symbol") or "").lower()
-            if item_symbol == normalized and normalized not in self._symbol_to_id:
-                self._symbol_to_id[normalized] = str(item["id"])
-                break
+            if item_symbol == normalized:
+                candidates.append(
+                    {
+                        "id": str(item.get("id") or ""),
+                        "name": str(item.get("name") or ""),
+                    }
+                )
 
-        if normalized not in self._symbol_to_id:
+        if not candidates:
             raise ValueError(f"Unable to resolve CoinGecko ID for symbol: {symbol}")
+
+        if len(candidates) > 1:
+            self._logger.warning(
+                "Ambiguous CoinGecko symbol resolve for '%s' (normalized='%s'). Candidates: %s",
+                symbol,
+                normalized,
+                candidates,
+            )
+            raise ValueError(
+                f"Ambiguous CoinGecko ID for symbol '{symbol}' (normalized='{normalized}'). "
+                f"Candidates: {[candidate['id'] for candidate in candidates]}"
+            )
+
+        self._symbol_to_id[normalized] = candidates[0]["id"]
 
         return self._symbol_to_id[normalized]
 
