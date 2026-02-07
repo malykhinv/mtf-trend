@@ -92,7 +92,7 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
 
 
 def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuturesClient, CoinGeckoClient]:
-    market_caps_cache_path = config.backtest.cache_dir / "market_caps.json"
+    market_caps_cache_path = config.backtest.cache_dir / "market_caps.parquet"
     exchange_client = CcxtFuturesClient(
         exchange=Exchange.BINANCE,
         api_key=config.fetch.binance_api_key,
