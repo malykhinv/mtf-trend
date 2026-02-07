@@ -18,7 +18,7 @@ from constants import (
     BACKTEST_PROFITABLE_PF_THRESHOLD,
     BACKTEST_ROUND_MAX_DD,
     BACKTEST_ROUND_METRICS,
-    BACKTEST_SORT_DESCENDING,
+    BACKTEST_SORT_ASCENDING,
     BACKTEST_ZERO_COUNT,
     SIMULATION_FEES,
     SIMULATION_FREQ,
@@ -108,7 +108,11 @@ class BacktestRunner:
             row = self._build_metrics_row(params, all_trades)
             rows.append(row)
 
-        results = pd.DataFrame(rows).sort_values("profit_factor", ascending=BACKTEST_SORT_DESCENDING).reset_index(drop=True)
+        results = (
+            pd.DataFrame(rows)
+            .sort_values("profit_factor", ascending=BACKTEST_SORT_ASCENDING)
+            .reset_index(drop=True)
+        )
         self._save_results(results)
         return results
 
