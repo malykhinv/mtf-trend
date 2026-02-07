@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
+from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
@@ -222,6 +224,107 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("make-report", config, _inner)
 
 
+def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
+    if "open_interest" not in frame.columns:
+        return [
+            {
+                "issue_type": "oi_missing_column",
+                "severity": "ERROR",
+                "description": "Отсутствует колонка open_interest",
+            }
+        ]
+
+    oi = pd.to_numeric(frame["open_interest"], errors="coerce")
+    issues: list[dict[str, str]] = []
+
+    if oi.isna().any():
+        issues.append(
+            {
+                "issue_type": "oi_alignment_missing_values",
+                "severity": "WARNING",
+                "description": "Есть пропуски open_interest после выравнивания",
+            }
+        )
+
+    if len(oi) > 1:
+        first_valid = oi.first_valid_index()
+        if first_valid is not None:
+            leading_missing = oi.loc[:first_valid].isna().sum()
+            if leading_missing > 0:
+                issues.append(
+                    {
+                        "issue_type": "oi_alignment_leading_gaps",
+                        "severity": "WARNING",
+                        "description": "Обнаружены пропуски open_interest в начале ряда",
+                    }
+                )
+
+        stale_ratio = (oi.ffill().diff().fillna(0) == 0).mean()
+        if stale_ratio > 0.98:
+            issues.append(
+                {
+                    "issue_type": "oi_alignment_stale_series",
+                    "severity": "ERROR",
+                    "description": "open_interest почти не меняется, вероятна рассинхронизация",
+                }
+            )
+
+    return issues
+
+
+
+def _build_quality_recommendations(summary: dict[str, object], symbols: dict[str, dict[str, object]]) -> list[str]:
+    recommendations: list[str] = []
+    if int(summary["gaps_total"]) > 0:
+        recommendations.append("Дозагрузка диапазона: запустите update-cache для символов с пропусками")
+
+    if any(int(data["gaps"]) > 0 for data in symbols.values()):
+        recommendations.append("Проверка таймфрейма: убедитесь, что timeframe совпадает с кэшем")
+
+    if int(summary["issues_total"]) > 0:
+        recommendations.append("Дедупликация и очистка: переcохраните ряды с удалением дублей и аномалий")
+
+    oi_problem_types = {
+        "oi_missing_column",
+        "oi_alignment_missing_values",
+        "oi_alignment_leading_gaps",
+        "oi_alignment_stale_series",
+    }
+    if any(problem in oi_problem_types for problem in summary["by_issue_type"]):
+        recommendations.append("Ресинхронизация OI: перезапустите загрузку OI с выравниванием относительно OHLCV")
+
+    if int(summary["issues_total"]) > 0 or int(summary["gaps_total"]) > 0:
+        recommendations.append("Повторная валидация: после исправлений выполните check-quality повторно")
+
+    return recommendations
+
+
+
+def _save_quality_report(report: dict[str, object], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.suffix.lower() == ".csv":
+        symbols = report["symbols"]
+        with output_path.open("w", newline="", encoding="utf-8") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["symbol", "issues", "gaps", "warning", "error", "critical", "info"])
+            for symbol, data in symbols.items():
+                sev = data["by_severity"]
+                writer.writerow(
+                    [
+                        symbol,
+                        data["issues"],
+                        data["gaps"],
+                        sev.get("WARNING", 0),
+                        sev.get("ERROR", 0),
+                        sev.get("CRITICAL", 0),
+                        sev.get("INFO", 0),
+                    ]
+                )
+    else:
+        output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
     def _inner() -> int:
         logger = get_logger("check-quality", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
@@ -234,19 +337,66 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
         validator = DataValidator()
         gap_detector = GapDetector()
 
+        issues_by_type: Counter[str] = Counter()
+        issues_by_severity: Counter[str] = Counter()
+        symbols_report: dict[str, dict[str, object]] = {}
+
         total_issues = 0
         total_gaps = 0
         for symbol in symbols:
             frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
             if frame.empty:
+                logger.info(f"check-quality: {symbol} пропущен, пустой датасет")
                 continue
+
             issues = validator.validate(symbol, config.fetch.timeframe, frame)
             gaps = gap_detector.detect_gaps(frame, config.fetch.timeframe)
-            total_issues += len(issues)
+            oi_alignment_issues = _collect_oi_alignment_issues(frame)
+
+            all_issue_types = [issue.issue_type for issue in issues]
+            all_severities = [issue.severity.value for issue in issues]
+            all_issue_types.extend(item["issue_type"] for item in oi_alignment_issues)
+            all_severities.extend(item["severity"] for item in oi_alignment_issues)
+
+            symbol_issue_counter = Counter(all_issue_types)
+            symbol_severity_counter = Counter(all_severities)
+            issues_by_type.update(symbol_issue_counter)
+            issues_by_severity.update(symbol_severity_counter)
+
+            symbol_total_issues = len(issues) + len(oi_alignment_issues)
+            total_issues += symbol_total_issues
             total_gaps += len(gaps)
-            logger.info(f"check-quality: {symbol} issues={len(issues)} gaps={len(gaps)}")
+
+            symbols_report[symbol] = {
+                "issues": symbol_total_issues,
+                "gaps": len(gaps),
+                "by_issue_type": dict(sorted(symbol_issue_counter.items())),
+                "by_severity": dict(sorted(symbol_severity_counter.items())),
+            }
+
+            logger.info(
+                f"check-quality: {symbol} issues={symbol_total_issues} gaps={len(gaps)} "
+                f"oi_alignment_issues={len(oi_alignment_issues)}"
+            )
+
+        summary = {
+            "symbols_checked": len(symbols_report),
+            "issues_total": total_issues,
+            "gaps_total": total_gaps,
+            "by_issue_type": dict(sorted(issues_by_type.items())),
+            "by_severity": dict(sorted(issues_by_severity.items())),
+        }
+        report = {
+            "summary": summary,
+            "symbols": symbols_report,
+            "recommendations": _build_quality_recommendations(summary, symbols_report),
+        }
+
+        output_path = Path(args.output) if args.output else config.backtest.results_dir / "quality_report.json"
+        _save_quality_report(report, output_path)
 
         logger.info(f"check-quality: итог issues={total_issues} gaps={total_gaps}")
+        logger.info(f"check-quality: отчет сохранен {output_path}")
         return 0
 
     return _run_with_logging("check-quality", config, _inner)
