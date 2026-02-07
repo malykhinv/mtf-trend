@@ -40,6 +40,9 @@ from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
 from domain.models.reporting.backtest_report import BacktestReport
+from domain.models.reporting.backtest_summary import BacktestSummary
+from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
+from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from domain.models.reporting.quality_report import QualityReport
 from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
@@ -209,25 +212,25 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
                 TARGET_PARAMETER_COMBINATIONS,
             )
 
-        summary = {
-            "total_combinations": int(len(frame)),
-            "profitable_combinations": int((frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD).sum()),
-            "best_pf": round(float(frame["profit_factor"].max()), 4),
-        }
+        summary = BacktestSummary(
+            total_combinations=int(len(frame)),
+            profitable_combinations=int((frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD).sum()),
+            best_pf=round(float(frame["profit_factor"].max()), 4),
+        )
 
         source = filtered if not filtered.empty else frame
 
-        optimal_ranges = {
-            "lookback": [int(source["lookback"].min()), int(source["lookback"].max())],
-            "volume_multiplier": [round(float(source["volume_mult"].min()), 4), round(float(source["volume_mult"].max()), 4)],
-        }
+        optimal_ranges = OptimalParameterRanges(
+            lookback=[int(source["lookback"].min()), int(source["lookback"].max())],
+            volume_multiplier=[round(float(source["volume_mult"].min()), 4), round(float(source["volume_mult"].max()), 4)],
+        )
 
-        distribution = {
-            "SL": int(source["sl_count"].sum()),
-            "BE": int(source["be_count"].sum()),
-            "TP1_BE": int(source["tp1_be_count"].sum()),
-            "TP2": int(source["tp2_count"].sum()),
-        }
+        distribution = TradeResultsDistribution(
+            SL=int(source["sl_count"].sum()),
+            BE=int(source["be_count"].sum()),
+            TP1_BE=int(source["tp1_be_count"].sum()),
+            TP2=int(source["tp2_count"].sum()),
+        )
 
         report = BacktestReport(
             summary=summary,
