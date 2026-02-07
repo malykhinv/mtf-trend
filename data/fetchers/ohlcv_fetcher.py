@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from domain.abstract.exchange_client import ExchangeClient
@@ -37,12 +38,14 @@ class OhlcvFetcher:
         storage: ParquetStorage,
         max_workers: int = 5,
         request_timeout_seconds: int = 60,
+        log_level: int | str = "INFO",
+        logs_dir: str | Path = "./logs",
     ) -> None:
         self._exchange_client = exchange_client
         self._storage = storage
         self._max_workers = max_workers
         self._request_timeout_seconds = request_timeout_seconds
-        self._logger = get_logger(self.__class__.__name__)
+        self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
         self._aligner = TimeAlignment()
         self._deduplicator = Deduplicator()
         self._gap_detector = GapDetector()

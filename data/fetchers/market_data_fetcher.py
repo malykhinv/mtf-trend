@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from domain.abstract.market_data_client import MarketDataClient
@@ -23,13 +24,15 @@ class MarketDataFetcher:
         market_data_client: MarketDataClient,
         max_workers: int = 5,
         request_timeout_seconds: int = 60,
+        log_level: int | str = "INFO",
+        logs_dir: str | Path = "./logs",
     ) -> None:
         self._ohlcv_fetcher = ohlcv_fetcher
         self._oi_fetcher = oi_fetcher
         self._market_data_client = market_data_client
         self._max_workers = max_workers
         self._request_timeout_seconds = request_timeout_seconds
-        self._logger = get_logger(self.__class__.__name__)
+        self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
 
     def fetch_market_caps(self, symbols: list[str]) -> dict[str, Any]:
         self._logger.info(f"MarketCap старт: {len(symbols)} инструментов")

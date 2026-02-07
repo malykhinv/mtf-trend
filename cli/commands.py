@@ -26,8 +26,12 @@ from vectorbt_runner.backtest_runner import BacktestRunner
 from vectorbt_runner.data_preparer import DataPreparer
 
 
-def _run_with_logging(command_name: str, body: Callable[[], int]) -> int:
-    logger = get_logger(command_name)
+def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
+    logger = get_logger(
+        command_name,
+        level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
+    )
     logger.info(f"{command_name}: старт")
     try:
         code = body()
@@ -49,11 +53,15 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
         exchange_client=exchange_client,
         storage=storage,
         max_workers=config.fetch.max_concurrent_requests,
+        log_level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
     )
     oi_fetcher = OiFetcher(
         exchange_client=exchange_client,
         storage=storage,
         max_workers=config.fetch.max_concurrent_requests,
+        log_level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
     )
     market_client = CoinGeckoClient(api_key=config.fetch.coingecko_api_key)
     return (
@@ -62,6 +70,8 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
             oi_fetcher=oi_fetcher,
             market_data_client=market_client,
             max_workers=config.fetch.max_concurrent_requests,
+            log_level=config.backtest.log_level,
+            logs_dir=config.backtest.logs_dir,
         ),
         exchange_client,
         market_client,
@@ -76,7 +86,7 @@ def _resolve_symbols(exchange_client: CcxtFuturesClient, market_client: CoinGeck
 
 def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
     def _inner() -> int:
-        logger = get_logger("fetch-data")
+        logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         fetcher, exchange_client, market_client = _build_fetch_stack(config)
         symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
         if not symbols:
@@ -89,12 +99,12 @@ def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info(f"fetch-data: загружено symbols={len(symbols)}")
         return 0
 
-    return _run_with_logging("fetch-data", _inner)
+    return _run_with_logging("fetch-data", config, _inner)
 
 
 def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
     def _inner() -> int:
-        logger = get_logger("update-cache")
+        logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         fetcher, exchange_client, market_client = _build_fetch_stack(config)
         symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
         if not symbols:
@@ -107,12 +117,12 @@ def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info(f"update-cache: обновлено symbols={len(symbols)}")
         return 0
 
-    return _run_with_logging("update-cache", _inner)
+    return _run_with_logging("update-cache", config, _inner)
 
 
 def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
     def _inner() -> int:
-        logger = get_logger("run-backtest")
+        logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         preparer = DataPreparer(config.backtest.cache_dir)
         symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
         if not symbols:
@@ -143,12 +153,12 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
         )
         return 0
 
-    return _run_with_logging("run-backtest", _inner)
+    return _run_with_logging("run-backtest", config, _inner)
 
 
 def make_report(config: AppConfig, args: argparse.Namespace) -> int:
     def _inner() -> int:
-        logger = get_logger("make-report")
+        logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
         if not csv_path.exists():
             logger.info(f"make-report: файл не найден: {csv_path}")
@@ -194,12 +204,12 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info(f"make-report: сохранено {output_path}")
         return 0
 
-    return _run_with_logging("make-report", _inner)
+    return _run_with_logging("make-report", config, _inner)
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
     def _inner() -> int:
-        logger = get_logger("check-quality")
+        logger = get_logger("check-quality", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         preparer = DataPreparer(config.backtest.cache_dir)
         symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
         if not symbols:
@@ -224,4 +234,4 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info(f"check-quality: итог issues={total_issues} gaps={total_gaps}")
         return 0
 
-    return _run_with_logging("check-quality", _inner)
+    return _run_with_logging("check-quality", config, _inner)
