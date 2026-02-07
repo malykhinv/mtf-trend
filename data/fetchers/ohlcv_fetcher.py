@@ -87,7 +87,8 @@ class OhlcvFetcher:
     ) -> dict[str, int | str]:
         results: dict[str, int | str] = {}
         poll_timeout_seconds = 0.5
-        with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=self._max_workers)
+        try:
             futures = {
                 executor.submit(self.fetch_symbol, s, timeframe, start_time, end_time): s for s in symbols
             }
@@ -128,39 +129,37 @@ class OhlcvFetcher:
                         self._logger.info(msg)
                         results[symbol] = msg
 
-            hard_timed_out: list = []
             for future in list(pending):
                 symbol = futures[future]
+                if future.done():
+                    pending.remove(future)
+                    try:
+                        results[symbol] = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        msg = f"OHLCV ошибка исполнения: {symbol}: {exc}"
+                        self._logger.info(msg)
+                        results[symbol] = msg
+                    continue
+
                 try:
                     cancelled = future.cancel()
                 except Exception:  # noqa: BLE001
                     cancelled = False
 
-                if cancelled:
+                if future in pending:
                     pending.remove(future)
+
+                if cancelled:
                     msg = f"OHLCV hard-timeout задачи: {symbol}"
                     self._logger.info(msg)
                     results[symbol] = msg
                     continue
 
-                hard_timed_out.append(future)
-
-            for future in as_completed(hard_timed_out):
-                if future in pending:
-                    pending.remove(future)
-                symbol = futures[future]
-                try:
-                    results[symbol] = future.result()
-                except Exception as exc:  # noqa: BLE001
-                    msg = f"OHLCV ошибка исполнения: {symbol}: {exc}"
-                    self._logger.info(msg)
-                    results[symbol] = msg
-
-            for future in pending:
-                symbol = futures[future]
                 msg = f"OHLCV hard-timeout задачи: {symbol}"
                 self._logger.info(msg)
                 results[symbol] = msg
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
         for symbol in symbols:
             if symbol not in results:
