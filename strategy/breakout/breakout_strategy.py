@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pandas as pd
 
 from domain.enums.position_side import PositionSide
@@ -14,12 +12,13 @@ from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
 from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
-from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
 from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
+from strategy.breakout.config import BreakoutParams
+from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
 
 
-class BreakoutStrategy(BaseStrategy):
+class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     """Breakout/retest-lite LONG strategy with TP1/TP2 and BE support."""
 
     REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
@@ -30,19 +29,14 @@ class BreakoutStrategy(BaseStrategy):
         self._strategy_timezone = strategy_timezone
         self._simulation_timezone = simulation_timezone
 
-    def validate_config(self, params: dict[str, Any]) -> None:
-        lookback = int(params["lookback"])
-        volume_mult = float(params["volume_mult"])
-        min_rr = float(params["min_rr"])
-        tp2_mult = float(params["tp2_mult"])
-
-        if lookback < 5:
+    def validate_config(self, params: BreakoutParams) -> None:
+        if params.lookback < 5:
             raise ValueError("lookback must be >= 5")
-        if volume_mult <= 0:
+        if params.volume_mult <= 0:
             raise ValueError("volume_mult must be > 0")
-        if min_rr <= 0:
+        if params.min_rr <= 0:
             raise ValueError("min_rr must be > 0")
-        if tp2_mult <= 1:
+        if params.tp2_mult <= 1:
             raise ValueError("tp2_mult must be > 1")
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -62,10 +56,10 @@ class BreakoutStrategy(BaseStrategy):
         prepared = prepared.dropna(subset=["open", "high", "low", "close", "volume"])
         return prepared
 
-    def generate_events(self, data: pd.DataFrame, params: dict[str, Any]) -> list[TradeResult]:
+    def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         self.validate_config(params)
         prepared = self.prepare_data(data)
-        if len(prepared) < int(params["lookback"]) + 5:
+        if len(prepared) < params.lookback + 5:
             return []
 
         sim = StatefulPositionSimulator(
@@ -75,31 +69,26 @@ class BreakoutStrategy(BaseStrategy):
             simulation_timezone=self._simulation_timezone,
         )
 
-        lookback = int(params["lookback"])
-        vol_mult = float(params["volume_mult"])
-        min_rr = float(params["min_rr"])
-        tp2_mult = float(params["tp2_mult"])
-
         trades: list[TradeResult] = []
         pending_signal: TradeSignal | None = None
 
-        for idx in range(lookback, len(prepared)):
+        for idx in range(params.lookback, len(prepared)):
             row = prepared.iloc[idx]
             candle = self._to_candle(row)
 
             if sim.position is None and pending_signal is None:
-                rolling = prepared.iloc[idx - lookback : idx]
+                rolling = prepared.iloc[idx - params.lookback : idx]
                 level_high = float(rolling["high"].max())
                 level_low = float(rolling["low"].min())
                 avg_volume = float(rolling["volume"].mean())
 
                 breakout = row["close"] > level_high
-                volume_ok = row["volume"] >= avg_volume * vol_mult
+                volume_ok = row["volume"] >= avg_volume * params.volume_mult
                 if breakout and volume_ok:
                     risk = max(row["close"] - level_low, row["close"] * 0.002)
                     stop = row["close"] - risk
-                    tp1 = row["close"] + risk * min_rr
-                    tp2 = row["close"] + risk * min_rr * tp2_mult
+                    tp1 = row["close"] + risk * params.min_rr
+                    tp2 = row["close"] + risk * params.min_rr * params.tp2_mult
                     pending_signal = TradeSignal(
                         entry_price=Price(float(row["close"])),
                         entry_time=datetime_to_timezone(row["datetime"].to_pydatetime(), self._simulation_timezone),
@@ -107,7 +96,7 @@ class BreakoutStrategy(BaseStrategy):
                         take_profit_1=Price(float(tp1)),
                         take_profit_2=Price(float(tp2)),
                         position_side=PositionSide.LONG,
-                        symbol=str(params["symbol"]),
+                        symbol=params.symbol,
                     )
 
             if sim.position is None and pending_signal is not None:
@@ -134,7 +123,7 @@ class BreakoutStrategy(BaseStrategy):
             low=Price(float(row["low"])),
             close=Price(float(row["close"])),
             volume=Volume(float(row["volume"])),
-            open_interest=Volume(float(row.get("open_interest", 0.0) or 0.0)),
+            open_interest=Volume(float(row.get("open_interest", 0.0))),
         )
 
     # endregion Private

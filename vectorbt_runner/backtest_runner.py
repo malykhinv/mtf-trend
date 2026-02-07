@@ -4,14 +4,14 @@ from __future__ import annotations
 
 from itertools import product
 from pathlib import Path
-from typing import Any
 import logging
 
 import pandas as pd
 
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
-from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS
+from strategy.base_strategy import BaseStrategy
+from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.data_preparer import DataPreparer
 
@@ -31,7 +31,7 @@ class BacktestRunner:
         self._results_dir = Path(results_dir)
         self._results_file_name = results_file_name
 
-    def build_parameter_grid(self) -> list[dict[str, Any]]:
+    def build_parameter_grid(self) -> list[BreakoutParams]:
         lookback = BREAKOUT_PARAMETER_GRID["lookback"]
         volume_mult = BREAKOUT_PARAMETER_GRID["volume_mult"]
         retest_window = BREAKOUT_PARAMETER_GRID["retest_window"]
@@ -42,15 +42,16 @@ class BacktestRunner:
 
         # combos = |lookback| × |volume_mult| × |retest_window| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| = 6×3×3×3×3×2×6 = 5832
         return [
-            {
-                "lookback": lb,
-                "volume_mult": vm,
-                "retest_window": rw,
-                "retest_zone": rz,
-                "min_rr": rr,
-                "sl_mode": sl,
-                "tp2_mult": tp2,
-            }
+            BreakoutParams(
+                lookback=int(lb),
+                volume_mult=float(vm),
+                retest_window=int(rw),
+                retest_zone=float(rz),
+                min_rr=float(rr),
+                sl_mode=sl,
+                tp2_mult=float(tp2),
+                symbol="",
+            )
             for lb, vm, rw, rz, rr, sl, tp2 in product(
                 lookback,
                 volume_mult,
@@ -62,16 +63,25 @@ class BacktestRunner:
             )
         ]
 
-    def run(self, strategy: Any, symbol_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    def run(self, strategy: BaseStrategy[BreakoutParams], symbol_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
         self._ensure_vectorbt_available()
 
-        rows: list[dict[str, Any]] = []
+        rows: list[dict[str, int | float | str]] = []
         grid = self.build_parameter_grid()
 
         for params in grid:
             all_trades: list[TradeResult] = []
             for symbol, frame in symbol_frames.items():
-                cfg = {**params, "symbol": symbol}
+                cfg = BreakoutParams(
+                    lookback=params.lookback,
+                    volume_mult=params.volume_mult,
+                    retest_window=params.retest_window,
+                    retest_zone=params.retest_zone,
+                    min_rr=params.min_rr,
+                    sl_mode=params.sl_mode,
+                    tp2_mult=params.tp2_mult,
+                    symbol=symbol,
+                )
                 trades = strategy.generate_events(frame, cfg)
                 all_trades.extend(trades)
 
@@ -114,10 +124,20 @@ class BacktestRunner:
             )
             raise RuntimeError(msg)
 
-    def _build_metrics_row(self, params: dict[str, Any], trades: list[TradeResult]) -> dict[str, Any]:
+    def _build_metrics_row(self, params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str]:
+        base_row: dict[str, int | float | str] = {
+            "lookback": params.lookback,
+            "volume_mult": params.volume_mult,
+            "retest_window": params.retest_window,
+            "retest_zone": params.retest_zone,
+            "min_rr": params.min_rr,
+            "sl_mode": params.sl_mode.value,
+            "tp2_mult": params.tp2_mult,
+        }
+
         if not trades:
             return {
-                **params,
+                **base_row,
                 "profit_factor": 0.0,
                 "pnl_percent": 0.0,
                 "win_rate": 0.0,
@@ -167,7 +187,7 @@ class BacktestRunner:
 
         result_types = [trade.result_type for trade in trades]
         return {
-            **params,
+            **base_row,
             "profit_factor": round(float(pf), 4),
             "pnl_percent": round(float(pnl_percent), 4),
             "win_rate": round(float(win_rate), 4),
