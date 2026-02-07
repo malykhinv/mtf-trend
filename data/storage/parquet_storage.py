@@ -47,7 +47,16 @@ class ParquetStorage:
         if existing.empty:
             merged = incoming
         else:
-            merged = pd.concat([existing, incoming], ignore_index=True)
+            merged = pd.merge(existing, incoming, on="timestamp", how="outer", suffixes=("", "__new"))
+            for col in list(merged.columns):
+                if not col.endswith("__new"):
+                    continue
+                base_col = col[:-5]
+                if base_col in merged.columns:
+                    merged[base_col] = merged[col].combine_first(merged[base_col])
+                    merged = merged.drop(columns=[col])
+                else:
+                    merged = merged.rename(columns={col: base_col})
 
         merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
         merged.to_parquet(path, index=False)

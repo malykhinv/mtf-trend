@@ -8,6 +8,10 @@ from typing import Any
 
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
+from data.quality.data_validator import DataValidator
+from data.quality.deduplicator import Deduplicator
+from data.quality.oi_aligner import OiAligner
+from data.quality.time_alignment import TimeAlignment
 from data.storage.parquet_storage import ParquetStorage
 from utils.logger import get_logger
 
@@ -39,6 +43,10 @@ class OiFetcher:
         self._max_workers = max_workers
         self._request_timeout_seconds = request_timeout_seconds
         self._logger = get_logger(self.__class__.__name__)
+        self._aligner = TimeAlignment()
+        self._deduplicator = Deduplicator()
+        self._oi_aligner = OiAligner()
+        self._validator = DataValidator()
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
         next_start = start_time
@@ -52,6 +60,18 @@ class OiFetcher:
             return 0
 
         data = self._exchange_client.fetch_open_interest(symbol, timeframe, next_start, end_time)
+        data = self._aligner.align_to_utc(data)
+        data = self._deduplicator.deduplicate(data)
+
+        ohlcv = self._storage.load(symbol, timeframe)
+        if not ohlcv.empty and "timestamp" in ohlcv.columns:
+            aligned = self._oi_aligner.align(ohlcv[["timestamp"]], data)
+            data = aligned[["timestamp", "open_interest"]]
+
+        issues = self._validator.validate(symbol, timeframe, data)
+        if issues:
+            self._logger.info(f"OI quality: {symbol} найдено {len(issues)} аномалий")
+
         added_rows = self._storage.save_incremental(symbol, timeframe, data)
         self._logger.info(f"OI завершен: {symbol}, добавлено {added_rows} строк")
         return added_rows
