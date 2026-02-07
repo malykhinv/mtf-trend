@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 
 from domain.models.candle import Candle
 from domain.models.position import Position
@@ -21,8 +22,8 @@ class PositionSimulator(ABC):
         """Open new trading position."""
 
     @abstractmethod
-    def close_position(self, price: float) -> TradeResult:
-        """Close current position at given price and return the result."""
+    def close_position(self, price: float, exit_time: datetime) -> TradeResult:
+        """Close current position at given price and close timestamp, then return the result."""
 
     @abstractmethod
     def update_stop(self, new_stop: float) -> None:
