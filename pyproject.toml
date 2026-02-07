@@ -1,0 +1,17 @@
+[project]
+name = "mtf-trend"
+version = "0.1.0"
+description = "CLI-система для загрузки рыночных данных и бектеста торговых стратегий"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pandas>=2.0",
+  "ccxt>=4.0",
+  "requests>=2.31",
+  "vectorbt>=0.26",
+  "pyarrow>=14.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
