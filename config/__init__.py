@@ -2,83 +2,39 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import tzinfo
-from pathlib import Path
 import os
+from pathlib import Path
 
+from config.app_config import AppConfig
+from config.backtest_config import BacktestConfig
+from config.fetch_config import FetchConfig
+from config.simulation_config import SimulationConfig
+from config.strategy_config import StrategyConfig
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
     DEFAULT_CACHE_DIR,
     DEFAULT_COMMISSION_RATE,
     DEFAULT_LOG_LEVEL,
-    DEFAULT_LOGS_DIR,
     DEFAULT_MAX_CONCURRENT_REQUESTS,
-    DEFAULT_RESULTS_DIR,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_SECONDS,
+    DEFAULT_RESULTS_DIR,
     DEFAULT_SLIPPAGE,
-    DEFAULT_SPREAD,
     DEFAULT_TIMEFRAME,
     DEFAULT_TIMEZONE,
+    DEFAULT_SPREAD,
+    DEFAULT_LOGS_DIR,
 )
 from domain.enums.timeframe import Timeframe
-from utils.formatters import resolve_timezone
 
-
-@dataclass(slots=True)
-class FetchConfig:
-    binance_api_key: str
-    binance_secret_key: str
-    coingecko_api_key: str
-    max_concurrent_requests: int = DEFAULT_MAX_CONCURRENT_REQUESTS
-    timeframe: Timeframe = DEFAULT_TIMEFRAME
-    timezone: str = DEFAULT_TIMEZONE
-
-    @property
-    def tzinfo(self) -> tzinfo:
-        return resolve_timezone(self.timezone)
-
-
-@dataclass(slots=True)
-class StrategyConfig:
-    timezone: str = DEFAULT_TIMEZONE
-    default_timeframe: Timeframe = DEFAULT_TIMEFRAME
-
-    @property
-    def tzinfo(self) -> tzinfo:
-        return resolve_timezone(self.timezone)
-
-
-@dataclass(slots=True)
-class SimulationConfig:
-    commission_rate: float = DEFAULT_COMMISSION_RATE
-    slippage: float = DEFAULT_SLIPPAGE
-    spread: float = DEFAULT_SPREAD
-    timezone: str = DEFAULT_TIMEZONE
-
-    @property
-    def tzinfo(self) -> tzinfo:
-        return resolve_timezone(self.timezone)
-
-
-@dataclass(slots=True)
-class BacktestConfig:
-    log_level: str = DEFAULT_LOG_LEVEL
-    cache_dir: Path = Path(DEFAULT_CACHE_DIR)
-    logs_dir: Path = Path(DEFAULT_LOGS_DIR)
-    results_dir: Path = Path(DEFAULT_RESULTS_DIR)
-    results_file_name: str = DEFAULT_BACKTEST_OUTPUT_FILE
-    retry_attempts: int = DEFAULT_RETRY_ATTEMPTS
-    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS
-
-
-@dataclass(slots=True)
-class AppConfig:
-    fetch: FetchConfig
-    strategy: StrategyConfig
-    simulation: SimulationConfig
-    backtest: BacktestConfig
+__all__ = [
+    "AppConfig",
+    "BacktestConfig",
+    "FetchConfig",
+    "SimulationConfig",
+    "StrategyConfig",
+    "load_config",
+]
 
 
 def _load_env_file(env_path: Path) -> None:
@@ -149,7 +105,11 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         ),
     )
 
-    for path in (backtest_config.cache_dir, backtest_config.logs_dir, backtest_config.results_dir):
+    for path in (
+        backtest_config.cache_dir,
+        backtest_config.logs_dir,
+        backtest_config.results_dir,
+    ):
         path.mkdir(parents=True, exist_ok=True)
 
     return AppConfig(

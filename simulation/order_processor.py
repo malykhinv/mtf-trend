@@ -5,14 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from domain.enums.position_side import PositionSide
-
-
-@dataclass(frozen=True, slots=True)
-class Fill:
-    """Single order fill snapshot."""
-
-    price: float
-    commission: float
+from simulation.models.fill import Fill
 
 
 @dataclass(frozen=True, slots=True)
