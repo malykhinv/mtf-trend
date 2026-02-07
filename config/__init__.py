@@ -37,6 +37,8 @@ __all__ = [
 ]
 
 
+# region Private
+
 def _load_env_file(env_path: Path) -> None:
     if not env_path.exists():
         return
@@ -57,6 +59,8 @@ def _parse_timeframe(raw: str | None, *, default: Timeframe) -> Timeframe:
     normalized = raw.strip().upper()
     return Timeframe(normalized)
 
+
+# endregion Private
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
     env_file = Path(env_path)
