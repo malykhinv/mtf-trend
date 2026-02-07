@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 
 @dataclass(frozen=True, slots=True)
 class Percentage:
-    """Represents percentage value in range [-100.0, 100.0]."""
+    """Represents any finite percentage value with lower bound at -100.0."""
 
     value: float
 
     def __post_init__(self) -> None:
-        if self.value < -100.0 or self.value > 100.0:
-            msg = "Percentage must be between -100.0 and 100.0."
+        if not isfinite(self.value):
+            msg = "Percentage must be a finite number."
+            raise ValueError(msg)
+
+        if self.value < -100.0:
+            msg = "Percentage must be greater than or equal to -100.0."
             raise ValueError(msg)
