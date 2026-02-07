@@ -22,6 +22,11 @@ class DataValidator:
         normalized = data.reset_index(drop=True)
         issues: list[DataQualityIssue] = []
         ts = pd.to_datetime(normalized["timestamp"], unit="ms", utc=True, errors="coerce")
+        numeric_columns = {
+            col: pd.to_numeric(normalized[col], errors="coerce")
+            for col in ("open", "high", "low", "close", "volume", "open_interest")
+            if col in normalized.columns
+        }
 
         def add_issue(pos: int, issue_type: str, severity: DataQualitySeverity, description: str) -> None:
             if pd.isna(ts.iloc[pos]):
@@ -39,8 +44,8 @@ class DataValidator:
             )
 
         for col in ("open", "high", "low", "close"):
-            if col in normalized.columns:
-                bad = normalized[col] < 0
+            if col in numeric_columns:
+                bad = numeric_columns[col] < 0
                 for pos in normalized.index[bad.fillna(False)]:
                     add_issue(int(pos), "negative_price", DataQualitySeverity.CRITICAL, f"Negative {col} value")
 
@@ -49,14 +54,14 @@ class DataValidator:
             "open_interest": "negative_open_interest",
         }
         for col, issue_type in issue_type_by_column.items():
-            if col in normalized.columns:
-                bad = normalized[col] < 0
+            if col in numeric_columns:
+                bad = numeric_columns[col] < 0
                 for pos in normalized.index[bad.fillna(False)]:
                     add_issue(int(pos), issue_type, DataQualitySeverity.ERROR, f"Negative {col} value")
 
-        if {"high", "low", "close"}.issubset(normalized.columns):
-            spread = (normalized["high"] - normalized["low"]).abs()
-            base = normalized["close"].abs().replace(0, pd.NA)
+        if {"high", "low", "close"}.issubset(numeric_columns):
+            spread = (numeric_columns["high"] - numeric_columns["low"]).abs()
+            base = numeric_columns["close"].abs().replace(0, pd.NA)
             ratio = spread / base
             suspicious = ratio > SPREAD_TO_CLOSE_WARNING_THRESHOLD
             for pos in normalized.index[suspicious.fillna(False)]:
@@ -68,9 +73,21 @@ class DataValidator:
                     f"Spread exceeds {threshold_pct}% of close",
                 )
 
-        if "volume" in normalized.columns:
-            zero_volume = normalized["volume"] == 0
+        if "volume" in numeric_columns:
+            zero_volume = numeric_columns["volume"] == 0
             for pos in normalized.index[zero_volume.fillna(False)]:
                 add_issue(int(pos), "zero_volume", DataQualitySeverity.INFO, "Zero candle volume")
+
+        for col, series in numeric_columns.items():
+            if series.notna().sum() == 0:
+                valid_ts_positions = normalized.index[ts.notna()]
+                if len(valid_ts_positions) == 0:
+                    continue
+                add_issue(
+                    int(valid_ts_positions[0]),
+                    f"invalid_{col}_series",
+                    DataQualitySeverity.ERROR,
+                    f"Column {col} could not be parsed as numeric values",
+                )
 
         return issues
