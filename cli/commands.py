@@ -262,6 +262,8 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
+    min_stale_observations = 3
+
     if "open_interest" not in frame.columns:
         return [
             {
@@ -296,7 +298,16 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
                     }
                 )
 
-        stale_ratio = (oi.ffill().diff().fillna(0) == 0).mean()
+        aligned_oi = oi.ffill()
+        aligned_valid_mask = aligned_oi.notna()
+        comparison_mask = aligned_valid_mask & aligned_valid_mask.shift(1, fill_value=False)
+        compared_observations = int(comparison_mask.sum())
+
+        if compared_observations >= min_stale_observations:
+            stale_ratio = (aligned_oi.diff().eq(0) & comparison_mask).sum() / compared_observations
+        else:
+            stale_ratio = 0.0
+
         if stale_ratio > OI_STALE_RATIO_THRESHOLD:
             issues.append(
                 {
