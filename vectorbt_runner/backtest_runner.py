@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from typing import Any
@@ -13,19 +12,13 @@ import pandas as pd
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS
+from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.data_preparer import DataPreparer
 
 try:
     import vectorbt as vbt
 except ImportError:  # pragma: no cover - environment dependent
     vbt = None
-
-
-@dataclass(slots=True)
-class BacktestSummary:
-    total_combinations: int
-    profitable_combinations: int
-    best_pf: float
 
 
 logger = logging.getLogger(__name__)
