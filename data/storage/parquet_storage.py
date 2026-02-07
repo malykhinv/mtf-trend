@@ -1,4 +1,4 @@
-"""Parquet storage with symbol/timeframe partition layout and incremental updates."""
+"""Parquet storage with UTC timestamp persistence for symbol/timeframe partitions."""
 
 from __future__ import annotations
 
@@ -18,11 +18,30 @@ class ParquetStorage:
     def _data_path(self, symbol: str, timeframe: Timeframe) -> Path:
         return self._base_dir / symbol / timeframe.value / "data.parquet"
 
+
+
+    @staticmethod
+    def _ensure_utc_columns(data: pd.DataFrame) -> pd.DataFrame:
+        normalized = data.copy()
+        if "timestamp" not in normalized.columns:
+            raise ValueError("data must contain 'timestamp' column")
+
+        ts = pd.to_datetime(normalized["timestamp"], unit="ms", utc=True, errors="coerce")
+        normalized = normalized.loc[ts.notna()].copy()
+        ts = ts.loc[ts.notna()]
+
+        normalized["timestamp"] = (ts.astype("int64") // 1_000_000).astype("int64")
+        normalized["datetime"] = ts
+        return normalized
+
     def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
         path = self._data_path(symbol, timeframe)
         if not path.exists():
             return pd.DataFrame()
-        return pd.read_parquet(path)
+        frame = pd.read_parquet(path)
+        if frame.empty:
+            return frame
+        return self._ensure_utc_columns(frame)
 
     def get_last_timestamp(self, symbol: str, timeframe: Timeframe) -> pd.Timestamp | None:
         data = self.load(symbol, timeframe)
@@ -37,9 +56,7 @@ class ParquetStorage:
         path = self._data_path(symbol, timeframe)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        incoming = new_data.copy()
-        if "timestamp" not in incoming.columns:
-            raise ValueError("new_data must contain 'timestamp' column")
+        incoming = self._ensure_utc_columns(new_data)
 
         existing = self.load(symbol, timeframe)
         previous_count = len(existing)
@@ -58,6 +75,7 @@ class ParquetStorage:
                 else:
                     merged = merged.rename(columns={col: base_col})
 
+        merged = self._ensure_utc_columns(merged)
         merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
         merged.to_parquet(path, index=False)
 

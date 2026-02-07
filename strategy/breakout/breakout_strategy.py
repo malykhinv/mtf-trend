@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timezone
 from typing import Any
 
 import pandas as pd
@@ -15,6 +14,7 @@ from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
 from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
+from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
 from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
 
@@ -24,9 +24,11 @@ class BreakoutStrategy(BaseStrategy):
 
     REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 
-    def __init__(self, *, commission_rate: float, slippage: float) -> None:
+    def __init__(self, *, commission_rate: float, slippage: float, strategy_timezone: str, simulation_timezone: str) -> None:
         self._commission_rate = commission_rate
         self._slippage = slippage
+        self._strategy_timezone = strategy_timezone
+        self._simulation_timezone = simulation_timezone
 
     def validate_config(self, params: dict[str, Any]) -> None:
         lookback = int(params["lookback"])
@@ -49,7 +51,9 @@ class BreakoutStrategy(BaseStrategy):
             raise ValueError(f"Missing required columns: {missing}")
 
         prepared = data.copy()
-        prepared["datetime"] = pd.to_datetime(prepared["timestamp"], unit="ms", utc=True, errors="coerce")
+        prepared["datetime"] = pd.to_numeric(prepared["timestamp"], errors="coerce").map(
+            lambda value: utc_ms_to_local_datetime(value, self._strategy_timezone) if pd.notna(value) else pd.NaT
+        )
         prepared = prepared.dropna(subset=["datetime"])
         prepared = prepared.sort_values("datetime").reset_index(drop=True)
 
@@ -68,6 +72,7 @@ class BreakoutStrategy(BaseStrategy):
             side=PositionSide.LONG,
             order_processor=OrderProcessor(commission_rate=self._commission_rate, slippage=self._slippage),
             trade_classifier=TradeClassifier(),
+            simulation_timezone=self._simulation_timezone,
         )
 
         lookback = int(params["lookback"])
@@ -97,7 +102,7 @@ class BreakoutStrategy(BaseStrategy):
                     tp2 = row["close"] + risk * min_rr * tp2_mult
                     pending_signal = TradeSignal(
                         entry_price=Price(float(row["close"])),
-                        entry_time=row["datetime"].to_pydatetime().astimezone(timezone.utc),
+                        entry_time=datetime_to_timezone(row["datetime"].to_pydatetime(), self._simulation_timezone),
                         stop_loss=Price(float(stop)),
                         take_profit_1=Price(float(tp1)),
                         take_profit_2=Price(float(tp2)),
@@ -119,10 +124,9 @@ class BreakoutStrategy(BaseStrategy):
 
         return trades
 
-    @staticmethod
-    def _to_candle(row: pd.Series) -> Candle:
+    def _to_candle(self, row: pd.Series) -> Candle:
         return Candle(
-            timestamp=row["datetime"].to_pydatetime().astimezone(timezone.utc),
+            timestamp=datetime_to_timezone(row["datetime"].to_pydatetime(), self._simulation_timezone),
             open=Price(float(row["open"])),
             high=Price(float(row["high"])),
             low=Price(float(row["low"])),
