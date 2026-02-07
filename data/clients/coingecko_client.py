@@ -6,14 +6,32 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from constants import COINGECKO_TIMEOUT_SECONDS
+from constants import (
+    COINGECKO_BASE_URL,
+    COINGECKO_DEFAULT_PAGE,
+    COINGECKO_HEADER_ACCEPT_JSON,
+    COINGECKO_HEADER_ACCEPT_KEY,
+    COINGECKO_HEADER_API_KEY,
+    COINGECKO_ORDER_KEY,
+    COINGECKO_ORDER_MARKET_CAP_DESC,
+    COINGECKO_PARAM_IDS,
+    COINGECKO_PARAM_PAGE,
+    COINGECKO_PARAM_PER_PAGE,
+    COINGECKO_PARAM_SPARKLINE,
+    COINGECKO_SPARKLINE_FALSE,
+    COINGECKO_TIMEOUT_SECONDS,
+    COINGECKO_VS_CURRENCY_KEY,
+    COINGECKO_VS_CURRENCY_USD,
+    SIMULATION_COIN_SUFFIX_SLASH_USDT,
+    SIMULATION_COIN_SUFFIX_USDT,
+)
 from domain.abstract.market_data_client import MarketDataClient
 
 
 class CoinGeckoClient(MarketDataClient):
     """Market cap provider backed by CoinGecko REST API."""
 
-    BASE_URL = "https://api.coingecko.com/api/v3"
+    BASE_URL = COINGECKO_BASE_URL
 
     def __init__(self, api_key: str = "", cache_ttl_hours: int = 24) -> None:
         self._api_key = api_key
@@ -24,13 +42,13 @@ class CoinGeckoClient(MarketDataClient):
     # region Private
 
     def _headers(self) -> dict[str, str]:
-        headers = {"accept": "application/json"}
+        headers = {COINGECKO_HEADER_ACCEPT_KEY: COINGECKO_HEADER_ACCEPT_JSON}
         if self._api_key:
-            headers["x-cg-demo-api-key"] = self._api_key
+            headers[COINGECKO_HEADER_API_KEY] = self._api_key
         return headers
 
     def _resolve_coin_id(self, symbol: str) -> str:
-        normalized = symbol.lower().replace("/usdt", "").replace("usdt", "")
+        normalized = symbol.lower().replace(SIMULATION_COIN_SUFFIX_SLASH_USDT, "").replace(SIMULATION_COIN_SUFFIX_USDT, "")
         if normalized in self._symbol_to_id:
             return self._symbol_to_id[normalized]
 
@@ -65,7 +83,13 @@ class CoinGeckoClient(MarketDataClient):
         response = requests.get(
             f"{self.BASE_URL}/coins/markets",
             headers=self._headers(),
-            params={"vs_currency": "usd", "ids": coin_id, "order": "market_cap_desc", "per_page": 1, "page": 1},
+            params={
+                COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
+                COINGECKO_PARAM_IDS: coin_id,
+                COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
+                COINGECKO_PARAM_PER_PAGE: COINGECKO_DEFAULT_PAGE,
+                COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
+            },
             timeout=COINGECKO_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -82,11 +106,11 @@ class CoinGeckoClient(MarketDataClient):
             f"{self.BASE_URL}/coins/markets",
             headers=self._headers(),
             params={
-                "vs_currency": "usd",
-                "order": "market_cap_desc",
-                "per_page": limit,
-                "page": 1,
-                "sparkline": "false",
+                COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
+                COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
+                COINGECKO_PARAM_PER_PAGE: limit,
+                COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
+                COINGECKO_PARAM_SPARKLINE: COINGECKO_SPARKLINE_FALSE,
             },
             timeout=COINGECKO_TIMEOUT_SECONDS,
         )

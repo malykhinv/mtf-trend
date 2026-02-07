@@ -6,16 +6,29 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from constants import (
+    LOGGER_COLOR_ERROR,
+    LOGGER_COLOR_INFO,
+    LOGGER_COLOR_RESET,
+    LOGGER_COLOR_WARNING,
+    LOGGER_DATE_FORMAT,
+    LOGGER_FILE_BACKUP_COUNT,
+    LOGGER_FILE_ENCODING,
+    LOGGER_FILE_MAX_BYTES,
+    LOGGER_MESSAGE_FORMAT,
+    DEFAULT_LOGS_DIR,
+)
+
 
 class _ColorFormatter(logging.Formatter):
     """Adds ANSI colors for INFO/WARNING/ERROR levels in console output."""
 
-    RESET = "\033[0m"
+    RESET = LOGGER_COLOR_RESET
     COLORS = {
-        logging.INFO: "\033[32m",
-        logging.WARNING: "\033[33m",
-        logging.ERROR: "\033[31m",
-        logging.CRITICAL: "\033[31m",
+        logging.INFO: LOGGER_COLOR_INFO,
+        logging.WARNING: LOGGER_COLOR_WARNING,
+        logging.ERROR: LOGGER_COLOR_ERROR,
+        logging.CRITICAL: LOGGER_COLOR_ERROR,
     }
 
     def format(self, record: logging.LogRecord) -> str:
@@ -29,7 +42,7 @@ class _ColorFormatter(logging.Formatter):
 def get_logger(
     name: str,
     level: int | str = logging.INFO,
-    logs_dir: str | Path = "./logs",
+    logs_dir: str | Path = DEFAULT_LOGS_DIR,
 ) -> logging.Logger:
     """Create or return configured logger in `ЧЧ:ММ:СС Сообщение` format."""
     if isinstance(level, str):
@@ -47,12 +60,17 @@ def get_logger(
     if not logger.handlers:
         stream_handler = logging.StreamHandler()
         stream_handler.setLevel(resolved_level)
-        stream_handler.setFormatter(_ColorFormatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+        stream_handler.setFormatter(_ColorFormatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
         logger.addHandler(stream_handler)
 
-        file_handler = RotatingFileHandler(file_path, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8")
+        file_handler = RotatingFileHandler(
+            file_path,
+            maxBytes=LOGGER_FILE_MAX_BYTES,
+            backupCount=LOGGER_FILE_BACKUP_COUNT,
+            encoding=LOGGER_FILE_ENCODING,
+        )
         file_handler.setLevel(resolved_level)
-        file_handler.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
+        file_handler.setFormatter(logging.Formatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
         logger.addHandler(file_handler)
     else:
         for handler in logger.handlers:

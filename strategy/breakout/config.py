@@ -5,9 +5,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import prod
 
+from constants import (
+    BREAKOUT_LOOKBACK_VALUES,
+    BREAKOUT_MIN_RR_VALUES,
+    BREAKOUT_RETEST_WINDOW_VALUES,
+    BREAKOUT_RETEST_ZONE_VALUES,
+    BREAKOUT_SL_MODE_VALUES,
+    BREAKOUT_TARGET_PARAMETER_COMBINATIONS,
+    BREAKOUT_TP2_MULT_VALUES,
+    BREAKOUT_VOLUME_MULT_VALUES,
+)
 from domain.enums.sl_mode import SLMode
 
-TARGET_PARAMETER_COMBINATIONS = 5832
+TARGET_PARAMETER_COMBINATIONS = BREAKOUT_TARGET_PARAMETER_COMBINATIONS
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,13 +33,13 @@ class BreakoutParams:
 
 
 BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {
-    "lookback": [8, 13, 21, 34, 55, 89],
-    "volume_mult": [1.1, 1.3, 1.5],
-    "retest_window": [2, 4, 6],
-    "retest_zone": [0.0015, 0.0020, 0.0030],
-    "min_rr": [1.0, 1.5, 2.0],
-    "sl_mode": [SLMode.LEVEL, SLMode.BREAKOUT_EXTREME],
-    "tp2_mult": [1.1, 1.25, 1.4, 1.5, 1.75, 2.0],
+    "lookback": list(BREAKOUT_LOOKBACK_VALUES),
+    "volume_mult": list(BREAKOUT_VOLUME_MULT_VALUES),
+    "retest_window": list(BREAKOUT_RETEST_WINDOW_VALUES),
+    "retest_zone": list(BREAKOUT_RETEST_ZONE_VALUES),
+    "min_rr": list(BREAKOUT_MIN_RR_VALUES),
+    "sl_mode": list(BREAKOUT_SL_MODE_VALUES),
+    "tp2_mult": list(BREAKOUT_TP2_MULT_VALUES),
 }
 
 PARAMETER_GRID_SIZE = prod(len(values) for values in BREAKOUT_PARAMETER_GRID.values())

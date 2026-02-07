@@ -3,29 +3,24 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
-from domain.abstract.exchange_client import ExchangeClient
-from domain.enums.timeframe import Timeframe
+from constants import (
+    DEFAULT_FETCHER_MAX_WORKERS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_LOGS_DIR,
+    TIMEFRAME_TO_DELTA,
+)
 from data.quality.data_validator import DataValidator
 from data.quality.deduplicator import Deduplicator
 from data.quality.oi_aligner import OiAligner
 from data.quality.time_alignment import TimeAlignment
 from data.storage.parquet_storage import ParquetStorage
+from domain.abstract.exchange_client import ExchangeClient
+from domain.enums.timeframe import Timeframe
 from utils.logger import get_logger
-
-
-_TIMEFRAME_DELTA = {
-    Timeframe.M1: timedelta(minutes=1),
-    Timeframe.M5: timedelta(minutes=5),
-    Timeframe.M15: timedelta(minutes=15),
-    Timeframe.M30: timedelta(minutes=30),
-    Timeframe.H1: timedelta(hours=1),
-    Timeframe.H4: timedelta(hours=4),
-    Timeframe.D1: timedelta(days=1),
-    Timeframe.W1: timedelta(weeks=1),
-}
 
 
 class OiFetcher:
@@ -35,10 +30,10 @@ class OiFetcher:
         self,
         exchange_client: ExchangeClient,
         storage: ParquetStorage,
-        max_workers: int = 5,
-        request_timeout_seconds: int = 60,
-        log_level: int | str = "INFO",
-        logs_dir: str | Path = "./logs",
+        max_workers: int = DEFAULT_FETCHER_MAX_WORKERS,
+        request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        log_level: int | str = DEFAULT_LOG_LEVEL,
+        logs_dir: str | Path = DEFAULT_LOGS_DIR,
     ) -> None:
         self._exchange_client = exchange_client
         self._storage = storage
@@ -54,7 +49,7 @@ class OiFetcher:
         next_start = start_time
         last_timestamp = self._storage.get_last_timestamp(symbol, timeframe)
         if last_timestamp is not None:
-            next_start = max(start_time, last_timestamp.to_pydatetime() + _TIMEFRAME_DELTA[timeframe])
+            next_start = max(start_time, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
 
         self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start.isoformat()} -> {end_time.isoformat()}")
         if next_start > end_time:

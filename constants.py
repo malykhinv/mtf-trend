@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from domain.enums.timeframe import Timeframe
+from domain.enums.sl_mode import SLMode
 
 SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = tuple(Timeframe)
 DEFAULT_TIMEFRAME = Timeframe.H1
@@ -12,11 +15,81 @@ DEFAULT_MAX_CONCURRENT_REQUESTS = 10
 DEFAULT_FETCH_BATCH_SIZE = 1000
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+MILLISECONDS_IN_SECOND = 1000
 
 # Timeouts (seconds)
 HTTP_TIMEOUT_SECONDS = 30
 EXCHANGE_TIMEOUT_SECONDS = 20
 COINGECKO_TIMEOUT_SECONDS = 20
+
+# Fetcher defaults
+DEFAULT_FETCHER_MAX_WORKERS = 5
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
+
+# Fetching domain constants
+TIMEFRAME_TO_DELTA = {
+    Timeframe.M1: timedelta(minutes=1),
+    Timeframe.M5: timedelta(minutes=5),
+    Timeframe.M15: timedelta(minutes=15),
+    Timeframe.M30: timedelta(minutes=30),
+    Timeframe.H1: timedelta(hours=1),
+    Timeframe.H4: timedelta(hours=4),
+    Timeframe.D1: timedelta(days=1),
+    Timeframe.W1: timedelta(weeks=1),
+}
+
+OHLCV_FRAME_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+OPEN_INTEREST_FRAME_COLUMNS = ("timestamp", "open_interest", "datetime")
+CCXT_OPTION_DEFAULT_TYPE_KEY = "defaultType"
+CCXT_MARKET_TYPE_SWAP = "swap"
+FUTURES_SETTLEMENT_QUOTE_ASSET = "USDT"
+SIMULATION_COIN_SUFFIX_SLASH_USDT = "/usdt"
+SIMULATION_COIN_SUFFIX_USDT = "usdt"
+
+# CoinGecko constants
+COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
+COINGECKO_HEADER_ACCEPT_KEY = "accept"
+COINGECKO_HEADER_ACCEPT_JSON = "application/json"
+COINGECKO_HEADER_API_KEY = "x-cg-demo-api-key"
+COINGECKO_VS_CURRENCY_KEY = "vs_currency"
+COINGECKO_VS_CURRENCY_USD = "usd"
+COINGECKO_ORDER_KEY = "order"
+COINGECKO_ORDER_MARKET_CAP_DESC = "market_cap_desc"
+COINGECKO_PARAM_IDS = "ids"
+COINGECKO_PARAM_PER_PAGE = "per_page"
+COINGECKO_PARAM_PAGE = "page"
+COINGECKO_PARAM_SPARKLINE = "sparkline"
+COINGECKO_SPARKLINE_FALSE = "false"
+COINGECKO_DEFAULT_PAGE = 1
+
+# Logger constants
+LOGGER_DATE_FORMAT = "%H:%M:%S"
+LOGGER_MESSAGE_FORMAT = "%(asctime)s %(message)s"
+LOGGER_COLOR_RESET = "\033[0m"
+LOGGER_COLOR_INFO = "\033[32m"
+LOGGER_COLOR_WARNING = "\033[33m"
+LOGGER_COLOR_ERROR = "\033[31m"
+LOGGER_FILE_MAX_BYTES = 5 * 1024 * 1024
+LOGGER_FILE_BACKUP_COUNT = 5
+LOGGER_FILE_ENCODING = "utf-8"
+
+# Data preparer constants
+DATA_PREPARER_NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "open_interest")
+DATA_PREPARER_EMPTY_FLOAT_DTYPE = "float64"
+DATA_PREPARER_EMPTY_BOOL_DTYPE = "bool"
+DATA_PREPARER_TRADE_COLUMNS = ("entry_time", "exit_time", "pnl", "pnl_percent", "result_type")
+SIMULATION_ZERO_VALUE = 0.0
+SIMULATION_UNIT_INCREMENT = 1.0
+
+# Breakout grid constants
+BREAKOUT_LOOKBACK_VALUES = (8, 13, 21, 34, 55, 89)
+BREAKOUT_VOLUME_MULT_VALUES = (1.1, 1.3, 1.5)
+BREAKOUT_RETEST_WINDOW_VALUES = (2, 4, 6)
+BREAKOUT_RETEST_ZONE_VALUES = (0.0015, 0.0020, 0.0030)
+BREAKOUT_MIN_RR_VALUES = (1.0, 1.5, 2.0)
+BREAKOUT_SL_MODE_VALUES = (SLMode.LEVEL, SLMode.BREAKOUT_EXTREME)
+BREAKOUT_TP2_MULT_VALUES = (1.1, 1.25, 1.4, 1.5, 1.75, 2.0)
+BREAKOUT_TARGET_PARAMETER_COMBINATIONS = 5832
 
 # Trading defaults
 DEFAULT_COMMISSION_RATE = 0.0004
