@@ -57,6 +57,10 @@ class CoinGeckoClient(MarketDataClient):
             .replace(SIMULATION_COIN_SUFFIX_USDT, "")
         )
 
+    @classmethod
+    def _canonical_symbol_key(cls, symbol: str) -> str:
+        return cls._normalize_symbol(symbol).upper()
+
     def _load_market_cap_cache(self) -> None:
         if self._cache_path is None or not self._cache_path.exists():
             return
@@ -75,6 +79,9 @@ class CoinGeckoClient(MarketDataClient):
                 symbol = row.symbol
                 if not isinstance(symbol, str) or not symbol:
                     continue
+                canonical_symbol = self._canonical_symbol_key(symbol)
+                if not canonical_symbol:
+                    continue
 
                 expires_at_dt = pd.Timestamp(row.expires_at)
                 if pd.isna(expires_at_dt):
@@ -89,11 +96,11 @@ class CoinGeckoClient(MarketDataClient):
                 if expires_at <= now:
                     continue
 
-                loaded_cache[symbol.upper()] = (float(row.market_cap), expires_at)
+                loaded_cache[canonical_symbol] = (float(row.market_cap), expires_at)
                 if has_coin_id:
                     coin_id = str(row.coin_id or "")
                     if coin_id:
-                        self._symbol_to_id[self._normalize_symbol(symbol)] = coin_id
+                        self._symbol_to_id[canonical_symbol] = coin_id
 
             self._market_cap_cache = loaded_cache
         except (OSError, ValueError, TypeError) as exc:
@@ -109,7 +116,7 @@ class CoinGeckoClient(MarketDataClient):
                 "symbol": symbol,
                 "market_cap": market_cap,
                 "expires_at": pd.Timestamp(expires_at).tz_convert(timezone.utc),
-                "coin_id": self._symbol_to_id.get(self._normalize_symbol(symbol), ""),
+                "coin_id": self._symbol_to_id.get(symbol, ""),
             }
             for symbol, (market_cap, expires_at) in self._market_cap_cache.items()
         ]
@@ -190,8 +197,9 @@ class CoinGeckoClient(MarketDataClient):
 
     def _resolve_coin_id(self, symbol: str) -> str:
         normalized = self._normalize_symbol(symbol)
-        if normalized in self._symbol_to_id:
-            return self._symbol_to_id[normalized]
+        canonical_symbol = self._canonical_symbol_key(symbol)
+        if canonical_symbol in self._symbol_to_id:
+            return self._symbol_to_id[canonical_symbol]
 
         response = requests.get(
             f"{self.BASE_URL}/coins/list",
@@ -273,17 +281,17 @@ class CoinGeckoClient(MarketDataClient):
                 f"Unable to resolve CoinGecko ID for symbol '{symbol}' (normalized='{normalized}') from candidates: {candidates}"
             )
 
-        self._symbol_to_id[normalized] = selected["id"]
+        self._symbol_to_id[canonical_symbol] = selected["id"]
 
-        return self._symbol_to_id[normalized]
+        return self._symbol_to_id[canonical_symbol]
 
     # endregion Private
 
     def get_market_cap(self, symbol: str) -> float:
-        normalized = symbol.upper()
+        canonical_symbol = self._canonical_symbol_key(symbol)
         now = datetime.now(tz=timezone.utc)
 
-        cached = self._market_cap_cache.get(normalized)
+        cached = self._market_cap_cache.get(canonical_symbol)
         if cached and cached[1] > now:
             return cached[0]
 
@@ -306,7 +314,7 @@ class CoinGeckoClient(MarketDataClient):
             raise ValueError(f"CoinGecko returned empty market data for symbol: {symbol}")
 
         market_cap = float(payload[0].get("market_cap") or 0.0)
-        self._market_cap_cache[normalized] = (market_cap, now + self._cache_ttl)
+        self._market_cap_cache[canonical_symbol] = (market_cap, now + self._cache_ttl)
         self._save_market_cap_cache()
         return market_cap
 
