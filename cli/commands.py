@@ -23,6 +23,7 @@ from domain.enums.exchange import Exchange
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
+from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
 from vectorbt_runner.backtest_runner import BacktestRunner
 from vectorbt_runner.data_preparer import DataPreparer
 
@@ -178,6 +179,13 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
 
         filtered = frame[(frame["trades_count"] >= 30) & (frame["profit_factor"] > 1.0)].copy()
         filtered = filtered.sort_values("profit_factor", ascending=False)
+
+        if len(frame) != TARGET_PARAMETER_COMBINATIONS:
+            logger.warning(
+                "make-report: фактическое число комбинаций=%s отличается от целевого=%s",
+                len(frame),
+                TARGET_PARAMETER_COMBINATIONS,
+            )
 
         summary = {
             "total_combinations": int(len(frame)),
