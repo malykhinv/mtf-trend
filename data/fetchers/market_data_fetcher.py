@@ -102,6 +102,9 @@ class MarketDataFetcher:
     ) -> FetchAllResult:
         self._logger.info(f"Загрузка старт: {len(symbols)} символов, TF={timeframe.value}")
 
+        ohlcv_result: dict[str, int | str]
+        oi_result: dict[str, int | str]
+
         with ThreadPoolExecutor(max_workers=FETCH_ALL_MAX_WORKERS) as executor:
             ohlcv_future = executor.submit(
                 self._ohlcv_fetcher.fetch_many,
@@ -118,8 +121,21 @@ class MarketDataFetcher:
                 end_time,
             )
 
-            ohlcv_result = ohlcv_future.result(timeout=self._request_timeout_seconds)
-            oi_result = oi_future.result(timeout=self._request_timeout_seconds)
+            try:
+                ohlcv_result = ohlcv_future.result(timeout=self._request_timeout_seconds)
+            except TimeoutError:
+                ohlcv_future.cancel()
+                msg = "OHLCV канал: таймаут при ожидании результата fetch_many"
+                self._logger.info(msg)
+                ohlcv_result = {symbol: msg for symbol in symbols}
+
+            try:
+                oi_result = oi_future.result(timeout=self._request_timeout_seconds)
+            except TimeoutError:
+                oi_future.cancel()
+                msg = "OI канал: таймаут при ожидании результата fetch_many"
+                self._logger.info(msg)
+                oi_result = {symbol: msg for symbol in symbols}
 
         market_caps = self.fetch_market_caps(symbols)
         self._logger.info("Загрузка завершена")
