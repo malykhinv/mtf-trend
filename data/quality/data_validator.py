@@ -6,6 +6,7 @@ from datetime import timezone
 
 import pandas as pd
 
+from constants import SPREAD_TO_CLOSE_WARNING_THRESHOLD
 from domain.enums.data_quality_severity import DataQualitySeverity
 from domain.enums.timeframe import Timeframe
 from domain.models.data_quality_issue import DataQualityIssue
@@ -50,9 +51,15 @@ class DataValidator:
             spread = (data["high"] - data["low"]).abs()
             base = data["close"].abs().replace(0, pd.NA)
             ratio = spread / base
-            suspicious = ratio > 0.3
+            suspicious = ratio > SPREAD_TO_CLOSE_WARNING_THRESHOLD
             for idx in data.index[suspicious.fillna(False)]:
-                add_issue(int(idx), "suspicious_spread", DataQualitySeverity.WARNING, "Spread exceeds 30% of close")
+                threshold_pct = int(SPREAD_TO_CLOSE_WARNING_THRESHOLD * 100)
+                add_issue(
+                    int(idx),
+                    "suspicious_spread",
+                    DataQualitySeverity.WARNING,
+                    f"Spread exceeds {threshold_pct}% of close",
+                )
 
         if "volume" in data.columns:
             zero_volume = data["volume"] == 0
