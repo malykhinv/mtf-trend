@@ -13,6 +13,12 @@ import pandas as pd
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS
+from vectorbt_runner.data_preparer import DataPreparer
+
+try:
+    import vectorbt as vbt
+except ImportError:  # pragma: no cover - environment dependent
+    vbt = None
 
 
 @dataclass(slots=True)
@@ -64,6 +70,8 @@ class BacktestRunner:
         ]
 
     def run(self, strategy: Any, symbol_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+        self._ensure_vectorbt_available()
+
         rows: list[dict[str, Any]] = []
         grid = self.build_parameter_grid()
 
@@ -103,6 +111,14 @@ class BacktestRunner:
             best_pf=best_pf,
         )
 
+    def _ensure_vectorbt_available(self) -> None:
+        if vbt is None:
+            msg = (
+                "vectorbt is not installed in the current environment. "
+                "Install it (for example: pip install vectorbt) and retry run-backtest."
+            )
+            raise RuntimeError(msg)
+
     def _build_metrics_row(self, params: dict[str, Any], trades: list[TradeResult]) -> dict[str, Any]:
         if not trades:
             return {
@@ -118,24 +134,50 @@ class BacktestRunner:
                 "tp2_count": 0,
             }
 
-        pnl_values = [trade.pnl for trade in trades]
-        profits = sum(value for value in pnl_values if value > 0)
-        losses = abs(sum(value for value in pnl_values if value < 0))
-        pf = profits / losses if losses > 0 else (99.0 if profits > 0 else 0.0)
+        prepared = DataPreparer.prepare_vectorbt_inputs(trades)
+        portfolio = vbt.Portfolio.from_signals(
+            close=prepared.close,
+            entries=prepared.entries,
+            exits=prepared.exits,
+            direction="longonly",
+            init_cash=100.0,
+            size=1.0,
+            size_type="amount",
+            fees=0.0,
+            slippage=0.0,
+            freq="1min",
+        )
 
-        wins = sum(1 for value in pnl_values if value > 0)
+        pnl_values = [trade.pnl for trade in trades]
         pnl_percent = sum(trade.pnl_percent.value for trade in trades)
-        equity = pd.Series(pnl_values).cumsum()
-        drawdown = float((equity.cummax() - equity).max()) if not equity.empty else 0.0
+
+        pf = portfolio.trades.profit_factor()
+        win_rate = portfolio.trades.win_rate()
+        trades_count = int(portfolio.trades.count())
+
+        max_dd = portfolio.drawdowns.max_drawdown()
+        if pd.isna(max_dd):
+            max_dd = 0.0
+        else:
+            max_dd = abs(float(max_dd))
+
+        if pd.isna(pf):
+            profits = sum(value for value in pnl_values if value > 0)
+            losses = abs(sum(value for value in pnl_values if value < 0))
+            pf = profits / losses if losses > 0 else (99.0 if profits > 0 else 0.0)
+
+        if pd.isna(win_rate):
+            wins = sum(1 for value in pnl_values if value > 0)
+            win_rate = wins / len(trades)
 
         result_types = [trade.result_type for trade in trades]
         return {
             **params,
             "profit_factor": round(float(pf), 4),
             "pnl_percent": round(float(pnl_percent), 4),
-            "win_rate": round(wins / len(trades), 4),
-            "trades_count": len(trades),
-            "max_dd": round(drawdown, 6),
+            "win_rate": round(float(win_rate), 4),
+            "trades_count": trades_count,
+            "max_dd": round(float(max_dd), 6),
             "sl_count": result_types.count(TradeResultType.SL),
             "be_count": result_types.count(TradeResultType.BE),
             "tp1_be_count": result_types.count(TradeResultType.TP1_BE),
