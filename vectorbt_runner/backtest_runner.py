@@ -20,25 +20,12 @@ from constants import (
     BACKTEST_ROUND_METRICS,
     BACKTEST_SORT_ASCENDING,
     BACKTEST_ZERO_COUNT,
-    SIMULATION_FEES,
-    SIMULATION_FREQ,
-    SIMULATION_INIT_CASH,
-    SIMULATION_SIZE,
-    SIMULATION_SIZE_TYPE,
-    SIMULATION_SLIPPAGE,
-    SIMULATION_VECTORBT_DIRECTION,
 )
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from vectorbt_runner.backtest_summary import BacktestSummary
-from vectorbt_runner.data_preparer import DataPreparer
-
-try:
-    import vectorbt as vbt
-except ImportError:  # pragma: no cover - environment dependent
-    vbt = None
 
 
 logger = logging.getLogger(__name__)
@@ -84,8 +71,6 @@ class BacktestRunner:
         ]
 
     def run(self, strategy: BaseStrategy[BreakoutParams], symbol_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
-        self._ensure_vectorbt_available()
-
         rows: list[dict[str, int | float | str]] = []
         grid = self.build_parameter_grid()
 
@@ -140,14 +125,6 @@ class BacktestRunner:
 
     # region Private
 
-    def _ensure_vectorbt_available(self) -> None:
-        if vbt is None:
-            msg = (
-                "vectorbt is not installed in the current environment. "
-                "Install it (for example: pip install vectorbt) and retry run-backtest."
-            )
-            raise RuntimeError(msg)
-
     def _build_metrics_row(self, params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str]:
         base_row: dict[str, int | float | str] = {
             "lookback": params.lookback,
@@ -173,41 +150,40 @@ class BacktestRunner:
                 "tp2_count": BACKTEST_ZERO_COUNT,
             }
 
-        prepared = DataPreparer.prepare_vectorbt_inputs(trades)
-        portfolio = vbt.Portfolio.from_signals(
-            close=prepared.close,
-            entries=prepared.entries,
-            exits=prepared.exits,
-            direction=SIMULATION_VECTORBT_DIRECTION,
-            init_cash=SIMULATION_INIT_CASH,
-            size=SIMULATION_SIZE,
-            size_type=SIMULATION_SIZE_TYPE,
-            fees=SIMULATION_FEES,
-            slippage=SIMULATION_SLIPPAGE,
-            freq=SIMULATION_FREQ,
-        )
-
         pnl_values = [trade.pnl for trade in trades]
         pnl_percent = sum(trade.pnl_percent.value for trade in trades)
+        profits = sum(value for value in pnl_values if value > 0)
+        losses = abs(sum(value for value in pnl_values if value < 0))
 
-        pf = portfolio.trades.profit_factor()
-        win_rate = portfolio.trades.win_rate()
-        trades_count = int(portfolio.trades.count())
-
-        max_dd = portfolio.drawdowns.max_drawdown()
-        if pd.isna(max_dd):
-            max_dd = BACKTEST_EMPTY_MAX_DD
+        if losses > 0:
+            pf = profits / losses
+        elif profits > 0:
+            pf = BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES
         else:
-            max_dd = abs(float(max_dd))
+            pf = BACKTEST_EMPTY_PF
 
-        if pd.isna(pf):
-            profits = sum(value for value in pnl_values if value > 0)
-            losses = abs(sum(value for value in pnl_values if value < 0))
-            pf = profits / losses if losses > 0 else (BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES if profits > 0 else BACKTEST_EMPTY_PF)
+        wins = sum(1 for value in pnl_values if value > 0)
+        win_rate = wins / len(trades)
 
-        if pd.isna(win_rate):
-            wins = sum(1 for value in pnl_values if value > 0)
-            win_rate = wins / len(trades)
+        trades_count = len(trades)
+        if trades_count != len(trades):
+            msg = (
+                "trades_count mismatch detected: derived trades_count "
+                f"({trades_count}) differs from trades list length ({len(trades)})."
+            )
+            raise RuntimeError(msg)
+
+        sorted_trades = sorted(trades, key=lambda trade: (trade.exit_time, trade.entry_time))
+        cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
+        peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
+        max_dd = BACKTEST_EMPTY_MAX_DD
+        for trade in sorted_trades:
+            cumulative_pnl += trade.pnl
+            if cumulative_pnl > peak_pnl:
+                peak_pnl = cumulative_pnl
+            drawdown = peak_pnl - cumulative_pnl
+            if drawdown > max_dd:
+                max_dd = drawdown
 
         result_types = [trade.result_type for trade in trades]
         return {
