@@ -15,6 +15,17 @@ class OrderProcessor:
     commission_rate: float
     slippage: float
 
+    # region Private
+
+    def _apply_slippage(self, price: float, *, is_buy: bool) -> float:
+        multiplier = 1 + self.slippage if is_buy else 1 - self.slippage
+        return price * multiplier
+
+    def _commission(self, notional: float) -> float:
+        return notional * self.commission_rate
+
+    # endregion Private
+
     def execute_entry(self, candle_open: float, side: PositionSide, size: float) -> Fill:
         """Execute market entry at candle open with adverse slippage and commission."""
         is_buy = side == PositionSide.LONG
@@ -33,10 +44,3 @@ class OrderProcessor:
         if side == PositionSide.LONG:
             return entry_price * (1 + reserve)
         return entry_price * (1 - reserve)
-
-    def _apply_slippage(self, price: float, *, is_buy: bool) -> float:
-        multiplier = 1 + self.slippage if is_buy else 1 - self.slippage
-        return price * multiplier
-
-    def _commission(self, notional: float) -> float:
-        return notional * self.commission_rate

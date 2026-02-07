@@ -33,61 +33,7 @@ class StatefulPositionSimulator(PositionSimulator):
     _closed_size: float = 0.0
     _last_exit_price: float = 0.0
 
-    def register_signal(self, signal: TradeSignal, size: float) -> None:
-        """Store signal; position will be opened by market order on next processed candle open."""
-        self._pending_signal = signal
-        self._pending_size = size
-
-    def process_candle(self, candle: Candle) -> TradeResult | None:
-        """Open pending signal and process active position against current candle."""
-        if self.position is None and self._pending_signal is not None:
-            self._open_from_pending_signal(candle)
-
-        if self.position is None:
-            return None
-
-        if self.side == PositionSide.LONG:
-            return self._process_long(candle)
-        return self._process_short(candle)
-
-    def open_position(self, position: Position) -> None:
-        """Set active position. Intended for already-executed fills."""
-        self.position = position
-        self._realized_pnl = 0.0
-        self._closed_size = 0.0
-        self._last_exit_price = position.entry_price.value
-
-    def close_position(self, price: float) -> TradeResult:
-        """Close remaining position at given price and return classified trade result."""
-        if self.position is None:
-            msg = "No active position to close."
-            raise RuntimeError(msg)
-
-        remaining_size = self.position.size.value - self._closed_size
-        if remaining_size > 0:
-            self._close_leg(size=remaining_size, target_price=price)
-
-        result_type = self.trade_classifier.classify_result_type(
-            tp1_done=self.position.tp1_done,
-            exit_at_breakeven=self.position.sl_moved_to_be and price == self.position.stop_loss.value,
-            exit_at_tp2=price == self.position.take_profit_2.value,
-        )
-        trade_result = self.trade_classifier.build_result(
-            position=self.position,
-            exit_price=self._last_exit_price,
-            exit_time=datetime_to_timezone(self.position.entry_time, self.simulation_timezone),
-            result_type=result_type,
-            pnl=self._realized_pnl,
-        )
-        self.position = None
-        return trade_result
-
-    def update_stop(self, new_stop: float) -> None:
-        """Update stop-loss level for active position."""
-        if self.position is None:
-            msg = "No active position to update stop for."
-            raise RuntimeError(msg)
-        self.position.stop_loss = Price(new_stop)
+    # region Private
 
     def _open_from_pending_signal(self, candle: Candle) -> None:
         signal = self._pending_signal
@@ -189,3 +135,61 @@ class StatefulPositionSimulator(PositionSimulator):
         )
         self.position = None
         return trade_result
+
+    # endregion Private
+
+    def register_signal(self, signal: TradeSignal, size: float) -> None:
+        """Store signal; position will be opened by market order on next processed candle open."""
+        self._pending_signal = signal
+        self._pending_size = size
+
+    def process_candle(self, candle: Candle) -> TradeResult | None:
+        """Open pending signal and process active position against current candle."""
+        if self.position is None and self._pending_signal is not None:
+            self._open_from_pending_signal(candle)
+
+        if self.position is None:
+            return None
+
+        if self.side == PositionSide.LONG:
+            return self._process_long(candle)
+        return self._process_short(candle)
+
+    def open_position(self, position: Position) -> None:
+        """Set active position. Intended for already-executed fills."""
+        self.position = position
+        self._realized_pnl = 0.0
+        self._closed_size = 0.0
+        self._last_exit_price = position.entry_price.value
+
+    def close_position(self, price: float) -> TradeResult:
+        """Close remaining position at given price and return classified trade result."""
+        if self.position is None:
+            msg = "No active position to close."
+            raise RuntimeError(msg)
+
+        remaining_size = self.position.size.value - self._closed_size
+        if remaining_size > 0:
+            self._close_leg(size=remaining_size, target_price=price)
+
+        result_type = self.trade_classifier.classify_result_type(
+            tp1_done=self.position.tp1_done,
+            exit_at_breakeven=self.position.sl_moved_to_be and price == self.position.stop_loss.value,
+            exit_at_tp2=price == self.position.take_profit_2.value,
+        )
+        trade_result = self.trade_classifier.build_result(
+            position=self.position,
+            exit_price=self._last_exit_price,
+            exit_time=datetime_to_timezone(self.position.entry_time, self.simulation_timezone),
+            result_type=result_type,
+            pnl=self._realized_pnl,
+        )
+        self.position = None
+        return trade_result
+
+    def update_stop(self, new_stop: float) -> None:
+        """Update stop-loss level for active position."""
+        if self.position is None:
+            msg = "No active position to update stop for."
+            raise RuntimeError(msg)
+        self.position.stop_loss = Price(new_stop)

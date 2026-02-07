@@ -21,6 +21,8 @@ class CoinGeckoClient(MarketDataClient):
         self._market_cap_cache: dict[str, tuple[float, datetime]] = {}
         self._symbol_to_id: dict[str, str] = {}
 
+    # region Private
+
     def _headers(self) -> dict[str, str]:
         headers = {"accept": "application/json"}
         if self._api_key:
@@ -48,6 +50,8 @@ class CoinGeckoClient(MarketDataClient):
             raise ValueError(f"Unable to resolve CoinGecko ID for symbol: {symbol}")
 
         return self._symbol_to_id[normalized]
+
+    # endregion Private
 
     def get_market_cap(self, symbol: str) -> float:
         normalized = symbol.upper()
