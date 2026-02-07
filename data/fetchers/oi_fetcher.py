@@ -66,6 +66,14 @@ class OiFetcher:
         data = self._aligner.align_to_utc(data)
         data = self._deduplicator.deduplicate(data)
 
+        if "timestamp" not in data.columns:
+            if data.empty:
+                self._logger.info(f"OI пустой OI без timestamp: {symbol} {timeframe.value}")
+                return 0
+            raise ValueError(
+                f"OI fetch_symbol: отсутствует колонка 'timestamp' в непустом OI для {symbol} {timeframe.value}"
+            )
+
         next_start_ms = int(next_start.timestamp() * 1000)
         end_time_ms = int(end_time.timestamp() * 1000)
         interval_mask = (data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_time_ms)
@@ -78,6 +86,13 @@ class OiFetcher:
             ].copy()
             if not ohlcv_interval.empty:
                 aligned = self._oi_aligner.align(ohlcv_interval, data)
+                expected_columns = {"timestamp", "open_interest"}
+                missing_columns = expected_columns.difference(aligned.columns)
+                if missing_columns:
+                    raise ValueError(
+                        "OI align: после OiAligner.align отсутствуют ожидаемые колонки "
+                        f"{sorted(missing_columns)} для {symbol} {timeframe.value}"
+                    )
                 data = aligned[["timestamp", "open_interest"]]
 
         if not data.empty and "timestamp" in data.columns:
