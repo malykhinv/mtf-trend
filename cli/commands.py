@@ -32,8 +32,7 @@ from strategy.breakout.breakout_strategy import BreakoutStrategy
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
 from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
-from vectorbt_runner.backtest_runner import BacktestRunner
-from vectorbt_runner.data_preparer import DataPreparer
+from vectorbt_runner import BacktestRunner, DataPreparer
 
 
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:

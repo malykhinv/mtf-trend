@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -11,15 +10,7 @@ from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
 
 
-@dataclass(frozen=True, slots=True)
-class VectorbtInputs:
-    """Prepared inputs that can be directly consumed by vectorbt."""
-
-    close: pd.Series
-    entries: pd.Series
-    exits: pd.Series
-    equity_curve: pd.Series
-    trades: pd.DataFrame
+from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
 class DataPreparer:

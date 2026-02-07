@@ -1,0 +1,16 @@
+"""Prepared inputs that can be directly consumed by vectorbt."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import pandas as pd
+
+
+@dataclass(frozen=True, slots=True)
+class VectorbtInputs:
+    close: pd.Series
+    entries: pd.Series
+    exits: pd.Series
+    equity_curve: pd.Series
+    trades: pd.DataFrame
