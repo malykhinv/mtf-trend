@@ -51,6 +51,28 @@ class ParquetStorage:
             return None
         return pd.to_datetime(data["timestamp"], unit="ms", utc=True).max()
 
+    def get_last_timestamp_for_column(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        column_name: str,
+    ) -> pd.Timestamp | None:
+        data = self.load(symbol, timeframe)
+        if data.empty or "timestamp" not in data.columns:
+            return None
+
+        if column_name == "timestamp":
+            return pd.to_datetime(data["timestamp"], unit="ms", utc=True).max()
+
+        if column_name not in data.columns:
+            return None
+
+        valid_rows = data[column_name].notna()
+        if not valid_rows.any():
+            return None
+
+        return pd.to_datetime(data.loc[valid_rows, "timestamp"], unit="ms", utc=True).max()
+
     def save_incremental(self, symbol: str, timeframe: Timeframe, new_data: pd.DataFrame) -> int:
         if new_data.empty:
             return 0
@@ -82,4 +104,3 @@ class ParquetStorage:
         merged.to_parquet(path, index=False)
 
         return max(len(merged) - previous_count, 0)
-
