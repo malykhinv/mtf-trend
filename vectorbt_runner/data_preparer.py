@@ -7,17 +7,21 @@ from pathlib import Path
 import pandas as pd
 
 from constants import (
+    DATA_PREPARER_EMPTY_BOOL_DTYPE,
+    DATA_PREPARER_EMPTY_FLOAT_DTYPE,
+    DATA_PREPARER_NUMERIC_COLUMNS,
+    DATA_PREPARER_TRADE_COLUMNS,
     SIMULATION_DATETIME_UNIT_MS,
     SIMULATION_PARQUET_FILE_NAME,
     SIMULATION_PNL_PERCENT_DIVISOR,
     SIMULATION_PRICE_INIT,
     SIMULATION_TIMEZONE_UTC,
+    SIMULATION_UNIT_INCREMENT,
+    SIMULATION_ZERO_VALUE,
     STRATEGY_REQUIRED_COLUMNS,
 )
 from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
-
-
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
@@ -55,7 +59,7 @@ class DataPreparer:
         normalized["datetime"] = pd.to_datetime(normalized["timestamp"], unit=SIMULATION_DATETIME_UNIT_MS, utc=True, errors="coerce")
         normalized = normalized.dropna(subset=["datetime"])
 
-        numeric_cols = [col for col in ("open", "high", "low", "close", "volume", "open_interest") if col in normalized.columns]
+        numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in normalized.columns]
         for col in numeric_cols:
             normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
 
@@ -68,9 +72,9 @@ class DataPreparer:
         """Build synthetic price/signals/equity series from closed trades."""
         if not trades:
             index = pd.DatetimeIndex([], tz=SIMULATION_TIMEZONE_UTC)
-            empty_float = pd.Series([], index=index, dtype="float64")
-            empty_bool = pd.Series([], index=index, dtype="bool")
-            trades_frame = pd.DataFrame(columns=["entry_time", "exit_time", "pnl", "pnl_percent", "result_type"])
+            empty_float = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
+            empty_bool = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)
+            trades_frame = pd.DataFrame(columns=DATA_PREPARER_TRADE_COLUMNS)
             return VectorbtInputs(
                 close=empty_float,
                 entries=empty_bool,
@@ -96,13 +100,13 @@ class DataPreparer:
             sorted(set(trades_frame["entry_time"].tolist() + trades_frame["exit_time"].tolist())),
             tz=SIMULATION_TIMEZONE_UTC,
         )
-        close = pd.Series(initial_price, index=timeline, dtype="float64")
-        entries = pd.Series(False, index=timeline, dtype="bool")
-        exits = pd.Series(False, index=timeline, dtype="bool")
-        equity_curve = pd.Series(0.0, index=timeline, dtype="float64")
+        close = pd.Series(initial_price, index=timeline, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
+        entries = pd.Series(False, index=timeline, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)
+        exits = pd.Series(False, index=timeline, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)
+        equity_curve = pd.Series(SIMULATION_ZERO_VALUE, index=timeline, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
 
         running_price = float(initial_price)
-        cumulative_pnl = 0.0
+        cumulative_pnl = SIMULATION_ZERO_VALUE
         for trade in trade_rows:
             entry_time = trade["entry_time"]
             exit_time = trade["exit_time"]
@@ -113,14 +117,14 @@ class DataPreparer:
             exits.loc[exit_time] = True
             close.loc[entry_time] = running_price
 
-            running_price *= 1.0 + (pnl_percent / SIMULATION_PNL_PERCENT_DIVISOR)
+            running_price *= SIMULATION_UNIT_INCREMENT + (pnl_percent / SIMULATION_PNL_PERCENT_DIVISOR)
             close.loc[exit_time] = running_price
 
             cumulative_pnl += pnl
             equity_curve.loc[exit_time] = cumulative_pnl
 
         close = close.ffill()
-        equity_curve = equity_curve.replace(0.0, pd.NA).ffill().fillna(0.0)
+        equity_curve = equity_curve.replace(SIMULATION_ZERO_VALUE, pd.NA).ffill().fillna(SIMULATION_ZERO_VALUE)
 
         return VectorbtInputs(
             close=close,

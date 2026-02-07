@@ -5,13 +5,20 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
 from pathlib import Path
-from constants import FETCH_ALL_MAX_WORKERS
+
+from constants import (
+    DEFAULT_FETCHER_MAX_WORKERS,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    DEFAULT_LOG_LEVEL,
+    DEFAULT_LOGS_DIR,
+    FETCH_ALL_MAX_WORKERS,
+)
+from data.fetchers.ohlcv_fetcher import OhlcvFetcher
+from data.fetchers.oi_fetcher import OiFetcher
 from domain.abstract.market_data_client import MarketDataClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.fetch_all_result import FetchAllResult
 from domain.models.reporting.market_caps_result import MarketCapsResult
-from data.fetchers.ohlcv_fetcher import OhlcvFetcher
-from data.fetchers.oi_fetcher import OiFetcher
 from utils.logger import get_logger
 
 
@@ -23,10 +30,10 @@ class MarketDataFetcher:
         ohlcv_fetcher: OhlcvFetcher,
         oi_fetcher: OiFetcher,
         market_data_client: MarketDataClient,
-        max_workers: int = 5,
-        request_timeout_seconds: int = 60,
-        log_level: int | str = "INFO",
-        logs_dir: str | Path = "./logs",
+        max_workers: int = DEFAULT_FETCHER_MAX_WORKERS,
+        request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        log_level: int | str = DEFAULT_LOG_LEVEL,
+        logs_dir: str | Path = DEFAULT_LOGS_DIR,
     ) -> None:
         self._ohlcv_fetcher = ohlcv_fetcher
         self._oi_fetcher = oi_fetcher

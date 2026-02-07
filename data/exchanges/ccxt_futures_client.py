@@ -7,7 +7,16 @@ from typing import Any
 
 import pandas as pd
 
-from constants import DEFAULT_FETCH_BATCH_SIZE, EXCHANGE_TIMEOUT_SECONDS
+from constants import (
+    CCXT_MARKET_TYPE_SWAP,
+    CCXT_OPTION_DEFAULT_TYPE_KEY,
+    DEFAULT_FETCH_BATCH_SIZE,
+    EXCHANGE_TIMEOUT_SECONDS,
+    FUTURES_SETTLEMENT_QUOTE_ASSET,
+    MILLISECONDS_IN_SECOND,
+    OHLCV_FRAME_COLUMNS,
+    OPEN_INTEREST_FRAME_COLUMNS,
+)
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.exchange import Exchange
 from domain.enums.timeframe import Timeframe
@@ -35,7 +44,7 @@ def _to_utc_ms(value: datetime) -> int:
         value = value.replace(tzinfo=timezone.utc)
     else:
         value = value.astimezone(timezone.utc)
-    return int(value.timestamp() * 1000)
+    return int(value.timestamp() * MILLISECONDS_IN_SECOND)
 
 
 class CcxtFuturesClient(ExchangeClient):
@@ -64,15 +73,15 @@ class CcxtFuturesClient(ExchangeClient):
             "secret": secret,
             "password": password,
             "enableRateLimit": enable_rate_limit,
-            "timeout": EXCHANGE_TIMEOUT_SECONDS * 1000,
+            "timeout": EXCHANGE_TIMEOUT_SECONDS * MILLISECONDS_IN_SECOND,
         }
         if exchange == Exchange.BINANCE:
             return ccxt.binanceusdm(params)
         if exchange == Exchange.BYBIT:
-            params["options"] = {"defaultType": "swap"}
+            params["options"] = {CCXT_OPTION_DEFAULT_TYPE_KEY: CCXT_MARKET_TYPE_SWAP}
             return ccxt.bybit(params)
         if exchange == Exchange.OKX:
-            params["options"] = {"defaultType": "swap"}
+            params["options"] = {CCXT_OPTION_DEFAULT_TYPE_KEY: CCXT_MARKET_TYPE_SWAP}
             return ccxt.okx(params)
         raise ValueError(f"Unsupported exchange: {exchange}")
 
@@ -90,9 +99,9 @@ class CcxtFuturesClient(ExchangeClient):
             settle = str(market.get("settle") or "").upper()
             linear = bool(market.get("linear", False))
 
-            if quote != "USDT" and settle != "USDT":
+            if quote != FUTURES_SETTLEMENT_QUOTE_ASSET and settle != FUTURES_SETTLEMENT_QUOTE_ASSET:
                 continue
-            if not linear and settle != "USDT":
+            if not linear and settle != FUTURES_SETTLEMENT_QUOTE_ASSET:
                 continue
 
             symbol = str(market.get("symbol") or "")
@@ -118,7 +127,7 @@ class CcxtFuturesClient(ExchangeClient):
                 break
             since = last_ts + 1
 
-        frame = pd.DataFrame(all_rows, columns=["timestamp", "open", "high", "low", "close", "volume"])
+        frame = pd.DataFrame(all_rows, columns=OHLCV_FRAME_COLUMNS)
         if frame.empty:
             return frame
 
@@ -157,7 +166,7 @@ class CcxtFuturesClient(ExchangeClient):
             since = last_ts + 1
 
         if not rows:
-            return pd.DataFrame(columns=["timestamp", "open_interest", "datetime"])
+            return pd.DataFrame(columns=OPEN_INTEREST_FRAME_COLUMNS)
 
         frame = pd.DataFrame(rows)
         if "openInterestAmount" in frame.columns:
@@ -169,5 +178,5 @@ class CcxtFuturesClient(ExchangeClient):
 
         frame = frame.loc[(frame["timestamp"] >= start_ms) & (frame["timestamp"] <= end_ms)]
         frame["datetime"] = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
-        frame = frame[["timestamp", "open_interest", "datetime"]]
+        frame = frame[list(OPEN_INTEREST_FRAME_COLUMNS)]
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
