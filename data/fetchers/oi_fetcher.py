@@ -66,10 +66,22 @@ class OiFetcher:
         data = self._aligner.align_to_utc(data)
         data = self._deduplicator.deduplicate(data)
 
+        next_start_ms = int(next_start.timestamp() * 1000)
+        end_time_ms = int(end_time.timestamp() * 1000)
+        interval_mask = (data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_time_ms)
+        data = data.loc[interval_mask].copy()
+
         ohlcv = self._storage.load(symbol, timeframe)
         if not ohlcv.empty and "timestamp" in ohlcv.columns:
-            aligned = self._oi_aligner.align(ohlcv[["timestamp"]], data)
-            data = aligned[["timestamp", "open_interest"]]
+            ohlcv_interval = ohlcv.loc[
+                (ohlcv["timestamp"] >= next_start_ms) & (ohlcv["timestamp"] <= end_time_ms), ["timestamp"]
+            ].copy()
+            if not ohlcv_interval.empty:
+                aligned = self._oi_aligner.align(ohlcv_interval, data)
+                data = aligned[["timestamp", "open_interest"]]
+
+        if not data.empty and "timestamp" in data.columns:
+            data = data.loc[(data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_time_ms)].copy()
 
         issues = self._validator.validate(symbol, timeframe, data)
         if issues:
