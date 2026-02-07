@@ -8,6 +8,7 @@ import json
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
+from dataclasses import asdict
 from typing import Callable
 
 import pandas as pd
@@ -23,6 +24,10 @@ from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
+from domain.models.reporting.backtest_report import BacktestReport
+from domain.models.reporting.quality_report import QualityReport
+from domain.models.reporting.quality_summary import QualitySummary
+from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
@@ -210,15 +215,15 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
             "TP2": int(source["tp2_count"].sum()),
         }
 
-        report = {
-            "summary": summary,
-            "optimal_ranges": optimal_ranges,
-            "trade_results_distribution": distribution,
-        }
+        report = BacktestReport(
+            summary=summary,
+            optimal_ranges=optimal_ranges,
+            trade_results_distribution=distribution,
+        )
 
         output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
         logger.info(f"make-report: сохранено {output_path}")
         return 0
 
@@ -274,15 +279,15 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
 
 
 
-def _build_quality_recommendations(summary: dict[str, object], symbols: dict[str, dict[str, object]]) -> list[str]:
+def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, QualitySymbolStats]) -> list[str]:
     recommendations: list[str] = []
-    if int(summary["gaps_total"]) > 0:
+    if summary.gaps_total > 0:
         recommendations.append("Дозагрузка диапазона: запустите update-cache для символов с пропусками")
 
-    if any(int(data["gaps"]) > 0 for data in symbols.values()):
+    if any(data.gaps > 0 for data in symbols.values()):
         recommendations.append("Проверка таймфрейма: убедитесь, что timeframe совпадает с кэшем")
 
-    if int(summary["issues_total"]) > 0:
+    if summary.issues_total > 0:
         recommendations.append("Дедупликация и очистка: переcохраните ряды с удалением дублей и аномалий")
 
     oi_problem_types = {
@@ -291,30 +296,30 @@ def _build_quality_recommendations(summary: dict[str, object], symbols: dict[str
         "oi_alignment_leading_gaps",
         "oi_alignment_stale_series",
     }
-    if any(problem in oi_problem_types for problem in summary["by_issue_type"]):
+    if any(problem in oi_problem_types for problem in summary.by_issue_type):
         recommendations.append("Ресинхронизация OI: перезапустите загрузку OI с выравниванием относительно OHLCV")
 
-    if int(summary["issues_total"]) > 0 or int(summary["gaps_total"]) > 0:
+    if summary.issues_total > 0 or summary.gaps_total > 0:
         recommendations.append("Повторная валидация: после исправлений выполните check-quality повторно")
 
     return recommendations
 
 
 
-def _save_quality_report(report: dict[str, object], output_path: Path) -> None:
+def _save_quality_report(report: QualityReport, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.suffix.lower() == ".csv":
-        symbols = report["symbols"]
+        symbols = report.symbols
         with output_path.open("w", newline="", encoding="utf-8") as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow(["symbol", "issues", "gaps", "warning", "error", "critical", "info"])
             for symbol, data in symbols.items():
-                sev = data["by_severity"]
+                sev = data.by_severity
                 writer.writerow(
                     [
                         symbol,
-                        data["issues"],
-                        data["gaps"],
+                        data.issues,
+                        data.gaps,
                         sev.get("WARNING", 0),
                         sev.get("ERROR", 0),
                         sev.get("CRITICAL", 0),
@@ -322,7 +327,7 @@ def _save_quality_report(report: dict[str, object], output_path: Path) -> None:
                     ]
                 )
     else:
-        output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 
@@ -340,7 +345,7 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
 
         issues_by_type: Counter[str] = Counter()
         issues_by_severity: Counter[str] = Counter()
-        symbols_report: dict[str, dict[str, object]] = {}
+        symbols_report: dict[str, QualitySymbolStats] = {}
 
         total_issues = 0
         total_gaps = 0
@@ -368,35 +373,35 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
             total_issues += symbol_total_issues
             total_gaps += len(gaps)
 
-            symbols_report[symbol] = {
-                "issues": symbol_total_issues,
-                "gaps": len(gaps),
-                "by_issue_type": dict(sorted(symbol_issue_counter.items())),
-                "by_severity": dict(sorted(symbol_severity_counter.items())),
-            }
+            symbols_report[symbol] = QualitySymbolStats(
+                issues=symbol_total_issues,
+                gaps=len(gaps),
+                by_issue_type=dict(sorted(symbol_issue_counter.items())),
+                by_severity=dict(sorted(symbol_severity_counter.items())),
+            )
 
             logger.info(
                 f"check-quality: {symbol} issues={symbol_total_issues} gaps={len(gaps)} "
                 f"oi_alignment_issues={len(oi_alignment_issues)}"
             )
 
-        summary = {
-            "symbols_checked": len(symbols_report),
-            "issues_total": total_issues,
-            "gaps_total": total_gaps,
-            "by_issue_type": dict(sorted(issues_by_type.items())),
-            "by_severity": dict(sorted(issues_by_severity.items())),
-        }
-        report = {
-            "summary": summary,
-            "symbols": symbols_report,
-            "recommendations": _build_quality_recommendations(summary, symbols_report),
-        }
+        summary = QualitySummary(
+            symbols_checked=len(symbols_report),
+            issues_total=total_issues,
+            gaps_total=total_gaps,
+            by_issue_type=dict(sorted(issues_by_type.items())),
+            by_severity=dict(sorted(issues_by_severity.items())),
+        )
+        report = QualityReport(
+            summary=summary,
+            symbols=symbols_report,
+            recommendations=_build_quality_recommendations(summary, symbols_report),
+        )
 
         output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
         _save_quality_report(report, output_path)
 
-        logger.info(f"check-quality: итог issues={total_issues} gaps={total_gaps}")
+        logger.info(f"check-quality: итог issues={report.summary.issues_total} gaps={report.summary.gaps_total}")
         logger.info(f"check-quality: отчет сохранен {output_path}")
         return 0
 

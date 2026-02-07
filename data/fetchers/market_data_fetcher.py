@@ -5,11 +5,11 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Any
-
 from constants import FETCH_ALL_MAX_WORKERS
 from domain.abstract.market_data_client import MarketDataClient
 from domain.enums.timeframe import Timeframe
+from domain.models.reporting.fetch_all_result import FetchAllResult
+from domain.models.reporting.market_caps_result import MarketCapsResult
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
 from utils.logger import get_logger
@@ -35,9 +35,9 @@ class MarketDataFetcher:
         self._request_timeout_seconds = request_timeout_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
 
-    def fetch_market_caps(self, symbols: list[str]) -> dict[str, Any]:
+    def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
         self._logger.info(f"MarketCap старт: {len(symbols)} инструментов")
-        results: dict[str, Any] = {}
+        results: dict[str, float | str] = {}
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {executor.submit(self._market_data_client.get_market_cap, symbol): symbol for symbol in symbols}
@@ -56,7 +56,7 @@ class MarketDataFetcher:
                     results[symbol] = msg
 
         self._logger.info("MarketCap завершен")
-        return results
+        return MarketCapsResult(market_caps=results)
 
     def fetch_all(
         self,
@@ -64,7 +64,7 @@ class MarketDataFetcher:
         timeframe: Timeframe,
         start_time: datetime,
         end_time: datetime,
-    ) -> dict[str, Any]:
+    ) -> FetchAllResult:
         self._logger.info(f"Загрузка старт: {len(symbols)} символов, TF={timeframe.value}")
 
         with ThreadPoolExecutor(max_workers=FETCH_ALL_MAX_WORKERS) as executor:
@@ -89,8 +89,8 @@ class MarketDataFetcher:
         market_caps = self.fetch_market_caps(symbols)
         self._logger.info("Загрузка завершена")
 
-        return {
-            "ohlcv": ohlcv_result,
-            "open_interest": oi_result,
-            "market_caps": market_caps,
-        }
+        return FetchAllResult(
+            ohlcv=ohlcv_result,
+            open_interest=oi_result,
+            market_caps=market_caps,
+        )
