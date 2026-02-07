@@ -1,0 +1,39 @@
+"""Project-wide constants to avoid magic values."""
+
+from __future__ import annotations
+
+from domain.enums.timeframe import Timeframe
+
+SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = tuple(Timeframe)
+DEFAULT_TIMEFRAME = Timeframe.H1
+
+# API limits
+DEFAULT_MAX_CONCURRENT_REQUESTS = 10
+DEFAULT_FETCH_BATCH_SIZE = 1000
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+
+# Timeouts (seconds)
+HTTP_TIMEOUT_SECONDS = 30
+EXCHANGE_TIMEOUT_SECONDS = 20
+COINGECKO_TIMEOUT_SECONDS = 20
+
+# Trading defaults
+DEFAULT_COMMISSION_RATE = 0.0004
+DEFAULT_SLIPPAGE = 0.0005
+DEFAULT_SPREAD = 0.0
+
+# Runtime defaults
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_TIMEZONE = "Europe/Belgrade"
+DEFAULT_CACHE_DIR = "./cache"
+DEFAULT_LOGS_DIR = "./logs"
+DEFAULT_RESULTS_DIR = "./cache/results"
+DEFAULT_BACKTEST_OUTPUT_FILE = "backtest_results.csv"
+
+# Error codes
+ERROR_CODE_INVALID_CONFIG = "E_CFG_001"
+ERROR_CODE_FETCH_FAILED = "E_FETCH_001"
+ERROR_CODE_SIMULATION_FAILED = "E_SIM_001"
+ERROR_CODE_DATA_QUALITY = "E_DQ_001"
+ERROR_CODE_UNKNOWN = "E_UNKNOWN"
