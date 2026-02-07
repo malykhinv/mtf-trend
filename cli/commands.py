@@ -14,7 +14,22 @@ from typing import Callable
 import pandas as pd
 
 from config import AppConfig
-from constants import DEFAULT_QUALITY_REPORT_OUTPUT_FILE, DEFAULT_REPORT_OUTPUT_FILE, OI_STALE_RATIO_THRESHOLD
+from constants import (
+    DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
+    DEFAULT_REPORT_OUTPUT_FILE,
+    OI_STALE_RATIO_THRESHOLD,
+    QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE,
+    QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
+    QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE,
+    QUALITY_OI_MISSING_COLUMN_ISSUE,
+    QUALITY_SEVERITY_ERROR,
+    QUALITY_SEVERITY_WARNING,
+    QUALITY_SEVERITY_CRITICAL,
+    QUALITY_SEVERITY_INFO,
+    REPORT_PROFITABLE_PF_THRESHOLD,
+    REPORT_PROFIT_FACTOR_FILTER,
+    REPORT_TRADES_COUNT_FILTER,
+)
 from data.clients.coingecko_client import CoinGeckoClient
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.fetchers.market_data_fetcher import MarketDataFetcher
@@ -184,7 +199,7 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
             logger.info("make-report: пустой файл результатов")
             return 1
 
-        filtered = frame[(frame["trades_count"] >= 30) & (frame["profit_factor"] > 1.0)].copy()
+        filtered = frame[(frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER) & (frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)].copy()
         filtered = filtered.sort_values("profit_factor", ascending=False)
 
         if len(frame) != TARGET_PARAMETER_COMBINATIONS:
@@ -196,7 +211,7 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
 
         summary = {
             "total_combinations": int(len(frame)),
-            "profitable_combinations": int((frame["profit_factor"] > 1.0).sum()),
+            "profitable_combinations": int((frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD).sum()),
             "best_pf": round(float(frame["profit_factor"].max()), 4),
         }
 
@@ -233,8 +248,8 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     if "open_interest" not in frame.columns:
         return [
             {
-                "issue_type": "oi_missing_column",
-                "severity": "ERROR",
+                "issue_type": QUALITY_OI_MISSING_COLUMN_ISSUE,
+                "severity": QUALITY_SEVERITY_ERROR,
                 "description": "Отсутствует колонка open_interest",
             }
         ]
@@ -245,8 +260,8 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     if oi.isna().any():
         issues.append(
             {
-                "issue_type": "oi_alignment_missing_values",
-                "severity": "WARNING",
+                "issue_type": QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
+                "severity": QUALITY_SEVERITY_WARNING,
                 "description": "Есть пропуски open_interest после выравнивания",
             }
         )
@@ -258,8 +273,8 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
             if leading_missing > 0:
                 issues.append(
                     {
-                        "issue_type": "oi_alignment_leading_gaps",
-                        "severity": "WARNING",
+                        "issue_type": QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE,
+                        "severity": QUALITY_SEVERITY_WARNING,
                         "description": "Обнаружены пропуски open_interest в начале ряда",
                     }
                 )
@@ -268,8 +283,8 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
         if stale_ratio > OI_STALE_RATIO_THRESHOLD:
             issues.append(
                 {
-                    "issue_type": "oi_alignment_stale_series",
-                    "severity": "ERROR",
+                    "issue_type": QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE,
+                    "severity": QUALITY_SEVERITY_ERROR,
                     "description": "open_interest почти не меняется, вероятна рассинхронизация",
                 }
             )
@@ -290,10 +305,10 @@ def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, Q
         recommendations.append("Дедупликация и очистка: переcохраните ряды с удалением дублей и аномалий")
 
     oi_problem_types = {
-        "oi_missing_column",
-        "oi_alignment_missing_values",
-        "oi_alignment_leading_gaps",
-        "oi_alignment_stale_series",
+        QUALITY_OI_MISSING_COLUMN_ISSUE,
+        QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
+        QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE,
+        QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE,
     }
     if any(problem in oi_problem_types for problem in summary.by_issue_type):
         recommendations.append("Ресинхронизация OI: перезапустите загрузку OI с выравниванием относительно OHLCV")
@@ -319,10 +334,10 @@ def _save_quality_report(report: QualityReport, output_path: Path) -> None:
                         symbol,
                         data.issues,
                         data.gaps,
-                        sev.get("WARNING", 0),
-                        sev.get("ERROR", 0),
-                        sev.get("CRITICAL", 0),
-                        sev.get("INFO", 0),
+                        sev.get(QUALITY_SEVERITY_WARNING, 0),
+                        sev.get(QUALITY_SEVERITY_ERROR, 0),
+                        sev.get(QUALITY_SEVERITY_CRITICAL, 0),
+                        sev.get(QUALITY_SEVERITY_INFO, 0),
                     ]
                 )
     else:
