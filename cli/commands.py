@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable
 
@@ -21,6 +21,7 @@ from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
 from strategy.breakout.breakout_strategy import BreakoutStrategy
+from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
 from vectorbt_runner.backtest_runner import BacktestRunner
 from vectorbt_runner.data_preparer import DataPreparer
@@ -84,6 +85,12 @@ def _resolve_symbols(exchange_client: CcxtFuturesClient, market_client: CoinGeck
     return sorted(top_symbols.intersection(futures_symbols))
 
 
+
+def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
+    local_end = datetime.now(tz=config.fetch.tzinfo)
+    local_start = local_end - timedelta(days=days)
+    return datetime_to_utc(local_start), datetime_to_utc(local_end)
+
 def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
     def _inner() -> int:
         logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
@@ -93,8 +100,7 @@ def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
             logger.info("fetch-data: не найдено символов для загрузки")
             return 0
 
-        end_time = datetime.now(tz=timezone.utc)
-        start_time = end_time - timedelta(days=args.days)
+        start_time, end_time = _fetch_period(config, args.days)
         fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
         logger.info(f"fetch-data: загружено symbols={len(symbols)}")
         return 0
@@ -111,8 +117,7 @@ def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
             logger.info("update-cache: не найдено символов для обновления")
             return 0
 
-        end_time = datetime.now(tz=timezone.utc)
-        start_time = end_time - timedelta(days=args.days)
+        start_time, end_time = _fetch_period(config, args.days)
         fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
         logger.info(f"update-cache: обновлено symbols={len(symbols)}")
         return 0
@@ -141,6 +146,8 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
         strategy = BreakoutStrategy(
             commission_rate=config.simulation.commission_rate,
             slippage=config.simulation.slippage,
+            strategy_timezone=config.strategy.timezone,
+            simulation_timezone=config.simulation.timezone,
         )
         runner = BacktestRunner(config.backtest.results_dir, config.backtest.results_file_name)
         results = runner.run(strategy, symbol_frames)

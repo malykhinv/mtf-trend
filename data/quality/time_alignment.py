@@ -1,4 +1,4 @@
-"""Timestamp normalization helpers for UTC storage."""
+"""Timestamp normalization helpers enforcing UTC parquet contract."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import pandas as pd
 
 
 class TimeAlignment:
-    """Normalize all time columns to UTC and millisecond timestamps."""
+    """Normalize all time columns to UTC timestamp-ms + UTC datetime for parquet storage."""
 
     def align_to_utc(self, data: pd.DataFrame) -> pd.DataFrame:
         if data.empty:

@@ -14,6 +14,7 @@ from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
 from simulation.order_processor import OrderProcessor
 from simulation.trade_classifier import TradeClassifier
+from utils.formatters import datetime_to_timezone
 
 
 @dataclass(slots=True)
@@ -23,6 +24,7 @@ class StatefulPositionSimulator(PositionSimulator):
     side: PositionSide
     order_processor: OrderProcessor
     trade_classifier: TradeClassifier
+    simulation_timezone: str
 
     position: Position | None = None
     _pending_signal: TradeSignal | None = None
@@ -73,7 +75,7 @@ class StatefulPositionSimulator(PositionSimulator):
         trade_result = self.trade_classifier.build_result(
             position=self.position,
             exit_price=self._last_exit_price,
-            exit_time=self.position.entry_time,
+            exit_time=datetime_to_timezone(self.position.entry_time, self.simulation_timezone),
             result_type=result_type,
             pnl=self._realized_pnl,
         )
@@ -95,7 +97,7 @@ class StatefulPositionSimulator(PositionSimulator):
         fill = self.order_processor.execute_entry(candle.open.value, self.side, self._pending_size)
         self.position = Position(
             entry_price=Price(fill.price),
-            entry_time=candle.timestamp,
+            entry_time=datetime_to_timezone(candle.timestamp, self.simulation_timezone),
             size=Volume(self._pending_size),
             stop_loss=signal.stop_loss,
             take_profit_1=signal.take_profit_1,
@@ -181,7 +183,7 @@ class StatefulPositionSimulator(PositionSimulator):
         trade_result = self.trade_classifier.build_result(
             position=self.position,
             exit_price=self._last_exit_price,
-            exit_time=candle.timestamp,
+            exit_time=datetime_to_timezone(candle.timestamp, self.simulation_timezone),
             result_type=result_type,
             pnl=self._realized_pnl,
         )

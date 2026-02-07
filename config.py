@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import tzinfo
 from pathlib import Path
 import os
 
@@ -22,6 +23,7 @@ from constants import (
     DEFAULT_TIMEZONE,
 )
 from domain.enums.timeframe import Timeframe
+from utils.formatters import resolve_timezone
 
 
 @dataclass(slots=True)
@@ -33,11 +35,19 @@ class FetchConfig:
     timeframe: Timeframe = DEFAULT_TIMEFRAME
     timezone: str = DEFAULT_TIMEZONE
 
+    @property
+    def tzinfo(self) -> tzinfo:
+        return resolve_timezone(self.timezone)
+
 
 @dataclass(slots=True)
 class StrategyConfig:
     timezone: str = DEFAULT_TIMEZONE
     default_timeframe: Timeframe = DEFAULT_TIMEFRAME
+
+    @property
+    def tzinfo(self) -> tzinfo:
+        return resolve_timezone(self.timezone)
 
 
 @dataclass(slots=True)
@@ -46,6 +56,10 @@ class SimulationConfig:
     slippage: float = DEFAULT_SLIPPAGE
     spread: float = DEFAULT_SPREAD
     timezone: str = DEFAULT_TIMEZONE
+
+    @property
+    def tzinfo(self) -> tzinfo:
+        return resolve_timezone(self.timezone)
 
 
 @dataclass(slots=True)
@@ -92,7 +106,11 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     env_file = Path(env_path)
     _load_env_file(env_file)
 
-    timezone = os.getenv("TIMEZONE", DEFAULT_TIMEZONE)
+    default_timezone = os.getenv("TIMEZONE", DEFAULT_TIMEZONE)
+
+    fetch_timezone = os.getenv("FETCH_TIMEZONE", default_timezone)
+    strategy_timezone = os.getenv("STRATEGY_TIMEZONE", default_timezone)
+    simulation_timezone = os.getenv("SIMULATION_TIMEZONE", default_timezone)
 
     timeframe = _parse_timeframe(os.getenv("TIMEFRAME"), default=DEFAULT_TIMEFRAME)
 
@@ -104,11 +122,11 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             os.getenv("MAX_CONCURRENT_REQUESTS", str(DEFAULT_MAX_CONCURRENT_REQUESTS))
         ),
         timeframe=timeframe,
-        timezone=timezone,
+        timezone=fetch_timezone,
     )
 
     strategy_config = StrategyConfig(
-        timezone=timezone,
+        timezone=strategy_timezone,
         default_timeframe=_parse_timeframe(os.getenv("STRATEGY_TIMEFRAME"), default=timeframe),
     )
 
@@ -116,7 +134,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         commission_rate=float(os.getenv("COMMISSION_RATE", str(DEFAULT_COMMISSION_RATE))),
         slippage=float(os.getenv("SLIPPAGE", str(DEFAULT_SLIPPAGE))),
         spread=float(os.getenv("SPREAD", str(DEFAULT_SPREAD))),
-        timezone=timezone,
+        timezone=simulation_timezone,
     )
 
     backtest_config = BacktestConfig(
