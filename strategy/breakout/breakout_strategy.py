@@ -124,6 +124,8 @@ class BreakoutStrategy(BaseStrategy):
 
         return trades
 
+    # region Private
+
     def _to_candle(self, row: pd.Series) -> Candle:
         return Candle(
             timestamp=datetime_to_timezone(row["datetime"].to_pydatetime(), self._simulation_timezone),
@@ -134,3 +136,5 @@ class BreakoutStrategy(BaseStrategy):
             volume=Volume(float(row["volume"])),
             open_interest=Volume(float(row.get("open_interest", 0.0) or 0.0)),
         )
+
+    # endregion Private

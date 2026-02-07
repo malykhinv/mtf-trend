@@ -15,10 +15,10 @@ class ParquetStorage:
     def __init__(self, base_dir: str | Path = "cache") -> None:
         self._base_dir = Path(base_dir)
 
+    # region Private
+
     def _data_path(self, symbol: str, timeframe: Timeframe) -> Path:
         return self._base_dir / symbol / timeframe.value / "data.parquet"
-
-
 
     @staticmethod
     def _ensure_utc_columns(data: pd.DataFrame) -> pd.DataFrame:
@@ -33,6 +33,8 @@ class ParquetStorage:
         normalized["timestamp"] = (ts.astype("int64") // 1_000_000).astype("int64")
         normalized["datetime"] = ts
         return normalized
+
+    # endregion Private
 
     def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
         path = self._data_path(symbol, timeframe)
@@ -80,3 +82,4 @@ class ParquetStorage:
         merged.to_parquet(path, index=False)
 
         return max(len(merged) - previous_count, 0)
+

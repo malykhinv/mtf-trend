@@ -104,6 +104,8 @@ class BacktestRunner:
             best_pf=best_pf,
         )
 
+    # region Private
+
     def _ensure_vectorbt_available(self) -> None:
         if vbt is None:
             msg = (
@@ -180,3 +182,5 @@ class BacktestRunner:
     def _save_results(self, results: pd.DataFrame) -> None:
         self._results_dir.mkdir(parents=True, exist_ok=True)
         results.to_csv(self._results_dir / self._results_file_name, index=False)
+
+    # endregion Private
