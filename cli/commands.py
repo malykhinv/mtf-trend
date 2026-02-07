@@ -214,6 +214,21 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 1
 
     frame = pd.read_csv(csv_path)
+    required_columns = [
+        "trades_count",
+        "profit_factor",
+        "lookback",
+        "volume_mult",
+        "sl_count",
+        "be_count",
+        "tp1_be_count",
+        "tp2_count",
+    ]
+    missing_columns = [column for column in required_columns if column not in frame.columns]
+    if missing_columns:
+        logger.error("make-report: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
+        return 1
+
     if frame.empty:
         logger.info("make-report: пустой файл результатов")
         return 1
