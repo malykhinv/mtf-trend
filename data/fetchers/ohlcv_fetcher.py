@@ -86,47 +86,48 @@ class OhlcvFetcher:
         end_time: datetime,
     ) -> dict[str, int | str]:
         results: dict[str, int | str] = {}
+        poll_timeout_seconds = 0.5
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {
                 executor.submit(self.fetch_symbol, s, timeframe, start_time, end_time): s for s in symbols
             }
+            start_times = {future: monotonic() for future in futures}
             pending = set(futures)
-            deadline = monotonic() + self._request_timeout_seconds
 
             while pending:
-                remaining = deadline - monotonic()
-                if remaining <= 0:
-                    for future in pending:
-                        symbol = futures[future]
-                        msg = f"OHLCV таймаут: {symbol}"
-                        self._logger.info(msg)
-                        results[symbol] = msg
-                        future.cancel()
-                    pending.clear()
+                now = monotonic()
+                expired = [
+                    future
+                    for future in pending
+                    if now - start_times[future] > self._request_timeout_seconds
+                ]
+                for future in expired:
+                    pending.remove(future)
+                    symbol = futures[future]
+                    msg = f"OHLCV таймаут задачи: {symbol}"
+                    self._logger.info(msg)
+                    results[symbol] = msg
+                    future.cancel()
+
+                if not pending:
                     break
 
                 try:
-                    for future in as_completed(pending, timeout=remaining):
+                    for future in as_completed(pending, timeout=poll_timeout_seconds):
                         pending.remove(future)
                         symbol = futures[future]
                         try:
                             results[symbol] = future.result()
                         except Exception as exc:  # noqa: BLE001
-                            msg = f"OHLCV ошибка: {symbol}: {exc}"
+                            msg = f"OHLCV ошибка исполнения: {symbol}: {exc}"
                             self._logger.info(msg)
                             results[symbol] = msg
                 except TimeoutError:
-                    for future in pending:
-                        symbol = futures[future]
-                        msg = f"OHLCV таймаут: {symbol}"
-                        self._logger.info(msg)
-                        results[symbol] = msg
-                        future.cancel()
-                    pending.clear()
+                    continue
 
         for symbol in symbols:
             if symbol not in results:
-                msg = f"OHLCV таймаут: {symbol}"
+                msg = f"OHLCV таймаут задачи: {symbol}"
                 self._logger.info(msg)
                 results[symbol] = msg
 

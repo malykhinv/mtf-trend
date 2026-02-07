@@ -46,47 +46,48 @@ class MarketDataFetcher:
     def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
         self._logger.info(f"MarketCap старт: {len(symbols)} инструментов")
         results: dict[str, float | str] = {}
+        poll_timeout_seconds = 0.5
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {executor.submit(self._market_data_client.get_market_cap, symbol): symbol for symbol in symbols}
+            start_times = {future: monotonic() for future in futures}
             pending = set(futures)
-            deadline = monotonic() + self._request_timeout_seconds
 
             while pending:
-                remaining = deadline - monotonic()
-                if remaining <= 0:
-                    for future in pending:
-                        symbol = futures[future]
-                        msg = f"MarketCap таймаут: {symbol}"
-                        self._logger.info(msg)
-                        results[symbol] = msg
-                        future.cancel()
-                    pending.clear()
+                now = monotonic()
+                expired = [
+                    future
+                    for future in pending
+                    if now - start_times[future] > self._request_timeout_seconds
+                ]
+                for future in expired:
+                    pending.remove(future)
+                    symbol = futures[future]
+                    msg = f"MarketCap таймаут задачи: {symbol}"
+                    self._logger.info(msg)
+                    results[symbol] = msg
+                    future.cancel()
+
+                if not pending:
                     break
 
                 try:
-                    for future in as_completed(pending, timeout=remaining):
+                    for future in as_completed(pending, timeout=poll_timeout_seconds):
                         pending.remove(future)
                         symbol = futures[future]
                         try:
                             results[symbol] = future.result()
                             self._logger.info(f"MarketCap готово: {symbol}")
                         except Exception as exc:  # noqa: BLE001
-                            msg = f"MarketCap ошибка: {symbol}: {exc}"
+                            msg = f"MarketCap ошибка исполнения: {symbol}: {exc}"
                             self._logger.info(msg)
                             results[symbol] = msg
                 except TimeoutError:
-                    for future in pending:
-                        symbol = futures[future]
-                        msg = f"MarketCap таймаут: {symbol}"
-                        self._logger.info(msg)
-                        results[symbol] = msg
-                        future.cancel()
-                    pending.clear()
+                    continue
 
         for symbol in symbols:
             if symbol not in results:
-                msg = f"MarketCap таймаут: {symbol}"
+                msg = f"MarketCap таймаут задачи: {symbol}"
                 self._logger.info(msg)
                 results[symbol] = msg
 
@@ -105,37 +106,74 @@ class MarketDataFetcher:
         ohlcv_result: dict[str, int | str]
         oi_result: dict[str, int | str]
 
+        channel_timeout_seconds = self._request_timeout_seconds
+        graceful_fallback = True
+
         with ThreadPoolExecutor(max_workers=FETCH_ALL_MAX_WORKERS) as executor:
-            ohlcv_future = executor.submit(
-                self._ohlcv_fetcher.fetch_many,
-                symbols,
-                timeframe,
-                start_time,
-                end_time,
-            )
-            oi_future = executor.submit(
-                self._oi_fetcher.fetch_many,
-                symbols,
-                timeframe,
-                start_time,
-                end_time,
-            )
+            channels = {
+                "ohlcv": executor.submit(
+                    self._ohlcv_fetcher.fetch_many,
+                    symbols,
+                    timeframe,
+                    start_time,
+                    end_time,
+                ),
+                "oi": executor.submit(
+                    self._oi_fetcher.fetch_many,
+                    symbols,
+                    timeframe,
+                    start_time,
+                    end_time,
+                ),
+            }
+            start_times = {name: monotonic() for name in channels}
+            pending = set(channels)
+            channel_results: dict[str, dict[str, int | str]] = {}
 
-            try:
-                ohlcv_result = ohlcv_future.result(timeout=self._request_timeout_seconds)
-            except TimeoutError:
-                ohlcv_future.cancel()
-                msg = "OHLCV канал: таймаут при ожидании результата fetch_many"
-                self._logger.info(msg)
-                ohlcv_result = {symbol: msg for symbol in symbols}
+            while pending:
+                now = monotonic()
+                expired = [
+                    name
+                    for name in pending
+                    if now - start_times[name] > channel_timeout_seconds
+                ]
+                for name in expired:
+                    pending.remove(name)
+                    channels[name].cancel()
+                    channel_label = "OHLCV" if name == "ohlcv" else "OI"
+                    msg = f"{channel_label} канал: пер-канальный таймаут fetch_many"
+                    self._logger.info(msg)
+                    if graceful_fallback:
+                        channel_results[name] = {symbol: msg for symbol in symbols}
 
-            try:
-                oi_result = oi_future.result(timeout=self._request_timeout_seconds)
-            except TimeoutError:
-                oi_future.cancel()
-                msg = "OI канал: таймаут при ожидании результата fetch_many"
-                self._logger.info(msg)
-                oi_result = {symbol: msg for symbol in symbols}
+                completed = []
+                for name in list(pending):
+                    future = channels[name]
+                    if not future.done():
+                        continue
+                    completed.append(name)
+                    try:
+                        channel_results[name] = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        channel_label = "OHLCV" if name == "ohlcv" else "OI"
+                        msg = f"{channel_label} канал: ошибка исполнения fetch_many: {exc}"
+                        self._logger.info(msg)
+                        if graceful_fallback:
+                            channel_results[name] = {symbol: msg for symbol in symbols}
+
+                for name in completed:
+                    pending.remove(name)
+
+                if pending:
+                    sleep_seconds = 0.5
+                    try:
+                        for _ in as_completed((channels[name] for name in pending), timeout=sleep_seconds):
+                            break
+                    except TimeoutError:
+                        continue
+
+            ohlcv_result = channel_results.get("ohlcv", {}) if graceful_fallback else channel_results["ohlcv"]
+            oi_result = channel_results.get("oi", {}) if graceful_fallback else channel_results["oi"]
 
         market_caps = self.fetch_market_caps(symbols)
         self._logger.info("Загрузка завершена")
