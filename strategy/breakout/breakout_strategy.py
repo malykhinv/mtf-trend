@@ -82,6 +82,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         trades: list[TradeResult] = []
         pending_signal: TradeSignal | None = None
+        pending_breakout: dict[str, float | int] | None = None
 
         for idx in range(params.lookback, len(prepared)):
             row = prepared.iloc[idx]
@@ -96,32 +97,59 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 trades.append(result)
 
             if sim.position is None and pending_signal is None:
+                if pending_breakout is not None:
+                    breakout_idx = int(pending_breakout["breakout_idx"])
+                    if idx - breakout_idx > params.retest_window:
+                        pending_breakout = None
+                    else:
+                        level_high = float(pending_breakout["level_high"])
+                        breakout_low = float(pending_breakout["breakout_low"])
+                        breakout_close = float(pending_breakout["breakout_close"])
+
+                        upper_retest_bound = level_high * (1 + params.retest_zone)
+                        lower_retest_bound = level_high * (1 - params.retest_zone)
+                        retest_hit = row["low"] <= upper_retest_bound and row["close"] >= lower_retest_bound
+
+                        if retest_hit:
+                            stop = self._resolve_stop_loss(
+                                params=params,
+                                level_high=level_high,
+                                breakout_low=breakout_low,
+                                retest_low=float(row["low"]),
+                            )
+                            risk = max(breakout_close - stop, breakout_close * STRATEGY_RISK_FLOOR)
+                            tp1 = breakout_close + risk * params.min_rr
+                            tp2 = breakout_close + risk * params.min_rr * params.tp2_mult
+                            entry_idx = min(idx + 1, len(prepared) - 1)
+                            entry_row = prepared.iloc[entry_idx]
+                            pending_signal = TradeSignal(
+                                entry_price=Price(breakout_close),
+                                entry_time=datetime_to_timezone(
+                                    entry_row["datetime"].to_pydatetime(),
+                                    self._simulation_timezone,
+                                ),
+                                stop_loss=Price(float(stop)),
+                                take_profit_1=Price(float(tp1)),
+                                take_profit_2=Price(float(tp2)),
+                                position_side=PositionSide.LONG,
+                                symbol=params.symbol,
+                            )
+                            pending_breakout = None
+                            continue
+
                 rolling = prepared.iloc[idx - params.lookback : idx]
                 level_high = float(rolling["high"].max())
-                level_low = float(rolling["low"].min())
                 avg_volume = float(rolling["volume"].mean())
 
                 breakout = row["close"] > level_high
                 volume_ok = row["volume"] >= avg_volume * params.volume_mult
                 if breakout and volume_ok:
-                    risk = max(row["close"] - level_low, row["close"] * STRATEGY_RISK_FLOOR)
-                    stop = row["close"] - risk
-                    tp1 = row["close"] + risk * params.min_rr
-                    tp2 = row["close"] + risk * params.min_rr * params.tp2_mult
-                    entry_idx = min(idx + 1, len(prepared) - 1)
-                    entry_row = prepared.iloc[entry_idx]
-                    pending_signal = TradeSignal(
-                        entry_price=Price(float(row["close"])),
-                        entry_time=datetime_to_timezone(
-                            entry_row["datetime"].to_pydatetime(),
-                            self._simulation_timezone,
-                        ),
-                        stop_loss=Price(float(stop)),
-                        take_profit_1=Price(float(tp1)),
-                        take_profit_2=Price(float(tp2)),
-                        position_side=PositionSide.LONG,
-                        symbol=params.symbol,
-                    )
+                    pending_breakout = {
+                        "breakout_idx": idx,
+                        "level_high": level_high,
+                        "breakout_low": float(row["low"]),
+                        "breakout_close": float(row["close"]),
+                    }
 
         if pending_signal is not None:
             pending_signal = None
@@ -144,5 +172,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             volume=Volume(float(row["volume"])),
             open_interest=Volume(float(row.get("open_interest", STRATEGY_DEFAULT_OPEN_INTEREST))),
         )
+
+    def _resolve_stop_loss(self, *, params: BreakoutParams, level_high: float, breakout_low: float, retest_low: float) -> float:
+        if params.sl_mode.value == "LEVEL":
+            return level_high * (1 - params.retest_zone)
+        if params.sl_mode.value == "BREAKOUT_EXTREME":
+            return breakout_low
+        return retest_low
 
     # endregion Private
