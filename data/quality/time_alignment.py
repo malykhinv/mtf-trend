@@ -15,7 +15,7 @@ class TimeAlignment:
         aligned = data.copy()
 
         if "timestamp" in aligned.columns:
-            ts = pd.to_datetime(aligned["timestamp"], utc=True, errors="coerce")
+            ts = pd.to_datetime(aligned["timestamp"], unit="ms", utc=True, errors="coerce")
         elif "datetime" in aligned.columns:
             ts = pd.to_datetime(aligned["datetime"], utc=True, errors="coerce")
         else:
