@@ -1,11 +1,9 @@
-"""Open interest fetch coordinator with parallel processing and timeout controls."""
+"""Open interest fetch coordinator."""
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
 from pathlib import Path
-from time import monotonic
 
 from constants import (
     DEFAULT_FETCHER_MAX_WORKERS,
@@ -114,84 +112,11 @@ class OiFetcher:
         end_time: datetime,
     ) -> dict[str, int | str]:
         results: dict[str, int | str] = {}
-        poll_timeout_seconds = 0.5
-        executor = ThreadPoolExecutor(max_workers=self._max_workers)
-        try:
-            futures = {
-                executor.submit(self.fetch_symbol, s, timeframe, start_time, end_time): s for s in symbols
-            }
-            start_times = {future: monotonic() for future in futures}
-            soft_timeout_logged: set = set()
-            pending = set(futures)
-            deadline = monotonic() + self._request_timeout_seconds
-
-            while pending:
-                now = monotonic()
-                soft_expired = [future for future in pending if now - start_times[future] > self._request_timeout_seconds]
-                for future in soft_expired:
-                    if future in soft_timeout_logged:
-                        continue
-                    symbol = futures[future]
-                    msg = f"OI soft-timeout задачи: {symbol}"
-                    self._logger.info(msg)
-
-                    soft_timeout_logged.add(future)
-
-                if now >= deadline:
-                    break
-
-                completed: list = []
-                try:
-                    for future in as_completed(pending, timeout=poll_timeout_seconds):
-                        completed.append(future)
-                except TimeoutError:
-                    continue
-
-                for future in completed:
-                    pending.remove(future)
-                    symbol = futures[future]
-                    try:
-                        results[symbol] = future.result()
-                    except Exception as exc:  # noqa: BLE001
-                        msg = f"OI ошибка исполнения: {symbol}: {exc}"
-                        self._logger.info(msg)
-                        results[symbol] = msg
-
-            for future in list(pending):
-                symbol = futures[future]
-                if future.done():
-                    pending.remove(future)
-                    try:
-                        results[symbol] = future.result()
-                    except Exception as exc:  # noqa: BLE001
-                        msg = f"OI ошибка исполнения: {symbol}: {exc}"
-                        self._logger.info(msg)
-                        results[symbol] = msg
-                    continue
-
-                try:
-                    cancelled = future.cancel()
-                except Exception:  # noqa: BLE001
-                    cancelled = False
-
-                if future in pending:
-                    pending.remove(future)
-
-                if cancelled:
-                    msg = f"OI hard-timeout задачи: {symbol}"
-                    self._logger.info(msg)
-                    results[symbol] = msg
-                    continue
-
-                msg = f"OI hard-timeout задачи: {symbol}"
-                self._logger.info(msg)
-                results[symbol] = msg
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-
         for symbol in symbols:
-            if symbol not in results:
-                msg = f"OI hard-timeout задачи: {symbol}"
+            try:
+                results[symbol] = self.fetch_symbol(symbol, timeframe, start_time, end_time)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"OI ошибка исполнения: {symbol}: {exc}"
                 self._logger.info(msg)
                 results[symbol] = msg
 
