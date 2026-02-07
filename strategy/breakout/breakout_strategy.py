@@ -87,6 +87,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             row = prepared.iloc[idx]
             candle = self._to_candle(row)
 
+            if sim.position is None and pending_signal is not None:
+                sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
+                pending_signal = None
+
+            result = sim.process_candle(candle)
+            if result is not None:
+                trades.append(result)
+
             if sim.position is None and pending_signal is None:
                 rolling = prepared.iloc[idx - params.lookback : idx]
                 level_high = float(rolling["high"].max())
@@ -100,9 +108,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     stop = row["close"] - risk
                     tp1 = row["close"] + risk * params.min_rr
                     tp2 = row["close"] + risk * params.min_rr * params.tp2_mult
+                    entry_idx = min(idx + 1, len(prepared) - 1)
+                    entry_row = prepared.iloc[entry_idx]
                     pending_signal = TradeSignal(
                         entry_price=Price(float(row["close"])),
-                        entry_time=datetime_to_timezone(row["datetime"].to_pydatetime(), self._simulation_timezone),
+                        entry_time=datetime_to_timezone(
+                            entry_row["datetime"].to_pydatetime(),
+                            self._simulation_timezone,
+                        ),
                         stop_loss=Price(float(stop)),
                         take_profit_1=Price(float(tp1)),
                         take_profit_2=Price(float(tp2)),
@@ -110,13 +123,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         symbol=params.symbol,
                     )
 
-            if sim.position is None and pending_signal is not None:
-                sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
-                pending_signal = None
-
-            result = sim.process_candle(candle)
-            if result is not None:
-                trades.append(result)
+        if pending_signal is not None:
+            pending_signal = None
 
         if sim.position is not None:
             final_row = prepared.iloc[-1]
