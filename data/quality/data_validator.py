@@ -44,11 +44,15 @@ class DataValidator:
                 for pos in normalized.index[bad.fillna(False)]:
                     add_issue(int(pos), "negative_price", DataQualitySeverity.CRITICAL, f"Negative {col} value")
 
-        for col in ("volume", "open_interest"):
+        issue_type_by_column = {
+            "volume": "negative_volume",
+            "open_interest": "negative_open_interest",
+        }
+        for col, issue_type in issue_type_by_column.items():
             if col in normalized.columns:
                 bad = normalized[col] < 0
                 for pos in normalized.index[bad.fillna(False)]:
-                    add_issue(int(pos), "negative_volume", DataQualitySeverity.ERROR, f"Negative {col} value")
+                    add_issue(int(pos), issue_type, DataQualitySeverity.ERROR, f"Negative {col} value")
 
         if {"high", "low", "close"}.issubset(normalized.columns):
             spread = (normalized["high"] - normalized["low"]).abs()
