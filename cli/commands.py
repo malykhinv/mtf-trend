@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+from logging import Logger
 from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -50,6 +51,7 @@ from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
+from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer
 
 
@@ -131,10 +133,31 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
     )
 
 
-def _resolve_symbols(exchange_client: CcxtFuturesClient, market_client: CoinGeckoClient, top_n: int) -> list[str]:
-    top_symbols = {f"{symbol}/USDT" for symbol in market_client.get_top_coins_by_market_cap(limit=top_n)}
-    futures_symbols = set(exchange_client.get_futures_symbols())
-    return sorted(top_symbols.intersection(futures_symbols))
+def _resolve_symbols(
+    exchange_client: CcxtFuturesClient,
+    market_client: CoinGeckoClient,
+    top_n: int,
+    logger: Logger,
+) -> list[str]:
+    top_symbols_raw = [f"{symbol}/USDT" for symbol in market_client.get_top_coins_by_market_cap(limit=top_n)]
+    futures_symbols_raw = exchange_client.get_futures_symbols()
+
+    top_symbols_normalized = {normalize_symbol(symbol) for symbol in top_symbols_raw}
+    futures_symbol_map = {
+        normalize_symbol(symbol): symbol
+        for symbol in futures_symbols_raw
+    }
+
+    intersection = sorted(top_symbols_normalized.intersection(futures_symbol_map))
+    logger.info(
+        "resolve-symbols: coingecko raw=%s normalized=%s; ccxt raw=%s normalized=%s; intersection=%s",
+        len(top_symbols_raw),
+        len(top_symbols_normalized),
+        len(futures_symbols_raw),
+        len(futures_symbol_map),
+        len(intersection),
+    )
+    return [futures_symbol_map[symbol] for symbol in intersection]
 
 
 def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
@@ -146,7 +169,7 @@ def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
-    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
+    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n, logger=logger)
     if not symbols:
         logger.info("fetch-data: не найдено символов для загрузки")
         return 0
@@ -160,7 +183,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
-    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
+    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n, logger=logger)
     if not symbols:
         logger.info("update-cache: не найдено символов для обновления")
         return 0
