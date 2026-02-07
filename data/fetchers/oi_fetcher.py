@@ -120,42 +120,79 @@ class OiFetcher:
                 executor.submit(self.fetch_symbol, s, timeframe, start_time, end_time): s for s in symbols
             }
             start_times = {future: monotonic() for future in futures}
+            soft_timeout_logged: set = set()
             pending = set(futures)
+            deadline = monotonic() + self._request_timeout_seconds
 
             while pending:
                 now = monotonic()
-                expired = [
-                    future
-                    for future in pending
-                    if now - start_times[future] > self._request_timeout_seconds
-                ]
-                for future in expired:
-                    pending.remove(future)
+                soft_expired = [future for future in pending if now - start_times[future] > self._request_timeout_seconds]
+                for future in soft_expired:
+                    if future in soft_timeout_logged:
+                        continue
                     symbol = futures[future]
-                    msg = f"OI таймаут задачи: {symbol}"
+                    msg = f"OI soft-timeout задачи: {symbol}"
                     self._logger.info(msg)
-                    results[symbol] = msg
-                    future.cancel()
 
-                if not pending:
+                    soft_timeout_logged.add(future)
+
+                if now >= deadline:
                     break
 
+                completed: list = []
                 try:
                     for future in as_completed(pending, timeout=poll_timeout_seconds):
-                        pending.remove(future)
-                        symbol = futures[future]
-                        try:
-                            results[symbol] = future.result()
-                        except Exception as exc:  # noqa: BLE001
-                            msg = f"OI ошибка исполнения: {symbol}: {exc}"
-                            self._logger.info(msg)
-                            results[symbol] = msg
+                        completed.append(future)
                 except TimeoutError:
                     continue
 
+                for future in completed:
+                    pending.remove(future)
+                    symbol = futures[future]
+                    try:
+                        results[symbol] = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        msg = f"OI ошибка исполнения: {symbol}: {exc}"
+                        self._logger.info(msg)
+                        results[symbol] = msg
+
+            hard_timed_out: list = []
+            for future in list(pending):
+                symbol = futures[future]
+                try:
+                    cancelled = future.cancel()
+                except Exception:  # noqa: BLE001
+                    cancelled = False
+
+                if cancelled:
+                    pending.remove(future)
+                    msg = f"OI hard-timeout задачи: {symbol}"
+                    self._logger.info(msg)
+                    results[symbol] = msg
+                    continue
+
+                hard_timed_out.append(future)
+
+            for future in as_completed(hard_timed_out):
+                if future in pending:
+                    pending.remove(future)
+                symbol = futures[future]
+                try:
+                    results[symbol] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    msg = f"OI ошибка исполнения: {symbol}: {exc}"
+                    self._logger.info(msg)
+                    results[symbol] = msg
+
+            for future in pending:
+                symbol = futures[future]
+                msg = f"OI hard-timeout задачи: {symbol}"
+                self._logger.info(msg)
+                results[symbol] = msg
+
         for symbol in symbols:
             if symbol not in results:
-                msg = f"OI таймаут задачи: {symbol}"
+                msg = f"OI hard-timeout задачи: {symbol}"
                 self._logger.info(msg)
                 results[symbol] = msg
 

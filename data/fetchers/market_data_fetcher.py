@@ -127,24 +127,25 @@ class MarketDataFetcher:
                 ),
             }
             start_times = {name: monotonic() for name in channels}
+            soft_timeout_logged: set[str] = set()
             pending = set(channels)
             channel_results: dict[str, dict[str, int | str]] = {}
+            deadline = monotonic() + channel_timeout_seconds
 
             while pending:
                 now = monotonic()
-                expired = [
-                    name
-                    for name in pending
-                    if now - start_times[name] > channel_timeout_seconds
-                ]
-                for name in expired:
-                    pending.remove(name)
-                    channels[name].cancel()
+                soft_expired = [name for name in pending if now - start_times[name] > channel_timeout_seconds]
+                for name in soft_expired:
+                    if name in soft_timeout_logged:
+                        continue
                     channel_label = "OHLCV" if name == "ohlcv" else "OI"
-                    msg = f"{channel_label} канал: пер-канальный таймаут fetch_many"
+                    msg = f"{channel_label} канал: soft-timeout fetch_many"
                     self._logger.info(msg)
-                    if graceful_fallback:
-                        channel_results[name] = {symbol: msg for symbol in symbols}
+
+                    soft_timeout_logged.add(name)
+
+                if now >= deadline:
+                    break
 
                 completed = []
                 for name in list(pending):
@@ -171,6 +172,45 @@ class MarketDataFetcher:
                             break
                     except TimeoutError:
                         continue
+
+            hard_timed_out: list[str] = []
+            for name in list(pending):
+                future = channels[name]
+                channel_label = "OHLCV" if name == "ohlcv" else "OI"
+                try:
+                    cancelled = future.cancel()
+                except Exception:  # noqa: BLE001
+                    cancelled = False
+
+                if cancelled:
+                    pending.remove(name)
+                    msg = f"{channel_label} канал: hard-timeout fetch_many"
+                    self._logger.info(msg)
+                    if graceful_fallback:
+                        channel_results[name] = {symbol: msg for symbol in symbols}
+                    continue
+
+                hard_timed_out.append(name)
+
+            for future in as_completed([channels[name] for name in hard_timed_out]):
+                name = "ohlcv" if future is channels["ohlcv"] else "oi"
+                if name in pending:
+                    pending.remove(name)
+                channel_label = "OHLCV" if name == "ohlcv" else "OI"
+                try:
+                    channel_results[name] = future.result()
+                except Exception as exc:  # noqa: BLE001
+                    msg = f"{channel_label} канал: ошибка исполнения fetch_many: {exc}"
+                    self._logger.info(msg)
+                    if graceful_fallback:
+                        channel_results[name] = {symbol: msg for symbol in symbols}
+
+            for name in pending:
+                channel_label = "OHLCV" if name == "ohlcv" else "OI"
+                msg = f"{channel_label} канал: hard-timeout fetch_many"
+                self._logger.info(msg)
+                if graceful_fallback:
+                    channel_results[name] = {symbol: msg for symbol in symbols}
 
             ohlcv_result = channel_results.get("ohlcv", {}) if graceful_fallback else channel_results["ohlcv"]
             oi_result = channel_results.get("oi", {}) if graceful_fallback else channel_results["oi"]
