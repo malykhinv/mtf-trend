@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import os
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pandas as pd
 import requests
 
 from constants import (
@@ -52,27 +54,35 @@ class CoinGeckoClient(MarketDataClient):
             return
 
         try:
-            raw_payload = json.loads(self._cache_path.read_text(encoding="utf-8"))
-            if not isinstance(raw_payload, dict):
-                raise ValueError("cache payload must be an object")
+            raw_payload = pd.read_parquet(self._cache_path)
+            required_columns = {"symbol", "market_cap", "expires_at"}
+            if not required_columns.issubset(raw_payload.columns):
+                raise ValueError(f"cache payload must contain columns: {required_columns}")
 
+            now = datetime.now(tz=timezone.utc)
             loaded_cache: dict[str, tuple[float, datetime]] = {}
-            for symbol, payload in raw_payload.items():
-                if not isinstance(symbol, str) or not isinstance(payload, list) or len(payload) != 2:
+            for row in raw_payload[["symbol", "market_cap", "expires_at"]].itertuples(index=False):
+                symbol = row.symbol
+                if not isinstance(symbol, str) or not symbol:
                     continue
 
-                market_cap, expires_at = payload
-                if not isinstance(expires_at, str):
+                expires_at_dt = pd.Timestamp(row.expires_at)
+                if pd.isna(expires_at_dt):
                     continue
 
-                expires_at_dt = datetime.fromisoformat(expires_at)
                 if expires_at_dt.tzinfo is None:
-                    expires_at_dt = expires_at_dt.replace(tzinfo=timezone.utc)
+                    expires_at_dt = expires_at_dt.tz_localize(timezone.utc)
+                else:
+                    expires_at_dt = expires_at_dt.tz_convert(timezone.utc)
 
-                loaded_cache[symbol.upper()] = (float(market_cap), expires_at_dt)
+                expires_at = expires_at_dt.to_pydatetime()
+                if expires_at <= now:
+                    continue
+
+                loaded_cache[symbol.upper()] = (float(row.market_cap), expires_at)
 
             self._market_cap_cache = loaded_cache
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        except (OSError, ValueError, TypeError) as exc:
             self._logger.warning("Failed to load CoinGecko cache from %s: %s", self._cache_path, exc)
             self._market_cap_cache = {}
 
@@ -80,12 +90,31 @@ class CoinGeckoClient(MarketDataClient):
         if self._cache_path is None:
             return
 
-        serialized_cache = {
-            symbol: [market_cap, expires_at.isoformat()]
+        records = [
+            {
+                "symbol": symbol,
+                "market_cap": market_cap,
+                "expires_at": pd.Timestamp(expires_at).tz_convert(timezone.utc),
+            }
             for symbol, (market_cap, expires_at) in self._market_cap_cache.items()
-        }
+        ]
+        cache_frame = pd.DataFrame.from_records(records, columns=["symbol", "market_cap", "expires_at"])
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
-        self._cache_path.write_text(json.dumps(serialized_cache, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_file = tempfile.NamedTemporaryFile(
+            mode="wb",
+            suffix=".tmp",
+            prefix=f"{self._cache_path.stem}.",
+            dir=self._cache_path.parent,
+            delete=False,
+        )
+        temp_path = Path(temp_file.name)
+        temp_file.close()
+        try:
+            cache_frame.to_parquet(temp_path, index=False)
+            os.replace(temp_path, self._cache_path)
+        finally:
+            if temp_path.exists():
+                temp_path.unlink()
 
     def _headers(self) -> dict[str, str]:
         headers = {COINGECKO_HEADER_ACCEPT_KEY: COINGECKO_HEADER_ACCEPT_JSON}
