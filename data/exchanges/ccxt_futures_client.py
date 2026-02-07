@@ -56,6 +56,8 @@ class CcxtFuturesClient(ExchangeClient):
         self._client = self._build_client(exchange=self.exchange, api_key=api_key, secret=secret, password=password, enable_rate_limit=enable_rate_limit)
         self._client.load_markets()
 
+    # region Private
+
     def _build_client(self, exchange: Exchange, api_key: str, secret: str, password: str, enable_rate_limit: bool) -> Any:
         params: dict[str, Any] = {
             "apiKey": api_key,
@@ -73,6 +75,8 @@ class CcxtFuturesClient(ExchangeClient):
             params["options"] = {"defaultType": "swap"}
             return ccxt.okx(params)
         raise ValueError(f"Unsupported exchange: {exchange}")
+
+    # endregion Private
 
     def get_futures_symbols(self) -> list[str]:
         symbols: list[str] = []
