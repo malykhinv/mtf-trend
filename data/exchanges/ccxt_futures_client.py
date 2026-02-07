@@ -38,6 +38,7 @@ _TIMEFRAME_TO_CCXT = {
     Timeframe.W1: "1w",
 }
 
+# region Private
 
 def _to_utc_ms(value: datetime) -> int:
     if value.tzinfo is None:
@@ -45,6 +46,8 @@ def _to_utc_ms(value: datetime) -> int:
     else:
         value = value.astimezone(timezone.utc)
     return int(value.timestamp() * MILLISECONDS_IN_SECOND)
+
+# endregion Private
 
 
 class CcxtFuturesClient(ExchangeClient):

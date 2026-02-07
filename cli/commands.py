@@ -6,9 +6,9 @@ import argparse
 import csv
 import json
 from collections import Counter
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from dataclasses import asdict
 from typing import Callable
 
 import pandas as pd
@@ -22,10 +22,10 @@ from constants import (
     QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
     QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE,
     QUALITY_OI_MISSING_COLUMN_ISSUE,
-    QUALITY_SEVERITY_ERROR,
-    QUALITY_SEVERITY_WARNING,
     QUALITY_SEVERITY_CRITICAL,
+    QUALITY_SEVERITY_ERROR,
     QUALITY_SEVERITY_INFO,
+    QUALITY_SEVERITY_WARNING,
     REPORT_PROFITABLE_PF_THRESHOLD,
     REPORT_PROFIT_FACTOR_FILTER,
     REPORT_TRADES_COUNT_FILTER,
@@ -42,16 +42,38 @@ from domain.enums.exchange import Exchange
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary
 from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
-from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from domain.models.reporting.quality_report import QualityReport
 from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
+from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from strategy.breakout.breakout_strategy import BreakoutStrategy
+from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
-from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
 from vectorbt_runner import BacktestRunner, DataPreparer
 
+
+def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("fetch-data", config, lambda: _fetch_data_inner(config, args))
+
+
+def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("update-cache", config, lambda: _update_cache_inner(config, args))
+
+
+def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
+
+
+def make_report(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("make-report", config, lambda: _make_report_inner(config, args))
+
+
+def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
+
+
+# region Private
 
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
     logger = get_logger(
@@ -111,140 +133,128 @@ def _resolve_symbols(exchange_client: CcxtFuturesClient, market_client: CoinGeck
     return sorted(top_symbols.intersection(futures_symbols))
 
 
-
 def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
     local_end = datetime.now(tz=config.fetch.tzinfo)
     local_start = local_end - timedelta(days=days)
     return datetime_to_utc(local_start), datetime_to_utc(local_end)
 
-def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
-    def _inner() -> int:
-        logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-        fetcher, exchange_client, market_client = _build_fetch_stack(config)
-        symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
-        if not symbols:
-            logger.info("fetch-data: не найдено символов для загрузки")
-            return 0
 
-        start_time, end_time = _fetch_period(config, args.days)
-        fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
-        logger.info(f"fetch-data: загружено symbols={len(symbols)}")
+def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    fetcher, exchange_client, market_client = _build_fetch_stack(config)
+    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
+    if not symbols:
+        logger.info("fetch-data: не найдено символов для загрузки")
         return 0
 
-    return _run_with_logging("fetch-data", config, _inner)
+    start_time, end_time = _fetch_period(config, args.days)
+    fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
+    logger.info(f"fetch-data: загружено symbols={len(symbols)}")
+    return 0
 
 
-def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
-    def _inner() -> int:
-        logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-        fetcher, exchange_client, market_client = _build_fetch_stack(config)
-        symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
-        if not symbols:
-            logger.info("update-cache: не найдено символов для обновления")
-            return 0
-
-        start_time, end_time = _fetch_period(config, args.days)
-        fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
-        logger.info(f"update-cache: обновлено symbols={len(symbols)}")
+def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    fetcher, exchange_client, market_client = _build_fetch_stack(config)
+    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n)
+    if not symbols:
+        logger.info("update-cache: не найдено символов для обновления")
         return 0
 
-    return _run_with_logging("update-cache", config, _inner)
+    start_time, end_time = _fetch_period(config, args.days)
+    fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
+    logger.info(f"update-cache: обновлено symbols={len(symbols)}")
+    return 0
 
 
-def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
-    def _inner() -> int:
-        logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-        preparer = DataPreparer(config.backtest.cache_dir)
-        symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
-        if not symbols:
-            logger.info("run-backtest: нет данных в кэше")
-            return 0
-
-        symbol_frames = {
-            symbol: preparer.load_symbol_data(symbol, config.fetch.timeframe)
-            for symbol in symbols
-        }
-        symbol_frames = {k: v for k, v in symbol_frames.items() if not v.empty}
-        if not symbol_frames:
-            logger.info("run-backtest: не удалось подготовить данные")
-            return 0
-
-        strategy = BreakoutStrategy(
-            commission_rate=config.simulation.commission_rate,
-            slippage=config.simulation.slippage,
-            strategy_timezone=config.strategy.timezone,
-            simulation_timezone=config.simulation.timezone,
-        )
-        runner = BacktestRunner(config.backtest.results_dir, config.backtest.results_file_name)
-        results = runner.run(strategy, symbol_frames)
-        summary = runner.build_summary(results)
-        logger.info(
-            "run-backtest: total=%s profitable=%s best_pf=%.4f",
-            summary.total_combinations,
-            summary.profitable_combinations,
-            summary.best_pf,
-        )
+def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
+    if not symbols:
+        logger.info("run-backtest: нет данных в кэше")
         return 0
 
-    return _run_with_logging("run-backtest", config, _inner)
-
-
-def make_report(config: AppConfig, args: argparse.Namespace) -> int:
-    def _inner() -> int:
-        logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-        csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
-        if not csv_path.exists():
-            logger.info(f"make-report: файл не найден: {csv_path}")
-            return 1
-
-        frame = pd.read_csv(csv_path)
-        if frame.empty:
-            logger.info("make-report: пустой файл результатов")
-            return 1
-
-        filtered = frame[(frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER) & (frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)].copy()
-        filtered = filtered.sort_values("profit_factor", ascending=False)
-
-        if len(frame) != TARGET_PARAMETER_COMBINATIONS:
-            logger.warning(
-                "make-report: фактическое число комбинаций=%s отличается от целевого=%s",
-                len(frame),
-                TARGET_PARAMETER_COMBINATIONS,
-            )
-
-        summary = BacktestSummary(
-            total_combinations=int(len(frame)),
-            profitable_combinations=int((frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD).sum()),
-            best_pf=round(float(frame["profit_factor"].max()), 4),
-        )
-
-        source = filtered if not filtered.empty else frame
-
-        optimal_ranges = OptimalParameterRanges(
-            lookback=[int(source["lookback"].min()), int(source["lookback"].max())],
-            volume_multiplier=[round(float(source["volume_mult"].min()), 4), round(float(source["volume_mult"].max()), 4)],
-        )
-
-        distribution = TradeResultsDistribution(
-            SL=int(source["sl_count"].sum()),
-            BE=int(source["be_count"].sum()),
-            TP1_BE=int(source["tp1_be_count"].sum()),
-            TP2=int(source["tp2_count"].sum()),
-        )
-
-        report = BacktestReport(
-            summary=summary,
-            optimal_ranges=optimal_ranges,
-            trade_results_distribution=distribution,
-        )
-
-        output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info(f"make-report: сохранено {output_path}")
+    symbol_frames = {
+        symbol: preparer.load_symbol_data(symbol, config.fetch.timeframe)
+        for symbol in symbols
+    }
+    symbol_frames = {k: v for k, v in symbol_frames.items() if not v.empty}
+    if not symbol_frames:
+        logger.info("run-backtest: не удалось подготовить данные")
         return 0
 
-    return _run_with_logging("make-report", config, _inner)
+    strategy = BreakoutStrategy(
+        commission_rate=config.simulation.commission_rate,
+        slippage=config.simulation.slippage,
+        strategy_timezone=config.strategy.timezone,
+        simulation_timezone=config.simulation.timezone,
+    )
+    runner = BacktestRunner(config.backtest.results_dir, config.backtest.results_file_name)
+    results = runner.run(strategy, symbol_frames)
+    summary = runner.build_summary(results)
+    logger.info(
+        "run-backtest: total=%s profitable=%s best_pf=%.4f",
+        summary.total_combinations,
+        summary.profitable_combinations,
+        summary.best_pf,
+    )
+    return 0
+
+
+def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
+    if not csv_path.exists():
+        logger.info(f"make-report: файл не найден: {csv_path}")
+        return 1
+
+    frame = pd.read_csv(csv_path)
+    if frame.empty:
+        logger.info("make-report: пустой файл результатов")
+        return 1
+
+    filtered = frame[(frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER) & (frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)].copy()
+    filtered = filtered.sort_values("profit_factor", ascending=False)
+
+    if len(frame) != TARGET_PARAMETER_COMBINATIONS:
+        logger.warning(
+            "make-report: фактическое число комбинаций=%s отличается от целевого=%s",
+            len(frame),
+            TARGET_PARAMETER_COMBINATIONS,
+        )
+
+    summary = BacktestSummary(
+        total_combinations=int(len(frame)),
+        profitable_combinations=int((frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD).sum()),
+        best_pf=round(float(frame["profit_factor"].max()), 4),
+    )
+
+    source = filtered if not filtered.empty else frame
+
+    optimal_ranges = OptimalParameterRanges(
+        lookback=[int(source["lookback"].min()), int(source["lookback"].max())],
+        volume_multiplier=[round(float(source["volume_mult"].min()), 4), round(float(source["volume_mult"].max()), 4)],
+    )
+
+    distribution = TradeResultsDistribution(
+        SL=int(source["sl_count"].sum()),
+        BE=int(source["be_count"].sum()),
+        TP1_BE=int(source["tp1_be_count"].sum()),
+        TP2=int(source["tp2_count"].sum()),
+    )
+
+    report = BacktestReport(
+        summary=summary,
+        optimal_ranges=optimal_ranges,
+        trade_results_distribution=distribution,
+    )
+
+    output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
+    logger.info(f"make-report: сохранено {output_path}")
+    return 0
 
 
 def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
@@ -295,7 +305,6 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     return issues
 
 
-
 def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, QualitySymbolStats]) -> list[str]:
     recommendations: list[str] = []
     if summary.gaps_total > 0:
@@ -322,7 +331,6 @@ def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, Q
     return recommendations
 
 
-
 def _save_quality_report(report: QualityReport, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.suffix.lower() == ".csv":
@@ -347,79 +355,78 @@ def _save_quality_report(report: QualityReport, output_path: Path) -> None:
         output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-
-def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
-    def _inner() -> int:
-        logger = get_logger("check-quality", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-        preparer = DataPreparer(config.backtest.cache_dir)
-        symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
-        if not symbols:
-            logger.info("check-quality: нет данных для проверки")
-            return 0
-
-        validator = DataValidator()
-        gap_detector = GapDetector()
-
-        issues_by_type: Counter[str] = Counter()
-        issues_by_severity: Counter[str] = Counter()
-        symbols_report: dict[str, QualitySymbolStats] = {}
-
-        total_issues = 0
-        total_gaps = 0
-        for symbol in symbols:
-            frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
-            if frame.empty:
-                logger.info(f"check-quality: {symbol} пропущен, пустой датасет")
-                continue
-
-            issues = validator.validate(symbol, config.fetch.timeframe, frame)
-            gaps = gap_detector.detect_gaps(frame, config.fetch.timeframe)
-            oi_alignment_issues = _collect_oi_alignment_issues(frame)
-
-            all_issue_types = [issue.issue_type for issue in issues]
-            all_severities = [issue.severity.value for issue in issues]
-            all_issue_types.extend(item["issue_type"] for item in oi_alignment_issues)
-            all_severities.extend(item["severity"] for item in oi_alignment_issues)
-
-            symbol_issue_counter = Counter(all_issue_types)
-            symbol_severity_counter = Counter(all_severities)
-            issues_by_type.update(symbol_issue_counter)
-            issues_by_severity.update(symbol_severity_counter)
-
-            symbol_total_issues = len(issues) + len(oi_alignment_issues)
-            total_issues += symbol_total_issues
-            total_gaps += len(gaps)
-
-            symbols_report[symbol] = QualitySymbolStats(
-                issues=symbol_total_issues,
-                gaps=len(gaps),
-                by_issue_type=dict(sorted(symbol_issue_counter.items())),
-                by_severity=dict(sorted(symbol_severity_counter.items())),
-            )
-
-            logger.info(
-                f"check-quality: {symbol} issues={symbol_total_issues} gaps={len(gaps)} "
-                f"oi_alignment_issues={len(oi_alignment_issues)}"
-            )
-
-        summary = QualitySummary(
-            symbols_checked=len(symbols_report),
-            issues_total=total_issues,
-            gaps_total=total_gaps,
-            by_issue_type=dict(sorted(issues_by_type.items())),
-            by_severity=dict(sorted(issues_by_severity.items())),
-        )
-        report = QualityReport(
-            summary=summary,
-            symbols=symbols_report,
-            recommendations=_build_quality_recommendations(summary, symbols_report),
-        )
-
-        output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
-        _save_quality_report(report, output_path)
-
-        logger.info(f"check-quality: итог issues={report.summary.issues_total} gaps={report.summary.gaps_total}")
-        logger.info(f"check-quality: отчет сохранен {output_path}")
+def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("check-quality", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
+    if not symbols:
+        logger.info("check-quality: нет данных для проверки")
         return 0
 
-    return _run_with_logging("check-quality", config, _inner)
+    validator = DataValidator()
+    gap_detector = GapDetector()
+
+    issues_by_type: Counter[str] = Counter()
+    issues_by_severity: Counter[str] = Counter()
+    symbols_report: dict[str, QualitySymbolStats] = {}
+
+    total_issues = 0
+    total_gaps = 0
+    for symbol in symbols:
+        frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
+        if frame.empty:
+            logger.info(f"check-quality: {symbol} пропущен, пустой датасет")
+            continue
+
+        issues = validator.validate(symbol, config.fetch.timeframe, frame)
+        gaps = gap_detector.detect_gaps(frame, config.fetch.timeframe)
+        oi_alignment_issues = _collect_oi_alignment_issues(frame)
+
+        all_issue_types = [issue.issue_type for issue in issues]
+        all_severities = [issue.severity.value for issue in issues]
+        all_issue_types.extend(item["issue_type"] for item in oi_alignment_issues)
+        all_severities.extend(item["severity"] for item in oi_alignment_issues)
+
+        symbol_issue_counter = Counter(all_issue_types)
+        symbol_severity_counter = Counter(all_severities)
+        issues_by_type.update(symbol_issue_counter)
+        issues_by_severity.update(symbol_severity_counter)
+
+        symbol_total_issues = len(issues) + len(oi_alignment_issues)
+        total_issues += symbol_total_issues
+        total_gaps += len(gaps)
+
+        symbols_report[symbol] = QualitySymbolStats(
+            issues=symbol_total_issues,
+            gaps=len(gaps),
+            by_issue_type=dict(sorted(symbol_issue_counter.items())),
+            by_severity=dict(sorted(symbol_severity_counter.items())),
+        )
+
+        logger.info(
+            f"check-quality: {symbol} issues={symbol_total_issues} gaps={len(gaps)} "
+            f"oi_alignment_issues={len(oi_alignment_issues)}"
+        )
+
+    summary = QualitySummary(
+        symbols_checked=len(symbols_report),
+        issues_total=total_issues,
+        gaps_total=total_gaps,
+        by_issue_type=dict(sorted(issues_by_type.items())),
+        by_severity=dict(sorted(issues_by_severity.items())),
+    )
+    report = QualityReport(
+        summary=summary,
+        symbols=symbols_report,
+        recommendations=_build_quality_recommendations(summary, symbols_report),
+    )
+
+    output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
+    _save_quality_report(report, output_path)
+
+    logger.info(f"check-quality: итог issues={report.summary.issues_total} gaps={report.summary.gaps_total}")
+    logger.info(f"check-quality: отчет сохранен {output_path}")
+    return 0
+
+
+# endregion Private
