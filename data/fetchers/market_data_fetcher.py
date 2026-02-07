@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 
 from constants import (
     DEFAULT_FETCHER_MAX_WORKERS,
@@ -48,19 +49,46 @@ class MarketDataFetcher:
 
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {executor.submit(self._market_data_client.get_market_cap, symbol): symbol for symbol in symbols}
-            for future in as_completed(futures):
-                symbol = futures[future]
+            pending = set(futures)
+            deadline = monotonic() + self._request_timeout_seconds
+
+            while pending:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    for future in pending:
+                        symbol = futures[future]
+                        msg = f"MarketCap таймаут: {symbol}"
+                        self._logger.info(msg)
+                        results[symbol] = msg
+                        future.cancel()
+                    pending.clear()
+                    break
+
                 try:
-                    results[symbol] = future.result(timeout=self._request_timeout_seconds)
-                    self._logger.info(f"MarketCap готово: {symbol}")
+                    for future in as_completed(pending, timeout=remaining):
+                        pending.remove(future)
+                        symbol = futures[future]
+                        try:
+                            results[symbol] = future.result()
+                            self._logger.info(f"MarketCap готово: {symbol}")
+                        except Exception as exc:  # noqa: BLE001
+                            msg = f"MarketCap ошибка: {symbol}: {exc}"
+                            self._logger.info(msg)
+                            results[symbol] = msg
                 except TimeoutError:
-                    msg = f"MarketCap таймаут: {symbol}"
-                    self._logger.info(msg)
-                    results[symbol] = msg
-                except Exception as exc:  # noqa: BLE001
-                    msg = f"MarketCap ошибка: {symbol}: {exc}"
-                    self._logger.info(msg)
-                    results[symbol] = msg
+                    for future in pending:
+                        symbol = futures[future]
+                        msg = f"MarketCap таймаут: {symbol}"
+                        self._logger.info(msg)
+                        results[symbol] = msg
+                        future.cancel()
+                    pending.clear()
+
+        for symbol in symbols:
+            if symbol not in results:
+                msg = f"MarketCap таймаут: {symbol}"
+                self._logger.info(msg)
+                results[symbol] = msg
 
         self._logger.info("MarketCap завершен")
         return MarketCapsResult(market_caps=results)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime
 from pathlib import Path
+from time import monotonic
 
 from constants import (
     DEFAULT_FETCHER_MAX_WORKERS,
@@ -89,17 +90,44 @@ class OhlcvFetcher:
             futures = {
                 executor.submit(self.fetch_symbol, s, timeframe, start_time, end_time): s for s in symbols
             }
-            for future in as_completed(futures):
-                symbol = futures[future]
+            pending = set(futures)
+            deadline = monotonic() + self._request_timeout_seconds
+
+            while pending:
+                remaining = deadline - monotonic()
+                if remaining <= 0:
+                    for future in pending:
+                        symbol = futures[future]
+                        msg = f"OHLCV таймаут: {symbol}"
+                        self._logger.info(msg)
+                        results[symbol] = msg
+                        future.cancel()
+                    pending.clear()
+                    break
+
                 try:
-                    results[symbol] = future.result(timeout=self._request_timeout_seconds)
+                    for future in as_completed(pending, timeout=remaining):
+                        pending.remove(future)
+                        symbol = futures[future]
+                        try:
+                            results[symbol] = future.result()
+                        except Exception as exc:  # noqa: BLE001
+                            msg = f"OHLCV ошибка: {symbol}: {exc}"
+                            self._logger.info(msg)
+                            results[symbol] = msg
                 except TimeoutError:
-                    msg = f"OHLCV таймаут: {symbol}"
-                    self._logger.info(msg)
-                    results[symbol] = msg
-                except Exception as exc:  # noqa: BLE001
-                    msg = f"OHLCV ошибка: {symbol}: {exc}"
-                    self._logger.info(msg)
-                    results[symbol] = msg
+                    for future in pending:
+                        symbol = futures[future]
+                        msg = f"OHLCV таймаут: {symbol}"
+                        self._logger.info(msg)
+                        results[symbol] = msg
+                        future.cancel()
+                    pending.clear()
+
+        for symbol in symbols:
+            if symbol not in results:
+                msg = f"OHLCV таймаут: {symbol}"
+                self._logger.info(msg)
+                results[symbol] = msg
 
         return results
