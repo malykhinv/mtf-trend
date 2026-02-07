@@ -6,11 +6,13 @@ from dataclasses import dataclass
 from itertools import product
 from pathlib import Path
 from typing import Any
+import logging
 
 import pandas as pd
 
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
+from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS
 
 
 @dataclass(slots=True)
@@ -18,6 +20,9 @@ class BacktestSummary:
     total_combinations: int
     profitable_combinations: int
     best_pf: float
+
+
+logger = logging.getLogger(__name__)
 
 
 class BacktestRunner:
@@ -28,14 +33,15 @@ class BacktestRunner:
         self._results_file_name = results_file_name
 
     def build_parameter_grid(self) -> list[dict[str, Any]]:
-        lookback = [13, 21, 34]
-        volume_mult = [1.2, 1.5, 2.0]
-        retest_window = [2, 4, 6]
-        retest_zone = [0.002, 0.003]
-        min_rr = [1.0, 1.5, 2.0]
-        sl_mode = ["LEVEL", "BREAKOUT_EXTREME"]
-        tp2_mult = [1.25, 1.5, 2.0]
+        lookback = BREAKOUT_PARAMETER_GRID["lookback"]
+        volume_mult = BREAKOUT_PARAMETER_GRID["volume_mult"]
+        retest_window = BREAKOUT_PARAMETER_GRID["retest_window"]
+        retest_zone = BREAKOUT_PARAMETER_GRID["retest_zone"]
+        min_rr = BREAKOUT_PARAMETER_GRID["min_rr"]
+        sl_mode = BREAKOUT_PARAMETER_GRID["sl_mode"]
+        tp2_mult = BREAKOUT_PARAMETER_GRID["tp2_mult"]
 
+        # combos = |lookback| × |volume_mult| × |retest_window| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| = 6×3×3×3×3×2×6 = 5832
         return [
             {
                 "lookback": lb,
@@ -76,6 +82,19 @@ class BacktestRunner:
         return results
 
     def build_summary(self, results: pd.DataFrame) -> BacktestSummary:
+        if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
+            logger.warning(
+                "run-backtest: расчетная мощность сетки=%s отличается от целевой=%s",
+                PARAMETER_GRID_SIZE,
+                TARGET_PARAMETER_COMBINATIONS,
+            )
+        if len(results) != TARGET_PARAMETER_COMBINATIONS:
+            logger.warning(
+                "run-backtest: фактическое число комбинаций=%s отличается от целевого=%s",
+                len(results),
+                TARGET_PARAMETER_COMBINATIONS,
+            )
+
         profitable = int((results["profit_factor"] > 1.0).sum()) if not results.empty else 0
         best_pf = float(results["profit_factor"].max()) if not results.empty else 0.0
         return BacktestSummary(
