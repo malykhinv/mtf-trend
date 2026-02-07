@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Generic, TypeVar
 
 import pandas as pd
 
 from domain.models.trade_result import TradeResult
 
 
-class BaseStrategy(ABC):
+StrategyParamsT = TypeVar("StrategyParamsT")
+
+
+class BaseStrategy(ABC, Generic[StrategyParamsT]):
     """Abstract strategy contract used by backtest runner."""
 
     @abstractmethod
-    def validate_config(self, params: dict[str, Any]) -> None:
+    def validate_config(self, params: StrategyParamsT) -> None:
         """Validate strategy parameters and raise ValueError for invalid configs."""
 
     @abstractmethod
@@ -22,5 +25,5 @@ class BaseStrategy(ABC):
         """Prepare and enrich source market data."""
 
     @abstractmethod
-    def generate_events(self, data: pd.DataFrame, params: dict[str, Any]) -> list[TradeResult]:
+    def generate_events(self, data: pd.DataFrame, params: StrategyParamsT) -> list[TradeResult]:
         """Run strategy simulation and return closed trades."""

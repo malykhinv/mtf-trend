@@ -5,7 +5,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
 
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
@@ -84,8 +83,8 @@ class OhlcvFetcher:
         timeframe: Timeframe,
         start_time: datetime,
         end_time: datetime,
-    ) -> dict[str, Any]:
-        results: dict[str, Any] = {}
+    ) -> dict[str, int | str]:
+        results: dict[str, int | str] = {}
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
             futures = {
                 executor.submit(self.fetch_symbol, s, timeframe, start_time, end_time): s for s in symbols
