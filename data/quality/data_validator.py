@@ -19,11 +19,14 @@ class DataValidator:
         if data.empty or "timestamp" not in data.columns:
             return []
 
+        normalized = data.reset_index(drop=True)
         issues: list[DataQualityIssue] = []
-        ts = pd.to_datetime(data["timestamp"], unit="ms", utc=True, errors="coerce")
+        ts = pd.to_datetime(normalized["timestamp"], unit="ms", utc=True, errors="coerce")
 
-        def add_issue(index: int, issue_type: str, severity: DataQualitySeverity, description: str) -> None:
-            tstamp = ts.iloc[index].to_pydatetime().astimezone(timezone.utc)
+        def add_issue(pos: int, issue_type: str, severity: DataQualitySeverity, description: str) -> None:
+            if pd.isna(ts.iloc[pos]):
+                return
+            tstamp = ts.iloc[pos].to_pydatetime().astimezone(timezone.utc)
             issues.append(
                 DataQualityIssue(
                     symbol=symbol,
@@ -36,34 +39,34 @@ class DataValidator:
             )
 
         for col in ("open", "high", "low", "close"):
-            if col in data.columns:
-                bad = data[col] < 0
-                for idx in data.index[bad.fillna(False)]:
-                    add_issue(int(idx), "negative_price", DataQualitySeverity.CRITICAL, f"Negative {col} value")
+            if col in normalized.columns:
+                bad = normalized[col] < 0
+                for pos in normalized.index[bad.fillna(False)]:
+                    add_issue(int(pos), "negative_price", DataQualitySeverity.CRITICAL, f"Negative {col} value")
 
         for col in ("volume", "open_interest"):
-            if col in data.columns:
-                bad = data[col] < 0
-                for idx in data.index[bad.fillna(False)]:
-                    add_issue(int(idx), "negative_volume", DataQualitySeverity.ERROR, f"Negative {col} value")
+            if col in normalized.columns:
+                bad = normalized[col] < 0
+                for pos in normalized.index[bad.fillna(False)]:
+                    add_issue(int(pos), "negative_volume", DataQualitySeverity.ERROR, f"Negative {col} value")
 
-        if {"high", "low", "close"}.issubset(data.columns):
-            spread = (data["high"] - data["low"]).abs()
-            base = data["close"].abs().replace(0, pd.NA)
+        if {"high", "low", "close"}.issubset(normalized.columns):
+            spread = (normalized["high"] - normalized["low"]).abs()
+            base = normalized["close"].abs().replace(0, pd.NA)
             ratio = spread / base
             suspicious = ratio > SPREAD_TO_CLOSE_WARNING_THRESHOLD
-            for idx in data.index[suspicious.fillna(False)]:
+            for pos in normalized.index[suspicious.fillna(False)]:
                 threshold_pct = int(SPREAD_TO_CLOSE_WARNING_THRESHOLD * 100)
                 add_issue(
-                    int(idx),
+                    int(pos),
                     "suspicious_spread",
                     DataQualitySeverity.WARNING,
                     f"Spread exceeds {threshold_pct}% of close",
                 )
 
-        if "volume" in data.columns:
-            zero_volume = data["volume"] == 0
-            for idx in data.index[zero_volume.fillna(False)]:
-                add_issue(int(idx), "zero_volume", DataQualitySeverity.INFO, "Zero candle volume")
+        if "volume" in normalized.columns:
+            zero_volume = normalized["volume"] == 0
+            for pos in normalized.index[zero_volume.fillna(False)]:
+                add_issue(int(pos), "zero_volume", DataQualitySeverity.INFO, "Zero candle volume")
 
         return issues
