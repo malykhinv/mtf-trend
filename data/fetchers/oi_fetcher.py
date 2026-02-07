@@ -47,10 +47,15 @@ class OiFetcher:
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
         next_start = start_time
-        last_timestamp = self._storage.get_last_timestamp(symbol, timeframe)
+        watermark_column = "open_interest"
+        last_timestamp = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
         if last_timestamp is not None:
             next_start = max(start_time, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
 
+        watermark_display = last_timestamp.isoformat() if last_timestamp is not None else "None"
+        self._logger.info(
+            f"OI watermark: {symbol} {timeframe.value} column={watermark_column} last={watermark_display} selected={next_start.isoformat()}"
+        )
         self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start.isoformat()} -> {end_time.isoformat()}")
         if next_start > end_time:
             self._logger.info(f"OI пропуск: {symbol} уже актуален")
