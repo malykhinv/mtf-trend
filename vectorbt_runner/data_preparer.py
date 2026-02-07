@@ -25,6 +25,14 @@ from domain.models.trade_result import TradeResult
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
+def _to_utc_timestamp(value: object) -> pd.Timestamp:
+    """Convert datetime-like values to UTC timestamp safely for aware/naive inputs."""
+    timestamp = pd.Timestamp(value)
+    if timestamp.tz is None:
+        return timestamp.tz_localize("UTC")
+    return timestamp.tz_convert("UTC")
+
+
 class DataPreparer:
     """Loads cached parquet data and normalizes it for backtest processing."""
 
@@ -86,8 +94,8 @@ class DataPreparer:
         trades_sorted = sorted(trades, key=lambda trade: (trade.entry_time, trade.exit_time))
         trade_rows = [
             {
-                "entry_time": pd.Timestamp(trade.entry_time, tz=SIMULATION_TIMEZONE_UTC),
-                "exit_time": pd.Timestamp(trade.exit_time, tz=SIMULATION_TIMEZONE_UTC),
+                "entry_time": _to_utc_timestamp(trade.entry_time),
+                "exit_time": _to_utc_timestamp(trade.exit_time),
                 "pnl": float(trade.pnl),
                 "pnl_percent": float(trade.pnl_percent.value),
                 "result_type": trade.result_type.value,
