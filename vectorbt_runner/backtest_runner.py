@@ -8,6 +8,26 @@ import logging
 
 import pandas as pd
 
+from constants import (
+    BACKTEST_EMPTY_MAX_DD,
+    BACKTEST_EMPTY_PF,
+    BACKTEST_EMPTY_PNL_PERCENT,
+    BACKTEST_EMPTY_TRADES_COUNT,
+    BACKTEST_EMPTY_WIN_RATE,
+    BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES,
+    BACKTEST_PROFITABLE_PF_THRESHOLD,
+    BACKTEST_ROUND_MAX_DD,
+    BACKTEST_ROUND_METRICS,
+    BACKTEST_SORT_DESCENDING,
+    BACKTEST_ZERO_COUNT,
+    SIMULATION_FEES,
+    SIMULATION_FREQ,
+    SIMULATION_INIT_CASH,
+    SIMULATION_SIZE,
+    SIMULATION_SIZE_TYPE,
+    SIMULATION_SLIPPAGE,
+    SIMULATION_VECTORBT_DIRECTION,
+)
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
@@ -88,7 +108,7 @@ class BacktestRunner:
             row = self._build_metrics_row(params, all_trades)
             rows.append(row)
 
-        results = pd.DataFrame(rows).sort_values("profit_factor", ascending=False).reset_index(drop=True)
+        results = pd.DataFrame(rows).sort_values("profit_factor", ascending=BACKTEST_SORT_DESCENDING).reset_index(drop=True)
         self._save_results(results)
         return results
 
@@ -106,8 +126,8 @@ class BacktestRunner:
                 TARGET_PARAMETER_COMBINATIONS,
             )
 
-        profitable = int((results["profit_factor"] > 1.0).sum()) if not results.empty else 0
-        best_pf = float(results["profit_factor"].max()) if not results.empty else 0.0
+        profitable = int((results["profit_factor"] > BACKTEST_PROFITABLE_PF_THRESHOLD).sum()) if not results.empty else BACKTEST_ZERO_COUNT
+        best_pf = float(results["profit_factor"].max()) if not results.empty else BACKTEST_EMPTY_PF
         return BacktestSummary(
             total_combinations=int(len(results)),
             profitable_combinations=profitable,
@@ -138,15 +158,15 @@ class BacktestRunner:
         if not trades:
             return {
                 **base_row,
-                "profit_factor": 0.0,
-                "pnl_percent": 0.0,
-                "win_rate": 0.0,
-                "trades_count": 0,
-                "max_dd": 0.0,
-                "sl_count": 0,
-                "be_count": 0,
-                "tp1_be_count": 0,
-                "tp2_count": 0,
+                "profit_factor": BACKTEST_EMPTY_PF,
+                "pnl_percent": BACKTEST_EMPTY_PNL_PERCENT,
+                "win_rate": BACKTEST_EMPTY_WIN_RATE,
+                "trades_count": BACKTEST_EMPTY_TRADES_COUNT,
+                "max_dd": BACKTEST_EMPTY_MAX_DD,
+                "sl_count": BACKTEST_ZERO_COUNT,
+                "be_count": BACKTEST_ZERO_COUNT,
+                "tp1_be_count": BACKTEST_ZERO_COUNT,
+                "tp2_count": BACKTEST_ZERO_COUNT,
             }
 
         prepared = DataPreparer.prepare_vectorbt_inputs(trades)
@@ -154,13 +174,13 @@ class BacktestRunner:
             close=prepared.close,
             entries=prepared.entries,
             exits=prepared.exits,
-            direction="longonly",
-            init_cash=100.0,
-            size=1.0,
-            size_type="amount",
-            fees=0.0,
-            slippage=0.0,
-            freq="1min",
+            direction=SIMULATION_VECTORBT_DIRECTION,
+            init_cash=SIMULATION_INIT_CASH,
+            size=SIMULATION_SIZE,
+            size_type=SIMULATION_SIZE_TYPE,
+            fees=SIMULATION_FEES,
+            slippage=SIMULATION_SLIPPAGE,
+            freq=SIMULATION_FREQ,
         )
 
         pnl_values = [trade.pnl for trade in trades]
@@ -172,14 +192,14 @@ class BacktestRunner:
 
         max_dd = portfolio.drawdowns.max_drawdown()
         if pd.isna(max_dd):
-            max_dd = 0.0
+            max_dd = BACKTEST_EMPTY_MAX_DD
         else:
             max_dd = abs(float(max_dd))
 
         if pd.isna(pf):
             profits = sum(value for value in pnl_values if value > 0)
             losses = abs(sum(value for value in pnl_values if value < 0))
-            pf = profits / losses if losses > 0 else (99.0 if profits > 0 else 0.0)
+            pf = profits / losses if losses > 0 else (BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES if profits > 0 else BACKTEST_EMPTY_PF)
 
         if pd.isna(win_rate):
             wins = sum(1 for value in pnl_values if value > 0)
@@ -188,11 +208,11 @@ class BacktestRunner:
         result_types = [trade.result_type for trade in trades]
         return {
             **base_row,
-            "profit_factor": round(float(pf), 4),
-            "pnl_percent": round(float(pnl_percent), 4),
-            "win_rate": round(float(win_rate), 4),
+            "profit_factor": round(float(pf), BACKTEST_ROUND_METRICS),
+            "pnl_percent": round(float(pnl_percent), BACKTEST_ROUND_METRICS),
+            "win_rate": round(float(win_rate), BACKTEST_ROUND_METRICS),
             "trades_count": trades_count,
-            "max_dd": round(float(max_dd), 6),
+            "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
             "sl_count": result_types.count(TradeResultType.SL),
             "be_count": result_types.count(TradeResultType.BE),
             "tp1_be_count": result_types.count(TradeResultType.TP1_BE),

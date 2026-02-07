@@ -4,6 +4,17 @@ from __future__ import annotations
 
 import pandas as pd
 
+from constants import (
+    STRATEGY_DEFAULT_OPEN_INTEREST,
+    STRATEGY_MIN_LOOKBACK,
+    STRATEGY_MIN_LOOKBACK_BUFFER,
+    STRATEGY_MIN_RR,
+    STRATEGY_MIN_TP2_MULT,
+    STRATEGY_MIN_VOLUME_MULT,
+    STRATEGY_POSITION_SIZE,
+    STRATEGY_REQUIRED_COLUMNS,
+    STRATEGY_RISK_FLOOR,
+)
 from domain.enums.position_side import PositionSide
 from domain.models.candle import Candle
 from domain.models.trade_result import TradeResult
@@ -21,7 +32,7 @@ from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     """Breakout/retest-lite LONG strategy with TP1/TP2 and BE support."""
 
-    REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+    REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
 
     def __init__(self, *, commission_rate: float, slippage: float, strategy_timezone: str, simulation_timezone: str) -> None:
         self._commission_rate = commission_rate
@@ -30,14 +41,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         self._simulation_timezone = simulation_timezone
 
     def validate_config(self, params: BreakoutParams) -> None:
-        if params.lookback < 5:
-            raise ValueError("lookback must be >= 5")
-        if params.volume_mult <= 0:
+        if params.lookback < STRATEGY_MIN_LOOKBACK:
+            raise ValueError(f"lookback must be >= {STRATEGY_MIN_LOOKBACK}")
+        if params.volume_mult <= STRATEGY_MIN_VOLUME_MULT:
             raise ValueError("volume_mult must be > 0")
-        if params.min_rr <= 0:
+        if params.min_rr <= STRATEGY_MIN_RR:
             raise ValueError("min_rr must be > 0")
-        if params.tp2_mult <= 1:
-            raise ValueError("tp2_mult must be > 1")
+        if params.tp2_mult <= STRATEGY_MIN_TP2_MULT:
+            raise ValueError(f"tp2_mult must be > {STRATEGY_MIN_TP2_MULT}")
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         missing = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
@@ -59,7 +70,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         self.validate_config(params)
         prepared = self.prepare_data(data)
-        if len(prepared) < params.lookback + 5:
+        if len(prepared) < params.lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
             return []
 
         sim = StatefulPositionSimulator(
@@ -85,7 +96,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 breakout = row["close"] > level_high
                 volume_ok = row["volume"] >= avg_volume * params.volume_mult
                 if breakout and volume_ok:
-                    risk = max(row["close"] - level_low, row["close"] * 0.002)
+                    risk = max(row["close"] - level_low, row["close"] * STRATEGY_RISK_FLOOR)
                     stop = row["close"] - risk
                     tp1 = row["close"] + risk * params.min_rr
                     tp2 = row["close"] + risk * params.min_rr * params.tp2_mult
@@ -100,7 +111,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     )
 
             if sim.position is None and pending_signal is not None:
-                sim.register_signal(pending_signal, size=1.0)
+                sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
                 pending_signal = None
 
             result = sim.process_candle(candle)
@@ -123,7 +134,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             low=Price(float(row["low"])),
             close=Price(float(row["close"])),
             volume=Volume(float(row["volume"])),
-            open_interest=Volume(float(row.get("open_interest", 0.0))),
+            open_interest=Volume(float(row.get("open_interest", STRATEGY_DEFAULT_OPEN_INTEREST))),
         )
 
     # endregion Private

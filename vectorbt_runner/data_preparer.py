@@ -6,6 +6,14 @@ from pathlib import Path
 
 import pandas as pd
 
+from constants import (
+    SIMULATION_DATETIME_UNIT_MS,
+    SIMULATION_PARQUET_FILE_NAME,
+    SIMULATION_PNL_PERCENT_DIVISOR,
+    SIMULATION_PRICE_INIT,
+    SIMULATION_TIMEZONE_UTC,
+    STRATEGY_REQUIRED_COLUMNS,
+)
 from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
 
@@ -16,7 +24,7 @@ from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 class DataPreparer:
     """Loads cached parquet data and normalizes it for backtest processing."""
 
-    REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+    REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
 
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = Path(cache_dir)
@@ -27,13 +35,13 @@ class DataPreparer:
             return symbols
 
         for symbol_dir in self._cache_dir.iterdir():
-            path = symbol_dir / timeframe.value / "data.parquet"
+            path = symbol_dir / timeframe.value / SIMULATION_PARQUET_FILE_NAME
             if symbol_dir.is_dir() and path.exists():
                 symbols.append(symbol_dir.name)
         return sorted(symbols)
 
     def load_symbol_data(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
-        path = self._cache_dir / symbol / timeframe.value / "data.parquet"
+        path = self._cache_dir / symbol / timeframe.value / SIMULATION_PARQUET_FILE_NAME
         if not path.exists():
             return pd.DataFrame()
 
@@ -44,7 +52,7 @@ class DataPreparer:
 
         normalized = frame.copy()
         normalized["symbol"] = symbol
-        normalized["datetime"] = pd.to_datetime(normalized["timestamp"], unit="ms", utc=True, errors="coerce")
+        normalized["datetime"] = pd.to_datetime(normalized["timestamp"], unit=SIMULATION_DATETIME_UNIT_MS, utc=True, errors="coerce")
         normalized = normalized.dropna(subset=["datetime"])
 
         numeric_cols = [col for col in ("open", "high", "low", "close", "volume", "open_interest") if col in normalized.columns]
@@ -56,10 +64,10 @@ class DataPreparer:
         return normalized.reset_index(drop=True)
 
     @staticmethod
-    def prepare_vectorbt_inputs(trades: list[TradeResult], initial_price: float = 100.0) -> VectorbtInputs:
+    def prepare_vectorbt_inputs(trades: list[TradeResult], initial_price: float = SIMULATION_PRICE_INIT) -> VectorbtInputs:
         """Build synthetic price/signals/equity series from closed trades."""
         if not trades:
-            index = pd.DatetimeIndex([], tz="UTC")
+            index = pd.DatetimeIndex([], tz=SIMULATION_TIMEZONE_UTC)
             empty_float = pd.Series([], index=index, dtype="float64")
             empty_bool = pd.Series([], index=index, dtype="bool")
             trades_frame = pd.DataFrame(columns=["entry_time", "exit_time", "pnl", "pnl_percent", "result_type"])
@@ -74,8 +82,8 @@ class DataPreparer:
         trades_sorted = sorted(trades, key=lambda trade: (trade.entry_time, trade.exit_time))
         trade_rows = [
             {
-                "entry_time": pd.Timestamp(trade.entry_time, tz="UTC"),
-                "exit_time": pd.Timestamp(trade.exit_time, tz="UTC"),
+                "entry_time": pd.Timestamp(trade.entry_time, tz=SIMULATION_TIMEZONE_UTC),
+                "exit_time": pd.Timestamp(trade.exit_time, tz=SIMULATION_TIMEZONE_UTC),
                 "pnl": float(trade.pnl),
                 "pnl_percent": float(trade.pnl_percent.value),
                 "result_type": trade.result_type.value,
@@ -86,7 +94,7 @@ class DataPreparer:
 
         timeline = pd.DatetimeIndex(
             sorted(set(trades_frame["entry_time"].tolist() + trades_frame["exit_time"].tolist())),
-            tz="UTC",
+            tz=SIMULATION_TIMEZONE_UTC,
         )
         close = pd.Series(initial_price, index=timeline, dtype="float64")
         entries = pd.Series(False, index=timeline, dtype="bool")
@@ -105,7 +113,7 @@ class DataPreparer:
             exits.loc[exit_time] = True
             close.loc[entry_time] = running_price
 
-            running_price *= 1.0 + (pnl_percent / 100.0)
+            running_price *= 1.0 + (pnl_percent / SIMULATION_PNL_PERCENT_DIVISOR)
             close.loc[exit_time] = running_price
 
             cumulative_pnl += pnl
