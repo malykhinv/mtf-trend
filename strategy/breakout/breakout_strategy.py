@@ -18,6 +18,7 @@ from constants import (
     STRATEGY_REQUIRED_COLUMNS,
     STRATEGY_RISK_FLOOR,
 )
+from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.level_type import LevelType
 from domain.enums.position_side import PositionSide
 from domain.enums.timeframe import Timeframe
@@ -186,43 +187,25 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 continue
 
             if pending_retest is not None:
+                if params.entry_trigger == EntryTrigger.IMMEDIATE:
+                    pending_signal = self._build_signal_from_retest(
+                        annotated=annotated,
+                        entry_idx=pending_retest.retest_idx + 1,
+                        pending_retest=pending_retest,
+                        params=params,
+                    )
+                    pending_retest = None
+                    continue
+
                 if idx > pending_retest.confirmation_end_idx:
                     pending_retest = None
                     continue
                 if self._is_confirmation(row=row, retest=pending_retest):
-                    entry_idx = idx + 1
-                    if entry_idx >= len(annotated):
-                        pending_retest = None
-                        continue
-                    entry_row = annotated.iloc[entry_idx]
-                    entry_price = float(entry_row["open"])
-                    stop = self._resolve_stop_loss(
+                    pending_signal = self._build_signal_from_retest(
+                        annotated=annotated,
+                        entry_idx=idx + 1,
+                        pending_retest=pending_retest,
                         params=params,
-                        side=pending_retest.breakout.side,
-                        level=pending_retest.breakout.level.price.value,
-                        breakout_extreme=pending_retest.breakout.breakout_extreme,
-                        retest_low=pending_retest.retest_low,
-                        retest_high=pending_retest.retest_high,
-                    )
-                    risk = self._risk_from_entry(entry_price=entry_price, stop=stop, side=pending_retest.breakout.side)
-                    tp1, tp2 = self._targets_from_entry(
-                        entry_price=entry_price,
-                        risk=risk,
-                        min_rr=params.min_rr,
-                        tp2_mult=params.tp2_mult,
-                        side=pending_retest.breakout.side,
-                    )
-                    pending_signal = TradeSignal(
-                        entry_price=Price(entry_price),
-                        entry_time=datetime_to_timezone(
-                            entry_row["datetime"].to_pydatetime(),
-                            self._simulation_timezone,
-                        ),
-                        stop_loss=Price(float(stop)),
-                        take_profit_1=Price(float(tp1)),
-                        take_profit_2=Price(float(tp2)),
-                        position_side=pending_retest.breakout.side,
-                        symbol=params.symbol,
                     )
                     pending_retest = None
                     continue
@@ -515,6 +498,47 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if retest.breakout.side == PositionSide.LONG:
             return float(row["close"]) > retest.retest_high
         return float(row["close"]) < retest.retest_low
+
+    def _build_signal_from_retest(
+        self,
+        *,
+        annotated: pd.DataFrame,
+        entry_idx: int,
+        pending_retest: PendingRetest,
+        params: BreakoutParams,
+    ) -> TradeSignal | None:
+        if entry_idx >= len(annotated):
+            return None
+        entry_row = annotated.iloc[entry_idx]
+        entry_price = float(entry_row["open"])
+        stop = self._resolve_stop_loss(
+            params=params,
+            side=pending_retest.breakout.side,
+            level=pending_retest.breakout.level.price.value,
+            breakout_extreme=pending_retest.breakout.breakout_extreme,
+            retest_low=pending_retest.retest_low,
+            retest_high=pending_retest.retest_high,
+        )
+        risk = self._risk_from_entry(entry_price=entry_price, stop=stop, side=pending_retest.breakout.side)
+        tp1, tp2 = self._targets_from_entry(
+            entry_price=entry_price,
+            risk=risk,
+            min_rr=params.min_rr,
+            tp2_mult=params.tp2_mult,
+            side=pending_retest.breakout.side,
+        )
+        return TradeSignal(
+            entry_price=Price(entry_price),
+            entry_time=datetime_to_timezone(
+                entry_row["datetime"].to_pydatetime(),
+                self._simulation_timezone,
+            ),
+            stop_loss=Price(float(stop)),
+            take_profit_1=Price(float(tp1)),
+            take_profit_2=Price(float(tp2)),
+            position_side=pending_retest.breakout.side,
+            symbol=params.symbol,
+        )
 
     @staticmethod
     def _resolve_stop_loss(

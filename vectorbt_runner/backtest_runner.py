@@ -54,8 +54,9 @@ class BacktestRunner:
         min_move_atr = BREAKOUT_PARAMETER_GRID["min_move_atr"]
         max_retest_depth = BREAKOUT_PARAMETER_GRID["max_retest_depth"]
         confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
+        entry_trigger = BREAKOUT_PARAMETER_GRID["entry_trigger"]
 
-        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |retest_zone_atr| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_atr| × |max_retest_depth| × |confirmation_bars|
+        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |retest_zone_atr| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_atr| × |max_retest_depth| × |confirmation_bars| × |entry_trigger|
         return [
             BreakoutParams(
                 lookback=int(lb),
@@ -70,9 +71,10 @@ class BacktestRunner:
                 min_move_atr=float(min_move),
                 max_retest_depth=float(max_depth),
                 confirmation_bars=int(confirm_bars),
+                entry_trigger=entry_trg,
                 symbol="",
             )
-            for lb, vm, rw, rz, rza, rr, sl, tp2, body_ratio, min_move, max_depth, confirm_bars in product(
+            for lb, vm, rw, rz, rza, rr, sl, tp2, body_ratio, min_move, max_depth, confirm_bars, entry_trg in product(
                 lookback,
                 volume_mult,
                 retest_window_hours,
@@ -85,6 +87,7 @@ class BacktestRunner:
                 min_move_atr,
                 max_retest_depth,
                 confirmation_bars,
+                entry_trigger,
             )
         ]
 
@@ -115,6 +118,7 @@ class BacktestRunner:
                     min_move_atr=params.min_move_atr,
                     max_retest_depth=params.max_retest_depth,
                     confirmation_bars=params.confirmation_bars,
+                    entry_trigger=params.entry_trigger,
                     symbol=symbol,
                     levels_timeframe=levels_timeframe,
                     entry_timeframe=entry_timeframe,
@@ -140,13 +144,13 @@ class BacktestRunner:
     def build_summary(results: pd.DataFrame) -> BacktestSummary:
         if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
             logger.warning(
-                "run-backtest: расчетная мощность сетки=%s отличается от целевой=%s",
+                "run-backtest: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
                 PARAMETER_GRID_SIZE,
                 TARGET_PARAMETER_COMBINATIONS,
             )
         if len(results) != TARGET_PARAMETER_COMBINATIONS:
             logger.warning(
-                "run-backtest: фактическое число комбинаций=%s отличается от целевого=%s",
+                "run-backtest: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
                 len(results),
                 TARGET_PARAMETER_COMBINATIONS,
             )
@@ -176,6 +180,7 @@ class BacktestRunner:
             "min_move_atr": params.min_move_atr,
             "max_retest_depth": params.max_retest_depth,
             "confirmation_bars": params.confirmation_bars,
+            "entry_trigger": params.entry_trigger.value,
         }
 
         if not trades:
