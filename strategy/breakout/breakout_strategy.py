@@ -37,13 +37,22 @@ from vectorbt_runner.mtf_frames import SymbolMtfFrames
 @dataclass(slots=True)
 class PendingBreakout:
     breakout_idx: int
-    level_high: float
-    breakout_low: float
-    breakout_close: float
+    level: float
+    breakout_extreme: float
+    side: PositionSide
+    level_start_time: pd.Timestamp
+
+
+@dataclass(slots=True)
+class PendingRetest:
+    breakout: PendingBreakout
+    retest_idx: int
+    retest_low: float
+    retest_high: float
 
 
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
-    """Breakout/retest-lite LONG strategy with TP1/TP2 and BE support."""
+    """Breakout/retest strategy with continuation confirmation and volume regime checks."""
 
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
     _logger = logging.getLogger(__name__)
@@ -114,98 +123,139 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if len(lower_prepared) < STRATEGY_MIN_LOOKBACK_BUFFER:
             return []
 
-        higher_levels = higher_prepared[["datetime", "high", "volume"]].copy()
+        higher_levels = higher_prepared[["datetime", "high", "low"]].copy()
         higher_levels["level_high"] = higher_levels["high"].rolling(window=params.lookback).max().shift(1)
-        higher_levels["avg_volume"] = higher_levels["volume"].rolling(window=params.lookback).mean().shift(1)
-        higher_levels = higher_levels.dropna(subset=["level_high", "avg_volume"]).sort_values("datetime")
+        higher_levels["level_low"] = higher_levels["low"].rolling(window=params.lookback).min().shift(1)
+        higher_levels["level_start_time"] = higher_levels["datetime"]
+        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("datetime")
         if higher_levels.empty:
             return []
 
         lower_prepared = lower_prepared.sort_values("datetime").reset_index(drop=True)
         annotated = pd.merge_asof(
             lower_prepared,
-            higher_levels[["datetime", "level_high", "avg_volume"]],
+            higher_levels[["datetime", "level_high", "level_low", "level_start_time"]],
             on="datetime",
             direction="backward",
         )
-        annotated = annotated.dropna(subset=["level_high", "avg_volume"]).reset_index(drop=True)
+        annotated = annotated.dropna(subset=["level_high", "level_low", "level_start_time"]).reset_index(drop=True)
         if annotated.empty:
             return []
-
-        sim = StatefulPositionSimulator(
-            side=PositionSide.LONG,
-            order_processor=OrderProcessor(commission_rate=self._commission_rate, slippage=self._slippage),
-            trade_classifier=TradeClassifier(),
-            simulation_timezone=self._simulation_timezone,
-        )
 
         trades: list[TradeResult] = []
         pending_signal: TradeSignal | None = None
         pending_breakout: PendingBreakout | None = None
+        pending_retest: PendingRetest | None = None
+        active_sim: StatefulPositionSimulator | None = None
+        retest_window_candles = max(1, self._hours_to_candles(params.retest_window_hours, params.entry_timeframe))
 
         for idx in range(len(annotated)):
             row = annotated.iloc[idx]
             candle = self._to_candle(row)
 
-            if sim.position is None and pending_signal is not None:
-                sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
+            if pending_signal is not None and (active_sim is None or active_sim.position is None):
+                active_sim = StatefulPositionSimulator(
+                    side=pending_signal.position_side,
+                    order_processor=OrderProcessor(commission_rate=self._commission_rate, slippage=self._slippage),
+                    trade_classifier=TradeClassifier(),
+                    simulation_timezone=self._simulation_timezone,
+                )
+                active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
                 pending_signal = None
 
-            result = sim.process_candle(candle)
-            if result is not None:
-                trades.append(result)
+            if active_sim is not None:
+                result = active_sim.process_candle(candle)
+                if result is not None:
+                    trades.append(result)
 
-            if sim.position is None and pending_signal is None:
-                if pending_breakout is not None:
-                    breakout_idx = pending_breakout.breakout_idx
-                    if idx - breakout_idx > params.retest_window:
+            active_position = active_sim is not None and active_sim.position is not None
+            if active_position or pending_signal is not None:
+                continue
+
+            if pending_retest is not None:
+                if self._is_confirmation(row=row, retest=pending_retest):
+                    entry_idx = idx + 1
+                    if entry_idx >= len(annotated):
+                        pending_retest = None
+                        continue
+                    entry_row = annotated.iloc[entry_idx]
+                    entry_price = float(entry_row["open"])
+                    stop = self._resolve_stop_loss(
+                        params=params,
+                        side=pending_retest.breakout.side,
+                        level=pending_retest.breakout.level,
+                        breakout_extreme=pending_retest.breakout.breakout_extreme,
+                        retest_low=pending_retest.retest_low,
+                        retest_high=pending_retest.retest_high,
+                    )
+                    risk = self._risk_from_entry(entry_price=entry_price, stop=stop, side=pending_retest.breakout.side)
+                    tp1, tp2 = self._targets_from_entry(
+                        entry_price=entry_price,
+                        risk=risk,
+                        min_rr=params.min_rr,
+                        tp2_mult=params.tp2_mult,
+                        side=pending_retest.breakout.side,
+                    )
+                    pending_signal = TradeSignal(
+                        entry_price=Price(entry_price),
+                        entry_time=datetime_to_timezone(
+                            entry_row["datetime"].to_pydatetime(),
+                            self._simulation_timezone,
+                        ),
+                        stop_loss=Price(float(stop)),
+                        take_profit_1=Price(float(tp1)),
+                        take_profit_2=Price(float(tp2)),
+                        position_side=pending_retest.breakout.side,
+                        symbol=params.symbol,
+                    )
+                    pending_retest = None
+                continue
+
+            if pending_breakout is not None:
+                breakout_idx = pending_breakout.breakout_idx
+                if idx - breakout_idx > retest_window_candles:
+                    pending_breakout = None
+                elif self._is_retest_candle(row=row, breakout=pending_breakout, params=params):
+                    if self._volume_regime_ok(
+                        annotated=annotated,
+                        breakout=pending_breakout,
+                        breakout_idx=breakout_idx,
+                        retest_idx=idx,
+                        volume_mult=params.volume_mult,
+                    ) and self._extra_retest_filters_ok(
+                        row=row,
+                        breakout=pending_breakout,
+                        params=params,
+                    ):
+                        pending_retest = PendingRetest(
+                            breakout=pending_breakout,
+                            retest_idx=idx,
+                            retest_low=float(row["low"]),
+                            retest_high=float(row["high"]),
+                        )
                         pending_breakout = None
-                    else:
-                        level_high = pending_breakout.level_high
-                        breakout_low = pending_breakout.breakout_low
-                        breakout_close = pending_breakout.breakout_close
+                        continue
 
-                        upper_retest_bound = level_high * (1 + params.retest_zone)
-                        lower_retest_bound = level_high * (1 - params.retest_zone)
-                        retest_hit = row["low"] <= upper_retest_bound and row["close"] >= lower_retest_bound
-
-                        if retest_hit:
-                            stop = self._resolve_stop_loss(
-                                params=params,
-                                level_high=level_high,
-                                breakout_low=breakout_low,
-                                retest_low=float(row["low"]),
-                            )
-                            risk = max(breakout_close - stop, breakout_close * STRATEGY_RISK_FLOOR)
-                            tp1 = breakout_close + risk * params.min_rr
-                            tp2 = breakout_close + risk * params.min_rr * params.tp2_mult
-                            entry_idx = min(idx + 1, len(annotated) - 1)
-                            entry_row = annotated.iloc[entry_idx]
-                            pending_signal = TradeSignal(
-                                entry_price=Price(breakout_close),
-                                entry_time=datetime_to_timezone(
-                                    entry_row["datetime"].to_pydatetime(),
-                                    self._simulation_timezone,
-                                ),
-                                stop_loss=Price(float(stop)),
-                                take_profit_1=Price(float(tp1)),
-                                take_profit_2=Price(float(tp2)),
-                                position_side=PositionSide.LONG,
-                                symbol=params.symbol,
-                            )
-                            pending_breakout = None
-                            continue
-
+            if pending_breakout is None:
                 level_high = float(row["level_high"])
-                avg_volume = float(row["avg_volume"])
-                breakout = row["close"] > level_high
-                volume_ok = row["volume"] >= avg_volume * params.volume_mult
-                if breakout and volume_ok:
+                level_low = float(row["level_low"])
+                breakout_long = float(row["close"]) > level_high
+                breakout_short = float(row["close"]) < level_low
+                if breakout_long:
                     pending_breakout = PendingBreakout(
                         breakout_idx=idx,
-                        level_high=level_high,
-                        breakout_low=float(row["low"]),
-                        breakout_close=float(row["close"]),
+                        level=level_high,
+                        breakout_extreme=float(row["low"]),
+                        side=PositionSide.LONG,
+                        level_start_time=row["level_start_time"],
+                    )
+                elif breakout_short:
+                    pending_breakout = PendingBreakout(
+                        breakout_idx=idx,
+                        level=level_low,
+                        breakout_extreme=float(row["high"]),
+                        side=PositionSide.SHORT,
+                        level_start_time=row["level_start_time"],
                     )
 
         if pending_signal is not None:
@@ -218,10 +268,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 pending_signal.entry_price.value,
             )
 
-        if sim.position is not None:
+        if active_sim is not None and active_sim.position is not None:
             final_row = annotated.iloc[-1]
             final_time = datetime_to_timezone(final_row["datetime"].to_pydatetime(), self._simulation_timezone)
-            trades.append(sim.close_position(price=float(final_row["close"]), exit_time=final_time))
+            trades.append(active_sim.close_position(price=float(final_row["close"]), exit_time=final_time))
 
         return trades
 
@@ -239,11 +289,105 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         )
 
     @staticmethod
-    def _resolve_stop_loss(*, params: BreakoutParams, level_high: float, breakout_low: float, retest_low: float) -> float:
+    def _hours_to_candles(hours: int, timeframe: Timeframe) -> int:
+        timeframe_minutes = {
+            Timeframe.M1: 1,
+            Timeframe.M5: 5,
+            Timeframe.M15: 15,
+            Timeframe.M30: 30,
+            Timeframe.H1: 60,
+            Timeframe.H4: 240,
+            Timeframe.D1: 1440,
+            Timeframe.W1: 10080,
+        }
+        candle_minutes = timeframe_minutes[timeframe]
+        return max(1, int((hours * 60) / candle_minutes))
+
+    @staticmethod
+    def _body_ratio(row: pd.Series) -> float:
+        high = float(row["high"])
+        low = float(row["low"])
+        spread = max(high - low, 1e-12)
+        return abs(float(row["close"]) - float(row["open"])) / spread
+
+    def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+        level = breakout.level
+        upper = level * (1 + params.retest_zone)
+        lower = level * (1 - params.retest_zone)
+        touched = float(row["low"]) <= upper and float(row["high"]) >= lower
+        if not touched or self._body_ratio(row) < params.min_body_ratio:
+            return False
+        if breakout.side == PositionSide.LONG:
+            return float(row["close"]) > level
+        return float(row["close"]) < level
+
+    def _extra_retest_filters_ok(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+        if breakout.side == PositionSide.LONG:
+            move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), 1e-12)
+            depth = max(0.0, (breakout.level - float(row["low"])) / max(breakout.level, 1e-12))
+        else:
+            move = (float(row["high"]) - float(row["close"])) / max(float(row["close"]), 1e-12)
+            depth = max(0.0, (float(row["high"]) - breakout.level) / max(breakout.level, 1e-12))
+        return move >= params.min_move_from_breakout and depth <= params.max_retest_depth
+
+    @staticmethod
+    def _volume_regime_ok(
+        *,
+        annotated: pd.DataFrame,
+        breakout: PendingBreakout,
+        breakout_idx: int,
+        retest_idx: int,
+        volume_mult: float,
+    ) -> bool:
+        before_slice = annotated.iloc[:breakout_idx]
+        before_slice = before_slice[before_slice["datetime"] >= breakout.level_start_time]
+        after_slice = annotated.iloc[breakout_idx + 1 : retest_idx]
+        if before_slice.empty or after_slice.empty:
+            return False
+        v_before = float(before_slice["volume"].mean())
+        v_after = float(after_slice["volume"].mean())
+        return v_after >= v_before * volume_mult
+
+    @staticmethod
+    def _is_confirmation(*, row: pd.Series, retest: PendingRetest) -> bool:
+        if retest.breakout.side == PositionSide.LONG:
+            breakout_close = float(row["close"]) > retest.retest_high
+            higher_low = float(row["low"]) > retest.retest_low
+            return breakout_close or higher_low
+        breakout_close = float(row["close"]) < retest.retest_low
+        lower_high = float(row["high"]) < retest.retest_high
+        return breakout_close or lower_high
+
+    @staticmethod
+    def _resolve_stop_loss(
+        *,
+        params: BreakoutParams,
+        side: PositionSide,
+        level: float,
+        breakout_extreme: float,
+        retest_low: float,
+        retest_high: float,
+    ) -> float:
         if params.sl_mode.value == "LEVEL":
-            return level_high * (1 - params.retest_zone)
+            return level * (1 - params.retest_zone) if side == PositionSide.LONG else level * (1 + params.retest_zone)
         if params.sl_mode.value == "BREAKOUT_EXTREME":
-            return breakout_low
-        return retest_low
+            return breakout_extreme
+        return retest_low if side == PositionSide.LONG else retest_high
+
+    @staticmethod
+    def _risk_from_entry(*, entry_price: float, stop: float, side: PositionSide) -> float:
+        if side == PositionSide.LONG:
+            return max(entry_price - stop, entry_price * STRATEGY_RISK_FLOOR)
+        return max(stop - entry_price, entry_price * STRATEGY_RISK_FLOOR)
+
+    @staticmethod
+    def _targets_from_entry(*, entry_price: float, risk: float, min_rr: float, tp2_mult: float, side: PositionSide) -> tuple[float, float]:
+        if side == PositionSide.LONG:
+            tp1 = entry_price + risk * min_rr
+            tp2 = entry_price + risk * min_rr * tp2_mult
+            return tp1, tp2
+        tp1 = entry_price - risk * min_rr
+        tp2 = entry_price - risk * min_rr * tp2_mult
+        return tp1, tp2
 
     # endregion Private

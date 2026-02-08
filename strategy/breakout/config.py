@@ -8,10 +8,13 @@ from math import prod
 from constants import (
     BREAKOUT_LOOKBACK_VALUES,
     BREAKOUT_MIN_RR_VALUES,
+    BREAKOUT_MIN_BODY_RATIO_VALUES,
+    BREAKOUT_MIN_MOVE_FROM_BREAKOUT_VALUES,
     BREAKOUT_RETEST_WINDOW_VALUES,
     BREAKOUT_RETEST_ZONE_VALUES,
     BREAKOUT_SL_MODE_VALUES,
     BREAKOUT_TARGET_PARAMETER_COMBINATIONS,
+    BREAKOUT_MAX_RETEST_DEPTH_VALUES,
     BREAKOUT_TP2_MULT_VALUES,
     BREAKOUT_VOLUME_MULT_VALUES,
 )
@@ -25,11 +28,14 @@ TARGET_PARAMETER_COMBINATIONS = BREAKOUT_TARGET_PARAMETER_COMBINATIONS
 class BreakoutParams:
     lookback: int
     volume_mult: float
-    retest_window: int
+    retest_window_hours: int
     retest_zone: float
     min_rr: float
     sl_mode: SLMode
     tp2_mult: float
+    min_body_ratio: float
+    min_move_from_breakout: float
+    max_retest_depth: float
     symbol: str
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
@@ -38,11 +44,14 @@ class BreakoutParams:
 BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {
     "lookback": list(BREAKOUT_LOOKBACK_VALUES),
     "volume_mult": list(BREAKOUT_VOLUME_MULT_VALUES),
-    "retest_window": list(BREAKOUT_RETEST_WINDOW_VALUES),
+    "retest_window_hours": list(BREAKOUT_RETEST_WINDOW_VALUES),
     "retest_zone": list(BREAKOUT_RETEST_ZONE_VALUES),
     "min_rr": list(BREAKOUT_MIN_RR_VALUES),
     "sl_mode": list(BREAKOUT_SL_MODE_VALUES),
     "tp2_mult": list(BREAKOUT_TP2_MULT_VALUES),
+    "min_body_ratio": list(BREAKOUT_MIN_BODY_RATIO_VALUES),
+    "min_move_from_breakout": list(BREAKOUT_MIN_MOVE_FROM_BREAKOUT_VALUES),
+    "max_retest_depth": list(BREAKOUT_MAX_RETEST_DEPTH_VALUES),
 }
 
 PARAMETER_GRID_SIZE = prod(len(values) for values in BREAKOUT_PARAMETER_GRID.values())
