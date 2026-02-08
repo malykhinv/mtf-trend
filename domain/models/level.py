@@ -18,6 +18,7 @@ class Level:
     shadow_ratio: float
     formation_timestamp: datetime | None = None
     volume_before: float | None = None
+    volume_after: float | None = None
 
     def __post_init__(self) -> None:
         if self.formation_time is None:
@@ -40,4 +41,8 @@ class Level:
 
         if self.volume_before is not None and self.volume_before < 0:
             msg = "Level volume_before cannot be negative."
+            raise ValueError(msg)
+
+        if self.volume_after is not None and self.volume_after < 0:
+            msg = "Level volume_after cannot be negative."
             raise ValueError(msg)
