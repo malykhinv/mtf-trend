@@ -15,7 +15,6 @@ from constants import (
     DEFAULT_CACHE_DIR,
     DEFAULT_COMMISSION_RATE,
     DEFAULT_LOG_LEVEL,
-    DEFAULT_MAX_CONCURRENT_REQUESTS,
     DEFAULT_RETRY_ATTEMPTS,
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_RESULTS_DIR,
@@ -78,9 +77,6 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
-        max_concurrent_requests=int(
-            os.getenv("MAX_CONCURRENT_REQUESTS", str(DEFAULT_MAX_CONCURRENT_REQUESTS))
-        ),
         timeframe=timeframe,
         timezone=fetch_timezone,
     )

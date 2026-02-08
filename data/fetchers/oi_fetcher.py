@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 
 from constants import (
-    DEFAULT_FETCHER_MAX_WORKERS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
@@ -29,14 +28,12 @@ class OiFetcher:
         self,
         exchange_client: ExchangeClient,
         storage: ParquetStorage,
-        max_workers: int = DEFAULT_FETCHER_MAX_WORKERS,
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         log_level: int | str = DEFAULT_LOG_LEVEL,
         logs_dir: str | Path = DEFAULT_LOGS_DIR,
     ) -> None:
         self._exchange_client = exchange_client
         self._storage = storage
-        self._max_workers = max_workers
         self._request_timeout_seconds = request_timeout_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
         self._aligner = TimeAlignment()

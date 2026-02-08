@@ -104,14 +104,12 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
     ohlcv_fetcher = OhlcvFetcher(
         exchange_client=exchange_client,
         storage=storage,
-        max_workers=config.fetch.max_concurrent_requests,
         log_level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
     oi_fetcher = OiFetcher(
         exchange_client=exchange_client,
         storage=storage,
-        max_workers=config.fetch.max_concurrent_requests,
         log_level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
@@ -124,7 +122,6 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
             ohlcv_fetcher=ohlcv_fetcher,
             oi_fetcher=oi_fetcher,
             market_data_client=market_client,
-            max_workers=config.fetch.max_concurrent_requests,
             log_level=config.backtest.log_level,
             logs_dir=config.backtest.logs_dir,
         ),
