@@ -16,10 +16,18 @@ class Level:
     formation_time: datetime
     lookback: int
     shadow_ratio: float
+    formation_timestamp: datetime | None = None
+    volume_before: float | None = None
 
     def __post_init__(self) -> None:
         if self.formation_time is None:
             msg = "Level formation_time is required."
+            raise ValueError(msg)
+
+        if self.formation_timestamp is None:
+            object.__setattr__(self, "formation_timestamp", self.formation_time)
+        elif not isinstance(self.formation_timestamp, datetime):
+            msg = "Level formation_timestamp must be datetime."
             raise ValueError(msg)
 
         if self.lookback <= 0:
@@ -28,4 +36,8 @@ class Level:
 
         if self.shadow_ratio < 0:
             msg = "Level shadow_ratio cannot be negative."
+            raise ValueError(msg)
+
+        if self.volume_before is not None and self.volume_before < 0:
+            msg = "Level volume_before cannot be negative."
             raise ValueError(msg)
