@@ -9,6 +9,7 @@ from constants import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
+    LOG_MSG_SKIP_UP_TO_DATE,
     TIMEFRAME_TO_DELTA,
 )
 from data.quality.data_validator import DataValidator
@@ -59,7 +60,7 @@ class OiFetcher:
         )
         self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start.isoformat()} -> {end_time.isoformat()}")
         if next_start > end_time:
-            self._logger.info(f"OI пропуск: {symbol} уже актуален")
+            self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OI", symbol)
             return 0
 
         data = self._exchange_client.fetch_open_interest(symbol, timeframe, next_start, end_time)
@@ -100,7 +101,7 @@ class OiFetcher:
 
         issues = self._validator.validate(symbol, timeframe, data)
         if issues:
-            self._logger.info(f"OI quality: {symbol} найдено {len(issues)} аномалий")
+            self._logger.info(f"OI качество: {symbol} найдено {len(issues)} аномалий")
 
         added_rows = self._storage.save_incremental(symbol, timeframe, data)
         self._logger.info(f"OI завершен: {symbol}, добавлено {added_rows} строк")

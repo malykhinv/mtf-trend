@@ -9,6 +9,7 @@ from constants import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
+    LOG_MSG_SKIP_UP_TO_DATE,
     TIMEFRAME_TO_DELTA,
 )
 from data.quality.data_validator import DataValidator
@@ -59,7 +60,7 @@ class OhlcvFetcher:
         )
         self._logger.info(f"OHLCV старт: {symbol} {timeframe.value} {next_start.isoformat()} -> {end_time.isoformat()}")
         if next_start > end_time:
-            self._logger.info(f"OHLCV пропуск: {symbol} уже актуален")
+            self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OHLCV", symbol)
             return 0
 
         data = self._exchange_client.fetch_ohlcv(symbol, timeframe, next_start, end_time)
@@ -68,11 +69,11 @@ class OhlcvFetcher:
 
         gaps = self._gap_detector.detect_gaps(data, timeframe)
         if gaps:
-            self._logger.info(f"OHLCV gaps: {symbol} найдено {len(gaps)} пропусков")
+            self._logger.info(f"OHLCV пропуски: {symbol} найдено {len(gaps)} пропусков")
 
         issues = self._validator.validate(symbol, timeframe, data)
         if issues:
-            self._logger.info(f"OHLCV quality: {symbol} найдено {len(issues)} аномалий")
+            self._logger.info(f"OHLCV качество: {symbol} найдено {len(issues)} аномалий")
 
         added_rows = self._storage.save_incremental(symbol, timeframe, data)
         self._logger.info(f"OHLCV завершен: {symbol}, добавлено {added_rows} строк")

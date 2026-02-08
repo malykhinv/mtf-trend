@@ -9,6 +9,7 @@ from constants import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
+    LOG_MSG_TASK_COMPLETED,
 )
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
@@ -54,11 +55,11 @@ class MarketDataFetcher:
                 self._logger.info(msg)
                 results[symbol] = msg
 
-        self._logger.info("MarketCap завершен")
+        self._logger.info(LOG_MSG_TASK_COMPLETED, "MarketCap")
         return MarketCapsResult(market_caps=results)
 
     def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
-        self._logger.info("%s summary: total=%s ok=%s failed=%s", stage, total, ok, failed)
+        self._logger.info("%s сводка: всего=%s успешно=%s с ошибками=%s", stage, total, ok, failed)
 
     @staticmethod
     def _count_structured_results(results: dict[str, SymbolFetchResult]) -> tuple[int, int, int]:

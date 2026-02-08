@@ -30,6 +30,7 @@ from constants import (
     REPORT_PROFITABLE_PF_THRESHOLD,
     REPORT_PROFIT_FACTOR_FILTER,
     REPORT_TRADES_COUNT_FILTER,
+    LOG_MSG_TASK_COMPLETED,
 )
 from data.clients.coingecko_client import CoinGeckoClient
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
@@ -87,7 +88,7 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
     logger.info(f"{command_name}: старт")
     try:
         code = body()
-        logger.info(f"{command_name}: завершено (code={code})")
+        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (code={code})")
         return code
     except Exception as exc:  # noqa: BLE001
         logger.exception(f"{command_name}: ошибка: {exc}")
@@ -169,7 +170,7 @@ def _resolve_symbols(
 
     excluded_by_liquidity = len(intersection) - len(liquid_symbols)
     logger.info(
-        "resolve-symbols: coingecko raw=%s normalized=%s; ccxt raw=%s normalized=%s; intersection=%s",
+        "resolve-symbols: coingecko сырых=%s нормализованных=%s; ccxt сырых=%s нормализованных=%s; пересечение=%s",
         len(top_symbols_raw),
         len(top_symbols_normalized),
         len(futures_symbols_raw),
@@ -177,7 +178,7 @@ def _resolve_symbols(
         len(intersection),
     )
     logger.info(
-        "resolve-symbols: liquidity filter min_volume_usd=%.2f excluded=%s final_symbols=%s",
+        "resolve-symbols: фильтр ликвидности min_volume_usd=%.2f исключено=%s итоговых_символов=%s",
         min_volume_usd,
         excluded_by_liquidity,
         len(liquid_symbols),
@@ -194,7 +195,7 @@ def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
 def _log_fetch_summary(command_name: str, logger: Logger, total_symbols: int, failed_symbols_count: int) -> None:
     failed_ratio = (failed_symbols_count / total_symbols) if total_symbols else 0.0
     logger.info(
-        "%s: fetch summary total=%s ok=%s failed=%s failed_ratio=%.2f%%",
+        "%s: сводка загрузки всего=%s успешно=%s с ошибками=%s доля_ошибок=%.2f%%",
         command_name,
         total_symbols,
         total_symbols - failed_symbols_count,
