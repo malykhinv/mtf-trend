@@ -16,6 +16,7 @@ from domain.abstract.market_data_client import MarketDataClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.fetch_all_result import FetchAllResult
 from domain.models.reporting.market_caps_result import MarketCapsResult
+from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from utils.logger import get_logger
 
 
@@ -56,6 +57,19 @@ class MarketDataFetcher:
         self._logger.info("MarketCap завершен")
         return MarketCapsResult(market_caps=results)
 
+    def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
+        self._logger.info("%s summary: total=%s ok=%s failed=%s", stage, total, ok, failed)
+
+    def _count_structured_results(self, results: dict[str, SymbolFetchResult]) -> tuple[int, int, int]:
+        total = len(results)
+        ok = sum(1 for result in results.values() if result.success)
+        return total, ok, total - ok
+
+    def _count_market_caps_results(self, results: MarketCapsResult) -> tuple[int, int, int]:
+        total = len(results.market_caps)
+        ok = sum(1 for value in results.market_caps.values() if isinstance(value, (int, float)))
+        return total, ok, total - ok
+
     def fetch_all(
         self,
         symbols: list[str],
@@ -79,10 +93,32 @@ class MarketDataFetcher:
         )
 
         market_caps = self.fetch_market_caps(symbols)
+
+        ohlcv_total, ohlcv_ok, ohlcv_failed = self._count_structured_results(ohlcv_result)
+        oi_total, oi_ok, oi_failed = self._count_structured_results(oi_result)
+        mcap_total, mcap_ok, mcap_failed = self._count_market_caps_results(market_caps)
+
+        self._log_stage_summary("OHLCV", ohlcv_total, ohlcv_ok, ohlcv_failed)
+        self._log_stage_summary("OI", oi_total, oi_ok, oi_failed)
+        self._log_stage_summary("MarketCap", mcap_total, mcap_ok, mcap_failed)
+
+        failed_symbols_count = len(
+            {
+                symbol
+                for symbol in symbols
+                if (symbol in ohlcv_result and not ohlcv_result[symbol].success)
+                or (symbol in oi_result and not oi_result[symbol].success)
+                or isinstance(market_caps.market_caps.get(symbol), str)
+            }
+        )
+        has_errors = failed_symbols_count > 0
+
         self._logger.info("Загрузка завершена")
 
         return FetchAllResult(
             ohlcv=ohlcv_result,
             open_interest=oi_result,
             market_caps=market_caps,
+            failed_symbols_count=failed_symbols_count,
+            has_errors=has_errors,
         )

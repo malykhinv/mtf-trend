@@ -18,6 +18,7 @@ from data.quality.time_alignment import TimeAlignment
 from data.storage.parquet_storage import ParquetStorage
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
+from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from utils.logger import get_logger
 
 
@@ -111,14 +112,15 @@ class OiFetcher:
         timeframe: Timeframe,
         start_time: datetime,
         end_time: datetime,
-    ) -> dict[str, int | str]:
-        results: dict[str, int | str] = {}
+    ) -> dict[str, SymbolFetchResult]:
+        results: dict[str, SymbolFetchResult] = {}
         for symbol in symbols:
             try:
-                results[symbol] = self.fetch_symbol(symbol, timeframe, start_time, end_time)
+                added_rows = self.fetch_symbol(symbol, timeframe, start_time, end_time)
+                results[symbol] = SymbolFetchResult.ok(added_rows)
             except Exception as exc:  # noqa: BLE001
                 msg = f"OI ошибка исполнения: {symbol}: {exc}"
                 self._logger.info(msg)
-                results[symbol] = msg
+                results[symbol] = SymbolFetchResult.error(msg)
 
         return results

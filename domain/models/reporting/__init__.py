@@ -9,6 +9,7 @@ from domain.models.reporting.market_caps_result import MarketCapsResult
 from domain.models.reporting.quality_report import QualityReport
 from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
+from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 
 __all__ = [
     "BacktestReport",
@@ -20,4 +21,5 @@ __all__ = [
     "QualityReport",
     "QualitySummary",
     "QualitySymbolStats",
+    "SymbolFetchResult",
 ]
