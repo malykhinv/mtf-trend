@@ -28,11 +28,11 @@ class GapDetector:
         if data.empty or "timestamp" not in data.columns:
             return []
 
-        ts = pd.to_datetime(data["timestamp"], unit="ms", utc=True, errors="coerce")
-        ts = ts.dropna().sort_values().drop_duplicates()
+        ts = pd.DatetimeIndex(pd.to_datetime(data["timestamp"], unit="ms", utc=True, errors="coerce").dropna())
+        ts = ts.sort_values().drop_duplicates()
         if ts.empty:
             return []
 
-        expected = pd.date_range(start=ts.iloc[0], end=ts.iloc[-1], freq=_TIMEFRAME_TO_DELTA[timeframe], tz="UTC")
+        expected = pd.date_range(start=ts[0], end=ts[-1], freq=_TIMEFRAME_TO_DELTA[timeframe], tz="UTC")
         missing = expected.difference(ts)
         return list(missing)
