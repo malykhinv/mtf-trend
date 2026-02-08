@@ -19,12 +19,10 @@ from constants import (
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_RESULTS_DIR,
     DEFAULT_SLIPPAGE,
-    DEFAULT_TIMEFRAME,
     DEFAULT_TIMEZONE,
     DEFAULT_SPREAD,
     DEFAULT_LOGS_DIR,
 )
-from domain.enums.timeframe import Timeframe
 
 __all__ = [
     "AppConfig",
@@ -52,13 +50,6 @@ def _load_env_file(env_path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
-def _parse_timeframe(raw: str | None, *, default: Timeframe) -> Timeframe:
-    if not raw:
-        return default
-    normalized = raw.strip().upper()
-    return Timeframe(normalized)
-
-
 # endregion Private
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
@@ -71,19 +62,15 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     strategy_timezone = os.getenv("STRATEGY_TIMEZONE", default_timezone)
     simulation_timezone = os.getenv("SIMULATION_TIMEZONE", default_timezone)
 
-    timeframe = _parse_timeframe(os.getenv("TIMEFRAME"), default=DEFAULT_TIMEFRAME)
-
     fetch_config = FetchConfig(
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
-        timeframe=timeframe,
         timezone=fetch_timezone,
     )
 
     strategy_config = StrategyConfig(
         timezone=strategy_timezone,
-        default_timeframe=_parse_timeframe(os.getenv("STRATEGY_TIMEFRAME"), default=timeframe),
     )
 
     simulation_config = SimulationConfig(
