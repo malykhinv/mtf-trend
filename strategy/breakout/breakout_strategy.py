@@ -295,7 +295,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     )
 
         if pending_signal is not None:
-            self._logger.info(
+            BreakoutStrategy._logger.info(
                 "signal_not_executed_end_of_data symbol=%s levels_tf=%s entry_tf=%s entry_time=%s entry_price=%.8f",
                 params.symbol,
                 params.levels_timeframe.value,
@@ -426,16 +426,46 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         retest_idx: int,
         volume_mult: float,
     ) -> bool:
-        before_slice = annotated.iloc[:breakout_idx]
-        before_slice = before_slice[before_slice["datetime"] >= breakout.level_start_time]
-        after_slice = annotated.iloc[breakout_idx + 1 : retest_idx]
+        """Compare volume regime on entry timeframe candles only.
+
+        Window definitions (left-inclusive, right-exclusive):
+        - V_before: formation_timestamp <= t < breakout_timestamp
+        - V_after: breakout_timestamp <= t < retest_timestamp
+        """
+        breakout_timestamp = annotated.iloc[breakout_idx]["datetime"]
+        retest_timestamp = annotated.iloc[retest_idx]["datetime"]
+
+        before_slice = annotated[
+            (annotated["datetime"] >= breakout.level_start_time) & (annotated["datetime"] < breakout_timestamp)
+        ]
+        after_slice = annotated[
+            (annotated["datetime"] >= breakout_timestamp) & (annotated["datetime"] < retest_timestamp)
+        ]
         if before_slice.empty or after_slice.empty:
+            BreakoutStrategy._logger.debug(
+                "volume_regime_rejected_empty_window formation_ts=%s breakout_ts=%s retest_ts=%s volume_mult=%.4f",
+                breakout.level_start_time,
+                breakout_timestamp,
+                retest_timestamp,
+                volume_mult,
+            )
             return False
+
         v_before = breakout.level.volume_before
         if v_before is None:
             v_before = float(before_slice["volume"].mean())
         v_after = float(after_slice["volume"].mean())
-        return v_after >= v_before * volume_mult
+        threshold = v_before * volume_mult
+        is_ok = v_after >= threshold
+        if not is_ok:
+            BreakoutStrategy._logger.info(
+                "volume_regime_rejected v_before=%.6f v_after=%.6f volume_mult=%.4f threshold=%.6f",
+                v_before,
+                v_after,
+                volume_mult,
+                threshold,
+            )
+        return is_ok
 
     @staticmethod
     def _is_confirmation(*, row: pd.Series, retest: PendingRetest) -> bool:
