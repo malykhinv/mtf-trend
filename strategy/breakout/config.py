@@ -39,8 +39,14 @@ class BreakoutParams:
     max_retest_depth: float
     confirmation_bars: int
     symbol: str
+    retest_zone_atr: float | None = None
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
+
+    def resolve_retest_zone_ratio(self, natr: float) -> float:
+        if self.retest_zone_atr is None:
+            return max(self.retest_zone, 0.0)
+        return max(self.retest_zone_atr * max(natr, 0.0), 0.0)
 
 
 BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {

@@ -347,15 +347,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return abs(float(row["close"]) - float(row["open"])) / spread
 
     def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
-        level = breakout.level.price.value
-        upper = level * (1 + params.retest_zone)
-        lower = level * (1 - params.retest_zone)
-        touched = float(row["low"]) <= upper and float(row["high"]) >= lower
+        level_price = breakout.level.price.value
+        natr = max(float(row.get("natr", 0.0)), 0.0)
+        zone_ratio = params.resolve_retest_zone_ratio(natr)
+        zone_top = level_price * (1 + zone_ratio)
+        zone_bottom = level_price * (1 - zone_ratio)
+        touched = float(row["low"]) <= zone_top and float(row["high"]) >= zone_bottom
         if not touched or self._body_ratio(row) < params.min_body_ratio:
             return False
         if breakout.side == PositionSide.LONG:
-            return float(row["close"]) > level
-        return float(row["close"]) < level
+            return float(row["close"]) > level_price
+        return float(row["close"]) < level_price
 
     def _extra_retest_filters_ok(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
         natr = max(float(row.get("natr", 0.0)), 1e-12)
