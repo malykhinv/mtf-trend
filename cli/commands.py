@@ -173,6 +173,22 @@ def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
     return datetime_to_utc(local_start), datetime_to_utc(local_end)
 
 
+def _log_fetch_summary(command_name: str, logger: Logger, total_symbols: int, failed_symbols_count: int) -> None:
+    failed_ratio = (failed_symbols_count / total_symbols) if total_symbols else 0.0
+    logger.info(
+        "%s: fetch summary total=%s ok=%s failed=%s failed_ratio=%.2f%%",
+        command_name,
+        total_symbols,
+        total_symbols - failed_symbols_count,
+        failed_symbols_count,
+        failed_ratio * 100,
+    )
+
+
+def _fetch_exit_code(failed_symbols_count: int, critical_fail_threshold: int = 1) -> int:
+    return 1 if failed_symbols_count >= critical_fail_threshold else 0
+
+
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
@@ -182,9 +198,11 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_time, end_time = _fetch_period(config, args.days)
-    fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
-    logger.info(f"fetch-data: загружено symbols={len(symbols)}")
-    return 0
+    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
+    _log_fetch_summary("fetch-data", logger, len(symbols), result.failed_symbols_count)
+    exit_code = _fetch_exit_code(result.failed_symbols_count)
+    logger.info(f"fetch-data: загружено symbols={len(symbols)}; code={exit_code}")
+    return exit_code
 
 
 def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
@@ -196,9 +214,11 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_time, end_time = _fetch_period(config, args.days)
-    fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
-    logger.info(f"update-cache: обновлено symbols={len(symbols)}")
-    return 0
+    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
+    _log_fetch_summary("update-cache", logger, len(symbols), result.failed_symbols_count)
+    exit_code = _fetch_exit_code(result.failed_symbols_count)
+    logger.info(f"update-cache: обновлено symbols={len(symbols)}; code={exit_code}")
+    return exit_code
 
 
 def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
