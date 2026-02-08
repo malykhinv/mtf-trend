@@ -29,18 +29,6 @@ except ImportError:  # pragma: no cover
     ccxt = None
 
 
-_TIMEFRAME_TO_CCXT = {
-    Timeframe.M1: "1m",
-    Timeframe.M5: "5m",
-    Timeframe.M15: "15m",
-    Timeframe.M30: "30m",
-    Timeframe.H1: "1h",
-    Timeframe.H4: "4h",
-    Timeframe.D1: "1d",
-    Timeframe.W1: "1w",
-}
-
-
 class CcxtClientOptions(TypedDict):
     defaultType: str
 
@@ -196,7 +184,6 @@ class CcxtFuturesClient(ExchangeClient):
         return sorted(set(symbols))
 
     def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
-        tf = _TIMEFRAME_TO_CCXT[timeframe]
         start_ms = _to_utc_ms(start_time)
         since = start_ms
         end_ms = _to_utc_ms(end_time)
@@ -208,7 +195,7 @@ class CcxtFuturesClient(ExchangeClient):
                 symbol=symbol,
                 endpoint="fetch_ohlcv",
                 call=self._client.fetch_ohlcv,
-                timeframe=tf,
+                timeframe=timeframe,
                 since=since,
                 limit=DEFAULT_FETCH_BATCH_SIZE,
             )
@@ -234,7 +221,6 @@ class CcxtFuturesClient(ExchangeClient):
         if not isinstance(self._client, CcxtOpenInterestApi):
             raise NotImplementedError(f"Exchange {self.exchange.value} does not support fetch_open_interest_history in CCXT")
 
-        tf = _TIMEFRAME_TO_CCXT[timeframe]
         start_ms = _to_utc_ms(start_time)
         since = start_ms
         end_ms = _to_utc_ms(end_time)
@@ -247,10 +233,10 @@ class CcxtFuturesClient(ExchangeClient):
                     symbol=symbol,
                     endpoint="fetch_open_interest_history",
                     call=self._client.fetch_open_interest_history,
-                    timeframe=tf,
+                    timeframe=timeframe,
                     since=since,
                     limit=DEFAULT_FETCH_BATCH_SIZE,
-                    params={"intervalTime": tf, "period": tf},
+                    params={"intervalTime": timeframe, "period": timeframe},
                 )
             except TypeError:
                 batch = self._retry_exchange_call(
@@ -258,7 +244,7 @@ class CcxtFuturesClient(ExchangeClient):
                     symbol=symbol,
                     endpoint="fetch_open_interest_history",
                     call=self._client.fetch_open_interest_history,
-                    timeframe=tf,
+                    timeframe=timeframe,
                     since=since,
                     limit=DEFAULT_FETCH_BATCH_SIZE,
                 )
