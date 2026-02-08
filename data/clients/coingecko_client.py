@@ -31,6 +31,7 @@ from constants import (
     SIMULATION_COIN_SUFFIX_USDT,
 )
 from domain.abstract.market_data_client import MarketDataClient
+from utils.retry import RetryExhaustedError, run_with_retry
 
 
 class CoinGeckoClient(MarketDataClient):
@@ -38,13 +39,22 @@ class CoinGeckoClient(MarketDataClient):
 
     BASE_URL = COINGECKO_BASE_URL
 
-    def __init__(self, api_key: str = "", cache_ttl_hours: int = 24, cache_path: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str = "",
+        cache_ttl_hours: int = 24,
+        cache_path: str | Path | None = None,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 1.0,
+    ) -> None:
         self._api_key = api_key
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
         self._market_cap_cache: dict[str, tuple[float, datetime]] = {}
         self._symbol_to_id: dict[str, str] = {}
         self._cache_path = Path(cache_path) if cache_path else None
         self._logger = logging.getLogger(self.__class__.__name__)
+        self._retry_attempts = retry_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._load_market_cap_cache()
 
     # region Private
@@ -144,13 +154,36 @@ class CoinGeckoClient(MarketDataClient):
             headers[COINGECKO_HEADER_API_KEY] = self._api_key
         return headers
 
+    def _request(self, endpoint: str, symbol: str, params: dict[str, str | int] | None = None) -> requests.Response:
+        def _perform_get() -> requests.Response:
+            response = requests.get(
+                url=f"{self.BASE_URL}{endpoint}",
+                headers=self._headers(),
+                params=params,
+                timeout=COINGECKO_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            return response
+
+        try:
+            return run_with_retry(
+                operation="coingecko_get",
+                call=_perform_get,
+                attempts=self._retry_attempts,
+                backoff_seconds=self._retry_backoff_seconds,
+                retriable_exceptions=(requests.RequestException,),
+                logger=self._logger,
+                endpoint=endpoint,
+                symbol=symbol,
+                jitter_seconds=0.25,
+            )
+        except RetryExhaustedError as exc:
+            raise RuntimeError(
+                f"CoinGecko retry exhausted: endpoint={endpoint} symbol={symbol} attempts={self._retry_attempts}"
+            ) from exc
+
     def _candidate_has_usdt_market(self, coin_id: str, base_symbol: str) -> bool:
-        response = requests.get(
-            f"{self.BASE_URL}/coins/{coin_id}/tickers",
-            headers=self._headers(),
-            timeout=COINGECKO_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
+        response = self._request(endpoint=f"/coins/{coin_id}/tickers", symbol=base_symbol)
         for ticker in response.json().get("tickers", []):
             base = str(ticker.get("base") or "").lower()
             target = str(ticker.get("target") or "").lower()
@@ -163,9 +196,9 @@ class CoinGeckoClient(MarketDataClient):
         if not candidate_ids:
             return None
 
-        response = requests.get(
-            f"{self.BASE_URL}/coins/markets",
-            headers=self._headers(),
+        response = self._request(
+            endpoint="/coins/markets",
+            symbol="multiple",
             params={
                 COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
                 COINGECKO_PARAM_IDS: ",".join(candidate_ids),
@@ -173,9 +206,7 @@ class CoinGeckoClient(MarketDataClient):
                 COINGECKO_PARAM_PER_PAGE: len(candidate_ids),
                 COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
             },
-            timeout=COINGECKO_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
 
         metrics_by_id = {
             str(item.get("id") or ""): item
@@ -201,12 +232,7 @@ class CoinGeckoClient(MarketDataClient):
         if canonical_symbol in self._symbol_to_id:
             return self._symbol_to_id[canonical_symbol]
 
-        response = requests.get(
-            f"{self.BASE_URL}/coins/list",
-            headers=self._headers(),
-            timeout=COINGECKO_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
+        response = self._request(endpoint="/coins/list", symbol=symbol)
         candidates = []
         for item in response.json():
             item_symbol = str(item.get("symbol") or "").lower()
@@ -296,9 +322,9 @@ class CoinGeckoClient(MarketDataClient):
             return cached[0]
 
         coin_id = self._resolve_coin_id(symbol)
-        response = requests.get(
-            f"{self.BASE_URL}/coins/markets",
-            headers=self._headers(),
+        response = self._request(
+            endpoint="/coins/markets",
+            symbol=symbol,
             params={
                 COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
                 COINGECKO_PARAM_IDS: coin_id,
@@ -306,9 +332,7 @@ class CoinGeckoClient(MarketDataClient):
                 COINGECKO_PARAM_PER_PAGE: COINGECKO_DEFAULT_PAGE,
                 COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
             },
-            timeout=COINGECKO_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
         payload = response.json()
         if not payload:
             raise ValueError(f"CoinGecko returned empty market data for symbol: {symbol}")
@@ -319,9 +343,9 @@ class CoinGeckoClient(MarketDataClient):
         return market_cap
 
     def get_top_coins_by_market_cap(self, limit: int) -> list[str]:
-        response = requests.get(
-            f"{self.BASE_URL}/coins/markets",
-            headers=self._headers(),
+        response = self._request(
+            endpoint="/coins/markets",
+            symbol=f"top_{limit}",
             params={
                 COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
                 COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
@@ -329,8 +353,6 @@ class CoinGeckoClient(MarketDataClient):
                 COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
                 COINGECKO_PARAM_SPARKLINE: COINGECKO_SPARKLINE_FALSE,
             },
-            timeout=COINGECKO_TIMEOUT_SECONDS,
         )
-        response.raise_for_status()
 
         return [str(item.get("symbol") or "").upper() for item in response.json() if item.get("symbol")]

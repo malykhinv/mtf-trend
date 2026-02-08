@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +21,7 @@ from constants import (
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.exchange import Exchange
 from domain.enums.timeframe import Timeframe
+from utils.retry import RetryExhaustedError, run_with_retry
 
 try:
     import ccxt  # type: ignore
@@ -60,11 +62,16 @@ class CcxtFuturesClient(ExchangeClient):
         secret: str = "",
         password: str = "",
         enable_rate_limit: bool = True,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 1.0,
     ) -> None:
         if ccxt is None:
             raise RuntimeError("ccxt is required for CcxtFuturesClient")
 
         self.exchange = Exchange(str(exchange).upper()) if isinstance(exchange, str) else exchange
+        self._logger = logging.getLogger(self.__class__.__name__)
+        self._retry_attempts = retry_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._client = self._build_client(exchange=self.exchange, api_key=api_key, secret=secret, password=password, enable_rate_limit=enable_rate_limit)
         self._client.load_markets()
 
@@ -89,6 +96,25 @@ class CcxtFuturesClient(ExchangeClient):
         raise ValueError(f"Unsupported exchange: {exchange}")
 
     # endregion Private
+
+    def _retry_exchange_call(self, operation: str, symbol: str, endpoint: str, call: Any, **kwargs: Any) -> Any:
+        try:
+            return run_with_retry(
+                operation=operation,
+                call=call,
+                attempts=self._retry_attempts,
+                backoff_seconds=self._retry_backoff_seconds,
+                retriable_exceptions=(Exception,),
+                logger=self._logger,
+                endpoint=endpoint,
+                symbol=symbol,
+                jitter_seconds=0.25,
+                **kwargs,
+            )
+        except RetryExhaustedError as exc:
+            raise RuntimeError(
+                f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts}"
+            ) from exc
 
     def get_futures_symbols(self) -> list[str]:
         symbols: list[str] = []
@@ -121,7 +147,15 @@ class CcxtFuturesClient(ExchangeClient):
 
         all_rows: list[list[float]] = []
         while since <= end_ms:
-            batch = self._client.fetch_ohlcv(symbol, timeframe=tf, since=since, limit=DEFAULT_FETCH_BATCH_SIZE)
+            batch = self._retry_exchange_call(
+                operation="ccxt_fetch_ohlcv",
+                symbol=symbol,
+                endpoint="fetch_ohlcv",
+                call=self._client.fetch_ohlcv,
+                timeframe=tf,
+                since=since,
+                limit=DEFAULT_FETCH_BATCH_SIZE,
+            )
             if not batch:
                 break
             all_rows.extend(batch)
@@ -150,15 +184,26 @@ class CcxtFuturesClient(ExchangeClient):
         rows: list[dict[str, Any]] = []
         while since <= end_ms:
             try:
-                batch = self._client.fetch_open_interest_history(
-                    symbol,
+                batch = self._retry_exchange_call(
+                    operation="ccxt_fetch_open_interest_history",
+                    symbol=symbol,
+                    endpoint="fetch_open_interest_history",
+                    call=self._client.fetch_open_interest_history,
                     timeframe=tf,
                     since=since,
                     limit=DEFAULT_FETCH_BATCH_SIZE,
                     params={"intervalTime": tf, "period": tf},
                 )
             except TypeError:
-                batch = self._client.fetch_open_interest_history(symbol, timeframe=tf, since=since, limit=DEFAULT_FETCH_BATCH_SIZE)
+                batch = self._retry_exchange_call(
+                    operation="ccxt_fetch_open_interest_history",
+                    symbol=symbol,
+                    endpoint="fetch_open_interest_history",
+                    call=self._client.fetch_open_interest_history,
+                    timeframe=tf,
+                    since=since,
+                    limit=DEFAULT_FETCH_BATCH_SIZE,
+                )
             if not batch:
                 break
 

@@ -99,29 +99,39 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
         exchange=Exchange.BINANCE,
         api_key=config.fetch.binance_api_key,
         secret=config.fetch.binance_secret_key,
+        retry_attempts=config.backtest.retry_attempts,
+        retry_backoff_seconds=config.backtest.retry_backoff_seconds,
     )
     storage = ParquetStorage(base_dir=config.backtest.cache_dir)
     ohlcv_fetcher = OhlcvFetcher(
         exchange_client=exchange_client,
         storage=storage,
+        retry_attempts=config.backtest.retry_attempts,
+        retry_backoff_seconds=config.backtest.retry_backoff_seconds,
         log_level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
     oi_fetcher = OiFetcher(
         exchange_client=exchange_client,
         storage=storage,
+        retry_attempts=config.backtest.retry_attempts,
+        retry_backoff_seconds=config.backtest.retry_backoff_seconds,
         log_level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
     market_client = CoinGeckoClient(
         api_key=config.fetch.coingecko_api_key,
         cache_path=market_caps_cache_path,
+        retry_attempts=config.backtest.retry_attempts,
+        retry_backoff_seconds=config.backtest.retry_backoff_seconds,
     )
     return (
         MarketDataFetcher(
             ohlcv_fetcher=ohlcv_fetcher,
             oi_fetcher=oi_fetcher,
             market_data_client=market_client,
+            retry_attempts=config.backtest.retry_attempts,
+            retry_backoff_seconds=config.backtest.retry_backoff_seconds,
             log_level=config.backtest.log_level,
             logs_dir=config.backtest.logs_dir,
         ),
