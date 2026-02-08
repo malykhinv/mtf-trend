@@ -80,17 +80,51 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return prepared
 
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
-        """Generate closed trades from historical candles.
+        """Backward-compatible wrapper for single-timeframe callers."""
+        return self.generate_events_multi_tf(
+            higher_tf_data=data,
+            lower_tf_data=data,
+            params=params,
+        )
 
-        Signals are always created on a retest candle and queued for execution on the
-        next candle open via ``pending_signal``. If data ends before that next candle
-        appears, the strategy works in **strict mode**: it does not force an entry on
-        the last candle and records the skipped signal with
-        ``signal_not_executed_end_of_data`` in logs.
-        """
+    def generate_events_multi_tf(
+        self,
+        *,
+        higher_tf_data: pd.DataFrame,
+        lower_tf_data: pd.DataFrame,
+        params: BreakoutParams,
+    ) -> list[TradeResult]:
+        """Generate trades from higher-TF levels and lower-TF breakout/retest logic."""
         self.validate_config(params)
-        prepared = self.prepare_data(data)
-        if len(prepared) < params.lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
+        higher_prepared = self.prepare_data(higher_tf_data)
+        lower_prepared = self.prepare_data(lower_tf_data)
+        self._logger.info(
+            "breakout_generate_events symbol=%s levels_tf=%s entry_tf=%s",
+            params.symbol,
+            params.levels_timeframe.value,
+            params.entry_timeframe.value,
+        )
+        if len(higher_prepared) < params.lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
+            return []
+        if len(lower_prepared) < STRATEGY_MIN_LOOKBACK_BUFFER:
+            return []
+
+        higher_levels = higher_prepared[["datetime", "high", "volume"]].copy()
+        higher_levels["level_high"] = higher_levels["high"].rolling(window=params.lookback).max().shift(1)
+        higher_levels["avg_volume"] = higher_levels["volume"].rolling(window=params.lookback).mean().shift(1)
+        higher_levels = higher_levels.dropna(subset=["level_high", "avg_volume"]).sort_values("datetime")
+        if higher_levels.empty:
+            return []
+
+        lower_prepared = lower_prepared.sort_values("datetime").reset_index(drop=True)
+        annotated = pd.merge_asof(
+            lower_prepared,
+            higher_levels[["datetime", "level_high", "avg_volume"]],
+            on="datetime",
+            direction="backward",
+        )
+        annotated = annotated.dropna(subset=["level_high", "avg_volume"]).reset_index(drop=True)
+        if annotated.empty:
             return []
 
         sim = StatefulPositionSimulator(
@@ -104,8 +138,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         pending_signal: TradeSignal | None = None
         pending_breakout: PendingBreakout | None = None
 
-        for idx in range(params.lookback, len(prepared)):
-            row = prepared.iloc[idx]
+        for idx in range(len(annotated)):
+            row = annotated.iloc[idx]
             candle = self._to_candle(row)
 
             if sim.position is None and pending_signal is not None:
@@ -140,8 +174,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             risk = max(breakout_close - stop, breakout_close * STRATEGY_RISK_FLOOR)
                             tp1 = breakout_close + risk * params.min_rr
                             tp2 = breakout_close + risk * params.min_rr * params.tp2_mult
-                            entry_idx = min(idx + 1, len(prepared) - 1)
-                            entry_row = prepared.iloc[entry_idx]
+                            entry_idx = min(idx + 1, len(annotated) - 1)
+                            entry_row = annotated.iloc[entry_idx]
                             pending_signal = TradeSignal(
                                 entry_price=Price(breakout_close),
                                 entry_time=datetime_to_timezone(
@@ -157,10 +191,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             pending_breakout = None
                             continue
 
-                rolling = prepared.iloc[idx - params.lookback : idx]
-                level_high = float(rolling["high"].max())
-                avg_volume = float(rolling["volume"].mean())
-
+                level_high = float(row["level_high"])
+                avg_volume = float(row["avg_volume"])
                 breakout = row["close"] > level_high
                 volume_ok = row["volume"] >= avg_volume * params.volume_mult
                 if breakout and volume_ok:
@@ -173,14 +205,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         if pending_signal is not None:
             self._logger.info(
-                "signal_not_executed_end_of_data symbol=%s entry_time=%s entry_price=%.8f",
+                "signal_not_executed_end_of_data symbol=%s levels_tf=%s entry_tf=%s entry_time=%s entry_price=%.8f",
                 params.symbol,
+                params.levels_timeframe.value,
+                params.entry_timeframe.value,
                 pending_signal.entry_time.isoformat(),
                 pending_signal.entry_price.value,
             )
 
         if sim.position is not None:
-            final_row = prepared.iloc[-1]
+            final_row = annotated.iloc[-1]
             final_time = datetime_to_timezone(final_row["datetime"].to_pydatetime(), self._simulation_timezone)
             trades.append(sim.close_position(price=float(final_row["close"]), exit_time=final_time))
 

@@ -27,3 +27,13 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
     @abstractmethod
     def generate_events(self, data: pd.DataFrame, params: StrategyParamsT) -> list[TradeResult]:
         """Run strategy simulation and return closed trades."""
+
+    @abstractmethod
+    def generate_events_multi_tf(
+        self,
+        *,
+        higher_tf_data: pd.DataFrame,
+        lower_tf_data: pd.DataFrame,
+        params: StrategyParamsT,
+    ) -> list[TradeResult]:
+        """Run strategy simulation using dedicated higher/lower timeframe data."""
