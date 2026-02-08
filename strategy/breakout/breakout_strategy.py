@@ -172,7 +172,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         if sim.position is not None:
             final_row = prepared.iloc[-1]
-            trades.append(sim._finalize(self._to_candle(final_row), float(final_row["close"])))  # noqa: SLF001
+            final_time = datetime_to_timezone(final_row["datetime"].to_pydatetime(), self._simulation_timezone)
+            trades.append(sim.close_position(price=float(final_row["close"]), exit_time=final_time))
 
         return trades
 
