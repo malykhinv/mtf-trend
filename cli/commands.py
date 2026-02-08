@@ -190,6 +190,17 @@ def _fetch_exit_code(failed_symbols_count: int, critical_fail_threshold: int = 1
     return 1 if failed_symbols_count >= critical_fail_threshold else 0
 
 
+def _log_loaded_coins(logger: Logger, count: int, action: str) -> None:
+    templates = {
+        "loaded": "Загружено %s монет.",
+        "updated": "Обновлено %s монет.",
+    }
+    template = templates.get(action)
+    if template is None:
+        raise ValueError(f"Unsupported action: {action}")
+    logger.info(template, count)
+
+
 def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name: str) -> Timeframe:
     if value is None:
         return fallback
@@ -215,7 +226,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
     _log_fetch_summary("fetch-data", logger, len(symbols), result.failed_symbols_count)
     exit_code = _fetch_exit_code(result.failed_symbols_count)
-    logger.info(f"fetch-data: загружено symbols={len(symbols)}; code={exit_code}")
+    _log_loaded_coins(logger, len(symbols), "loaded")
     return exit_code
 
 
@@ -231,7 +242,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
     _log_fetch_summary("update-cache", logger, len(symbols), result.failed_symbols_count)
     exit_code = _fetch_exit_code(result.failed_symbols_count)
-    logger.info(f"update-cache: обновлено symbols={len(symbols)}; code={exit_code}")
+    _log_loaded_coins(logger, len(symbols), "updated")
     return exit_code
 
 
