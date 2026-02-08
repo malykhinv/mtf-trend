@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import Final
 
 from constants import (
     LOGGER_COLOR_ERROR,
@@ -39,6 +40,16 @@ class _ColorFormatter(logging.Formatter):
         return f"{color}{message}{self.RESET}"
 
 
+_NAMED_LOG_LEVELS: Final[dict[str, int]] = {
+    "CRITICAL": logging.CRITICAL,
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "INFO": logging.INFO,
+    "DEBUG": logging.DEBUG,
+    "NOTSET": logging.NOTSET,
+}
+
+
 def get_logger(
     name: str,
     level: int | str = logging.INFO,
@@ -46,7 +57,7 @@ def get_logger(
 ) -> logging.Logger:
     """Create or return configured logger in `ЧЧ:ММ:СС Сообщение` format."""
     if isinstance(level, str):
-        resolved_level = getattr(logging, level.upper(), logging.INFO)
+        resolved_level = _NAMED_LOG_LEVELS.get(level.upper(), logging.INFO)
     else:
         resolved_level = level
     logger = logging.getLogger(name)
