@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Callable, NotRequired, Protocol, TypedDict, runtime_checkable
 
 import pandas as pd
 
@@ -40,6 +40,42 @@ _TIMEFRAME_TO_CCXT = {
     Timeframe.W1: "1w",
 }
 
+
+class CcxtClientOptions(TypedDict):
+    defaultType: str
+
+
+class CcxtConstructorArgs(TypedDict):
+    apiKey: str
+    secret: str
+    password: str
+    enableRateLimit: bool
+    timeout: int
+    options: NotRequired[CcxtClientOptions]
+
+
+class CcxtFuturesApi(Protocol):
+    markets: dict[str, dict[str, object]]
+
+    def load_markets(self) -> object:
+        ...
+
+    def fetch_ohlcv(self, symbol: str, timeframe: str, since: int, limit: int) -> list[list[float]]:
+        ...
+
+
+@runtime_checkable
+class CcxtOpenInterestApi(Protocol):
+    def fetch_open_interest_history(
+        self,
+        symbol: str,
+        timeframe: str,
+        since: int,
+        limit: int,
+        params: dict[str, str] | None = None,
+    ) -> list[dict[str, object]]:
+        ...
+
 # region Private
 
 def _to_utc_ms(value: datetime) -> int:
@@ -72,14 +108,26 @@ class CcxtFuturesClient(ExchangeClient):
         self._logger = logging.getLogger(self.__class__.__name__)
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
-        self._client = self._build_client(exchange=self.exchange, api_key=api_key, secret=secret, password=password, enable_rate_limit=enable_rate_limit)
+        self._client: CcxtFuturesApi = self._build_client(
+            exchange=self.exchange,
+            api_key=api_key,
+            secret=secret,
+            password=password,
+            enable_rate_limit=enable_rate_limit,
+        )
         self._client.load_markets()
 
     # region Private
 
     @staticmethod
-    def _build_client(exchange: Exchange, api_key: str, secret: str, password: str, enable_rate_limit: bool) -> Any:
-        params: dict[str, Any] = {
+    def _build_client(
+        exchange: Exchange,
+        api_key: str,
+        secret: str,
+        password: str,
+        enable_rate_limit: bool,
+    ) -> CcxtFuturesApi:
+        params: CcxtConstructorArgs = {
             "apiKey": api_key,
             "secret": secret,
             "password": password,
@@ -98,7 +146,14 @@ class CcxtFuturesClient(ExchangeClient):
 
     # endregion Private
 
-    def _retry_exchange_call(self, operation: str, symbol: str, endpoint: str, call: Any, **kwargs: Any) -> Any:
+    def _retry_exchange_call(
+        self,
+        operation: str,
+        symbol: str,
+        endpoint: str,
+        call: Callable[..., object],
+        **kwargs: object,
+    ) -> object:
         try:
             return run_with_retry(
                 operation=operation,
@@ -157,6 +212,8 @@ class CcxtFuturesClient(ExchangeClient):
                 since=since,
                 limit=DEFAULT_FETCH_BATCH_SIZE,
             )
+            if not isinstance(batch, list):
+                break
             if not batch:
                 break
             all_rows.extend(batch)
@@ -174,7 +231,7 @@ class CcxtFuturesClient(ExchangeClient):
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
     def fetch_open_interest(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
-        if not hasattr(self._client, "fetch_open_interest_history"):
+        if not isinstance(self._client, CcxtOpenInterestApi):
             raise NotImplementedError(f"Exchange {self.exchange.value} does not support fetch_open_interest_history in CCXT")
 
         tf = _TIMEFRAME_TO_CCXT[timeframe]
@@ -182,7 +239,7 @@ class CcxtFuturesClient(ExchangeClient):
         since = start_ms
         end_ms = _to_utc_ms(end_time)
 
-        rows: list[dict[str, Any]] = []
+        rows: list[dict[str, object]] = []
         while since <= end_ms:
             try:
                 batch = self._retry_exchange_call(
@@ -205,6 +262,8 @@ class CcxtFuturesClient(ExchangeClient):
                     since=since,
                     limit=DEFAULT_FETCH_BATCH_SIZE,
                 )
+            if not isinstance(batch, list):
+                break
             if not batch:
                 break
 
