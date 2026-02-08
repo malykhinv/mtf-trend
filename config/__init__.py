@@ -23,6 +23,7 @@ from constants import (
     DEFAULT_TIMEZONE,
     DEFAULT_SPREAD,
     DEFAULT_LOGS_DIR,
+    DEFAULT_MIN_VOLUME_USD,
 )
 
 __all__ = [
@@ -76,6 +77,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         binance_secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
         timezone=fetch_timezone,
+        min_volume_usd=float(os.getenv("MIN_VOLUME_USD", os.getenv("FETCH_MIN_VOLUME_USD", str(DEFAULT_MIN_VOLUME_USD)))),
     )
 
     strategy_levels_timeframe = _parse_timeframe(
