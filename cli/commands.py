@@ -40,6 +40,7 @@ from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
+from domain.enums.timeframe import Timeframe
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary
 from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
@@ -230,10 +231,17 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     symbol_frames = {
-        symbol: preparer.load_symbol_data(symbol, config.fetch.timeframe)
+        symbol: {
+            "1d": preparer.load_symbol_data(symbol, Timeframe.D1),
+            "15m": preparer.load_symbol_data(symbol, Timeframe.M15),
+        }
         for symbol in symbols
     }
-    symbol_frames = {k: v for k, v in symbol_frames.items() if not v.empty}
+    symbol_frames = {
+        symbol: frames
+        for symbol, frames in symbol_frames.items()
+        if not frames["1d"].empty and not frames["15m"].empty
+    }
     if not symbol_frames:
         logger.info("run-backtest: не удалось подготовить данные")
         return 0

@@ -16,6 +16,7 @@ from constants import (
     BREAKOUT_VOLUME_MULT_VALUES,
 )
 from domain.enums.sl_mode import SLMode
+from domain.enums.timeframe import Timeframe
 
 TARGET_PARAMETER_COMBINATIONS = BREAKOUT_TARGET_PARAMETER_COMBINATIONS
 
@@ -30,6 +31,8 @@ class BreakoutParams:
     sl_mode: SLMode
     tp2_mult: float
     symbol: str
+    levels_timeframe: Timeframe = Timeframe.D1
+    entry_timeframe: Timeframe = Timeframe.M15
 
 
 BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {

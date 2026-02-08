@@ -71,13 +71,13 @@ class BacktestRunner:
             )
         ]
 
-    def run(self, strategy: BaseStrategy[BreakoutParams], symbol_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    def run(self, strategy: BaseStrategy[BreakoutParams], symbol_frames: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
         rows: list[dict[str, int | float | str]] = []
         grid = self.build_parameter_grid()
 
         for params in grid:
             all_trades: list[TradeResult] = []
-            for symbol, frame in symbol_frames.items():
+            for symbol, frames_by_tf in symbol_frames.items():
                 cfg = BreakoutParams(
                     lookback=params.lookback,
                     volume_mult=params.volume_mult,
@@ -88,7 +88,15 @@ class BacktestRunner:
                     tp2_mult=params.tp2_mult,
                     symbol=symbol,
                 )
-                trades = strategy.generate_events(frame, cfg)
+                higher_tf_key = cfg.levels_timeframe.value
+                lower_tf_key = cfg.entry_timeframe.value
+                if higher_tf_key not in frames_by_tf or lower_tf_key not in frames_by_tf:
+                    continue
+                trades = strategy.generate_events_multi_tf(
+                    higher_tf_data=frames_by_tf[higher_tf_key],
+                    lower_tf_data=frames_by_tf[lower_tf_key],
+                    params=cfg,
+                )
                 all_trades.extend(trades)
 
             row = self._build_metrics_row(params, all_trades)
