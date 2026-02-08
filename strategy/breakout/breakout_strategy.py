@@ -19,6 +19,7 @@ from constants import (
     STRATEGY_RISK_FLOOR,
 )
 from domain.enums.position_side import PositionSide
+from domain.enums.timeframe import Timeframe
 from domain.models.candle import Candle
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
@@ -83,7 +84,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         """Backward-compatible wrapper for single-timeframe callers."""
         return self.generate_events_multi_tf(
-            mtf_frames=SymbolMtfFrames(d1_frame=data, m15_frame=data),
+            mtf_frames=SymbolMtfFrames(
+                levels_timeframe=Timeframe.D1,
+                entry_timeframe=Timeframe.M15,
+                levels_frame=data,
+                entry_frame=data,
+            ),
             params=params,
         )
 

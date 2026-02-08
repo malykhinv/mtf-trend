@@ -13,13 +13,18 @@ from domain.enums.timeframe import Timeframe
 class SymbolMtfFrames:
     """Normalized pair of frames required by breakout MTF mode."""
 
-    d1_frame: pd.DataFrame
-    m15_frame: pd.DataFrame
+    levels_timeframe: Timeframe
+    entry_timeframe: Timeframe
+    levels_frame: pd.DataFrame
+    entry_frame: pd.DataFrame
 
     def get_frame(self, timeframe: Timeframe) -> pd.DataFrame:
-        if timeframe == Timeframe.D1:
-            return self.d1_frame
-        if timeframe == Timeframe.M15:
-            return self.m15_frame
-        msg = f"Unsupported timeframe for SymbolMtfFrames: {timeframe.value}"
+        if timeframe == self.levels_timeframe:
+            return self.levels_frame
+        if timeframe == self.entry_timeframe:
+            return self.entry_frame
+        msg = (
+            "Unsupported timeframe for SymbolMtfFrames: "
+            f"{timeframe.value}. Available: {self.levels_timeframe.value}, {self.entry_timeframe.value}"
+        )
         raise ValueError(msg)

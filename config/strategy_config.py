@@ -14,6 +14,8 @@ from utils.formatters import resolve_timezone
 class StrategyConfig:
     timezone: str = DEFAULT_TIMEZONE
     default_timeframe: Timeframe = DEFAULT_TIMEFRAME
+    levels_timeframe: Timeframe = Timeframe.D1
+    entry_timeframe: Timeframe = Timeframe.M15
 
     @property
     def tzinfo(self) -> tzinfo:
