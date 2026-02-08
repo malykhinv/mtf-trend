@@ -15,6 +15,7 @@ from constants import (
     BREAKOUT_SL_MODE_VALUES,
     BREAKOUT_TARGET_PARAMETER_COMBINATIONS,
     BREAKOUT_MAX_RETEST_DEPTH_VALUES,
+    BREAKOUT_CONFIRMATION_BARS_VALUES,
     BREAKOUT_TP2_MULT_VALUES,
     BREAKOUT_VOLUME_MULT_VALUES,
 )
@@ -36,6 +37,7 @@ class BreakoutParams:
     min_body_ratio: float
     min_move_from_breakout: float
     max_retest_depth: float
+    confirmation_bars: int
     symbol: str
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
@@ -52,6 +54,7 @@ BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {
     "min_body_ratio": list(BREAKOUT_MIN_BODY_RATIO_VALUES),
     "min_move_from_breakout": list(BREAKOUT_MIN_MOVE_FROM_BREAKOUT_VALUES),
     "max_retest_depth": list(BREAKOUT_MAX_RETEST_DEPTH_VALUES),
+    "confirmation_bars": list(BREAKOUT_CONFIRMATION_BARS_VALUES),
 }
 
 PARAMETER_GRID_SIZE = prod(len(values) for values in BREAKOUT_PARAMETER_GRID.values())

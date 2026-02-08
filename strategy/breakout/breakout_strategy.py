@@ -49,6 +49,7 @@ class PendingRetest:
     retest_idx: int
     retest_low: float
     retest_high: float
+    confirmation_end_idx: int
 
 
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
@@ -72,6 +73,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             raise ValueError("min_rr must be > 0")
         if params.tp2_mult <= STRATEGY_MIN_TP2_MULT:
             raise ValueError(f"tp2_mult must be > {STRATEGY_MIN_TP2_MULT}")
+        if params.confirmation_bars < 1:
+            raise ValueError("confirmation_bars must be >= 1")
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         missing = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
@@ -173,6 +176,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 continue
 
             if pending_retest is not None:
+                if idx > pending_retest.confirmation_end_idx:
+                    pending_retest = None
+                    continue
                 if self._is_confirmation(row=row, retest=pending_retest):
                     entry_idx = idx + 1
                     if entry_idx >= len(annotated):
@@ -209,6 +215,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         symbol=params.symbol,
                     )
                     pending_retest = None
+                    continue
+                if idx == pending_retest.confirmation_end_idx:
+                    pending_retest = None
                 continue
 
             if pending_breakout is not None:
@@ -232,6 +241,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_idx=idx,
                             retest_low=float(row["low"]),
                             retest_high=float(row["high"]),
+                            confirmation_end_idx=idx + max(1, int(params.confirmation_bars)),
                         )
                         pending_breakout = None
                         continue
@@ -351,12 +361,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     @staticmethod
     def _is_confirmation(*, row: pd.Series, retest: PendingRetest) -> bool:
         if retest.breakout.side == PositionSide.LONG:
-            breakout_close = float(row["close"]) > retest.retest_high
-            higher_low = float(row["low"]) > retest.retest_low
-            return breakout_close or higher_low
-        breakout_close = float(row["close"]) < retest.retest_low
-        lower_high = float(row["high"]) < retest.retest_high
-        return breakout_close or lower_high
+            return float(row["close"]) > retest.retest_high
+        return float(row["close"]) < retest.retest_low
 
     @staticmethod
     def _resolve_stop_loss(
