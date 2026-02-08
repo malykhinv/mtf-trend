@@ -93,3 +93,8 @@ python main.py run-backtest
 python main.py make-report
 python main.py check-quality
 ```
+
+## Параметры breakout-стратегии
+
+По умолчанию грид `retest_window_hours` для перебора параметров: `12, 24, 36, 48` (в часах).
+
