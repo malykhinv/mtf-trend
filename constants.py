@@ -38,7 +38,6 @@ TIMEFRAME_TO_DELTA = {
 
 OHLCV_FRAME_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 OPEN_INTEREST_FRAME_COLUMNS = ("timestamp", "open_interest", "datetime")
-CCXT_OPTION_DEFAULT_TYPE_KEY = "defaultType"
 CCXT_MARKET_TYPE_SWAP = "swap"
 FUTURES_SETTLEMENT_QUOTE_ASSET = "USDT"
 SIMULATION_COIN_SUFFIX_SLASH_USDT = "/usdt"
