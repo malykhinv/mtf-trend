@@ -22,6 +22,7 @@ from constants import (
     BACKTEST_ZERO_COUNT,
 )
 from domain.enums.trade_result_type import TradeResultType
+from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
@@ -72,7 +73,14 @@ class BacktestRunner:
             )
         ]
 
-    def run(self, strategy: BaseStrategy[BreakoutParams], symbol_frames: dict[str, SymbolMtfFrames]) -> pd.DataFrame:
+    def run(
+        self,
+        strategy: BaseStrategy[BreakoutParams],
+        symbol_frames: dict[str, SymbolMtfFrames],
+        *,
+        levels_timeframe: Timeframe = Timeframe.D1,
+        entry_timeframe: Timeframe = Timeframe.M15,
+    ) -> pd.DataFrame:
         rows: list[dict[str, int | float | str]] = []
         grid = self.build_parameter_grid()
 
@@ -88,6 +96,8 @@ class BacktestRunner:
                     sl_mode=params.sl_mode,
                     tp2_mult=params.tp2_mult,
                     symbol=symbol,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
                 )
                 trades = strategy.generate_events_multi_tf(
                     mtf_frames=mtf_frames,

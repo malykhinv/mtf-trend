@@ -10,6 +10,7 @@ from config.backtest_config import BacktestConfig
 from config.fetch_config import FetchConfig
 from config.simulation_config import SimulationConfig
 from config.strategy_config import StrategyConfig
+from domain.enums.timeframe import Timeframe
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
     DEFAULT_CACHE_DIR,
@@ -50,6 +51,14 @@ def _load_env_file(env_path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
+    normalized = value.strip().lower()
+    for timeframe in Timeframe:
+        if timeframe.value == normalized:
+            return timeframe
+    supported = ", ".join(tf.value for tf in Timeframe)
+    raise ValueError(f"Invalid {env_name}: {value}. Supported values: {supported}")
+
 # endregion Private
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
@@ -69,8 +78,19 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         timezone=fetch_timezone,
     )
 
+    strategy_levels_timeframe = _parse_timeframe(
+        os.getenv("LEVELS_TIMEFRAME", Timeframe.D1.value),
+        env_name="LEVELS_TIMEFRAME",
+    )
+    strategy_entry_timeframe = _parse_timeframe(
+        os.getenv("ENTRY_TIMEFRAME", Timeframe.M15.value),
+        env_name="ENTRY_TIMEFRAME",
+    )
+
     strategy_config = StrategyConfig(
         timezone=strategy_timezone,
+        levels_timeframe=strategy_levels_timeframe,
+        entry_timeframe=strategy_entry_timeframe,
     )
 
     simulation_config = SimulationConfig(

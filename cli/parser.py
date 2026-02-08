@@ -26,6 +26,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_bt = subparsers.add_parser("run-backtest", help="Запуск бектеста по данным в кэше")
     run_bt.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
+    run_bt.add_argument(
+        "--levels-tf",
+        default=None,
+        help="Таймфрейм уровней (например 1d). Приоритетнее LEVELS_TIMEFRAME из env",
+    )
+    run_bt.add_argument(
+        "--entry-tf",
+        default=None,
+        help="Таймфрейм входов (например 15m). Приоритетнее ENTRY_TIMEFRAME из env",
+    )
 
     report = subparsers.add_parser("make-report", help="Сформировать JSON-отчет по результатам бектеста")
     report.add_argument("--input", default=None, help="Путь к CSV с результатами")

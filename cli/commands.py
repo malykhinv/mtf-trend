@@ -190,6 +190,19 @@ def _fetch_exit_code(failed_symbols_count: int, critical_fail_threshold: int = 1
     return 1 if failed_symbols_count >= critical_fail_threshold else 0
 
 
+def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name: str) -> Timeframe:
+    if value is None:
+        return fallback
+
+    normalized = value.strip().lower()
+    for timeframe in Timeframe:
+        if timeframe.value == normalized:
+            return timeframe
+
+    supported = ", ".join(tf.value for tf in Timeframe)
+    raise ValueError(f"Invalid {argument_name}: {value}. Supported values: {supported}")
+
+
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
@@ -224,20 +237,41 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    levels_timeframe = _resolve_timeframe(
+        getattr(args, "levels_tf", None),
+        fallback=config.strategy.levels_timeframe,
+        argument_name="--levels-tf",
+    )
+    entry_timeframe = _resolve_timeframe(
+        getattr(args, "entry_tf", None),
+        fallback=config.strategy.entry_timeframe,
+        argument_name="--entry-tf",
+    )
+    logger.info(
+        "run-backtest: явный запуск, уровни: %s, входы: %s",
+        levels_timeframe.value,
+        entry_timeframe.value,
+    )
+
     preparer = DataPreparer(config.backtest.cache_dir)
-    symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
+    symbols = args.symbols or preparer.list_symbols(entry_timeframe)
     if not symbols:
         logger.info("run-backtest: нет данных в кэше")
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
     for symbol in symbols:
-        frames_by_tf = preparer.load_symbol_data_multi(symbol, [Timeframe.D1, Timeframe.M15])
-        d1_frame = frames_by_tf.get(Timeframe.D1, pd.DataFrame())
-        m15_frame = frames_by_tf.get(Timeframe.M15, pd.DataFrame())
-        if d1_frame.empty or m15_frame.empty:
+        frames_by_tf = preparer.load_symbol_data_multi(symbol, [levels_timeframe, entry_timeframe])
+        levels_frame = frames_by_tf.get(levels_timeframe, pd.DataFrame())
+        entry_frame = frames_by_tf.get(entry_timeframe, pd.DataFrame())
+        if levels_frame.empty or entry_frame.empty:
             continue
-        symbol_frames[symbol] = SymbolMtfFrames(d1_frame=d1_frame, m15_frame=m15_frame)
+        symbol_frames[symbol] = SymbolMtfFrames(
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            levels_frame=levels_frame,
+            entry_frame=entry_frame,
+        )
     if not symbol_frames:
         logger.info("run-backtest: не удалось подготовить данные")
         return 0
@@ -249,7 +283,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         simulation_timezone=config.simulation.timezone,
     )
     runner = BacktestRunner(config.backtest.results_dir, config.backtest.results_file_name)
-    results = runner.run(strategy, symbol_frames)
+    results = runner.run(
+        strategy,
+        symbol_frames,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
     summary = runner.build_summary(results)
     logger.info(
         "run-backtest: total=%s profitable=%s best_pf=%.4f",
