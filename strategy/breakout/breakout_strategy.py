@@ -176,7 +176,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 "signal_not_executed_end_of_data symbol=%s entry_time=%s entry_price=%.8f",
                 params.symbol,
                 pending_signal.entry_time.isoformat(),
-                float(pending_signal.entry_price),
+                pending_signal.entry_price.value,
             )
 
         if sim.position is not None:
