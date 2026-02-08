@@ -6,7 +6,7 @@ import argparse
 from collections.abc import Callable
 
 from config import AppConfig
-from constants import DEFAULT_FETCH_DAYS, DEFAULT_QUALITY_REPORT_OUTPUT_FILE, DEFAULT_TOP_N, DEFAULT_UPDATE_DAYS
+from constants import DEFAULT_FETCH_DAYS, DEFAULT_MIN_VOLUME_USD, DEFAULT_QUALITY_REPORT_OUTPUT_FILE, DEFAULT_TOP_N, DEFAULT_UPDATE_DAYS
 from cli import commands
 
 Handler = Callable[[AppConfig, argparse.Namespace], int]
@@ -19,10 +19,12 @@ def build_parser() -> argparse.ArgumentParser:
     fetch = subparsers.add_parser("fetch-data", help="Загрузка данных с бирж и CoinGecko")
     fetch.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     fetch.add_argument("--days", type=int, default=DEFAULT_FETCH_DAYS)
+    fetch.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
 
     update = subparsers.add_parser("update-cache", help="Инкрементальное обновление кэша")
     update.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     update.add_argument("--days", type=int, default=DEFAULT_UPDATE_DAYS)
+    update.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
 
     run_bt = subparsers.add_parser("run-backtest", help="Запуск бектеста по данным в кэше")
     run_bt.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")

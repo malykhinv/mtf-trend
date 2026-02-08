@@ -145,6 +145,7 @@ def _resolve_symbols(
     exchange_client: CcxtFuturesClient,
     market_client: CoinGeckoClient,
     top_n: int,
+    min_volume_usd: float,
     logger: Logger,
 ) -> list[str]:
     top_symbols_raw = [f"{symbol}/USDT" for symbol in market_client.get_top_coins_by_market_cap(limit=top_n)]
@@ -157,6 +158,16 @@ def _resolve_symbols(
     }
 
     intersection = sorted(top_symbols_normalized.intersection(futures_symbol_map))
+    volumes_by_symbol = market_client.get_total_volumes([f"{symbol}/USDT" for symbol in intersection])
+
+    liquid_symbols: list[str] = []
+    for symbol in intersection:
+        symbol_pair = f"{symbol}/USDT"
+        total_volume = volumes_by_symbol.get(symbol_pair, 0.0)
+        if total_volume >= min_volume_usd:
+            liquid_symbols.append(symbol)
+
+    excluded_by_liquidity = len(intersection) - len(liquid_symbols)
     logger.info(
         "resolve-symbols: coingecko raw=%s normalized=%s; ccxt raw=%s normalized=%s; intersection=%s",
         len(top_symbols_raw),
@@ -165,7 +176,13 @@ def _resolve_symbols(
         len(futures_symbol_map),
         len(intersection),
     )
-    return [futures_symbol_map[symbol] for symbol in intersection]
+    logger.info(
+        "resolve-symbols: liquidity filter min_volume_usd=%.2f excluded=%s final_symbols=%s",
+        min_volume_usd,
+        excluded_by_liquidity,
+        len(liquid_symbols),
+    )
+    return [futures_symbol_map[symbol] for symbol in liquid_symbols]
 
 
 def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
@@ -217,7 +234,14 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
-    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n, logger=logger)
+    min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
+    symbols = _resolve_symbols(
+        exchange_client,
+        market_client,
+        top_n=args.top_n,
+        min_volume_usd=min_volume_usd,
+        logger=logger,
+    )
     if not symbols:
         logger.info("fetch-data: не найдено символов для загрузки")
         return 0
@@ -233,7 +257,14 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
-    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n, logger=logger)
+    min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
+    symbols = _resolve_symbols(
+        exchange_client,
+        market_client,
+        top_n=args.top_n,
+        min_volume_usd=min_volume_usd,
+        logger=logger,
+    )
     if not symbols:
         logger.info("update-cache: не найдено символов для обновления")
         return 0
