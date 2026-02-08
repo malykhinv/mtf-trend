@@ -80,3 +80,9 @@ def run_with_retry(
                 sleep_seconds += random.uniform(0.0, jitter_seconds)
             if sleep_seconds > 0:
                 time.sleep(sleep_seconds)
+
+    raise RetryExhaustedError(
+        operation=operation,
+        attempts=attempts,
+        reason="retry loop exited unexpectedly",
+    )
