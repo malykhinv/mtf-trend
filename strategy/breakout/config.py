@@ -9,7 +9,7 @@ from constants import (
     BREAKOUT_LOOKBACK_VALUES,
     BREAKOUT_MIN_RR_VALUES,
     BREAKOUT_MIN_BODY_RATIO_VALUES,
-    BREAKOUT_MIN_MOVE_FROM_BREAKOUT_VALUES,
+    BREAKOUT_MIN_MOVE_ATR_VALUES,
     BREAKOUT_RETEST_WINDOW_VALUES,
     BREAKOUT_RETEST_ZONE_VALUES,
     BREAKOUT_SL_MODE_VALUES,
@@ -35,7 +35,7 @@ class BreakoutParams:
     sl_mode: SLMode
     tp2_mult: float
     min_body_ratio: float
-    min_move_from_breakout: float
+    min_move_atr: float
     max_retest_depth: float
     confirmation_bars: int
     symbol: str
@@ -52,7 +52,7 @@ BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {
     "sl_mode": list(BREAKOUT_SL_MODE_VALUES),
     "tp2_mult": list(BREAKOUT_TP2_MULT_VALUES),
     "min_body_ratio": list(BREAKOUT_MIN_BODY_RATIO_VALUES),
-    "min_move_from_breakout": list(BREAKOUT_MIN_MOVE_FROM_BREAKOUT_VALUES),
+    "min_move_atr": list(BREAKOUT_MIN_MOVE_ATR_VALUES),
     "max_retest_depth": list(BREAKOUT_MAX_RETEST_DEPTH_VALUES),
     "confirmation_bars": list(BREAKOUT_CONFIRMATION_BARS_VALUES),
 }

@@ -50,11 +50,11 @@ class BacktestRunner:
         sl_mode = BREAKOUT_PARAMETER_GRID["sl_mode"]
         tp2_mult = BREAKOUT_PARAMETER_GRID["tp2_mult"]
         min_body_ratio = BREAKOUT_PARAMETER_GRID["min_body_ratio"]
-        min_move_from_breakout = BREAKOUT_PARAMETER_GRID["min_move_from_breakout"]
+        min_move_atr = BREAKOUT_PARAMETER_GRID["min_move_atr"]
         max_retest_depth = BREAKOUT_PARAMETER_GRID["max_retest_depth"]
         confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
 
-        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_from_breakout| × |max_retest_depth| × |confirmation_bars|
+        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_atr| × |max_retest_depth| × |confirmation_bars|
         return [
             BreakoutParams(
                 lookback=int(lb),
@@ -65,7 +65,7 @@ class BacktestRunner:
                 sl_mode=sl,
                 tp2_mult=float(tp2),
                 min_body_ratio=float(body_ratio),
-                min_move_from_breakout=float(min_move),
+                min_move_atr=float(min_move),
                 max_retest_depth=float(max_depth),
                 confirmation_bars=int(confirm_bars),
                 symbol="",
@@ -79,7 +79,7 @@ class BacktestRunner:
                 sl_mode,
                 tp2_mult,
                 min_body_ratio,
-                min_move_from_breakout,
+                min_move_atr,
                 max_retest_depth,
                 confirmation_bars,
             )
@@ -108,7 +108,7 @@ class BacktestRunner:
                     sl_mode=params.sl_mode,
                     tp2_mult=params.tp2_mult,
                     min_body_ratio=params.min_body_ratio,
-                    min_move_from_breakout=params.min_move_from_breakout,
+                    min_move_atr=params.min_move_atr,
                     max_retest_depth=params.max_retest_depth,
                     confirmation_bars=params.confirmation_bars,
                     symbol=symbol,
@@ -168,7 +168,7 @@ class BacktestRunner:
             "sl_mode": params.sl_mode.value,
             "tp2_mult": params.tp2_mult,
             "min_body_ratio": params.min_body_ratio,
-            "min_move_from_breakout": params.min_move_from_breakout,
+            "min_move_atr": params.min_move_atr,
             "max_retest_depth": params.max_retest_depth,
             "confirmation_bars": params.confirmation_bars,
         }
