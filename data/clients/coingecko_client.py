@@ -29,6 +29,8 @@ from constants import (
     COINGECKO_VS_CURRENCY_USD,
     SIMULATION_COIN_SUFFIX_SLASH_USDT,
     SIMULATION_COIN_SUFFIX_USDT,
+    LOG_MSG_LOAD_ERROR,
+    LOG_MSG_RETRY_EXHAUSTED,
 )
 from domain.abstract.market_data_client import MarketDataClient
 from utils.retry import RetryExhaustedError, run_with_retry
@@ -114,7 +116,7 @@ class CoinGeckoClient(MarketDataClient):
 
             self._market_cap_cache = loaded_cache
         except (OSError, ValueError, TypeError) as exc:
-            self._logger.warning("Failed to load CoinGecko cache from %s: %s", self._cache_path, exc)
+            self._logger.warning(LOG_MSG_LOAD_ERROR, self._cache_path, exc)
             self._market_cap_cache = {}
 
     def _save_market_cap_cache(self) -> None:
@@ -179,7 +181,7 @@ class CoinGeckoClient(MarketDataClient):
             )
         except RetryExhaustedError as exc:
             raise RuntimeError(
-                f"CoinGecko retry exhausted: endpoint={endpoint} symbol={symbol} attempts={self._retry_attempts}"
+                LOG_MSG_RETRY_EXHAUSTED % (endpoint, symbol, self._retry_attempts)
             ) from exc
 
     def _candidate_has_usdt_market(self, coin_id: str, base_symbol: str) -> bool:
@@ -261,7 +263,7 @@ class CoinGeckoClient(MarketDataClient):
                     selected = usdt_candidates[0]
                     resolved_by_strategy = True
                     self._logger.info(
-                        "Resolved CoinGecko symbol '%s' via exact %s/USDT market match: %s",
+                        "Символ CoinGecko '%s' сопоставлен по точному рынку %s/USDT: %s",
                         symbol,
                         normalized.upper(),
                         selected["id"],
@@ -270,9 +272,9 @@ class CoinGeckoClient(MarketDataClient):
                     selected = usdt_candidates[0]
                     resolved_by_strategy = True
                     self._logger.warning(
-                        "Multiple CoinGecko candidates matched %s/USDT for '%s'; using deterministic fallback: %s",
-                        normalized.upper(),
+                        "Для '%s' найдено несколько кандидатов CoinGecko по %s/USDT; используется детерминированный вариант: %s",
                         symbol,
+                        normalized.upper(),
                         selected["id"],
                     )
 
@@ -282,7 +284,7 @@ class CoinGeckoClient(MarketDataClient):
                     selected = by_metrics
                     resolved_by_strategy = True
                     self._logger.info(
-                        "Resolved ambiguous CoinGecko symbol '%s' by market rank/liquidity: %s",
+                        "Неоднозначный символ CoinGecko '%s' сопоставлен по рангу/ликвидности рынка: %s",
                         symbol,
                         selected["id"],
                     )
@@ -297,7 +299,7 @@ class CoinGeckoClient(MarketDataClient):
 
                 selected = deterministic_fallback
                 self._logger.warning(
-                    "Ambiguous CoinGecko symbol '%s' unresolved by market heuristics; fallback to deterministic candidate: %s",
+                    "Неоднозначный символ CoinGecko '%s' не удалось разрешить эвристиками рынка; переход на детерминированного кандидата: %s",
                     symbol,
                     selected["id"],
                 )

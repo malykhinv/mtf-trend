@@ -71,6 +71,12 @@ LOGGER_FILE_MAX_BYTES = 5 * 1024 * 1024
 LOGGER_FILE_BACKUP_COUNT = 5
 LOGGER_FILE_ENCODING = "utf-8"
 
+# Logging glossary (единые шаблоны)
+LOG_MSG_LOAD_ERROR = "Ошибка загрузки %s: %s"
+LOG_MSG_RETRY_EXHAUSTED = "Ретраи исчерпаны: endpoint=%s symbol=%s attempts=%s"
+LOG_MSG_SKIP_UP_TO_DATE = "%s пропуск: %s уже актуален"
+LOG_MSG_TASK_COMPLETED = "%s завершено"
+
 # Data preparer constants
 DATA_PREPARER_NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "open_interest")
 DATA_PREPARER_EMPTY_FLOAT_DTYPE = "float64"
