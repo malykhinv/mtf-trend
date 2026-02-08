@@ -29,12 +29,16 @@ class OhlcvFetcher:
         exchange_client: ExchangeClient,
         storage: ParquetStorage,
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 1.0,
         log_level: int | str = DEFAULT_LOG_LEVEL,
         logs_dir: str | Path = DEFAULT_LOGS_DIR,
     ) -> None:
         self._exchange_client = exchange_client
         self._storage = storage
         self._request_timeout_seconds = request_timeout_seconds
+        self._retry_attempts = retry_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
         self._aligner = TimeAlignment()
         self._deduplicator = Deduplicator()

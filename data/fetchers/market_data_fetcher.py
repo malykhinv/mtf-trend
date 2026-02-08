@@ -28,6 +28,8 @@ class MarketDataFetcher:
         oi_fetcher: OiFetcher,
         market_data_client: MarketDataClient,
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        retry_attempts: int = 3,
+        retry_backoff_seconds: float = 1.0,
         log_level: int | str = DEFAULT_LOG_LEVEL,
         logs_dir: str | Path = DEFAULT_LOGS_DIR,
     ) -> None:
@@ -35,6 +37,8 @@ class MarketDataFetcher:
         self._oi_fetcher = oi_fetcher
         self._market_data_client = market_data_client
         self._request_timeout_seconds = request_timeout_seconds
+        self._retry_attempts = retry_attempts
+        self._retry_backoff_seconds = retry_backoff_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
 
     def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
