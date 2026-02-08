@@ -18,9 +18,11 @@ from constants import (
     STRATEGY_REQUIRED_COLUMNS,
     STRATEGY_RISK_FLOOR,
 )
+from domain.enums.level_type import LevelType
 from domain.enums.position_side import PositionSide
 from domain.enums.timeframe import Timeframe
 from domain.models.candle import Candle
+from domain.models.level import Level
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
@@ -37,7 +39,7 @@ from vectorbt_runner.mtf_frames import SymbolMtfFrames
 @dataclass(slots=True)
 class PendingBreakout:
     breakout_idx: int
-    level: float
+    level: Level
     breakout_extreme: float
     side: PositionSide
     level_start_time: pd.Timestamp
@@ -193,7 +195,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     stop = self._resolve_stop_loss(
                         params=params,
                         side=pending_retest.breakout.side,
-                        level=pending_retest.breakout.level,
+                        level=pending_retest.breakout.level.price.value,
                         breakout_extreme=pending_retest.breakout.breakout_extreme,
                         retest_low=pending_retest.retest_low,
                         retest_high=pending_retest.retest_high,
@@ -258,7 +260,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 if breakout_long:
                     pending_breakout = PendingBreakout(
                         breakout_idx=idx,
-                        level=level_high,
+                        level=self._build_level(
+                            price=level_high,
+                            side=PositionSide.LONG,
+                            row=row,
+                            lookback=params.lookback,
+                            volume_before=self._average_volume_before(
+                                annotated=annotated,
+                                breakout_idx=idx,
+                                level_start_time=row["level_start_time"],
+                            ),
+                        ),
                         breakout_extreme=float(row["low"]),
                         side=PositionSide.LONG,
                         level_start_time=row["level_start_time"],
@@ -266,7 +278,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 elif breakout_short:
                     pending_breakout = PendingBreakout(
                         breakout_idx=idx,
-                        level=level_low,
+                        level=self._build_level(
+                            price=level_low,
+                            side=PositionSide.SHORT,
+                            row=row,
+                            lookback=params.lookback,
+                            volume_before=self._average_volume_before(
+                                annotated=annotated,
+                                breakout_idx=idx,
+                                level_start_time=row["level_start_time"],
+                            ),
+                        ),
                         breakout_extreme=float(row["high"]),
                         side=PositionSide.SHORT,
                         level_start_time=row["level_start_time"],
@@ -325,7 +347,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return abs(float(row["close"]) - float(row["open"])) / spread
 
     def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
-        level = breakout.level
+        level = breakout.level.price.value
         upper = level * (1 + params.retest_zone)
         lower = level * (1 - params.retest_zone)
         touched = float(row["low"]) <= upper and float(row["high"]) >= lower
@@ -339,13 +361,44 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         natr = max(float(row.get("natr", 0.0)), 1e-12)
         if breakout.side == PositionSide.LONG:
             move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), 1e-12)
-            depth = max(0.0, (breakout.level - float(row["low"])) / max(breakout.level, 1e-12))
+            level_price = breakout.level.price.value
+            depth = max(0.0, (level_price - float(row["low"])) / max(level_price, 1e-12))
         else:
             move = (float(row["high"]) - float(row["close"])) / max(float(row["close"]), 1e-12)
-            depth = max(0.0, (float(row["high"]) - breakout.level) / max(breakout.level, 1e-12))
+            level_price = breakout.level.price.value
+            depth = max(0.0, (float(row["high"]) - level_price) / max(level_price, 1e-12))
         min_move_threshold = params.min_move_atr * natr
         max_depth_threshold = params.max_retest_depth * natr
         return move >= min_move_threshold and depth <= max_depth_threshold
+
+
+    def _build_level(
+        self,
+        *,
+        price: float,
+        side: PositionSide,
+        row: pd.Series,
+        lookback: int,
+        volume_before: float | None,
+    ) -> Level:
+        formation_dt = datetime_to_timezone(row["level_start_time"].to_pydatetime(), self._simulation_timezone)
+        return Level(
+            price=Price(price),
+            level_type=LevelType.RESISTANCE if side == PositionSide.LONG else LevelType.SUPPORT,
+            formation_time=formation_dt,
+            formation_timestamp=formation_dt,
+            lookback=lookback,
+            shadow_ratio=0.0,
+            volume_before=volume_before,
+        )
+
+    @staticmethod
+    def _average_volume_before(*, annotated: pd.DataFrame, breakout_idx: int, level_start_time: pd.Timestamp) -> float | None:
+        before_slice = annotated.iloc[:breakout_idx]
+        before_slice = before_slice[before_slice["datetime"] >= level_start_time]
+        if before_slice.empty:
+            return None
+        return float(before_slice["volume"].mean())
 
     @staticmethod
     def _append_natr(*, annotated: pd.DataFrame, atr_window: int) -> pd.DataFrame:
@@ -378,7 +431,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         after_slice = annotated.iloc[breakout_idx + 1 : retest_idx]
         if before_slice.empty or after_slice.empty:
             return False
-        v_before = float(before_slice["volume"].mean())
+        v_before = breakout.level.volume_before
+        if v_before is None:
+            v_before = float(before_slice["volume"].mean())
         v_after = float(after_slice["volume"].mean())
         return v_after >= v_before * volume_mult
 
