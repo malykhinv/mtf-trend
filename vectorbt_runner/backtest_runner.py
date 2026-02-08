@@ -52,8 +52,9 @@ class BacktestRunner:
         min_body_ratio = BREAKOUT_PARAMETER_GRID["min_body_ratio"]
         min_move_from_breakout = BREAKOUT_PARAMETER_GRID["min_move_from_breakout"]
         max_retest_depth = BREAKOUT_PARAMETER_GRID["max_retest_depth"]
+        confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
 
-        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_from_breakout| × |max_retest_depth|
+        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_from_breakout| × |max_retest_depth| × |confirmation_bars|
         return [
             BreakoutParams(
                 lookback=int(lb),
@@ -66,9 +67,10 @@ class BacktestRunner:
                 min_body_ratio=float(body_ratio),
                 min_move_from_breakout=float(min_move),
                 max_retest_depth=float(max_depth),
+                confirmation_bars=int(confirm_bars),
                 symbol="",
             )
-            for lb, vm, rw, rz, rr, sl, tp2, body_ratio, min_move, max_depth in product(
+            for lb, vm, rw, rz, rr, sl, tp2, body_ratio, min_move, max_depth, confirm_bars in product(
                 lookback,
                 volume_mult,
                 retest_window_hours,
@@ -79,6 +81,7 @@ class BacktestRunner:
                 min_body_ratio,
                 min_move_from_breakout,
                 max_retest_depth,
+                confirmation_bars,
             )
         ]
 
@@ -107,6 +110,7 @@ class BacktestRunner:
                     min_body_ratio=params.min_body_ratio,
                     min_move_from_breakout=params.min_move_from_breakout,
                     max_retest_depth=params.max_retest_depth,
+                    confirmation_bars=params.confirmation_bars,
                     symbol=symbol,
                     levels_timeframe=levels_timeframe,
                     entry_timeframe=entry_timeframe,
@@ -166,6 +170,7 @@ class BacktestRunner:
             "min_body_ratio": params.min_body_ratio,
             "min_move_from_breakout": params.min_move_from_breakout,
             "max_retest_depth": params.max_retest_depth,
+            "confirmation_bars": params.confirmation_bars,
         }
 
         if not trades:
