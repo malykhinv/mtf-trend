@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 
 import pandas as pd
@@ -29,6 +30,14 @@ from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BreakoutParams
 from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
+
+
+@dataclass(slots=True)
+class PendingBreakout:
+    breakout_idx: int
+    level_high: float
+    breakout_low: float
+    breakout_close: float
 
 
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
@@ -93,7 +102,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         trades: list[TradeResult] = []
         pending_signal: TradeSignal | None = None
-        pending_breakout: dict[str, float | int] | None = None
+        pending_breakout: PendingBreakout | None = None
 
         for idx in range(params.lookback, len(prepared)):
             row = prepared.iloc[idx]
@@ -109,13 +118,13 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
             if sim.position is None and pending_signal is None:
                 if pending_breakout is not None:
-                    breakout_idx = int(pending_breakout["breakout_idx"])
+                    breakout_idx = pending_breakout.breakout_idx
                     if idx - breakout_idx > params.retest_window:
                         pending_breakout = None
                     else:
-                        level_high = float(pending_breakout["level_high"])
-                        breakout_low = float(pending_breakout["breakout_low"])
-                        breakout_close = float(pending_breakout["breakout_close"])
+                        level_high = pending_breakout.level_high
+                        breakout_low = pending_breakout.breakout_low
+                        breakout_close = pending_breakout.breakout_close
 
                         upper_retest_bound = level_high * (1 + params.retest_zone)
                         lower_retest_bound = level_high * (1 - params.retest_zone)
@@ -155,12 +164,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 breakout = row["close"] > level_high
                 volume_ok = row["volume"] >= avg_volume * params.volume_mult
                 if breakout and volume_ok:
-                    pending_breakout = {
-                        "breakout_idx": idx,
-                        "level_high": level_high,
-                        "breakout_low": float(row["low"]),
-                        "breakout_close": float(row["close"]),
-                    }
+                    pending_breakout = PendingBreakout(
+                        breakout_idx=idx,
+                        level_high=level_high,
+                        breakout_low=float(row["low"]),
+                        breakout_close=float(row["close"]),
+                    )
 
         if pending_signal is not None:
             self._logger.info(
