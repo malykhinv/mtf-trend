@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Callable, NotRequired, Protocol, TypedDict, runtime_checkable
+from typing import Any, Callable, Protocol, TypedDict, cast, runtime_checkable
 
 import pandas as pd
 
@@ -31,15 +31,6 @@ except ImportError:  # pragma: no cover
 
 class CcxtClientOptions(TypedDict):
     defaultType: str
-
-
-class CcxtConstructorArgs(TypedDict):
-    apiKey: str
-    secret: str
-    password: str
-    enableRateLimit: bool
-    timeout: int
-    options: NotRequired[CcxtClientOptions]
 
 
 class CcxtFuturesApi(Protocol):
@@ -92,7 +83,7 @@ class CcxtFuturesClient(ExchangeClient):
         if ccxt is None:
             raise RuntimeError("ccxt is required for CcxtFuturesClient")
 
-        self.exchange = Exchange(str(exchange).upper()) if isinstance(exchange, str) else exchange
+        self.exchange = Exchange(str(exchange).upper())
         self._logger = logging.getLogger(self.__class__.__name__)
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
@@ -115,7 +106,7 @@ class CcxtFuturesClient(ExchangeClient):
         password: str,
         enable_rate_limit: bool,
     ) -> CcxtFuturesApi:
-        params: CcxtConstructorArgs = {
+        params: dict[str, object] = {
             "apiKey": api_key,
             "secret": secret,
             "password": password,
@@ -123,14 +114,13 @@ class CcxtFuturesClient(ExchangeClient):
             "timeout": EXCHANGE_TIMEOUT_SECONDS * MILLISECONDS_IN_SECOND,
         }
         if exchange == Exchange.BINANCE:
-            return ccxt.binanceusdm(params)
+            return ccxt.binanceusdm(cast(Any, params))
         if exchange == Exchange.BYBIT:
-            params["options"] = {CCXT_OPTION_DEFAULT_TYPE_KEY: CCXT_MARKET_TYPE_SWAP}
-            return ccxt.bybit(params)
+            params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
+            return ccxt.bybit(cast(Any, params))
         if exchange == Exchange.OKX:
-            params["options"] = {CCXT_OPTION_DEFAULT_TYPE_KEY: CCXT_MARKET_TYPE_SWAP}
-            return ccxt.okx(params)
-        raise ValueError(f"Unsupported exchange: {exchange}")
+            params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
+            return ccxt.okx(cast(Any, params))
 
     # endregion Private
 
