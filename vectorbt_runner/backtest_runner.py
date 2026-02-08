@@ -26,6 +26,7 @@ from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from vectorbt_runner.backtest_summary import BacktestSummary
+from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 logger = logging.getLogger(__name__)
@@ -71,13 +72,13 @@ class BacktestRunner:
             )
         ]
 
-    def run(self, strategy: BaseStrategy[BreakoutParams], symbol_frames: dict[str, dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    def run(self, strategy: BaseStrategy[BreakoutParams], symbol_frames: dict[str, SymbolMtfFrames]) -> pd.DataFrame:
         rows: list[dict[str, int | float | str]] = []
         grid = self.build_parameter_grid()
 
         for params in grid:
             all_trades: list[TradeResult] = []
-            for symbol, frames_by_tf in symbol_frames.items():
+            for symbol, mtf_frames in symbol_frames.items():
                 cfg = BreakoutParams(
                     lookback=params.lookback,
                     volume_mult=params.volume_mult,
@@ -88,13 +89,8 @@ class BacktestRunner:
                     tp2_mult=params.tp2_mult,
                     symbol=symbol,
                 )
-                higher_tf_key = cfg.levels_timeframe.value
-                lower_tf_key = cfg.entry_timeframe.value
-                if higher_tf_key not in frames_by_tf or lower_tf_key not in frames_by_tf:
-                    continue
                 trades = strategy.generate_events_multi_tf(
-                    higher_tf_data=frames_by_tf[higher_tf_key],
-                    lower_tf_data=frames_by_tf[lower_tf_key],
+                    mtf_frames=mtf_frames,
                     params=cfg,
                 )
                 all_trades.extend(trades)

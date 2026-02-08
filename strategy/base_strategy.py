@@ -8,6 +8,7 @@ from typing import Generic, TypeVar
 import pandas as pd
 
 from domain.models.trade_result import TradeResult
+from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 StrategyParamsT = TypeVar("StrategyParamsT")
@@ -32,8 +33,7 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
     def generate_events_multi_tf(
         self,
         *,
-        higher_tf_data: pd.DataFrame,
-        lower_tf_data: pd.DataFrame,
+        mtf_frames: SymbolMtfFrames,
         params: StrategyParamsT,
     ) -> list[TradeResult]:
         """Run strategy simulation using dedicated higher/lower timeframe data."""
