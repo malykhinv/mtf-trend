@@ -356,6 +356,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return abs(float(row["close"]) - float(row["open"])) / spread
 
     def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+        """Validate retest candle inside ATR/NATR-adjusted zone with directional bounce.
+
+        Retest requirements:
+        1) Candle intersects retest zone around level: low <= zone_top and high >= zone_bottom.
+        2) Candle body ratio is at least ``min_body_ratio``.
+        3) Directional close confirms bounce from the zone:
+           - LONG: close > open and close > zone_bottom.
+           - SHORT: close < open and close < zone_top.
+        """
         level_price = breakout.level.price.value
         natr = max(float(row.get("natr", 0.0)), 0.0)
         zone_ratio = params.resolve_retest_zone_ratio(natr)
@@ -365,8 +374,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if not touched or self._body_ratio(row) < params.min_body_ratio:
             return False
         if breakout.side == PositionSide.LONG:
-            return float(row["close"]) > level_price
-        return float(row["close"]) < level_price
+            return float(row["close"]) > float(row["open"]) and float(row["close"]) > zone_bottom
+        return float(row["close"]) < float(row["open"]) and float(row["close"]) < zone_top
 
     def _extra_retest_filters_ok(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
         natr = max(float(row.get("natr", 0.0)), 1e-12)
