@@ -52,6 +52,10 @@ class PendingRetest:
     retest_low: float
     retest_high: float
     confirmation_end_idx: int
+    volume_before: float
+    volume_after: float
+    volume_threshold: float
+    volume_filter_passed: bool
 
 
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
@@ -231,13 +235,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 if idx - breakout_idx > retest_window_candles:
                     pending_breakout = None
                 elif self._is_retest_candle(row=row, breakout=pending_breakout, params=params):
-                    if self._volume_regime_ok(
+                    volume_check = self._evaluate_volume_regime(
                         annotated=annotated,
                         breakout=pending_breakout,
                         breakout_idx=breakout_idx,
                         retest_idx=idx,
                         volume_mult=params.volume_mult,
-                    ) and self._extra_retest_filters_ok(
+                    )
+                    if volume_check["is_ok"] and self._extra_retest_filters_ok(
                         row=row,
                         breakout=pending_breakout,
                         params=params,
@@ -248,6 +253,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_low=float(row["low"]),
                             retest_high=float(row["high"]),
                             confirmation_end_idx=idx + max(1, int(params.confirmation_bars)),
+                            volume_before=volume_check["v_before"],
+                            volume_after=volume_check["v_after"],
+                            volume_threshold=volume_check["threshold"],
+                            volume_filter_passed=volume_check["is_ok"],
                         )
                         pending_breakout = None
                         continue
@@ -382,6 +391,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         row: pd.Series,
         lookback: int,
         volume_before: float | None,
+        volume_after: float | None = None,
     ) -> Level:
         formation_dt = datetime_to_timezone(row["level_start_time"].to_pydatetime(), self._simulation_timezone)
         return Level(
@@ -392,6 +402,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             lookback=lookback,
             shadow_ratio=0.0,
             volume_before=volume_before,
+            volume_after=volume_after,
         )
 
     @staticmethod
@@ -419,15 +430,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         frame = frame.dropna(subset=["natr"]).reset_index(drop=True)
         return frame
 
-    @staticmethod
-    def _volume_regime_ok(
+    def _evaluate_volume_regime(
+        self,
         *,
         annotated: pd.DataFrame,
         breakout: PendingBreakout,
         breakout_idx: int,
         retest_idx: int,
         volume_mult: float,
-    ) -> bool:
+    ) -> dict[str, float | bool]:
         """Compare volume regime on entry timeframe candles only.
 
         Window definitions (left-inclusive, right-exclusive):
@@ -451,7 +462,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 retest_timestamp,
                 volume_mult,
             )
-            return False
+            return {
+                "v_before": 0.0,
+                "v_after": 0.0,
+                "threshold": 0.0,
+                "is_ok": False,
+            }
 
         v_before = breakout.level.volume_before
         if v_before is None:
@@ -459,6 +475,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         v_after = float(after_slice["volume"].mean())
         threshold = v_before * volume_mult
         is_ok = v_after >= threshold
+
+        updated_level = self._build_level(
+            price=breakout.level.price.value,
+            side=breakout.side,
+            row=annotated.iloc[breakout_idx],
+            lookback=breakout.level.lookback,
+            volume_before=v_before,
+            volume_after=v_after,
+        )
+        breakout.level = updated_level
+
         if not is_ok:
             BreakoutStrategy._logger.info(
                 "volume_regime_rejected v_before=%.6f v_after=%.6f volume_mult=%.4f threshold=%.6f",
@@ -467,7 +494,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 volume_mult,
                 threshold,
             )
-        return is_ok
+        return {
+            "v_before": float(v_before),
+            "v_after": v_after,
+            "threshold": threshold,
+            "is_ok": is_ok,
+        }
 
     @staticmethod
     def _is_confirmation(*, row: pd.Series, retest: PendingRetest) -> bool:
