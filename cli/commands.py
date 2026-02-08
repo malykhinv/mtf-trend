@@ -164,30 +164,42 @@ def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
 
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    fetcher, exchange_client, market_client = _build_fetch_stack(config)
-    symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n, logger=logger)
-    if not symbols:
-        logger.info("fetch-data: не найдено символов для загрузки")
-        return 0
-
-    start_time, end_time = _fetch_period(config, args.days)
-    fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
-    logger.info(f"fetch-data: загружено symbols={len(symbols)}")
-    return 0
+    return _run_fetch_command(
+        command_name="fetch-data",
+        result_verb="загружено",
+        empty_message="не найдено символов для загрузки",
+        config=config,
+        args=args,
+    )
 
 
 def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    return _run_fetch_command(
+        command_name="update-cache",
+        result_verb="обновлено",
+        empty_message="не найдено символов для обновления",
+        config=config,
+        args=args,
+    )
+
+
+def _run_fetch_command(
+    command_name: str,
+    result_verb: str,
+    empty_message: str,
+    config: AppConfig,
+    args: argparse.Namespace,
+) -> int:
+    logger = get_logger(command_name, level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
     symbols = _resolve_symbols(exchange_client, market_client, top_n=args.top_n, logger=logger)
     if not symbols:
-        logger.info("update-cache: не найдено символов для обновления")
+        logger.info(f"{command_name}: {empty_message}")
         return 0
 
     start_time, end_time = _fetch_period(config, args.days)
     fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
-    logger.info(f"update-cache: обновлено symbols={len(symbols)}")
+    logger.info(f"{command_name}: {result_verb} symbols={len(symbols)}")
     return 0
 
 
