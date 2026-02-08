@@ -145,6 +145,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if annotated.empty:
             return []
 
+        annotated = self._append_natr(annotated=annotated, atr_window=params.lookback)
+        if annotated.empty:
+            return []
+
         trades: list[TradeResult] = []
         pending_signal: TradeSignal | None = None
         pending_breakout: PendingBreakout | None = None
@@ -332,13 +336,33 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return float(row["close"]) < level
 
     def _extra_retest_filters_ok(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+        natr = max(float(row.get("natr", 0.0)), 1e-12)
         if breakout.side == PositionSide.LONG:
             move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), 1e-12)
             depth = max(0.0, (breakout.level - float(row["low"])) / max(breakout.level, 1e-12))
         else:
             move = (float(row["high"]) - float(row["close"])) / max(float(row["close"]), 1e-12)
             depth = max(0.0, (float(row["high"]) - breakout.level) / max(breakout.level, 1e-12))
-        return move >= params.min_move_from_breakout and depth <= params.max_retest_depth
+        min_move_threshold = params.min_move_atr * natr
+        max_depth_threshold = params.max_retest_depth * natr
+        return move >= min_move_threshold and depth <= max_depth_threshold
+
+    @staticmethod
+    def _append_natr(*, annotated: pd.DataFrame, atr_window: int) -> pd.DataFrame:
+        frame = annotated.copy()
+        prev_close = frame["close"].shift(1)
+        true_range = pd.concat(
+            [
+                frame["high"] - frame["low"],
+                (frame["high"] - prev_close).abs(),
+                (frame["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        frame["atr"] = true_range.rolling(window=max(2, int(atr_window)), min_periods=max(2, int(atr_window))).mean()
+        frame["natr"] = frame["atr"] / frame["close"].replace(0, pd.NA)
+        frame = frame.dropna(subset=["natr"]).reset_index(drop=True)
+        return frame
 
     @staticmethod
     def _volume_regime_ok(
