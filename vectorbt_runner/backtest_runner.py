@@ -47,6 +47,7 @@ class BacktestRunner:
         retest_window_hours = BREAKOUT_PARAMETER_GRID["retest_window_hours"]
         retest_zone = BREAKOUT_PARAMETER_GRID["retest_zone"]
         min_rr = BREAKOUT_PARAMETER_GRID["min_rr"]
+        retest_zone_atr = BREAKOUT_PARAMETER_GRID["retest_zone_atr"]
         sl_mode = BREAKOUT_PARAMETER_GRID["sl_mode"]
         tp2_mult = BREAKOUT_PARAMETER_GRID["tp2_mult"]
         min_body_ratio = BREAKOUT_PARAMETER_GRID["min_body_ratio"]
@@ -54,7 +55,7 @@ class BacktestRunner:
         max_retest_depth = BREAKOUT_PARAMETER_GRID["max_retest_depth"]
         confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
 
-        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_atr| × |max_retest_depth| × |confirmation_bars|
+        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |retest_zone_atr| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_atr| × |max_retest_depth| × |confirmation_bars|
         return [
             BreakoutParams(
                 lookback=int(lb),
@@ -62,6 +63,7 @@ class BacktestRunner:
                 retest_window_hours=int(rw),
                 retest_zone=float(rz),
                 min_rr=float(rr),
+                retest_zone_atr=float(rza),
                 sl_mode=sl,
                 tp2_mult=float(tp2),
                 min_body_ratio=float(body_ratio),
@@ -70,11 +72,12 @@ class BacktestRunner:
                 confirmation_bars=int(confirm_bars),
                 symbol="",
             )
-            for lb, vm, rw, rz, rr, sl, tp2, body_ratio, min_move, max_depth, confirm_bars in product(
+            for lb, vm, rw, rz, rza, rr, sl, tp2, body_ratio, min_move, max_depth, confirm_bars in product(
                 lookback,
                 volume_mult,
                 retest_window_hours,
                 retest_zone,
+                retest_zone_atr,
                 min_rr,
                 sl_mode,
                 tp2_mult,
@@ -93,7 +96,7 @@ class BacktestRunner:
         levels_timeframe: Timeframe = Timeframe.D1,
         entry_timeframe: Timeframe = Timeframe.M15,
     ) -> pd.DataFrame:
-        rows: list[dict[str, int | float | str]] = []
+        rows: list[dict[str, int | float | str | None]] = []
         grid = self.build_parameter_grid()
 
         for params in grid:
@@ -105,6 +108,7 @@ class BacktestRunner:
                     retest_window_hours=params.retest_window_hours,
                     retest_zone=params.retest_zone,
                     min_rr=params.min_rr,
+                    retest_zone_atr=params.retest_zone_atr,
                     sl_mode=params.sl_mode,
                     tp2_mult=params.tp2_mult,
                     min_body_ratio=params.min_body_ratio,
@@ -158,13 +162,14 @@ class BacktestRunner:
     # region Private
 
     @staticmethod
-    def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str]:
-        base_row: dict[str, int | float | str] = {
+    def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str | None]:
+        base_row: dict[str, int | float | str | None] = {
             "lookback": params.lookback,
             "volume_mult": params.volume_mult,
             "retest_window_hours": params.retest_window_hours,
             "retest_zone": params.retest_zone,
             "min_rr": params.min_rr,
+            "retest_zone_atr": params.retest_zone_atr,
             "sl_mode": params.sl_mode.value,
             "tp2_mult": params.tp2_mult,
             "min_body_ratio": params.min_body_ratio,
