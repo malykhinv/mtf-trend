@@ -75,8 +75,9 @@ class DataValidator:
 
         for col in ("open", "high", "low", "close"):
             if col in numeric_columns:
-                bad = numeric_columns[col] < 0
-                for pos in normalized.index[bad.fillna(False)]:
+                price_series = numeric_columns[col]
+                bad_mask = price_series.lt(0) & price_series.notna()
+                for pos in normalized.index[bad_mask]:
                     add_issue(int(pos), "negative_price", DataQualitySeverity.CRITICAL, f"Negative {col} value")
 
         issue_type_by_column = {
@@ -85,16 +86,17 @@ class DataValidator:
         }
         for col, issue_type in issue_type_by_column.items():
             if col in numeric_columns:
-                bad = numeric_columns[col] < 0
-                for pos in normalized.index[bad.fillna(False)]:
+                numeric_series = numeric_columns[col]
+                bad_mask = numeric_series.lt(0) & numeric_series.notna()
+                for pos in normalized.index[bad_mask]:
                     add_issue(int(pos), issue_type, DataQualitySeverity.ERROR, f"Negative {col} value")
 
         if {"high", "low", "close"}.issubset(numeric_columns):
             spread = (numeric_columns["high"] - numeric_columns["low"]).abs()
             base = numeric_columns["close"].abs().replace(0, pd.NA)
             ratio = spread / base
-            suspicious = ratio > SPREAD_TO_CLOSE_WARNING_THRESHOLD
-            for pos in normalized.index[suspicious.fillna(False)]:
+            suspicious_mask = ratio.gt(SPREAD_TO_CLOSE_WARNING_THRESHOLD) & ratio.notna()
+            for pos in normalized.index[suspicious_mask]:
                 threshold_pct = int(SPREAD_TO_CLOSE_WARNING_THRESHOLD * 100)
                 add_issue(
                     int(pos),
@@ -104,8 +106,9 @@ class DataValidator:
                 )
 
         if "volume" in numeric_columns:
-            zero_volume = numeric_columns["volume"] == 0
-            for pos in normalized.index[zero_volume.fillna(False)]:
+            volume_series = numeric_columns["volume"]
+            zero_volume_mask = volume_series.eq(0) & volume_series.notna()
+            for pos in normalized.index[zero_volume_mask]:
                 add_issue(int(pos), "zero_volume", DataQualitySeverity.INFO, "Zero candle volume")
 
         for col, series in numeric_columns.items():
