@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 
 from constants import (
-    DEFAULT_FETCHER_MAX_WORKERS,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
@@ -28,7 +27,6 @@ class MarketDataFetcher:
         ohlcv_fetcher: OhlcvFetcher,
         oi_fetcher: OiFetcher,
         market_data_client: MarketDataClient,
-        max_workers: int = DEFAULT_FETCHER_MAX_WORKERS,
         request_timeout_seconds: int = DEFAULT_REQUEST_TIMEOUT_SECONDS,
         log_level: int | str = DEFAULT_LOG_LEVEL,
         logs_dir: str | Path = DEFAULT_LOGS_DIR,
@@ -36,7 +34,6 @@ class MarketDataFetcher:
         self._ohlcv_fetcher = ohlcv_fetcher
         self._oi_fetcher = oi_fetcher
         self._market_data_client = market_data_client
-        self._max_workers = max_workers
         self._request_timeout_seconds = request_timeout_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
 
