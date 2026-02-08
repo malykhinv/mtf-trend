@@ -30,6 +30,7 @@ from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BreakoutParams
 from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
+from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 @dataclass(slots=True)
@@ -82,22 +83,20 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         """Backward-compatible wrapper for single-timeframe callers."""
         return self.generate_events_multi_tf(
-            higher_tf_data=data,
-            lower_tf_data=data,
+            mtf_frames=SymbolMtfFrames(d1_frame=data, m15_frame=data),
             params=params,
         )
 
     def generate_events_multi_tf(
         self,
         *,
-        higher_tf_data: pd.DataFrame,
-        lower_tf_data: pd.DataFrame,
+        mtf_frames: SymbolMtfFrames,
         params: BreakoutParams,
     ) -> list[TradeResult]:
         """Generate trades from higher-TF levels and lower-TF breakout/retest logic."""
         self.validate_config(params)
-        higher_prepared = self.prepare_data(higher_tf_data)
-        lower_prepared = self.prepare_data(lower_tf_data)
+        higher_prepared = self.prepare_data(mtf_frames.get_frame(params.levels_timeframe))
+        lower_prepared = self.prepare_data(mtf_frames.get_frame(params.entry_timeframe))
         self._logger.info(
             "breakout_generate_events symbol=%s levels_tf=%s entry_tf=%s",
             params.symbol,

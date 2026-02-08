@@ -53,7 +53,7 @@ from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
-from vectorbt_runner import BacktestRunner, DataPreparer
+from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
 
 def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
@@ -230,18 +230,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("run-backtest: нет данных в кэше")
         return 0
 
-    symbol_frames = {
-        symbol: {
-            "1d": preparer.load_symbol_data(symbol, Timeframe.D1),
-            "15m": preparer.load_symbol_data(symbol, Timeframe.M15),
-        }
-        for symbol in symbols
-    }
-    symbol_frames = {
-        symbol: frames
-        for symbol, frames in symbol_frames.items()
-        if not frames["1d"].empty and not frames["15m"].empty
-    }
+    symbol_frames: dict[str, SymbolMtfFrames] = {}
+    for symbol in symbols:
+        frames_by_tf = preparer.load_symbol_data_multi(symbol, [Timeframe.D1, Timeframe.M15])
+        d1_frame = frames_by_tf.get(Timeframe.D1, pd.DataFrame())
+        m15_frame = frames_by_tf.get(Timeframe.M15, pd.DataFrame())
+        if d1_frame.empty or m15_frame.empty:
+            continue
+        symbol_frames[symbol] = SymbolMtfFrames(d1_frame=d1_frame, m15_frame=m15_frame)
     if not symbol_frames:
         logger.info("run-backtest: не удалось подготовить данные")
         return 0

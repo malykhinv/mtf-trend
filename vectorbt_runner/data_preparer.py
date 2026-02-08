@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Iterable
 
 import pandas as pd
 
@@ -74,6 +75,13 @@ class DataPreparer:
         normalized = normalized.dropna(subset=["open", "high", "low", "close", "volume"])
         normalized = normalized.sort_values("datetime").drop_duplicates(subset=["timestamp"], keep="last")
         return normalized.reset_index(drop=True)
+
+
+    def load_symbol_data_multi(self, symbol: str, timeframes: Iterable[Timeframe]) -> dict[Timeframe, pd.DataFrame]:
+        return {
+            timeframe: self.load_symbol_data(symbol, timeframe)
+            for timeframe in timeframes
+        }
 
     @staticmethod
     def prepare_vectorbt_inputs(trades: list[TradeResult], initial_price: float = SIMULATION_PRICE_INIT) -> VectorbtInputs:
