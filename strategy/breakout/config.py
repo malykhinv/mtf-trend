@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import prod
 
 from constants import (
+    BREAKOUT_ENTRY_TRIGGER_VALUES,
     BREAKOUT_LOOKBACK_VALUES,
     BREAKOUT_MIN_RR_VALUES,
     BREAKOUT_MIN_BODY_RATIO_VALUES,
@@ -20,6 +21,7 @@ from constants import (
     BREAKOUT_TP2_MULT_VALUES,
     BREAKOUT_VOLUME_MULT_VALUES,
 )
+from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.sl_mode import SLMode
 from domain.enums.timeframe import Timeframe
 
@@ -39,6 +41,7 @@ class BreakoutParams:
     min_move_atr: float
     max_retest_depth: float
     confirmation_bars: int
+    entry_trigger: EntryTrigger
     symbol: str
     retest_zone_atr: float | None = None
     levels_timeframe: Timeframe = Timeframe.D1
@@ -50,7 +53,7 @@ class BreakoutParams:
         return max(self.retest_zone_atr * max(natr, 0.0), 0.0)
 
 
-BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {
+BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode | EntryTrigger]] = {
     "lookback": list(BREAKOUT_LOOKBACK_VALUES),
     "volume_mult": list(BREAKOUT_VOLUME_MULT_VALUES),
     "retest_window_hours": list(BREAKOUT_RETEST_WINDOW_VALUES),
@@ -63,6 +66,7 @@ BREAKOUT_PARAMETER_GRID: dict[str, list[float | int | SLMode]] = {
     "min_move_atr": list(BREAKOUT_MIN_MOVE_ATR_VALUES),
     "max_retest_depth": list(BREAKOUT_MAX_RETEST_DEPTH_VALUES),
     "confirmation_bars": list(BREAKOUT_CONFIRMATION_BARS_VALUES),
+    "entry_trigger": list(BREAKOUT_ENTRY_TRIGGER_VALUES),
 }
 
 PARAMETER_GRID_SIZE = prod(len(values) for values in BREAKOUT_PARAMETER_GRID.values())
