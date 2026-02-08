@@ -44,32 +44,41 @@ class BacktestRunner:
     def build_parameter_grid() -> list[BreakoutParams]:
         lookback = BREAKOUT_PARAMETER_GRID["lookback"]
         volume_mult = BREAKOUT_PARAMETER_GRID["volume_mult"]
-        retest_window = BREAKOUT_PARAMETER_GRID["retest_window"]
+        retest_window_hours = BREAKOUT_PARAMETER_GRID["retest_window_hours"]
         retest_zone = BREAKOUT_PARAMETER_GRID["retest_zone"]
         min_rr = BREAKOUT_PARAMETER_GRID["min_rr"]
         sl_mode = BREAKOUT_PARAMETER_GRID["sl_mode"]
         tp2_mult = BREAKOUT_PARAMETER_GRID["tp2_mult"]
+        min_body_ratio = BREAKOUT_PARAMETER_GRID["min_body_ratio"]
+        min_move_from_breakout = BREAKOUT_PARAMETER_GRID["min_move_from_breakout"]
+        max_retest_depth = BREAKOUT_PARAMETER_GRID["max_retest_depth"]
 
-        # combos = |lookback| × |volume_mult| × |retest_window| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| = 6×3×3×3×3×2×6 = 5832
+        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_from_breakout| × |max_retest_depth|
         return [
             BreakoutParams(
                 lookback=int(lb),
                 volume_mult=float(vm),
-                retest_window=int(rw),
+                retest_window_hours=int(rw),
                 retest_zone=float(rz),
                 min_rr=float(rr),
                 sl_mode=sl,
                 tp2_mult=float(tp2),
+                min_body_ratio=float(body_ratio),
+                min_move_from_breakout=float(min_move),
+                max_retest_depth=float(max_depth),
                 symbol="",
             )
-            for lb, vm, rw, rz, rr, sl, tp2 in product(
+            for lb, vm, rw, rz, rr, sl, tp2, body_ratio, min_move, max_depth in product(
                 lookback,
                 volume_mult,
-                retest_window,
+                retest_window_hours,
                 retest_zone,
                 min_rr,
                 sl_mode,
                 tp2_mult,
+                min_body_ratio,
+                min_move_from_breakout,
+                max_retest_depth,
             )
         ]
 
@@ -90,11 +99,14 @@ class BacktestRunner:
                 cfg = BreakoutParams(
                     lookback=params.lookback,
                     volume_mult=params.volume_mult,
-                    retest_window=params.retest_window,
+                    retest_window_hours=params.retest_window_hours,
                     retest_zone=params.retest_zone,
                     min_rr=params.min_rr,
                     sl_mode=params.sl_mode,
                     tp2_mult=params.tp2_mult,
+                    min_body_ratio=params.min_body_ratio,
+                    min_move_from_breakout=params.min_move_from_breakout,
+                    max_retest_depth=params.max_retest_depth,
                     symbol=symbol,
                     levels_timeframe=levels_timeframe,
                     entry_timeframe=entry_timeframe,
@@ -146,11 +158,14 @@ class BacktestRunner:
         base_row: dict[str, int | float | str] = {
             "lookback": params.lookback,
             "volume_mult": params.volume_mult,
-            "retest_window": params.retest_window,
+            "retest_window_hours": params.retest_window_hours,
             "retest_zone": params.retest_zone,
             "min_rr": params.min_rr,
             "sl_mode": params.sl_mode.value,
             "tp2_mult": params.tp2_mult,
+            "min_body_ratio": params.min_body_ratio,
+            "min_move_from_breakout": params.min_move_from_breakout,
+            "max_retest_depth": params.max_retest_depth,
         }
 
         if not trades:
