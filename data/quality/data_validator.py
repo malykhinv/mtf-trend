@@ -15,7 +15,8 @@ from domain.models.data_quality_issue import DataQualityIssue
 class DataValidator:
     """Validate common anomalies in OHLCV/OI data."""
 
-    def validate(self, symbol: str, timeframe: Timeframe, data: pd.DataFrame) -> list[DataQualityIssue]:
+    @staticmethod
+    def validate(symbol: str, timeframe: Timeframe, data: pd.DataFrame) -> list[DataQualityIssue]:
         if data.empty:
             return []
 

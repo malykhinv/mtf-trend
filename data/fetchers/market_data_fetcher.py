@@ -60,12 +60,14 @@ class MarketDataFetcher:
     def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
         self._logger.info("%s summary: total=%s ok=%s failed=%s", stage, total, ok, failed)
 
-    def _count_structured_results(self, results: dict[str, SymbolFetchResult]) -> tuple[int, int, int]:
+    @staticmethod
+    def _count_structured_results(results: dict[str, SymbolFetchResult]) -> tuple[int, int, int]:
         total = len(results)
         ok = sum(1 for result in results.values() if result.success)
         return total, ok, total - ok
 
-    def _count_market_caps_results(self, results: MarketCapsResult) -> tuple[int, int, int]:
+    @staticmethod
+    def _count_market_caps_results(results: MarketCapsResult) -> tuple[int, int, int]:
         total = len(results.market_caps)
         ok = sum(1 for value in results.market_caps.values() if isinstance(value, (int, float)))
         return total, ok, total - ok

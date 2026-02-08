@@ -222,7 +222,7 @@ class CoinGeckoClient(MarketDataClient):
             total_volume = float(metrics.get("total_volume") or 0.0)
             market_cap = float(metrics.get("market_cap") or 0.0)
             normalized_rank = float(rank) if isinstance(rank, (int, float)) and rank > 0 else float("inf")
-            return (normalized_rank, -total_volume, -market_cap, candidate["id"])
+            return normalized_rank, -total_volume, -market_cap, candidate["id"]
 
         return min(candidates, key=score)
 

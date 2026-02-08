@@ -8,7 +8,8 @@ import pandas as pd
 class OiAligner:
     """Align OI values to OHLCV timestamps using forward-fill."""
 
-    def align(self, ohlcv: pd.DataFrame, open_interest: pd.DataFrame) -> pd.DataFrame:
+    @staticmethod
+    def align(ohlcv: pd.DataFrame, open_interest: pd.DataFrame) -> pd.DataFrame:
         if ohlcv.empty:
             return ohlcv.copy()
 

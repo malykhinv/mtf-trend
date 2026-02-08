@@ -8,7 +8,8 @@ import pandas as pd
 class Deduplicator:
     """Remove duplicated rows by timestamp and keep the latest occurrence."""
 
-    def deduplicate(self, data: pd.DataFrame) -> pd.DataFrame:
+    @staticmethod
+    def deduplicate(data: pd.DataFrame) -> pd.DataFrame:
         if data.empty:
             return data.copy()
 

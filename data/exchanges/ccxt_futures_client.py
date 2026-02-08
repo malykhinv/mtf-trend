@@ -77,7 +77,8 @@ class CcxtFuturesClient(ExchangeClient):
 
     # region Private
 
-    def _build_client(self, exchange: Exchange, api_key: str, secret: str, password: str, enable_rate_limit: bool) -> Any:
+    @staticmethod
+    def _build_client(exchange: Exchange, api_key: str, secret: str, password: str, enable_rate_limit: bool) -> Any:
         params: dict[str, Any] = {
             "apiKey": api_key,
             "secret": secret,

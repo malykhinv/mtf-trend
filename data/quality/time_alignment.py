@@ -8,7 +8,8 @@ import pandas as pd
 class TimeAlignment:
     """Normalize all time columns to UTC timestamp-ms + UTC datetime for parquet storage."""
 
-    def align_to_utc(self, data: pd.DataFrame) -> pd.DataFrame:
+    @staticmethod
+    def align_to_utc(data: pd.DataFrame) -> pd.DataFrame:
         if data.empty:
             return data.copy()
 

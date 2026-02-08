@@ -190,7 +190,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             open_interest=Volume(float(row.get("open_interest", STRATEGY_DEFAULT_OPEN_INTEREST))),
         )
 
-    def _resolve_stop_loss(self, *, params: BreakoutParams, level_high: float, breakout_low: float, retest_low: float) -> float:
+    @staticmethod
+    def _resolve_stop_loss(*, params: BreakoutParams, level_high: float, breakout_low: float, retest_low: float) -> float:
         if params.sl_mode.value == "LEVEL":
             return level_high * (1 - params.retest_zone)
         if params.sl_mode.value == "BREAKOUT_EXTREME":

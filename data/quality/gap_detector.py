@@ -23,7 +23,8 @@ _TIMEFRAME_TO_DELTA = {
 class GapDetector:
     """Find missing candle timestamps for a selected timeframe."""
 
-    def detect_gaps(self, data: pd.DataFrame, timeframe: Timeframe) -> list[pd.Timestamp]:
+    @staticmethod
+    def detect_gaps(data: pd.DataFrame, timeframe: Timeframe) -> list[pd.Timestamp]:
         if data.empty or "timestamp" not in data.columns:
             return []
 

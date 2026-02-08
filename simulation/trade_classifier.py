@@ -16,16 +16,17 @@ from domain.value_objects.price import Price
 class TradeClassifier:
     """Builds final trade results from simulator state."""
 
-    def classify_result_type(self, *, tp1_done: bool, exit_at_breakeven: bool, exit_at_tp2: bool) -> TradeResultType:
+    @staticmethod
+    def classify_result_type(*, tp1_done: bool, exit_at_breakeven: bool, exit_at_tp2: bool) -> TradeResultType:
         if exit_at_tp2:
             return TradeResultType.TP2
         if exit_at_breakeven:
             return TradeResultType.TP1_BE if tp1_done else TradeResultType.BE
         return TradeResultType.SL
 
+    @staticmethod
     def build_result(
-        self,
-        *,
+            *,
         position: Position,
         exit_price: float,
         exit_time: datetime,

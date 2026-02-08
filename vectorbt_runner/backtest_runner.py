@@ -38,7 +38,8 @@ class BacktestRunner:
         self._results_dir = Path(results_dir)
         self._results_file_name = results_file_name
 
-    def build_parameter_grid(self) -> list[BreakoutParams]:
+    @staticmethod
+    def build_parameter_grid() -> list[BreakoutParams]:
         lookback = BREAKOUT_PARAMETER_GRID["lookback"]
         volume_mult = BREAKOUT_PARAMETER_GRID["volume_mult"]
         retest_window = BREAKOUT_PARAMETER_GRID["retest_window"]
@@ -101,7 +102,8 @@ class BacktestRunner:
         self._save_results(results)
         return results
 
-    def build_summary(self, results: pd.DataFrame) -> BacktestSummary:
+    @staticmethod
+    def build_summary(results: pd.DataFrame) -> BacktestSummary:
         if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
             logger.warning(
                 "run-backtest: расчетная мощность сетки=%s отличается от целевой=%s",
@@ -125,7 +127,8 @@ class BacktestRunner:
 
     # region Private
 
-    def _build_metrics_row(self, params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str]:
+    @staticmethod
+    def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str]:
         base_row: dict[str, int | float | str] = {
             "lookback": params.lookback,
             "volume_mult": params.volume_mult,
