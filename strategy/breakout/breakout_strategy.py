@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 
 import pandas as pd
@@ -33,30 +32,10 @@ from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BreakoutParams
+from strategy.breakout.pending_breakout import PendingBreakout
+from strategy.breakout.pending_retest import PendingRetest
 from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
-
-
-@dataclass(slots=True)
-class PendingBreakout:
-    breakout_idx: int
-    level: Level
-    breakout_extreme: float
-    side: PositionSide
-    level_start_time: pd.Timestamp
-
-
-@dataclass(slots=True)
-class PendingRetest:
-    breakout: PendingBreakout
-    retest_idx: int
-    retest_low: float
-    retest_high: float
-    confirmation_end_idx: int
-    volume_before: float
-    volume_after: float
-    volume_threshold: float
-    volume_filter_passed: bool
 
 
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):

@@ -1,0 +1,20 @@
+"""Pending retest state model for breakout strategy."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from strategy.breakout.pending_breakout import PendingBreakout
+
+
+@dataclass(slots=True)
+class PendingRetest:
+    breakout: PendingBreakout
+    retest_idx: int
+    retest_low: float
+    retest_high: float
+    confirmation_end_idx: int
+    volume_before: float
+    volume_after: float
+    volume_threshold: float
+    volume_filter_passed: bool
