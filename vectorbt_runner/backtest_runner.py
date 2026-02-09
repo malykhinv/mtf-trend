@@ -40,6 +40,95 @@ class BacktestRunner:
         self._results_dir = Path(results_dir)
         self._results_file_name = results_file_name
 
+    # область Приватные
+
+    @staticmethod
+    def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str | None]:
+        base_row: dict[str, int | float | str | None] = {
+            "lookback": params.lookback,
+            "volume_mult": params.volume_mult,
+            "retest_window_hours": params.retest_window_hours,
+            "retest_zone": params.retest_zone,
+            "min_rr": params.min_rr,
+            "retest_zone_atr": params.retest_zone_atr,
+            "sl_mode": params.sl_mode.value,
+            "tp2_mult": params.tp2_mult,
+            "min_body_ratio": params.min_body_ratio,
+            "min_move_atr": params.min_move_atr,
+            "max_retest_depth": params.max_retest_depth,
+            "confirmation_bars": params.confirmation_bars,
+            "entry_trigger": params.entry_trigger.value,
+        }
+
+        if not trades:
+            return {
+                **base_row,
+                "profit_factor": BACKTEST_EMPTY_PF,
+                "pnl_percent": BACKTEST_EMPTY_PNL_PERCENT,
+                "win_rate": BACKTEST_EMPTY_WIN_RATE,
+                "trades_count": BACKTEST_EMPTY_TRADES_COUNT,
+                "max_dd": BACKTEST_EMPTY_MAX_DD,
+                "sl_count": BACKTEST_ZERO_COUNT,
+                "be_count": BACKTEST_ZERO_COUNT,
+                "tp1_be_count": BACKTEST_ZERO_COUNT,
+                "tp2_count": BACKTEST_ZERO_COUNT,
+            }
+
+        pnl_values = [trade.pnl for trade in trades]
+        pnl_percent = sum(trade.pnl_percent.value for trade in trades)
+        profits = sum(value for value in pnl_values if value > 0)
+        losses = abs(sum(value for value in pnl_values if value < 0))
+
+        if losses > 0:
+            pf = profits / losses
+        elif profits > 0:
+            pf = BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES
+        else:
+            pf = BACKTEST_EMPTY_PF
+
+        wins = sum(1 for value in pnl_values if value > 0)
+        win_rate = wins / len(trades)
+
+        trades_count = len(trades)
+        if trades_count != len(trades):
+            msg = (
+                "обнаружено несоответствие trades_count: вычисленное значение "
+                f"({trades_count}) отличается от длины списка сделок ({len(trades)})."
+            )
+            raise RuntimeError(msg)
+
+        sorted_trades = sorted(trades, key=lambda trade: (trade.exit_time, trade.entry_time))
+        cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
+        peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
+        max_dd = BACKTEST_EMPTY_MAX_DD
+        for trade in sorted_trades:
+            cumulative_pnl += trade.pnl
+            if cumulative_pnl > peak_pnl:
+                peak_pnl = cumulative_pnl
+            drawdown = peak_pnl - cumulative_pnl
+            if drawdown > max_dd:
+                max_dd = drawdown
+
+        result_types = [trade.result_type for trade in trades]
+        return {
+            **base_row,
+            "profit_factor": round(float(pf), BACKTEST_ROUND_METRICS),
+            "pnl_percent": round(float(pnl_percent), BACKTEST_ROUND_METRICS),
+            "win_rate": round(float(win_rate), BACKTEST_ROUND_METRICS),
+            "trades_count": trades_count,
+            "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
+            "sl_count": result_types.count(TradeResultType.SL),
+            "be_count": result_types.count(TradeResultType.BE),
+            "tp1_be_count": result_types.count(TradeResultType.TP1_BE),
+            "tp2_count": result_types.count(TradeResultType.TP2),
+        }
+
+    def _save_results(self, results: pd.DataFrame) -> None:
+        self._results_dir.mkdir(parents=True, exist_ok=True)
+        results.to_csv(self._results_dir / self._results_file_name, index=False)
+
+    # конец области Приватные
+
     @staticmethod
     def build_parameter_grid() -> list[BreakoutParams]:
         lookback = BREAKOUT_PARAMETER_GRID["lookback"]
@@ -163,91 +252,3 @@ class BacktestRunner:
             best_pf=best_pf,
         )
 
-    # область Приватные
-
-    @staticmethod
-    def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str | None]:
-        base_row: dict[str, int | float | str | None] = {
-            "lookback": params.lookback,
-            "volume_mult": params.volume_mult,
-            "retest_window_hours": params.retest_window_hours,
-            "retest_zone": params.retest_zone,
-            "min_rr": params.min_rr,
-            "retest_zone_atr": params.retest_zone_atr,
-            "sl_mode": params.sl_mode.value,
-            "tp2_mult": params.tp2_mult,
-            "min_body_ratio": params.min_body_ratio,
-            "min_move_atr": params.min_move_atr,
-            "max_retest_depth": params.max_retest_depth,
-            "confirmation_bars": params.confirmation_bars,
-            "entry_trigger": params.entry_trigger.value,
-        }
-
-        if not trades:
-            return {
-                **base_row,
-                "profit_factor": BACKTEST_EMPTY_PF,
-                "pnl_percent": BACKTEST_EMPTY_PNL_PERCENT,
-                "win_rate": BACKTEST_EMPTY_WIN_RATE,
-                "trades_count": BACKTEST_EMPTY_TRADES_COUNT,
-                "max_dd": BACKTEST_EMPTY_MAX_DD,
-                "sl_count": BACKTEST_ZERO_COUNT,
-                "be_count": BACKTEST_ZERO_COUNT,
-                "tp1_be_count": BACKTEST_ZERO_COUNT,
-                "tp2_count": BACKTEST_ZERO_COUNT,
-            }
-
-        pnl_values = [trade.pnl for trade in trades]
-        pnl_percent = sum(trade.pnl_percent.value for trade in trades)
-        profits = sum(value for value in pnl_values if value > 0)
-        losses = abs(sum(value for value in pnl_values if value < 0))
-
-        if losses > 0:
-            pf = profits / losses
-        elif profits > 0:
-            pf = BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES
-        else:
-            pf = BACKTEST_EMPTY_PF
-
-        wins = sum(1 for value in pnl_values if value > 0)
-        win_rate = wins / len(trades)
-
-        trades_count = len(trades)
-        if trades_count != len(trades):
-            msg = (
-                "обнаружено несоответствие trades_count: вычисленное значение "
-                f"({trades_count}) отличается от длины списка сделок ({len(trades)})."
-            )
-            raise RuntimeError(msg)
-
-        sorted_trades = sorted(trades, key=lambda trade: (trade.exit_time, trade.entry_time))
-        cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
-        peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
-        max_dd = BACKTEST_EMPTY_MAX_DD
-        for trade in sorted_trades:
-            cumulative_pnl += trade.pnl
-            if cumulative_pnl > peak_pnl:
-                peak_pnl = cumulative_pnl
-            drawdown = peak_pnl - cumulative_pnl
-            if drawdown > max_dd:
-                max_dd = drawdown
-
-        result_types = [trade.result_type for trade in trades]
-        return {
-            **base_row,
-            "profit_factor": round(float(pf), BACKTEST_ROUND_METRICS),
-            "pnl_percent": round(float(pnl_percent), BACKTEST_ROUND_METRICS),
-            "win_rate": round(float(win_rate), BACKTEST_ROUND_METRICS),
-            "trades_count": trades_count,
-            "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
-            "sl_count": result_types.count(TradeResultType.SL),
-            "be_count": result_types.count(TradeResultType.BE),
-            "tp1_be_count": result_types.count(TradeResultType.TP1_BE),
-            "tp2_count": result_types.count(TradeResultType.TP2),
-        }
-
-    def _save_results(self, results: pd.DataFrame) -> None:
-        self._results_dir.mkdir(parents=True, exist_ok=True)
-        results.to_csv(self._results_dir / self._results_file_name, index=False)
-
-    # конец области Приватные
