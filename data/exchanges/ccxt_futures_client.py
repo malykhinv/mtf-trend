@@ -96,8 +96,6 @@ class CcxtFuturesClient(ExchangeClient):
             params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
             return ccxt.okx(cast(Any, params))
 
-    # конец области Приватные
-
     def _retry_exchange_call(
         self,
         operation: str,
@@ -123,6 +121,8 @@ class CcxtFuturesClient(ExchangeClient):
             raise RuntimeError(
                 f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts}"
             ) from exc
+
+    # конец области Приватные
 
     def get_futures_symbols(self) -> list[str]:
         symbols: list[str] = []

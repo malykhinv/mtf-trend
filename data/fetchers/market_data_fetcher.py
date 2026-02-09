@@ -24,7 +24,6 @@ from utils.logger import get_logger
 class MarketDataFetcher:
     """Координирует загрузку OHLCV/OI и получение рыночной капитализации."""
 
-    # область Приватные
     def __init__(
         self,
         ohlcv_fetcher: OhlcvFetcher,
@@ -44,20 +43,7 @@ class MarketDataFetcher:
         self._retry_backoff_seconds = retry_backoff_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
 
-    def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
-        self._logger.info(f"Рыночная капитализация старт: {len(symbols)} инструментов")
-        results: dict[str, float | str] = {}
-        for symbol in symbols:
-            try:
-                results[symbol] = self._market_data_client.get_market_cap(symbol)
-                self._logger.info(f"Рыночная капитализация готово: {symbol}")
-            except Exception as exc:  # noqa: BLE001
-                msg = f"Рыночная капитализация ошибка исполнения: {symbol}: {exc}"
-                self._logger.info(msg)
-                results[symbol] = msg
-
-        self._logger.info(LOG_MSG_TASK_COMPLETED, "Рыночная капитализация")
-        return MarketCapsResult(market_caps=results)
+    # область Приватные
 
     def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
         self._logger.info("%s сводка: всего=%s успешно=%s с ошибками=%s", stage, total, ok, failed)
@@ -75,6 +61,22 @@ class MarketDataFetcher:
         return total, ok, total - ok
 
     # конец области Приватные
+
+    def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
+        self._logger.info(f"Рыночная капитализация старт: {len(symbols)} инструментов")
+        results: dict[str, float | str] = {}
+        for symbol in symbols:
+            try:
+                results[symbol] = self._market_data_client.get_market_cap(symbol)
+                self._logger.info(f"Рыночная капитализация готово: {symbol}")
+            except Exception as exc:  # noqa: BLE001
+                msg = f"Рыночная капитализация ошибка исполнения: {symbol}: {exc}"
+                self._logger.info(msg)
+                results[symbol] = msg
+
+        self._logger.info(LOG_MSG_TASK_COMPLETED, "Рыночная капитализация")
+        return MarketCapsResult(market_caps=results)
+
     def fetch_all(
         self,
         symbols: list[str],

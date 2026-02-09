@@ -52,238 +52,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         self._strategy_timezone = strategy_timezone
         self._simulation_timezone = simulation_timezone
 
-    def validate_config(self, params: BreakoutParams) -> None:
-        if params.lookback < STRATEGY_MIN_LOOKBACK:
-            raise ValueError(f"параметр lookback должен быть >= {STRATEGY_MIN_LOOKBACK}")
-        if params.volume_mult <= STRATEGY_MIN_VOLUME_MULT:
-            raise ValueError("параметр volume_mult должен быть > 0")
-        if params.min_rr <= STRATEGY_MIN_RR:
-            raise ValueError("параметр min_rr должен быть > 0")
-        if params.tp2_mult <= STRATEGY_MIN_TP2_MULT:
-            raise ValueError(f"параметр tp2_mult должен быть > {STRATEGY_MIN_TP2_MULT}")
-        if params.confirmation_bars < 1:
-            raise ValueError("параметр confirmation_bars должен быть >= 1")
-
-    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        missing = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
-        if missing:
-            raise ValueError(f"Отсутствуют обязательные колонки: {missing}")
-
-        prepared = data.copy()
-        prepared["datetime"] = pd.to_numeric(prepared["timestamp"], errors="coerce").map(
-            lambda value: utc_ms_to_local_datetime(value, self._strategy_timezone) if pd.notna(value) else pd.NaT
-        )
-        prepared = prepared.dropna(subset=["datetime"])
-        prepared = prepared.sort_values("datetime").reset_index(drop=True)
-
-        for col in ("open", "high", "low", "close", "volume"):
-            prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
-        prepared = prepared.dropna(subset=["open", "high", "low", "close", "volume"])
-        return prepared
-
-    def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
-        """Обратносовместимая обертка для вызовов с одним таймфреймом."""
-        return self.generate_events_multi_tf(
-            mtf_frames=SymbolMtfFrames(
-                levels_timeframe=Timeframe.D1,
-                entry_timeframe=Timeframe.M15,
-                levels_frame=data,
-                entry_frame=data,
-            ),
-            params=params,
-        )
-
-    def generate_events_multi_tf(
-        self,
-        *,
-        mtf_frames: SymbolMtfFrames,
-        params: BreakoutParams,
-    ) -> list[TradeResult]:
-        """Генерирует сделки по уровням старшего ТФ и логике пробоя/ретеста младшего ТФ."""
-        self.validate_config(params)
-        higher_prepared = self.prepare_data(mtf_frames.get_frame(params.levels_timeframe))
-        lower_prepared = self.prepare_data(mtf_frames.get_frame(params.entry_timeframe))
-        self._logger.info(
-            "генерация_сигналов_пробой символ=%s тф_уровней=%s тф_входа=%s",
-            params.symbol,
-            params.levels_timeframe.value,
-            params.entry_timeframe.value,
-        )
-        if len(higher_prepared) < params.lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
-            return []
-        if len(lower_prepared) < STRATEGY_MIN_LOOKBACK_BUFFER:
-            return []
-
-        higher_levels = higher_prepared[["datetime", "high", "low"]].copy()
-        higher_levels["level_high"] = higher_levels["high"].rolling(window=params.lookback).max().shift(1)
-        higher_levels["level_low"] = higher_levels["low"].rolling(window=params.lookback).min().shift(1)
-        higher_levels["level_start_time"] = higher_levels["datetime"]
-        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("datetime")
-        if higher_levels.empty:
-            return []
-
-        lower_prepared = lower_prepared.sort_values("datetime").reset_index(drop=True)
-        annotated = pd.merge_asof(
-            lower_prepared,
-            higher_levels[["datetime", "level_high", "level_low", "level_start_time"]],
-            on="datetime",
-            direction="backward",
-        )
-        annotated = annotated.dropna(subset=["level_high", "level_low", "level_start_time"]).reset_index(drop=True)
-        if annotated.empty:
-            return []
-
-        annotated = self._append_natr(annotated=annotated, atr_window=params.lookback)
-        if annotated.empty:
-            return []
-
-        trades: list[TradeResult] = []
-        pending_signal: TradeSignal | None = None
-        pending_breakout: PendingBreakout | None = None
-        pending_retest: PendingRetest | None = None
-        active_sim: StatefulPositionSimulator | None = None
-        retest_window_candles = max(1, self._hours_to_candles(params.retest_window_hours, params.entry_timeframe))
-
-        for idx in range(len(annotated)):
-            row = annotated.iloc[idx]
-            candle = self._to_candle(row)
-
-            if pending_signal is not None and (active_sim is None or active_sim.position is None):
-                active_sim = StatefulPositionSimulator(
-                    side=pending_signal.position_side,
-                    order_processor=OrderProcessor(commission_rate=self._commission_rate, slippage=self._slippage),
-                    trade_classifier=TradeClassifier(),
-                    simulation_timezone=self._simulation_timezone,
-                )
-                active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
-                pending_signal = None
-
-            if active_sim is not None:
-                result = active_sim.process_candle(candle)
-                if result is not None:
-                    trades.append(result)
-
-            active_position = active_sim is not None and active_sim.position is not None
-            if active_position or pending_signal is not None:
-                continue
-
-            if pending_retest is not None:
-                if params.entry_trigger == EntryTrigger.IMMEDIATE:
-                    pending_signal = self._build_signal_from_retest(
-                        annotated=annotated,
-                        entry_idx=pending_retest.retest_idx + 1,
-                        pending_retest=pending_retest,
-                        params=params,
-                    )
-                    pending_retest = None
-                    continue
-
-                if idx > pending_retest.confirmation_end_idx:
-                    pending_retest = None
-                    continue
-                if self._is_confirmation(row=row, retest=pending_retest):
-                    pending_signal = self._build_signal_from_retest(
-                        annotated=annotated,
-                        entry_idx=idx + 1,
-                        pending_retest=pending_retest,
-                        params=params,
-                    )
-                    pending_retest = None
-                    continue
-                if idx == pending_retest.confirmation_end_idx:
-                    pending_retest = None
-                continue
-
-            if pending_breakout is not None:
-                breakout_idx = pending_breakout.breakout_idx
-                if idx - breakout_idx > retest_window_candles:
-                    pending_breakout = None
-                elif self._is_retest_candle(row=row, breakout=pending_breakout, params=params):
-                    volume_check = self._evaluate_volume_regime(
-                        annotated=annotated,
-                        breakout=pending_breakout,
-                        breakout_idx=breakout_idx,
-                        retest_idx=idx,
-                        volume_mult=params.volume_mult,
-                    )
-                    if volume_check["is_ok"] and self._extra_retest_filters_ok(
-                        row=row,
-                        breakout=pending_breakout,
-                        params=params,
-                    ):
-                        pending_retest = PendingRetest(
-                            breakout=pending_breakout,
-                            retest_idx=idx,
-                            retest_low=float(row["low"]),
-                            retest_high=float(row["high"]),
-                            confirmation_end_idx=idx + max(1, int(params.confirmation_bars)),
-                            volume_before=volume_check["v_before"],
-                            volume_after=volume_check["v_after"],
-                            volume_threshold=volume_check["threshold"],
-                            volume_filter_passed=volume_check["is_ok"],
-                        )
-                        pending_breakout = None
-                        continue
-
-            if pending_breakout is None:
-                level_high = float(row["level_high"])
-                level_low = float(row["level_low"])
-                breakout_long = float(row["close"]) > level_high
-                breakout_short = float(row["close"]) < level_low
-                if breakout_long:
-                    pending_breakout = PendingBreakout(
-                        breakout_idx=idx,
-                        level=self._build_level(
-                            price=level_high,
-                            side=PositionSide.LONG,
-                            row=row,
-                            lookback=params.lookback,
-                            volume_before=self._average_volume_before(
-                                annotated=annotated,
-                                breakout_idx=idx,
-                                level_start_time=row["level_start_time"],
-                            ),
-                        ),
-                        breakout_extreme=float(row["low"]),
-                        side=PositionSide.LONG,
-                        level_start_time=row["level_start_time"],
-                    )
-                elif breakout_short:
-                    pending_breakout = PendingBreakout(
-                        breakout_idx=idx,
-                        level=self._build_level(
-                            price=level_low,
-                            side=PositionSide.SHORT,
-                            row=row,
-                            lookback=params.lookback,
-                            volume_before=self._average_volume_before(
-                                annotated=annotated,
-                                breakout_idx=idx,
-                                level_start_time=row["level_start_time"],
-                            ),
-                        ),
-                        breakout_extreme=float(row["high"]),
-                        side=PositionSide.SHORT,
-                        level_start_time=row["level_start_time"],
-                    )
-
-        if pending_signal is not None:
-            BreakoutStrategy._logger.info(
-                "сигнал_не_исполнен_конец_данных символ=%s тф_уровней=%s тф_входа=%s время_входа=%s цена_входа=%.8f",
-                params.symbol,
-                params.levels_timeframe.value,
-                params.entry_timeframe.value,
-                pending_signal.entry_time.isoformat(),
-                pending_signal.entry_price.value,
-            )
-
-        if active_sim is not None and active_sim.position is not None:
-            final_row = annotated.iloc[-1]
-            final_time = datetime_to_timezone(final_row["datetime"].to_pydatetime(), self._simulation_timezone)
-            trades.append(active_sim.close_position(price=float(final_row["close"]), exit_time=final_time))
-
-        return trades
-
     # область Приватные
 
     def _to_candle(self, row: pd.Series) -> Candle:
@@ -554,3 +322,238 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return tp1, tp2
 
     # конец области Приватные
+
+    def validate_config(self, params: BreakoutParams) -> None:
+        if params.lookback < STRATEGY_MIN_LOOKBACK:
+            raise ValueError(f"параметр lookback должен быть >= {STRATEGY_MIN_LOOKBACK}")
+        if params.volume_mult <= STRATEGY_MIN_VOLUME_MULT:
+            raise ValueError("параметр volume_mult должен быть > 0")
+        if params.min_rr <= STRATEGY_MIN_RR:
+            raise ValueError("параметр min_rr должен быть > 0")
+        if params.tp2_mult <= STRATEGY_MIN_TP2_MULT:
+            raise ValueError(f"параметр tp2_mult должен быть > {STRATEGY_MIN_TP2_MULT}")
+        if params.confirmation_bars < 1:
+            raise ValueError("параметр confirmation_bars должен быть >= 1")
+
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        missing = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
+        if missing:
+            raise ValueError(f"Отсутствуют обязательные колонки: {missing}")
+
+        prepared = data.copy()
+        prepared["datetime"] = pd.to_numeric(prepared["timestamp"], errors="coerce").map(
+            lambda value: utc_ms_to_local_datetime(value, self._strategy_timezone) if pd.notna(value) else pd.NaT
+        )
+        prepared = prepared.dropna(subset=["datetime"])
+        prepared = prepared.sort_values("datetime").reset_index(drop=True)
+
+        for col in ("open", "high", "low", "close", "volume"):
+            prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
+        prepared = prepared.dropna(subset=["open", "high", "low", "close", "volume"])
+        return prepared
+
+    def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
+        """Обратносовместимая обертка для вызовов с одним таймфреймом."""
+        return self.generate_events_multi_tf(
+            mtf_frames=SymbolMtfFrames(
+                levels_timeframe=Timeframe.D1,
+                entry_timeframe=Timeframe.M15,
+                levels_frame=data,
+                entry_frame=data,
+            ),
+            params=params,
+        )
+
+    def generate_events_multi_tf(
+        self,
+        *,
+        mtf_frames: SymbolMtfFrames,
+        params: BreakoutParams,
+    ) -> list[TradeResult]:
+        """Генерирует сделки по уровням старшего ТФ и логике пробоя/ретеста младшего ТФ."""
+        self.validate_config(params)
+        higher_prepared = self.prepare_data(mtf_frames.get_frame(params.levels_timeframe))
+        lower_prepared = self.prepare_data(mtf_frames.get_frame(params.entry_timeframe))
+        self._logger.info(
+            "генерация_сигналов_пробой символ=%s тф_уровней=%s тф_входа=%s",
+            params.symbol,
+            params.levels_timeframe.value,
+            params.entry_timeframe.value,
+        )
+        if len(higher_prepared) < params.lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
+            return []
+        if len(lower_prepared) < STRATEGY_MIN_LOOKBACK_BUFFER:
+            return []
+
+        higher_levels = higher_prepared[["datetime", "high", "low"]].copy()
+        higher_levels["level_high"] = higher_levels["high"].rolling(window=params.lookback).max().shift(1)
+        higher_levels["level_low"] = higher_levels["low"].rolling(window=params.lookback).min().shift(1)
+        higher_levels["level_start_time"] = higher_levels["datetime"]
+        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("datetime")
+        if higher_levels.empty:
+            return []
+
+        lower_prepared = lower_prepared.sort_values("datetime").reset_index(drop=True)
+        annotated = pd.merge_asof(
+            lower_prepared,
+            higher_levels[["datetime", "level_high", "level_low", "level_start_time"]],
+            on="datetime",
+            direction="backward",
+        )
+        annotated = annotated.dropna(subset=["level_high", "level_low", "level_start_time"]).reset_index(drop=True)
+        if annotated.empty:
+            return []
+
+        annotated = self._append_natr(annotated=annotated, atr_window=params.lookback)
+        if annotated.empty:
+            return []
+
+        trades: list[TradeResult] = []
+        pending_signal: TradeSignal | None = None
+        pending_breakout: PendingBreakout | None = None
+        pending_retest: PendingRetest | None = None
+        active_sim: StatefulPositionSimulator | None = None
+        retest_window_candles = max(1, self._hours_to_candles(params.retest_window_hours, params.entry_timeframe))
+
+        for idx in range(len(annotated)):
+            row = annotated.iloc[idx]
+            candle = self._to_candle(row)
+
+            if pending_signal is not None and (active_sim is None or active_sim.position is None):
+                active_sim = StatefulPositionSimulator(
+                    side=pending_signal.position_side,
+                    order_processor=OrderProcessor(commission_rate=self._commission_rate, slippage=self._slippage),
+                    trade_classifier=TradeClassifier(),
+                    simulation_timezone=self._simulation_timezone,
+                )
+                active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
+                pending_signal = None
+
+            if active_sim is not None:
+                result = active_sim.process_candle(candle)
+                if result is not None:
+                    trades.append(result)
+
+            active_position = active_sim is not None and active_sim.position is not None
+            if active_position or pending_signal is not None:
+                continue
+
+            if pending_retest is not None:
+                if params.entry_trigger == EntryTrigger.IMMEDIATE:
+                    pending_signal = self._build_signal_from_retest(
+                        annotated=annotated,
+                        entry_idx=pending_retest.retest_idx + 1,
+                        pending_retest=pending_retest,
+                        params=params,
+                    )
+                    pending_retest = None
+                    continue
+
+                if idx > pending_retest.confirmation_end_idx:
+                    pending_retest = None
+                    continue
+                if self._is_confirmation(row=row, retest=pending_retest):
+                    pending_signal = self._build_signal_from_retest(
+                        annotated=annotated,
+                        entry_idx=idx + 1,
+                        pending_retest=pending_retest,
+                        params=params,
+                    )
+                    pending_retest = None
+                    continue
+                if idx == pending_retest.confirmation_end_idx:
+                    pending_retest = None
+                continue
+
+            if pending_breakout is not None:
+                breakout_idx = pending_breakout.breakout_idx
+                if idx - breakout_idx > retest_window_candles:
+                    pending_breakout = None
+                elif self._is_retest_candle(row=row, breakout=pending_breakout, params=params):
+                    volume_check = self._evaluate_volume_regime(
+                        annotated=annotated,
+                        breakout=pending_breakout,
+                        breakout_idx=breakout_idx,
+                        retest_idx=idx,
+                        volume_mult=params.volume_mult,
+                    )
+                    if volume_check["is_ok"] and self._extra_retest_filters_ok(
+                        row=row,
+                        breakout=pending_breakout,
+                        params=params,
+                    ):
+                        pending_retest = PendingRetest(
+                            breakout=pending_breakout,
+                            retest_idx=idx,
+                            retest_low=float(row["low"]),
+                            retest_high=float(row["high"]),
+                            confirmation_end_idx=idx + max(1, int(params.confirmation_bars)),
+                            volume_before=volume_check["v_before"],
+                            volume_after=volume_check["v_after"],
+                            volume_threshold=volume_check["threshold"],
+                            volume_filter_passed=volume_check["is_ok"],
+                        )
+                        pending_breakout = None
+                        continue
+
+            if pending_breakout is None:
+                level_high = float(row["level_high"])
+                level_low = float(row["level_low"])
+                breakout_long = float(row["close"]) > level_high
+                breakout_short = float(row["close"]) < level_low
+                if breakout_long:
+                    pending_breakout = PendingBreakout(
+                        breakout_idx=idx,
+                        level=self._build_level(
+                            price=level_high,
+                            side=PositionSide.LONG,
+                            row=row,
+                            lookback=params.lookback,
+                            volume_before=self._average_volume_before(
+                                annotated=annotated,
+                                breakout_idx=idx,
+                                level_start_time=row["level_start_time"],
+                            ),
+                        ),
+                        breakout_extreme=float(row["low"]),
+                        side=PositionSide.LONG,
+                        level_start_time=row["level_start_time"],
+                    )
+                elif breakout_short:
+                    pending_breakout = PendingBreakout(
+                        breakout_idx=idx,
+                        level=self._build_level(
+                            price=level_low,
+                            side=PositionSide.SHORT,
+                            row=row,
+                            lookback=params.lookback,
+                            volume_before=self._average_volume_before(
+                                annotated=annotated,
+                                breakout_idx=idx,
+                                level_start_time=row["level_start_time"],
+                            ),
+                        ),
+                        breakout_extreme=float(row["high"]),
+                        side=PositionSide.SHORT,
+                        level_start_time=row["level_start_time"],
+                    )
+
+        if pending_signal is not None:
+            BreakoutStrategy._logger.info(
+                "сигнал_не_исполнен_конец_данных символ=%s тф_уровней=%s тф_входа=%s время_входа=%s цена_входа=%.8f",
+                params.symbol,
+                params.levels_timeframe.value,
+                params.entry_timeframe.value,
+                pending_signal.entry_time.isoformat(),
+                pending_signal.entry_price.value,
+            )
+
+        if active_sim is not None and active_sim.position is not None:
+            final_row = annotated.iloc[-1]
+            final_time = datetime_to_timezone(final_row["datetime"].to_pydatetime(), self._simulation_timezone)
+            trades.append(active_sim.close_position(price=float(final_row["close"]), exit_time=final_time))
+
+        return trades
+
+    # область Приватные
+
