@@ -20,6 +20,7 @@ class Position:
     tp1_done: bool = False
     sl_moved_to_be: bool = False
 
+    # область Приватные
     def __post_init__(self) -> None:
         if self.entry_time is None:
             msg = "Position entry_time is required."
@@ -28,3 +29,4 @@ class Position:
         if self.size.value <= 0:
             msg = "Position size must be positive."
             raise ValueError(msg)
+    # конец области Приватные

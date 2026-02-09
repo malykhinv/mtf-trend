@@ -11,7 +11,9 @@ class Price:
 
     value: float
 
+    # область Приватные
     def __post_init__(self) -> None:
         if self.value < 0:
             msg = "Price cannot be negative."
             raise ValueError(msg)
+    # конец области Приватные

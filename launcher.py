@@ -27,6 +27,7 @@ MODE_LABELS: dict[str, str] = {
 }
 
 
+# область Приватные
 def _force_single_thread_mode() -> None:
     single_thread_env = {
         "OMP_NUM_THREADS": "1",
@@ -117,6 +118,7 @@ def _run_batch(config: AppConfig, cli_args: argparse.Namespace, payload: dict[st
     return 0
 
 
+# конец области Приватные
 def main() -> int:
     _force_single_thread_mode()
     parser = _build_parser()

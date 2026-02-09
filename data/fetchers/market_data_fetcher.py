@@ -24,6 +24,7 @@ from utils.logger import get_logger
 class MarketDataFetcher:
     """Координирует загрузку OHLCV/OI и получение рыночной капитализации."""
 
+    # область Приватные
     def __init__(
         self,
         ohlcv_fetcher: OhlcvFetcher,
@@ -73,6 +74,7 @@ class MarketDataFetcher:
         ok = sum(1 for value in results.market_caps.values() if isinstance(value, (int, float)))
         return total, ok, total - ok
 
+    # конец области Приватные
     def fetch_all(
         self,
         symbols: list[str],

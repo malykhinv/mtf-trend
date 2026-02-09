@@ -8,6 +8,7 @@ from cli.parser import build_parser, resolve_handler
 from config import load_config
 
 
+# область Приватные
 def _force_single_thread_mode() -> None:
     """Disable library-level multithreading to avoid lockups/timeouts in long runs."""
     single_thread_env = {
@@ -21,6 +22,7 @@ def _force_single_thread_mode() -> None:
         os.environ[key] = value
 
 
+# конец области Приватные
 def main() -> int:
     _force_single_thread_mode()
     config = load_config()

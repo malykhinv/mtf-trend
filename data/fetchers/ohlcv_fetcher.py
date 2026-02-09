@@ -26,6 +26,7 @@ from utils.logger import get_logger
 class OhlcvFetcher:
     """Fetches and stores OHLCV incrementally for one or many symbols."""
 
+    # область Приватные
     def __init__(
         self,
         exchange_client: ExchangeClient,
@@ -35,6 +36,7 @@ class OhlcvFetcher:
         retry_backoff_seconds: float = 1.0,
         log_level: int | str = DEFAULT_LOG_LEVEL,
         logs_dir: str | Path = DEFAULT_LOGS_DIR,
+    # конец области Приватные
     ) -> None:
         self._exchange_client = exchange_client
         self._storage = storage

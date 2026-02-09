@@ -14,6 +14,7 @@ class SymbolInfo:
     daily_volume: Volume
     is_active: bool = True
 
+    # область Приватные
     def __post_init__(self) -> None:
         if not self.symbol:
             msg = "SymbolInfo symbol is required."
@@ -22,3 +23,4 @@ class SymbolInfo:
         if self.market_cap < 0:
             msg = "SymbolInfo market_cap cannot be negative."
             raise ValueError(msg)
+    # конец области Приватные

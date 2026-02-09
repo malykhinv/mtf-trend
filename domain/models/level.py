@@ -20,6 +20,7 @@ class Level:
     volume_before: float | None = None
     volume_after: float | None = None
 
+    # область Приватные
     def __post_init__(self) -> None:
         if self.formation_time is None:
             msg = "Level formation_time is required."
@@ -46,3 +47,4 @@ class Level:
         if self.volume_after is not None and self.volume_after < 0:
             msg = "Level volume_after cannot be negative."
             raise ValueError(msg)
+    # конец области Приватные

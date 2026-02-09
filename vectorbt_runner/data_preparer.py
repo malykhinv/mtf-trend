@@ -26,6 +26,7 @@ from domain.models.trade_result import TradeResult
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
+# область Приватные
 def _to_utc_timestamp(value: object) -> pd.Timestamp:
     """Convert datetime-like values to UTC timestamp safely for aware/naive inputs."""
     timestamp = pd.Timestamp(value)
@@ -34,14 +35,17 @@ def _to_utc_timestamp(value: object) -> pd.Timestamp:
     return timestamp.tz_convert("UTC")
 
 
+# конец области Приватные
 class DataPreparer:
     """Loads cached parquet data and normalizes it for backtest processing."""
 
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
 
+    # область Приватные
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = Path(cache_dir)
 
+    # конец области Приватные
     def list_symbols(self, timeframe: Timeframe) -> list[str]:
         symbols: list[str] = []
         if not self._cache_dir.exists():

@@ -21,6 +21,7 @@ class RetryExhaustedError(Exception):
     attempts: int
     reason: str
 
+    # область Приватные
     def __str__(self) -> str:
         return (
             f"Повторы исчерпаны для операции='{self.operation}' после {self.attempts} попыток: "
@@ -28,6 +29,7 @@ class RetryExhaustedError(Exception):
         )
 
 
+    # конец области Приватные
 def run_with_retry(
     operation: str,
     call: Callable[P, R],
