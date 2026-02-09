@@ -14,7 +14,7 @@ from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
-from constants import TP1_CLOSE_RATIO
+from constants import SIMULATION_PRICE_COMPARISON_EPSILON, TP1_CLOSE_RATIO
 from simulation.order_processor import OrderProcessor
 from simulation.trade_classifier import TradeClassifier
 from utils.formatters import datetime_to_timezone
@@ -171,8 +171,6 @@ class StatefulPositionSimulator(PositionSimulator):
             msg = "No active position to close."
             raise RuntimeError(msg)
 
-        price_eps = 1e-8
-
         remaining_size = self.position.size.value - self._closed_size
         if remaining_size > 0:
             self._close_leg(size=remaining_size, target_price=price)
@@ -180,8 +178,8 @@ class StatefulPositionSimulator(PositionSimulator):
         result_type = self.trade_classifier.classify_result_type(
             tp1_done=self.position.tp1_done,
             exit_at_breakeven=self.position.sl_moved_to_be
-            and math.isclose(price, self.position.stop_loss.value, abs_tol=price_eps),
-            exit_at_tp2=math.isclose(price, self.position.take_profit_2.value, abs_tol=price_eps),
+            and math.isclose(price, self.position.stop_loss.value, abs_tol=SIMULATION_PRICE_COMPARISON_EPSILON),
+            exit_at_tp2=math.isclose(price, self.position.take_profit_2.value, abs_tol=SIMULATION_PRICE_COMPARISON_EPSILON),
         )
         trade_result = self.trade_classifier.build_result(
             position=self.position,

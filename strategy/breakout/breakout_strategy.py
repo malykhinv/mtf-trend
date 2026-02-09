@@ -10,10 +10,12 @@ from constants import (
     STRATEGY_DEFAULT_OPEN_INTEREST,
     STRATEGY_MIN_LOOKBACK,
     STRATEGY_MIN_LOOKBACK_BUFFER,
+    STRATEGY_NATR_EPSILON,
     STRATEGY_MIN_RR,
     STRATEGY_MIN_TP2_MULT,
     STRATEGY_MIN_VOLUME_MULT,
     STRATEGY_POSITION_SIZE,
+    STRATEGY_PRICE_EPSILON,
     STRATEGY_REQUIRED_COLUMNS,
     STRATEGY_RISK_FLOOR,
 )
@@ -314,7 +316,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def _body_ratio(row: pd.Series) -> float:
         high = float(row["high"])
         low = float(row["low"])
-        spread = max(high - low, 1e-12)
+        spread = max(high - low, STRATEGY_PRICE_EPSILON)
         return abs(float(row["close"]) - float(row["open"])) / spread
 
     def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
@@ -340,15 +342,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return float(row["close"]) < float(row["open"]) and float(row["close"]) < zone_top
 
     def _extra_retest_filters_ok(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
-        natr = max(float(row.get("natr", 0.0)), 1e-12)
+        natr = max(float(row.get("natr", 0.0)), STRATEGY_NATR_EPSILON)
         if breakout.side == PositionSide.LONG:
-            move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), 1e-12)
+            move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), STRATEGY_PRICE_EPSILON)
             level_price = breakout.level.price.value
-            depth = max(0.0, (level_price - float(row["low"])) / max(level_price, 1e-12))
+            depth = max(0.0, (level_price - float(row["low"])) / max(level_price, STRATEGY_PRICE_EPSILON))
         else:
-            move = (float(row["high"]) - float(row["close"])) / max(float(row["close"]), 1e-12)
+            move = (float(row["high"]) - float(row["close"])) / max(float(row["close"]), STRATEGY_PRICE_EPSILON)
             level_price = breakout.level.price.value
-            depth = max(0.0, (float(row["high"]) - level_price) / max(level_price, 1e-12))
+            depth = max(0.0, (float(row["high"]) - level_price) / max(level_price, STRATEGY_PRICE_EPSILON))
         min_move_threshold = params.min_move_atr * natr
         max_depth_threshold = params.max_retest_depth * natr
         return move >= min_move_threshold and depth <= max_depth_threshold
