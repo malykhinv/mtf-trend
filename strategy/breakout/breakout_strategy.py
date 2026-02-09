@@ -88,15 +88,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return abs(float(row["close"]) - float(row["open"])) / spread
 
     def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
-        """Проверяет свечу ретеста в зоне, скорректированной по ATR/NATR, с направленным отбоем.
-
-        Требования к ретесту:
-        1) Свеча пересекает зону ретеста около уровня: минимум <= верхняя_граница и максимум >= нижняя_граница.
-        2) Доля тела свечи не меньше ``min_body_ratio``.
-        3) Направленное закрытие подтверждает отбой от зоны:
-           - для длинной позиции: закрытие > открытие и закрытие > нижняя_граница.
-           - для короткой позиции: закрытие < открытие и закрытие < верхняя_граница.
-        """
         level_price = breakout.level.price.value
         natr = max(float(row.get("natr", 0.0)), 0.0)
         zone_ratio = params.resolve_retest_zone_ratio(natr)
@@ -180,12 +171,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         retest_idx: int,
         volume_mult: float,
     ) -> dict[str, float | bool]:
-        """Сравнивает режим объема только по свечам таймфрейма входа.
-
-        Определения окон (левая граница включена, правая исключена):
-        - V_before: formation_timestamp <= t < breakout_timestamp
-        - V_after: breakout_timestamp <= t < retest_timestamp
-        """
         breakout_timestamp = annotated.iloc[breakout_idx]["datetime"]
         retest_timestamp = annotated.iloc[retest_idx]["datetime"]
 
@@ -556,4 +541,3 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return trades
 
     # область Приватные
-
