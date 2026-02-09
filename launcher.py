@@ -6,7 +6,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 from cli import commands
@@ -53,8 +52,8 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> SimpleNamespace:
-    return SimpleNamespace(
+def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argparse.Namespace:
+    return argparse.Namespace(
         top_n=int(task.get("top_n", cli_args.top_n)),
         days=int(task.get("days", cli_args.days)),
         symbols=task.get("symbols", cli_args.symbols),
@@ -63,7 +62,7 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> Simpl
     )
 
 
-def _run_mode(config: AppConfig, mode: str, task_args: SimpleNamespace) -> int:
+def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> int:
     handlers = {
         MODE_FETCH_CACHE: commands.fetch_data,
         MODE_UPDATE_CACHE: commands.update_cache,
