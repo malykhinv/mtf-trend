@@ -12,6 +12,7 @@ class Percentage:
 
     value: float
 
+    # область Приватные
     def __post_init__(self) -> None:
         if not isfinite(self.value):
             msg = "Percentage must be a finite number."
@@ -20,3 +21,4 @@ class Percentage:
         if self.value < -100.0:
             msg = "Percentage must be greater than or equal to -100.0."
             raise ValueError(msg)
+    # конец области Приватные

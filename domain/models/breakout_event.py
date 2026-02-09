@@ -19,6 +19,7 @@ class BreakoutEvent:
     volume_after: Volume
     oi_value: Volume
 
+    # область Приватные
     def __post_init__(self) -> None:
         if self.breakout_time is None:
             msg = "Breakout time is required."
@@ -27,3 +28,4 @@ class BreakoutEvent:
         if self.volume_after.value == 0:
             msg = "Breakout volume_after must be positive."
             raise ValueError(msg)
+    # конец области Приватные

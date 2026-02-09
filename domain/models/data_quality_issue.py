@@ -18,6 +18,7 @@ class DataQualityIssue:
     timestamp: datetime
     description: str
 
+    # область Приватные
     def __post_init__(self) -> None:
         if not self.symbol:
             msg = "DataQualityIssue symbol is required."
@@ -34,3 +35,4 @@ class DataQualityIssue:
         if not self.description:
             msg = "DataQualityIssue description is required."
             raise ValueError(msg)
+    # конец области Приватные
