@@ -1,4 +1,4 @@
-"""Stateful position simulator with SL/TP/BE lifecycle management."""
+"""Симулятор позиции с сохранением состояния и управлением жизненным циклом SL/TP/BE."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from utils.formatters import datetime_to_timezone
 
 @dataclass(slots=True)
 class StatefulPositionSimulator(PositionSimulator):
-    """Processes candles one-by-one and closes position based on conservative priority rules."""
+    """Обрабатывает свечи по одной и закрывает позицию по консервативным приоритетам."""
 
     side: PositionSide
     order_processor: OrderProcessor
@@ -142,12 +142,12 @@ class StatefulPositionSimulator(PositionSimulator):
     # конец области Приватные
 
     def register_signal(self, signal: TradeSignal, size: float) -> None:
-        """Store signal; position will be opened by market order on next processed candle open."""
+        """Сохраняет сигнал; позиция откроется рыночным ордером на открытии следующей свечи."""
         self._pending_signal = signal
         self._pending_size = size
 
     def process_candle(self, candle: Candle) -> TradeResult | None:
-        """Open pending signal and process active position against current candle."""
+        """Открывает отложенный сигнал и обрабатывает активную позицию на текущей свече."""
         if self.position is None and self._pending_signal is not None:
             self._open_from_pending_signal(candle)
 
@@ -159,14 +159,14 @@ class StatefulPositionSimulator(PositionSimulator):
         return self._process_short(candle)
 
     def open_position(self, position: Position) -> None:
-        """Set active position. Intended for already-executed fills."""
+        """Устанавливает активную позицию. Предназначено для уже исполненных сделок."""
         self.position = position
         self._realized_pnl = 0.0
         self._closed_size = 0.0
         self._last_exit_price = position.entry_price.value
 
     def close_position(self, price: float, exit_time: datetime) -> TradeResult:
-        """Close remaining position at given price and close timestamp, then return classified trade result."""
+        """Закрывает остаток позиции по заданной цене и времени, затем возвращает классифицированный результат сделки."""
         if self.position is None:
             msg = "Нет активной позиции для закрытия."
             raise RuntimeError(msg)
@@ -192,7 +192,7 @@ class StatefulPositionSimulator(PositionSimulator):
         return trade_result
 
     def update_stop(self, new_stop: float) -> None:
-        """Update stop-loss level for active position."""
+        """Обновляет уровень стоп-лосса для активной позиции."""
         if self.position is None:
             msg = "Нет активной позиции для обновления стопа."
             raise RuntimeError(msg)

@@ -1,4 +1,4 @@
-"""Simulation models exports."""
+"""Экспорты моделей симуляции."""
 
 from simulation.models.fill import Fill
 

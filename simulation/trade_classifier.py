@@ -1,4 +1,4 @@
-"""Trade result classification and PnL calculations."""
+"""Классификация результатов сделки и расчеты прибыли/убытка."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from domain.value_objects.price import Price
 
 @dataclass(frozen=True, slots=True)
 class TradeClassifier:
-    """Builds final trade results from simulator state."""
+    """Формирует итоговые результаты сделки из состояния симулятора."""
 
     @staticmethod
     def classify_result_type(*, tp1_done: bool, exit_at_breakeven: bool, exit_at_tp2: bool) -> TradeResultType:

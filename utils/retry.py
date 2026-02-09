@@ -1,4 +1,4 @@
-"""Retry helper with structured attempt logging."""
+"""Помощник повторных попыток со структурированным логированием."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ R = TypeVar("R")
 
 @dataclass(slots=True)
 class RetryExhaustedError(Exception):
-    """Controlled error raised when all retry attempts are exhausted."""
+    """Контролируемая ошибка, возникающая при исчерпании всех попыток."""
 
     operation: str
     attempts: int
@@ -23,7 +23,7 @@ class RetryExhaustedError(Exception):
 
     def __str__(self) -> str:
         return (
-            f"Retry exhausted for operation='{self.operation}' after {self.attempts} attempts: "
+            f"Повторы исчерпаны для операции='{self.operation}' после {self.attempts} попыток: "
             f"{self.reason}"
         )
 
@@ -41,9 +41,9 @@ def run_with_retry(
     jitter_seconds: float | None = None,
     **kwargs: P.kwargs,
 ) -> R:
-    """Execute callable with retries and structured logs for each attempt."""
+    """Выполняет вызов функции с повторами и структурированными логами каждой попытки."""
     if attempts < 1:
-        raise ValueError("attempts должно быть >= 1")
+        raise ValueError("число попыток должно быть >= 1")
 
     target_logger = logger or logging.getLogger(__name__)
     endpoint_value = endpoint or "n/a"

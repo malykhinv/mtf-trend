@@ -1,4 +1,4 @@
-"""Simple breakout strategy implementation backed by stateful position simulation."""
+"""Простая реализация стратегии пробоя на базе симуляции с сохранением состояния позиции."""
 
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
-    """Breakout/retest strategy with continuation confirmation and volume regime checks."""
+    """Стратегия пробоя/ретеста с подтверждением продолжения и проверкой режима объема."""
 
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
     _logger = logging.getLogger(__name__)
@@ -54,20 +54,20 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
     def validate_config(self, params: BreakoutParams) -> None:
         if params.lookback < STRATEGY_MIN_LOOKBACK:
-            raise ValueError(f"lookback must be >= {STRATEGY_MIN_LOOKBACK}")
+            raise ValueError(f"параметр lookback должен быть >= {STRATEGY_MIN_LOOKBACK}")
         if params.volume_mult <= STRATEGY_MIN_VOLUME_MULT:
-            raise ValueError("volume_mult must be > 0")
+            raise ValueError("параметр volume_mult должен быть > 0")
         if params.min_rr <= STRATEGY_MIN_RR:
-            raise ValueError("min_rr must be > 0")
+            raise ValueError("параметр min_rr должен быть > 0")
         if params.tp2_mult <= STRATEGY_MIN_TP2_MULT:
-            raise ValueError(f"tp2_mult must be > {STRATEGY_MIN_TP2_MULT}")
+            raise ValueError(f"параметр tp2_mult должен быть > {STRATEGY_MIN_TP2_MULT}")
         if params.confirmation_bars < 1:
-            raise ValueError("confirmation_bars must be >= 1")
+            raise ValueError("параметр confirmation_bars должен быть >= 1")
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         missing = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
         if missing:
-            raise ValueError(f"Missing required columns: {missing}")
+            raise ValueError(f"Отсутствуют обязательные колонки: {missing}")
 
         prepared = data.copy()
         prepared["datetime"] = pd.to_numeric(prepared["timestamp"], errors="coerce").map(
@@ -82,7 +82,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return prepared
 
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
-        """Backward-compatible wrapper for single-timeframe callers."""
+        """Обратносовместимая обертка для вызовов с одним таймфреймом."""
         return self.generate_events_multi_tf(
             mtf_frames=SymbolMtfFrames(
                 levels_timeframe=Timeframe.D1,
@@ -99,12 +99,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         mtf_frames: SymbolMtfFrames,
         params: BreakoutParams,
     ) -> list[TradeResult]:
-        """Generate trades from higher-TF levels and lower-TF breakout/retest logic."""
+        """Генерирует сделки по уровням старшего ТФ и логике пробоя/ретеста младшего ТФ."""
         self.validate_config(params)
         higher_prepared = self.prepare_data(mtf_frames.get_frame(params.levels_timeframe))
         lower_prepared = self.prepare_data(mtf_frames.get_frame(params.entry_timeframe))
         self._logger.info(
-            "breakout_generate_events symbol=%s levels_tf=%s entry_tf=%s",
+            "генерация_сигналов_пробой символ=%s тф_уровней=%s тф_входа=%s",
             params.symbol,
             params.levels_timeframe.value,
             params.entry_timeframe.value,
@@ -269,7 +269,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         if pending_signal is not None:
             BreakoutStrategy._logger.info(
-                "signal_not_executed_end_of_data symbol=%s levels_tf=%s entry_tf=%s entry_time=%s entry_price=%.8f",
+                "сигнал_не_исполнен_конец_данных символ=%s тф_уровней=%s тф_входа=%s время_входа=%s цена_входа=%.8f",
                 params.symbol,
                 params.levels_timeframe.value,
                 params.entry_timeframe.value,
@@ -320,14 +320,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return abs(float(row["close"]) - float(row["open"])) / spread
 
     def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
-        """Validate retest candle inside ATR/NATR-adjusted zone with directional bounce.
+        """Проверяет свечу ретеста в зоне, скорректированной по ATR/NATR, с направленным отбоем.
 
-        Retest requirements:
-        1) Candle intersects retest zone around level: low <= zone_top and high >= zone_bottom.
-        2) Candle body ratio is at least ``min_body_ratio``.
-        3) Directional close confirms bounce from the zone:
-           - LONG: close > open and close > zone_bottom.
-           - SHORT: close < open and close < zone_top.
+        Требования к ретесту:
+        1) Свеча пересекает зону ретеста около уровня: минимум <= верхняя_граница и максимум >= нижняя_граница.
+        2) Доля тела свечи не меньше ``min_body_ratio``.
+        3) Направленное закрытие подтверждает отбой от зоны:
+           - для длинной позиции: закрытие > открытие и закрытие > нижняя_граница.
+           - для короткой позиции: закрытие < открытие и закрытие < верхняя_граница.
         """
         level_price = breakout.level.price.value
         natr = max(float(row.get("natr", 0.0)), 0.0)
@@ -412,9 +412,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         retest_idx: int,
         volume_mult: float,
     ) -> dict[str, float | bool]:
-        """Compare volume regime on entry timeframe candles only.
+        """Сравнивает режим объема только по свечам таймфрейма входа.
 
-        Window definitions (left-inclusive, right-exclusive):
+        Определения окон (левая граница включена, правая исключена):
         - V_before: formation_timestamp <= t < breakout_timestamp
         - V_after: breakout_timestamp <= t < retest_timestamp
         """
@@ -429,7 +429,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         ]
         if before_slice.empty or after_slice.empty:
             BreakoutStrategy._logger.debug(
-                "volume_regime_rejected_empty_window formation_ts=%s breakout_ts=%s retest_ts=%s volume_mult=%.4f",
+                "режим_объема_отклонен_пустое_окно время_формирования=%s время_пробоя=%s время_ретеста=%s множитель_объема=%.4f",
                 breakout.level_start_time,
                 breakout_timestamp,
                 retest_timestamp,
@@ -461,7 +461,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         if not is_ok:
             BreakoutStrategy._logger.info(
-                "volume_regime_rejected v_before=%.6f v_after=%.6f volume_mult=%.4f threshold=%.6f",
+                "режим_объема_отклонен объем_до=%.6f объем_после=%.6f множитель_объема=%.4f порог=%.6f",
                 v_before,
                 v_after,
                 volume_mult,

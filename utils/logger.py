@@ -1,4 +1,4 @@
-"""Logging utilities with concise timestamped output."""
+"""Утилиты логирования с компактным выводом и временными метками."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from constants import (
 
 
 class _ColorFormatter(logging.Formatter):
-    """Adds ANSI colors for INFO/WARNING/ERROR levels in console output."""
+    """Добавляет цвета ANSI для уровней журналирования в консольном выводе."""
 
     RESET = LOGGER_COLOR_RESET
     COLORS = {
@@ -55,7 +55,7 @@ def get_logger(
     level: int | str = logging.INFO,
     logs_dir: str | Path = DEFAULT_LOGS_DIR,
 ) -> logging.Logger:
-    """Create or return configured logger in `ЧЧ:ММ:СС Сообщение` format."""
+    """Создает или возвращает настроенный логгер в формате `ЧЧ:ММ:СС Сообщение`."""
     if isinstance(level, str):
         resolved_level = _NAMED_LOG_LEVELS.get(level.upper(), logging.INFO)
     else:

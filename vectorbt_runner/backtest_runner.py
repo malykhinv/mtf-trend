@@ -1,4 +1,4 @@
-"""Parameter-grid backtest runner and metrics calculator."""
+"""Запуск бэктеста по сетке параметров и расчет метрик."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class BacktestRunner:
-    """Runs strategy over parameter combinations and stores CSV output."""
+    """Запускает стратегию по комбинациям параметров и сохраняет результат в CSV."""
 
     def __init__(self, results_dir: Path, results_file_name: str) -> None:
         self._results_dir = Path(results_dir)
@@ -144,13 +144,13 @@ class BacktestRunner:
     def build_summary(results: pd.DataFrame) -> BacktestSummary:
         if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
             logger.warning(
-                "run-backtest: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
+                "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
                 PARAMETER_GRID_SIZE,
                 TARGET_PARAMETER_COMBINATIONS,
             )
         if len(results) != TARGET_PARAMETER_COMBINATIONS:
             logger.warning(
-                "run-backtest: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
+                "запуск-бэктеста: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
                 len(results),
                 TARGET_PARAMETER_COMBINATIONS,
             )
@@ -215,8 +215,8 @@ class BacktestRunner:
         trades_count = len(trades)
         if trades_count != len(trades):
             msg = (
-                "trades_count mismatch detected: derived trades_count "
-                f"({trades_count}) differs from trades list length ({len(trades)})."
+                "обнаружено несоответствие trades_count: вычисленное значение "
+                f"({trades_count}) отличается от длины списка сделок ({len(trades)})."
             )
             raise RuntimeError(msg)
 
