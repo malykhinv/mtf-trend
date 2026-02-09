@@ -18,6 +18,7 @@ from config import AppConfig
 from constants import (
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     DEFAULT_REPORT_OUTPUT_FILE,
+    OI_STALE_MIN_OBSERVATIONS,
     OI_STALE_RATIO_THRESHOLD,
     QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE,
     QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
@@ -413,8 +414,6 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
-    min_stale_observations = 3
-
     if "open_interest" not in frame.columns:
         return [
             {
@@ -454,7 +453,7 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
         comparison_mask = aligned_valid_mask & aligned_valid_mask.shift(1, fill_value=False)
         compared_observations = int(comparison_mask.sum())
 
-        if compared_observations >= min_stale_observations:
+        if compared_observations >= OI_STALE_MIN_OBSERVATIONS:
             stale_ratio = (aligned_oi.diff().eq(0) & comparison_mask).sum() / compared_observations
         else:
             stale_ratio = 0.0

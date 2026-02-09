@@ -119,6 +119,10 @@ STRATEGY_MIN_TP2_MULT = 1.0
 STRATEGY_RISK_FLOOR = 0.002
 STRATEGY_POSITION_SIZE = 1.0
 STRATEGY_DEFAULT_OPEN_INTEREST = 0.0
+# Price floor epsilon for ratio calculations in breakout candle geometry.
+STRATEGY_PRICE_EPSILON = 1e-12
+# ATR/NATR floor epsilon to avoid zero thresholds in retest filters.
+STRATEGY_NATR_EPSILON = 1e-12
 
 # Reporting domain constants
 REPORT_TRADES_COUNT_FILTER = 30
@@ -163,6 +167,12 @@ SIMULATION_PARQUET_FILE_NAME = "data.parquet"
 # Data quality thresholds
 SPREAD_TO_CLOSE_WARNING_THRESHOLD = 0.3
 OI_STALE_RATIO_THRESHOLD = 0.98
+# Minimal number of aligned OI comparisons before stale-ratio evaluation is meaningful.
+OI_STALE_MIN_OBSERVATIONS = 3
+
+# Simulation thresholds
+# Absolute tolerance for classifying BE/TP2 exits by close price proximity.
+SIMULATION_PRICE_COMPARISON_EPSILON = 1e-8
 
 # Runtime defaults
 DEFAULT_LOG_LEVEL = "INFO"
