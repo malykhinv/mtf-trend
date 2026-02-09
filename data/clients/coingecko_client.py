@@ -59,7 +59,7 @@ class CoinGeckoClient(MarketDataClient):
         self._retry_backoff_seconds = retry_backoff_seconds
         self._load_market_cap_cache()
 
-    # region Private
+    # область Приватные
 
     @staticmethod
     def _normalize_symbol(symbol: str) -> str:
@@ -313,7 +313,7 @@ class CoinGeckoClient(MarketDataClient):
 
         return self._symbol_to_id[canonical_symbol]
 
-    # endregion Private
+    # конец области Приватные
 
     def get_market_cap(self, symbol: str) -> float:
         canonical_symbol = self._canonical_symbol_key(symbol)

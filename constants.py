@@ -11,21 +11,21 @@ from domain.enums.sl_mode import SLMode
 SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = tuple(Timeframe)
 DEFAULT_TIMEFRAME = Timeframe.H1
 
-# API limits
+# Лимиты АПИ
 DEFAULT_FETCH_BATCH_SIZE = 1000
 DEFAULT_RETRY_ATTEMPTS = 3
 DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
 MILLISECONDS_IN_SECOND = 1000
 
-# Timeouts (seconds)
+# Таймауты (секунды)
 HTTP_TIMEOUT_SECONDS = 30
 EXCHANGE_TIMEOUT_SECONDS = 20
 COINGECKO_TIMEOUT_SECONDS = 20
 
-# Fetcher defaults
+# Значения по умолчанию для загрузчиков
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60
 
-# Fetching domain constants
+# Константы домена загрузки
 TIMEFRAME_TO_DELTA = {
     Timeframe.M1: timedelta(minutes=1),
     Timeframe.M5: timedelta(minutes=5),
@@ -44,7 +44,7 @@ FUTURES_SETTLEMENT_QUOTE_ASSET = "USDT"
 SIMULATION_COIN_SUFFIX_SLASH_USDT = "/usdt"
 SIMULATION_COIN_SUFFIX_USDT = "usdt"
 
-# CoinGecko constants
+# Константы КоинГекко
 COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
 COINGECKO_HEADER_ACCEPT_KEY = "accept"
 COINGECKO_HEADER_ACCEPT_JSON = "application/json"
@@ -60,7 +60,7 @@ COINGECKO_PARAM_SPARKLINE = "sparkline"
 COINGECKO_SPARKLINE_FALSE = "false"
 COINGECKO_DEFAULT_PAGE = 1
 
-# Logger constants
+# Константы логгера
 LOGGER_DATE_FORMAT = "%H:%M:%S"
 LOGGER_MESSAGE_FORMAT = "%(asctime)s %(message)s"
 LOGGER_COLOR_RESET = "\033[0m"
@@ -71,13 +71,13 @@ LOGGER_FILE_MAX_BYTES = 5 * 1024 * 1024
 LOGGER_FILE_BACKUP_COUNT = 5
 LOGGER_FILE_ENCODING = "utf-8"
 
-# Logging glossary (единые шаблоны)
+# Глоссарий логирования (единые шаблоны)
 LOG_MSG_LOAD_ERROR = "Ошибка загрузки %s: %s"
 LOG_MSG_RETRY_EXHAUSTED = "Ретраи исчерпаны: endpoint=%s symbol=%s attempts=%s"
 LOG_MSG_SKIP_UP_TO_DATE = "%s пропуск: %s уже актуален"
 LOG_MSG_TASK_COMPLETED = "%s завершено"
 
-# Data preparer constants
+# Константы подготовщика данных
 DATA_PREPARER_NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "open_interest")
 DATA_PREPARER_EMPTY_FLOAT_DTYPE = "float64"
 DATA_PREPARER_EMPTY_BOOL_DTYPE = "bool"
@@ -85,7 +85,7 @@ DATA_PREPARER_TRADE_COLUMNS = ("entry_time", "exit_time", "pnl", "pnl_percent", 
 SIMULATION_ZERO_VALUE = 0.0
 SIMULATION_UNIT_INCREMENT = 1.0
 
-# Breakout grid constants
+# Константы сетки пробоя
 BREAKOUT_LOOKBACK_VALUES = (8, 13, 21)
 BREAKOUT_VOLUME_MULT_VALUES = (1.2, 1.5, 2.0)
 BREAKOUT_RETEST_WINDOW_VALUES = (12, 24, 36, 48)
@@ -97,19 +97,19 @@ BREAKOUT_ENTRY_TRIGGER_VALUES = (EntryTrigger.IMMEDIATE, EntryTrigger.PRICE_CONF
 BREAKOUT_TP2_MULT_VALUES = (1.5, 2.0, 2.5)
 BREAKOUT_MIN_BODY_RATIO_VALUES = (0.4,)
 BREAKOUT_MIN_MOVE_ATR_VALUES = (0.5,)
-# Backward-compatible alias for legacy imports.
+# Обратносуместимый алиас для старых импортов.
 BREAKOUT_MIN_MOVE_FROM_BREAKOUT_VALUES = BREAKOUT_MIN_MOVE_ATR_VALUES
 BREAKOUT_MAX_RETEST_DEPTH_VALUES = (1.0,)
 BREAKOUT_CONFIRMATION_BARS_VALUES = (2,)
 BREAKOUT_TARGET_PARAMETER_COMBINATIONS = 5832
 
-# Trading defaults
+# Значения по умолчанию для торговли
 DEFAULT_COMMISSION_RATE = 0.0004
 DEFAULT_SLIPPAGE = 0.0005
 DEFAULT_SPREAD = 0.0
 TP1_CLOSE_RATIO = 0.5
 
-# Strategy domain constants
+# Константы домена стратегии
 STRATEGY_REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 STRATEGY_MIN_LOOKBACK = 5
 STRATEGY_MIN_LOOKBACK_BUFFER = 5
@@ -119,12 +119,12 @@ STRATEGY_MIN_TP2_MULT = 1.0
 STRATEGY_RISK_FLOOR = 0.002
 STRATEGY_POSITION_SIZE = 1.0
 STRATEGY_DEFAULT_OPEN_INTEREST = 0.0
-# Price floor epsilon for ratio calculations in breakout candle geometry.
+# Эпсилон нижней границы цены для расчетов отношений в геометрии свечи пробоя.
 STRATEGY_PRICE_EPSILON = 1e-12
-# ATR/NATR floor epsilon to avoid zero thresholds in retest filters.
+# Эпсилон нижней границы АТР/НАТР, чтобы избегать нулевых порогов в фильтрах ретеста.
 STRATEGY_NATR_EPSILON = 1e-12
 
-# Reporting domain constants
+# Константы домена отчетности
 REPORT_TRADES_COUNT_FILTER = 30
 REPORT_PROFIT_FACTOR_FILTER = 1.0
 REPORT_PROFITABLE_PF_THRESHOLD = 1.0
@@ -137,7 +137,7 @@ QUALITY_SEVERITY_WARNING = "WARNING"
 QUALITY_SEVERITY_CRITICAL = "CRITICAL"
 QUALITY_SEVERITY_INFO = "INFO"
 
-# Backtest domain constants
+# Константы домена бектеста
 BACKTEST_EMPTY_PF = 0.0
 BACKTEST_EMPTY_PNL_PERCENT = 0.0
 BACKTEST_EMPTY_WIN_RATE = 0.0
@@ -150,7 +150,7 @@ BACKTEST_ROUND_MAX_DD = 6
 BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES = 99.0
 BACKTEST_PROFITABLE_PF_THRESHOLD = 1.0
 
-# Simulation/vectorbt domain constants
+# Константы домена симуляции/векторбт
 SIMULATION_VECTORBT_DIRECTION = "longonly"
 SIMULATION_INIT_CASH = 100.0
 SIMULATION_SIZE = 1.0
@@ -164,17 +164,17 @@ SIMULATION_DATETIME_UNIT_MS = "ms"
 SIMULATION_TIMEZONE_UTC = "UTC"
 SIMULATION_PARQUET_FILE_NAME = "data.parquet"
 
-# Data quality thresholds
+# Пороги качества данных
 SPREAD_TO_CLOSE_WARNING_THRESHOLD = 0.3
 OI_STALE_RATIO_THRESHOLD = 0.98
-# Minimal number of aligned OI comparisons before stale-ratio evaluation is meaningful.
+# Минимальное число выровненных сравнений ОИ, при котором оценка доли застоя имеет смысл.
 OI_STALE_MIN_OBSERVATIONS = 3
 
-# Simulation thresholds
-# Absolute tolerance for classifying BE/TP2 exits by close price proximity.
+# Пороги симуляции
+# Абсолютная погрешность для классификации выходов безубыток/ТП2 по близости цены закрытия.
 SIMULATION_PRICE_COMPARISON_EPSILON = 1e-8
 
-# Runtime defaults
+# Значения по умолчанию для рантайма
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_TIMEZONE = "Europe/Belgrade"
 DEFAULT_CACHE_DIR = "./cache"
@@ -184,15 +184,15 @@ DEFAULT_BACKTEST_OUTPUT_FILE = "backtest_results.csv"
 DEFAULT_REPORT_OUTPUT_FILE = "report.json"
 DEFAULT_QUALITY_REPORT_OUTPUT_FILE = "quality_report.json"
 
-# CLI defaults
+# Значения по умолчанию для интерфейса командной строки
 DEFAULT_TOP_N = 50
 DEFAULT_FETCH_DAYS = 60
 DEFAULT_UPDATE_DAYS = 7
 DEFAULT_MIN_VOLUME_USD = 20_000_000.0
 
-# Service defaults
+# Значения по умолчанию для сервиса
 
-# Error codes
+# Коды ошибок
 ERROR_CODE_INVALID_CONFIG = "E_CFG_001"
 ERROR_CODE_FETCH_FAILED = "E_FETCH_001"
 ERROR_CODE_SIMULATION_FAILED = "E_SIM_001"

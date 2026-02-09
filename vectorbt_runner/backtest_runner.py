@@ -56,7 +56,7 @@ class BacktestRunner:
         confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
         entry_trigger = BREAKOUT_PARAMETER_GRID["entry_trigger"]
 
-        # combos = |lookback| × |volume_mult| × |retest_window_hours| × |retest_zone| × |retest_zone_atr| × |min_rr| × |sl_mode| × |tp2_mult| × |min_body_ratio| × |min_move_atr| × |max_retest_depth| × |confirmation_bars| × |entry_trigger|
+        # комбинации = |оглядка| × |множитель_объема| × |окно_ретеста_часы| × |зона_ретеста| × |зона_ретеста_атр| × |мин_рр| × |режим_сл| × |множитель_тп2| × |мин_доля_тела| × |мин_движение_атр| × |макс_глубина_ретеста| × |бары_подтверждения| × |триггер_входа|
         return [
             BreakoutParams(
                 lookback=int(lb),
@@ -163,7 +163,7 @@ class BacktestRunner:
             best_pf=best_pf,
         )
 
-    # region Private
+    # область Приватные
 
     @staticmethod
     def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str | None]:
@@ -250,4 +250,4 @@ class BacktestRunner:
         self._results_dir.mkdir(parents=True, exist_ok=True)
         results.to_csv(self._results_dir / self._results_file_name, index=False)
 
-    # endregion Private
+    # конец области Приватные
