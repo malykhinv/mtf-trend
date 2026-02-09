@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
     ccxt = None
 
 
-# region Private
+# область Приватные
 
 def _to_utc_ms(value: datetime) -> int:
     if value.tzinfo is None:
@@ -38,7 +38,7 @@ def _to_utc_ms(value: datetime) -> int:
         value = value.astimezone(timezone.utc)
     return int(value.timestamp() * MILLISECONDS_IN_SECOND)
 
-# endregion Private
+# конец области Приватные
 
 
 class CcxtFuturesClient(ExchangeClient):
@@ -70,7 +70,7 @@ class CcxtFuturesClient(ExchangeClient):
         )
         self._client.load_markets()
 
-    # region Private
+    # область Приватные
 
     @staticmethod
     def _build_client(
@@ -96,7 +96,7 @@ class CcxtFuturesClient(ExchangeClient):
             params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
             return ccxt.okx(cast(Any, params))
 
-    # endregion Private
+    # конец области Приватные
 
     def _retry_exchange_call(
         self,

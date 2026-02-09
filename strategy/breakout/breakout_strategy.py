@@ -284,7 +284,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         return trades
 
-    # region Private
+    # область Приватные
 
     def _to_candle(self, row: pd.Series) -> Candle:
         return Candle(
@@ -553,4 +553,4 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         tp2 = entry_price - risk * min_rr * tp2_mult
         return tp1, tp2
 
-    # endregion Private
+    # конец области Приватные

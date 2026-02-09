@@ -36,7 +36,7 @@ class StatefulPositionSimulator(PositionSimulator):
     _closed_size: float = 0.0
     _last_exit_price: float = 0.0
 
-    # region Private
+    # область Приватные
 
     def _open_from_pending_signal(self, candle: Candle) -> None:
         signal = self._pending_signal
@@ -139,7 +139,7 @@ class StatefulPositionSimulator(PositionSimulator):
         self.position = None
         return trade_result
 
-    # endregion Private
+    # конец области Приватные
 
     def register_signal(self, signal: TradeSignal, size: float) -> None:
         """Store signal; position will be opened by market order on next processed candle open."""
@@ -168,7 +168,7 @@ class StatefulPositionSimulator(PositionSimulator):
     def close_position(self, price: float, exit_time: datetime) -> TradeResult:
         """Close remaining position at given price and close timestamp, then return classified trade result."""
         if self.position is None:
-            msg = "No active position to close."
+            msg = "Нет активной позиции для закрытия."
             raise RuntimeError(msg)
 
         remaining_size = self.position.size.value - self._closed_size
@@ -194,6 +194,6 @@ class StatefulPositionSimulator(PositionSimulator):
     def update_stop(self, new_stop: float) -> None:
         """Update stop-loss level for active position."""
         if self.position is None:
-            msg = "No active position to update stop for."
+            msg = "Нет активной позиции для обновления стопа."
             raise RuntimeError(msg)
         self.position.stop_loss = Price(new_stop)

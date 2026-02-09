@@ -43,7 +43,7 @@ def run_with_retry(
 ) -> R:
     """Execute callable with retries and structured logs for each attempt."""
     if attempts < 1:
-        raise ValueError("attempts must be >= 1")
+        raise ValueError("attempts должно быть >= 1")
 
     target_logger = logger or logging.getLogger(__name__)
     endpoint_value = endpoint or "n/a"
@@ -53,7 +53,7 @@ def run_with_retry(
         try:
             result = call(*args, **kwargs)
             target_logger.info(
-                "retry operation=%s attempt=%s/%s endpoint=%s symbol=%s result=success",
+                "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s результат=успех",
                 operation,
                 attempt_number,
                 attempts,
@@ -64,7 +64,7 @@ def run_with_retry(
         except retriable_exceptions as exc:
             is_last = attempt_number >= attempts
             target_logger.warning(
-                "retry operation=%s attempt=%s/%s endpoint=%s symbol=%s result=failure reason=%s",
+                "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s результат=ошибка причина=%s",
                 operation,
                 attempt_number,
                 attempts,

@@ -78,7 +78,7 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
 
 
-# region Private
+# область Приватные
 
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
     logger = get_logger(
@@ -245,7 +245,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger=logger,
     )
     if not symbols:
-        logger.info("fetch-data: не найдено символов для загрузки")
+        logger.info("загрузка-данных: не найдено символов для загрузки")
         return 0
 
     start_time, end_time = _fetch_period(config, args.days)
@@ -268,7 +268,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger=logger,
     )
     if not symbols:
-        logger.info("update-cache: не найдено символов для обновления")
+        logger.info("обновление-кэша: не найдено символов для обновления")
         return 0
 
     start_time, end_time = _fetch_period(config, args.days)
@@ -300,7 +300,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(entry_timeframe)
     if not symbols:
-        logger.info("run-backtest: нет данных в кэше")
+        logger.info("запуск-бектеста: нет данных в кэше")
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
@@ -317,7 +317,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             entry_frame=entry_frame,
         )
     if not symbol_frames:
-        logger.info("run-backtest: не удалось подготовить данные")
+        logger.info("запуск-бектеста: не удалось подготовить данные")
         return 0
 
     strategy = BreakoutStrategy(
@@ -363,11 +363,11 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     ]
     missing_columns = [column for column in required_columns if column not in frame.columns]
     if missing_columns:
-        logger.error("make-report: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
+        logger.error("подготовка-отчета: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
         return 1
 
     if frame.empty:
-        logger.info("make-report: пустой файл результатов")
+        logger.info("подготовка-отчета: пустой файл результатов")
         return 1
 
     filtered = frame[(frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER) & (frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)].copy()
@@ -525,7 +525,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
     if not symbols:
-        logger.info("check-quality: нет данных для проверки")
+        logger.info("проверка-качества: нет данных для проверки")
         return 0
 
     validator = DataValidator()
@@ -540,7 +540,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     for symbol in symbols:
         frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
         if frame.empty:
-            logger.info(f"check-quality: {symbol} пропущен, пустой датасет")
+            logger.info(f"проверка-качества: {symbol} пропущен, пустой датасет")
             continue
 
         issues = validator.validate(symbol, config.fetch.timeframe, frame)
@@ -589,9 +589,9 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
     _save_quality_report(report, output_path)
 
-    logger.info(f"check-quality: итог issues={report.summary.issues_total} gaps={report.summary.gaps_total}")
-    logger.info(f"check-quality: отчет сохранен {output_path}")
+    logger.info(f"проверка-качества: итог проблемы={report.summary.issues_total} пропуски={report.summary.gaps_total}")
+    logger.info(f"проверка-качества: отчет сохранен {output_path}")
     return 0
 
 
-# endregion Private
+# конец области Приватные
