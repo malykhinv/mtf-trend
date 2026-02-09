@@ -1,4 +1,4 @@
-"""Order fill model."""
+"""Модель исполнения ордера."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class Fill:
-    """Single order fill snapshot."""
+    """Снимок одного исполнения ордера."""
 
     price: float
     commission: float

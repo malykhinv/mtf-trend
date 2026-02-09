@@ -1,4 +1,4 @@
-"""Order execution and transaction cost calculations for simulation."""
+"""Исполнение ордеров и расчет транзакционных издержек в симуляции."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from simulation.models.fill import Fill
 
 @dataclass(frozen=True, slots=True)
 class OrderProcessor:
-    """Calculates execution prices and trading costs."""
+    """Рассчитывает цены исполнения и торговые издержки."""
 
     commission_rate: float
     slippage: float
@@ -27,19 +27,19 @@ class OrderProcessor:
     # конец области Приватные
 
     def execute_entry(self, candle_open: float, side: PositionSide, size: float) -> Fill:
-        """Execute market entry at candle open with adverse slippage and commission."""
+        """Исполняет вход по рынку на открытии свечи с неблагоприятным проскальзыванием и комиссией."""
         is_buy = side == PositionSide.LONG
         fill_price = self._apply_slippage(candle_open, is_buy=is_buy)
         return Fill(price=fill_price, commission=self._commission(fill_price * size))
 
     def execute_exit(self, target_price: float, side: PositionSide, size: float) -> Fill:
-        """Execute market exit at target level with adverse slippage and commission."""
+        """Исполняет выход по рынку на целевом уровне с неблагоприятным проскальзыванием и комиссией."""
         is_buy = side == PositionSide.SHORT
         fill_price = self._apply_slippage(target_price, is_buy=is_buy)
         return Fill(price=fill_price, commission=self._commission(fill_price * size))
 
     def breakeven_price(self, entry_price: float, side: PositionSide) -> float:
-        """Calculate breakeven level including commissions and slippage reserve."""
+        """Вычисляет уровень безубытка с учетом комиссий и резерва на проскальзывание."""
         reserve = 2 * self.commission_rate + self.slippage
         if side == PositionSide.LONG:
             return entry_price * (1 + reserve)

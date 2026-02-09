@@ -1,4 +1,4 @@
-"""Simulation package exports."""
+"""Экспорты пакета симуляции."""
 
 from simulation.models.fill import Fill
 from simulation.order_processor import OrderProcessor

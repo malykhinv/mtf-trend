@@ -1,4 +1,4 @@
-"""High-level coordinator for OHLCV, OI and market-cap loading."""
+"""Высокоуровневый координатор загрузки OHLCV, OI и рыночной капитализации."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from utils.logger import get_logger
 
 
 class MarketDataFetcher:
-    """Coordinates OHLCV/OI downloads and market-cap fetching."""
+    """Координирует загрузку OHLCV/OI и получение рыночной капитализации."""
 
     def __init__(
         self,
@@ -44,18 +44,18 @@ class MarketDataFetcher:
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
 
     def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
-        self._logger.info(f"MarketCap старт: {len(symbols)} инструментов")
+        self._logger.info(f"Рыночная капитализация старт: {len(symbols)} инструментов")
         results: dict[str, float | str] = {}
         for symbol in symbols:
             try:
                 results[symbol] = self._market_data_client.get_market_cap(symbol)
-                self._logger.info(f"MarketCap готово: {symbol}")
+                self._logger.info(f"Рыночная капитализация готово: {symbol}")
             except Exception as exc:  # noqa: BLE001
-                msg = f"MarketCap ошибка исполнения: {symbol}: {exc}"
+                msg = f"Рыночная капитализация ошибка исполнения: {symbol}: {exc}"
                 self._logger.info(msg)
                 results[symbol] = msg
 
-        self._logger.info(LOG_MSG_TASK_COMPLETED, "MarketCap")
+        self._logger.info(LOG_MSG_TASK_COMPLETED, "Рыночная капитализация")
         return MarketCapsResult(market_caps=results)
 
     def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
@@ -103,7 +103,7 @@ class MarketDataFetcher:
 
         self._log_stage_summary("OHLCV", ohlcv_total, ohlcv_ok, ohlcv_failed)
         self._log_stage_summary("OI", oi_total, oi_ok, oi_failed)
-        self._log_stage_summary("MarketCap", mcap_total, mcap_ok, mcap_failed)
+        self._log_stage_summary("Рыночная капитализация", mcap_total, mcap_ok, mcap_failed)
 
         failed_symbols_count = len(
             {
