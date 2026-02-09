@@ -131,6 +131,8 @@ class BacktestRunner:
 
     @staticmethod
     def build_parameter_grid() -> list[BreakoutParams]:
+        """Собирает декартово произведение диапазонов параметров в полный набор конфигураций стратегии."""
+
         lookback = BREAKOUT_PARAMETER_GRID["lookback"]
         volume_mult = BREAKOUT_PARAMETER_GRID["volume_mult"]
         retest_window_hours = BREAKOUT_PARAMETER_GRID["retest_window_hours"]
@@ -145,7 +147,6 @@ class BacktestRunner:
         confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
         entry_trigger = BREAKOUT_PARAMETER_GRID["entry_trigger"]
 
-        # комбинации = |оглядка| × |множитель_объема| × |окно_ретеста_часы| × |зона_ретеста| × |зона_ретеста_атр| × |мин_рр| × |режим_сл| × |множитель_тп2| × |мин_доля_тела| × |мин_движение_атр| × |макс_глубина_ретеста| × |бары_подтверждения| × |триггер_входа|
         return [
             BreakoutParams(
                 lookback=int(lb),
@@ -251,4 +252,3 @@ class BacktestRunner:
             profitable_combinations=profitable,
             best_pf=best_pf,
         )
-
