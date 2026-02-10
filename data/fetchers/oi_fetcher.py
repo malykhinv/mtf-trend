@@ -25,7 +25,7 @@ from utils.logger import get_logger
 
 class OiFetcher:
     """Класс."""
-    # область Приватные
+    # region Приватные
     def __init__(
         self,
         exchange_client: ExchangeClient,

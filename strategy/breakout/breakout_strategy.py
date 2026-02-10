@@ -52,7 +52,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         self._strategy_timezone = strategy_timezone
         self._simulation_timezone = simulation_timezone
 
-    # область Приватные
+    # region Приватные
 
     def _to_candle(self, row: pd.Series) -> Candle:
         return Candle(
@@ -307,7 +307,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         tp2 = entry_price - risk * min_rr * tp2_mult
         return tp1, tp2
 
-    # конец области Приватные
+    # endregion Приватные
 
     def validate_config(self, params: BreakoutParams) -> None:
         """Проверяет корректность параметров стратегии."""
@@ -543,4 +543,4 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         return trades
 
-    # область Приватные
+    # region Приватные

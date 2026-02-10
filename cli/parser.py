@@ -5,9 +5,10 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 
-from config import AppConfig
-from constants import DEFAULT_FETCH_DAYS, DEFAULT_MIN_VOLUME_USD, DEFAULT_QUALITY_REPORT_OUTPUT_FILE, DEFAULT_TOP_N, DEFAULT_UPDATE_DAYS
 from cli import commands
+from config import AppConfig
+from constants import DEFAULT_FETCH_DAYS, DEFAULT_MIN_VOLUME_USD, DEFAULT_QUALITY_REPORT_OUTPUT_FILE, DEFAULT_TOP_N, \
+    DEFAULT_UPDATE_DAYS
 
 Handler = Callable[[AppConfig, argparse.Namespace], int]
 

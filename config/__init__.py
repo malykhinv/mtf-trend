@@ -36,7 +36,7 @@ __all__ = [
 ]
 
 
-# область Приватные
+# region Приватные
 
 def _load_env_file(env_path: Path) -> None:
     if not env_path.exists():
@@ -60,7 +60,7 @@ def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
     supported = ", ".join(tf.value for tf in Timeframe)
     raise ValueError(f"Invalid {env_name}: {value}. Supported values: {supported}")
 
-# конец области Приватные
+# endregion Приватные
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
     """Загружает конфигурацию приложения из файла."""

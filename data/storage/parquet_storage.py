@@ -14,7 +14,7 @@ class ParquetStorage:
     def __init__(self, base_dir: str | Path = "cache") -> None:
         self._base_dir = Path(base_dir)
 
-    # область Приватные
+    # region Приватные
 
     def _data_path(self, symbol: str, timeframe: Timeframe) -> Path:
         return self._base_dir / symbol / timeframe.value / "data.parquet"
@@ -33,7 +33,7 @@ class ParquetStorage:
         normalized["datetime"] = ts
         return normalized
 
-    # конец области Приватные
+    # endregion Приватные
 
     def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
         """Загружает данные из parquet-файла."""

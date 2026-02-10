@@ -8,7 +8,7 @@ from cli.parser import build_parser, resolve_handler
 from config import load_config
 
 
-# область Приватные
+# region Приватные
 def _force_single_thread_mode() -> None:
     single_thread_env = {
         "OMP_NUM_THREADS": "1",
@@ -21,7 +21,7 @@ def _force_single_thread_mode() -> None:
         os.environ[key] = value
 
 
-# конец области Приватные
+# endregion Приватные
 def main() -> int:
     _force_single_thread_mode()
     config = load_config()

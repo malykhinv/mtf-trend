@@ -10,9 +10,9 @@ class Volume:
     """Класс."""
     value: float
 
-    # область Приватные
+    # region Приватные
     def __post_init__(self) -> None:
         if self.value < 0:
             msg = "Volume cannot be negative."
             raise ValueError(msg)
-    # конец области Приватные
+    # endregion Приватные

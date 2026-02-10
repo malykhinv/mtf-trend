@@ -19,7 +19,7 @@ class Candle:
     volume: Volume
     open_interest: Volume
 
-    # область Приватные
+    # region Приватные
     def __post_init__(self) -> None:
         if self.timestamp is None:
             msg = "Candle timestamp is required."
@@ -36,4 +36,4 @@ class Candle:
         if not (self.low.value <= self.close.value <= self.high.value):
             msg = "Candle close price must be inside [low, high]."
             raise ValueError(msg)
-    # конец области Приватные
+    # endregion Приватные

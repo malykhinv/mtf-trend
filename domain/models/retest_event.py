@@ -18,7 +18,7 @@ class RetestEvent:
     volume_retest: Volume
     oi_retest: Volume
 
-    # область Приватные
+    # region Приватные
     def __post_init__(self) -> None:
         if self.retest_time is None:
             msg = "Retest time is required."
@@ -27,4 +27,4 @@ class RetestEvent:
         if self.retest_time < self.breakout_event.breakout_time:
             msg = "Retest time cannot be earlier than breakout time."
             raise ValueError(msg)
-    # конец области Приватные
+    # endregion Приватные

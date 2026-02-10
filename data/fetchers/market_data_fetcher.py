@@ -41,7 +41,7 @@ class MarketDataFetcher:
         self._retry_backoff_seconds = retry_backoff_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
 
-    # область Приватные
+    # region Приватные
 
     def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
         self._logger.info("%s сводка: всего=%s успешно=%s с ошибками=%s", stage, total, ok, failed)
@@ -58,7 +58,7 @@ class MarketDataFetcher:
         ok = sum(1 for value in results.market_caps.values() if isinstance(value, (int, float)))
         return total, ok, total - ok
 
-    # конец области Приватные
+    # endregion Приватные
 
     def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
         """Загружает капитализации для списка тикеров."""

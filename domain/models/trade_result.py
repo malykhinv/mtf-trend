@@ -20,7 +20,7 @@ class TradeResult:
     pnl: float
     pnl_percent: Percentage
 
-    # область Приватные
+    # region Приватные
     def __post_init__(self) -> None:
         if self.entry_time is None or self.exit_time is None:
             msg = "Trade result entry/exit time is required."
@@ -29,4 +29,4 @@ class TradeResult:
         if self.exit_time < self.entry_time:
             msg = "Trade result exit_time cannot be earlier than entry_time."
             raise ValueError(msg)
-    # конец области Приватные
+    # endregion Приватные

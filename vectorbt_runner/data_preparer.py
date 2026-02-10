@@ -26,7 +26,7 @@ from domain.models.trade_result import TradeResult
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
-# область Приватные
+# region Приватные
 def _to_utc_timestamp(value: object) -> pd.Timestamp:
     timestamp = pd.Timestamp(value)
     if timestamp.tz is None:
@@ -34,16 +34,16 @@ def _to_utc_timestamp(value: object) -> pd.Timestamp:
     return timestamp.tz_convert("UTC")
 
 
-# конец области Приватные
+# endregion Приватные
 class DataPreparer:
     """Класс."""
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
 
-    # область Приватные
+    # region Приватные
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = Path(cache_dir)
 
-    # конец области Приватные
+    # endregion Приватные
     def list_symbols(self, timeframe: Timeframe) -> list[str]:
         """Возвращает список символов, доступных для расчёта."""
         symbols: list[str] = []

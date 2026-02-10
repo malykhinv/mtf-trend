@@ -19,7 +19,7 @@ class TradeSignal:
     position_side: PositionSide
     symbol: str
 
-    # область Приватные
+    # region Приватные
     def __post_init__(self) -> None:
         if self.entry_time is None:
             msg = "Trade signal entry_time is required."
@@ -45,4 +45,4 @@ class TradeSignal:
         if self.position_side == PositionSide.SHORT and self.take_profit_2.value > self.take_profit_1.value:
             msg = "For SHORT, take_profit_2 must be <= take_profit_1."
             raise ValueError(msg)
-    # конец области Приватные
+    # endregion Приватные

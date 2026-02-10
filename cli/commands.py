@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from logging import Logger
 from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timedelta
+from logging import Logger
 from pathlib import Path
 from typing import Callable
 
@@ -58,7 +58,7 @@ from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
 
-# область Приватные
+# region Приватные
 
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
     logger = get_logger(
@@ -124,11 +124,11 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
 
 
 def _resolve_symbols(
-    exchange_client: CcxtFuturesClient,
-    market_client: CoinGeckoClient,
-    top_n: int,
-    min_volume_usd: float,
-    logger: Logger,
+        exchange_client: CcxtFuturesClient,
+        market_client: CoinGeckoClient,
+        top_n: int,
+        min_volume_usd: float,
+        logger: Logger,
 ) -> list[str]:
     top_symbols_raw = [f"{symbol}/USDT" for symbol in market_client.get_top_coins_by_market_cap(limit=top_n)]
     futures_symbols_raw = exchange_client.get_futures_symbols()
@@ -229,7 +229,8 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_time, end_time = _fetch_period(config, args.days)
-    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
+    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time,
+                               end_time=end_time)
     _log_fetch_summary("fetch-data", logger, len(symbols), result.failed_symbols_count)
     exit_code = _fetch_exit_code(result.failed_symbols_count)
     _log_loaded_coins(logger, len(symbols), "loaded")
@@ -252,7 +253,8 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_time, end_time = _fetch_period(config, args.days)
-    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time, end_time=end_time)
+    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time,
+                               end_time=end_time)
     _log_fetch_summary("update-cache", logger, len(symbols), result.failed_symbols_count)
     exit_code = _fetch_exit_code(result.failed_symbols_count)
     _log_loaded_coins(logger, len(symbols), "updated")
@@ -350,7 +352,8 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("подготовка-отчета: пустой файл результатов")
         return 1
 
-    filtered = frame[(frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER) & (frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)].copy()
+    filtered = frame[(frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER) & (
+                frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)].copy()
     filtered = filtered.sort_values("profit_factor", ascending=False)
 
     if len(frame) != TARGET_PARAMETER_COMBINATIONS:
@@ -574,7 +577,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-# конец области Приватные
+# endregion Приватные
 
 # Публичные точки входа
 

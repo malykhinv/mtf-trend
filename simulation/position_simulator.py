@@ -36,7 +36,7 @@ class StatefulPositionSimulator(PositionSimulator):
     _closed_size: float = 0.0
     _last_exit_price: float = 0.0
 
-    # область Приватные
+    # region Приватные
 
     def _open_from_pending_signal(self, candle: Candle) -> None:
         signal = self._pending_signal
@@ -139,7 +139,7 @@ class StatefulPositionSimulator(PositionSimulator):
         self.position = None
         return trade_result
 
-    # конец области Приватные
+    # endregion Приватные
 
     def register_signal(self, signal: TradeSignal, size: float) -> None:
         """Сохраняет сигнал; позиция откроется рыночным ордером на открытии следующей свечи."""

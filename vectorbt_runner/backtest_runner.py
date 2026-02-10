@@ -39,7 +39,7 @@ class BacktestRunner:
         self._results_dir = Path(results_dir)
         self._results_file_name = results_file_name
 
-    # область Приватные
+    # region Приватные
 
     @staticmethod
     def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str | None]:
@@ -126,7 +126,7 @@ class BacktestRunner:
         self._results_dir.mkdir(parents=True, exist_ok=True)
         results.to_csv(self._results_dir / self._results_file_name, index=False)
 
-    # конец области Приватные
+    # endregion Приватные
 
     @staticmethod
     def build_parameter_grid() -> list[BreakoutParams]:

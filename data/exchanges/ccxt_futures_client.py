@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover
     ccxt = None
 
 
-# область Приватные
+# region Приватные
 
 def _to_utc_ms(value: datetime) -> int:
     if value.tzinfo is None:
@@ -38,7 +38,7 @@ def _to_utc_ms(value: datetime) -> int:
         value = value.astimezone(timezone.utc)
     return int(value.timestamp() * MILLISECONDS_IN_SECOND)
 
-# конец области Приватные
+# endregion Приватные
 
 
 class CcxtFuturesClient(ExchangeClient):
@@ -69,7 +69,7 @@ class CcxtFuturesClient(ExchangeClient):
         )
         self._client.load_markets()
 
-    # область Приватные
+    # region Приватные
 
     @staticmethod
     def _build_client(
@@ -121,7 +121,7 @@ class CcxtFuturesClient(ExchangeClient):
                 f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts}"
             ) from exc
 
-    # конец области Приватные
+    # endregion Приватные
 
     def get_futures_symbols(self) -> list[str]:
         """Возвращает список доступных фьючерсных символов."""
