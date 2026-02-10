@@ -54,6 +54,7 @@ from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
+from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
@@ -140,16 +141,44 @@ def _resolve_symbols(
     }
 
     intersection = sorted(top_symbols_normalized.intersection(futures_symbol_map))
-    volumes_by_symbol = market_client.get_total_volumes([f"{symbol}/USDT" for symbol in intersection])
+    volumes_by_symbol: dict[str, float] = {}
+    symbols_skipped_by_api_errors = 0
+    for symbol in intersection:
+        symbol_pair = f"{symbol}/USDT"
+        try:
+            volume_for_symbol = market_client.get_total_volumes([symbol_pair])
+        except (RuntimeError, RetryExhaustedError) as exc:
+            symbols_skipped_by_api_errors += 1
+            logger.warning(
+                "подбор-символов: ошибка внешнего API при получении объёма для %s: %s; символ будет исключён",
+                symbol_pair,
+                exc,
+            )
+            continue
+        except Exception as exc:
+            root_cause = exc.__cause__
+            if isinstance(root_cause, RetryExhaustedError):
+                symbols_skipped_by_api_errors += 1
+                logger.warning(
+                    "подбор-символов: ошибка внешнего API при получении объёма для %s: %s; символ будет исключён",
+                    symbol_pair,
+                    exc,
+                )
+                continue
+            raise
+
+        volumes_by_symbol[symbol_pair] = volume_for_symbol.get(symbol_pair, 0.0)
+
+    symbols_with_volume = [symbol for symbol in intersection if f"{symbol}/USDT" in volumes_by_symbol]
 
     liquid_symbols: list[str] = []
-    for symbol in intersection:
+    for symbol in symbols_with_volume:
         symbol_pair = f"{symbol}/USDT"
         total_volume = volumes_by_symbol.get(symbol_pair, 0.0)
         if total_volume >= min_volume_usd:
             liquid_symbols.append(symbol)
 
-    excluded_by_liquidity = len(intersection) - len(liquid_symbols)
+    excluded_by_liquidity = len(symbols_with_volume) - len(liquid_symbols)
     logger.info(
         "подбор-символов: коингекко сырых=%s нормализованных=%s; ccxt сырых=%s нормализованных=%s; пересечение=%s",
         len(top_symbols_raw),
@@ -157,6 +186,10 @@ def _resolve_symbols(
         len(futures_symbols_raw),
         len(futures_symbol_map),
         len(intersection),
+    )
+    logger.info(
+        "подбор-символов: пропущено символов из-за ошибок внешнего API=%s",
+        symbols_skipped_by_api_errors,
     )
     logger.info(
         "подбор-символов: фильтр ликвидности (мин_объем_usd=%.2f) исключено=%s итоговых_символов=%s",
