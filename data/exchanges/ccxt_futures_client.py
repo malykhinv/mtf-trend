@@ -19,6 +19,7 @@ from constants import (
 )
 from data.exchanges.ccxt_types import CcxtClientOptions, CcxtFuturesApi, CcxtOpenInterestApi
 from domain.abstract.exchange_client import ExchangeClient
+from domain.exceptions import ExchangeConnectivityError
 from domain.enums.exchange import Exchange
 from domain.enums.timeframe import Timeframe
 from utils.retry import RetryExhaustedError, run_with_retry
@@ -67,7 +68,7 @@ class CcxtFuturesClient(ExchangeClient):
             password=password,
             enable_rate_limit=enable_rate_limit,
         )
-        self._client.load_markets()
+        self._markets_loaded = False
 
     # region Приватные
 
@@ -121,10 +122,48 @@ class CcxtFuturesClient(ExchangeClient):
                 f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts}"
             ) from exc
 
+    def _retry_exchange_startup_call(
+        self,
+        operation: str,
+        endpoint: str,
+        call: Callable[..., object],
+        **kwargs: object,
+    ) -> object:
+        try:
+            return run_with_retry(
+                operation=operation,
+                call=call,
+                attempts=self._retry_attempts,
+                backoff_seconds=self._retry_backoff_seconds,
+                retriable_exceptions=(Exception,),
+                logger=self._logger,
+                endpoint=endpoint,
+                jitter_seconds=0.25,
+                **kwargs,
+            )
+        except RetryExhaustedError as exc:
+            raise ExchangeConnectivityError(
+                "Не удалось загрузить рынки биржи после повторных попыток. "
+                "Вероятная причина: сетевая недоступность или DNS-сбой при обращении к API биржи. "
+                "Проверьте DNS-резолвинг, настройки прокси и правила firewall. "
+                f"exchange={self.exchange.value} endpoint={endpoint} attempts={self._retry_attempts}"
+            ) from exc
+
+    def _ensure_markets_loaded(self) -> None:
+        if self._markets_loaded:
+            return
+        self._retry_exchange_startup_call(
+            operation="ccxt_load_markets",
+            endpoint="load_markets",
+            call=self._client.load_markets,
+        )
+        self._markets_loaded = True
+
     # endregion Приватные
 
     def get_futures_symbols(self) -> list[str]:
         """Возвращает список доступных фьючерсных символов."""
+        self._ensure_markets_loaded()
         symbols: list[str] = []
         for market in self._client.markets.values():
             if not market.get("active", True):
@@ -149,6 +188,7 @@ class CcxtFuturesClient(ExchangeClient):
 
     def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
         """Запрашивает свечи по символу и интервалу."""
+        self._ensure_markets_loaded()
         start_ms = _to_utc_ms(start_time)
         since = start_ms
         end_ms = _to_utc_ms(end_time)
@@ -184,6 +224,7 @@ class CcxtFuturesClient(ExchangeClient):
 
     def fetch_open_interest(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
         """Запрашивает историю open interest по символу."""
+        self._ensure_markets_loaded()
         if not isinstance(self._client, CcxtOpenInterestApi):
             raise NotImplementedError(f"Exchange {self.exchange.value} does not support fetch_open_interest_history in CCXT")
 
