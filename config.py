@@ -1,4 +1,4 @@
-"""Public configuration facade over internal ``config/`` package."""
+"""Модуль проекта."""
 
 from config import (
     AppConfig,

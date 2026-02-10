@@ -1,4 +1,4 @@
-"""Timestamp normalization helpers enforcing UTC parquet contract."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ import pandas as pd
 
 
 class TimeAlignment:
-    """Normalize all time columns to UTC timestamp-ms + UTC datetime for parquet storage."""
-
+    """Класс."""
     @staticmethod
     def align_to_utc(data: pd.DataFrame) -> pd.DataFrame:
         if data.empty:

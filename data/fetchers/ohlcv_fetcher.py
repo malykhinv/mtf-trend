@@ -1,4 +1,4 @@
-"""OHLCV fetch coordinator with synchronous symbol processing."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -24,8 +24,7 @@ from utils.logger import get_logger
 
 
 class OhlcvFetcher:
-    """Fetches and stores OHLCV incrementally for one or many symbols."""
-
+    """Класс."""
     # область Приватные
     def __init__(
         self,
@@ -58,7 +57,7 @@ class OhlcvFetcher:
 
         watermark_display = last_timestamp.isoformat() if last_timestamp is not None else "None"
         self._logger.info(
-            f"OHLCV watermark: {symbol} {timeframe.value} column={watermark_column} last={watermark_display} selected={next_start.isoformat()}"
+            f"OHLCV водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start.isoformat()}"
         )
         self._logger.info(f"OHLCV старт: {symbol} {timeframe.value} {next_start.isoformat()} -> {end_time.isoformat()}")
         if next_start > end_time:

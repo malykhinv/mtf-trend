@@ -1,4 +1,4 @@
-"""Open interest alignment helpers."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ import pandas as pd
 
 
 class OiAligner:
-    """Align OI values to OHLCV timestamps using forward-fill."""
-
+    """Класс."""
     @staticmethod
     def align(ohlcv: pd.DataFrame, open_interest: pd.DataFrame) -> pd.DataFrame:
         if ohlcv.empty:

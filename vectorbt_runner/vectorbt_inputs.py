@@ -1,4 +1,4 @@
-"""Prepared inputs that can be directly consumed by vectorbt."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

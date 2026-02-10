@@ -1,4 +1,4 @@
-"""Breakout event model."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

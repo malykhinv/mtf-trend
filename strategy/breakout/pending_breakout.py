@@ -1,4 +1,4 @@
-"""Pending breakout state model for breakout strategy."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

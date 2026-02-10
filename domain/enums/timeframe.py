@@ -1,4 +1,4 @@
-"""Supported market data timeframes."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Source-of-truth breakout parameter ranges for grid backtests."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Entry trigger behavior options for breakout entries."""
+"""Модуль проекта."""
 
 from enum import Enum
 

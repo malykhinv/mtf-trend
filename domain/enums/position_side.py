@@ -1,4 +1,4 @@
-"""Position direction."""
+"""Модуль проекта."""
 
 from enum import Enum
 

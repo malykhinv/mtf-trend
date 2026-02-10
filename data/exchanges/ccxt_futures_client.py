@@ -1,4 +1,4 @@
-"""CCXT-based futures-only exchange adapter."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -42,8 +42,7 @@ def _to_utc_ms(value: datetime) -> int:
 
 
 class CcxtFuturesClient(ExchangeClient):
-    """Futures-only implementation for Binance/Bybit/OKX via CCXT."""
-
+    """Класс."""
     def __init__(
         self,
         exchange: Exchange | str,

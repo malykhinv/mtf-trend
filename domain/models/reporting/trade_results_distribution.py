@@ -1,4 +1,4 @@
-"""Trade results distribution DTO."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

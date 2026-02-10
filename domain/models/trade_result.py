@@ -1,4 +1,4 @@
-"""Closed trade result model."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

@@ -22,8 +22,7 @@ from constants import (
 
 
 class _ColorFormatter(logging.Formatter):
-    """Добавляет цвета ANSI для уровней журналирования в консольном выводе."""
-
+    """Класс."""
     RESET = LOGGER_COLOR_RESET
     COLORS = {
         logging.INFO: LOGGER_COLOR_INFO,

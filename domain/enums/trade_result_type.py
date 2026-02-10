@@ -1,4 +1,4 @@
-"""Trade result categories."""
+"""Модуль проекта."""
 
 from enum import Enum
 

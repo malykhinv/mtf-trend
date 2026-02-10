@@ -1,4 +1,4 @@
-"""Gap detection for timeframe-based candle series."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -21,8 +21,7 @@ _TIMEFRAME_TO_DELTA = {
 
 
 class GapDetector:
-    """Find missing candle timestamps for a selected timeframe."""
-
+    """Класс."""
     @staticmethod
     def detect_gaps(data: pd.DataFrame, timeframe: Timeframe) -> list[pd.Timestamp]:
         if data.empty or "timestamp" not in data.columns:

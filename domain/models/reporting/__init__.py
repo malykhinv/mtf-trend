@@ -1,4 +1,4 @@
-"""Reporting DTO exports."""
+"""Модуль проекта."""
 
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary

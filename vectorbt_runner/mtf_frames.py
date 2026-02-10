@@ -1,4 +1,4 @@
-"""Typed containers for multi-timeframe symbol data."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from domain.enums.timeframe import Timeframe
 
 @dataclass(frozen=True, slots=True)
 class SymbolMtfFrames:
-    """Normalized pair of frames required by breakout MTF mode."""
-
+    """Класс."""
     levels_timeframe: Timeframe
     entry_timeframe: Timeframe
     levels_frame: pd.DataFrame

@@ -1,4 +1,4 @@
-"""Supported derivatives exchanges."""
+"""Модуль проекта."""
 
 from enum import Enum
 

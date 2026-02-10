@@ -1,4 +1,4 @@
-"""Optimal parameter ranges DTO."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

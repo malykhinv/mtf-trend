@@ -1,4 +1,4 @@
-"""Data quality tools package."""
+"""Модуль проекта."""
 
 from data.quality.data_validator import DataValidator
 from data.quality.deduplicator import Deduplicator

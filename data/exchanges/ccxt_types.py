@@ -1,4 +1,4 @@
-"""CCXT protocol/type declarations for futures exchange client."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

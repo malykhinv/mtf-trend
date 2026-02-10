@@ -1,4 +1,4 @@
-"""CoinGecko market data adapter with in-memory market-cap cache."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -37,8 +37,7 @@ from utils.retry import RetryExhaustedError, run_with_retry
 
 
 class CoinGeckoClient(MarketDataClient):
-    """Market cap provider backed by CoinGecko REST API."""
-
+    """Класс."""
     BASE_URL = COINGECKO_BASE_URL
 
     def __init__(
@@ -81,7 +80,7 @@ class CoinGeckoClient(MarketDataClient):
             raw_payload = pd.read_parquet(self._cache_path)
             required_columns = {"symbol", "market_cap", "expires_at"}
             if not required_columns.issubset(raw_payload.columns):
-                raise ValueError(f"cache payload must contain columns: {required_columns}")
+                raise ValueError(f"Кэш должен содержать колонки: {required_columns}")
 
             now = datetime.now(tz=timezone.utc)
             loaded_cache: dict[str, tuple[float, datetime]] = {}
@@ -248,7 +247,7 @@ class CoinGeckoClient(MarketDataClient):
                 )
 
         if not candidates:
-            raise ValueError(f"Unable to resolve CoinGecko ID for symbol: {symbol}")
+            raise ValueError(f"Не удалось определить CoinGecko ID для символа: {symbol}")
 
         selected = candidates[0]
         resolved_by_strategy = len(candidates) == 1
@@ -263,7 +262,7 @@ class CoinGeckoClient(MarketDataClient):
                     selected = usdt_candidates[0]
                     resolved_by_strategy = True
                     self._logger.info(
-                        "Символ CoinGecko '%s' сопоставлен по точному рынку %s/USDT: %s",
+                        "Символ КоинГекко '%s' сопоставлен по точному рынку %s/USDT: %s",
                         symbol,
                         normalized.upper(),
                         selected["id"],
@@ -272,7 +271,7 @@ class CoinGeckoClient(MarketDataClient):
                     selected = usdt_candidates[0]
                     resolved_by_strategy = True
                     self._logger.warning(
-                        "Для '%s' найдено несколько кандидатов CoinGecko по %s/USDT; используется детерминированный вариант: %s",
+                        "Для '%s' найдено несколько кандидатов КоинГекко по %s/USDT; используется детерминированный вариант: %s",
                         symbol,
                         normalized.upper(),
                         selected["id"],
@@ -284,7 +283,7 @@ class CoinGeckoClient(MarketDataClient):
                     selected = by_metrics
                     resolved_by_strategy = True
                     self._logger.info(
-                        "Неоднозначный символ CoinGecko '%s' сопоставлен по рангу/ликвидности рынка: %s",
+                        "Неоднозначный символ КоинГекко '%s' сопоставлен по рангу/ликвидности рынка: %s",
                         symbol,
                         selected["id"],
                     )
@@ -293,20 +292,20 @@ class CoinGeckoClient(MarketDataClient):
                 deterministic_fallback = sorted(candidates, key=lambda candidate: candidate["id"])[0]
                 if not deterministic_fallback.get("id"):
                     raise ValueError(
-                        f"Ambiguous CoinGecko ID for symbol '{symbol}' (normalized='{normalized}') could not be resolved. "
-                        f"Candidates: {candidates}"
+                        f"Не удалось разрешить неоднозначный CoinGecko ID для символа '{symbol}' (normalized='{normalized}'). "
+                        f"Кандидаты: {candidates}"
                     )
 
                 selected = deterministic_fallback
                 self._logger.warning(
-                    "Неоднозначный символ CoinGecko '%s' не удалось разрешить эвристиками рынка; переход на детерминированного кандидата: %s",
+                    "Неоднозначный символ КоинГекко '%s' не удалось разрешить эвристиками рынка; переход на детерминированного кандидата: %s",
                     symbol,
                     selected["id"],
                 )
 
         if not selected.get("id"):
             raise ValueError(
-                f"Unable to resolve CoinGecko ID for symbol '{symbol}' (normalized='{normalized}') from candidates: {candidates}"
+                f"Не удалось определить CoinGecko ID для символа '{symbol}' (normalized='{normalized}') из кандидатов: {candidates}"
             )
 
         self._symbol_to_id[canonical_symbol] = selected["id"]
@@ -337,7 +336,7 @@ class CoinGeckoClient(MarketDataClient):
         )
         payload = response.json()
         if not payload:
-            raise ValueError(f"CoinGecko returned empty market data for symbol: {symbol}")
+            raise ValueError(f"CoinGecko вернул пустые рыночные данные для символа: {symbol}")
 
         market_cap = float(payload[0].get("market_cap") or 0.0)
         self._market_cap_cache[canonical_symbol] = (market_cap, now + self._cache_ttl)

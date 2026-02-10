@@ -1,4 +1,4 @@
-"""Parquet storage with UTC timestamp persistence for symbol/timeframe partitions."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -10,8 +10,7 @@ from domain.enums.timeframe import Timeframe
 
 
 class ParquetStorage:
-    """Store and incrementally update time-series in `{symbol}/{timeframe}/data.parquet`."""
-
+    """Класс."""
     def __init__(self, base_dir: str | Path = "cache") -> None:
         self._base_dir = Path(base_dir)
 

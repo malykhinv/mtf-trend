@@ -34,8 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 class BacktestRunner:
-    """Запускает стратегию по комбинациям параметров и сохраняет результат в CSV."""
-
+    """Класс."""
     def __init__(self, results_dir: Path, results_file_name: str) -> None:
         self._results_dir = Path(results_dir)
         self._results_file_name = results_file_name

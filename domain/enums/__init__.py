@@ -1,4 +1,4 @@
-"""Domain enums package exports."""
+"""Модуль проекта."""
 
 from domain.enums.data_quality_severity import DataQualitySeverity
 from domain.enums.entry_trigger import EntryTrigger

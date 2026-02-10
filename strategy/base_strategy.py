@@ -1,4 +1,4 @@
-"""Base abstraction for all trading strategies."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -15,20 +15,16 @@ StrategyParamsT = TypeVar("StrategyParamsT")
 
 
 class BaseStrategy(ABC, Generic[StrategyParamsT]):
-    """Abstract strategy contract used by backtest runner."""
-
+    """Класс."""
     @abstractmethod
     def validate_config(self, params: StrategyParamsT) -> None:
-        """Validate strategy parameters and raise ValueError for invalid configs."""
-
+        """Метод."""
     @abstractmethod
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
-        """Prepare and enrich source market data."""
-
+        """Метод."""
     @abstractmethod
     def generate_events(self, data: pd.DataFrame, params: StrategyParamsT) -> list[TradeResult]:
-        """Run strategy simulation and return closed trades."""
-
+        """Метод."""
     @abstractmethod
     def generate_events_multi_tf(
         self,
@@ -36,4 +32,4 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
         mtf_frames: SymbolMtfFrames,
         params: StrategyParamsT,
     ) -> list[TradeResult]:
-        """Run strategy simulation using dedicated higher/lower timeframe data."""
+        """Метод."""
