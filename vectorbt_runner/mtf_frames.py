@@ -18,6 +18,7 @@ class SymbolMtfFrames:
     entry_frame: pd.DataFrame
 
     def get_frame(self, timeframe: Timeframe) -> pd.DataFrame:
+        """Возвращает набор данных для выбранного таймфрейма."""
         if timeframe == self.levels_timeframe:
             return self.levels_frame
         if timeframe == self.entry_timeframe:

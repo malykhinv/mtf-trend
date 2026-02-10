@@ -36,6 +36,7 @@ class ParquetStorage:
     # конец области Приватные
 
     def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
+        """Загружает данные из parquet-файла."""
         path = self._data_path(symbol, timeframe)
         if not path.exists():
             return pd.DataFrame()
@@ -45,6 +46,7 @@ class ParquetStorage:
         return self._ensure_utc_columns(frame)
 
     def get_last_timestamp(self, symbol: str, timeframe: Timeframe) -> pd.Timestamp | None:
+        """Возвращает последнюю временную метку в хранилище."""
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:
             return None
@@ -56,6 +58,7 @@ class ParquetStorage:
         timeframe: Timeframe,
         column_name: str,
     ) -> pd.Timestamp | None:
+        """Возвращает последнюю метку времени для указанной колонки."""
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:
             return None
@@ -73,6 +76,7 @@ class ParquetStorage:
         return pd.to_datetime(data.loc[valid_rows, "timestamp"], unit="ms", utc=True).max()
 
     def save_incremental(self, symbol: str, timeframe: Timeframe, new_data: pd.DataFrame) -> int:
+        """Дозаписывает новые данные без перезаписи старых."""
         if new_data.empty:
             return 0
 

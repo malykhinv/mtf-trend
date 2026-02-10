@@ -48,6 +48,7 @@ class BreakoutParams:
     entry_timeframe: Timeframe = Timeframe.M15
 
     def resolve_retest_zone_ratio(self, natr: float) -> float:
+        """Возвращает долю зоны ретеста с учётом настроек."""
         if self.retest_zone_atr is None:
             return max(self.retest_zone, 0.0)
         return max(self.retest_zone_atr * max(natr, 0.0), 0.0)

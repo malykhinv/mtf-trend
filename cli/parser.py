@@ -13,6 +13,7 @@ Handler = Callable[[AppConfig, argparse.Namespace], int]
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Собирает и возвращает парсер аргументов CLI."""
     parser = argparse.ArgumentParser(prog="mtf-trend")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -57,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_handler(command_name: str) -> Handler:
+    """Находит обработчик команды по разобранным аргументам."""
     handlers: dict[str, Handler] = {
         "fetch-data": commands.fetch_data,
         "update-cache": commands.update_cache,

@@ -309,6 +309,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     # конец области Приватные
 
     def validate_config(self, params: BreakoutParams) -> None:
+        """Проверяет корректность параметров стратегии."""
         if params.lookback < STRATEGY_MIN_LOOKBACK:
             raise ValueError(f"параметр lookback должен быть >= {STRATEGY_MIN_LOOKBACK}")
         if params.volume_mult <= STRATEGY_MIN_VOLUME_MULT:
@@ -321,6 +322,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             raise ValueError("параметр confirmation_bars должен быть >= 1")
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Подготавливает входные данные перед расчётом сигналов."""
         missing = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
         if missing:
             raise ValueError(f"Отсутствуют обязательные колонки: {missing}")

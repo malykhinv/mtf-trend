@@ -9,6 +9,7 @@ class OiAligner:
     """Класс."""
     @staticmethod
     def align(ohlcv: pd.DataFrame, open_interest: pd.DataFrame) -> pd.DataFrame:
+        """Синхронизирует open interest с базовой временной сеткой."""
         if ohlcv.empty:
             return ohlcv.copy()
 

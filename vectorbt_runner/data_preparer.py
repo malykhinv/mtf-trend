@@ -45,6 +45,7 @@ class DataPreparer:
 
     # конец области Приватные
     def list_symbols(self, timeframe: Timeframe) -> list[str]:
+        """Возвращает список символов, доступных для расчёта."""
         symbols: list[str] = []
         if not self._cache_dir.exists():
             return symbols
@@ -56,6 +57,7 @@ class DataPreparer:
         return sorted(symbols)
 
     def load_symbol_data(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
+        """Загружает данные по одному символу для бэктеста."""
         path = self._cache_dir / symbol / timeframe.value / SIMULATION_PARQUET_FILE_NAME
         if not path.exists():
             return pd.DataFrame()
@@ -80,6 +82,7 @@ class DataPreparer:
 
 
     def load_symbol_data_multi(self, symbol: str, timeframes: Iterable[Timeframe]) -> dict[Timeframe, pd.DataFrame]:
+        """Загружает данные по нескольким символам сразу."""
         return {
             timeframe: self.load_symbol_data(symbol, timeframe)
             for timeframe in timeframes

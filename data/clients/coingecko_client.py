@@ -315,6 +315,7 @@ class CoinGeckoClient(MarketDataClient):
     # конец области Приватные
 
     def get_market_cap(self, symbol: str) -> float:
+        """Возвращает капитализацию монеты на нужный момент."""
         canonical_symbol = self._canonical_symbol_key(symbol)
         now = datetime.now(tz=timezone.utc)
 
@@ -344,6 +345,7 @@ class CoinGeckoClient(MarketDataClient):
         return market_cap
 
     def get_top_coins_by_market_cap(self, limit: int) -> list[str]:
+        """Возвращает список монет с наибольшей капитализацией."""
         response = self._request(
             endpoint="/coins/markets",
             symbol=f"top_{limit}",
@@ -359,6 +361,7 @@ class CoinGeckoClient(MarketDataClient):
         return [str(item.get("symbol") or "").upper() for item in response.json() if item.get("symbol")]
 
     def get_total_volumes(self, symbols_or_coin_ids: list[str]) -> dict[str, float]:
+        """Возвращает объёмы торгов для списка монет."""
         if not symbols_or_coin_ids:
             return {}
 

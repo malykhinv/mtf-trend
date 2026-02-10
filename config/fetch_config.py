@@ -21,4 +21,5 @@ class FetchConfig:
 
     @property
     def tzinfo(self) -> tzinfo:
+        """Возвращает объект часового пояса для загрузки данных."""
         return resolve_timezone(self.timezone)

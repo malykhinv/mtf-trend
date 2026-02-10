@@ -188,6 +188,7 @@ class BacktestRunner:
         levels_timeframe: Timeframe = Timeframe.D1,
         entry_timeframe: Timeframe = Timeframe.M15,
     ) -> pd.DataFrame:
+        """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
         grid = self.build_parameter_grid()
 
@@ -231,6 +232,7 @@ class BacktestRunner:
 
     @staticmethod
     def build_summary(results: pd.DataFrame) -> BacktestSummary:
+        """Собирает краткую сводку по результатам бэктеста."""
         if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
             logger.warning(
                 "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
