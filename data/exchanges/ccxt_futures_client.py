@@ -88,6 +88,10 @@ class CcxtFuturesClient(ExchangeClient):
             "timeout": EXCHANGE_TIMEOUT_SECONDS * MILLISECONDS_IN_SECOND,
         }
         if exchange == Exchange.BINANCE:
+            params["options"] = CcxtClientOptions(
+                defaultType=CCXT_MARKET_TYPE_SWAP,
+                fetchCurrencies=False,
+            )
             return ccxt.binanceusdm(cast(Any, params))
         if exchange == Exchange.BYBIT:
             params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)

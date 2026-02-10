@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Protocol, TypedDict, runtime_checkable
 
 
-class CcxtClientOptions(TypedDict):
+class CcxtClientOptions(TypedDict, total=False):
     defaultType: str
+    fetchCurrencies: bool
 
 
 class CcxtFuturesApi(Protocol):
