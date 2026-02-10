@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 import os
+import random
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import pandas as pd
@@ -33,7 +36,6 @@ from constants import (
     LOG_MSG_RETRY_EXHAUSTED,
 )
 from domain.abstract.market_data_client import MarketDataClient
-from utils.retry import RetryExhaustedError, run_with_retry
 
 
 class CoinGeckoClient(MarketDataClient):
@@ -155,33 +157,115 @@ class CoinGeckoClient(MarketDataClient):
             headers[COINGECKO_HEADER_API_KEY] = self._api_key
         return headers
 
-    def _request(self, endpoint: str, symbol: str, params: dict[str, str | int] | None = None) -> requests.Response:
-        def _perform_get() -> requests.Response:
-            response = requests.get(
-                url=f"{self.BASE_URL}{endpoint}",
-                headers=self._headers(),
-                params=params,
-                timeout=COINGECKO_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-            return response
+    @staticmethod
+    def _parse_retry_after_seconds(header_value: str | None) -> float | None:
+        if not header_value:
+            return None
+
+        normalized = header_value.strip()
+        if not normalized:
+            return None
 
         try:
-            return run_with_retry(
-                operation="coingecko_get",
-                call=_perform_get,
-                attempts=self._retry_attempts,
-                backoff_seconds=self._retry_backoff_seconds,
-                retriable_exceptions=(requests.RequestException,),
-                logger=self._logger,
-                endpoint=endpoint,
-                symbol=symbol,
-                jitter_seconds=0.25,
-            )
-        except RetryExhaustedError as exc:
-            raise RuntimeError(
-                LOG_MSG_RETRY_EXHAUSTED % (endpoint, symbol, self._retry_attempts)
-            ) from exc
+            return max(float(normalized), 0.0)
+        except ValueError:
+            pass
+
+        try:
+            retry_at = parsedate_to_datetime(normalized)
+        except (TypeError, ValueError):
+            return None
+
+        now = datetime.now(tz=timezone.utc)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max((retry_at - now).total_seconds(), 0.0)
+
+    def _request(self, endpoint: str, symbol: str, params: dict[str, str | int] | None = None) -> requests.Response:
+        last_error: requests.RequestException | None = None
+        last_status_code: int | None = None
+
+        for attempt_number in range(1, self._retry_attempts + 1):
+            try:
+                response = requests.get(
+                    url=f"{self.BASE_URL}{endpoint}",
+                    headers=self._headers(),
+                    params=params,
+                    timeout=COINGECKO_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                self._logger.info(
+                    "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s результат=успех",
+                    "coingecko_get",
+                    attempt_number,
+                    self._retry_attempts,
+                    endpoint,
+                    symbol,
+                )
+                return response
+            except requests.HTTPError as exc:
+                last_error = exc
+                response = exc.response
+                status_code = response.status_code if response is not None else None
+                last_status_code = status_code
+
+                if status_code is not None and 400 <= status_code < 500 and status_code != 429:
+                    raise RuntimeError(
+                        f"Неретраимая HTTP ошибка: статус={status_code} эндпоинт={endpoint} символ={symbol}"
+                    ) from exc
+
+                is_last = attempt_number >= self._retry_attempts
+                if is_last:
+                    break
+
+                jitter = random.uniform(0.0, 0.25)
+                if status_code == 429:
+                    retry_after_header = response.headers.get("Retry-After") if response is not None else None
+                    retry_after_seconds = self._parse_retry_after_seconds(retry_after_header)
+                    exponential_backoff = self._retry_backoff_seconds * (2 ** (attempt_number - 1)) + jitter
+                    sleep_seconds = max(retry_after_seconds or 0.0, exponential_backoff)
+                elif status_code is not None and 500 <= status_code < 600:
+                    sleep_seconds = self._retry_backoff_seconds * 1.5 * (2 ** (attempt_number - 1)) + jitter
+                else:
+                    sleep_seconds = self._retry_backoff_seconds * (2 ** (attempt_number - 1)) + jitter
+
+                self._logger.warning(
+                    "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s статус=%s задержка=%.2fs причина=%s",
+                    "coingecko_get",
+                    attempt_number,
+                    self._retry_attempts,
+                    endpoint,
+                    symbol,
+                    status_code,
+                    sleep_seconds,
+                    exc,
+                )
+                time.sleep(sleep_seconds)
+            except requests.RequestException as exc:
+                last_error = exc
+                last_status_code = None
+                is_last = attempt_number >= self._retry_attempts
+                if is_last:
+                    break
+
+                sleep_seconds = self._retry_backoff_seconds * (2 ** (attempt_number - 1)) + random.uniform(0.0, 0.25)
+                self._logger.warning(
+                    "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s задержка=%.2fs причина=%s",
+                    "coingecko_get",
+                    attempt_number,
+                    self._retry_attempts,
+                    endpoint,
+                    symbol,
+                    sleep_seconds,
+                    exc,
+                )
+                time.sleep(sleep_seconds)
+
+        details = (
+            f"{LOG_MSG_RETRY_EXHAUSTED % (endpoint, symbol, self._retry_attempts)}; "
+            f"статус={last_status_code}; эндпоинт={endpoint}"
+        )
+        raise RuntimeError(details) from last_error
 
     def _candidate_has_usdt_market(self, coin_id: str, base_symbol: str) -> bool:
         response = self._request(endpoint=f"/coins/{coin_id}/tickers", symbol=base_symbol)
