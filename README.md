@@ -34,6 +34,114 @@ CACHE_DIR=./cache
 TIMEZONE=Europe/Belgrade
 ```
 
+## Гайд «для чайников»: как запускать бота в PyCharm
+
+Ниже — самый простой сценарий без терминальных «танцев с бубном». Идея: вы запускаете `launcher.py` с разными режимами.
+
+### 0) Один раз настроить запуск в PyCharm
+
+1. Открой проект в PyCharm.
+2. Убедись, что выбран интерпретатор из `.venv`.
+3. Открой **Run | Edit Configurations…**.
+4. Нажми **+** → **Python**.
+5. Заполни:
+   - **Name**: `MTF Launcher`
+   - **Script path**: `.../mtf-trend/launcher.py`
+   - **Working directory**: `.../mtf-trend`
+   - **Parameters**: (будешь менять под задачу, примеры ниже)
+6. Сохрани конфигурацию.
+
+Теперь тебе нужно менять только поле **Parameters** и нажимать ▶ Run.
+
+---
+
+### 1) Как собрать кэш
+
+Это первый шаг: бот скачает свечи/данные и положит их в папку кэша.
+
+В **Parameters** вставь:
+
+```bash
+--mode fetch-cache --top-n 100 --days 30
+```
+
+Что это значит простыми словами:
+- `fetch-cache` — собрать кэш «с нуля»;
+- `--top-n 100` — взять 100 монет;
+- `--days 30` — загрузить последние 30 дней.
+
+Куда сохраняется: по умолчанию в `./cache`.
+
+---
+
+### 2) Как проверить стратегию на кэше (бектест)
+
+После сборки кэша запусти анализ стратегии на этих данных.
+
+В **Parameters**:
+
+```bash
+--mode analyze-cache
+```
+
+Если хочешь проверить только конкретные монеты:
+
+```bash
+--mode analyze-cache --symbols BTC/USDT ETH/USDT
+```
+
+Результат бектеста сохраняется в CSV (по умолчанию):
+
+`cache/results/backtest_results.csv`
+
+---
+
+### 3) Как обработать результат
+
+CSV неудобно читать «глазами», поэтому делаем готовый JSON-отчет.
+
+В **Parameters**:
+
+```bash
+--mode make-report
+```
+
+Или вручную указать вход/выход:
+
+```bash
+--mode make-report --input ./cache/results/backtest_results.csv --output ./cache/results/report.json
+```
+
+---
+
+### 4) Как увидеть итоги
+
+Есть 2 простых варианта:
+
+1. **Быстро в PyCharm**
+   - открой `cache/results/backtest_results.csv`
+   - открой `cache/results/report.json`
+   - в `report.json` смотри блоки `summary`, `optimal_parameter_ranges`, `trade_results_distribution`.
+
+2. **Проверить качество кэша (полезно, если результаты странные)**
+
+В **Parameters**:
+
+```bash
+--mode check-quality
+```
+
+Отчет качества: `cache/results/quality_report.json`.
+
+---
+
+### Супер-короткий порядок действий
+
+1. `--mode fetch-cache --top-n 100 --days 30`
+2. `--mode analyze-cache`
+3. `--mode make-report`
+4. Открыть `cache/results/backtest_results.csv` и `cache/results/report.json`
+
 ## Конфигурация
 
 Публичная точка входа для конфигурации — корневой `config.py` (например, `from config import AppConfig, load_config`).
@@ -102,4 +210,3 @@ python main.py check-quality
 ## Параметры breakout-стратегии
 
 По умолчанию грид `retest_window_hours` для перебора параметров: `12, 24, 36, 48` (в часах).
-
