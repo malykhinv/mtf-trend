@@ -17,10 +17,10 @@ from constants import (
     OHLCV_FRAME_COLUMNS,
     OPEN_INTEREST_FRAME_COLUMNS,
 )
+from data.exchanges.ccxt_types import CcxtClientOptions, CcxtFuturesApi, CcxtOpenInterestApi
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.exchange import Exchange
 from domain.enums.timeframe import Timeframe
-from data.exchanges.ccxt_types import CcxtClientOptions, CcxtFuturesApi, CcxtOpenInterestApi
 from utils.retry import RetryExhaustedError, run_with_retry
 
 try:

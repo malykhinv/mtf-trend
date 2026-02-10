@@ -10,7 +10,6 @@ from typing import Any
 from cli import commands
 from config import AppConfig, load_config
 
-
 MODE_FETCH_CACHE = "fetch-cache"
 MODE_UPDATE_CACHE = "update-cache"
 MODE_BACKTEST = "analyze-cache"

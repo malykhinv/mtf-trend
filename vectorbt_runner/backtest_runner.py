@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 from itertools import product
 from pathlib import Path
-import logging
 
 import pandas as pd
 
@@ -21,14 +21,14 @@ from constants import (
     BACKTEST_SORT_ASCENDING,
     BACKTEST_ZERO_COUNT,
 )
-from domain.enums.trade_result_type import TradeResultType
 from domain.enums.timeframe import Timeframe
+from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
-from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
+from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, \
+    BreakoutParams
 from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
-
 
 logger = logging.getLogger(__name__)
 

@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime
 
+from constants import SIMULATION_PRICE_COMPARISON_EPSILON, TP1_CLOSE_RATIO
 from domain.abstract.position_simulator import PositionSimulator
 from domain.enums.position_side import PositionSide
 from domain.models.candle import Candle
@@ -14,7 +15,6 @@ from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
-from constants import SIMULATION_PRICE_COMPARISON_EPSILON, TP1_CLOSE_RATIO
 from simulation.order_processor import OrderProcessor
 from simulation.trade_classifier import TradeClassifier
 from utils.formatters import datetime_to_timezone

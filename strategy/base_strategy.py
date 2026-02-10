@@ -10,7 +10,6 @@ import pandas as pd
 from domain.models.trade_result import TradeResult
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
-
 StrategyParamsT = TypeVar("StrategyParamsT")
 
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from domain.enums.timeframe import Timeframe
 from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.sl_mode import SLMode
+from domain.enums.timeframe import Timeframe
 
 SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = tuple(Timeframe)
 DEFAULT_TIMEFRAME = Timeframe.H1

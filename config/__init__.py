@@ -10,7 +10,6 @@ from config.backtest_config import BacktestConfig
 from config.fetch_config import FetchConfig
 from config.simulation_config import SimulationConfig
 from config.strategy_config import StrategyConfig
-from domain.enums.timeframe import Timeframe
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
     DEFAULT_CACHE_DIR,
@@ -25,6 +24,7 @@ from constants import (
     DEFAULT_LOGS_DIR,
     DEFAULT_MIN_VOLUME_USD,
 )
+from domain.enums.timeframe import Timeframe
 
 __all__ = [
     "AppConfig",
@@ -60,6 +60,7 @@ def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
     supported = ", ".join(tf.value for tf in Timeframe)
     raise ValueError(f"Invalid {env_name}: {value}. Supported values: {supported}")
 
+
 # endregion Приватные
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
@@ -78,7 +79,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         binance_secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
         timezone=fetch_timezone,
-        min_volume_usd=float(os.getenv("MIN_VOLUME_USD", os.getenv("FETCH_MIN_VOLUME_USD", str(DEFAULT_MIN_VOLUME_USD)))),
+        min_volume_usd=float(
+            os.getenv("MIN_VOLUME_USD", os.getenv("FETCH_MIN_VOLUME_USD", str(DEFAULT_MIN_VOLUME_USD)))),
     )
 
     strategy_levels_timeframe = _parse_timeframe(
@@ -116,9 +118,9 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     )
 
     for path in (
-        backtest_config.cache_dir,
-        backtest_config.logs_dir,
-        backtest_config.results_dir,
+            backtest_config.cache_dir,
+            backtest_config.logs_dir,
+            backtest_config.results_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)
 
