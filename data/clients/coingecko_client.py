@@ -41,6 +41,7 @@ from domain.abstract.market_data_client import MarketDataClient
 class CoinGeckoClient(MarketDataClient):
     """Класс."""
     BASE_URL = COINGECKO_BASE_URL
+    TICKER_CHECK_TOP_K = 5
 
     def __init__(
         self,
@@ -54,6 +55,8 @@ class CoinGeckoClient(MarketDataClient):
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
         self._market_cap_cache: dict[str, tuple[float, datetime]] = {}
         self._symbol_to_id: dict[str, str] = {}
+        self._coins_list_cache: list[dict[str, str]] | None = None
+        self._coins_by_symbol_index: dict[str, list[dict[str, str]]] = {}
         self._cache_path = Path(cache_path) if cache_path else None
         self._logger = logging.getLogger(self.__class__.__name__)
         self._retry_attempts = retry_attempts
@@ -80,14 +83,19 @@ class CoinGeckoClient(MarketDataClient):
 
         try:
             raw_payload = pd.read_parquet(self._cache_path)
-            required_columns = {"symbol", "market_cap", "expires_at"}
+            required_columns = {"symbol"}
             if not required_columns.issubset(raw_payload.columns):
                 raise ValueError(f"Кэш должен содержать колонки: {required_columns}")
 
             now = datetime.now(tz=timezone.utc)
             loaded_cache: dict[str, tuple[float, datetime]] = {}
+            has_market_cap = {"market_cap", "expires_at"}.issubset(raw_payload.columns)
             has_coin_id = "coin_id" in raw_payload.columns
-            load_columns = ["symbol", "market_cap", "expires_at", "coin_id"] if has_coin_id else ["symbol", "market_cap", "expires_at"]
+            load_columns = ["symbol"]
+            if has_market_cap:
+                load_columns.extend(["market_cap", "expires_at"])
+            if has_coin_id:
+                load_columns.append("coin_id")
             for row in raw_payload[load_columns].itertuples(index=False):
                 symbol = row.symbol
                 if not isinstance(symbol, str) or not symbol:
@@ -96,20 +104,18 @@ class CoinGeckoClient(MarketDataClient):
                 if not canonical_symbol:
                     continue
 
-                expires_at_dt = pd.Timestamp(row.expires_at)
-                if pd.isna(expires_at_dt):
-                    continue
+                if has_market_cap:
+                    expires_at_dt = pd.Timestamp(row.expires_at)
+                    if not pd.isna(expires_at_dt):
+                        if expires_at_dt.tzinfo is None:
+                            expires_at_dt = expires_at_dt.tz_localize(timezone.utc)
+                        else:
+                            expires_at_dt = expires_at_dt.tz_convert(timezone.utc)
 
-                if expires_at_dt.tzinfo is None:
-                    expires_at_dt = expires_at_dt.tz_localize(timezone.utc)
-                else:
-                    expires_at_dt = expires_at_dt.tz_convert(timezone.utc)
-
-                expires_at = expires_at_dt.to_pydatetime()
-                if expires_at <= now:
-                    continue
-
-                loaded_cache[canonical_symbol] = (float(row.market_cap), expires_at)
+                        expires_at = expires_at_dt.to_pydatetime()
+                        market_cap = row.market_cap
+                        if expires_at > now and pd.notna(market_cap):
+                            loaded_cache[canonical_symbol] = (float(market_cap), expires_at)
                 if has_coin_id:
                     coin_id = str(row.coin_id or "")
                     if coin_id:
@@ -124,15 +130,30 @@ class CoinGeckoClient(MarketDataClient):
         if self._cache_path is None:
             return
 
-        records = [
-            {
+        records_by_symbol: dict[str, dict[str, object]] = {}
+        for symbol, coin_id in self._symbol_to_id.items():
+            records_by_symbol[symbol] = {
                 "symbol": symbol,
-                "market_cap": market_cap,
-                "expires_at": pd.Timestamp(expires_at).tz_convert(timezone.utc),
-                "coin_id": self._symbol_to_id.get(symbol, ""),
+                "market_cap": None,
+                "expires_at": None,
+                "coin_id": coin_id,
             }
-            for symbol, (market_cap, expires_at) in self._market_cap_cache.items()
-        ]
+
+        for symbol, (market_cap, expires_at) in self._market_cap_cache.items():
+            record = records_by_symbol.setdefault(
+                symbol,
+                {
+                    "symbol": symbol,
+                    "market_cap": None,
+                    "expires_at": None,
+                    "coin_id": self._symbol_to_id.get(symbol, ""),
+                },
+            )
+            record["market_cap"] = market_cap
+            record["expires_at"] = pd.Timestamp(expires_at).tz_convert(timezone.utc)
+            record["coin_id"] = self._symbol_to_id.get(symbol, "")
+
+        records = list(records_by_symbol.values())
         cache_frame = pd.DataFrame.from_records(records, columns=["symbol", "market_cap", "expires_at", "coin_id"])
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         temp_file = tempfile.NamedTemporaryFile(
@@ -276,6 +297,67 @@ class CoinGeckoClient(MarketDataClient):
                 return True
         return False
 
+    def _load_coins_list_index(self, symbol: str) -> None:
+        if self._coins_list_cache is not None:
+            return
+
+        response = self._request(endpoint="/coins/list", symbol=symbol)
+        payload = response.json()
+        if not isinstance(payload, list):
+            payload = []
+
+        self._coins_list_cache = payload
+        index: dict[str, list[dict[str, str]]] = {}
+        for item in payload:
+            item_symbol = str(item.get("symbol") or "").lower()
+            coin_id = str(item.get("id") or "")
+            if not item_symbol or not coin_id:
+                continue
+            index.setdefault(item_symbol, []).append(
+                {
+                    "id": coin_id,
+                    "name": str(item.get("name") or ""),
+                    "symbol": item_symbol,
+                }
+            )
+
+        for item_symbol, candidates in index.items():
+            index[item_symbol] = sorted(candidates, key=lambda candidate: candidate["id"])
+        self._coins_by_symbol_index = index
+
+    @staticmethod
+    def _deterministic_candidate_score(candidate: dict[str, str], normalized_symbol: str) -> tuple[int, int, str]:
+        coin_id = candidate.get("id") or ""
+        candidate_name = (candidate.get("name") or "").lower()
+        prefix = f"{normalized_symbol}-"
+        if coin_id == normalized_symbol:
+            priority = 0
+        elif coin_id.startswith(prefix):
+            priority = 1
+        elif candidate_name == normalized_symbol:
+            priority = 2
+        elif candidate_name.startswith(f"{normalized_symbol} "):
+            priority = 3
+        else:
+            priority = 4
+        return priority, len(coin_id), coin_id
+
+    def _select_candidate_deterministically(
+        self,
+        candidates: list[dict[str, str]],
+        normalized_symbol: str,
+    ) -> tuple[dict[str, str] | None, bool]:
+        if not candidates:
+            return None, False
+        if len(candidates) == 1:
+            return candidates[0], True
+
+        ranked = sorted(candidates, key=lambda candidate: self._deterministic_candidate_score(candidate, normalized_symbol))
+        best = ranked[0]
+        best_score = self._deterministic_candidate_score(best, normalized_symbol)
+        is_unique_best = sum(1 for candidate in ranked if self._deterministic_candidate_score(candidate, normalized_symbol) == best_score) == 1
+        return best, is_unique_best
+
     def _select_candidate_by_market_metrics(self, candidates: list[dict[str, str]]) -> dict[str, str] | None:
         candidate_ids = [candidate["id"] for candidate in candidates if candidate.get("id")]
         if not candidate_ids:
@@ -317,29 +399,25 @@ class CoinGeckoClient(MarketDataClient):
         if canonical_symbol in self._symbol_to_id:
             return self._symbol_to_id[canonical_symbol]
 
-        response = self._request(endpoint="/coins/list", symbol=symbol)
-        candidates = []
-        for item in response.json():
-            item_symbol = str(item.get("symbol") or "").lower()
-            if item_symbol == normalized:
-                candidates.append(
-                    {
-                        "id": str(item.get("id") or ""),
-                        "name": str(item.get("name") or ""),
-                        "symbol": item_symbol,
-                    }
-                )
+        self._load_coins_list_index(symbol)
+        candidates = list(self._coins_by_symbol_index.get(normalized, []))
 
         if not candidates:
             raise ValueError(f"Не удалось определить CoinGecko ID для символа: {symbol}")
 
-        selected = candidates[0]
-        resolved_by_strategy = len(candidates) == 1
+        selected, resolved_by_strategy = self._select_candidate_deterministically(candidates, normalized)
+        if selected is None:
+            raise ValueError(f"Не удалось определить CoinGecko ID для символа: {symbol}")
+
         if len(candidates) > 1:
-            if symbol.upper().endswith("/USDT") or symbol.upper().endswith("USDT"):
+            if not resolved_by_strategy and (symbol.upper().endswith("/USDT") or symbol.upper().endswith("USDT")):
+                top_candidates = sorted(
+                    candidates,
+                    key=lambda candidate: self._deterministic_candidate_score(candidate, normalized),
+                )[: self.TICKER_CHECK_TOP_K]
                 usdt_candidates = [
                     candidate
-                    for candidate in sorted(candidates, key=lambda candidate: candidate["id"])
+                    for candidate in top_candidates
                     if self._candidate_has_usdt_market(candidate["id"], normalized)
                 ]
                 if len(usdt_candidates) == 1:
@@ -355,9 +433,10 @@ class CoinGeckoClient(MarketDataClient):
                     selected = usdt_candidates[0]
                     resolved_by_strategy = True
                     self._logger.warning(
-                        "Для '%s' найдено несколько кандидатов КоинГекко по %s/USDT; используется детерминированный вариант: %s",
+                        "Для '%s' найдено несколько кандидатов КоинГекко по %s/USDT среди top-%s; используется детерминированный вариант: %s",
                         symbol,
                         normalized.upper(),
+                        self.TICKER_CHECK_TOP_K,
                         selected["id"],
                     )
 
@@ -393,6 +472,7 @@ class CoinGeckoClient(MarketDataClient):
             )
 
         self._symbol_to_id[canonical_symbol] = selected["id"]
+        self._save_market_cap_cache()
 
         return self._symbol_to_id[canonical_symbol]
 
