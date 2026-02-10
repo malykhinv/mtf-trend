@@ -50,6 +50,7 @@ class CoinGeckoClient(MarketDataClient):
         cache_path: str | Path | None = None,
         retry_attempts: int = 3,
         retry_backoff_seconds: float = 1.0,
+        min_request_interval_seconds: float = 1.0,
     ) -> None:
         self._api_key = api_key
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
@@ -61,6 +62,8 @@ class CoinGeckoClient(MarketDataClient):
         self._logger = logging.getLogger(self.__class__.__name__)
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
+        self._min_request_interval_seconds = max(0.0, float(min_request_interval_seconds))
+        self._last_request_monotonic: float | None = None
         self._load_market_cap_cache()
 
     # region Приватные
@@ -208,12 +211,19 @@ class CoinGeckoClient(MarketDataClient):
 
         for attempt_number in range(1, self._retry_attempts + 1):
             try:
+                if self._last_request_monotonic is not None and self._min_request_interval_seconds > 0:
+                    elapsed = time.monotonic() - self._last_request_monotonic
+                    wait_seconds = self._min_request_interval_seconds - elapsed
+                    if wait_seconds > 0:
+                        time.sleep(wait_seconds)
+
                 response = requests.get(
                     url=f"{self.BASE_URL}{endpoint}",
                     headers=self._headers(),
                     params=params,
                     timeout=COINGECKO_TIMEOUT_SECONDS,
                 )
+                self._last_request_monotonic = time.monotonic()
                 response.raise_for_status()
                 self._logger.info(
                     "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s результат=успех",
@@ -225,6 +235,7 @@ class CoinGeckoClient(MarketDataClient):
                 )
                 return response
             except requests.HTTPError as exc:
+                self._last_request_monotonic = time.monotonic()
                 last_error = exc
                 response = exc.response
                 status_code = response.status_code if response is not None else None
@@ -263,6 +274,7 @@ class CoinGeckoClient(MarketDataClient):
                 )
                 time.sleep(sleep_seconds)
             except requests.RequestException as exc:
+                self._last_request_monotonic = time.monotonic()
                 last_error = exc
                 last_status_code = None
                 is_last = attempt_number >= self._retry_attempts
