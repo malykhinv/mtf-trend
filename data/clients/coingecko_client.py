@@ -170,7 +170,15 @@ class CoinGeckoClient(MarketDataClient):
         temp_file.close()
         try:
             cache_frame.to_parquet(temp_path, index=False)
-            os.replace(temp_path, self._cache_path)
+            replace_attempts = 5
+            for attempt in range(1, replace_attempts + 1):
+                try:
+                    os.replace(temp_path, self._cache_path)
+                    break
+                except PermissionError:
+                    if attempt == replace_attempts:
+                        raise
+                    time.sleep(0.1 * attempt)
         finally:
             if temp_path.exists():
                 temp_path.unlink()
