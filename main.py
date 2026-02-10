@@ -10,7 +10,6 @@ from config import load_config
 
 # область Приватные
 def _force_single_thread_mode() -> None:
-    """Метод."""
     single_thread_env = {
         "OMP_NUM_THREADS": "1",
         "OPENBLAS_NUM_THREADS": "1",
