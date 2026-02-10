@@ -1,4 +1,4 @@
-"""Support/resistance level model."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

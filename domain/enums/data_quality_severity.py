@@ -1,4 +1,4 @@
-"""Data quality issue severity levels."""
+"""Модуль проекта."""
 
 from enum import Enum
 

@@ -14,7 +14,7 @@ def resolve_timezone(timezone_name: str) -> ZoneInfo:
 
 
 def utc_ms_to_local_datetime(timestamp_ms: int | float, timezone_name: str) -> datetime:
-    """Конвертирует UTC-метку времени в миллисекундах в объект даты и времени с указанным часовым поясом."""
+    """Преобразует UTC-метку времени в миллисекундах в локальную дату и время."""
     tz = resolve_timezone(timezone_name)
     utc_dt = datetime.fromtimestamp(float(timestamp_ms) / 1000.0, tz=timezone.utc)
     return utc_dt.astimezone(tz)
@@ -29,7 +29,7 @@ def datetime_to_timezone(value: datetime, timezone_name: str) -> datetime:
 
 
 def datetime_to_utc(value: datetime, source_timezone_name: str | None = None) -> datetime:
-    """Конвертирует объект даты и времени с часовым поясом или без него в UTC; значение без пояса интерпретируется как заданный исходный часовой пояс или UTC."""
+    """Преобразует дату и время в UTC."""
     if value.tzinfo is None:
         if source_timezone_name is None:
             aware = value.replace(tzinfo=timezone.utc)
@@ -41,6 +41,6 @@ def datetime_to_utc(value: datetime, source_timezone_name: str | None = None) ->
 
 
 def datetime_to_utc_ms(value: datetime, source_timezone_name: str | None = None) -> int:
-    """Конвертирует объект даты и времени с часовым поясом или без него в UTC-метку времени в миллисекундах."""
+    """Преобразует дату и время в UTC-метку времени в миллисекундах."""
     utc_dt = datetime_to_utc(value, source_timezone_name=source_timezone_name)
     return int(utc_dt.timestamp() * 1000)

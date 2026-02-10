@@ -1,4 +1,4 @@
-"""Volume value object."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -7,8 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class Volume:
-    """Represents a non-negative trade or market volume."""
-
+    """Класс."""
     value: float
 
     # область Приватные

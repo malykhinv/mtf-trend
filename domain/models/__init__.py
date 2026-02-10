@@ -1,4 +1,4 @@
-"""Domain models exports."""
+"""Модуль проекта."""
 
 from domain.models.breakout_event import BreakoutEvent
 from domain.models.candle import Candle

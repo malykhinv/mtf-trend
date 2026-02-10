@@ -1,4 +1,4 @@
-"""Data preparation helpers for strategy/backtest pipeline."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 # область Приватные
 def _to_utc_timestamp(value: object) -> pd.Timestamp:
-    """Convert datetime-like values to UTC timestamp safely for aware/naive inputs."""
+    """Метод."""
     timestamp = pd.Timestamp(value)
     if timestamp.tz is None:
         return timestamp.tz_localize("UTC")
@@ -37,8 +37,7 @@ def _to_utc_timestamp(value: object) -> pd.Timestamp:
 
 # конец области Приватные
 class DataPreparer:
-    """Loads cached parquet data and normalizes it for backtest processing."""
-
+    """Класс."""
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
 
     # область Приватные
@@ -89,7 +88,7 @@ class DataPreparer:
 
     @staticmethod
     def prepare_vectorbt_inputs(trades: list[TradeResult], initial_price: float = SIMULATION_PRICE_INIT) -> VectorbtInputs:
-        """Build synthetic price/signals/equity series from closed trades."""
+        """Метод."""
         if not trades:
             index = pd.DatetimeIndex([], tz=SIMULATION_TIMEZONE_UTC)
             empty_float = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)

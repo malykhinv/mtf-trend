@@ -1,4 +1,4 @@
-"""CLI parser and command dispatch helpers."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

@@ -1,5 +1,4 @@
-"""Упрощенный запуск сценариев проекта без ручного ввода CLI-команд."""
-
+"""Модуль проекта."""
 from __future__ import annotations
 
 import argparse

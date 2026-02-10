@@ -1,4 +1,4 @@
-"""Open interest fetch coordinator."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -24,8 +24,7 @@ from utils.logger import get_logger
 
 
 class OiFetcher:
-    """Fetches and stores open-interest data incrementally for one or many symbols."""
-
+    """Класс."""
     # область Приватные
     def __init__(
         self,
@@ -58,7 +57,7 @@ class OiFetcher:
 
         watermark_display = last_timestamp.isoformat() if last_timestamp is not None else "None"
         self._logger.info(
-            f"OI watermark: {symbol} {timeframe.value} column={watermark_column} last={watermark_display} selected={next_start.isoformat()}"
+            f"OI водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start.isoformat()}"
         )
         self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start.isoformat()} -> {end_time.isoformat()}")
         if next_start > end_time:
@@ -71,7 +70,7 @@ class OiFetcher:
 
         if "timestamp" not in data.columns:
             if data.empty:
-                self._logger.info(f"OI пустой OI без timestamp: {symbol} {timeframe.value}")
+                self._logger.info(f"OI пустой ряд без метки времени: {symbol} {timeframe.value}")
                 return 0
             raise ValueError(
                 f"OI fetch_symbol: отсутствует колонка 'timestamp' в непустом OI для {symbol} {timeframe.value}"

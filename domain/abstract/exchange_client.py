@@ -1,4 +1,4 @@
-"""Exchange client abstraction."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -11,8 +11,7 @@ from domain.enums.timeframe import Timeframe
 
 
 class ExchangeClient(ABC):
-    """Interface for futures exchange market data access."""
-
+    """Класс."""
     @abstractmethod
     def fetch_ohlcv(
         self,
@@ -21,8 +20,7 @@ class ExchangeClient(ABC):
         start_time: datetime,
         end_time: datetime,
     ) -> pd.DataFrame:
-        """Return OHLCV candles for symbol and timeframe in [start_time, end_time]."""
-
+        """Метод."""
     @abstractmethod
     def fetch_open_interest(
         self,
@@ -31,8 +29,7 @@ class ExchangeClient(ABC):
         start_time: datetime,
         end_time: datetime,
     ) -> pd.DataFrame:
-        """Return open interest time-series aligned to timeframe in [start_time, end_time]."""
-
+        """Метод."""
     @abstractmethod
     def get_futures_symbols(self) -> list[str]:
-        """Return list of active futures symbols."""
+        """Метод."""

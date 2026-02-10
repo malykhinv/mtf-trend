@@ -1,4 +1,4 @@
-"""DTO for combined OHLCV/OI/market-cap fetching results."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

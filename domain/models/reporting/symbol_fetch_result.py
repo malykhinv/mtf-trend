@@ -1,4 +1,4 @@
-"""Per-symbol fetch execution status."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

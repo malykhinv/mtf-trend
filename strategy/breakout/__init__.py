@@ -1,4 +1,4 @@
-"""Breakout strategy package exports."""
+"""Модуль проекта."""
 
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.pending_breakout import PendingBreakout

@@ -1,4 +1,4 @@
-"""CLI entrypoint for mtf-trend backtesting project."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from config import load_config
 
 # область Приватные
 def _force_single_thread_mode() -> None:
-    """Disable library-level multithreading to avoid lockups/timeouts in long runs."""
+    """Метод."""
     single_thread_env = {
         "OMP_NUM_THREADS": "1",
         "OPENBLAS_NUM_THREADS": "1",

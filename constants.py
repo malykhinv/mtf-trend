@@ -1,4 +1,4 @@
-"""Project-wide constants to avoid magic values."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ LOGGER_FILE_ENCODING = "utf-8"
 
 # Глоссарий логирования (единые шаблоны)
 LOG_MSG_LOAD_ERROR = "Ошибка загрузки %s: %s"
-LOG_MSG_RETRY_EXHAUSTED = "Ретраи исчерпаны: endpoint=%s symbol=%s attempts=%s"
+LOG_MSG_RETRY_EXHAUSTED = "Повторы исчерпаны: эндпоинт=%s символ=%s попыток=%s"
 LOG_MSG_SKIP_UP_TO_DATE = "%s пропуск: %s уже актуален"
 LOG_MSG_TASK_COMPLETED = "%s завершено"
 

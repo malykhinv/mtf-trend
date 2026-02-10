@@ -1,4 +1,4 @@
-"""Anomaly validator for market data quality checks."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -13,8 +13,7 @@ from domain.models.data_quality_issue import DataQualityIssue
 
 
 class DataValidator:
-    """Validate common anomalies in OHLCV/OI data."""
-
+    """Класс."""
     @staticmethod
     def validate(symbol: str, timeframe: Timeframe, data: pd.DataFrame) -> list[DataQualityIssue]:
         if data.empty:

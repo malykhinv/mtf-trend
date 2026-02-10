@@ -1,4 +1,4 @@
-"""Application configuration dataclasses and .env loader."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

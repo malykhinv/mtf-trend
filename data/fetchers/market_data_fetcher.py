@@ -1,5 +1,4 @@
-"""Высокоуровневый координатор загрузки OHLCV, OI и рыночной капитализации."""
-
+"""Модуль проекта."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -22,8 +21,7 @@ from utils.logger import get_logger
 
 
 class MarketDataFetcher:
-    """Координирует загрузку OHLCV/OI и получение рыночной капитализации."""
-
+    """Класс."""
     def __init__(
         self,
         ohlcv_fetcher: OhlcvFetcher,

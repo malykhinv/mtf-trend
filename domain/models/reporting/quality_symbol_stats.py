@@ -1,4 +1,4 @@
-"""Per-symbol quality stats DTO."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

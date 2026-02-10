@@ -1,4 +1,4 @@
-"""DTO for final backtest report output."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Position simulator abstraction."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -11,20 +11,16 @@ from domain.models.trade_result import TradeResult
 
 
 class PositionSimulator(ABC):
-    """Interface for trade position lifecycle simulation."""
-
+    """Класс."""
     @abstractmethod
     def process_candle(self, candle: Candle) -> TradeResult | None:
-        """Process new candle and return trade result if position is closed."""
-
+        """Метод."""
     @abstractmethod
     def open_position(self, position: Position) -> None:
-        """Open new trading position."""
-
+        """Метод."""
     @abstractmethod
     def close_position(self, price: float, exit_time: datetime) -> TradeResult:
-        """Close current position at given price and close timestamp, then return the result."""
-
+        """Метод."""
     @abstractmethod
     def update_stop(self, new_stop: float) -> None:
-        """Update stop-loss for active position."""
+        """Метод."""

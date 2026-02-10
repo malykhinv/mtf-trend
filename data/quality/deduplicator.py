@@ -1,4 +1,4 @@
-"""Deduplicate candle/open-interest frames by timestamp."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ import pandas as pd
 
 
 class Deduplicator:
-    """Remove duplicated rows by timestamp and keep the latest occurrence."""
-
+    """Класс."""
     @staticmethod
     def deduplicate(data: pd.DataFrame) -> pd.DataFrame:
         if data.empty:

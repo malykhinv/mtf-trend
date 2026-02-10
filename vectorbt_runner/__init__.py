@@ -1,4 +1,4 @@
-"""Vectorbt runner package exports."""
+"""Модуль проекта."""
 
 from vectorbt_runner.backtest_runner import BacktestRunner
 from vectorbt_runner.backtest_summary import BacktestSummary

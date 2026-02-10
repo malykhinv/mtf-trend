@@ -1,4 +1,4 @@
-"""Domain value objects exports."""
+"""Модуль проекта."""
 
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price

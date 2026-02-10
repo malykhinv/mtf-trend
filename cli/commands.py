@@ -1,4 +1,4 @@
-"""CLI command handlers."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
     logger.info(f"{command_name}: старт")
     try:
         code = body()
-        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (code={code})")
+        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (код={code})")
         return code
     except Exception as exc:  # noqa: BLE001
         logger.exception(f"{command_name}: ошибка: {exc}")
@@ -171,7 +171,7 @@ def _resolve_symbols(
 
     excluded_by_liquidity = len(intersection) - len(liquid_symbols)
     logger.info(
-        "resolve-symbols: coingecko сырых=%s нормализованных=%s; ccxt сырых=%s нормализованных=%s; пересечение=%s",
+        "подбор-символов: коингекко сырых=%s нормализованных=%s; ccxt сырых=%s нормализованных=%s; пересечение=%s",
         len(top_symbols_raw),
         len(top_symbols_normalized),
         len(futures_symbols_raw),
@@ -179,7 +179,7 @@ def _resolve_symbols(
         len(intersection),
     )
     logger.info(
-        "resolve-symbols: фильтр ликвидности min_volume_usd=%.2f исключено=%s итоговых_символов=%s",
+        "подбор-символов: фильтр ликвидности (мин_объем_usd=%.2f) исключено=%s итоговых_символов=%s",
         min_volume_usd,
         excluded_by_liquidity,
         len(liquid_symbols),
@@ -216,7 +216,7 @@ def _log_loaded_coins(logger: Logger, count: int, action: str) -> None:
     }
     template = templates.get(action)
     if template is None:
-        raise ValueError(f"Unsupported action: {action}")
+        raise ValueError(f"Неподдерживаемое действие: {action}")
     logger.info(template, count)
 
 
@@ -230,7 +230,7 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
             return timeframe
 
     supported = ", ".join(tf.value for tf in Timeframe)
-    raise ValueError(f"Invalid {argument_name}: {value}. Supported values: {supported}")
+    raise ValueError(f"Некорректное значение {argument_name}: {value}. Поддерживаемые значения: {supported}")
 
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
@@ -292,7 +292,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         argument_name="--entry-tf",
     )
     logger.info(
-        "run-backtest: явный запуск, уровни: %s, входы: %s",
+        "запуск-бэктеста: явный запуск, уровни: %s, входы: %s",
         levels_timeframe.value,
         entry_timeframe.value,
     )
@@ -335,7 +335,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     summary = runner.build_summary(results)
     logger.info(
-        "run-backtest: total=%s profitable=%s best_pf=%.4f",
+        "запуск-бэктеста: всего=%s прибыльных=%s лучший_pf=%.4f",
         summary.total_combinations,
         summary.profitable_combinations,
         summary.best_pf,
@@ -347,7 +347,7 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
     if not csv_path.exists():
-        logger.info(f"make-report: файл не найден: {csv_path}")
+        logger.info(f"подготовка-отчета: файл не найден: {csv_path}")
         return 1
 
     frame = pd.read_csv(csv_path)
@@ -375,7 +375,7 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     if len(frame) != TARGET_PARAMETER_COMBINATIONS:
         logger.warning(
-            "make-report: фактическое число комбинаций=%s отличается от целевого=%s",
+            "подготовка-отчета: фактическое число комбинаций=%s отличается от целевого=%s",
             len(frame),
             TARGET_PARAMETER_COMBINATIONS,
         )
@@ -409,7 +409,7 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info(f"make-report: сохранено {output_path}")
+    logger.info(f"подготовка-отчета: сохранено {output_path}")
     return 0
 
 
@@ -569,8 +569,8 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
 
         logger.info(
-            f"check-quality: {symbol} issues={symbol_total_issues} gaps={len(gaps)} "
-            f"oi_alignment_issues={len(oi_alignment_issues)}"
+            f"проверка-качества: {symbol} проблемы={symbol_total_issues} пропуски={len(gaps)} "
+            f"проблемы_выравнивания_oi={len(oi_alignment_issues)}"
         )
 
     summary = QualitySummary(

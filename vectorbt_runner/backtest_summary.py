@@ -1,4 +1,4 @@
-"""Backtest summary value object."""
+"""Модуль проекта."""
 
 from dataclasses import dataclass
 

@@ -1,4 +1,4 @@
-"""Domain abstraction exports."""
+"""Модуль проекта."""
 
 from domain.abstract.exchange_client import ExchangeClient
 from domain.abstract.market_data_client import MarketDataClient

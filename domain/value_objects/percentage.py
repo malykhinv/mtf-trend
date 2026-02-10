@@ -1,4 +1,4 @@
-"""Percentage value object."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ from math import isfinite
 
 @dataclass(frozen=True, slots=True)
 class Percentage:
-    """Represents any finite percentage value with lower bound at -100.0."""
-
+    """Класс."""
     value: float
 
     # область Приватные

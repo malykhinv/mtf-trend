@@ -1,4 +1,4 @@
-"""Price value object."""
+"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -7,8 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class Price:
-    """Represents a non-negative market price."""
-
+    """Класс."""
     value: float
 
     # область Приватные
