@@ -119,7 +119,7 @@ class OiFetcher:
             try:
                 added_rows = self.fetch_symbol(symbol, timeframe, start_time, end_time)
                 results[symbol] = SymbolFetchResult.ok(added_rows)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 msg = f"OI ошибка исполнения: {symbol}: {exc}"
                 self._logger.info(msg)
                 results[symbol] = SymbolFetchResult.error(msg)
