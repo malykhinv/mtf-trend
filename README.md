@@ -12,14 +12,14 @@ CLI-проект для загрузки данных, бектеста и от�
 1. Создать и активировать virtual environment:
 
 ```bash
-python3.10 -m venv .venv
-source .venv/bin/activate
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 ```
 
 2. Установить зависимости:
 
 ```bash
-pip install --upgrade pip
+python -m pip install --upgrade pip
 pip install -e .
 ```
 

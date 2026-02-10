@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar
 
 import pandas as pd
 
 from domain.models.trade_result import TradeResult
-from vectorbt_runner.mtf_frames import SymbolMtfFrames
+from typing import Generic, TypeVar, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from vectorbt_runner.mtf_frames import SymbolMtfFrames
+
 
 StrategyParamsT = TypeVar("StrategyParamsT")
 

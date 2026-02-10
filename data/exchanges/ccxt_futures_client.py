@@ -45,7 +45,7 @@ class CcxtFuturesClient(ExchangeClient):
     """Класс."""
     def __init__(
         self,
-        exchange: Exchange | str,
+        exchange: Exchange,
         api_key: str = "",
         secret: str = "",
         password: str = "",
@@ -56,7 +56,7 @@ class CcxtFuturesClient(ExchangeClient):
         if ccxt is None:
             raise RuntimeError("ccxt is required for CcxtFuturesClient")
 
-        self.exchange = Exchange(str(exchange).upper())
+        self.exchange = exchange
         self._logger = logging.getLogger(self.__class__.__name__)
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
