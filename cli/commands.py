@@ -58,26 +58,6 @@ from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
 
-def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
-    return _run_with_logging("fetch-data", config, lambda: _fetch_data_inner(config, args))
-
-
-def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
-    return _run_with_logging("update-cache", config, lambda: _update_cache_inner(config, args))
-
-
-def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
-    return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
-
-
-def make_report(config: AppConfig, args: argparse.Namespace) -> int:
-    return _run_with_logging("make-report", config, lambda: _make_report_inner(config, args))
-
-
-def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
-    return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
-
-
 # область Приватные
 
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
@@ -595,3 +575,24 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 # конец области Приватные
+
+# Публичные точки входа
+
+def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("fetch-data", config, lambda: _fetch_data_inner(config, args))
+
+
+def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("update-cache", config, lambda: _update_cache_inner(config, args))
+
+
+def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
+
+
+def make_report(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("make-report", config, lambda: _make_report_inner(config, args))
+
+
+def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
