@@ -9,6 +9,7 @@ class Deduplicator:
     """Класс."""
     @staticmethod
     def deduplicate(data: pd.DataFrame) -> pd.DataFrame:
+        """Удаляет дублирующиеся строки по ключевым полям."""
         if data.empty:
             return data.copy()
 

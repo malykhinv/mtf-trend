@@ -63,6 +63,7 @@ def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
 # конец области Приватные
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
+    """Загружает конфигурацию приложения из файла."""
     env_file = Path(env_path)
     _load_env_file(env_file)
 

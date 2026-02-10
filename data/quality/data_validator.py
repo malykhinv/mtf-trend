@@ -16,6 +16,7 @@ class DataValidator:
     """Класс."""
     @staticmethod
     def validate(symbol: str, timeframe: Timeframe, data: pd.DataFrame) -> list[DataQualityIssue]:
+        """Проверяет данные и собирает найденные проблемы."""
         if data.empty:
             return []
 

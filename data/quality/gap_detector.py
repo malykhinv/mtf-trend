@@ -24,6 +24,7 @@ class GapDetector:
     """Класс."""
     @staticmethod
     def detect_gaps(data: pd.DataFrame, timeframe: Timeframe) -> list[pd.Timestamp]:
+        """Ищет пропуски во временном ряду свечей."""
         if data.empty or "timestamp" not in data.columns:
             return []
 

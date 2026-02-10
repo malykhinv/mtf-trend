@@ -61,6 +61,7 @@ class MarketDataFetcher:
     # конец области Приватные
 
     def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
+        """Загружает капитализации для списка тикеров."""
         self._logger.info(f"Рыночная капитализация старт: {len(symbols)} инструментов")
         results: dict[str, float | str] = {}
         for symbol in symbols:
@@ -82,6 +83,7 @@ class MarketDataFetcher:
         start_time: datetime,
         end_time: datetime,
     ) -> FetchAllResult:
+        """Загружает полный набор рыночных метрик."""
         self._logger.info(f"Загрузка старт: {len(symbols)} символов, TF={timeframe.value}")
 
         ohlcv_result = self._ohlcv_fetcher.fetch_many(

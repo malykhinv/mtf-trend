@@ -18,6 +18,7 @@ class TradeClassifier:
 
     @staticmethod
     def classify_result_type(*, tp1_done: bool, exit_at_breakeven: bool, exit_at_tp2: bool) -> TradeResultType:
+        """Определяет тип исхода сделки по её параметрам."""
         if exit_at_tp2:
             return TradeResultType.TP2
         if exit_at_breakeven:
@@ -33,6 +34,7 @@ class TradeClassifier:
         result_type: TradeResultType,
         pnl: float,
     ) -> TradeResult:
+        """Формирует объект результата классификации сделки."""
         entry_notional = position.entry_price.value * position.size.value
         pnl_percent_value = 0.0 if entry_notional == 0 else (pnl / entry_notional) * 100
         return TradeResult(

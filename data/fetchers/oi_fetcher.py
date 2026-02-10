@@ -48,6 +48,7 @@ class OiFetcher:
         self._validator = DataValidator()
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
+        """Загружает историю open interest для одного символа."""
         next_start = start_time
         watermark_column = "open_interest"
         last_timestamp = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
@@ -114,6 +115,7 @@ class OiFetcher:
         start_time: datetime,
         end_time: datetime,
     ) -> dict[str, SymbolFetchResult]:
+        """Последовательно загружает open interest для набора символов."""
         results: dict[str, SymbolFetchResult] = {}
         for symbol in symbols:
             try:

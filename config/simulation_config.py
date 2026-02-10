@@ -18,4 +18,5 @@ class SimulationConfig:
 
     @property
     def tzinfo(self) -> tzinfo:
+        """Возвращает объект часового пояса для симуляции."""
         return resolve_timezone(self.timezone)

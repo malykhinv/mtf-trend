@@ -124,6 +124,7 @@ class CcxtFuturesClient(ExchangeClient):
     # конец области Приватные
 
     def get_futures_symbols(self) -> list[str]:
+        """Возвращает список доступных фьючерсных символов."""
         symbols: list[str] = []
         for market in self._client.markets.values():
             if not market.get("active", True):
@@ -147,6 +148,7 @@ class CcxtFuturesClient(ExchangeClient):
         return sorted(set(symbols))
 
     def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+        """Запрашивает свечи по символу и интервалу."""
         start_ms = _to_utc_ms(start_time)
         since = start_ms
         end_ms = _to_utc_ms(end_time)
@@ -181,6 +183,7 @@ class CcxtFuturesClient(ExchangeClient):
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
     def fetch_open_interest(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+        """Запрашивает историю open interest по символу."""
         if not isinstance(self._client, CcxtOpenInterestApi):
             raise NotImplementedError(f"Exchange {self.exchange.value} does not support fetch_open_interest_history in CCXT")
 

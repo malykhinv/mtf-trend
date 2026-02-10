@@ -19,4 +19,5 @@ class StrategyConfig:
 
     @property
     def tzinfo(self) -> tzinfo:
+        """Возвращает объект часового пояса для стратегии."""
         return resolve_timezone(self.timezone)

@@ -579,20 +579,25 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
 # Публичные точки входа
 
 def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
+    """Запускает сценарий загрузки рыночных данных."""
     return _run_with_logging("fetch-data", config, lambda: _fetch_data_inner(config, args))
 
 
 def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
+    """Обновляет локальный кэш данных."""
     return _run_with_logging("update-cache", config, lambda: _update_cache_inner(config, args))
 
 
 def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
+    """Запускает бэктест по текущей конфигурации."""
     return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
 
 
 def make_report(config: AppConfig, args: argparse.Namespace) -> int:
+    """Формирует итоговый отчёт по результатам."""
     return _run_with_logging("make-report", config, lambda: _make_report_inner(config, args))
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
+    """Проверяет качество и целостность данных."""
     return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))

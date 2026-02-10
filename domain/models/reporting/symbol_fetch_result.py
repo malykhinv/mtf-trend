@@ -13,9 +13,11 @@ class SymbolFetchResult:
 
     @classmethod
     def ok(cls, added_rows: int) -> "SymbolFetchResult":
+        """Создаёт успешный результат загрузки символа."""
         return cls(success=True, message="ok", added_rows=added_rows)
 
     @classmethod
     def error(cls, message: str) -> "SymbolFetchResult":
+        """Создаёт результат загрузки с ошибкой."""
         return cls(success=False, message=message, added_rows=0)
 
