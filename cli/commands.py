@@ -108,6 +108,7 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
         cache_path=market_caps_cache_path,
         retry_attempts=config.backtest.retry_attempts,
         retry_backoff_seconds=config.backtest.retry_backoff_seconds,
+        min_request_interval_seconds=config.fetch.coingecko_min_request_interval_seconds,
     )
     return (
         MarketDataFetcher(
@@ -130,6 +131,7 @@ def _resolve_symbols(
         top_n: int,
         min_volume_usd: float,
         logger: Logger,
+        coingecko_volume_batch_size: int,
 ) -> list[str]:
     top_symbols_raw = [f"{symbol}/USDT" for symbol in market_client.get_top_coins_by_market_cap(limit=top_n)]
     futures_symbols_raw = exchange_client.get_futures_symbols()
@@ -143,31 +145,33 @@ def _resolve_symbols(
     intersection = sorted(top_symbols_normalized.intersection(futures_symbol_map))
     volumes_by_symbol: dict[str, float] = {}
     symbols_skipped_by_api_errors = 0
-    for symbol in intersection:
-        symbol_pair = f"{symbol}/USDT"
+    symbol_pairs = [f"{symbol}/USDT" for symbol in intersection]
+
+    for start in range(0, len(symbol_pairs), coingecko_volume_batch_size):
+        batch = symbol_pairs[start:start + coingecko_volume_batch_size]
         try:
-            volume_for_symbol = market_client.get_total_volumes([symbol_pair])
+            volumes_by_symbol.update(market_client.get_total_volumes(batch))
         except (RuntimeError, RetryExhaustedError) as exc:
-            symbols_skipped_by_api_errors += 1
+            symbols_skipped_by_api_errors += len(batch)
             logger.warning(
-                "подбор-символов: ошибка внешнего API при получении объёма для %s: %s; символ будет исключён",
-                symbol_pair,
+                "подбор-символов: ошибка внешнего API при получении объёма батча (%s символов, first=%s): %s; символы будут исключены",
+                len(batch),
+                batch[0] if batch else "n/a",
                 exc,
             )
             continue
         except Exception as exc:
             root_cause = exc.__cause__
             if isinstance(root_cause, RetryExhaustedError):
-                symbols_skipped_by_api_errors += 1
+                symbols_skipped_by_api_errors += len(batch)
                 logger.warning(
-                    "подбор-символов: ошибка внешнего API при получении объёма для %s: %s; символ будет исключён",
-                    symbol_pair,
+                    "подбор-символов: ошибка внешнего API при получении объёма батча (%s символов, first=%s): %s; символы будут исключены",
+                    len(batch),
+                    batch[0] if batch else "n/a",
                     exc,
                 )
                 continue
             raise
-
-        volumes_by_symbol[symbol_pair] = volume_for_symbol.get(symbol_pair, 0.0)
 
     symbols_with_volume = [symbol for symbol in intersection if f"{symbol}/USDT" in volumes_by_symbol]
 
@@ -256,6 +260,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         top_n=args.top_n,
         min_volume_usd=min_volume_usd,
         logger=logger,
+        coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
     )
     if not symbols:
         logger.info("загрузка-данных: не найдено символов для загрузки")
@@ -280,6 +285,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         top_n=args.top_n,
         min_volume_usd=min_volume_usd,
         logger=logger,
+        coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
     )
     if not symbols:
         logger.info("обновление-кэша: не найдено символов для обновления")

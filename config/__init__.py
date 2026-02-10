@@ -23,6 +23,8 @@ from constants import (
     DEFAULT_SPREAD,
     DEFAULT_LOGS_DIR,
     DEFAULT_MIN_VOLUME_USD,
+    DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS,
+    DEFAULT_COINGECKO_VOLUME_BATCH_SIZE,
 )
 from domain.enums.timeframe import Timeframe
 
@@ -81,6 +83,16 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         timezone=fetch_timezone,
         min_volume_usd=float(
             os.getenv("MIN_VOLUME_USD", os.getenv("FETCH_MIN_VOLUME_USD", str(DEFAULT_MIN_VOLUME_USD)))),
+        coingecko_min_request_interval_seconds=float(
+            os.getenv(
+                "COINGECKO_MIN_REQUEST_INTERVAL_SECONDS",
+                str(DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS),
+            )
+        ),
+        coingecko_volume_batch_size=max(
+            1,
+            int(os.getenv("COINGECKO_VOLUME_BATCH_SIZE", str(DEFAULT_COINGECKO_VOLUME_BATCH_SIZE))),
+        ),
     )
 
     strategy_levels_timeframe = _parse_timeframe(
