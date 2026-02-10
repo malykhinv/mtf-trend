@@ -28,7 +28,6 @@ from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 # область Приватные
 def _to_utc_timestamp(value: object) -> pd.Timestamp:
-    """Метод."""
     timestamp = pd.Timestamp(value)
     if timestamp.tz is None:
         return timestamp.tz_localize("UTC")
