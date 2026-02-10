@@ -100,7 +100,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             return float(row["close"]) > float(row["open"]) and float(row["close"]) > zone_bottom
         return float(row["close"]) < float(row["open"]) and float(row["close"]) < zone_top
 
-    def _extra_retest_filters_ok(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+    @staticmethod
+    def _extra_retest_filters_ok(*, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
         natr = max(float(row.get("natr", 0.0)), STRATEGY_NATR_EPSILON)
         if breakout.side == PositionSide.LONG:
             move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), STRATEGY_PRICE_EPSILON)
