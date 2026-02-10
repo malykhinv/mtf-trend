@@ -67,7 +67,7 @@ class MarketDataFetcher:
             try:
                 results[symbol] = self._market_data_client.get_market_cap(symbol)
                 self._logger.info(f"Рыночная капитализация готово: {symbol}")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 msg = f"Рыночная капитализация ошибка исполнения: {symbol}: {exc}"
                 self._logger.info(msg)
                 results[symbol] = msg

@@ -71,7 +71,7 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         code = body()
         logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (код={code})")
         return code
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.exception(f"{command_name}: ошибка: {exc}")
         return 1
 
