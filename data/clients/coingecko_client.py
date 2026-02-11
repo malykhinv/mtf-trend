@@ -581,7 +581,10 @@ class CoinGeckoClient(MarketDataClient):
         coin_ids_by_input: dict[str, str] = {}
         for item in requested:
             if "/" in item:
-                coin_ids_by_input[item] = self._resolve_coin_id(item)
+                try:
+                    coin_ids_by_input[item] = self._resolve_coin_id(item)
+                except ValueError:
+                    coin_ids_by_input[item] = item
                 continue
 
             canonical_symbol = self._canonical_symbol_key(item)
@@ -631,7 +634,10 @@ class CoinGeckoClient(MarketDataClient):
         coin_ids_by_input: dict[str, str] = {}
         for item in requested:
             if "/" in item:
-                coin_ids_by_input[item] = self._resolve_coin_id(item)
+                try:
+                    coin_ids_by_input[item] = self._resolve_coin_id(item)
+                except ValueError:
+                    coin_ids_by_input[item] = item
                 continue
 
             canonical_symbol = self._canonical_symbol_key(item)
