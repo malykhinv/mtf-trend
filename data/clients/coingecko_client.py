@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import random
+import re
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
@@ -42,6 +43,7 @@ class CoinGeckoClient(MarketDataClient):
     """Класс."""
     BASE_URL = COINGECKO_BASE_URL
     TICKER_CHECK_TOP_K = 5
+    EXCHANGE_SIZE_PREFIXES = ("1000", "10000", "100000", "1000000")
 
     def __init__(
         self,
@@ -79,6 +81,16 @@ class CoinGeckoClient(MarketDataClient):
     @classmethod
     def _canonical_symbol_key(cls, symbol: str) -> str:
         return cls._normalize_symbol(symbol).upper()
+
+    @classmethod
+    def _exchange_prefixed_symbol_variant(cls, symbol: str) -> str | None:
+        normalized = cls._normalize_symbol(symbol)
+        for prefix in cls.EXCHANGE_SIZE_PREFIXES:
+            if normalized.startswith(prefix) and len(normalized) > len(prefix):
+                candidate = normalized[len(prefix):]
+                if re.fullmatch(r"[a-z][a-z0-9]*", candidate):
+                    return candidate
+        return None
 
     def _load_market_cap_cache(self) -> None:
         if self._cache_path is None or not self._cache_path.exists():
@@ -421,6 +433,19 @@ class CoinGeckoClient(MarketDataClient):
 
         self._load_coins_list_index(symbol)
         candidates = list(self._coins_by_symbol_index.get(normalized, []))
+
+        if not candidates:
+            prefixed_variant = self._exchange_prefixed_symbol_variant(symbol)
+            if prefixed_variant:
+                candidates = list(self._coins_by_symbol_index.get(prefixed_variant, []))
+                if candidates:
+                    self._logger.info(
+                        "Символ КоинГекко '%s' сопоставляется через биржевой префикс объёма: %s -> %s",
+                        symbol,
+                        normalized,
+                        prefixed_variant,
+                    )
+                    normalized = prefixed_variant
 
         if not candidates:
             raise ValueError(f"Не удалось определить CoinGecko ID для символа: {symbol}")
