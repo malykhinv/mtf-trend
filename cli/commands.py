@@ -133,22 +133,26 @@ def _resolve_symbols(
         logger: Logger,
         coingecko_volume_batch_size: int,
 ) -> list[str]:
-    top_symbols_raw = [f"{symbol}/USDT" for symbol in market_client.get_top_coins_by_market_cap(limit=top_n)]
     futures_symbols_raw = exchange_client.get_futures_symbols()
-
-    top_symbols_normalized = {normalize_symbol(symbol) for symbol in top_symbols_raw}
     futures_symbol_map = {
         normalize_symbol(symbol): symbol
         for symbol in futures_symbols_raw
     }
+    exchange_symbols_normalized = sorted(futures_symbol_map)
 
-    intersection = sorted(top_symbols_normalized.intersection(futures_symbol_map))
+    market_caps_by_symbol = market_client.get_market_caps(exchange_symbols_normalized)
+    ranked_symbols = sorted(
+        exchange_symbols_normalized,
+        key=lambda symbol: (market_caps_by_symbol.get(symbol, 0.0), symbol),
+        reverse=True,
+    )
+    ranked_top_symbols = ranked_symbols[:top_n]
+
     volumes_by_symbol: dict[str, float] = {}
     symbols_skipped_by_api_errors = 0
-    symbol_pairs = [f"{symbol}/USDT" for symbol in intersection]
 
-    for start in range(0, len(symbol_pairs), coingecko_volume_batch_size):
-        batch = symbol_pairs[start:start + coingecko_volume_batch_size]
+    for start in range(0, len(ranked_top_symbols), coingecko_volume_batch_size):
+        batch = ranked_top_symbols[start:start + coingecko_volume_batch_size]
         try:
             volumes_by_symbol.update(market_client.get_total_volumes(batch))
         except (RuntimeError, RetryExhaustedError) as exc:
@@ -173,23 +177,20 @@ def _resolve_symbols(
                 continue
             raise
 
-    symbols_with_volume = [symbol for symbol in intersection if f"{symbol}/USDT" in volumes_by_symbol]
+    symbols_with_volume = [symbol for symbol in ranked_top_symbols if symbol in volumes_by_symbol]
 
     liquid_symbols: list[str] = []
     for symbol in symbols_with_volume:
-        symbol_pair = f"{symbol}/USDT"
-        total_volume = volumes_by_symbol.get(symbol_pair, 0.0)
+        total_volume = volumes_by_symbol.get(symbol, 0.0)
         if total_volume >= min_volume_usd:
             liquid_symbols.append(symbol)
 
     excluded_by_liquidity = len(symbols_with_volume) - len(liquid_symbols)
     logger.info(
-        "подбор-символов: коингекко сырых=%s нормализованных=%s; ccxt сырых=%s нормализованных=%s; пересечение=%s",
-        len(top_symbols_raw),
-        len(top_symbols_normalized),
-        len(futures_symbols_raw),
-        len(futures_symbol_map),
-        len(intersection),
+        "подбор-символов: всего на бирже=%s → после ранжирования top_n=%s → после фильтра ликвидности=%s",
+        len(exchange_symbols_normalized),
+        len(ranked_top_symbols),
+        len(liquid_symbols),
     )
     logger.info(
         "подбор-символов: пропущено символов из-за ошибок внешнего API=%s",
