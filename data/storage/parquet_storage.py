@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 import pandas as pd
 
@@ -16,8 +17,19 @@ class ParquetStorage:
 
     # region Приватные
 
+    @staticmethod
+    def encode_symbol_for_path(symbol: str) -> str:
+        """Преобразует биржевой символ в безопасное имя каталога."""
+        return quote(str(symbol), safe="")
+
+    @staticmethod
+    def decode_symbol_from_path(value: str) -> str:
+        """Восстанавливает исходный биржевой символ из имени каталога."""
+        return unquote(str(value))
+
     def _data_path(self, symbol: str, timeframe: Timeframe) -> Path:
-        return self._base_dir / symbol / timeframe.value / "data.parquet"
+        symbol_path = self.encode_symbol_for_path(symbol)
+        return self._base_dir / symbol_path / timeframe.value / "data.parquet"
 
     @staticmethod
     def _ensure_utc_columns(data: pd.DataFrame) -> pd.DataFrame:

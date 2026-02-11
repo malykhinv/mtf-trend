@@ -21,6 +21,7 @@ from constants import (
     SIMULATION_ZERO_VALUE,
     STRATEGY_REQUIRED_COLUMNS,
 )
+from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
@@ -53,12 +54,13 @@ class DataPreparer:
         for symbol_dir in self._cache_dir.iterdir():
             path = symbol_dir / timeframe.value / SIMULATION_PARQUET_FILE_NAME
             if symbol_dir.is_dir() and path.exists():
-                symbols.append(symbol_dir.name)
+                symbols.append(ParquetStorage.decode_symbol_from_path(symbol_dir.name))
         return sorted(symbols)
 
     def load_symbol_data(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
         """Загружает данные по одному символу для бэктеста."""
-        path = self._cache_dir / symbol / timeframe.value / SIMULATION_PARQUET_FILE_NAME
+        symbol_path = ParquetStorage.encode_symbol_for_path(symbol)
+        path = self._cache_dir / symbol_path / timeframe.value / SIMULATION_PARQUET_FILE_NAME
         if not path.exists():
             return pd.DataFrame()
 
