@@ -544,6 +544,56 @@ class CoinGeckoClient(MarketDataClient):
 
         return [str(item.get("symbol") or "").upper() for item in response.json() if item.get("symbol")]
 
+    def get_market_caps(self, symbols_or_coin_ids: list[str]) -> dict[str, float]:
+        """Возвращает капитализации для списка монет."""
+        if not symbols_or_coin_ids:
+            return {}
+
+        requested = [str(item).strip() for item in symbols_or_coin_ids if str(item).strip()]
+        if not requested:
+            return {}
+
+        coin_ids_by_input: dict[str, str] = {}
+        for item in requested:
+            if "/" in item:
+                coin_ids_by_input[item] = self._resolve_coin_id(item)
+                continue
+
+            canonical_symbol = self._canonical_symbol_key(item)
+            known_coin_id = self._symbol_to_id.get(canonical_symbol)
+            if known_coin_id:
+                coin_ids_by_input[item] = known_coin_id
+                continue
+
+            try:
+                coin_ids_by_input[item] = self._resolve_coin_id(item)
+            except ValueError:
+                coin_ids_by_input[item] = item
+
+        response = self._request(
+            endpoint="/coins/markets",
+            symbol="market_cap_batch",
+            params={
+                COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
+                COINGECKO_PARAM_IDS: ",".join(sorted(set(coin_ids_by_input.values()))),
+                COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
+                COINGECKO_PARAM_PER_PAGE: len(coin_ids_by_input),
+                COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
+                COINGECKO_PARAM_SPARKLINE: COINGECKO_SPARKLINE_FALSE,
+            },
+        )
+        payload = response.json()
+        market_caps_by_coin_id = {
+            str(item.get("id") or ""): float(item.get("market_cap") or 0.0)
+            for item in payload
+            if item.get("id")
+        }
+
+        return {
+            input_name: market_caps_by_coin_id.get(coin_id, 0.0)
+            for input_name, coin_id in coin_ids_by_input.items()
+        }
+
     def get_total_volumes(self, symbols_or_coin_ids: list[str]) -> dict[str, float]:
         """Возвращает объёмы торгов для списка монет."""
         if not symbols_or_coin_ids:
