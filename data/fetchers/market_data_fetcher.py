@@ -64,10 +64,24 @@ class MarketDataFetcher:
         """Загружает капитализации для списка тикеров."""
         self._logger.info(f"Рыночная капитализация старт: {len(symbols)} инструментов")
         results: dict[str, float | str] = {}
-        for symbol in symbols:
+
+        try:
+            batch_caps = self._market_data_client.get_market_caps(symbols)
+            for symbol in symbols:
+                if symbol in batch_caps:
+                    results[symbol] = float(batch_caps.get(symbol, 0.0))
+                    self._logger.info(f"Рыночная капитализация готово (batch): {symbol}")
+        except Exception as exc:
+            self._logger.warning(
+                "Рыночная капитализация: batch-запрос не удался, переключение на fallback get_market_cap(): %s",
+                exc,
+            )
+
+        unresolved_symbols = [symbol for symbol in symbols if symbol not in results]
+        for symbol in unresolved_symbols:
             try:
                 results[symbol] = self._market_data_client.get_market_cap(symbol)
-                self._logger.info(f"Рыночная капитализация готово: {symbol}")
+                self._logger.info(f"Рыночная капитализация готово (fallback): {symbol}")
             except Exception as exc:
                 msg = f"Рыночная капитализация ошибка исполнения: {symbol}: {exc}"
                 self._logger.info(msg)
