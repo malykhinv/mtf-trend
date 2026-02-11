@@ -240,6 +240,7 @@ class CcxtFuturesClient(ExchangeClient):
         start_ms = _to_utc_ms(start_time)
         since = start_ms
         end_ms = _to_utc_ms(end_time)
+        ccxt_timeframe = timeframe.value
 
         rows: list[dict[str, object]] = []
         while since <= end_ms:
@@ -249,10 +250,11 @@ class CcxtFuturesClient(ExchangeClient):
                     symbol=symbol,
                     endpoint="fetch_open_interest_history",
                     call=self._client.fetch_open_interest_history,
-                    timeframe=timeframe,
+                    args=(symbol,),
+                    timeframe=ccxt_timeframe,
                     since=since,
                     limit=DEFAULT_FETCH_BATCH_SIZE,
-                    params={"intervalTime": timeframe, "period": timeframe},
+                    params={"intervalTime": ccxt_timeframe, "period": ccxt_timeframe},
                 )
             except TypeError:
                 batch = self._retry_exchange_call(
@@ -260,7 +262,8 @@ class CcxtFuturesClient(ExchangeClient):
                     symbol=symbol,
                     endpoint="fetch_open_interest_history",
                     call=self._client.fetch_open_interest_history,
-                    timeframe=timeframe,
+                    args=(symbol,),
+                    timeframe=ccxt_timeframe,
                     since=since,
                     limit=DEFAULT_FETCH_BATCH_SIZE,
                 )
