@@ -44,6 +44,7 @@ class CoinGeckoClient(MarketDataClient):
     BASE_URL = COINGECKO_BASE_URL
     TICKER_CHECK_TOP_K = 5
     EXCHANGE_SIZE_PREFIXES = ("1000", "10000", "100000", "1000000")
+    MARKETS_BATCH_SIZE = 200
 
     def __init__(
         self,
@@ -91,6 +92,69 @@ class CoinGeckoClient(MarketDataClient):
                 if re.fullmatch(r"[a-z][a-z0-9]*", candidate):
                     return candidate
         return None
+
+    @staticmethod
+    def _chunked(items: list[str], chunk_size: int) -> list[list[str]]:
+        if chunk_size <= 0:
+            raise ValueError("chunk_size должен быть положительным")
+        return [items[idx:idx + chunk_size] for idx in range(0, len(items), chunk_size)]
+
+    @staticmethod
+    def _is_valid_coin_id(coin_id: str) -> bool:
+        normalized = str(coin_id or "").strip().lower()
+        if not normalized:
+            return False
+        return bool(re.fullmatch(r"[a-z0-9-]+", normalized))
+
+    def _resolve_coin_ids_by_input(self, symbols_or_coin_ids: list[str]) -> dict[str, str]:
+        coin_ids_by_input: dict[str, str] = {}
+        for item in symbols_or_coin_ids:
+            if "/" in item:
+                try:
+                    coin_id = self._resolve_coin_id(item)
+                except ValueError:
+                    coin_id = item
+            else:
+                canonical_symbol = self._canonical_symbol_key(item)
+                known_coin_id = self._symbol_to_id.get(canonical_symbol)
+                if known_coin_id:
+                    coin_id = known_coin_id
+                else:
+                    try:
+                        coin_id = self._resolve_coin_id(item)
+                    except ValueError:
+                        coin_id = item
+
+            normalized_coin_id = str(coin_id).strip().lower()
+            if self._is_valid_coin_id(normalized_coin_id):
+                coin_ids_by_input[item] = normalized_coin_id
+            else:
+                self._logger.warning("Пропуск невалидного coin_id для '%s': %s", item, coin_id)
+        return coin_ids_by_input
+
+    def _fetch_markets_payload_by_coin_ids(self, coin_ids: list[str], request_symbol: str) -> list[dict[str, object]]:
+        valid_coin_ids = sorted({coin_id for coin_id in coin_ids if self._is_valid_coin_id(coin_id)})
+        if not valid_coin_ids:
+            return []
+
+        payload: list[dict[str, object]] = []
+        for chunk in self._chunked(valid_coin_ids, self.MARKETS_BATCH_SIZE):
+            response = self._request(
+                endpoint="/coins/markets",
+                symbol=request_symbol,
+                params={
+                    COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
+                    COINGECKO_PARAM_IDS: ",".join(chunk),
+                    COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
+                    COINGECKO_PARAM_PER_PAGE: len(chunk),
+                    COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
+                    COINGECKO_PARAM_SPARKLINE: COINGECKO_SPARKLINE_FALSE,
+                },
+            )
+            chunk_payload = response.json()
+            if isinstance(chunk_payload, list):
+                payload.extend(chunk_payload)
+        return payload
 
     def _load_market_cap_cache(self) -> None:
         if self._cache_path is None or not self._cache_path.exists():
@@ -591,41 +655,16 @@ class CoinGeckoClient(MarketDataClient):
         if not requested:
             return {}
 
-        coin_ids_by_input: dict[str, str] = {}
-        for item in requested:
-            if "/" in item:
-                try:
-                    coin_ids_by_input[item] = self._resolve_coin_id(item)
-                except ValueError:
-                    coin_ids_by_input[item] = item
-                continue
+        coin_ids_by_input = self._resolve_coin_ids_by_input(requested)
+        if not coin_ids_by_input:
+            return {item: 0.0 for item in requested}
 
-            canonical_symbol = self._canonical_symbol_key(item)
-            known_coin_id = self._symbol_to_id.get(canonical_symbol)
-            if known_coin_id:
-                coin_ids_by_input[item] = known_coin_id
-                continue
-
-            try:
-                coin_ids_by_input[item] = self._resolve_coin_id(item)
-            except ValueError:
-                coin_ids_by_input[item] = item
-
-        response = self._request(
-            endpoint="/coins/markets",
-            symbol="market_cap_batch",
-            params={
-                COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
-                COINGECKO_PARAM_IDS: ",".join(sorted(set(coin_ids_by_input.values()))),
-                COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
-                COINGECKO_PARAM_PER_PAGE: len(coin_ids_by_input),
-                COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
-                COINGECKO_PARAM_SPARKLINE: COINGECKO_SPARKLINE_FALSE,
-            },
+        payload = self._fetch_markets_payload_by_coin_ids(
+            coin_ids=list(coin_ids_by_input.values()),
+            request_symbol="market_cap_batch",
         )
-        payload = response.json()
         market_caps_by_coin_id = {
-            str(item.get("id") or ""): float(item.get("market_cap") or 0.0)
+            str(item.get("id") or "").strip().lower(): float(item.get("market_cap") or 0.0)
             for item in payload
             if item.get("id")
         }
