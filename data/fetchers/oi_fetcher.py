@@ -20,6 +20,7 @@ from data.storage.parquet_storage import ParquetStorage
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
+from utils.formatters import format_datetime_human
 from utils.logger import get_logger
 
 
@@ -55,11 +56,13 @@ class OiFetcher:
         if last_timestamp is not None:
             next_start = max(start_time, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
 
-        watermark_display = last_timestamp.isoformat() if last_timestamp is not None else "None"
+        watermark_display = format_datetime_human(last_timestamp.to_pydatetime()) if last_timestamp is not None else "None"
+        next_start_display = format_datetime_human(next_start)
+        end_time_display = format_datetime_human(end_time)
         self._logger.info(
-            f"OI водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start.isoformat()}"
+            f"OI водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start_display}"
         )
-        self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start.isoformat()} -> {end_time.isoformat()}")
+        self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start_display} -> {end_time_display}")
         if next_start > end_time:
             self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OI", symbol)
             return 0
