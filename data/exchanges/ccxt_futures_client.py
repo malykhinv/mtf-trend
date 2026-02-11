@@ -106,12 +106,14 @@ class CcxtFuturesClient(ExchangeClient):
         symbol: str,
         endpoint: str,
         call: Callable[..., object],
+        args: tuple[object, ...] = (),
         **kwargs: object,
     ) -> object:
         try:
             return run_with_retry(
-                operation=operation,
-                call=call,
+                operation,
+                call,
+                *args,
                 attempts=self._retry_attempts,
                 backoff_seconds=self._retry_backoff_seconds,
                 retriable_exceptions=(Exception,),
@@ -131,12 +133,14 @@ class CcxtFuturesClient(ExchangeClient):
         operation: str,
         endpoint: str,
         call: Callable[..., object],
+        args: tuple[object, ...] = (),
         **kwargs: object,
     ) -> object:
         try:
             return run_with_retry(
-                operation=operation,
-                call=call,
+                operation,
+                call,
+                *args,
                 attempts=self._retry_attempts,
                 backoff_seconds=self._retry_backoff_seconds,
                 retriable_exceptions=(Exception,),
@@ -204,6 +208,7 @@ class CcxtFuturesClient(ExchangeClient):
                 symbol=symbol,
                 endpoint="fetch_ohlcv",
                 call=self._client.fetch_ohlcv,
+                args=(symbol,),
                 timeframe=timeframe,
                 since=since,
                 limit=DEFAULT_FETCH_BATCH_SIZE,
