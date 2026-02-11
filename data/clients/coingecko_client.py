@@ -425,12 +425,55 @@ class CoinGeckoClient(MarketDataClient):
 
         return min(candidates, key=score)
 
+    def _select_candidate_by_deterministic_and_market_rank(
+        self,
+        candidates: list[dict[str, str]],
+        normalized_symbol: str,
+    ) -> dict[str, str] | None:
+        if not candidates:
+            return None
+
+        candidate_ids = [candidate["id"] for candidate in candidates if candidate.get("id")]
+        if not candidate_ids:
+            return None
+
+        response = self._request(
+            endpoint="/coins/markets",
+            symbol=f"resolve_{normalized_symbol}",
+            params={
+                COINGECKO_VS_CURRENCY_KEY: COINGECKO_VS_CURRENCY_USD,
+                COINGECKO_PARAM_IDS: ",".join(candidate_ids),
+                COINGECKO_ORDER_KEY: COINGECKO_ORDER_MARKET_CAP_DESC,
+                COINGECKO_PARAM_PER_PAGE: len(candidate_ids),
+                COINGECKO_PARAM_PAGE: COINGECKO_DEFAULT_PAGE,
+                COINGECKO_PARAM_SPARKLINE: COINGECKO_SPARKLINE_FALSE,
+            },
+        )
+
+        metrics_by_id = {
+            str(item.get("id") or ""): item
+            for item in response.json()
+            if item.get("id")
+        }
+
+        def combined_score(candidate: dict[str, str]) -> tuple[int, float, int, str]:
+            deterministic_priority, id_len, coin_id = self._deterministic_candidate_score(candidate, normalized_symbol)
+            metrics = metrics_by_id.get(candidate["id"], {})
+            rank = metrics.get("market_cap_rank")
+            normalized_rank = float(rank) if isinstance(rank, (int, float)) and rank > 0 else float("inf")
+            return deterministic_priority, normalized_rank, id_len, coin_id
+
+        return min(candidates, key=combined_score)
+
     def _resolve_coin_id(self, symbol: str) -> str:
         normalized = self._normalize_symbol(symbol)
         canonical_symbol = self._canonical_symbol_key(symbol)
+
+        # Уровень 1: быстрый локальный lookup из персистентного symbol->coin_id кэша.
         if canonical_symbol in self._symbol_to_id:
             return self._symbol_to_id[canonical_symbol]
 
+        # Уровень 2: локальный поиск по заранее загруженному /coins/list индексу.
         self._load_coins_list_index(symbol)
         candidates = list(self._coins_by_symbol_index.get(normalized, []))
 
@@ -455,43 +498,13 @@ class CoinGeckoClient(MarketDataClient):
             raise ValueError(f"Не удалось определить CoinGecko ID для символа: {symbol}")
 
         if len(candidates) > 1:
-            if not resolved_by_strategy and (symbol.upper().endswith("/USDT") or symbol.upper().endswith("USDT")):
-                top_candidates = sorted(
-                    candidates,
-                    key=lambda candidate: self._deterministic_candidate_score(candidate, normalized),
-                )[: self.TICKER_CHECK_TOP_K]
-                usdt_candidates = [
-                    candidate
-                    for candidate in top_candidates
-                    if self._candidate_has_usdt_market(candidate["id"], normalized)
-                ]
-                if len(usdt_candidates) == 1:
-                    selected = usdt_candidates[0]
-                    resolved_by_strategy = True
-                    self._logger.info(
-                        "Символ КоинГекко '%s' сопоставлен по точному рынку %s/USDT: %s",
-                        symbol,
-                        normalized.upper(),
-                        selected["id"],
-                    )
-                elif len(usdt_candidates) > 1:
-                    selected = usdt_candidates[0]
-                    resolved_by_strategy = True
-                    self._logger.warning(
-                        "Для '%s' найдено несколько кандидатов КоинГекко по %s/USDT среди top-%s; используется детерминированный вариант: %s",
-                        symbol,
-                        normalized.upper(),
-                        self.TICKER_CHECK_TOP_K,
-                        selected["id"],
-                    )
-
             if not resolved_by_strategy:
-                by_metrics = self._select_candidate_by_market_metrics(candidates)
-                if by_metrics:
-                    selected = by_metrics
+                by_deterministic_and_rank = self._select_candidate_by_deterministic_and_market_rank(candidates, normalized)
+                if by_deterministic_and_rank:
+                    selected = by_deterministic_and_rank
                     resolved_by_strategy = True
                     self._logger.info(
-                        "Неоднозначный символ КоинГекко '%s' сопоставлен по рангу/ликвидности рынка: %s",
+                        "Неоднозначный символ КоинГекко '%s' сопоставлен детерминированно с учетом market-cap rank: %s",
                         symbol,
                         selected["id"],
                     )
