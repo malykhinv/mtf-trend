@@ -22,11 +22,23 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     fetch.add_argument("--days", type=int, default=DEFAULT_FETCH_DAYS)
     fetch.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
+    fetch.add_argument(
+        "--ignore-coingecko",
+        action="store_true",
+        default=None,
+        help="Не использовать CoinGecko при подборе символов",
+    )
 
     update = subparsers.add_parser("update-cache", help="Инкрементальное обновление кэша")
     update.add_argument("--top-n", type=int, default=DEFAULT_TOP_N)
     update.add_argument("--days", type=int, default=DEFAULT_UPDATE_DAYS)
     update.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
+    update.add_argument(
+        "--ignore-coingecko",
+        action="store_true",
+        default=None,
+        help="Не использовать CoinGecko при подборе символов",
+    )
 
     run_bt = subparsers.add_parser("run-backtest", help="Запуск бектеста по данным в кэше")
     run_bt.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")

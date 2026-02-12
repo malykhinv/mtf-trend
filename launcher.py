@@ -26,6 +26,24 @@ MODE_LABELS: dict[str, str] = {
 
 
 # region Приватные
+
+
+def _to_bool(value: Any, *, fallback: bool | None = False) -> bool | None:
+    if value is None:
+        return fallback
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Некорректное булево значение: {value}")
+
+
 def _force_single_thread_mode() -> None:
     single_thread_env = {
         "OMP_NUM_THREADS": "1",
@@ -46,6 +64,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-n", type=int, default=100, help="Количество топ монет для fetch/update")
     parser.add_argument("--min-volume-usd", type=float, default=None, help="Минимальный суточный объем в USD")
     parser.add_argument("--days", type=int, default=30, help="Число дней для fetch/update")
+    parser.add_argument(
+        "--ignore-coingecko",
+        action="store_true",
+        default=None,
+        help="Не использовать CoinGecko при подборе символов для fetch/update",
+    )
     parser.add_argument("--symbols", nargs="*", default=None, help="Список символов для backtest/check-quality")
     parser.add_argument("--input", default=None, help="Входной CSV для отчета")
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
@@ -60,6 +84,11 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         symbols=task.get("symbols", cli_args.symbols),
         input=task.get("input", cli_args.input),
         output=task.get("output", cli_args.output),
+        ignore_coingecko=(
+            _to_bool(task.get("ignore_coingecko"), fallback=cli_args.ignore_coingecko)
+            if "ignore_coingecko" in task
+            else cli_args.ignore_coingecko
+        ),
     )
 
 

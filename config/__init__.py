@@ -63,6 +63,18 @@ def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
     raise ValueError(f"Invalid {env_name}: {value}. Supported values: {supported}")
 
 
+def _parse_bool(value: str | None, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"Invalid boolean value: {value}")
+
+
 # endregion Приватные
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
@@ -93,6 +105,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             1,
             int(os.getenv("COINGECKO_VOLUME_BATCH_SIZE", str(DEFAULT_COINGECKO_VOLUME_BATCH_SIZE))),
         ),
+        ignore_coingecko=_parse_bool(os.getenv("IGNORE_COINGECKO"), default=False),
     )
 
     strategy_levels_timeframe = _parse_timeframe(

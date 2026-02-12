@@ -132,6 +132,7 @@ def _resolve_symbols(
         min_volume_usd: float,
         logger: Logger,
         coingecko_volume_batch_size: int,
+        ignore_coingecko: bool,
 ) -> list[str]:
     futures_symbols_raw = exchange_client.get_futures_symbols()
     futures_symbol_map = {
@@ -139,6 +140,15 @@ def _resolve_symbols(
         for symbol in futures_symbols_raw
     }
     exchange_symbols_normalized = sorted(futures_symbol_map)
+
+    if ignore_coingecko:
+        selected_symbols = exchange_symbols_normalized[:top_n]
+        logger.info(
+            "подбор-символов: CoinGecko отключен, всего на бирже=%s → выбрано top_n=%s (без фильтра ликвидности)",
+            len(exchange_symbols_normalized),
+            len(selected_symbols),
+        )
+        return [futures_symbol_map[symbol] for symbol in selected_symbols]
 
     market_caps_by_symbol = market_client.get_market_caps(exchange_symbols_normalized)
     ranked_symbols = sorted(
@@ -255,6 +265,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
+    ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     symbols = _resolve_symbols(
         exchange_client,
         market_client,
@@ -262,6 +273,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         min_volume_usd=min_volume_usd,
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
+        ignore_coingecko=ignore_coingecko,
     )
     if not symbols:
         logger.info("загрузка-данных: не найдено символов для загрузки")
@@ -280,6 +292,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
+    ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     symbols = _resolve_symbols(
         exchange_client,
         market_client,
@@ -287,6 +300,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         min_volume_usd=min_volume_usd,
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
+        ignore_coingecko=ignore_coingecko,
     )
     if not symbols:
         logger.info("обновление-кэша: не найдено символов для обновления")
