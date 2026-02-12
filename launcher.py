@@ -61,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env", default=".env", help="Путь к env-файлу")
     parser.add_argument("--mode", choices=tuple(MODE_LABELS.keys()), default=None, help="Одиночный режим запуска")
     parser.add_argument("--config", default=None, help="JSON-файл с пачкой задач")
-    parser.add_argument("--top-n", type=int, default=100, help="Количество топ монет для fetch/update")
+    parser.add_argument("--top-n", type=int, default=None, help="Количество топ монет для fetch/update")
     parser.add_argument("--min-volume-usd", type=float, default=None, help="Минимальный суточный объем в USD")
     parser.add_argument("--days", type=int, default=30, help="Число дней для fetch/update")
     parser.add_argument(
@@ -78,7 +78,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argparse.Namespace:
     return argparse.Namespace(
-        top_n=int(task.get("top_n", cli_args.top_n)),
+        top_n=(
+            int(task["top_n"])
+            if "top_n" in task and task.get("top_n") is not None
+            else cli_args.top_n
+        ),
         min_volume_usd=task.get("min_volume_usd", cli_args.min_volume_usd),
         days=int(task.get("days", cli_args.days)),
         symbols=task.get("symbols", cli_args.symbols),
