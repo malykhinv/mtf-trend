@@ -42,6 +42,7 @@ from domain.abstract.market_data_client import MarketDataClient
 class CoinGeckoClient(MarketDataClient):
     """Класс."""
     BASE_URL = COINGECKO_BASE_URL
+    CACHE_SCHEMA_VERSION = 2
     TICKER_CHECK_TOP_K = 5
     EXCHANGE_SIZE_PREFIXES = ("1000", "10000", "100000", "1000000")
     MARKETS_BATCH_SIZE = 200
@@ -162,14 +163,31 @@ class CoinGeckoClient(MarketDataClient):
 
         try:
             raw_payload = pd.read_parquet(self._cache_path)
-            required_columns = {"symbol"}
-            if not required_columns.issubset(raw_payload.columns):
-                raise ValueError(f"Кэш должен содержать колонки: {required_columns}")
+            if "symbol" not in raw_payload.columns:
+                raise ValueError("Кэш должен содержать колонку 'symbol'")
 
             now = datetime.now(tz=timezone.utc)
             loaded_cache: dict[str, tuple[float, datetime]] = {}
+            loaded_symbol_to_id: dict[str, str] = {}
             has_market_cap = {"market_cap", "expires_at"}.issubset(raw_payload.columns)
             has_coin_id = "coin_id" in raw_payload.columns
+            has_schema_version = "schema_version" in raw_payload.columns
+
+            if has_schema_version:
+                schema_versions: set[int] = set()
+                for version in raw_payload["schema_version"].dropna().unique().tolist():
+                    try:
+                        schema_versions.add(int(version))
+                    except (TypeError, ValueError):
+                        continue
+                if schema_versions and schema_versions != {self.CACHE_SCHEMA_VERSION}:
+                    self._logger.warning(
+                        "Неожиданная версия схемы кэша %s в %s. Ожидаемая версия: %s",
+                        sorted(schema_versions),
+                        self._cache_path,
+                        self.CACHE_SCHEMA_VERSION,
+                    )
+
             load_columns = ["symbol"]
             if has_market_cap:
                 load_columns.extend(["market_cap", "expires_at"])
@@ -183,6 +201,11 @@ class CoinGeckoClient(MarketDataClient):
                 if not canonical_symbol:
                     continue
 
+                if has_coin_id:
+                    coin_id = str(row.coin_id or "").strip().lower()
+                    if self._is_valid_coin_id(coin_id):
+                        loaded_symbol_to_id[canonical_symbol] = coin_id
+
                 if has_market_cap:
                     expires_at_dt = pd.Timestamp(row.expires_at)
                     if not pd.isna(expires_at_dt):
@@ -195,12 +218,9 @@ class CoinGeckoClient(MarketDataClient):
                         market_cap = row.market_cap
                         if expires_at > now and pd.notna(market_cap):
                             loaded_cache[canonical_symbol] = (float(market_cap), expires_at)
-                if has_coin_id:
-                    coin_id = str(row.coin_id or "")
-                    if coin_id:
-                        self._symbol_to_id[canonical_symbol] = coin_id
 
             self._market_cap_cache = loaded_cache
+            self._symbol_to_id.update(loaded_symbol_to_id)
         except (OSError, ValueError, TypeError) as exc:
             self._logger.warning(LOG_MSG_LOAD_ERROR, self._cache_path, exc)
             self._market_cap_cache = {}
@@ -212,6 +232,7 @@ class CoinGeckoClient(MarketDataClient):
         records_by_symbol: dict[str, dict[str, object]] = {}
         for symbol, coin_id in self._symbol_to_id.items():
             records_by_symbol[symbol] = {
+                "schema_version": self.CACHE_SCHEMA_VERSION,
                 "symbol": symbol,
                 "market_cap": None,
                 "expires_at": None,
@@ -222,18 +243,23 @@ class CoinGeckoClient(MarketDataClient):
             record = records_by_symbol.setdefault(
                 symbol,
                 {
+                    "schema_version": self.CACHE_SCHEMA_VERSION,
                     "symbol": symbol,
                     "market_cap": None,
                     "expires_at": None,
                     "coin_id": self._symbol_to_id.get(symbol, ""),
                 },
             )
+            record["schema_version"] = self.CACHE_SCHEMA_VERSION
             record["market_cap"] = market_cap
             record["expires_at"] = pd.Timestamp(expires_at).tz_convert(timezone.utc)
             record["coin_id"] = self._symbol_to_id.get(symbol, "")
 
         records = list(records_by_symbol.values())
-        cache_frame = pd.DataFrame.from_records(records, columns=["symbol", "market_cap", "expires_at", "coin_id"])
+        cache_frame = pd.DataFrame.from_records(
+            records,
+            columns=["schema_version", "symbol", "market_cap", "expires_at", "coin_id"],
+        )
         self._cache_path.parent.mkdir(parents=True, exist_ok=True)
         temp_file = tempfile.NamedTemporaryFile(
             mode="wb",
