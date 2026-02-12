@@ -8,7 +8,7 @@ import json
 import shutil
 from collections import Counter
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
 from logging import Logger
 from pathlib import Path
 from typing import Callable
@@ -255,8 +255,47 @@ def _resolve_symbols(
     return [futures_symbol_map[symbol] for symbol in liquid_symbols]
 
 
-def _fetch_period(config: AppConfig, days: int) -> tuple[datetime, datetime]:
-    local_end = datetime.now(tz=config.fetch.tzinfo)
+def _parse_iso_datetime(
+        value: str,
+        *,
+        argument_name: str,
+        target_timezone: tzinfo,
+) -> datetime:
+    normalized_value = value.strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized_value)
+    except ValueError as error:
+        raise ValueError(
+            f"Некорректный формат {argument_name}: {value}. "
+            f"Ожидается ISO дата/дата-время, например 2025-01-31 или 2025-01-31T23:59:59+03:00"
+        ) from error
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=target_timezone)
+    return parsed.astimezone(target_timezone)
+
+
+def _resolve_fetch_anchor_datetime(config: AppConfig, end_datetime_raw: datetime | str | None) -> datetime:
+    if isinstance(end_datetime_raw, datetime):
+        if end_datetime_raw.tzinfo is None:
+            return end_datetime_raw.replace(tzinfo=config.fetch.tzinfo)
+        return end_datetime_raw.astimezone(config.fetch.tzinfo)
+
+    if isinstance(end_datetime_raw, str):
+        return _parse_iso_datetime(
+            end_datetime_raw,
+            argument_name="--end-datetime",
+            target_timezone=config.fetch.tzinfo,
+        )
+
+    if config.fetch.anchor_datetime is not None:
+        return config.fetch.anchor_datetime
+
+    return datetime.now(tz=config.fetch.tzinfo)
+
+
+def _fetch_period(config: AppConfig, days: int, end_datetime_raw: datetime | str | None = None) -> tuple[datetime, datetime]:
+    local_end = _resolve_fetch_anchor_datetime(config, end_datetime_raw)
     local_start = local_end - timedelta(days=days)
     return datetime_to_utc(local_start), datetime_to_utc(local_end)
 
@@ -330,7 +369,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("загрузка-данных: не найдено символов для загрузки")
         return 0
 
-    start_time, end_time = _fetch_period(config, args.days)
+    start_time, end_time = _fetch_period(config, args.days, getattr(args, "end_datetime", None))
     result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time,
                                end_time=end_time)
     _log_fetch_summary("fetch-data", logger, len(symbols), result.failed_symbols_count)
@@ -368,7 +407,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("обновление-кэша: не найдено символов для обновления")
         return 0
 
-    start_time, end_time = _fetch_period(config, args.days)
+    start_time, end_time = _fetch_period(config, args.days, getattr(args, "end_datetime", None))
     result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time,
                                end_time=end_time)
     _log_fetch_summary("update-cache", logger, len(symbols), result.failed_symbols_count)

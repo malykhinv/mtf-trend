@@ -22,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--top-n", type=int, default=None)
     fetch.add_argument("--days", type=int, default=DEFAULT_FETCH_DAYS)
     fetch.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
+    fetch.add_argument("--end-datetime", default=None, help="Якорная дата/время окончания периода в ISO формате")
     fetch.add_argument(
         "--ignore-coingecko",
         action="store_true",
@@ -33,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--top-n", type=int, default=None)
     update.add_argument("--days", type=int, default=DEFAULT_UPDATE_DAYS)
     update.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
+    update.add_argument("--end-datetime", default=None, help="Якорная дата/время окончания периода в ISO формате")
     update.add_argument(
         "--ignore-coingecko",
         action="store_true",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from pathlib import Path
 
 from config.app_config import AppConfig
@@ -27,6 +28,7 @@ from constants import (
     DEFAULT_COINGECKO_VOLUME_BATCH_SIZE,
 )
 from domain.enums.timeframe import Timeframe
+from utils.formatters import resolve_timezone
 
 __all__ = [
     "AppConfig",
@@ -75,6 +77,29 @@ def _parse_bool(value: str | None, *, default: bool = False) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
+def _parse_anchor_datetime(value: str | None, *, timezone_name: str, env_name: str) -> datetime | None:
+    if value is None:
+        return None
+
+    raw_value = value.strip()
+    if not raw_value:
+        return None
+
+    normalized_value = raw_value.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized_value)
+    except ValueError as error:
+        raise ValueError(
+            f"Invalid {env_name}: {value}. Expected ISO date/datetime, for example "
+            f"2025-01-31 or 2025-01-31T23:59:59+03:00"
+        ) from error
+
+    target_tz = resolve_timezone(timezone_name)
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=target_tz)
+    return parsed.astimezone(target_tz)
+
+
 # endregion Приватные
 
 def load_config(env_path: str | Path = ".env") -> AppConfig:
@@ -106,6 +131,11 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             int(os.getenv("COINGECKO_VOLUME_BATCH_SIZE", str(DEFAULT_COINGECKO_VOLUME_BATCH_SIZE))),
         ),
         ignore_coingecko=_parse_bool(os.getenv("IGNORE_COINGECKO"), default=False),
+        anchor_datetime=_parse_anchor_datetime(
+            os.getenv("FETCH_ANCHOR_DATETIME"),
+            timezone_name=fetch_timezone,
+            env_name="FETCH_ANCHOR_DATETIME",
+        ),
     )
 
     strategy_levels_timeframe = _parse_timeframe(
