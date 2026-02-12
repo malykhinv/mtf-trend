@@ -307,10 +307,11 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
+    top_n = args.top_n if args.top_n is not None else all_futures_count
     symbols = _resolve_symbols(
         exchange_client,
         market_client,
-        top_n=all_futures_count,
+        top_n=top_n,
         min_volume_usd=min_volume_usd,
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
@@ -344,10 +345,11 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
+    top_n = args.top_n if args.top_n is not None else all_futures_count
     symbols = _resolve_symbols(
         exchange_client,
         market_client,
-        top_n=all_futures_count,
+        top_n=top_n,
         min_volume_usd=min_volume_usd,
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
