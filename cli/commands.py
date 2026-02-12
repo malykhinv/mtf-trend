@@ -157,34 +157,37 @@ def _resolve_symbols(
             normalize_symbol(raw_symbol): volume
             for raw_symbol, volume in avg_daily_volumes.items()
         }
-        ranked_symbols = sorted(
-            avg_daily_volumes_normalized,
+        symbols_with_volume = [
+            symbol
+            for symbol in exchange_symbols_normalized
+            if symbol in avg_daily_volumes_normalized
+        ]
+
+        liquid_symbols = [
+            symbol
+            for symbol in symbols_with_volume
+            if avg_daily_volumes_normalized.get(symbol, 0.0) >= min_volume_usd
+        ]
+        ranked_liquid_symbols = sorted(
+            liquid_symbols,
             key=lambda symbol: (avg_daily_volumes_normalized[symbol], symbol),
             reverse=True,
         )
-        ranked_top_symbols = ranked_symbols[:top_n]
+        ranked_top_symbols = ranked_liquid_symbols[:top_n]
 
-        liquid_symbols: list[str] = []
-        for symbol in ranked_top_symbols:
-            avg_daily_volume_usd = avg_daily_volumes_normalized.get(symbol, 0.0)
-            if avg_daily_volume_usd >= min_volume_usd:
-                liquid_symbols.append(symbol)
-
-        excluded_by_liquidity = len(ranked_top_symbols) - len(liquid_symbols)
         logger.info(
-            "подбор-символов: CoinGecko отключен, всего на бирже=%s → доступно в кэше=%s → после ранжирования top_n=%s → после фильтра ликвидности=%s",
+            "подбор-символов: CoinGecko отключен, всего на бирже=%s → прошли расчёт объёма=%s → после фильтра ликвидности=%s → после top_n=%s",
             len(exchange_symbols_normalized),
-            len(avg_daily_volumes_normalized),
-            len(ranked_top_symbols),
+            len(symbols_with_volume),
             len(liquid_symbols),
+            len(ranked_top_symbols),
         )
         logger.info(
-            "подбор-символов: фильтр ликвидности по среднедневному объёму (мин_avg_daily_volume_usd=%.2f) исключено=%s итоговых_символов=%s",
+            "подбор-символов: фильтр ликвидности по среднедневному объёму (мин_avg_daily_volume_usd=%.2f) исключено=%s",
             min_volume_usd,
-            excluded_by_liquidity,
-            len(liquid_symbols),
+            len(symbols_with_volume) - len(liquid_symbols),
         )
-        return [futures_symbol_map[symbol] for symbol in liquid_symbols]
+        return [futures_symbol_map[symbol] for symbol in ranked_top_symbols]
 
     market_caps_by_symbol = market_client.get_market_caps(exchange_symbols_normalized)
     ranked_symbols = sorted(
