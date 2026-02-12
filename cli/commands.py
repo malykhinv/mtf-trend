@@ -38,6 +38,7 @@ from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
+from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
@@ -133,6 +134,8 @@ def _resolve_symbols(
         logger: Logger,
         coingecko_volume_batch_size: int,
         ignore_coingecko: bool,
+        cache_dir: Path,
+        liquidity_timeframe: Timeframe,
         futures_symbols_raw: list[str] | None = None,
 ) -> list[str]:
     futures_symbols_raw = futures_symbols_raw or exchange_client.get_futures_symbols()
@@ -143,13 +146,45 @@ def _resolve_symbols(
     exchange_symbols_normalized = sorted(futures_symbol_map)
 
     if ignore_coingecko:
-        selected_symbols = exchange_symbols_normalized[:top_n]
-        logger.info(
-            "подбор-символов: CoinGecko отключен, всего на бирже=%s → выбрано top_n=%s (без фильтра ликвидности)",
-            len(exchange_symbols_normalized),
-            len(selected_symbols),
+        ranker = DailyVolumeRanker(cache_dir=cache_dir)
+        symbols_raw = [futures_symbol_map[symbol] for symbol in exchange_symbols_normalized]
+        avg_daily_volumes = ranker.calculate_avg_daily_volume_usd(
+            symbols=symbols_raw,
+            timeframe=liquidity_timeframe,
+            logger=logger,
         )
-        return [futures_symbol_map[symbol] for symbol in selected_symbols]
+        avg_daily_volumes_normalized = {
+            normalize_symbol(raw_symbol): volume
+            for raw_symbol, volume in avg_daily_volumes.items()
+        }
+        ranked_symbols = sorted(
+            avg_daily_volumes_normalized,
+            key=lambda symbol: (avg_daily_volumes_normalized[symbol], symbol),
+            reverse=True,
+        )
+        ranked_top_symbols = ranked_symbols[:top_n]
+
+        liquid_symbols: list[str] = []
+        for symbol in ranked_top_symbols:
+            avg_daily_volume_usd = avg_daily_volumes_normalized.get(symbol, 0.0)
+            if avg_daily_volume_usd >= min_volume_usd:
+                liquid_symbols.append(symbol)
+
+        excluded_by_liquidity = len(ranked_top_symbols) - len(liquid_symbols)
+        logger.info(
+            "подбор-символов: CoinGecko отключен, всего на бирже=%s → доступно в кэше=%s → после ранжирования top_n=%s → после фильтра ликвидности=%s",
+            len(exchange_symbols_normalized),
+            len(avg_daily_volumes_normalized),
+            len(ranked_top_symbols),
+            len(liquid_symbols),
+        )
+        logger.info(
+            "подбор-символов: фильтр ликвидности по среднедневному объёму (мин_avg_daily_volume_usd=%.2f) исключено=%s итоговых_символов=%s",
+            min_volume_usd,
+            excluded_by_liquidity,
+            len(liquid_symbols),
+        )
+        return [futures_symbol_map[symbol] for symbol in liquid_symbols]
 
     market_caps_by_symbol = market_client.get_market_caps(exchange_symbols_normalized)
     ranked_symbols = sorted(
@@ -277,6 +312,8 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
         ignore_coingecko=ignore_coingecko,
+        cache_dir=config.backtest.cache_dir,
+        liquidity_timeframe=config.fetch.timeframe,
         futures_symbols_raw=futures_symbols,
     )
     logger.info(
@@ -312,6 +349,8 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
         ignore_coingecko=ignore_coingecko,
+        cache_dir=config.backtest.cache_dir,
+        liquidity_timeframe=config.fetch.timeframe,
         futures_symbols_raw=futures_symbols,
     )
     logger.info(
