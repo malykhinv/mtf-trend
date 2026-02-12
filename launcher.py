@@ -15,6 +15,7 @@ MODE_UPDATE_CACHE = "update-cache"
 MODE_BACKTEST = "analyze-cache"
 MODE_REPORT = "make-report"
 MODE_QUALITY = "check-quality"
+MODE_CLEAR_CACHE = "clear-cache"
 
 MODE_LABELS: dict[str, str] = {
     MODE_FETCH_CACHE: "Сбор кэша",
@@ -22,6 +23,7 @@ MODE_LABELS: dict[str, str] = {
     MODE_BACKTEST: "Анализ кэша стратегией",
     MODE_REPORT: "Построение отчета",
     MODE_QUALITY: "Проверка качества кэша",
+    MODE_CLEAR_CACHE: "Очистка кэша",
 }
 
 
@@ -103,6 +105,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_BACKTEST: commands.run_backtest,
         MODE_REPORT: commands.make_report,
         MODE_QUALITY: commands.check_quality,
+        MODE_CLEAR_CACHE: commands.clear_cache,
     }
     return handlers[mode](config, task_args)
 

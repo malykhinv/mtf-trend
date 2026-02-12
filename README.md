@@ -180,6 +180,7 @@ python launcher.py --mode update-cache --top-n 100 --days 7 --ignore-coingecko
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
+python launcher.py --mode clear-cache
 ```
 
 ### 3) Запуск цепочки задач через JSON-конфиг
@@ -215,6 +216,7 @@ python main.py update-cache --top-n 100 --days 7 --ignore-coingecko
 python main.py run-backtest
 python main.py make-report
 python main.py check-quality
+python main.py clear-cache
 ```
 
 ## Параметры breakout-стратегии

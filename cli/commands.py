@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import shutil
 from collections import Counter
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -692,6 +693,33 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    del args
+    logger = get_logger("clear-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+
+    cache_dir = config.backtest.cache_dir
+    cache_dir_str = str(cache_dir).strip()
+    if not cache_dir_str:
+        logger.error("очистка-кэша: путь к директории кэша пустой, удаление отменено")
+        return 1
+
+    resolved_cache_dir = cache_dir.expanduser().resolve()
+    home_dir = Path.home().resolve()
+    if resolved_cache_dir == Path(resolved_cache_dir.anchor):
+        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на корень ФС, удаление отменено")
+        return 1
+
+    if resolved_cache_dir == home_dir:
+        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на домашнюю директорию, удаление отменено")
+        return 1
+
+    logger.info(f"очистка-кэша: удаление содержимого {resolved_cache_dir}")
+    shutil.rmtree(resolved_cache_dir, ignore_errors=True)
+    resolved_cache_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"очистка-кэша: директория пересоздана {resolved_cache_dir}")
+    return 0
+
+
 # endregion Приватные
 
 # Публичные точки входа
@@ -719,3 +747,8 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
     """Проверяет качество и целостность данных."""
     return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
+
+
+def clear_cache(config: AppConfig, args: argparse.Namespace) -> int:
+    """Очищает директорию локального кэша и пересоздаёт её."""
+    return _run_with_logging("clear-cache", config, lambda: _clear_cache_inner(config, args))

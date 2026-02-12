@@ -67,6 +67,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    subparsers.add_parser("clear-cache", help="Полная очистка директории кэша")
+
     return parser
 
 
@@ -78,5 +80,6 @@ def resolve_handler(command_name: str) -> Handler:
         "run-backtest": commands.run_backtest,
         "make-report": commands.make_report,
         "check-quality": commands.check_quality,
+        "clear-cache": commands.clear_cache,
     }
     return handlers[command_name]
