@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import tzinfo
+from datetime import datetime, tzinfo
 
 from constants import (
     DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS,
@@ -27,6 +27,7 @@ class FetchConfig:
     coingecko_min_request_interval_seconds: float = DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS
     coingecko_volume_batch_size: int = DEFAULT_COINGECKO_VOLUME_BATCH_SIZE
     ignore_coingecko: bool = False
+    anchor_datetime: datetime | None = None
 
     @property
     def tzinfo(self) -> tzinfo:

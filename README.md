@@ -207,6 +207,26 @@ python launcher.py --mode clear-cache
 python launcher.py --config run_config.json
 ```
 
+
+### Фиксация конца периода загрузки (повторяемые прогоны)
+
+Можно зафиксировать «текущий момент» для `fetch-data` и `update-cache`, чтобы получать повторяемые выборки:
+
+```env
+FETCH_ANCHOR_DATETIME=2025-01-31T23:59:59+03:00
+```
+
+Тогда параметр `--days` будет отсчитываться назад именно от `FETCH_ANCHOR_DATETIME`, а не от реального `now`.
+
+Дополнительно можно переопределить это значение через CLI (приоритет выше env):
+
+```bash
+python main.py fetch-data --top-n 100 --days 30 --end-datetime 2025-01-31T23:59:59+03:00
+python main.py update-cache --top-n 100 --days 7 --end-datetime 2025-01-31T23:59:59+03:00
+```
+
+Поддерживается ISO-формат даты/времени (`YYYY-MM-DD` или `YYYY-MM-DDTHH:MM:SS±HH:MM`).
+
 ## Базовые CLI-команды (старый способ)
 
 ```bash
