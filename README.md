@@ -31,6 +31,7 @@ BINANCE_SECRET_KEY=...
 COINGECKO_API_KEY=...
 COINGECKO_MIN_REQUEST_INTERVAL_SECONDS=2.1
 COINGECKO_VOLUME_BATCH_SIZE=40
+IGNORE_COINGECKO=false
 LOG_LEVEL=INFO
 CACHE_DIR=./cache
 TIMEZONE=Europe/Belgrade
@@ -65,6 +66,8 @@ TIMEZONE=Europe/Belgrade
 
 ```bash
 --mode fetch-cache --top-n 100 --days 30
+# или без CoinGecko:
+--mode fetch-cache --top-n 100 --days 30 --ignore-coingecko
 ```
 
 Что это значит простыми словами:
@@ -170,7 +173,10 @@ python launcher.py
 
 ```bash
 python launcher.py --mode fetch-cache --top-n 100 --days 30
+# или без CoinGecko:
+python launcher.py --mode fetch-cache --top-n 100 --days 30 --ignore-coingecko
 python launcher.py --mode update-cache --top-n 100 --days 7
+python launcher.py --mode update-cache --top-n 100 --days 7 --ignore-coingecko
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
@@ -185,8 +191,8 @@ python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./r
   "env_path": ".env",
   "continue_on_error": false,
   "tasks": [
-    { "mode": "fetch-cache", "top_n": 100, "days": 30 },
-    { "mode": "update-cache", "top_n": 100, "days": 7 },
+    { "mode": "fetch-cache", "top_n": 100, "days": 30, "ignore_coingecko": true },
+    { "mode": "update-cache", "top_n": 100, "days": 7, "ignore_coingecko": false },
     { "mode": "analyze-cache", "symbols": ["BTC/USDT", "ETH/USDT"] },
     { "mode": "make-report", "output": "./results/report.json" },
     { "mode": "check-quality", "output": "./results/quality_report.json" }
@@ -204,6 +210,8 @@ python launcher.py --config run_config.json
 
 ```bash
 python main.py fetch-data --top-n 100 --days 30
+python main.py fetch-data --top-n 100 --days 30 --ignore-coingecko
+python main.py update-cache --top-n 100 --days 7 --ignore-coingecko
 python main.py run-backtest
 python main.py make-report
 python main.py check-quality
