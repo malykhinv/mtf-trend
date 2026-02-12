@@ -133,8 +133,9 @@ def _resolve_symbols(
         logger: Logger,
         coingecko_volume_batch_size: int,
         ignore_coingecko: bool,
+        futures_symbols_raw: list[str] | None = None,
 ) -> list[str]:
-    futures_symbols_raw = exchange_client.get_futures_symbols()
+    futures_symbols_raw = futures_symbols_raw or exchange_client.get_futures_symbols()
     futures_symbol_map = {
         normalize_symbol(symbol): symbol
         for symbol in futures_symbols_raw
@@ -264,16 +265,24 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
+    futures_symbols = exchange_client.get_futures_symbols()
+    all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     symbols = _resolve_symbols(
         exchange_client,
         market_client,
-        top_n=args.top_n,
+        top_n=all_futures_count,
         min_volume_usd=min_volume_usd,
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
         ignore_coingecko=ignore_coingecko,
+        futures_symbols_raw=futures_symbols,
+    )
+    logger.info(
+        "загрузка-данных: найдено фьючерсов=%s отправлено в fetch_all=%s",
+        all_futures_count,
+        len(symbols),
     )
     if not symbols:
         logger.info("загрузка-данных: не найдено символов для загрузки")
@@ -291,16 +300,24 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
+    futures_symbols = exchange_client.get_futures_symbols()
+    all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     symbols = _resolve_symbols(
         exchange_client,
         market_client,
-        top_n=args.top_n,
+        top_n=all_futures_count,
         min_volume_usd=min_volume_usd,
         logger=logger,
         coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
         ignore_coingecko=ignore_coingecko,
+        futures_symbols_raw=futures_symbols,
+    )
+    logger.info(
+        "обновление-кэша: найдено фьючерсов=%s отправлено в fetch_all=%s",
+        all_futures_count,
+        len(symbols),
     )
     if not symbols:
         logger.info("обновление-кэша: не найдено символов для обновления")
