@@ -26,7 +26,7 @@ class FetchConfig:
     min_volume_usd: float = DEFAULT_MIN_VOLUME_USD
     coingecko_min_request_interval_seconds: float = DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS
     coingecko_volume_batch_size: int = DEFAULT_COINGECKO_VOLUME_BATCH_SIZE
-    ignore_coingecko: bool = False
+    ignore_coingecko: bool = True
     anchor_datetime: datetime | None = None
 
     def __post_init__(self) -> None:
