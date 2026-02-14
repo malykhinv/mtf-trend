@@ -506,12 +506,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
+    symbols_total = len(symbols)
+    symbols_missing_levels_tf = 0
+    symbols_missing_entry_tf = 0
+    symbols_used = 0
     for symbol in symbols:
         frames_by_tf = preparer.load_symbol_data_multi(symbol, [levels_timeframe, entry_timeframe])
         levels_frame = frames_by_tf.get(levels_timeframe, pd.DataFrame())
         entry_frame = frames_by_tf.get(entry_timeframe, pd.DataFrame())
+        if levels_frame.empty:
+            symbols_missing_levels_tf += 1
+        if entry_frame.empty:
+            symbols_missing_entry_tf += 1
         if levels_frame.empty or entry_frame.empty:
             continue
+        symbols_used += 1
         symbol_frames[symbol] = SymbolMtfFrames(
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
@@ -529,6 +538,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         simulation_timezone=config.simulation.timezone,
     )
     runner = BacktestRunner(config.backtest.results_dir, config.backtest.results_file_name)
+    symbols_used_ratio = symbols_used / symbols_total if symbols_total else 0.0
+    logger.info(
+        "запуск-бэктеста: сводка по символам всего=%s использовано=%s без_данных_levels_tf=%s без_данных_entry_tf=%s",
+        symbols_total,
+        symbols_used,
+        symbols_missing_levels_tf,
+        symbols_missing_entry_tf,
+    )
+    if symbols_total and symbols_used_ratio < 0.2:
+        logger.warning(
+            "запуск-бэктеста: используется только %.1f%% символов (%s из %s); результат бэктеста может быть нерепрезентативным",
+            symbols_used_ratio * 100,
+            symbols_used,
+            symbols_total,
+        )
     results = runner.run(
         strategy,
         symbol_frames,
