@@ -370,10 +370,20 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_time, end_time = _fetch_period(config, args.days, getattr(args, "end_datetime", None))
-    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time,
-                               end_time=end_time)
-    _log_fetch_summary("fetch-data", logger, len(symbols), result.failed_symbols_count)
-    exit_code = _fetch_exit_code(result.failed_symbols_count)
+    failed_symbols: set[str] = set()
+    for timeframe in config.fetch.timeframes:
+        logger.info("загрузка-данных: сбор кэша для TF=%s", timeframe.value)
+        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_time=start_time, end_time=end_time)
+        _log_fetch_summary(f"fetch-data[{timeframe.value}]", logger, len(symbols), result.failed_symbols_count)
+        failed_symbols.update(
+            symbol
+            for symbol in symbols
+            if (symbol in result.ohlcv and not result.ohlcv[symbol].success)
+            or (symbol in result.open_interest and not result.open_interest[symbol].success)
+            or isinstance(result.market_caps.market_caps.get(symbol), str)
+        )
+
+    exit_code = _fetch_exit_code(len(failed_symbols))
     _log_loaded_coins(logger, len(symbols), "loaded")
     return exit_code
 
@@ -408,10 +418,20 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_time, end_time = _fetch_period(config, args.days, getattr(args, "end_datetime", None))
-    result = fetcher.fetch_all(symbols=symbols, timeframe=config.fetch.timeframe, start_time=start_time,
-                               end_time=end_time)
-    _log_fetch_summary("update-cache", logger, len(symbols), result.failed_symbols_count)
-    exit_code = _fetch_exit_code(result.failed_symbols_count)
+    failed_symbols: set[str] = set()
+    for timeframe in config.fetch.timeframes:
+        logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
+        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_time=start_time, end_time=end_time)
+        _log_fetch_summary(f"update-cache[{timeframe.value}]", logger, len(symbols), result.failed_symbols_count)
+        failed_symbols.update(
+            symbol
+            for symbol in symbols
+            if (symbol in result.ohlcv and not result.ohlcv[symbol].success)
+            or (symbol in result.open_interest and not result.open_interest[symbol].success)
+            or isinstance(result.market_caps.market_caps.get(symbol), str)
+        )
+
+    exit_code = _fetch_exit_code(len(failed_symbols))
     _log_loaded_coins(logger, len(symbols), "updated")
     return exit_code
 
