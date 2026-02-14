@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from itertools import product
 from pathlib import Path
 from time import perf_counter
@@ -204,6 +205,7 @@ class BacktestRunner:
         started_at = perf_counter()
 
         prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
+        rejection_diagnostics: Counter[str] = Counter()
         if isinstance(strategy, BreakoutStrategy):
             for symbol, mtf_frames in symbol_frames.items():
                 prepared_multi_tf = strategy.prepare_multi_tf_data(
@@ -247,6 +249,7 @@ class BacktestRunner:
                         params=cfg,
                         annotated=prepared_annotated,
                     )
+                    rejection_diagnostics.update(strategy.consume_last_generation_diagnostics())
                 else:
                     trades = cast("BaseStrategy[BreakoutParams]", strategy).generate_events_multi_tf(
                         mtf_frames=mtf_frames,
@@ -292,6 +295,16 @@ class BacktestRunner:
             total_trades,
             no_trades_share,
         )
+        if rejection_diagnostics:
+            diagnostic_parts = [
+                f"{name}={value}"
+                for name, value in rejection_diagnostics.most_common()
+                if value > BACKTEST_ZERO_COUNT
+            ]
+            logger.info(
+                "запуск-бэктеста: диагностика_отброшенных_входов %s",
+                ", ".join(diagnostic_parts),
+            )
 
         self._save_results(results)
         return results

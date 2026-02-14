@@ -63,6 +63,13 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         self._slippage = slippage
         self._strategy_timezone = strategy_timezone
         self._simulation_timezone = simulation_timezone
+        self._last_generation_diagnostics: dict[str, int] = {}
+
+    def consume_last_generation_diagnostics(self) -> dict[str, int]:
+        """Возвращает диагностику последней генерации сигналов и очищает буфер."""
+        diagnostics = self._last_generation_diagnostics.copy()
+        self._last_generation_diagnostics = {}
+        return diagnostics
 
     # region Приватные
 
@@ -441,7 +448,22 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 prepared_multi_tf=prepared_multi_tf,
                 lookback=params.lookback,
             )
+        diagnostics: dict[str, int] = {
+            "annotated_rows": int(len(annotated)),
+            "breakouts_found": 0,
+            "retests_found": 0,
+            "retest_rejected_by_volume": 0,
+            "retest_rejected_by_extra_filters": 0,
+            "breakout_retest_window_expired": 0,
+            "retest_confirmation_expired": 0,
+            "retest_confirmation_not_received": 0,
+            "signal_not_filled_end_of_data": 0,
+            "breakout_pending_end_of_data": 0,
+            "retest_pending_end_of_data": 0,
+            "trades_generated": 0,
+        }
         if annotated.empty:
+            self._last_generation_diagnostics = diagnostics
             return []
 
         trades: list[TradeResult] = []
@@ -486,6 +508,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     continue
 
                 if idx > pending_retest.confirmation_end_idx:
+                    diagnostics["retest_confirmation_expired"] += 1
                     pending_retest = None
                     continue
                 if self._is_confirmation(row=row, retest=pending_retest):
@@ -498,14 +521,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     pending_retest = None
                     continue
                 if idx == pending_retest.confirmation_end_idx:
+                    diagnostics["retest_confirmation_not_received"] += 1
                     pending_retest = None
                 continue
 
             if pending_breakout is not None:
                 breakout_idx = pending_breakout.breakout_idx
                 if idx - breakout_idx > retest_window_candles:
+                    diagnostics["breakout_retest_window_expired"] += 1
                     pending_breakout = None
                 elif self._is_retest_candle(row=row, breakout=pending_breakout, params=params):
+                    diagnostics["retests_found"] += 1
                     volume_check = self._evaluate_volume_regime(
                         annotated=annotated,
                         breakout=pending_breakout,
@@ -531,6 +557,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         )
                         pending_breakout = None
                         continue
+                    if not bool(volume_check["is_ok"]):
+                        diagnostics["retest_rejected_by_volume"] += 1
+                    else:
+                        diagnostics["retest_rejected_by_extra_filters"] += 1
 
             if pending_breakout is None:
                 level_high = float(row["level_high"])
@@ -538,6 +568,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 breakout_long = float(row["close"]) > level_high
                 breakout_short = float(row["close"]) < level_low
                 if breakout_long:
+                    diagnostics["breakouts_found"] += 1
                     pending_breakout = PendingBreakout(
                         breakout_idx=idx,
                         level=self._build_level(
@@ -556,6 +587,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         level_start_time=row["level_start_time"],
                     )
                 elif breakout_short:
+                    diagnostics["breakouts_found"] += 1
                     pending_breakout = PendingBreakout(
                         breakout_idx=idx,
                         level=self._build_level(
@@ -575,6 +607,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     )
 
         if pending_signal is not None:
+            diagnostics["signal_not_filled_end_of_data"] += 1
             BreakoutStrategy._logger.info(
                 "сигнал_не_исполнен_конец_данных символ=%s тф_уровней=%s тф_входа=%s время_входа=%s цена_входа=%.8f",
                 params.symbol,
@@ -584,11 +617,18 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 pending_signal.entry_price.value,
             )
 
+        if pending_breakout is not None:
+            diagnostics["breakout_pending_end_of_data"] += 1
+        if pending_retest is not None:
+            diagnostics["retest_pending_end_of_data"] += 1
+
         if active_sim is not None and active_sim.position is not None:
             final_row = annotated.iloc[-1]
             final_time = datetime_to_timezone(final_row["datetime"].to_pydatetime(), self._simulation_timezone)
             trades.append(active_sim.close_position(price=float(final_row["close"]), exit_time=final_time))
 
+        diagnostics["trades_generated"] = len(trades)
+        self._last_generation_diagnostics = diagnostics
         return trades
 
     # region Приватные
