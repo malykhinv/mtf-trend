@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from itertools import product
 from pathlib import Path
+from time import perf_counter
 
 import pandas as pd
 
@@ -35,6 +36,7 @@ from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 logger = logging.getLogger(__name__)
+PROGRESS_LOG_EVERY = 50
 
 
 class BacktestRunner:
@@ -195,8 +197,11 @@ class BacktestRunner:
         """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
         grid = self.build_parameter_grid()
+        total = len(grid)
+        symbols_count = len(symbol_frames)
+        started_at = perf_counter()
 
-        for params in grid:
+        for idx, params in enumerate(grid, start=1):
             all_trades: list[TradeResult] = []
             for symbol, mtf_frames in symbol_frames.items():
                 cfg = BreakoutParams(
@@ -225,6 +230,20 @@ class BacktestRunner:
 
             row = self._build_metrics_row(params, all_trades)
             rows.append(row)
+
+            if idx % PROGRESS_LOG_EVERY == 0 or idx == total:
+                elapsed_seconds = perf_counter() - started_at
+                progress = (idx / total) * 100 if total else BACKTEST_ZERO_COUNT
+                eta_seconds = (elapsed_seconds / idx) * (total - idx) if idx else BACKTEST_ZERO_COUNT
+                logger.info(
+                    "run-progress: grid=%s/%s (%.1f%%), symbols=%s, elapsed=%ss, eta=%ss",
+                    idx,
+                    total,
+                    progress,
+                    symbols_count,
+                    int(elapsed_seconds),
+                    int(eta_seconds),
+                )
 
         results = (
             pd.DataFrame(rows)
