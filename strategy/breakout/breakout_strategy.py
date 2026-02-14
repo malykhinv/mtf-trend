@@ -44,6 +44,18 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     """Стратегия пробоя/ретеста с подтверждением продолжения и проверкой режима объема."""
 
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
+    ANNOTATED_COLUMNS = [
+        "datetime",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "level_high",
+        "level_low",
+        "level_start_time",
+        "natr",
+    ]
     _logger = logging.getLogger(__name__)
 
     def __init__(self, *, commission_rate: float, slippage: float, strategy_timezone: str, simulation_timezone: str) -> None:
@@ -340,6 +352,58 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         prepared = prepared.dropna(subset=["open", "high", "low", "close", "volume"])
         return prepared
 
+    def prepare_multi_tf_data(
+        self,
+        *,
+        mtf_frames: SymbolMtfFrames,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Готовит базовые фреймы старшего/младшего ТФ для дальнейшего аннотирования."""
+        higher_prepared = self.prepare_data(mtf_frames.get_frame(levels_timeframe))
+        lower_prepared = self.prepare_data(mtf_frames.get_frame(entry_timeframe))
+        return (
+            higher_prepared[["datetime", "high", "low"]].copy(),
+            lower_prepared[["datetime", "open", "high", "low", "close", "volume"]].copy(),
+        )
+
+    def prepare_annotated_multi_tf_data(
+        self,
+        *,
+        prepared_multi_tf: tuple[pd.DataFrame, pd.DataFrame],
+        lookback: int,
+    ) -> pd.DataFrame:
+        """Строит аннотированный фрейм (уровни + NATR), готовый к проходу сигналов."""
+        higher_base, lower_base = prepared_multi_tf
+        if len(higher_base) < lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
+            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+        if len(lower_base) < STRATEGY_MIN_LOOKBACK_BUFFER:
+            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+
+        higher_levels = higher_base.copy()
+        higher_levels["level_high"] = higher_levels["high"].rolling(window=lookback).max().shift(1)
+        higher_levels["level_low"] = higher_levels["low"].rolling(window=lookback).min().shift(1)
+        higher_levels["level_start_time"] = higher_levels["datetime"]
+        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("datetime")
+        if higher_levels.empty:
+            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+
+        annotated = pd.merge_asof(
+            lower_base.sort_values("datetime").reset_index(drop=True),
+            higher_levels[["datetime", "level_high", "level_low", "level_start_time"]],
+            on="datetime",
+            direction="backward",
+        )
+        annotated = annotated.dropna(subset=["level_high", "level_low", "level_start_time"]).reset_index(drop=True)
+        if annotated.empty:
+            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+
+        annotated = self._append_natr(annotated=annotated, atr_window=lookback)
+        if annotated.empty:
+            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+
+        return annotated[self.ANNOTATED_COLUMNS].copy()
+
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         """Обратносовместимая обертка для вызовов с одним таймфреймом."""
         return self.generate_events_multi_tf(
@@ -357,42 +421,26 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         *,
         mtf_frames: SymbolMtfFrames,
         params: BreakoutParams,
+        annotated: pd.DataFrame | None = None,
     ) -> list[TradeResult]:
         """Генерирует сделки по уровням старшего ТФ и логике пробоя/ретеста младшего ТФ."""
         self.validate_config(params)
-        higher_prepared = self.prepare_data(mtf_frames.get_frame(params.levels_timeframe))
-        lower_prepared = self.prepare_data(mtf_frames.get_frame(params.entry_timeframe))
         self._logger.info(
             "генерация_сигналов_пробой символ=%s тф_уровней=%s тф_входа=%s",
             params.symbol,
             params.levels_timeframe.value,
             params.entry_timeframe.value,
         )
-        if len(higher_prepared) < params.lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
-            return []
-        if len(lower_prepared) < STRATEGY_MIN_LOOKBACK_BUFFER:
-            return []
-
-        higher_levels = higher_prepared[["datetime", "high", "low"]].copy()
-        higher_levels["level_high"] = higher_levels["high"].rolling(window=params.lookback).max().shift(1)
-        higher_levels["level_low"] = higher_levels["low"].rolling(window=params.lookback).min().shift(1)
-        higher_levels["level_start_time"] = higher_levels["datetime"]
-        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("datetime")
-        if higher_levels.empty:
-            return []
-
-        lower_prepared = lower_prepared.sort_values("datetime").reset_index(drop=True)
-        annotated = pd.merge_asof(
-            lower_prepared,
-            higher_levels[["datetime", "level_high", "level_low", "level_start_time"]],
-            on="datetime",
-            direction="backward",
-        )
-        annotated = annotated.dropna(subset=["level_high", "level_low", "level_start_time"]).reset_index(drop=True)
-        if annotated.empty:
-            return []
-
-        annotated = self._append_natr(annotated=annotated, atr_window=params.lookback)
+        if annotated is None:
+            prepared_multi_tf = self.prepare_multi_tf_data(
+                mtf_frames=mtf_frames,
+                levels_timeframe=params.levels_timeframe,
+                entry_timeframe=params.entry_timeframe,
+            )
+            annotated = self.prepare_annotated_multi_tf_data(
+                prepared_multi_tf=prepared_multi_tf,
+                lookback=params.lookback,
+            )
         if annotated.empty:
             return []
 
