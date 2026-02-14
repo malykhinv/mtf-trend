@@ -121,6 +121,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
     @staticmethod
     def _extra_retest_filters_ok(*, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+        metrics = BreakoutStrategy._extra_retest_filter_metrics(row=row, breakout=breakout, params=params)
+        return bool(metrics["is_ok"])
+
+    @staticmethod
+    def _extra_retest_filter_metrics(
+        *,
+        row: pd.Series,
+        breakout: PendingBreakout,
+        params: BreakoutParams,
+    ) -> dict[str, float | bool]:
         natr = max(float(row.get("natr", 0.0)), STRATEGY_NATR_EPSILON)
         if breakout.side == PositionSide.LONG:
             move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), STRATEGY_PRICE_EPSILON)
@@ -132,7 +142,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             depth = max(0.0, (float(row["high"]) - level_price) / max(level_price, STRATEGY_PRICE_EPSILON))
         min_move_threshold = params.min_move_atr * natr
         max_depth_threshold = params.max_retest_depth * natr
-        return move >= min_move_threshold and depth <= max_depth_threshold
+        return {
+            "is_ok": move >= min_move_threshold and depth <= max_depth_threshold,
+            "body_ratio": BreakoutStrategy._body_ratio(row),
+            "body_ratio_min": params.min_body_ratio,
+            "move": move,
+            "move_threshold": min_move_threshold,
+            "max_retest_depth": depth,
+            "max_retest_depth_threshold": max_depth_threshold,
+            "natr": natr,
+        }
 
 
     def _build_level(
@@ -506,9 +525,20 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
             if pending_retest is not None:
                 if params.entry_trigger == EntryTrigger.IMMEDIATE:
+                    entry_idx = pending_retest.retest_idx + 1
+                    BreakoutStrategy._logger.info(
+                        "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
+                        params.symbol,
+                        row["datetime"],
+                        pending_retest.breakout.side.value,
+                        params.entry_trigger.value,
+                        entry_idx,
+                        pending_retest.retest_idx,
+                        pending_retest.breakout.breakout_idx,
+                    )
                     pending_signal = self._build_signal_from_retest(
                         annotated=annotated,
-                        entry_idx=pending_retest.retest_idx + 1,
+                        entry_idx=entry_idx,
                         pending_retest=pending_retest,
                         params=params,
                     )
@@ -517,12 +547,30 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
                 if idx > pending_retest.confirmation_end_idx:
                     diagnostics["retest_confirmation_expired"] += 1
+                    BreakoutStrategy._logger.info(
+                        "retest_confirmation_expired symbol=%s confirmation_end_idx=%s idx=%s candle_time=%s",
+                        params.symbol,
+                        pending_retest.confirmation_end_idx,
+                        idx,
+                        row["datetime"],
+                    )
                     pending_retest = None
                     continue
                 if self._is_confirmation(row=row, retest=pending_retest):
+                    entry_idx = idx + 1
+                    BreakoutStrategy._logger.info(
+                        "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
+                        params.symbol,
+                        row["datetime"],
+                        pending_retest.breakout.side.value,
+                        params.entry_trigger.value,
+                        entry_idx,
+                        pending_retest.retest_idx,
+                        pending_retest.breakout.breakout_idx,
+                    )
                     pending_signal = self._build_signal_from_retest(
                         annotated=annotated,
-                        entry_idx=idx + 1,
+                        entry_idx=entry_idx,
                         pending_retest=pending_retest,
                         params=params,
                     )
@@ -530,6 +578,13 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     continue
                 if idx == pending_retest.confirmation_end_idx:
                     diagnostics["retest_confirmation_not_received"] += 1
+                    BreakoutStrategy._logger.info(
+                        "retest_confirmation_not_received symbol=%s confirmation_end_idx=%s idx=%s candle_time=%s",
+                        params.symbol,
+                        pending_retest.confirmation_end_idx,
+                        idx,
+                        row["datetime"],
+                    )
                     pending_retest = None
                 continue
 
@@ -539,6 +594,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     diagnostics["breakout_retest_window_expired"] += 1
                     pending_breakout = None
                 elif self._is_retest_candle(row=row, breakout=pending_breakout, params=params):
+                    BreakoutStrategy._logger.debug(
+                        "retest_candle_detected symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s",
+                        params.symbol,
+                        row["datetime"],
+                        pending_breakout.side.value,
+                        pending_breakout.level.price.value,
+                        breakout_idx,
+                        idx,
+                    )
                     diagnostics["retests_found"] += 1
                     volume_check = self._evaluate_volume_regime(
                         annotated=annotated,
@@ -547,11 +611,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         retest_idx=idx,
                         volume_mult=params.volume_mult,
                     )
-                    if volume_check["is_ok"] and self._extra_retest_filters_ok(
+                    extra_filters = self._extra_retest_filter_metrics(
                         row=row,
                         breakout=pending_breakout,
                         params=params,
-                    ):
+                    )
+                    if volume_check["is_ok"] and extra_filters["is_ok"]:
                         pending_retest = PendingRetest(
                             breakout=pending_breakout,
                             retest_idx=idx,
@@ -563,12 +628,52 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             volume_threshold=volume_check["threshold"],
                             volume_filter_passed=volume_check["is_ok"],
                         )
+                        BreakoutStrategy._logger.info(
+                            "retest accepted -> pending_retest created symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s entry_trigger=%s entry_idx=%s",
+                            params.symbol,
+                            row["datetime"],
+                            pending_breakout.side.value,
+                            pending_breakout.level.price.value,
+                            breakout_idx,
+                            idx,
+                            params.entry_trigger.value,
+                            idx + 1 if params.entry_trigger == EntryTrigger.IMMEDIATE else idx + max(1, int(params.confirmation_bars)) + 1,
+                        )
                         pending_breakout = None
                         continue
                     if not bool(volume_check["is_ok"]):
                         diagnostics["retest_rejected_by_volume"] += 1
+                        BreakoutStrategy._logger.info(
+                            "retest_rejected_by_volume symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s v_before=%.6f v_after=%.6f threshold=%.6f volume_mult=%.4f volume_filter_passed=false",
+                            params.symbol,
+                            row["datetime"],
+                            pending_breakout.side.value,
+                            pending_breakout.level.price.value,
+                            breakout_idx,
+                            idx,
+                            float(volume_check["v_before"]),
+                            float(volume_check["v_after"]),
+                            float(volume_check["threshold"]),
+                            params.volume_mult,
+                        )
                     else:
                         diagnostics["retest_rejected_by_extra_filters"] += 1
+                        BreakoutStrategy._logger.info(
+                            "retest_rejected_by_extra_filters symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s body_ratio=%.6f body_ratio_min=%.6f move_atr=%.6f move_atr_threshold=%.6f max_retest_depth=%.6f max_retest_depth_threshold=%.6f natr=%.6f",
+                            params.symbol,
+                            row["datetime"],
+                            pending_breakout.side.value,
+                            pending_breakout.level.price.value,
+                            breakout_idx,
+                            idx,
+                            float(extra_filters["body_ratio"]),
+                            float(extra_filters["body_ratio_min"]),
+                            float(extra_filters["move"]),
+                            float(extra_filters["move_threshold"]),
+                            float(extra_filters["max_retest_depth"]),
+                            float(extra_filters["max_retest_depth_threshold"]),
+                            float(extra_filters["natr"]),
+                        )
 
             if pending_breakout is None:
                 level_high = float(row["level_high"])
