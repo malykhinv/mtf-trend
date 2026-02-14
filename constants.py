@@ -10,6 +10,7 @@ from domain.enums.timeframe import Timeframe
 
 SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = tuple(Timeframe)
 DEFAULT_TIMEFRAME = Timeframe.H1
+DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.D1, Timeframe.M15)
 
 # Лимиты АПИ
 DEFAULT_FETCH_BATCH_SIZE = 1000

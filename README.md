@@ -36,6 +36,8 @@ LOG_LEVEL=INFO
 CACHE_DIR=./cache
 TIMEZONE=Europe/Belgrade
 ```
+> Таймфреймы для сборки кэша задаются в коде конфигурации (`config/fetch_config.py`, поле `FetchConfig.timeframes`),
+> а не через параметры CLI и не через `.env`.
 
 ## Гайд «для чайников»: как запускать бота в PyCharm
 
