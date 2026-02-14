@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter
+from collections import Counter, defaultdict
 from itertools import product
 from pathlib import Path
 from time import perf_counter
@@ -37,8 +37,16 @@ from strategy.breakout.breakout_strategy import BreakoutStrategy
 from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
+
 module_logger = logging.getLogger(__name__)
 PROGRESS_LOG_EVERY = 50
+DIAGNOSTIC_TOP_N = 5
+ZERO_ENTRY_REJECTION_KEYS = (
+    "retest_rejected_by_volume",
+    "retest_rejected_by_extra_filters",
+    "retest_confirmation_not_received",
+    "retest_confirmation_expired",
+)
 
 
 class BacktestRunner:
@@ -140,6 +148,100 @@ class BacktestRunner:
         self._results_dir.mkdir(parents=True, exist_ok=True)
         results.to_csv(self._results_dir / self._results_file_name, index=False)
 
+    @staticmethod
+    def _params_signature(params: BreakoutParams) -> str:
+        return (
+            f"lookback={params.lookback}|"
+            f"volume_mult={params.volume_mult:.4f}|"
+            f"retest_window_hours={params.retest_window_hours}|"
+            f"entry_trigger={params.entry_trigger.value}|"
+            f"confirmation_bars={params.confirmation_bars}"
+        )
+
+    @staticmethod
+    def _extract_diagnostic_counter(diagnostics: dict[str, object]) -> Counter[str]:
+        return Counter(
+            {
+                key: value
+                for key, value in diagnostics.items()
+                if isinstance(value, int) and not isinstance(value, bool)
+            }
+        )
+
+    def _log_zero_entry_with_retests(
+        self,
+        diagnostics_by_key: dict[tuple[str, str], Counter[str]],
+    ) -> None:
+        if not diagnostics_by_key:
+            return
+
+        keys_with_retests = [
+            (key, counter)
+            for key, counter in diagnostics_by_key.items()
+            if counter.get("retests_found", BACKTEST_ZERO_COUNT) > BACKTEST_ZERO_COUNT
+        ]
+        if not keys_with_retests:
+            return
+
+        problematic = [
+            (key, counter)
+            for key, counter in keys_with_retests
+            if counter.get("trades_generated", BACKTEST_ZERO_COUNT) == BACKTEST_ZERO_COUNT
+        ]
+        problematic_count = len(problematic)
+        keys_with_retests_count = len(keys_with_retests)
+        problematic_share = problematic_count / keys_with_retests_count if keys_with_retests_count else BACKTEST_ZERO_COUNT
+
+        total_retests = sum(counter.get("retests_found", BACKTEST_ZERO_COUNT) for _, counter in keys_with_retests)
+        problematic_retests = sum(counter.get("retests_found", BACKTEST_ZERO_COUNT) for _, counter in problematic)
+        problematic_retests_share = (
+            problematic_retests / total_retests
+            if total_retests
+            else BACKTEST_ZERO_COUNT
+        )
+
+        breakdown = {
+            name: sum(counter.get(name, BACKTEST_ZERO_COUNT) for _, counter in problematic)
+            for name in ZERO_ENTRY_REJECTION_KEYS
+        }
+        breakdown_message = ", ".join(f"{name}={value}" for name, value in breakdown.items())
+
+        self._logger.info(
+            "запуск-бэктеста: нулевые_входы_при_наличии_ретестов ключей=%s/%s доля_ключей=%.4f ретестов=%s/%s доля_ретестов=%.4f %s",
+            problematic_count,
+            keys_with_retests_count,
+            problematic_share,
+            problematic_retests,
+            total_retests,
+            problematic_retests_share,
+            breakdown_message,
+        )
+
+        if not problematic:
+            return
+
+        sorted_problematic = sorted(
+            problematic,
+            key=lambda item: (
+                sum(item[1].get(name, BACKTEST_ZERO_COUNT) for name in ZERO_ENTRY_REJECTION_KEYS),
+                item[1].get("retests_found", BACKTEST_ZERO_COUNT),
+            ),
+            reverse=True,
+        )
+        detail_limit = len(sorted_problematic) if self._logger.isEnabledFor(logging.DEBUG) else min(DIAGNOSTIC_TOP_N, len(sorted_problematic))
+        for (symbol, params_signature), counter in sorted_problematic[:detail_limit]:
+            self._logger.info(
+                "запуск-бэктеста: проблемный_ключ symbol=%s params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
+                symbol,
+                params_signature,
+                counter.get("retests_found", BACKTEST_ZERO_COUNT),
+                counter.get("trades_generated", BACKTEST_ZERO_COUNT),
+                counter.get("retest_rejected_by_volume", BACKTEST_ZERO_COUNT),
+                counter.get("retest_rejected_by_extra_filters", BACKTEST_ZERO_COUNT),
+                counter.get("retest_confirmation_not_received", BACKTEST_ZERO_COUNT),
+                counter.get("retest_confirmation_expired", BACKTEST_ZERO_COUNT),
+            )
+
     # endregion Приватные
 
     @staticmethod
@@ -211,7 +313,8 @@ class BacktestRunner:
         started_at = perf_counter()
 
         prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
-        rejection_diagnostics: Counter[str] = Counter()
+        rejection_diagnostics_total: Counter[str] = Counter()
+        rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         if isinstance(strategy, BreakoutStrategy):
             for symbol, mtf_frames in symbol_frames.items():
                 prepared_multi_tf = strategy.prepare_multi_tf_data(
@@ -255,7 +358,15 @@ class BacktestRunner:
                         params=cfg,
                         annotated=prepared_annotated,
                     )
-                    rejection_diagnostics.update(strategy.consume_last_generation_diagnostics())
+                    diagnostics_raw = strategy.consume_last_generation_diagnostics()
+                    diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
+                    rejection_diagnostics_total.update(diagnostics_counter)
+                    context = diagnostics_raw.get("context")
+                    context_symbol = symbol
+                    if isinstance(context, dict) and isinstance(context.get("symbol"), str):
+                        context_symbol = context["symbol"]
+                    key = (context_symbol, self._params_signature(cfg))
+                    rejection_diagnostics_by_key[key].update(diagnostics_counter)
                 else:
                     trades = cast("BaseStrategy[BreakoutParams]", strategy).generate_events_multi_tf(
                         mtf_frames=mtf_frames,
@@ -301,16 +412,18 @@ class BacktestRunner:
             total_trades,
             no_trades_share,
         )
-        if rejection_diagnostics:
+        if rejection_diagnostics_total:
             diagnostic_parts = [
                 f"{name}={value}"
-                for name, value in rejection_diagnostics.most_common()
+                for name, value in rejection_diagnostics_total.most_common()
                 if value > BACKTEST_ZERO_COUNT
             ]
             self._logger.info(
-                "запуск-бэктеста: диагностика_отброшенных_входов %s",
+                "запуск-бэктеста: диагностика_отброшенных_входов_итого %s",
                 ", ".join(diagnostic_parts),
             )
+
+        self._log_zero_entry_with_retests(dict(rejection_diagnostics_by_key))
 
         self._save_results(results)
         return results
