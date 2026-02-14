@@ -63,9 +63,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         self._slippage = slippage
         self._strategy_timezone = strategy_timezone
         self._simulation_timezone = simulation_timezone
-        self._last_generation_diagnostics: dict[str, int] = {}
+        self._last_generation_diagnostics: dict[str, object] = {}
 
-    def consume_last_generation_diagnostics(self) -> dict[str, int]:
+    def consume_last_generation_diagnostics(self) -> dict[str, object]:
         """Возвращает диагностику последней генерации сигналов и очищает буфер."""
         diagnostics = self._last_generation_diagnostics.copy()
         self._last_generation_diagnostics = {}
@@ -448,7 +448,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 prepared_multi_tf=prepared_multi_tf,
                 lookback=params.lookback,
             )
-        diagnostics: dict[str, int] = {
+        diagnostics: dict[str, object] = {
             "annotated_rows": int(len(annotated)),
             "breakouts_found": 0,
             "retests_found": 0,
@@ -461,6 +461,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "breakout_pending_end_of_data": 0,
             "retest_pending_end_of_data": 0,
             "trades_generated": 0,
+        }
+        diagnostics["context"] = {
+            "symbol": params.symbol,
+            "lookback": params.lookback,
+            "volume_mult": params.volume_mult,
+            "retest_window_hours": params.retest_window_hours,
+            "entry_trigger": params.entry_trigger.value,
+            "confirmation_bars": params.confirmation_bars,
         }
         if annotated.empty:
             self._last_generation_diagnostics = diagnostics
