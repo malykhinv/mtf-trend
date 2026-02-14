@@ -235,6 +235,9 @@ python main.py update-cache --top-n 100 --days 7 --end-datetime 2025-01-31T23:59
 python main.py fetch-data --top-n 100 --days 30
 python main.py fetch-data --top-n 100 --days 30 --ignore-coingecko
 python main.py update-cache --top-n 100 --days 7 --ignore-coingecko
+
+# При --ignore-coingecko команда автоматически использует bootstrap mode (без фильтра ликвидности),
+# если кэш объёмов ещё не прогрет; после прогрева применяется cache-liquidity mode.
 python main.py run-backtest
 python main.py make-report
 python main.py check-quality

@@ -164,6 +164,22 @@ def _resolve_symbols(
             if symbol in avg_daily_volumes_normalized
         ]
 
+        min_cache_ready_symbols = min(top_n, len(exchange_symbols_normalized))
+        is_cold_start = len(symbols_with_volume) < min_cache_ready_symbols
+        if is_cold_start:
+            bootstrap_symbols = exchange_symbols_normalized[:top_n]
+            logger.info(
+                "подбор-символов: кэш пуст, выполняется bootstrap без фильтра ликвидности (режим=bootstrap mode)"
+            )
+            logger.info(
+                "подбор-символов: CoinGecko отключен, всего на бирже=%s → в кэше с объёмом=%s (порог готовности=%s) → после bootstrap top_n=%s",
+                len(exchange_symbols_normalized),
+                len(symbols_with_volume),
+                min_cache_ready_symbols,
+                len(bootstrap_symbols),
+            )
+            return [futures_symbol_map[symbol] for symbol in bootstrap_symbols]
+
         liquid_symbols = [
             symbol
             for symbol in symbols_with_volume
@@ -177,7 +193,7 @@ def _resolve_symbols(
         ranked_top_symbols = ranked_liquid_symbols[:top_n]
 
         logger.info(
-            "подбор-символов: CoinGecko отключен, всего на бирже=%s → прошли расчёт объёма=%s → после фильтра ликвидности=%s → после top_n=%s",
+            "подбор-символов: CoinGecko отключен (режим=cache-liquidity mode), всего на бирже=%s → прошли расчёт объёма=%s → после фильтра ликвидности=%s → после top_n=%s",
             len(exchange_symbols_normalized),
             len(symbols_with_volume),
             len(liquid_symbols),
