@@ -536,12 +536,22 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         entry_timeframe=entry_timeframe,
     )
     summary = runner.build_summary(results)
+    combinations_with_trades = int((results["trades_count"] > 0).sum()) if not results.empty else 0
+    total_trades = int(results["trades_count"].sum()) if not results.empty else 0
     logger.info(
-        "запуск-бэктеста: всего=%s прибыльных=%s лучший_pf=%.4f",
+        "запуск-бэктеста: всего=%s прибыльных=%s лучший_pf=%.4f комбинаций_со_сделками=%s",
         summary.total_combinations,
         summary.profitable_combinations,
         summary.best_pf,
+        combinations_with_trades,
     )
+    if summary.best_pf == 0 and total_trades == 0:
+        logger.warning(
+            "запуск-бэктеста: отсутствуют сделки по всем комбинациям; проверьте достаточность истории для levels_tf=%s и соответствие таймфреймов в кэше (%s/%s)",
+            levels_timeframe.value,
+            levels_timeframe.value,
+            entry_timeframe.value,
+        )
     return 0
 
 
