@@ -37,15 +37,21 @@ from strategy.breakout.breakout_strategy import BreakoutStrategy
 from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
-logger = logging.getLogger(__name__)
+module_logger = logging.getLogger(__name__)
 PROGRESS_LOG_EVERY = 50
 
 
 class BacktestRunner:
     """Класс."""
-    def __init__(self, results_dir: Path, results_file_name: str) -> None:
+    def __init__(
+        self,
+        results_dir: Path,
+        results_file_name: str,
+        logger: logging.Logger | None = None,
+    ) -> None:
         self._results_dir = Path(results_dir)
         self._results_file_name = results_file_name
+        self._logger = logger or module_logger
 
     # region Приватные
 
@@ -264,7 +270,7 @@ class BacktestRunner:
                 elapsed_seconds = perf_counter() - started_at
                 progress = (idx / total) * 100 if total else BACKTEST_ZERO_COUNT
                 eta_seconds = (elapsed_seconds / idx) * (total - idx) if idx else BACKTEST_ZERO_COUNT
-                logger.info(
+                self._logger.info(
                     "run-progress: grid=%s/%s (%.1f%%), symbols=%s, elapsed=%ss, eta=%ss",
                     idx,
                     total,
@@ -288,7 +294,7 @@ class BacktestRunner:
             if not results.empty
             else BACKTEST_ZERO_COUNT
         )
-        logger.info(
+        self._logger.info(
             "запуск-бэктеста: покрытие сделками: со_сделками=%s без_сделок=%s всего_сделок=%s доля_без_сделок=%.4f",
             combinations_with_trades,
             combinations_without_trades,
@@ -301,7 +307,7 @@ class BacktestRunner:
                 for name, value in rejection_diagnostics.most_common()
                 if value > BACKTEST_ZERO_COUNT
             ]
-            logger.info(
+            self._logger.info(
                 "запуск-бэктеста: диагностика_отброшенных_входов %s",
                 ", ".join(diagnostic_parts),
             )
@@ -309,17 +315,16 @@ class BacktestRunner:
         self._save_results(results)
         return results
 
-    @staticmethod
-    def build_summary(results: pd.DataFrame) -> BacktestSummary:
+    def build_summary(self, results: pd.DataFrame) -> BacktestSummary:
         """Собирает краткую сводку по результатам бэктеста."""
         if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
-            logger.warning(
+            self._logger.warning(
                 "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
                 PARAMETER_GRID_SIZE,
                 TARGET_PARAMETER_COMBINATIONS,
             )
         if len(results) != TARGET_PARAMETER_COMBINATIONS:
-            logger.warning(
+            self._logger.warning(
                 "запуск-бэктеста: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
                 len(results),
                 TARGET_PARAMETER_COMBINATIONS,
