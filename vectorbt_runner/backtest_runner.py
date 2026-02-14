@@ -276,6 +276,23 @@ class BacktestRunner:
             .sort_values("profit_factor", ascending=BACKTEST_SORT_ASCENDING)
             .reset_index(drop=True)
         )
+
+        combinations_with_trades = int((results["trades_count"] > BACKTEST_ZERO_COUNT).sum()) if not results.empty else BACKTEST_ZERO_COUNT
+        combinations_without_trades = int((results["trades_count"] == BACKTEST_ZERO_COUNT).sum()) if not results.empty else BACKTEST_ZERO_COUNT
+        total_trades = int(results["trades_count"].sum()) if not results.empty else BACKTEST_ZERO_COUNT
+        no_trades_share = (
+            combinations_without_trades / len(results)
+            if not results.empty
+            else BACKTEST_ZERO_COUNT
+        )
+        logger.info(
+            "запуск-бэктеста: покрытие сделками: со_сделками=%s без_сделок=%s всего_сделок=%s доля_без_сделок=%.4f",
+            combinations_with_trades,
+            combinations_without_trades,
+            total_trades,
+            no_trades_share,
+        )
+
         self._save_results(results)
         return results
 
