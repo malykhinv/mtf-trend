@@ -242,6 +242,31 @@ class BacktestRunner:
                 counter.get("retest_confirmation_expired", BACKTEST_ZERO_COUNT),
             )
 
+        breakdown_by_params: dict[str, Counter[str]] = defaultdict(Counter)
+        for (_, params_signature), counter in problematic:
+            breakdown_by_params[params_signature].update(counter)
+
+        sorted_by_params = sorted(
+            breakdown_by_params.items(),
+            key=lambda item: (
+                sum(item[1].get(name, BACKTEST_ZERO_COUNT) for name in ZERO_ENTRY_REJECTION_KEYS),
+                item[1].get("retests_found", BACKTEST_ZERO_COUNT),
+            ),
+            reverse=True,
+        )
+        params_detail_limit = min(DIAGNOSTIC_TOP_N, len(sorted_by_params))
+        for params_signature, counter in sorted_by_params[:params_detail_limit]:
+            self._logger.info(
+                "запуск-бэктеста: проблемный_ключ_параметров params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
+                params_signature,
+                counter.get("retests_found", BACKTEST_ZERO_COUNT),
+                counter.get("trades_generated", BACKTEST_ZERO_COUNT),
+                counter.get("retest_rejected_by_volume", BACKTEST_ZERO_COUNT),
+                counter.get("retest_rejected_by_extra_filters", BACKTEST_ZERO_COUNT),
+                counter.get("retest_confirmation_not_received", BACKTEST_ZERO_COUNT),
+                counter.get("retest_confirmation_expired", BACKTEST_ZERO_COUNT),
+            )
+
     # endregion Приватные
 
     @staticmethod
@@ -316,6 +341,7 @@ class BacktestRunner:
         rejection_diagnostics_total: Counter[str] = Counter()
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         if isinstance(strategy, BreakoutStrategy):
+            strategy.set_logger(self._logger)
             for symbol, mtf_frames in symbol_frames.items():
                 prepared_multi_tf = strategy.prepare_multi_tf_data(
                     mtf_frames=mtf_frames,

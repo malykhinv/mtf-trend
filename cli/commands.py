@@ -536,6 +536,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         slippage=config.simulation.slippage,
         strategy_timezone=config.strategy.timezone,
         simulation_timezone=config.simulation.timezone,
+        logger=logger,
     )
     runner = BacktestRunner(
         config.backtest.results_dir,
