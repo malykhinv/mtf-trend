@@ -55,6 +55,7 @@ class CoinGeckoClient(MarketDataClient):
         retry_attempts: int = 3,
         retry_backoff_seconds: float = 1.0,
         min_request_interval_seconds: float = 1.0,
+        skip_invalid_coin_id_filter: bool = False,
     ) -> None:
         self._api_key = api_key
         self._cache_ttl = timedelta(hours=cache_ttl_hours)
@@ -67,8 +68,12 @@ class CoinGeckoClient(MarketDataClient):
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
         self._min_request_interval_seconds = max(0.0, float(min_request_interval_seconds))
+        self._skip_invalid_coin_id_filter = bool(skip_invalid_coin_id_filter)
         self._last_request_monotonic: float | None = None
         self._load_market_cap_cache()
+
+    def set_skip_invalid_coin_id_filter(self, value: bool) -> None:
+        self._skip_invalid_coin_id_filter = bool(value)
 
     # region Приватные
 
@@ -127,7 +132,7 @@ class CoinGeckoClient(MarketDataClient):
                         coin_id = item
 
             normalized_coin_id = str(coin_id).strip().lower()
-            if self._is_valid_coin_id(normalized_coin_id):
+            if self._skip_invalid_coin_id_filter or self._is_valid_coin_id(normalized_coin_id):
                 coin_ids_by_input[item] = normalized_coin_id
             else:
                 self._logger.warning("Пропуск невалидного coin_id для '%s': %s", item, coin_id)
