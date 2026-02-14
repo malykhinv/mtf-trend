@@ -25,13 +25,14 @@ from constants import (
 from domain.enums.timeframe import Timeframe
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from strategy.base_strategy import BaseStrategy
 
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, \
     BreakoutParams
+from strategy.breakout.breakout_strategy import BreakoutStrategy
 from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
@@ -197,9 +198,26 @@ class BacktestRunner:
         """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
         grid = self.build_parameter_grid()
+        lookbacks = sorted({params.lookback for params in grid})
         total = len(grid)
         symbols_count = len(symbol_frames)
         started_at = perf_counter()
+
+        prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
+        if isinstance(strategy, BreakoutStrategy):
+            for symbol, mtf_frames in symbol_frames.items():
+                prepared_multi_tf = strategy.prepare_multi_tf_data(
+                    mtf_frames=mtf_frames,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                )
+                prepared_symbol_data[symbol] = {
+                    lookback: strategy.prepare_annotated_multi_tf_data(
+                        prepared_multi_tf=prepared_multi_tf,
+                        lookback=lookback,
+                    )
+                    for lookback in lookbacks
+                }
 
         for idx, params in enumerate(grid, start=1):
             all_trades: list[TradeResult] = []
@@ -222,10 +240,18 @@ class BacktestRunner:
                     levels_timeframe=levels_timeframe,
                     entry_timeframe=entry_timeframe,
                 )
-                trades = strategy.generate_events_multi_tf(
-                    mtf_frames=mtf_frames,
-                    params=cfg,
-                )
+                if isinstance(strategy, BreakoutStrategy):
+                    prepared_annotated = prepared_symbol_data[symbol][params.lookback]
+                    trades = strategy.generate_events_multi_tf(
+                        mtf_frames=mtf_frames,
+                        params=cfg,
+                        annotated=prepared_annotated,
+                    )
+                else:
+                    trades = cast("BaseStrategy[BreakoutParams]", strategy).generate_events_multi_tf(
+                        mtf_frames=mtf_frames,
+                        params=cfg,
+                    )
                 all_trades.extend(trades)
 
             row = self._build_metrics_row(params, all_trades)
