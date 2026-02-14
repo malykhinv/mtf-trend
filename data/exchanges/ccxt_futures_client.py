@@ -17,6 +17,7 @@ from constants import (
     MILLISECONDS_IN_SECOND,
     OHLCV_FRAME_COLUMNS,
     OPEN_INTEREST_FRAME_COLUMNS,
+    TIMEFRAME_TO_DELTA,
 )
 from data.exchanges.ccxt_types import CcxtClientOptions, CcxtFuturesApi, CcxtOpenInterestApi
 from domain.abstract.exchange_client import ExchangeClient
@@ -242,9 +243,19 @@ class CcxtFuturesClient(ExchangeClient):
         since = start_ms
         end_ms = _to_utc_ms(end_time)
         ccxt_timeframe = timeframe.value
+        timeframe_ms = int(TIMEFRAME_TO_DELTA[timeframe].total_seconds() * MILLISECONDS_IN_SECOND)
+        oi_limit = min(DEFAULT_FETCH_BATCH_SIZE, 500) if self.exchange == Exchange.BINANCE else DEFAULT_FETCH_BATCH_SIZE
 
         rows: list[dict[str, object]] = []
         while since <= end_ms:
+            request_end_ms = min(end_ms, since + timeframe_ms * oi_limit - 1)
+            params: dict[str, object] | None = None
+            if self.exchange == Exchange.BINANCE:
+                params = {
+                    "period": ccxt_timeframe,
+                    "endTime": request_end_ms,
+                }
+
             try:
                 batch = self._retry_exchange_call(
                     operation="ccxt_fetch_open_interest_history",
@@ -254,8 +265,8 @@ class CcxtFuturesClient(ExchangeClient):
                     args=(symbol,),
                     timeframe=ccxt_timeframe,
                     since=since,
-                    limit=DEFAULT_FETCH_BATCH_SIZE,
-                    params={"intervalTime": ccxt_timeframe, "period": ccxt_timeframe},
+                    limit=oi_limit,
+                    params=params,
                 )
             except TypeError:
                 batch = self._retry_exchange_call(
@@ -266,7 +277,7 @@ class CcxtFuturesClient(ExchangeClient):
                     args=(symbol,),
                     timeframe=ccxt_timeframe,
                     since=since,
-                    limit=DEFAULT_FETCH_BATCH_SIZE,
+                    limit=oi_limit,
                 )
             if not isinstance(batch, list):
                 break
@@ -277,7 +288,10 @@ class CcxtFuturesClient(ExchangeClient):
             last_ts = int(batch[-1].get("timestamp") or 0)
             if last_ts >= end_ms:
                 break
-            since = last_ts + 1
+            if last_ts < since:
+                since = request_end_ms + 1
+                continue
+            since = max(last_ts + 1, request_end_ms + 1)
 
         if not rows:
             return pd.DataFrame(columns=OPEN_INTEREST_FRAME_COLUMNS)
