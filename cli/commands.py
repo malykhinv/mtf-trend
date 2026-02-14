@@ -365,18 +365,31 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
-    symbols = _resolve_symbols(
-        exchange_client,
-        market_client,
-        top_n=top_n,
-        min_volume_usd=min_volume_usd,
-        logger=logger,
-        coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
-        ignore_coingecko=ignore_coingecko,
-        cache_dir=config.backtest.cache_dir,
-        liquidity_timeframe=config.fetch.timeframe,
-        futures_symbols_raw=futures_symbols,
-    )
+    if ignore_coingecko:
+        futures_symbol_map = {
+            normalize_symbol(symbol): symbol
+            for symbol in futures_symbols
+        }
+        exchange_symbols_normalized = sorted(futures_symbol_map)
+        bootstrap_symbols = exchange_symbols_normalized[:top_n]
+        symbols = [futures_symbol_map[symbol] for symbol in bootstrap_symbols]
+        logger.info(
+            "загрузка-данных: CoinGecko отключен, первичная загрузка кэша до расчёта ликвидности (bootstrap symbols=%s)",
+            len(symbols),
+        )
+    else:
+        symbols = _resolve_symbols(
+            exchange_client,
+            market_client,
+            top_n=top_n,
+            min_volume_usd=min_volume_usd,
+            logger=logger,
+            coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
+            ignore_coingecko=ignore_coingecko,
+            cache_dir=config.backtest.cache_dir,
+            liquidity_timeframe=config.fetch.timeframe,
+            futures_symbols_raw=futures_symbols,
+        )
     logger.info(
         "загрузка-данных: найдено фьючерсов=%s отправлено в fetch_all=%s",
         all_futures_count,
@@ -398,6 +411,20 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             if (symbol in result.ohlcv and not result.ohlcv[symbol].success)
             or (symbol in result.open_interest and not result.open_interest[symbol].success)
             or isinstance(result.market_caps.market_caps.get(symbol), str)
+        )
+
+    if ignore_coingecko:
+        _ = _resolve_symbols(
+            exchange_client,
+            market_client,
+            top_n=top_n,
+            min_volume_usd=min_volume_usd,
+            logger=logger,
+            coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
+            ignore_coingecko=True,
+            cache_dir=config.backtest.cache_dir,
+            liquidity_timeframe=config.fetch.timeframe,
+            futures_symbols_raw=futures_symbols,
         )
 
     exit_code = _fetch_exit_code(len(failed_symbols))
