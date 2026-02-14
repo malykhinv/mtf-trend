@@ -537,7 +537,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         strategy_timezone=config.strategy.timezone,
         simulation_timezone=config.simulation.timezone,
     )
-    runner = BacktestRunner(config.backtest.results_dir, config.backtest.results_file_name)
+    runner = BacktestRunner(
+        config.backtest.results_dir,
+        config.backtest.results_file_name,
+        logger=logger,
+    )
     symbols_used_ratio = symbols_used / symbols_total if symbols_total else 0.0
     logger.info(
         "запуск-бэктеста: сводка по символам всего=%s использовано=%s без_данных_levels_tf=%s без_данных_entry_tf=%s",
