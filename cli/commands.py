@@ -347,6 +347,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
+    market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
     symbols = _resolve_symbols(
         exchange_client,
@@ -395,6 +396,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
+    market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
     symbols = _resolve_symbols(
         exchange_client,
