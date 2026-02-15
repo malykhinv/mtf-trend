@@ -15,12 +15,11 @@ from constants import (
 from data.quality.data_validator import DataValidator
 from data.quality.deduplicator import Deduplicator
 from data.quality.oi_aligner import OiAligner
-from data.quality.time_alignment import TimeAlignment
 from data.storage.parquet_storage import ParquetCacheValidationError, ParquetStorage
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
-from utils.formatters import datetime_to_utc, format_datetime_human
+from utils.formatters import format_datetime_human
 from utils.logger import get_logger
 
 
@@ -43,34 +42,32 @@ class OiFetcher:
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
-        self._aligner = TimeAlignment()
         self._deduplicator = Deduplicator()
         self._oi_aligner = OiAligner()
         self._validator = DataValidator()
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
         """Загружает историю open interest для одного символа."""
-        start_time_utc = datetime_to_utc(start_time)
-        end_time_utc = datetime_to_utc(end_time)
-        next_start = start_time_utc
+        start_time_raw = start_time
+        end_time_raw = end_time
+        next_start = start_time_raw
         watermark_column = "open_interest"
         last_timestamp = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
         if last_timestamp is not None:
-            next_start = max(start_time_utc, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
+            next_start = max(start_time_raw, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
 
         watermark_display = format_datetime_human(last_timestamp.to_pydatetime()) if last_timestamp is not None else "None"
         next_start_display = format_datetime_human(next_start)
-        end_time_display = format_datetime_human(end_time_utc)
+        end_time_display = format_datetime_human(end_time_raw)
         self._logger.info(
             f"OI водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start_display}"
         )
         self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start_display} -> {end_time_display}")
-        if next_start > end_time_utc:
+        if next_start > end_time_raw:
             self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OI", symbol)
             return 0
 
-        data = self._exchange_client.fetch_open_interest(symbol, timeframe, next_start, end_time_utc)
-        data = self._aligner.align_to_utc(data)
+        data = self._exchange_client.fetch_open_interest(symbol, timeframe, next_start, end_time_raw)
         data = self._deduplicator.deduplicate(data)
 
         if "timestamp" not in data.columns:
@@ -82,7 +79,7 @@ class OiFetcher:
             )
 
         next_start_ms = int(next_start.timestamp() * 1000)
-        end_time_ms = int(end_time_utc.timestamp() * 1000)
+        end_time_ms = int(end_time_raw.timestamp() * 1000)
         interval_mask = (data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_time_ms)
         data = data.loc[interval_mask].copy()
 
@@ -159,11 +156,4 @@ class OiFetcher:
 
     @staticmethod
     def _is_system_error(exc: Exception) -> bool:
-        message = str(exc).lower()
-        signatures = (
-            "normalize",
-            "timestamp normalization",
-            "tz-naive",
-            "tz-aware",
-        )
-        return isinstance(exc, AttributeError) or any(signature in message for signature in signatures)
+        return isinstance(exc, AttributeError)
