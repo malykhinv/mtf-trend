@@ -8,8 +8,6 @@ import random
 import re
 import tempfile
 import time
-from datetime import datetime
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 
 import pandas as pd
@@ -174,7 +172,6 @@ class CoinGeckoClient(MarketDataClient):
             now_ms = int(time.time() * 1000)
             loaded_cache: dict[str, tuple[float, int]] = {}
             loaded_symbol_to_id: dict[str, str] = {}
-            migration_required = False
             has_market_cap = {"market_cap", "expires_at"}.issubset(raw_payload.columns)
             has_coin_id = "coin_id" in raw_payload.columns
             has_schema_version = "schema_version" in raw_payload.columns
@@ -213,67 +210,28 @@ class CoinGeckoClient(MarketDataClient):
                         loaded_symbol_to_id[canonical_symbol] = coin_id
 
                 if has_market_cap:
-                    expires_at_ms, was_migrated = self._parse_expires_at_to_epoch_ms(row.expires_at)
-                    migration_required = migration_required or was_migrated
+                    expires_at_ms = self._parse_expires_at_to_epoch_ms(row.expires_at)
                     market_cap = row.market_cap
                     if expires_at_ms is not None and expires_at_ms > now_ms and pd.notna(market_cap):
                         loaded_cache[canonical_symbol] = (float(market_cap), expires_at_ms)
 
             self._market_cap_cache = loaded_cache
             self._symbol_to_id.update(loaded_symbol_to_id)
-            if migration_required:
-                self._save_market_cap_cache()
         except (OSError, ValueError, TypeError) as exc:
             self._logger.warning(LOG_MSG_LOAD_ERROR, self._cache_path, exc)
             self._market_cap_cache = {}
 
     @staticmethod
-    def _parse_expires_at_to_epoch_ms(value: object) -> tuple[int | None, bool]:
+    def _parse_expires_at_to_epoch_ms(value: object) -> int | None:
         if value is None or pd.isna(value):
-            return None, False
+            return None
 
         if isinstance(value, (int, float)):
             if value <= 0:
-                return None, False
-            numeric = float(value)
-            if numeric >= 1_000_000_000_000:
-                return int(numeric), False
-            return int(numeric * 1000), True
+                return None
+            return int(value)
 
-        if isinstance(value, datetime):
-            return int(value.timestamp() * 1000), True
-
-        if isinstance(value, str):
-            normalized = value.strip()
-            if not normalized:
-                return None, False
-            try:
-                as_float = float(normalized)
-            except ValueError:
-                try:
-                    parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
-                except ValueError:
-                    return None, False
-                return int(parsed.timestamp() * 1000), True
-
-            if as_float <= 0:
-                return None, False
-            if as_float >= 1_000_000_000_000:
-                return int(as_float), False
-            return int(as_float * 1000), True
-
-        timestamp_method = getattr(value, "timestamp", None)
-        if callable(timestamp_method):
-            try:
-                return int(float(timestamp_method()) * 1000), True
-            except (TypeError, ValueError, OverflowError):
-                return None, False
-
-        raw_ns = getattr(value, "value", None)
-        if isinstance(raw_ns, (int, float)) and raw_ns > 0:
-            return int(raw_ns / 1_000_000), True
-
-        return None, False
+        return None
 
     def _save_market_cap_cache(self) -> None:
         if self._cache_path is None:
@@ -353,16 +311,7 @@ class CoinGeckoClient(MarketDataClient):
         try:
             return max(float(normalized), 0.0)
         except ValueError:
-            pass
-
-        try:
-            retry_at = parsedate_to_datetime(normalized)
-        except (TypeError, ValueError):
             return None
-
-        now_ts = datetime.now().timestamp()
-        retry_at_ts = retry_at.timestamp()
-        return max(retry_at_ts - now_ts, 0.0)
 
     def _request(self, endpoint: str, symbol: str, params: dict[str, str | int] | None = None) -> requests.Response:
         last_error: requests.RequestException | None = None
