@@ -173,11 +173,11 @@ SLIPPAGE=0.0005
 
 **`domain/models/breakout_event.py`:**
 
-- Датакласс BreakoutEvent: level, breakout_time, breakout_price, volume_before, volume_after, oi_value
+- Датакласс BreakoutEvent: level, breakout_timestamp_ms, breakout_price, volume_before, volume_after, oi_value
 
 **`domain/models/retest_event.py`:**
 
-- Датакласс RetestEvent: breakout_event, retest_time, retest_price, volume_retest, oi_retest
+- Датакласс RetestEvent: breakout_event, retest_timestamp_ms, retest_price, volume_retest, oi_retest
 
 **`domain/models/trade_signal.py`:**
 
