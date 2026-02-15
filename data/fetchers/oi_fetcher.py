@@ -126,7 +126,7 @@ class OiFetcher:
                 results[symbol] = SymbolFetchResult.ok(added_rows)
             except Exception as exc:
                 msg = f"OI ошибка исполнения: {symbol}: {exc}"
-                self._logger.info(msg)
+                self._logger.error(msg)
                 results[symbol] = SymbolFetchResult.error(msg)
 
         return results
