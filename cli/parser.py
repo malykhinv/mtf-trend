@@ -71,22 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("clear-cache", help="Полная очистка директории кэша")
 
-    migrate_cache = subparsers.add_parser(
-        "migrate-cache-timestamps",
-        help="Миграция parquet-кэша в канонический timestamp(ms UTC) формат",
-    )
-    migrate_cache.add_argument(
-        "--symbols",
-        nargs="*",
-        default=None,
-        help="Список символов для миграции; по умолчанию мигрируются все",
-    )
-    migrate_cache.add_argument(
-        "--timeframes",
-        nargs="*",
-        default=None,
-        help="Список таймфреймов (например 1m 15m 1h); по умолчанию мигрируются все",
-    )
 
     plot_daily_levels = subparsers.add_parser(
         "plot-daily-levels",
@@ -130,7 +114,6 @@ def resolve_handler(command_name: str) -> Handler:
         "make-report": commands.make_report,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
-        "migrate-cache-timestamps": commands.migrate_cache_timestamps,
         "plot-daily-levels": commands.plot_daily_levels,
         "plot-retests": commands.plot_retests,
     }

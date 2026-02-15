@@ -29,7 +29,6 @@ from constants import (
     DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
 )
 from domain.enums.timeframe import Timeframe
-from utils.formatters import resolve_timezone
 
 __all__ = [
     "AppConfig",
@@ -78,7 +77,7 @@ def _parse_bool(value: str | None, *, default: bool = False) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
-def _parse_anchor_datetime(value: str | None, *, timezone_name: str, env_name: str) -> datetime | None:
+def _parse_anchor_datetime(value: str | None, *, env_name: str) -> datetime | None:
     if value is None:
         return None
 
@@ -95,10 +94,7 @@ def _parse_anchor_datetime(value: str | None, *, timezone_name: str, env_name: s
             f"2025-01-31 or 2025-01-31T23:59:59+03:00"
         ) from error
 
-    target_tz = resolve_timezone(timezone_name)
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=target_tz)
-    return parsed.astimezone(target_tz)
+    return parsed
 
 
 # endregion Приватные
@@ -140,7 +136,6 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         ignore_coingecko=_parse_bool(os.getenv("IGNORE_COINGECKO"), default=False),
         anchor_datetime=_parse_anchor_datetime(
             os.getenv("FETCH_ANCHOR_DATETIME"),
-            timezone_name=fetch_timezone,
             env_name="FETCH_ANCHOR_DATETIME",
         ),
     )

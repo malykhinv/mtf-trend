@@ -28,11 +28,8 @@ from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
 # region Приватные
-def _to_utc_timestamp(value: object) -> pd.Timestamp:
-    timestamp = pd.Timestamp(value)
-    if timestamp.tz is None:
-        return timestamp.tz_localize("UTC")
-    return timestamp.tz_convert("UTC")
+def _to_timestamp(value: object) -> pd.Timestamp:
+    return pd.Timestamp(value)
 
 
 # endregion Приватные
@@ -71,7 +68,7 @@ class DataPreparer:
 
         normalized = frame.copy()
         normalized["symbol"] = symbol
-        normalized["datetime"] = pd.to_datetime(normalized["timestamp"], unit=SIMULATION_DATETIME_UNIT_MS, utc=True, errors="coerce")
+        normalized["datetime"] = pd.to_datetime(normalized["timestamp"], unit=SIMULATION_DATETIME_UNIT_MS, errors="coerce")
         normalized = normalized.dropna(subset=["datetime"])
 
         numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in normalized.columns]
@@ -94,7 +91,7 @@ class DataPreparer:
     def prepare_vectorbt_inputs(trades: list[TradeResult], initial_price: float = SIMULATION_PRICE_INIT) -> VectorbtInputs:
         """Метод."""
         if not trades:
-            index = pd.DatetimeIndex([], tz=SIMULATION_TIMEZONE_UTC)
+            index = pd.DatetimeIndex([])
             empty_float = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
             empty_bool = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)
             trades_frame = pd.DataFrame(columns=DATA_PREPARER_TRADE_COLUMNS)
@@ -109,8 +106,8 @@ class DataPreparer:
         trades_sorted = sorted(trades, key=lambda trade: (trade.entry_time, trade.exit_time))
         trade_rows = [
             {
-                "entry_time": _to_utc_timestamp(trade.entry_time),
-                "exit_time": _to_utc_timestamp(trade.exit_time),
+                "entry_time": _to_timestamp(trade.entry_time),
+                "exit_time": _to_timestamp(trade.exit_time),
                 "pnl": float(trade.pnl),
                 "pnl_percent": float(trade.pnl_percent.value),
                 "result_type": trade.result_type.value,
@@ -120,8 +117,7 @@ class DataPreparer:
         trades_frame = pd.DataFrame(trade_rows)
 
         timeline = pd.DatetimeIndex(
-            sorted(set(trades_frame["entry_time"].tolist() + trades_frame["exit_time"].tolist())),
-            tz=SIMULATION_TIMEZONE_UTC,
+            sorted(set(trades_frame["entry_time"].tolist() + trades_frame["exit_time"].tolist()))
         )
         close = pd.Series(initial_price, index=timeline, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
         entries = pd.Series(False, index=timeline, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)

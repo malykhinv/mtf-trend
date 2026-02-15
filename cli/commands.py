@@ -8,7 +8,7 @@ import json
 import shutil
 from collections import Counter
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, tzinfo
+from datetime import datetime, timedelta
 from logging import Logger
 from pathlib import Path
 from typing import Callable
@@ -56,7 +56,6 @@ from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS, BreakoutParams
-from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
 from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
@@ -281,7 +280,6 @@ def _parse_iso_datetime(
         value: str,
         *,
         argument_name: str,
-        target_timezone: tzinfo,
 ) -> datetime:
     normalized_value = value.strip().replace("Z", "+00:00")
     try:
@@ -292,34 +290,29 @@ def _parse_iso_datetime(
             f"Ожидается ISO дата/дата-время, например 2025-01-31 или 2025-01-31T23:59:59+03:00"
         ) from error
 
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=target_timezone)
-    return parsed.astimezone(target_timezone)
+    return parsed
 
 
 def _resolve_fetch_anchor_datetime(config: AppConfig, end_datetime_raw: datetime | str | None) -> datetime:
     if isinstance(end_datetime_raw, datetime):
-        if end_datetime_raw.tzinfo is None:
-            return end_datetime_raw.replace(tzinfo=config.fetch.tzinfo)
-        return end_datetime_raw.astimezone(config.fetch.tzinfo)
+        return end_datetime_raw
 
     if isinstance(end_datetime_raw, str):
         return _parse_iso_datetime(
             end_datetime_raw,
             argument_name="--end-datetime",
-            target_timezone=config.fetch.tzinfo,
         )
 
     if config.fetch.anchor_datetime is not None:
         return config.fetch.anchor_datetime
 
-    return datetime.now(tz=config.fetch.tzinfo)
+    return datetime.now()
 
 
 def _fetch_period(config: AppConfig, days: int, end_datetime_raw: datetime | str | None = None) -> tuple[datetime, datetime]:
     local_end = _resolve_fetch_anchor_datetime(config, end_datetime_raw)
     local_start = local_end - timedelta(days=days)
-    return datetime_to_utc(local_start), datetime_to_utc(local_end)
+    return local_start, local_end
 
 
 @dataclass(frozen=True, slots=True)
