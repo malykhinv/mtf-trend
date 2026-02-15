@@ -928,6 +928,81 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _migrate_cache_timestamps_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger(
+        "migrate-cache-timestamps",
+        level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
+    )
+
+    storage = ParquetStorage(
+        base_dir=config.backtest.cache_dir,
+        log_level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
+    )
+
+    requested_symbols = set(args.symbols or [])
+    requested_timeframes = set(args.timeframes or [])
+
+    cache_root = config.backtest.cache_dir
+    parquet_paths = sorted(cache_root.glob("*/*/data.parquet"))
+    if not parquet_paths:
+        logger.info("миграция-кэша: parquet-файлы не найдены в %s", cache_root)
+        return 0
+
+    migrated = 0
+    skipped = 0
+    failed = 0
+
+    for path in parquet_paths:
+        symbol_encoded = path.parent.parent.name
+        timeframe_raw = path.parent.name
+        symbol = storage.decode_symbol_from_path(symbol_encoded)
+
+        if requested_symbols and symbol not in requested_symbols:
+            skipped += 1
+            continue
+        if requested_timeframes and timeframe_raw not in requested_timeframes:
+            skipped += 1
+            continue
+
+        try:
+            timeframe = Timeframe(timeframe_raw)
+        except ValueError:
+            skipped += 1
+            logger.warning("миграция-кэша: пропуск файла с неподдерживаемым таймфреймом path=%s", path)
+            continue
+
+        try:
+            rows = storage.migrate_cache_file(symbol=symbol, timeframe=timeframe)
+            migrated += 1
+            logger.info(
+                "миграция-кэша: ok symbol=%s timeframe=%s path=%s rows=%s",
+                symbol,
+                timeframe.value,
+                path,
+                rows,
+            )
+        except Exception as exc:
+            failed += 1
+            logger.error(
+                "миграция-кэша: error symbol=%s timeframe=%s path=%s reason=%s",
+                symbol,
+                timeframe.value,
+                path,
+                exc,
+            )
+
+    logger.info(
+        "миграция-кэша: итог migrated=%s skipped=%s failed=%s root=%s",
+        migrated,
+        skipped,
+        failed,
+        cache_root,
+    )
+    return 1 if failed else 0
+
+
 def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("plot-daily-levels", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
 
@@ -1217,6 +1292,15 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
 def clear_cache(config: AppConfig, args: argparse.Namespace) -> int:
     """Очищает директорию локального кэша и пересоздаёт её."""
     return _run_with_logging("clear-cache", config, lambda: _clear_cache_inner(config, args))
+
+
+def migrate_cache_timestamps(config: AppConfig, args: argparse.Namespace) -> int:
+    """Мигрирует parquet-кэш в канонический timestamp(ms UTC)-формат."""
+    return _run_with_logging(
+        "migrate-cache-timestamps",
+        config,
+        lambda: _migrate_cache_timestamps_inner(config, args),
+    )
 
 
 def plot_daily_levels(config: AppConfig, args: argparse.Namespace) -> int:

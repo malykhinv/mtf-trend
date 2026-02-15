@@ -58,6 +58,8 @@ def _select_best_unit_by_datetime_fallback(
     raw: pd.Series,
     datetime_fallback: pd.Series,
     default_unit: str,
+    logger: Logger | None = None,
+    log_prefix: str = "timestamp-normalization",
 ) -> str:
     fallback_dt = pd.to_datetime(datetime_fallback, errors="coerce", utc=True)
     fallback_mask = fallback_dt.notna()
@@ -77,9 +79,10 @@ def _select_best_unit_by_datetime_fallback(
     if default_unit not in unit_to_divider:
         return default_unit
 
-    best_unit = default_unit
-    best_score = None
+    unit_scores: dict[str, float] = {}
     fallback_ns = fallback_dt.astype("int64")
+    modern_horizon_start = pd.Timestamp("2000-01-01", tz="UTC")
+    modern_horizon_end = pd.Timestamp("2100-01-01", tz="UTC")
 
     for unit in unit_to_divider:
         parsed = pd.to_datetime(numeric, unit=unit, errors="coerce", utc=True)
@@ -91,9 +94,32 @@ def _select_best_unit_by_datetime_fallback(
         score = (parsed_ns.loc[valid_mask] - fallback_ns.loc[valid_mask]).abs().median()
         if pd.isna(score):
             continue
-        if best_score is None or score < best_score:
-            best_score = score
-            best_unit = unit
+        valid_parsed = parsed.loc[valid_mask]
+        in_modern_horizon = valid_parsed.between(modern_horizon_start, modern_horizon_end, inclusive="both")
+        modern_ratio = float(in_modern_horizon.mean())
+        if modern_ratio < 0.8:
+            continue
+        unit_scores[unit] = float(score)
+
+    if not unit_scores:
+        return default_unit
+
+    sorted_scores = sorted(unit_scores.items(), key=lambda item: item[1])
+    best_unit, best_score = sorted_scores[0]
+    second_score = sorted_scores[1][1] if len(sorted_scores) > 1 else None
+
+    is_ambiguous = second_score is not None and (
+        (best_score == 0 and second_score == 0)
+        or (best_score > 0 and (second_score / best_score) < 1.2)
+    )
+    if is_ambiguous:
+        message = (
+            f"{log_prefix}: ambiguous timestamp unit selection by datetime fallback; "
+            f"scores={unit_scores}, default_unit={default_unit}"
+        )
+        if logger is not None:
+            logger.warning(message)
+        raise ValueError(message)
 
     return best_unit
 
@@ -125,6 +151,8 @@ def normalize_timestamp_series(
                 raw=raw,
                 datetime_fallback=datetime_fallback,
                 default_unit=detected_format,
+                logger=logger,
+                log_prefix=log_prefix,
             )
         timestamp_ms = _normalize_numeric_timestamp_to_ms(raw, detected_format=detected_format)
         parsed = pd.to_datetime(timestamp_ms, unit="ms", errors="coerce", utc=True)

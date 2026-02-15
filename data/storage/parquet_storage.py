@@ -48,7 +48,7 @@ class ParquetStorage:
         symbol_path = self.encode_symbol_for_path(symbol)
         return self._base_dir / symbol_path / timeframe.value / "data.parquet"
 
-    def _ensure_utc_columns(self, data: pd.DataFrame) -> pd.DataFrame:
+    def _normalize_raw_utc_columns(self, data: pd.DataFrame) -> pd.DataFrame:
         normalized = data.copy()
         if "timestamp" not in normalized.columns:
             raise ValueError("data must contain 'timestamp' column")
@@ -57,7 +57,7 @@ class ParquetStorage:
             timestamp_series=normalized["timestamp"],
             datetime_fallback=normalized.get("datetime"),
             logger=self._logger,
-            log_prefix="parquet-storage-normalization",
+            log_prefix="parquet-storage-normalization[raw]",
         )
         normalized = normalized.loc[ts.notna()].copy()
         ts = ts.loc[ts.notna()]
@@ -65,6 +65,30 @@ class ParquetStorage:
         normalized["timestamp"] = timestamp_ms.loc[ts.index].astype("int64")
         normalized["datetime"] = pd.to_datetime(ts, errors="coerce", utc=True)
         return normalized
+
+    def _normalize_canonical_utc_columns(self, data: pd.DataFrame) -> pd.DataFrame:
+        normalized = data.copy()
+        if "timestamp" not in normalized.columns:
+            raise ValueError("data must contain 'timestamp' column")
+
+        timestamp_ms = pd.to_numeric(normalized["timestamp"], errors="coerce").astype("Int64")
+        ts = pd.to_datetime(timestamp_ms, unit="ms", errors="coerce", utc=True)
+
+        valid_mask = timestamp_ms.notna() & ts.notna()
+        normalized = normalized.loc[valid_mask].copy()
+        ts = ts.loc[valid_mask]
+        timestamp_ms = timestamp_ms.loc[valid_mask]
+
+        normalized["timestamp"] = timestamp_ms.astype("int64")
+        normalized["datetime"] = ts
+        return normalized
+
+    def _ensure_utc_columns(self, data: pd.DataFrame, mode: str) -> pd.DataFrame:
+        if mode == "raw":
+            return self._normalize_raw_utc_columns(data)
+        if mode == "canonical":
+            return self._normalize_canonical_utc_columns(data)
+        raise ValueError(f"Unsupported normalization mode: {mode}")
 
     def _validate_written_cache(
         self,
@@ -154,12 +178,7 @@ class ParquetStorage:
             logger=self._logger,
             log_prefix="parquet-cache-incoming-timestamp-normalization",
         )
-        written_timestamp_ms, _ = normalize_timestamp_series(
-            timestamp_series=written["timestamp"],
-            datetime_fallback=written.get("datetime"),
-            logger=self._logger,
-            log_prefix="parquet-cache-written-timestamp-normalization",
-        )
+        written_timestamp_ms = pd.to_numeric(written["timestamp"], errors="coerce").astype("Int64")
 
         incoming_timestamps = incoming_timestamp_ms.dropna().astype("int64")
         written_timestamps = written_timestamp_ms.dropna().astype("int64")
@@ -260,7 +279,7 @@ class ParquetStorage:
         frame = pd.read_parquet(path)
         if frame.empty:
             return frame
-        return self._ensure_utc_columns(frame)
+        return self._ensure_utc_columns(frame, mode="canonical")
 
     def get_last_timestamp(self, symbol: str, timeframe: Timeframe) -> pd.Timestamp | None:
         """Возвращает последнюю временную метку в хранилище."""
@@ -305,7 +324,7 @@ class ParquetStorage:
             if "timestamp" in new_data.columns
             else 0
         )
-        incoming = self._ensure_utc_columns(new_data)
+        incoming = self._ensure_utc_columns(new_data, mode="raw")
         incoming_nunique_after_ensure = int(incoming["timestamp"].nunique())
 
         if incoming_nunique_after_ensure < incoming_nunique_before:
@@ -334,8 +353,8 @@ class ParquetStorage:
                 else:
                     merged = merged.rename(columns={col: base_col})
 
-        merged = self._ensure_utc_columns(merged)
-        merged_rechecked = self._ensure_utc_columns(merged)
+        merged = self._ensure_utc_columns(merged, mode="canonical")
+        merged_rechecked = self._ensure_utc_columns(merged, mode="canonical")
         if not merged["timestamp"].reset_index(drop=True).equals(merged_rechecked["timestamp"].reset_index(drop=True)):
             merged_ts = merged["timestamp"].reset_index(drop=True)
             merged_rechecked_ts = merged_rechecked["timestamp"].reset_index(drop=True)
@@ -343,9 +362,18 @@ class ParquetStorage:
             mismatch_sample = pd.DataFrame(
                 {"merged": merged_ts, "merged_rechecked": merged_rechecked_ts}
             ).loc[mismatch_mask].head(10).to_dict("records")
+            merged_dt = merged.get("datetime")
+            merged_rechecked_dt = merged_rechecked.get("datetime")
             raise ParquetCacheValidationError(
                 "parquet cache validation failed: reason=ensure_utc_non_idempotent, "
                 f"symbol={symbol}, timeframe={timeframe.value}, path={path}, "
+                f"normalizer_mode=canonical, "
+                f"timestamp_dtype_before={merged_ts.dtype}, timestamp_dtype_after={merged_rechecked_ts.dtype}, "
+                f"datetime_dtype_before={getattr(merged_dt, 'dtype', '<missing>')}, "
+                f"datetime_dtype_after={getattr(merged_rechecked_dt, 'dtype', '<missing>')}, "
+                f"timestamp_sample_before={merged_ts.head(5).tolist()}, timestamp_sample_after={merged_rechecked_ts.head(5).tolist()}, "
+                f"datetime_sample_before={merged_dt.head(5).tolist() if merged_dt is not None else '<missing>'}, "
+                f"datetime_sample_after={merged_rechecked_dt.head(5).tolist() if merged_rechecked_dt is not None else '<missing>'}, "
                 f"merged_min={merged_ts.min()}, merged_max={merged_ts.max()}, "
                 f"merged_rechecked_min={merged_rechecked_ts.min()}, merged_rechecked_max={merged_rechecked_ts.max()}, "
                 f"mismatch_sample={mismatch_sample}"
@@ -395,3 +423,37 @@ class ParquetStorage:
         )
 
         return added_rows
+
+
+    def migrate_cache_file(self, symbol: str, timeframe: Timeframe) -> int:
+        """Мигрирует существующий parquet-файл в канонический UTC ms-формат."""
+        path = self._data_path(symbol, timeframe)
+        if not path.exists():
+            return 0
+
+        raw = pd.read_parquet(path)
+        if raw.empty:
+            raw.to_parquet(path, index=False)
+            return 0
+
+        normalized_raw = self._ensure_utc_columns(raw, mode="raw")
+        canonical = self._ensure_utc_columns(normalized_raw, mode="canonical")
+        canonical = canonical.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+
+        canonical_rechecked = self._ensure_utc_columns(canonical, mode="canonical")
+        if not canonical["timestamp"].reset_index(drop=True).equals(canonical_rechecked["timestamp"].reset_index(drop=True)):
+            raise ParquetCacheValidationError(
+                "parquet cache validation failed: reason=migration_non_idempotent, "
+                f"symbol={symbol}, timeframe={timeframe.value}, path={path}, normalizer_mode=canonical"
+            )
+
+        canonical_rechecked.to_parquet(path, index=False)
+        self._validate_written_cache(
+            symbol=symbol,
+            timeframe=timeframe,
+            previous_count=0,
+            incoming=normalized_raw,
+            merged=canonical_rechecked,
+        )
+        return len(canonical_rechecked)
+
