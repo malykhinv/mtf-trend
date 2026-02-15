@@ -44,7 +44,7 @@ class DailyVolumeRanker:
                 continue
 
             normalized = frame.copy()
-            normalized["datetime"] = pd.to_datetime(normalized["datetime"], utc=True, errors="coerce")
+            normalized["datetime"] = pd.to_datetime(normalized["datetime"], errors="coerce")
             normalized = normalized.dropna(subset=["datetime", "close", "volume"])
             if normalized.empty:
                 logger.info(

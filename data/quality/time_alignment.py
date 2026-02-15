@@ -16,7 +16,7 @@ class TimeAlignment:
     """Класс."""
     @staticmethod
     def align_to_utc(data: pd.DataFrame) -> pd.DataFrame:
-        """Приводит временные метки к единой зоне UTC."""
+        """Приводит временные метки к единому числовому формату timestamp(ms)."""
         if data.empty:
             return data.copy()
 
