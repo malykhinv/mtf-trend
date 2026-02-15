@@ -23,18 +23,26 @@ class TimeAlignment:
         aligned = data.copy()
 
         if "timestamp" in aligned.columns:
-            timestamp_ms, ts = normalize_timestamp_series(
-                timestamp_series=aligned["timestamp"],
-                datetime_fallback=aligned.get("datetime"),
-                logger=logger,
-                log_prefix="time-alignment-normalization",
-            )
+            try:
+                timestamp_ms, ts = normalize_timestamp_series(
+                    timestamp_series=aligned["timestamp"],
+                    datetime_fallback=aligned.get("datetime"),
+                    logger=logger,
+                    log_prefix="time-alignment-normalization",
+                )
+            except ValueError as exc:
+                logger.error("time-alignment-normalization: system-error=%s", exc)
+                raise
         elif "datetime" in aligned.columns:
-            timestamp_ms, ts = normalize_timestamp_series(
-                timestamp_series=aligned["datetime"],
-                logger=logger,
-                log_prefix="time-alignment-normalization",
-            )
+            try:
+                timestamp_ms, ts = normalize_timestamp_series(
+                    timestamp_series=aligned["datetime"],
+                    logger=logger,
+                    log_prefix="time-alignment-normalization",
+                )
+            except ValueError as exc:
+                logger.error("time-alignment-normalization: system-error=%s", exc)
+                raise
         else:
             msg = "DataFrame must contain 'timestamp' or 'datetime' column"
             raise ValueError(msg)
