@@ -1,7 +1,6 @@
 """Модуль проекта."""
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from constants import (
@@ -94,8 +93,8 @@ class MarketDataFetcher:
         self,
         symbols: list[str],
         timeframe: Timeframe,
-        start_time: datetime,
-        end_time: datetime,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
     ) -> FetchAllResult:
         """Загружает полный набор рыночных метрик."""
         self._logger.info(f"Загрузка старт: {len(symbols)} символов, TF={timeframe.value}")
@@ -103,14 +102,14 @@ class MarketDataFetcher:
         ohlcv_result = self._ohlcv_fetcher.fetch_many(
             symbols,
             timeframe,
-            start_time,
-            end_time,
+            start_timestamp_ms,
+            end_timestamp_ms,
         )
         oi_result = self._oi_fetcher.fetch_many(
             symbols,
             timeframe,
-            start_time,
-            end_time,
+            start_timestamp_ms,
+            end_timestamp_ms,
         )
 
         market_caps = self.fetch_market_caps(symbols)

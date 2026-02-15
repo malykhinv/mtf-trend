@@ -234,19 +234,19 @@ python launcher.py --config run_config.json
 Можно зафиксировать «текущий момент» для `fetch-data` и `update-cache`, чтобы получать повторяемые выборки:
 
 ```env
-FETCH_ANCHOR_DATETIME=2025-01-31T23:59:59
+FETCH_ANCHOR_TIMESTAMP_MS=1738367999000
 ```
 
-Тогда параметр `--days` будет отсчитываться назад именно от `FETCH_ANCHOR_DATETIME`, а не от реального `now`.
+Тогда параметр `--days` будет отсчитываться назад именно от `FETCH_ANCHOR_TIMESTAMP_MS`, а не от текущего времени.
 
 Дополнительно можно переопределить это значение через CLI (приоритет выше env):
 
 ```bash
-python main.py fetch-data --top-n 100 --days 30 --end-datetime 2025-01-31T23:59:59
-python main.py update-cache --top-n 100 --days 7 --end-datetime 2025-01-31T23:59:59
+python main.py fetch-data --top-n 100 --days 30 --end-timestamp-ms 1738367999000
+python main.py update-cache --top-n 100 --days 7 --end-timestamp-ms 1738367999000
 ```
 
-Поддерживается ISO-формат даты/времени (`YYYY-MM-DD` или `YYYY-MM-DDTHH:MM:SS`).
+Используется только unix timestamp в миллисекундах (ms) без преобразований и таймзон.
 
 ## Базовые CLI-команды (старый способ)
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 from pathlib import Path
 
 from config.app_config import AppConfig
@@ -76,7 +75,7 @@ def _parse_bool(value: str | None, *, default: bool = False) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
-def _parse_anchor_datetime(value: str | None, *, env_name: str) -> datetime | None:
+def _parse_anchor_timestamp_ms(value: str | None, *, env_name: str) -> int | None:
     if value is None:
         return None
 
@@ -85,12 +84,14 @@ def _parse_anchor_datetime(value: str | None, *, env_name: str) -> datetime | No
         return None
 
     try:
-        parsed = datetime.fromisoformat(raw_value)
+        parsed = int(raw_value)
     except ValueError as error:
         raise ValueError(
-            f"Invalid {env_name}: {value}. Expected ISO date/datetime, for example "
-            f"2025-01-31 or 2025-01-31T23:59:59"
+            f"Invalid {env_name}: {value}. Expected unix timestamp in milliseconds, for example 1735689599000"
         ) from error
+
+    if parsed < 0:
+        raise ValueError(f"Invalid {env_name}: {value}. Timestamp must be non-negative.")
 
     return parsed
 
@@ -126,9 +127,9 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             )
         ),
         ignore_coingecko=_parse_bool(os.getenv("IGNORE_COINGECKO"), default=False),
-        anchor_datetime=_parse_anchor_datetime(
-            os.getenv("FETCH_ANCHOR_DATETIME"),
-            env_name="FETCH_ANCHOR_DATETIME",
+        anchor_timestamp_ms=_parse_anchor_timestamp_ms(
+            os.getenv("FETCH_ANCHOR_TIMESTAMP_MS"),
+            env_name="FETCH_ANCHOR_TIMESTAMP_MS",
         ),
     )
 

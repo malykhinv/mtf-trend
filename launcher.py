@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-n", type=int, default=None, help="Количество топ монет для fetch/update")
     parser.add_argument("--min-volume-usd", type=float, default=None, help="Минимальный суточный объем в USD")
     parser.add_argument("--days", type=int, default=30, help="Число дней для fetch/update")
-    parser.add_argument("--end-datetime", default=None, help="Якорная дата/время окончания периода в ISO формате")
+    parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Якорный timestamp окончания периода (unix ms)")
     parser.add_argument(
         "--ignore-coingecko",
         action="store_true",
@@ -96,7 +96,7 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         ),
         min_volume_usd=task.get("min_volume_usd", cli_args.min_volume_usd),
         days=int(task.get("days", cli_args.days)),
-        end_datetime=task.get("end_datetime", cli_args.end_datetime),
+        end_timestamp_ms=task.get("end_timestamp_ms", cli_args.end_timestamp_ms),
         symbols=task.get("symbols", cli_args.symbols),
         levels_tf=task.get("levels_tf", cli_args.levels_tf),
         entry_tf=task.get("entry_tf", cli_args.entry_tf),

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
 
 from constants import (
@@ -43,10 +42,10 @@ class OiFetcher:
         self._deduplicator = Deduplicator()
         self._validator = DataValidator()
 
-    def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
+    def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_timestamp_ms: int, end_timestamp_ms: int) -> int:
         """Загружает историю open interest для одного символа."""
-        start_timestamp_ms = int(start_time.timestamp() * 1000)
-        end_timestamp_ms = int(end_time.timestamp() * 1000)
+        start_timestamp_ms = int(start_timestamp_ms)
+        end_timestamp_ms = int(end_timestamp_ms)
         next_start_ms = start_timestamp_ms
         watermark_column = "open_interest"
         last_timestamp_ms = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
@@ -96,14 +95,14 @@ class OiFetcher:
         self,
         symbols: list[str],
         timeframe: Timeframe,
-        start_time: datetime,
-        end_time: datetime,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
     ) -> dict[str, SymbolFetchResult]:
         """Последовательно загружает open interest для набора символов."""
         results: dict[str, SymbolFetchResult] = {}
         for index, symbol in enumerate(symbols):
             try:
-                added_rows = self.fetch_symbol(symbol, timeframe, start_time, end_time)
+                added_rows = self.fetch_symbol(symbol, timeframe, start_timestamp_ms, end_timestamp_ms)
                 results[symbol] = SymbolFetchResult.ok(added_rows)
             except Exception as exc:
                 if isinstance(exc, ParquetCacheValidationError) or "parquet cache validation failed" in str(exc).lower():

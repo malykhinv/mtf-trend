@@ -8,7 +8,7 @@ import json
 import shutil
 from collections import Counter
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta
+import time
 from logging import Logger
 from pathlib import Path
 from typing import Callable
@@ -276,43 +276,20 @@ def _resolve_symbols(
     return [futures_symbol_map[symbol] for symbol in liquid_symbols]
 
 
-def _parse_iso_datetime(
-        value: str,
-        *,
-        argument_name: str,
-) -> datetime:
-    raw_value = value.strip()
-    try:
-        parsed = datetime.fromisoformat(raw_value)
-    except ValueError as error:
-        raise ValueError(
-            f"Некорректный формат {argument_name}: {value}. "
-            f"Ожидается ISO дата/дата-время, например 2025-01-31 или 2025-01-31T23:59:59"
-        ) from error
+def _resolve_fetch_anchor_timestamp_ms(config: AppConfig, end_timestamp_ms_raw: int | None) -> int:
+    if end_timestamp_ms_raw is not None:
+        return int(end_timestamp_ms_raw)
 
-    return parsed
+    if config.fetch.anchor_timestamp_ms is not None:
+        return int(config.fetch.anchor_timestamp_ms)
+
+    return int(time.time() * 1000)
 
 
-def _resolve_fetch_anchor_datetime(config: AppConfig, end_datetime_raw: datetime | str | None) -> datetime:
-    if isinstance(end_datetime_raw, datetime):
-        return end_datetime_raw
-
-    if isinstance(end_datetime_raw, str):
-        return _parse_iso_datetime(
-            end_datetime_raw,
-            argument_name="--end-datetime",
-        )
-
-    if config.fetch.anchor_datetime is not None:
-        return config.fetch.anchor_datetime
-
-    return datetime.now()
-
-
-def _fetch_period(config: AppConfig, days: int, end_datetime_raw: datetime | str | None = None) -> tuple[datetime, datetime]:
-    local_end = _resolve_fetch_anchor_datetime(config, end_datetime_raw)
-    local_start = local_end - timedelta(days=days)
-    return local_start, local_end
+def _fetch_period(config: AppConfig, days: int, end_timestamp_ms_raw: int | None = None) -> tuple[int, int]:
+    end_timestamp_ms = _resolve_fetch_anchor_timestamp_ms(config, end_timestamp_ms_raw)
+    start_timestamp_ms = end_timestamp_ms - (days * 86_400_000)
+    return start_timestamp_ms, end_timestamp_ms
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,12 +409,12 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("загрузка-данных: не найдено символов для загрузки")
         return 0
 
-    start_time, end_time = _fetch_period(config, args.days, getattr(args, "end_datetime", None))
+    start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     failed_symbols: set[str] = set()
     fetch_summaries: dict[Timeframe, FetchSummary] = {}
     for timeframe in config.fetch.timeframes:
         logger.info("загрузка-данных: сбор кэша для TF=%s", timeframe.value)
-        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_time=start_time, end_time=end_time)
+        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_timestamp_ms=start_timestamp_ms, end_timestamp_ms=end_timestamp_ms)
         fetch_summaries[timeframe] = _log_fetch_summary(
             f"fetch-data[{timeframe.value}]",
             logger,
@@ -520,11 +497,11 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("обновление-кэша: не найдено символов для обновления")
         return 0
 
-    start_time, end_time = _fetch_period(config, args.days, getattr(args, "end_datetime", None))
+    start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     failed_symbols: set[str] = set()
     for timeframe in config.fetch.timeframes:
         logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
-        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_time=start_time, end_time=end_time)
+        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_timestamp_ms=start_timestamp_ms, end_timestamp_ms=end_timestamp_ms)
         _log_fetch_summary(f"update-cache[{timeframe.value}]", logger, len(symbols), result.failed_symbols_count)
         failed_symbols.update(
             symbol
