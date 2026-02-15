@@ -7,7 +7,7 @@ import csv
 import json
 import shutil
 from collections import Counter
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, tzinfo
 from logging import Logger
 from pathlib import Path
@@ -322,20 +322,46 @@ def _fetch_period(config: AppConfig, days: int, end_datetime_raw: datetime | str
     return datetime_to_utc(local_start), datetime_to_utc(local_end)
 
 
-def _log_fetch_summary(command_name: str, logger: Logger, total_symbols: int, failed_symbols_count: int) -> None:
-    failed_ratio = (failed_symbols_count / total_symbols) if total_symbols else 0.0
+@dataclass(frozen=True, slots=True)
+class FetchSummary:
+    total_symbols: int
+    success_symbols: int
+    failed_symbols: int
+
+    @property
+    def failed_ratio(self) -> float:
+        return (self.failed_symbols / self.total_symbols) if self.total_symbols else 0.0
+
+
+def _log_fetch_summary(command_name: str, logger: Logger, total_symbols: int, failed_symbols_count: int) -> FetchSummary:
+    summary = FetchSummary(
+        total_symbols=total_symbols,
+        success_symbols=total_symbols - failed_symbols_count,
+        failed_symbols=failed_symbols_count,
+    )
     logger.info(
         "%s: сводка загрузки всего=%s успешно=%s с ошибками=%s доля_ошибок=%.2f%%",
         command_name,
-        total_symbols,
-        total_symbols - failed_symbols_count,
-        failed_symbols_count,
-        failed_ratio * 100,
+        summary.total_symbols,
+        summary.success_symbols,
+        summary.failed_symbols,
+        summary.failed_ratio * 100,
     )
+    return summary
 
 
 def _fetch_exit_code(failed_symbols_count: int, critical_fail_threshold: int = 1) -> int:
     return 1 if failed_symbols_count >= critical_fail_threshold else 0
+
+
+def _resolve_liquidity_skip_reason(summary: FetchSummary | None, threshold: float) -> str | None:
+    if summary is None:
+        return "no_ohlcv_cache_data"
+    if summary.success_symbols == 0:
+        return "no_ohlcv_cache_data"
+    if summary.failed_ratio > threshold:
+        return "ohlcv_error_ratio_above_threshold"
+    return None
 
 
 def _log_loaded_coins(logger: Logger, count: int, action: str) -> None:
@@ -407,10 +433,16 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     start_time, end_time = _fetch_period(config, args.days, getattr(args, "end_datetime", None))
     failed_symbols: set[str] = set()
+    fetch_summaries: dict[Timeframe, FetchSummary] = {}
     for timeframe in config.fetch.timeframes:
         logger.info("загрузка-данных: сбор кэша для TF=%s", timeframe.value)
         result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_time=start_time, end_time=end_time)
-        _log_fetch_summary(f"fetch-data[{timeframe.value}]", logger, len(symbols), result.failed_symbols_count)
+        fetch_summaries[timeframe] = _log_fetch_summary(
+            f"fetch-data[{timeframe.value}]",
+            logger,
+            len(symbols),
+            result.failed_symbols_count,
+        )
         failed_symbols.update(
             symbol
             for symbol in symbols
@@ -419,21 +451,39 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             or isinstance(result.market_caps.market_caps.get(symbol), str)
         )
 
+    root_stage_status = "ok"
     if ignore_coingecko:
-        _ = _resolve_symbols(
-            exchange_client,
-            market_client,
-            top_n=top_n,
-            min_volume_usd=min_volume_usd,
-            logger=logger,
-            coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
-            ignore_coingecko=True,
-            cache_dir=config.backtest.cache_dir,
-            liquidity_timeframe=config.fetch.timeframe,
-            futures_symbols_raw=futures_symbols,
+        liquidity_summary = fetch_summaries.get(config.fetch.timeframe)
+        skip_reason = _resolve_liquidity_skip_reason(
+            liquidity_summary,
+            config.fetch.liquidity_skip_error_ratio_threshold,
         )
+        if skip_reason is None:
+            _ = _resolve_symbols(
+                exchange_client,
+                market_client,
+                top_n=top_n,
+                min_volume_usd=min_volume_usd,
+                logger=logger,
+                coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
+                ignore_coingecko=True,
+                cache_dir=config.backtest.cache_dir,
+                liquidity_timeframe=config.fetch.timeframe,
+                futures_symbols_raw=futures_symbols,
+            )
+        else:
+            root_stage_status = "ohlcv_cache_failed"
+            logger.warning(
+                "liquidity-skip: reason=%s timeframe=%s",
+                skip_reason,
+                config.fetch.timeframe.value,
+            )
 
     exit_code = _fetch_exit_code(len(failed_symbols))
+    if root_stage_status == "ohlcv_cache_failed":
+        exit_code = 2
+
+    logger.info("fetch-data: status=%s exit_code=%s", root_stage_status, exit_code)
     _log_loaded_coins(logger, len(symbols), "loaded")
     return exit_code
 

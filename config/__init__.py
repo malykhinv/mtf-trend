@@ -26,6 +26,7 @@ from constants import (
     DEFAULT_MIN_VOLUME_USD,
     DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS,
     DEFAULT_COINGECKO_VOLUME_BATCH_SIZE,
+    DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
 )
 from domain.enums.timeframe import Timeframe
 from utils.formatters import resolve_timezone
@@ -129,6 +130,12 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         coingecko_volume_batch_size=max(
             1,
             int(os.getenv("COINGECKO_VOLUME_BATCH_SIZE", str(DEFAULT_COINGECKO_VOLUME_BATCH_SIZE))),
+        ),
+        liquidity_skip_error_ratio_threshold=float(
+            os.getenv(
+                "LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD",
+                str(DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD),
+            )
         ),
         ignore_coingecko=_parse_bool(os.getenv("IGNORE_COINGECKO"), default=False),
         anchor_datetime=_parse_anchor_datetime(
