@@ -324,7 +324,16 @@ class ParquetStorage:
             if "timestamp" in new_data.columns
             else 0
         )
-        incoming = self._ensure_utc_columns(new_data, mode="raw")
+        try:
+            incoming = self._ensure_utc_columns(new_data, mode="raw")
+        except ValueError as exc:
+            self._logger.error(
+                "parquet-cache-save-abort: stage=normalize_incoming symbol=%s timeframe=%s cause=%s",
+                symbol,
+                timeframe.value,
+                exc,
+            )
+            raise
         incoming_nunique_after_ensure = int(incoming["timestamp"].nunique())
 
         if incoming_nunique_after_ensure < incoming_nunique_before:

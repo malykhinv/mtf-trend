@@ -80,6 +80,7 @@ def _select_best_unit_by_datetime_fallback(
         return default_unit
 
     unit_scores: dict[str, float] = {}
+    unit_diagnostics: dict[str, dict[str, float]] = {}
     fallback_ns = fallback_dt.astype("int64")
     modern_horizon_start = pd.Timestamp("2000-01-01", tz="UTC")
     modern_horizon_end = pd.Timestamp("2100-01-01", tz="UTC")
@@ -97,11 +98,34 @@ def _select_best_unit_by_datetime_fallback(
         valid_parsed = parsed.loc[valid_mask]
         in_modern_horizon = valid_parsed.between(modern_horizon_start, modern_horizon_end, inclusive="both")
         modern_ratio = float(in_modern_horizon.mean())
+        q95_score = float((parsed_ns.loc[valid_mask] - fallback_ns.loc[valid_mask]).abs().quantile(0.95))
+        unit_diagnostics[unit] = {
+            "median_abs_delta_ns": float(score),
+            "q95_abs_delta_ns": q95_score,
+            "modern_ratio": modern_ratio,
+            "matched_points": float(valid_mask.sum()),
+        }
         if modern_ratio < 0.8:
             continue
         unit_scores[unit] = float(score)
 
     if not unit_scores:
+        fallback_modern_mask = fallback_dt.loc[fallback_mask].between(
+            modern_horizon_start,
+            modern_horizon_end,
+            inclusive="both",
+        )
+        fallback_modern_ratio = float(fallback_modern_mask.mean()) if not fallback_modern_mask.empty else 0.0
+        if fallback_modern_ratio >= 0.8:
+            raw_min, raw_max = _safe_min_max(raw)
+            message = (
+                f"{log_prefix}: datetime fallback present but none of units {tuple(unit_to_divider)} are consistent; "
+                f"raw_min={raw_min}, raw_max={raw_max}, default_unit={default_unit}, "
+                f"fallback_modern_ratio={fallback_modern_ratio:.3f}, diagnostics={unit_diagnostics}"
+            )
+            if logger is not None:
+                logger.error(message)
+            raise ValueError(message)
         return default_unit
 
     sorted_scores = sorted(unit_scores.items(), key=lambda item: item[1])
@@ -122,6 +146,50 @@ def _select_best_unit_by_datetime_fallback(
         raise ValueError(message)
 
     return best_unit
+
+
+def _check_parsed_vs_fallback_consistency(
+    raw: pd.Series,
+    parsed: pd.Series,
+    datetime_fallback: pd.Series,
+    detected_format: str,
+    logger: Logger | None = None,
+    log_prefix: str = "timestamp-normalization",
+) -> None:
+    fallback_dt = pd.to_datetime(datetime_fallback, errors="coerce", utc=True)
+    mask = parsed.notna() & fallback_dt.notna()
+    if not mask.any():
+        return
+
+    parsed_ns = parsed.loc[mask].astype("int64")
+    fallback_ns = fallback_dt.loc[mask].astype("int64")
+    abs_delta_ns = (parsed_ns - fallback_ns).abs()
+
+    median_abs_delta_ns = float(abs_delta_ns.median())
+    q95_abs_delta_ns = float(abs_delta_ns.quantile(0.95))
+    one_year_ns = float(pd.Timedelta(days=365).value)
+
+    modern_horizon_start = pd.Timestamp("2000-01-01", tz="UTC")
+    modern_horizon_end = pd.Timestamp("2100-01-01", tz="UTC")
+    fallback_modern_ratio = float(
+        fallback_dt.loc[mask].between(modern_horizon_start, modern_horizon_end, inclusive="both").mean()
+    )
+    parsed_modern_ratio = float(
+        parsed.loc[mask].between(modern_horizon_start, modern_horizon_end, inclusive="both").mean()
+    )
+
+    if fallback_modern_ratio >= 0.8 and (parsed_modern_ratio < 0.2 or median_abs_delta_ns > one_year_ns):
+        raw_min, raw_max = _safe_min_max(raw)
+        message = (
+            f"{log_prefix}: timestamp normalization rejected by datetime fallback consistency; "
+            f"raw_min={raw_min}, raw_max={raw_max}, detected_format={detected_format}, "
+            f"matched_points={int(mask.sum())}, median_abs_delta_ns={median_abs_delta_ns:.0f}, "
+            f"q95_abs_delta_ns={q95_abs_delta_ns:.0f}, fallback_modern_ratio={fallback_modern_ratio:.3f}, "
+            f"parsed_modern_ratio={parsed_modern_ratio:.3f}"
+        )
+        if logger is not None:
+            logger.error(message)
+        raise ValueError(message)
 
 
 def normalize_timestamp_series(
@@ -159,6 +227,14 @@ def normalize_timestamp_series(
 
     if datetime_fallback is not None:
         fallback_dt = pd.to_datetime(datetime_fallback, errors="coerce", utc=True)
+        _check_parsed_vs_fallback_consistency(
+            raw=raw,
+            parsed=parsed,
+            datetime_fallback=fallback_dt,
+            detected_format=detected_format,
+            logger=logger,
+            log_prefix=log_prefix,
+        )
         parsed = parsed.where(parsed.notna(), fallback_dt)
 
     timestamp_ms = pd.Series(pd.NA, index=parsed.index, dtype="Int64")
