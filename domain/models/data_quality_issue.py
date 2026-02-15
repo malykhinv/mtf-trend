@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from domain.enums.data_quality_severity import DataQualitySeverity
 from domain.enums.timeframe import Timeframe
@@ -15,7 +14,7 @@ class DataQualityIssue:
     timeframe: Timeframe
     issue_type: str
     severity: DataQualitySeverity
-    timestamp: datetime
+    timestamp: int
     description: str
 
     # region Приватные
@@ -30,6 +29,10 @@ class DataQualityIssue:
 
         if self.timestamp is None:
             msg = "DataQualityIssue timestamp is required."
+            raise ValueError(msg)
+
+        if self.timestamp < 0:
+            msg = "DataQualityIssue timestamp must be >= 0."
             raise ValueError(msg)
 
         if not self.description:

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas as pd
 
 from constants import SPREAD_TO_CLOSE_WARNING_THRESHOLD
@@ -30,7 +28,7 @@ class DataValidator:
                     timeframe=timeframe,
                     issue_type=issue_type,
                     severity=severity,
-                    timestamp=datetime.fromtimestamp(0),
+                    timestamp=0,
                     description=description,
                 )
             )
@@ -43,12 +41,12 @@ class DataValidator:
             )
             return issues
 
-        ts = pd.to_datetime(normalized["timestamp"], unit="ms", errors="coerce")
+        ts = pd.to_numeric(normalized["timestamp"], errors="coerce")
         if ts.notna().sum() == 0:
             add_dataset_issue(
                 "invalid_timestamp_series",
                 DataQualitySeverity.ERROR,
-                "Колонка timestamp не распознана (все значения NaT): данные нельзя валидировать по времени, дальнейшие проверки остановлены.",
+                "Колонка timestamp не распознана как числовая серия: данные нельзя валидировать по времени, дальнейшие проверки остановлены.",
             )
             return issues
 
@@ -61,7 +59,7 @@ class DataValidator:
         def add_issue(pos: int, issue_type: str, severity: DataQualitySeverity, description: str) -> None:
             if pd.isna(ts.iloc[pos]):
                 return
-            tstamp = ts.iloc[pos].to_pydatetime()
+            tstamp = int(ts.iloc[pos])
             issues.append(
                 DataQualityIssue(
                     symbol=symbol,
