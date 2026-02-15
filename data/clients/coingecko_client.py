@@ -8,7 +8,7 @@ import random
 import re
 import tempfile
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -171,7 +171,7 @@ class CoinGeckoClient(MarketDataClient):
             if "symbol" not in raw_payload.columns:
                 raise ValueError("Кэш должен содержать колонку 'symbol'")
 
-            now = datetime.now(tz=timezone.utc)
+            now = datetime.utcnow()
             loaded_cache: dict[str, tuple[float, datetime]] = {}
             loaded_symbol_to_id: dict[str, str] = {}
             has_market_cap = {"market_cap", "expires_at"}.issubset(raw_payload.columns)
@@ -214,10 +214,8 @@ class CoinGeckoClient(MarketDataClient):
                 if has_market_cap:
                     expires_at_dt = pd.Timestamp(row.expires_at)
                     if not pd.isna(expires_at_dt):
-                        if expires_at_dt.tzinfo is None:
-                            expires_at_dt = expires_at_dt.tz_localize(timezone.utc)
-                        else:
-                            expires_at_dt = expires_at_dt.tz_convert(timezone.utc)
+                        if expires_at_dt.tzinfo is not None:
+                            expires_at_dt = expires_at_dt.tz_localize(None)
 
                         expires_at = expires_at_dt.to_pydatetime()
                         market_cap = row.market_cap
@@ -257,7 +255,10 @@ class CoinGeckoClient(MarketDataClient):
             )
             record["schema_version"] = self.CACHE_SCHEMA_VERSION
             record["market_cap"] = market_cap
-            record["expires_at"] = pd.Timestamp(expires_at).tz_convert(timezone.utc)
+            expires_at_value = pd.Timestamp(expires_at)
+            if expires_at_value.tzinfo is not None:
+                expires_at_value = expires_at_value.tz_localize(None)
+            record["expires_at"] = expires_at_value.to_pydatetime()
             record["coin_id"] = self._symbol_to_id.get(symbol, "")
 
         records = list(records_by_symbol.values())
@@ -315,10 +316,9 @@ class CoinGeckoClient(MarketDataClient):
         except (TypeError, ValueError):
             return None
 
-        now = datetime.now(tz=timezone.utc)
-        if retry_at.tzinfo is None:
-            retry_at = retry_at.replace(tzinfo=timezone.utc)
-        return max((retry_at - now).total_seconds(), 0.0)
+        now_ts = datetime.now().timestamp()
+        retry_at_ts = retry_at.timestamp()
+        return max(retry_at_ts - now_ts, 0.0)
 
     def _request(self, endpoint: str, symbol: str, params: dict[str, str | int] | None = None) -> requests.Response:
         last_error: requests.RequestException | None = None
@@ -634,7 +634,7 @@ class CoinGeckoClient(MarketDataClient):
     def get_market_cap(self, symbol: str) -> float:
         """Возвращает капитализацию монеты на нужный момент."""
         canonical_symbol = self._canonical_symbol_key(symbol)
-        now = datetime.now(tz=timezone.utc)
+        now = datetime.utcnow()
 
         cached = self._market_cap_cache.get(canonical_symbol)
         if cached and cached[1] > now:
