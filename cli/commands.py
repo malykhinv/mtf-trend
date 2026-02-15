@@ -333,20 +333,28 @@ class FetchSummary:
         return (self.failed_symbols / self.total_symbols) if self.total_symbols else 0.0
 
 
-def _log_fetch_summary(command_name: str, logger: Logger, total_symbols: int, failed_symbols_count: int) -> FetchSummary:
+def _log_fetch_summary(
+    command_name: str,
+    logger: Logger,
+    total_symbols: int,
+    failed_symbols_count: int,
+    *,
+    emit_log: bool = True,
+) -> FetchSummary:
     summary = FetchSummary(
         total_symbols=total_symbols,
         success_symbols=total_symbols - failed_symbols_count,
         failed_symbols=failed_symbols_count,
     )
-    logger.info(
-        "%s: сводка загрузки всего=%s успешно=%s с ошибками=%s доля_ошибок=%.2f%%",
-        command_name,
-        summary.total_symbols,
-        summary.success_symbols,
-        summary.failed_symbols,
-        summary.failed_ratio * 100,
-    )
+    if emit_log:
+        logger.info(
+            "%s: сводка загрузки всего=%s успешно=%s с ошибками=%s доля_ошибок=%.2f%%",
+            command_name,
+            summary.total_symbols,
+            summary.success_symbols,
+            summary.failed_symbols,
+            summary.failed_ratio * 100,
+        )
     return summary
 
 
@@ -442,6 +450,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             logger,
             len(symbols),
             result.failed_symbols_count,
+            emit_log=(not ignore_coingecko or timeframe == config.fetch.timeframe),
         )
         failed_symbols.update(
             symbol
