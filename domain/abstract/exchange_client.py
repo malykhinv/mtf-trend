@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
-
 import pandas as pd
 
 from domain.enums.timeframe import Timeframe
@@ -17,8 +15,8 @@ class ExchangeClient(ABC):
         self,
         symbol: str,
         timeframe: Timeframe,
-        start_time: datetime,
-        end_time: datetime,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
     ) -> pd.DataFrame:
         """Метод."""
     @abstractmethod
@@ -26,8 +24,8 @@ class ExchangeClient(ABC):
         self,
         symbol: str,
         timeframe: Timeframe,
-        start_time: datetime,
-        end_time: datetime,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
     ) -> pd.DataFrame:
         """Метод."""
     @abstractmethod
