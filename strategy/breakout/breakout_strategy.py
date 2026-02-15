@@ -37,7 +37,6 @@ from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BreakoutParams
 from strategy.breakout.pending_breakout import PendingBreakout
 from strategy.breakout.pending_retest import PendingRetest
-from utils.formatters import datetime_to_timezone, utc_ms_to_local_datetime
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
@@ -86,7 +85,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
     def _to_candle(self, row: pd.Series) -> Candle:
         return Candle(
-            timestamp=datetime_to_timezone(row["datetime"].to_pydatetime(), self._simulation_timezone),
+            timestamp=row["datetime"].to_pydatetime(),
             open=Price(float(row["open"])),
             high=Price(float(row["high"])),
             low=Price(float(row["low"])),
@@ -378,9 +377,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             raise ValueError(f"Отсутствуют обязательные колонки: {missing}")
 
         prepared = data.copy()
-        prepared["datetime"] = pd.to_numeric(prepared["timestamp"], errors="coerce").map(
-            lambda value: utc_ms_to_local_datetime(value, self._strategy_timezone) if pd.notna(value) else pd.NaT
-        )
+        prepared["datetime"] = pd.to_datetime(prepared["timestamp"], unit="ms", errors="coerce")
         prepared = prepared.dropna(subset=["datetime"])
         prepared = prepared.sort_values("datetime").reset_index(drop=True)
 
@@ -841,7 +838,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         if active_sim is not None and active_sim.position is not None:
             final_row = annotated.iloc[-1]
-            final_time = datetime_to_timezone(final_row["datetime"].to_pydatetime(), self._simulation_timezone)
+            final_time = final_row["datetime"].to_pydatetime()
             trades.append(active_sim.close_position(price=float(final_row["close"]), exit_time=final_time))
 
         diagnostics["trades_generated"] = len(trades)

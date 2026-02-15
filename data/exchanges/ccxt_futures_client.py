@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable, cast
 
 import pandas as pd
@@ -34,9 +34,7 @@ except ImportError:  # pragma: no cover
 
 # region Приватные
 
-def _to_utc_ms(value: datetime) -> int:
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
+def _to_exchange_ms(value: datetime) -> int:
     return int(value.timestamp() * MILLISECONDS_IN_SECOND)
 
 # endregion Приватные
@@ -197,9 +195,9 @@ class CcxtFuturesClient(ExchangeClient):
     def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
         """Запрашивает свечи по символу и интервалу."""
         self._ensure_markets_loaded()
-        start_ms = _to_utc_ms(start_time)
+        start_ms = _to_exchange_ms(start_time)
         since = start_ms
-        end_ms = _to_utc_ms(end_time)
+        end_ms = _to_exchange_ms(end_time)
 
         all_rows: list[list[float]] = []
         while since <= end_ms:
@@ -237,9 +235,9 @@ class CcxtFuturesClient(ExchangeClient):
         if not isinstance(self._client, CcxtOpenInterestApi):
             raise NotImplementedError(f"Exchange {self.exchange.value} does not support fetch_open_interest_history in CCXT")
 
-        start_ms = _to_utc_ms(start_time)
+        start_ms = _to_exchange_ms(start_time)
         since = start_ms
-        end_ms = _to_utc_ms(end_time)
+        end_ms = _to_exchange_ms(end_time)
         ccxt_timeframe = timeframe.value
         timeframe_ms = int(TIMEFRAME_TO_DELTA[timeframe].total_seconds() * MILLISECONDS_IN_SECOND)
         oi_limit = min(DEFAULT_FETCH_BATCH_SIZE, 500) if self.exchange == Exchange.BINANCE else DEFAULT_FETCH_BATCH_SIZE
