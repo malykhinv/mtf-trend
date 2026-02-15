@@ -2,37 +2,42 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pandas as pd
 
+from constants import MILLISECONDS_IN_SECOND, TIMEFRAME_TO_DELTA
 from domain.enums.timeframe import Timeframe
 
-_TIMEFRAME_TO_DELTA = {
-    Timeframe.M1: timedelta(minutes=1),
-    Timeframe.M5: timedelta(minutes=5),
-    Timeframe.M15: timedelta(minutes=15),
-    Timeframe.M30: timedelta(minutes=30),
-    Timeframe.H1: timedelta(hours=1),
-    Timeframe.H4: timedelta(hours=4),
-    Timeframe.D1: timedelta(days=1),
-    Timeframe.W1: timedelta(weeks=1),
+_TIMEFRAME_TO_MS = {
+    timeframe: int(delta.total_seconds() * MILLISECONDS_IN_SECOND)
+    for timeframe, delta in TIMEFRAME_TO_DELTA.items()
 }
 
 
 class GapDetector:
     """Класс."""
     @staticmethod
-    def detect_gaps(data: pd.DataFrame, timeframe: Timeframe) -> list[pd.Timestamp]:
-        """Ищет пропуски во временном ряду свечей."""
+    def detect_gaps(data: pd.DataFrame, timeframe: Timeframe) -> list[int]:
+        """Ищет пропуски во временном ряду свечей по исходным меткам времени биржи."""
         if data.empty or "timestamp" not in data.columns:
             return []
 
-        ts = pd.DatetimeIndex(pd.to_datetime(data["timestamp"], unit="ms", errors="coerce").dropna())
-        ts = ts.sort_values().drop_duplicates()
-        if ts.empty:
+        timestamps = pd.to_numeric(data["timestamp"], errors="coerce").dropna().astype("int64")
+        if timestamps.empty:
             return []
 
-        expected = pd.date_range(start=ts[0], end=ts[-1], freq=_TIMEFRAME_TO_DELTA[timeframe])
-        missing = expected.difference(ts)
-        return list(missing)
+        ts = sorted(set(timestamps.tolist()))
+        step = _TIMEFRAME_TO_MS[timeframe]
+        if step <= 0:
+            return []
+
+        missing: list[int] = []
+        for prev, curr in zip(ts, ts[1:]):
+            gap = curr - prev
+            if gap <= step:
+                continue
+            next_expected = prev + step
+            while next_expected < curr:
+                missing.append(next_expected)
+                next_expected += step
+
+        return missing
