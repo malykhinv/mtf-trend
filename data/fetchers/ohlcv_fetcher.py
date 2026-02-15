@@ -20,7 +20,7 @@ from data.storage.parquet_storage import ParquetCacheValidationError, ParquetSto
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
-from utils.formatters import format_datetime_human
+from utils.formatters import datetime_to_utc, format_datetime_human
 from utils.logger import get_logger
 
 
@@ -50,24 +50,26 @@ class OhlcvFetcher:
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
         """Загружает OHLCV-данные для одного символа."""
-        next_start = start_time
+        start_time_utc = datetime_to_utc(start_time)
+        end_time_utc = datetime_to_utc(end_time)
+        next_start = start_time_utc
         watermark_column = "close"
         last_timestamp = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
         if last_timestamp is not None:
-            next_start = max(start_time, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
+            next_start = max(start_time_utc, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
 
         watermark_display = format_datetime_human(last_timestamp.to_pydatetime()) if last_timestamp is not None else "None"
         next_start_display = format_datetime_human(next_start)
-        end_time_display = format_datetime_human(end_time)
+        end_time_display = format_datetime_human(end_time_utc)
         self._logger.info(
             f"OHLCV водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start_display}"
         )
         self._logger.info(f"OHLCV старт: {symbol} {timeframe.value} {next_start_display} -> {end_time_display}")
-        if next_start > end_time:
+        if next_start > end_time_utc:
             self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OHLCV", symbol)
             return 0
 
-        data = self._exchange_client.fetch_ohlcv(symbol, timeframe, next_start, end_time)
+        data = self._exchange_client.fetch_ohlcv(symbol, timeframe, next_start, end_time_utc)
         data = self._aligner.align_to_utc(data)
         data = self._deduplicator.deduplicate(data)
 

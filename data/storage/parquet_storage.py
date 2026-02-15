@@ -227,7 +227,7 @@ class ParquetStorage:
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:
             return None
-        return pd.to_datetime(data["timestamp"], unit="ms").max()
+        return pd.to_datetime(data["timestamp"], unit="ms", utc=True).max()
 
     def get_last_timestamp_for_column(
         self,
@@ -241,7 +241,7 @@ class ParquetStorage:
             return None
 
         if column_name == "timestamp":
-            return pd.to_datetime(data["timestamp"], unit="ms").max()
+            return pd.to_datetime(data["timestamp"], unit="ms", utc=True).max()
 
         if column_name not in data.columns:
             return None
@@ -250,7 +250,7 @@ class ParquetStorage:
         if not valid_rows.any():
             return None
 
-        return pd.to_datetime(data.loc[valid_rows, "timestamp"], unit="ms").max()
+        return pd.to_datetime(data.loc[valid_rows, "timestamp"], unit="ms", utc=True).max()
 
     def save_incremental(self, symbol: str, timeframe: Timeframe, new_data: pd.DataFrame) -> int:
         """Дозаписывает новые данные без перезаписи старых."""
