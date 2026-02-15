@@ -118,14 +118,14 @@ class ParquetStorage:
         if written["timestamp"].isna().any():
             _raise_validation_error("null_timestamp", null_count=int(written["timestamp"].isna().sum()))
 
-        parsed_written_timestamps = pd.to_datetime(written["timestamp"], unit="ms", utc=True, errors="coerce")
+        parsed_written_timestamps = pd.to_datetime(written["timestamp"], unit="ms", errors="coerce")
         if parsed_written_timestamps.isna().any():
             _raise_validation_error(
                 "invalid_timestamp_values",
                 invalid_count=int(parsed_written_timestamps.isna().sum()),
             )
 
-        parsed_datetime = pd.to_datetime(written["datetime"], utc=True, errors="coerce")
+        parsed_datetime = pd.to_datetime(written["datetime"], errors="coerce")
         if parsed_datetime.isna().any():
             _raise_validation_error("invalid_datetime_values", invalid_count=int(parsed_datetime.isna().sum()))
 
@@ -191,7 +191,7 @@ class ParquetStorage:
                 )
 
             sampled_row = written_batch_rows.sample(n=1, random_state=42).iloc[0]
-            sampled_timestamp = pd.to_datetime(sampled_row["timestamp"], unit="ms", utc=True, errors="coerce")
+            sampled_timestamp = pd.to_datetime(sampled_row["timestamp"], unit="ms", errors="coerce")
             if pd.isna(sampled_timestamp):
                 _raise_validation_error(
                     "sampled_timestamp_unparseable",
@@ -227,7 +227,7 @@ class ParquetStorage:
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:
             return None
-        return pd.to_datetime(data["timestamp"], unit="ms", utc=True).max()
+        return pd.to_datetime(data["timestamp"], unit="ms").max()
 
     def get_last_timestamp_for_column(
         self,
@@ -241,7 +241,7 @@ class ParquetStorage:
             return None
 
         if column_name == "timestamp":
-            return pd.to_datetime(data["timestamp"], unit="ms", utc=True).max()
+            return pd.to_datetime(data["timestamp"], unit="ms").max()
 
         if column_name not in data.columns:
             return None
@@ -250,7 +250,7 @@ class ParquetStorage:
         if not valid_rows.any():
             return None
 
-        return pd.to_datetime(data.loc[valid_rows, "timestamp"], unit="ms", utc=True).max()
+        return pd.to_datetime(data.loc[valid_rows, "timestamp"], unit="ms").max()
 
     def save_incremental(self, symbol: str, timeframe: Timeframe, new_data: pd.DataFrame) -> int:
         """Дозаписывает новые данные без перезаписи старых."""

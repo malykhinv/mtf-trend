@@ -43,7 +43,7 @@ class DataValidator:
             )
             return issues
 
-        ts = pd.to_datetime(normalized["timestamp"], unit="ms", utc=True, errors="coerce")
+        ts = pd.to_datetime(normalized["timestamp"], unit="ms", errors="coerce")
         if ts.notna().sum() == 0:
             add_dataset_issue(
                 "invalid_timestamp_series",
@@ -61,7 +61,7 @@ class DataValidator:
         def add_issue(pos: int, issue_type: str, severity: DataQualitySeverity, description: str) -> None:
             if pd.isna(ts.iloc[pos]):
                 return
-            tstamp = ts.iloc[pos].to_pydatetime().astimezone(timezone.utc)
+            tstamp = ts.iloc[pos].to_pydatetime()
             issues.append(
                 DataQualityIssue(
                     symbol=symbol,

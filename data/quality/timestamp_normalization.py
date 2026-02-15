@@ -34,6 +34,26 @@ def _safe_min_max(raw: pd.Series) -> tuple[object, object]:
         return as_string.min(), as_string.max()
 
 
+def _normalize_numeric_timestamp_to_ms(raw: pd.Series) -> pd.Series:
+    numeric = pd.to_numeric(raw, errors="coerce")
+    if numeric.dropna().empty:
+        return pd.Series(pd.NA, index=raw.index, dtype="Int64")
+
+    detected_format = _detect_timestamp_unit(raw)
+    if detected_format == "ns":
+        normalized = numeric // 1_000_000
+    elif detected_format == "us":
+        normalized = numeric // 1_000
+    elif detected_format == "ms":
+        normalized = numeric
+    elif detected_format == "s":
+        normalized = numeric * 1_000
+    else:
+        normalized = pd.Series(pd.NA, index=raw.index, dtype="float64")
+
+    return normalized.round().astype("Int64")
+
+
 def normalize_timestamp_series(
     timestamp_series: pd.Series,
     datetime_fallback: pd.Series | None = None,
@@ -48,25 +68,27 @@ def normalize_timestamp_series(
 
     if is_datetime64_any_dtype(raw):
         detected_format = "datetime-like"
-        parsed = pd.to_datetime(raw, utc=True, errors="coerce")
+        parsed = pd.to_datetime(raw, errors="coerce")
+        timestamp_ms = pd.Series(pd.NA, index=parsed.index, dtype="Int64")
+        parsed_notna_mask = parsed.notna()
+        timestamp_ms.loc[parsed_notna_mask] = (
+            parsed.loc[parsed_notna_mask].astype("int64") // 1_000_000
+        ).astype("Int64")
     else:
         detected_format = _detect_timestamp_unit(raw)
-        if detected_format == "datetime-like":
-            parsed = pd.to_datetime(raw, utc=True, errors="coerce")
-        else:
-            numeric = pd.to_numeric(raw, errors="coerce")
-            parsed = pd.to_datetime(numeric, unit=detected_format, utc=True, errors="coerce")
+        timestamp_ms = _normalize_numeric_timestamp_to_ms(raw)
+        parsed = pd.to_datetime(timestamp_ms, unit="ms", errors="coerce")
 
     if datetime_fallback is not None:
-        fallback_dt = pd.to_datetime(datetime_fallback, utc=True, errors="coerce")
+        fallback_dt = pd.to_datetime(datetime_fallback, errors="coerce")
         parsed = parsed.where(parsed.notna(), fallback_dt)
+        parsed_notna_mask = parsed.notna()
+        timestamp_ms.loc[parsed_notna_mask] = (
+            parsed.loc[parsed_notna_mask].astype("int64") // 1_000_000
+        ).astype("Int64")
 
     parsed_notna_mask = parsed.notna()
     parsed_notna = int(parsed_notna_mask.sum())
-    timestamp_ms = pd.Series(pd.NA, index=parsed.index, dtype="Int64")
-    timestamp_ms.loc[parsed_notna_mask] = (
-        parsed.loc[parsed_notna_mask].astype("int64") // 1_000_000
-    ).astype("Int64")
     nunique_after = int(timestamp_ms.dropna().nunique())
 
     if logger is not None:

@@ -28,7 +28,7 @@ class GapDetector:
         if data.empty or "timestamp" not in data.columns:
             return []
 
-        ts = pd.DatetimeIndex(pd.to_datetime(data["timestamp"], unit="ms", utc=True, errors="coerce").dropna())
+        ts = pd.DatetimeIndex(pd.to_datetime(data["timestamp"], unit="ms", errors="coerce").dropna())
         ts = ts.sort_values().drop_duplicates()
         if ts.empty:
             return []

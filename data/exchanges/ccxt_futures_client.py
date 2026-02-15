@@ -37,8 +37,6 @@ except ImportError:  # pragma: no cover
 def _to_utc_ms(value: datetime) -> int:
     if value.tzinfo is None:
         value = value.replace(tzinfo=timezone.utc)
-    else:
-        value = value.astimezone(timezone.utc)
     return int(value.timestamp() * MILLISECONDS_IN_SECOND)
 
 # endregion Приватные
@@ -230,7 +228,7 @@ class CcxtFuturesClient(ExchangeClient):
             return frame
 
         frame = frame.loc[(frame["timestamp"] >= start_ms) & (frame["timestamp"] <= end_ms)]
-        frame["datetime"] = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
+        frame["datetime"] = pd.to_datetime(frame["timestamp"], unit="ms")
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
     def fetch_open_interest(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
@@ -305,6 +303,6 @@ class CcxtFuturesClient(ExchangeClient):
             frame["open_interest"] = pd.to_numeric(frame.get("openInterest"), errors="coerce")
 
         frame = frame.loc[(frame["timestamp"] >= start_ms) & (frame["timestamp"] <= end_ms)]
-        frame["datetime"] = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
+        frame["datetime"] = pd.to_datetime(frame["timestamp"], unit="ms")
         frame = frame[list(OPEN_INTEREST_FRAME_COLUMNS)]
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
