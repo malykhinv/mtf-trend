@@ -97,8 +97,9 @@ class ParquetStorage:
         previous_count: int,
         incoming: pd.DataFrame,
         merged: pd.DataFrame,
+        path_override: Path | None = None,
     ) -> None:
-        path = self._data_path(symbol, timeframe)
+        path = path_override or self._data_path(symbol, timeframe)
         written = pd.read_parquet(path)
         written_ts_dtype = written["timestamp"].dtype if "timestamp" in written.columns else "<missing>"
         added_rows = max(len(merged) - previous_count, 0)
@@ -400,19 +401,29 @@ class ParquetStorage:
                 merged_nunique_before_dedup,
                 merged_nunique_after_dedup,
             )
-        merged.to_parquet(path, index=False)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        merged.to_parquet(tmp_path, index=False)
         incoming_rows = len(incoming)
         final_rows = len(merged)
         added_rows = max(final_rows - previous_count, 0)
 
         try:
-            self._validate_written_cache(symbol, timeframe, previous_count, incoming, merged)
+            self._validate_written_cache(
+                symbol=symbol,
+                timeframe=timeframe,
+                previous_count=previous_count,
+                incoming=incoming,
+                merged=merged,
+                path_override=tmp_path,
+            )
         except Exception as exc:
+            if tmp_path.exists():
+                tmp_path.unlink()
             self._logger.error(
                 "parquet-cache-validation: validation=error symbol=%s timeframe=%s path=%s previous_count=%s incoming_rows=%s added_rows=%s final_rows=%s reason=%s",
                 symbol,
                 timeframe.value,
-                path,
+                tmp_path,
                 previous_count,
                 incoming_rows,
                 added_rows,
@@ -420,6 +431,8 @@ class ParquetStorage:
                 str(exc),
             )
             raise
+
+        tmp_path.replace(path)
 
         self._logger.info(
             "parquet-cache-validation: validation=ok symbol=%s timeframe=%s previous_count=%s incoming_rows=%s added_rows=%s final_rows=%s",
@@ -440,9 +453,12 @@ class ParquetStorage:
         if not path.exists():
             return 0
 
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+
         raw = pd.read_parquet(path)
         if raw.empty:
-            raw.to_parquet(path, index=False)
+            raw.to_parquet(tmp_path, index=False)
+            tmp_path.replace(path)
             return 0
 
         normalized_raw = self._ensure_utc_columns(raw, mode="raw")
@@ -456,13 +472,20 @@ class ParquetStorage:
                 f"symbol={symbol}, timeframe={timeframe.value}, path={path}, normalizer_mode=canonical"
             )
 
-        canonical_rechecked.to_parquet(path, index=False)
-        self._validate_written_cache(
-            symbol=symbol,
-            timeframe=timeframe,
-            previous_count=0,
-            incoming=normalized_raw,
-            merged=canonical_rechecked,
-        )
-        return len(canonical_rechecked)
+        canonical_rechecked.to_parquet(tmp_path, index=False)
+        try:
+            self._validate_written_cache(
+                symbol=symbol,
+                timeframe=timeframe,
+                previous_count=0,
+                incoming=normalized_raw,
+                merged=canonical_rechecked,
+                path_override=tmp_path,
+            )
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise
 
+        tmp_path.replace(path)
+        return len(canonical_rechecked)
