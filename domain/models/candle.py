@@ -20,8 +20,12 @@ class Candle:
 
     # region Приватные
     def __post_init__(self) -> None:
-        if self.timestamp_ms is None:
-            msg = "Candle timestamp_ms is required."
+        if not isinstance(self.timestamp_ms, int):
+            msg = "Candle timestamp_ms must be int unix ms."
+            raise ValueError(msg)
+
+        if self.timestamp_ms < 0:
+            msg = "Candle timestamp_ms must be >= 0."
             raise ValueError(msg)
 
         if self.high.value < self.low.value:
