@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -35,14 +34,16 @@ class StrategyPlotter:
     def _format_date_range(annotated: pd.DataFrame) -> str:
         if annotated.empty:
             return "empty"
-        start = datetime.fromtimestamp(int(annotated["timestamp"].iloc[0]) / 1000, tz=UTC).strftime("%Y%m%d")
-        end = datetime.fromtimestamp(int(annotated["timestamp"].iloc[-1]) / 1000, tz=UTC).strftime("%Y%m%d")
-        return f"{start}_{end}"
+        start_ms = int(annotated["timestamp"].iloc[0])
+        end_ms = int(annotated["timestamp"].iloc[-1])
+        return f"{start_ms}_{end_ms}"
 
     @staticmethod
     def _timestamp_formatter(fmt: str) -> FuncFormatter:
+        _ = fmt
+
         def _format_timestamp(value: float, _position: float) -> str:
-            return datetime.fromtimestamp(value / 1000, tz=UTC).strftime(fmt)
+            return str(int(value))
 
         return FuncFormatter(_format_timestamp)
 
@@ -224,12 +225,12 @@ class StrategyPlotter:
             ax.add_patch(rect)
             ax.grid(alpha=0.3)
             ax.legend(loc="upper left")
-            start_str = datetime.fromtimestamp(span.retest_start_timestamp_ms / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+            start_str = str(span.retest_start_timestamp_ms)
             ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {start_str}")
             ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
             fig.autofmt_xdate(rotation=30)
 
-            timestamp = datetime.fromtimestamp(span.retest_start_timestamp_ms / 1000, tz=UTC).strftime("%Y%m%d_%H%M%S")
+            timestamp = span.retest_start_timestamp_ms
             output_path = symbol_dir / f"retest_{timestamp}_{span.side.value}_{span.status}.png"
             fig.tight_layout()
             fig.savefig(output_path, dpi=150)
