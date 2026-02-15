@@ -16,7 +16,7 @@ from data.quality.data_validator import DataValidator
 from data.quality.deduplicator import Deduplicator
 from data.quality.gap_detector import GapDetector
 from data.quality.time_alignment import TimeAlignment
-from data.storage.parquet_storage import ParquetStorage
+from data.storage.parquet_storage import ParquetCacheValidationError, ParquetStorage
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
@@ -97,6 +97,13 @@ class OhlcvFetcher:
                 added_rows = self.fetch_symbol(symbol, timeframe, start_time, end_time)
                 results[symbol] = SymbolFetchResult.ok(added_rows)
             except Exception as exc:
+                if isinstance(exc, ParquetCacheValidationError) or "parquet cache validation failed" in str(exc).lower():
+                    self._logger.error(
+                        "cache-validation-error: source=ohlcv symbol=%s timeframe=%s cause=%s",
+                        symbol,
+                        timeframe.value,
+                        exc,
+                    )
                 msg = f"OHLCV ошибка исполнения: {symbol}: {exc}"
                 self._logger.error(msg)
                 results[symbol] = SymbolFetchResult.error(msg)
