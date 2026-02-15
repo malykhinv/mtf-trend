@@ -25,6 +25,7 @@ from domain.enums.position_side import PositionSide
 from domain.enums.timeframe import Timeframe
 from domain.models.candle import Candle
 from domain.models.level import Level
+from domain.models.retest_plot_span import RetestPlotSpan
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
@@ -490,6 +491,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "breakout_pending_end_of_data": 0,
             "retest_pending_end_of_data": 0,
             "trades_generated": 0,
+            "retest_plot_spans": [],
         }
         diagnostics["context"] = {
             "symbol": params.symbol,
@@ -504,6 +506,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             return []
 
         trades: list[TradeResult] = []
+        retest_plot_spans: list[RetestPlotSpan] = []
         pending_signal: TradeSignal | None = None
         pending_breakout: PendingBreakout | None = None
         pending_retest: PendingRetest | None = None
@@ -536,6 +539,19 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             if pending_retest is not None:
                 if params.entry_trigger == EntryTrigger.IMMEDIATE:
                     entry_idx = pending_retest.retest_idx + 1
+                    pending_retest.retest_end_idx = pending_retest.retest_idx
+                    retest_plot_spans.append(
+                        RetestPlotSpan(
+                            symbol=params.symbol,
+                            side=pending_retest.breakout.side,
+                            level_price=pending_retest.breakout.level.price.value,
+                            retest_low=pending_retest.retest_low,
+                            retest_high=pending_retest.retest_high,
+                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
+                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            status="confirmed",
+                        )
+                    )
                     self._logger.info(
                         "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
                         params.symbol,
@@ -557,6 +573,19 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
                 if idx > pending_retest.confirmation_end_idx:
                     diagnostics["retest_confirmation_expired"] += 1
+                    pending_retest.retest_end_idx = pending_retest.confirmation_end_idx
+                    retest_plot_spans.append(
+                        RetestPlotSpan(
+                            symbol=params.symbol,
+                            side=pending_retest.breakout.side,
+                            level_price=pending_retest.breakout.level.price.value,
+                            retest_low=pending_retest.retest_low,
+                            retest_high=pending_retest.retest_high,
+                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
+                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            status="confirmation_expired",
+                        )
+                    )
                     self._logger.info(
                         "retest_confirmation_expired symbol=%s confirmation_end_idx=%s idx=%s candle_time=%s",
                         params.symbol,
@@ -568,6 +597,19 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     continue
                 if self._is_confirmation(row=row, retest=pending_retest):
                     entry_idx = idx + 1
+                    pending_retest.retest_end_idx = idx
+                    retest_plot_spans.append(
+                        RetestPlotSpan(
+                            symbol=params.symbol,
+                            side=pending_retest.breakout.side,
+                            level_price=pending_retest.breakout.level.price.value,
+                            retest_low=pending_retest.retest_low,
+                            retest_high=pending_retest.retest_high,
+                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
+                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            status="confirmed",
+                        )
+                    )
                     self._logger.info(
                         "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
                         params.symbol,
@@ -588,6 +630,19 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     continue
                 if idx == pending_retest.confirmation_end_idx:
                     diagnostics["retest_confirmation_not_received"] += 1
+                    pending_retest.retest_end_idx = idx
+                    retest_plot_spans.append(
+                        RetestPlotSpan(
+                            symbol=params.symbol,
+                            side=pending_retest.breakout.side,
+                            level_price=pending_retest.breakout.level.price.value,
+                            retest_low=pending_retest.retest_low,
+                            retest_high=pending_retest.retest_high,
+                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
+                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            status="confirmation_not_received",
+                        )
+                    )
                     self._logger.info(
                         "retest_confirmation_not_received symbol=%s confirmation_end_idx=%s idx=%s candle_time=%s",
                         params.symbol,
@@ -630,6 +685,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         pending_retest = PendingRetest(
                             breakout=pending_breakout,
                             retest_idx=idx,
+                            retest_start_idx=idx,
+                            retest_end_idx=None,
                             retest_low=float(row["low"]),
                             retest_high=float(row["high"]),
                             confirmation_end_idx=idx + max(1, int(params.confirmation_bars)),
@@ -653,6 +710,18 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         continue
                     if not bool(volume_check["is_ok"]):
                         diagnostics["retest_rejected_by_volume"] += 1
+                        retest_plot_spans.append(
+                            RetestPlotSpan(
+                                symbol=params.symbol,
+                                side=pending_breakout.side,
+                                level_price=pending_breakout.level.price.value,
+                                retest_low=float(row["low"]),
+                                retest_high=float(row["high"]),
+                                retest_start_time=pd.Timestamp(row["datetime"]),
+                                retest_end_time=pd.Timestamp(row["datetime"]),
+                                status="rejected_by_volume",
+                            )
+                        )
                         self._logger.info(
                             "retest_rejected_by_volume symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s v_before=%.6f v_after=%.6f threshold=%.6f volume_mult=%.4f volume_filter_passed=false",
                             params.symbol,
@@ -668,6 +737,18 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         )
                     else:
                         diagnostics["retest_rejected_by_extra_filters"] += 1
+                        retest_plot_spans.append(
+                            RetestPlotSpan(
+                                symbol=params.symbol,
+                                side=pending_breakout.side,
+                                level_price=pending_breakout.level.price.value,
+                                retest_low=float(row["low"]),
+                                retest_high=float(row["high"]),
+                                retest_start_time=pd.Timestamp(row["datetime"]),
+                                retest_end_time=pd.Timestamp(row["datetime"]),
+                                status="rejected_by_extra_filters",
+                            )
+                        )
                         self._logger.info(
                             "retest_rejected_by_extra_filters symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s body_ratio=%.6f body_ratio_min=%.6f move_atr=%.6f move_atr_threshold=%.6f max_retest_depth=%.6f max_retest_depth_threshold=%.6f natr=%.6f",
                             params.symbol,
@@ -744,6 +825,19 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             diagnostics["breakout_pending_end_of_data"] += 1
         if pending_retest is not None:
             diagnostics["retest_pending_end_of_data"] += 1
+            pending_retest.retest_end_idx = min(pending_retest.confirmation_end_idx, len(annotated) - 1)
+            retest_plot_spans.append(
+                RetestPlotSpan(
+                    symbol=params.symbol,
+                    side=pending_retest.breakout.side,
+                    level_price=pending_retest.breakout.level.price.value,
+                    retest_low=pending_retest.retest_low,
+                    retest_high=pending_retest.retest_high,
+                    retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
+                    retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                    status="pending_end_of_data",
+                )
+            )
 
         if active_sim is not None and active_sim.position is not None:
             final_row = annotated.iloc[-1]
@@ -751,6 +845,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             trades.append(active_sim.close_position(price=float(final_row["close"]), exit_time=final_time))
 
         diagnostics["trades_generated"] = len(trades)
+        diagnostics["retest_plot_spans"] = retest_plot_spans
         self._last_generation_diagnostics = diagnostics
         return trades
 

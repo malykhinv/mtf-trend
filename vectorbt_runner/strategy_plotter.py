@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.dates as mdates
@@ -10,28 +9,12 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.patches import Rectangle
 
-from domain.enums.position_side import PositionSide
 from domain.enums.timeframe import Timeframe
+from domain.models.retest_plot_span import RetestPlotSpan
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import BreakoutParams
-from strategy.breakout.pending_breakout import PendingBreakout
-from strategy.breakout.pending_retest import PendingRetest
 from vectorbt_runner.data_preparer import DataPreparer
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
-
-
-@dataclass(frozen=True, slots=True)
-class RetestPlotEvent:
-    """Снимок события ретеста для построения графика."""
-
-    symbol: str
-    side: PositionSide
-    timestamp: pd.Timestamp
-    level_price: float
-    retest_low: float
-    retest_high: float
-    x_start: pd.Timestamp
-    x_end: pd.Timestamp
 
 
 class StrategyPlotter:
@@ -63,16 +46,6 @@ class StrategyPlotter:
             levels_frame=symbol_data.get(Timeframe.D1, pd.DataFrame()),
             entry_frame=symbol_data.get(Timeframe.M15, pd.DataFrame()),
         )
-
-    @staticmethod
-    def _resolve_candle_end(annotated: pd.DataFrame, idx: int) -> pd.Timestamp:
-        current = pd.Timestamp(annotated.iloc[idx]["datetime"])
-        if idx + 1 < len(annotated):
-            return pd.Timestamp(annotated.iloc[idx + 1]["datetime"])
-        if idx > 0:
-            previous = pd.Timestamp(annotated.iloc[idx - 1]["datetime"])
-            return current + (current - previous)
-        return current + pd.Timedelta(minutes=15)
 
     def _load_annotated(self, symbol: str, params: BreakoutParams) -> pd.DataFrame:
         symbol_data = self._data_preparer.load_symbol_data_multi(
@@ -146,154 +119,52 @@ class StrategyPlotter:
         plt.close(fig)
         return output_path
 
-    def _collect_retests(self, annotated: pd.DataFrame, params: BreakoutParams) -> list[RetestPlotEvent]:
-        events: list[RetestPlotEvent] = []
-        pending_breakout: PendingBreakout | None = None
-        pending_retest: PendingRetest | None = None
-        retest_window_candles = max(
-            1,
-            self._strategy._hours_to_candles(params.retest_window_hours, params.entry_timeframe),
-        )
-
-        for idx in range(len(annotated)):
-            row = annotated.iloc[idx]
-
-            if pending_retest is not None:
-                pending_retest = None
-                continue
-
-            if pending_breakout is not None:
-                breakout_idx = pending_breakout.breakout_idx
-                if idx - breakout_idx > retest_window_candles:
-                    pending_breakout = None
-                elif self._strategy._is_retest_candle(row=row, breakout=pending_breakout, params=params):
-                    volume_check = self._strategy._evaluate_volume_regime(
-                        annotated=annotated,
-                        breakout=pending_breakout,
-                        breakout_idx=breakout_idx,
-                        retest_idx=idx,
-                        volume_mult=params.volume_mult,
-                    )
-                    extra_filters = self._strategy._extra_retest_filter_metrics(
-                        row=row,
-                        breakout=pending_breakout,
-                        params=params,
-                    )
-                    if volume_check["is_ok"] and extra_filters["is_ok"]:
-                        pending_retest = PendingRetest(
-                            breakout=pending_breakout,
-                            retest_idx=idx,
-                            retest_low=float(row["low"]),
-                            retest_high=float(row["high"]),
-                            confirmation_end_idx=idx + max(1, int(params.confirmation_bars)),
-                            volume_before=float(volume_check["v_before"]),
-                            volume_after=float(volume_check["v_after"]),
-                            volume_threshold=float(volume_check["threshold"]),
-                            volume_filter_passed=bool(volume_check["is_ok"]),
-                        )
-                        events.append(
-                            RetestPlotEvent(
-                                symbol=params.symbol,
-                                side=pending_retest.breakout.side,
-                                timestamp=pd.Timestamp(row["datetime"]),
-                                level_price=pending_retest.breakout.level.price.value,
-                                retest_low=pending_retest.retest_low,
-                                retest_high=pending_retest.retest_high,
-                                x_start=pd.Timestamp(row["datetime"]),
-                                x_end=self._resolve_candle_end(annotated, idx),
-                            )
-                        )
-                        pending_breakout = None
-
-            if pending_breakout is None:
-                level_high = float(row["level_high"])
-                level_low = float(row["level_low"])
-                breakout_long = float(row["close"]) > level_high
-                breakout_short = float(row["close"]) < level_low
-                if breakout_long:
-                    pending_breakout = PendingBreakout(
-                        breakout_idx=idx,
-                        level=self._strategy._build_level(
-                            price=level_high,
-                            side=PositionSide.LONG,
-                            row=row,
-                            lookback=params.lookback,
-                            volume_before=self._strategy._average_volume_before(
-                                annotated=annotated,
-                                breakout_idx=idx,
-                                level_start_time=row["level_start_time"],
-                            ),
-                        ),
-                        breakout_extreme=float(row["low"]),
-                        side=PositionSide.LONG,
-                        level_start_time=row["level_start_time"],
-                    )
-                elif breakout_short:
-                    pending_breakout = PendingBreakout(
-                        breakout_idx=idx,
-                        level=self._strategy._build_level(
-                            price=level_low,
-                            side=PositionSide.SHORT,
-                            row=row,
-                            lookback=params.lookback,
-                            volume_before=self._strategy._average_volume_before(
-                                annotated=annotated,
-                                breakout_idx=idx,
-                                level_start_time=row["level_start_time"],
-                            ),
-                        ),
-                        breakout_extreme=float(row["high"]),
-                        side=PositionSide.SHORT,
-                        level_start_time=row["level_start_time"],
-                    )
-
-        return events
-
     def plot_retests(
         self,
         *,
         symbol: str,
         params: BreakoutParams,
         output_dir: Path | str,
+        retest_spans: list[RetestPlotSpan],
     ) -> list[Path]:
-        """Строит отдельные графики ретестов с уровнем и прямоугольником зоны."""
+        """Строит отдельные графики ретестов по заранее вычисленным диапазонам."""
         annotated = self._load_annotated(symbol=symbol, params=params)
         if annotated.empty:
             return []
 
-        events = self._collect_retests(annotated=annotated, params=params)
-        if not events:
+        symbol_spans = [span for span in retest_spans if span.symbol == symbol]
+        if not symbol_spans:
             return []
 
         symbol_dir = self._resolve_symbol_output_dir(output_dir=output_dir, symbol=symbol)
         saved_paths: list[Path] = []
-        for event in events:
+        for span in symbol_spans:
             fig, ax = plt.subplots(1, 1, figsize=(14, 6))
             ax.plot(annotated["datetime"], annotated["close"], color="black", linewidth=1.0, label="15m close")
-            ax.axhline(event.level_price, color="royalblue", linestyle="--", linewidth=1.2, label="daily level")
+            ax.axhline(span.level_price, color="royalblue", linestyle="--", linewidth=1.2, label="daily level")
 
-            x_start = mdates.date2num(event.x_start.to_pydatetime())
-            x_end = mdates.date2num(event.x_end.to_pydatetime())
+            x_start = mdates.date2num(span.retest_start_time.to_pydatetime())
+            x_end = mdates.date2num(span.retest_end_time.to_pydatetime())
             rect = Rectangle(
-                (x_start, event.retest_low),
+                (x_start, span.retest_low),
                 max(x_end - x_start, 1e-9),
-                event.retest_high - event.retest_low,
+                span.retest_high - span.retest_low,
                 facecolor="orange",
                 alpha=0.35,
                 edgecolor="darkorange",
                 linewidth=1.0,
-                label="retest zone",
+                label=f"retest zone ({span.status})",
             )
             ax.add_patch(rect)
             ax.xaxis_date()
             ax.grid(alpha=0.3)
             ax.legend(loc="upper left")
-            ax.set_title(f"{symbol} retest {event.side.value} @ {event.timestamp}")
+            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {span.retest_start_time}")
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
             fig.autofmt_xdate()
 
-            timestamp = event.timestamp.strftime("%Y%m%d_%H%M%S")
-            output_path = symbol_dir / f"retest_{timestamp}_{event.side.value}.png"
+            timestamp = span.retest_start_time.strftime("%Y%m%d_%H%M%S")
+            output_path = symbol_dir / f"retest_{timestamp}_{span.side.value}_{span.status}.png"
             fig.tight_layout()
             fig.savefig(output_path, dpi=150)
             plt.close(fig)
