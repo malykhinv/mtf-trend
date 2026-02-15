@@ -39,12 +39,17 @@ class StrategyPlotter:
         return f"{start}_{end}"
 
     @staticmethod
-    def _build_mtf_frames(symbol_data: dict[Timeframe, pd.DataFrame]) -> SymbolMtfFrames:
+    def _build_mtf_frames(
+        symbol_data: dict[Timeframe, pd.DataFrame],
+        *,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> SymbolMtfFrames:
         return SymbolMtfFrames(
-            levels_timeframe=Timeframe.D1,
-            entry_timeframe=Timeframe.M15,
-            levels_frame=symbol_data.get(Timeframe.D1, pd.DataFrame()),
-            entry_frame=symbol_data.get(Timeframe.M15, pd.DataFrame()),
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            levels_frame=symbol_data.get(levels_timeframe, pd.DataFrame()),
+            entry_frame=symbol_data.get(entry_timeframe, pd.DataFrame()),
         )
 
     def _load_annotated(self, symbol: str, params: BreakoutParams) -> pd.DataFrame:
@@ -52,7 +57,11 @@ class StrategyPlotter:
             symbol,
             (params.levels_timeframe, params.entry_timeframe),
         )
-        mtf_frames = self._build_mtf_frames(symbol_data)
+        mtf_frames = self._build_mtf_frames(
+            symbol_data,
+            levels_timeframe=params.levels_timeframe,
+            entry_timeframe=params.entry_timeframe,
+        )
         prepared = self._strategy.prepare_multi_tf_data(
             mtf_frames=mtf_frames,
             levels_timeframe=params.levels_timeframe,
