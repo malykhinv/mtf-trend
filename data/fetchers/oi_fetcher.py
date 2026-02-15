@@ -126,14 +126,14 @@ class OiFetcher:
                 results[symbol] = SymbolFetchResult.ok(added_rows)
             except Exception as exc:
                 if isinstance(exc, ParquetCacheValidationError) or "parquet cache validation failed" in str(exc).lower():
-                    self._logger.error(
+                    self._logger.exception(
                         "cache-validation-error: source=oi symbol=%s timeframe=%s cause=%s",
                         symbol,
                         timeframe.value,
                         exc,
                     )
                 msg = f"OI ошибка исполнения: {symbol}: {exc}"
-                self._logger.error(msg)
+                self._logger.exception(msg)
                 results[symbol] = SymbolFetchResult.error(msg)
 
         return results
