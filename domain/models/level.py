@@ -20,8 +20,12 @@ class Level:
 
     # region Приватные
     def __post_init__(self) -> None:
-        if self.formation_timestamp_ms is None:
-            msg = "Level formation_timestamp_ms is required."
+        if not isinstance(self.formation_timestamp_ms, int):
+            msg = "Level formation_timestamp_ms must be int unix ms."
+            raise ValueError(msg)
+
+        if self.formation_timestamp_ms < 0:
+            msg = "Level formation_timestamp_ms must be >= 0."
             raise ValueError(msg)
 
         if self.lookback <= 0:
