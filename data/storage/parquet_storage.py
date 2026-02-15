@@ -45,6 +45,102 @@ class ParquetStorage:
         normalized["datetime"] = ts
         return normalized
 
+    def _validate_written_cache(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        previous_count: int,
+        incoming: pd.DataFrame,
+        merged: pd.DataFrame,
+    ) -> None:
+        path = self._data_path(symbol, timeframe)
+        written = pd.read_parquet(path)
+        added_rows = max(len(merged) - previous_count, 0)
+
+        def _raise_validation_error(reason: str, **details: object) -> None:
+            context_parts = [
+                f"reason={reason}",
+                f"symbol={symbol}",
+                f"timeframe={timeframe.value}",
+                f"path={path}",
+                f"expected_rows={len(merged)}",
+                f"actual_rows={len(written)}",
+                f"previous_count={previous_count}",
+                f"added_rows={added_rows}",
+            ]
+            context_parts.extend(f"{key}={value}" for key, value in details.items())
+            raise ValueError("parquet cache validation failed: " + ", ".join(context_parts))
+
+        if len(written) != len(merged):
+            if len(written) < previous_count or len(written) != previous_count + added_rows:
+                _raise_validation_error(
+                    "row_count_mismatch",
+                    expected_formula=f"{previous_count}+{added_rows}",
+                )
+
+        domain_candidates = ["open", "high", "low", "close", "volume", "open_interest"]
+        batch_domain_columns = [column for column in domain_candidates if column in incoming.columns]
+        required_columns = ["timestamp", "datetime", *batch_domain_columns]
+        missing_columns = [column for column in required_columns if column not in written.columns]
+        if missing_columns:
+            _raise_validation_error("missing_required_columns", missing_columns=missing_columns)
+
+        if written["timestamp"].isna().any():
+            _raise_validation_error("null_timestamp", null_count=int(written["timestamp"].isna().sum()))
+
+        parsed_written_timestamps = pd.to_datetime(written["timestamp"], unit="ms", utc=True, errors="coerce")
+        if parsed_written_timestamps.isna().any():
+            _raise_validation_error(
+                "invalid_timestamp_values",
+                invalid_count=int(parsed_written_timestamps.isna().sum()),
+            )
+
+        parsed_datetime = pd.to_datetime(written["datetime"], utc=True, errors="coerce")
+        if parsed_datetime.isna().any():
+            _raise_validation_error("invalid_datetime_values", invalid_count=int(parsed_datetime.isna().sum()))
+
+        incoming_timestamps = pd.to_numeric(incoming["timestamp"], errors="coerce")
+        incoming_timestamps = incoming_timestamps.dropna().astype("int64")
+        required_for_batch_rows = ["datetime", *batch_domain_columns]
+        if not incoming_timestamps.empty and required_for_batch_rows:
+            written_batch_rows = written[written["timestamp"].isin(incoming_timestamps)]
+            if written_batch_rows.empty:
+                _raise_validation_error(
+                    "missing_written_batch_rows",
+                    incoming_rows=len(incoming),
+                    matched_rows=0,
+                )
+            problematic_fields: dict[str, int] = {}
+            for column in required_for_batch_rows:
+                null_count = int(written_batch_rows[column].isna().sum())
+                if null_count > 0:
+                    problematic_fields[column] = null_count
+            if problematic_fields:
+                _raise_validation_error(
+                    "nulls_in_required_batch_columns",
+                    problematic_fields=problematic_fields,
+                )
+
+            sampled_row = written_batch_rows.sample(n=1, random_state=42).iloc[0]
+            sampled_timestamp = pd.to_datetime(sampled_row["timestamp"], unit="ms", utc=True, errors="coerce")
+            if pd.isna(sampled_timestamp):
+                _raise_validation_error(
+                    "sampled_timestamp_unparseable",
+                    sampled_row_timestamp=sampled_row.get("timestamp"),
+                )
+
+            sampled_null_columns = [
+                column
+                for column in ["timestamp", "datetime", *batch_domain_columns]
+                if pd.isna(sampled_row[column])
+            ]
+            if sampled_null_columns:
+                _raise_validation_error(
+                    "sampled_row_has_nulls",
+                    sampled_null_columns=sampled_null_columns,
+                    sampled_timestamp=sampled_row.get("timestamp"),
+                )
+
     # endregion Приватные
 
     def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
@@ -117,5 +213,6 @@ class ParquetStorage:
         merged = self._ensure_utc_columns(merged)
         merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
         merged.to_parquet(path, index=False)
+        self._validate_written_cache(symbol, timeframe, previous_count, incoming, merged)
 
         return max(len(merged) - previous_count, 0)

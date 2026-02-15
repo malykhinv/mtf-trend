@@ -98,7 +98,7 @@ class OhlcvFetcher:
                 results[symbol] = SymbolFetchResult.ok(added_rows)
             except Exception as exc:
                 msg = f"OHLCV ошибка исполнения: {symbol}: {exc}"
-                self._logger.info(msg)
+                self._logger.error(msg)
                 results[symbol] = SymbolFetchResult.error(msg)
 
         return results
