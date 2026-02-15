@@ -60,7 +60,12 @@ def normalize_timestamp_series(
     logger: Logger | None = None,
     log_prefix: str = "timestamp-normalization",
 ) -> tuple[pd.Series, pd.Series]:
-    """Нормализует временные метки к UTC datetime и int64 milliseconds."""
+    """Нормализует временные метки к UTC.
+
+    Возвращает:
+    * parsed: timezone-aware серия `datetime64[ns, UTC]`.
+    * timestamp_ms: unix timestamp в миллисекундах (UTC) как `Int64`.
+    """
     raw = timestamp_series.copy()
     raw_dtype = str(raw.dtype)
     raw_min, raw_max = _safe_min_max(raw)
@@ -68,24 +73,21 @@ def normalize_timestamp_series(
 
     if is_datetime64_any_dtype(raw):
         detected_format = "datetime-like"
-        parsed = pd.to_datetime(raw, errors="coerce")
-        timestamp_ms = pd.Series(pd.NA, index=parsed.index, dtype="Int64")
-        parsed_notna_mask = parsed.notna()
-        timestamp_ms.loc[parsed_notna_mask] = (
-            parsed.loc[parsed_notna_mask].astype("int64") // 1_000_000
-        ).astype("Int64")
+        parsed = pd.to_datetime(raw, errors="coerce", utc=True)
     else:
         detected_format = _detect_timestamp_unit(raw)
         timestamp_ms = _normalize_numeric_timestamp_to_ms(raw)
-        parsed = pd.to_datetime(timestamp_ms, unit="ms", errors="coerce")
+        parsed = pd.to_datetime(timestamp_ms, unit="ms", errors="coerce", utc=True)
 
     if datetime_fallback is not None:
-        fallback_dt = pd.to_datetime(datetime_fallback, errors="coerce")
+        fallback_dt = pd.to_datetime(datetime_fallback, errors="coerce", utc=True)
         parsed = parsed.where(parsed.notna(), fallback_dt)
-        parsed_notna_mask = parsed.notna()
-        timestamp_ms.loc[parsed_notna_mask] = (
-            parsed.loc[parsed_notna_mask].astype("int64") // 1_000_000
-        ).astype("Int64")
+
+    timestamp_ms = pd.Series(pd.NA, index=parsed.index, dtype="Int64")
+    parsed_notna_mask = parsed.notna()
+    timestamp_ms.loc[parsed_notna_mask] = (
+        parsed.loc[parsed_notna_mask].astype("int64") // 1_000_000
+    ).astype("Int64")
 
     parsed_notna_mask = parsed.notna()
     parsed_notna = int(parsed_notna_mask.sum())
