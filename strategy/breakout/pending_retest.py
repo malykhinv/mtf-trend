@@ -11,6 +11,8 @@ from strategy.breakout.pending_breakout import PendingBreakout
 class PendingRetest:
     breakout: PendingBreakout
     retest_idx: int
+    retest_start_idx: int
+    retest_end_idx: int | None
     retest_low: float
     retest_high: float
     confirmation_end_idx: int
