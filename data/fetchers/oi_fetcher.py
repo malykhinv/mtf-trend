@@ -120,7 +120,7 @@ class OiFetcher:
     ) -> dict[str, SymbolFetchResult]:
         """Последовательно загружает open interest для набора символов."""
         results: dict[str, SymbolFetchResult] = {}
-        for symbol in symbols:
+        for index, symbol in enumerate(symbols):
             try:
                 added_rows = self.fetch_symbol(symbol, timeframe, start_time, end_time)
                 results[symbol] = SymbolFetchResult.ok(added_rows)
@@ -136,4 +136,32 @@ class OiFetcher:
                 self._logger.exception(msg)
                 results[symbol] = SymbolFetchResult.error(msg)
 
+                if self._is_system_error(exc):
+                    diagnostic_message = (
+                        "OI fail-fast: системная ошибка, прерывание обработки TF "
+                        f"{timeframe.value} после {symbol}: {exc}"
+                    )
+                    remaining_symbols = symbols[index + 1 :]
+                    self._logger.warning(
+                        "fetch-abort-system-error: source=oi timeframe=%s failure_symbol=%s remaining=%s cause=%s",
+                        timeframe.value,
+                        symbol,
+                        len(remaining_symbols),
+                        exc,
+                    )
+                    for remaining_symbol in remaining_symbols:
+                        results[remaining_symbol] = SymbolFetchResult.error(diagnostic_message)
+                    break
+
         return results
+
+    @staticmethod
+    def _is_system_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        signatures = (
+            "normalize",
+            "timestamp normalization",
+            "tz-naive",
+            "tz-aware",
+        )
+        return isinstance(exc, AttributeError) or any(signature in message for signature in signatures)
