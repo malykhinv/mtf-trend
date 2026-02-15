@@ -71,7 +71,16 @@ class ParquetStorage:
     ) -> None:
         path = self._data_path(symbol, timeframe)
         written = pd.read_parquet(path)
+        written_ts_dtype = written["timestamp"].dtype if "timestamp" in written.columns else "<missing>"
         added_rows = max(len(merged) - previous_count, 0)
+
+        self._logger.info(
+            "parquet-cache-written-timestamp-dtype: symbol=%s timeframe=%s path=%s dtype=%s",
+            symbol,
+            timeframe.value,
+            path,
+            written_ts_dtype,
+        )
 
         def _raise_validation_error(reason: str, **details: object) -> None:
             context_parts = [
@@ -119,6 +128,15 @@ class ParquetStorage:
         incoming_timestamps = incoming_timestamps.dropna().astype("int64")
         required_for_batch_rows = ["datetime", *batch_domain_columns]
         if not incoming_timestamps.empty and required_for_batch_rows:
+            self._logger.info(
+                "parquet-cache-timestamp-compare: symbol=%s timeframe=%s incoming_dtype=%s written_dtype=%s incoming_unique=%s written_unique=%s",
+                symbol,
+                timeframe.value,
+                incoming_timestamps.dtype,
+                written_ts_dtype,
+                int(incoming_timestamps.nunique()),
+                int(written["timestamp"].nunique()) if "timestamp" in written.columns else 0,
+            )
             written_batch_rows = written[written["timestamp"].isin(incoming_timestamps)]
             if written_batch_rows.empty:
                 _raise_validation_error(
@@ -207,7 +225,22 @@ class ParquetStorage:
         path = self._data_path(symbol, timeframe)
         path.parent.mkdir(parents=True, exist_ok=True)
 
+        incoming_nunique_before = (
+            int(pd.to_numeric(new_data["timestamp"], errors="coerce").dropna().nunique())
+            if "timestamp" in new_data.columns
+            else 0
+        )
         incoming = self._ensure_utc_columns(new_data)
+        incoming_nunique_after_ensure = int(incoming["timestamp"].nunique())
+
+        if incoming_nunique_after_ensure < incoming_nunique_before:
+            self._logger.warning(
+                "parquet-cache-nunique-anomaly: stage=after_ensure_utc symbol=%s timeframe=%s before=%s after=%s",
+                symbol,
+                timeframe.value,
+                incoming_nunique_before,
+                incoming_nunique_after_ensure,
+            )
 
         existing = self.load(symbol, timeframe)
         previous_count = len(existing)
@@ -227,7 +260,18 @@ class ParquetStorage:
                     merged = merged.rename(columns={col: base_col})
 
         merged = self._ensure_utc_columns(merged)
+        merged_nunique_before_dedup = int(merged["timestamp"].nunique())
         merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+        merged_nunique_after_dedup = int(merged["timestamp"].nunique()) if not merged.empty else 0
+
+        if merged_nunique_after_dedup < merged_nunique_before_dedup:
+            self._logger.warning(
+                "parquet-cache-nunique-anomaly: stage=before_drop_duplicates symbol=%s timeframe=%s before=%s after=%s",
+                symbol,
+                timeframe.value,
+                merged_nunique_before_dedup,
+                merged_nunique_after_dedup,
+            )
         merged.to_parquet(path, index=False)
         incoming_rows = len(incoming)
         final_rows = len(merged)
