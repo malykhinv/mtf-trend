@@ -174,7 +174,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         volume_before: float | None,
         volume_after: float | None = None,
     ) -> Level:
-        formation_dt = datetime_to_timezone(row["level_start_time"].to_pydatetime(), self._simulation_timezone)
+        formation_dt = row["level_start_time"].to_pydatetime()
         return Level(
             price=Price(price),
             level_type=LevelType.RESISTANCE if side == PositionSide.LONG else LevelType.SUPPORT,
@@ -312,10 +312,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         )
         return TradeSignal(
             entry_price=Price(entry_price),
-            entry_time=datetime_to_timezone(
-                entry_row["datetime"].to_pydatetime(),
-                self._simulation_timezone,
-            ),
+            entry_time=entry_row["datetime"].to_pydatetime(),
             stop_loss=Price(float(stop)),
             take_profit_1=Price(float(tp1)),
             take_profit_2=Price(float(tp2)),
