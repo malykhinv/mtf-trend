@@ -118,7 +118,7 @@ class BacktestRunner:
             )
             raise RuntimeError(msg)
 
-        sorted_trades = sorted(trades, key=lambda trade: (trade.exit_time, trade.entry_time))
+        sorted_trades = sorted(trades, key=lambda trade: (trade.exit_timestamp_ms, trade.entry_timestamp_ms))
         cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
         peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
         max_dd = BACKTEST_EMPTY_MAX_DD

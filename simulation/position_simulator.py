@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
 
 from constants import SIMULATION_PRICE_COMPARISON_EPSILON, TP1_CLOSE_RATIO
 from domain.abstract.position_simulator import PositionSimulator
@@ -44,7 +43,7 @@ class StatefulPositionSimulator(PositionSimulator):
         fill = self.order_processor.execute_entry(candle.open.value, self.side, self._pending_size)
         self.position = Position(
             entry_price=Price(fill.price),
-            entry_time=candle.timestamp,
+            entry_timestamp_ms=candle.timestamp_ms,
             size=Volume(self._pending_size),
             stop_loss=signal.stop_loss,
             take_profit_1=signal.take_profit_1,
@@ -130,7 +129,7 @@ class StatefulPositionSimulator(PositionSimulator):
         trade_result = self.trade_classifier.build_result(
             position=self.position,
             exit_price=self._last_exit_price,
-            exit_time=candle.timestamp,
+            exit_timestamp_ms=candle.timestamp_ms,
             result_type=result_type,
             pnl=self._realized_pnl,
         )
@@ -163,7 +162,7 @@ class StatefulPositionSimulator(PositionSimulator):
         self._closed_size = 0.0
         self._last_exit_price = position.entry_price.value
 
-    def close_position(self, price: float, exit_time: datetime) -> TradeResult:
+    def close_position(self, price: float, exit_timestamp_ms: int) -> TradeResult:
         """Закрывает остаток позиции по заданной цене и времени, затем возвращает классифицированный результат сделки."""
         if self.position is None:
             msg = "Нет активной позиции для закрытия."
@@ -182,7 +181,7 @@ class StatefulPositionSimulator(PositionSimulator):
         trade_result = self.trade_classifier.build_result(
             position=self.position,
             exit_price=self._last_exit_price,
-            exit_time=exit_time,
+            exit_timestamp_ms=exit_timestamp_ms,
             result_type=result_type,
             pnl=self._realized_pnl,
         )

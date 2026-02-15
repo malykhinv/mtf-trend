@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.position import Position
@@ -30,7 +29,7 @@ class TradeClassifier:
             *,
         position: Position,
         exit_price: float,
-        exit_time: datetime,
+        exit_timestamp_ms: int,
         result_type: TradeResultType,
         pnl: float,
     ) -> TradeResult:
@@ -40,8 +39,8 @@ class TradeClassifier:
         return TradeResult(
             entry_price=position.entry_price,
             exit_price=Price(exit_price),
-            entry_time=position.entry_time,
-            exit_time=exit_time,
+            entry_timestamp_ms=position.entry_timestamp_ms,
+            exit_timestamp_ms=exit_timestamp_ms,
             result_type=result_type,
             pnl=pnl,
             pnl_percent=Percentage(pnl_percent_value),

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from domain.enums.level_type import LevelType
 from domain.value_objects.price import Price
@@ -13,23 +12,16 @@ from domain.value_objects.price import Price
 class Level:
     price: Price
     level_type: LevelType
-    formation_time: datetime
+    formation_timestamp_ms: int
     lookback: int
     shadow_ratio: float
-    formation_timestamp: datetime | None = None
     volume_before: float | None = None
     volume_after: float | None = None
 
     # region Приватные
     def __post_init__(self) -> None:
-        if self.formation_time is None:
-            msg = "Level formation_time is required."
-            raise ValueError(msg)
-
-        if self.formation_timestamp is None:
-            object.__setattr__(self, "formation_timestamp", self.formation_time)
-        elif not isinstance(self.formation_timestamp, datetime):
-            msg = "Level formation_timestamp must be datetime."
+        if self.formation_timestamp_ms is None:
+            msg = "Level formation_timestamp_ms is required."
             raise ValueError(msg)
 
         if self.lookback <= 0:
