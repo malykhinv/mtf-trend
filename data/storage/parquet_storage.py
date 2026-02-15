@@ -63,7 +63,7 @@ class ParquetStorage:
         ts = ts.loc[ts.notna()]
 
         normalized["timestamp"] = timestamp_ms.loc[ts.index].astype("int64")
-        normalized["datetime"] = ts
+        normalized["datetime"] = pd.to_datetime(ts, errors="coerce", utc=True)
         return normalized
 
     def _validate_written_cache(
@@ -118,14 +118,14 @@ class ParquetStorage:
         if written["timestamp"].isna().any():
             _raise_validation_error("null_timestamp", null_count=int(written["timestamp"].isna().sum()))
 
-        parsed_written_timestamps = pd.to_datetime(written["timestamp"], unit="ms", errors="coerce")
+        parsed_written_timestamps = pd.to_datetime(written["timestamp"], unit="ms", errors="coerce", utc=True)
         if parsed_written_timestamps.isna().any():
             _raise_validation_error(
                 "invalid_timestamp_values",
                 invalid_count=int(parsed_written_timestamps.isna().sum()),
             )
 
-        parsed_datetime = pd.to_datetime(written["datetime"], errors="coerce")
+        parsed_datetime = pd.to_datetime(written["datetime"], errors="coerce", utc=True)
         if parsed_datetime.isna().any():
             _raise_validation_error("invalid_datetime_values", invalid_count=int(parsed_datetime.isna().sum()))
 
@@ -231,7 +231,7 @@ class ParquetStorage:
                 )
 
             sampled_row = written_batch_rows.sample(n=1, random_state=42).iloc[0]
-            sampled_timestamp = pd.to_datetime(sampled_row["timestamp"], unit="ms", errors="coerce")
+            sampled_timestamp = pd.to_datetime(sampled_row["timestamp"], unit="ms", errors="coerce", utc=True)
             if pd.isna(sampled_timestamp):
                 _raise_validation_error(
                     "sampled_timestamp_unparseable",
@@ -337,9 +337,18 @@ class ParquetStorage:
         merged = self._ensure_utc_columns(merged)
         merged_rechecked = self._ensure_utc_columns(merged)
         if not merged["timestamp"].reset_index(drop=True).equals(merged_rechecked["timestamp"].reset_index(drop=True)):
+            merged_ts = merged["timestamp"].reset_index(drop=True)
+            merged_rechecked_ts = merged_rechecked["timestamp"].reset_index(drop=True)
+            mismatch_mask = merged_ts.ne(merged_rechecked_ts) & ~(merged_ts.isna() & merged_rechecked_ts.isna())
+            mismatch_sample = pd.DataFrame(
+                {"merged": merged_ts, "merged_rechecked": merged_rechecked_ts}
+            ).loc[mismatch_mask].head(10).to_dict("records")
             raise ParquetCacheValidationError(
                 "parquet cache validation failed: reason=ensure_utc_non_idempotent, "
-                f"symbol={symbol}, timeframe={timeframe.value}, path={path}"
+                f"symbol={symbol}, timeframe={timeframe.value}, path={path}, "
+                f"merged_min={merged_ts.min()}, merged_max={merged_ts.max()}, "
+                f"merged_rechecked_min={merged_rechecked_ts.min()}, merged_rechecked_max={merged_rechecked_ts.max()}, "
+                f"mismatch_sample={mismatch_sample}"
             )
         merged = merged_rechecked
         merged_nunique_before_dedup = int(merged["timestamp"].nunique())
