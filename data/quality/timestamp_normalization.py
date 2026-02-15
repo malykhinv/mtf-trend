@@ -61,8 +61,12 @@ def normalize_timestamp_series(
         fallback_dt = pd.to_datetime(datetime_fallback, utc=True, errors="coerce")
         parsed = parsed.where(parsed.notna(), fallback_dt)
 
-    parsed_notna = int(parsed.notna().sum())
-    timestamp_ms = pd.Series((parsed.view("int64") // 1_000_000), index=parsed.index).where(parsed.notna())
+    parsed_notna_mask = parsed.notna()
+    parsed_notna = int(parsed_notna_mask.sum())
+    timestamp_ms = pd.Series(pd.NA, index=parsed.index, dtype="Int64")
+    timestamp_ms.loc[parsed_notna_mask] = (
+        parsed.loc[parsed_notna_mask].astype("int64") // 1_000_000
+    ).astype("Int64")
     nunique_after = int(timestamp_ms.dropna().nunique())
 
     if logger is not None:
@@ -79,4 +83,3 @@ def normalize_timestamp_series(
         )
 
     return timestamp_ms, parsed
-
