@@ -6,14 +6,6 @@ from numbers import Integral
 
 import pandas as pd
 
-from constants import MILLISECONDS_IN_SECOND, TIMEFRAME_TO_DELTA
-from domain.enums.timeframe import Timeframe
-
-_TIMEFRAME_TO_MS = {
-    timeframe: int(delta.total_seconds() * MILLISECONDS_IN_SECOND)
-    for timeframe, delta in TIMEFRAME_TO_DELTA.items()
-}
-
 
 class GapDetector:
     """Класс."""
@@ -30,7 +22,14 @@ class GapDetector:
         )
 
     @staticmethod
-    def detect_gaps(data: pd.DataFrame, timeframe: Timeframe) -> list[int]:
+    def _infer_step_ms(sorted_timestamps: list[int]) -> int | None:
+        diffs = [curr - prev for prev, curr in zip(sorted_timestamps, sorted_timestamps[1:]) if curr > prev]
+        if not diffs:
+            return None
+        return min(diffs)
+
+    @staticmethod
+    def detect_gaps(data: pd.DataFrame, expected_step_ms: int | None = None) -> list[int]:
         """Ищет пропуски во временном ряду свечей по исходным меткам времени биржи."""
         if data.empty or "timestamp" not in data.columns:
             return []
@@ -43,8 +42,8 @@ class GapDetector:
             return []
 
         ts = sorted(set(timestamps.tolist()))
-        step = _TIMEFRAME_TO_MS[timeframe]
-        if step <= 0:
+        step = expected_step_ms if expected_step_ms is not None else GapDetector._infer_step_ms(ts)
+        if step is None or step <= 0:
             return []
 
         missing: list[int] = []
