@@ -71,6 +71,36 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("clear-cache", help="Полная очистка директории кэша")
 
+    plot_daily_levels = subparsers.add_parser(
+        "plot-daily-levels",
+        help="Построить графики с дневными уровнями",
+    )
+    plot_daily_levels.add_argument(
+        "--symbols",
+        nargs="*",
+        default=None,
+        help="Список символов, например BTC/USDT ETH/USDT",
+    )
+    plot_daily_levels.add_argument("--levels-tf", default="1d", help="Таймфрейм уровней")
+    plot_daily_levels.add_argument("--entry-tf", default="15m", help="Таймфрейм входов")
+    plot_daily_levels.add_argument("--output-dir", default=None, help="Директория для сохранения изображений")
+    plot_daily_levels.add_argument("--limit", type=int, default=None, help="Ограничение числа свечей")
+
+    plot_retests = subparsers.add_parser(
+        "plot-retests",
+        help="Построить графики ретестов уровней",
+    )
+    plot_retests.add_argument(
+        "--symbols",
+        nargs="*",
+        default=None,
+        help="Список символов, например BTC/USDT ETH/USDT",
+    )
+    plot_retests.add_argument("--levels-tf", default="1d", help="Таймфрейм уровней")
+    plot_retests.add_argument("--entry-tf", default="15m", help="Таймфрейм входов")
+    plot_retests.add_argument("--output-dir", default=None, help="Директория для сохранения изображений")
+    plot_retests.add_argument("--limit", type=int, default=None, help="Ограничение числа событий")
+
     return parser
 
 
@@ -83,5 +113,7 @@ def resolve_handler(command_name: str) -> Handler:
         "make-report": commands.make_report,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
+        "plot-daily-levels": commands.plot_daily_levels,
+        "plot-retests": commands.plot_retests,
     }
     return handlers[command_name]
