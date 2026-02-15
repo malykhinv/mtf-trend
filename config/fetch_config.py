@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import datetime
 
 from constants import (
     DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS,
@@ -14,7 +14,6 @@ from constants import (
     DEFAULT_TIMEZONE,
 )
 from domain.enums.timeframe import Timeframe
-from utils.formatters import resolve_timezone
 
 
 @dataclass(slots=True)
@@ -39,8 +38,3 @@ class FetchConfig:
     def timeframe(self) -> Timeframe:
         """Возвращает основной таймфрейм для обратной совместимости."""
         return self.timeframes[0]
-
-    @property
-    def tzinfo(self) -> tzinfo:
-        """Возвращает объект часового пояса для загрузки данных."""
-        return resolve_timezone(self.timezone)
