@@ -103,35 +103,29 @@ class StrategyPlotter:
         annotated: pd.DataFrame,
         lookback: int,
     ) -> pd.DataFrame:
-        daily_from_levels = pd.DataFrame(columns=["timestamp_ms", "level_high", "level_low"])
+        daily_from_levels = pd.DataFrame(columns=["timestamp", "level_high", "level_low"])
         if not higher_base.empty:
             daily_from_levels = higher_base.copy()
             daily_from_levels["level_high"] = daily_from_levels["high"].rolling(window=lookback).max().shift(1)
             daily_from_levels["level_low"] = daily_from_levels["low"].rolling(window=lookback).min().shift(1)
-            daily_from_levels["day_bucket"] = (daily_from_levels["timestamp"] // 86_400_000).astype("int64")
             daily_from_levels = (
                 daily_from_levels.dropna(subset=["level_high", "level_low"])
                 .sort_values("timestamp")
-                .drop_duplicates(subset=["day_bucket"], keep="last")[["day_bucket", "level_high", "level_low"]]
+                .drop_duplicates(subset=["timestamp"], keep="last")[["timestamp", "level_high", "level_low"]]
                 .reset_index(drop=True)
             )
-            daily_from_levels["timestamp_ms"] = daily_from_levels["day_bucket"] * 86_400_000
-            daily_from_levels = daily_from_levels[["timestamp_ms", "level_high", "level_low"]]
         if not daily_from_levels.empty:
             return daily_from_levels
 
         if annotated.empty:
-            return pd.DataFrame(columns=["timestamp_ms", "level_high", "level_low"])
+            return pd.DataFrame(columns=["timestamp", "level_high", "level_low"])
 
         daily_from_annotated = annotated.copy()
-        daily_from_annotated["day_bucket"] = (daily_from_annotated["timestamp"] // 86_400_000).astype("int64")
-        daily_from_annotated = (
+        return (
             daily_from_annotated.sort_values("timestamp")
-            .drop_duplicates(subset=["day_bucket"], keep="last")[["day_bucket", "level_high", "level_low"]]
+            .drop_duplicates(subset=["timestamp"], keep="last")[["timestamp", "level_high", "level_low"]]
             .reset_index(drop=True)
         )
-        daily_from_annotated["timestamp_ms"] = daily_from_annotated["day_bucket"] * 86_400_000
-        return daily_from_annotated[["timestamp_ms", "level_high", "level_low"]]
 
     def plot_daily_levels(
         self,
@@ -161,10 +155,10 @@ class StrategyPlotter:
         ax_top.grid(alpha=0.3)
         ax_top.legend(loc="upper left")
 
-        ax_bottom.plot(daily_levels["timestamp_ms"], daily_levels["level_high"], label="Daily level high", color="green")
-        ax_bottom.plot(daily_levels["timestamp_ms"], daily_levels["level_low"], label="Daily level low", color="red")
+        ax_bottom.plot(daily_levels["timestamp"], daily_levels["level_high"], label="Daily level high", color="green")
+        ax_bottom.plot(daily_levels["timestamp"], daily_levels["level_low"], label="Daily level low", color="red")
         ax_bottom.fill_between(
-            daily_levels["timestamp_ms"],
+            daily_levels["timestamp"],
             daily_levels["level_low"],
             daily_levels["level_high"],
             color="lightgray",
