@@ -350,7 +350,7 @@ class BacktestRunner:
                 )
                 prepared_symbol_data[symbol] = {
                     lookback: strategy.prepare_annotated_multi_tf_data(
-                        prepared_multi_tf=prepared_multi_tf,
+                        lower_base=prepared_multi_tf[1],
                         lookback=lookback,
                     )
                     for lookback in lookbacks
