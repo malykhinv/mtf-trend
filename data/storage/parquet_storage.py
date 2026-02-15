@@ -129,26 +129,56 @@ class ParquetStorage:
         if parsed_datetime.isna().any():
             _raise_validation_error("invalid_datetime_values", invalid_count=int(parsed_datetime.isna().sum()))
 
-        incoming_timestamps = pd.to_numeric(incoming["timestamp"], errors="coerce")
-        incoming_timestamps = incoming_timestamps.dropna().astype("int64")
+        incoming_ts_canonical = pd.to_numeric(incoming["timestamp"], errors="coerce")
+        written_ts_canonical = pd.to_numeric(written["timestamp"], errors="coerce")
+
+        incoming_timestamps = incoming_ts_canonical.dropna().astype("int64")
+        written_timestamps = written_ts_canonical.dropna().astype("int64")
+
+        incoming_timestamp_index = pd.Index(incoming_timestamps.unique())
+        written_timestamp_index = pd.Index(written_timestamps.unique())
+        intersection_timestamps = incoming_timestamp_index.intersection(written_timestamp_index)
+
+        incoming_min = int(incoming_timestamp_index.min()) if not incoming_timestamp_index.empty else None
+        incoming_max = int(incoming_timestamp_index.max()) if not incoming_timestamp_index.empty else None
+        written_min = int(written_timestamp_index.min()) if not written_timestamp_index.empty else None
+        written_max = int(written_timestamp_index.max()) if not written_timestamp_index.empty else None
+        intersection_count = int(len(intersection_timestamps))
+
         required_for_batch_rows = ["datetime", *batch_domain_columns]
         if not incoming_timestamps.empty and required_for_batch_rows:
             self._logger.info(
-                "parquet-cache-timestamp-compare: symbol=%s timeframe=%s incoming_dtype=%s written_dtype=%s incoming_unique=%s written_unique=%s",
+                "parquet-cache-timestamp-compare: symbol=%s timeframe=%s incoming_dtype=%s written_dtype=%s incoming_unique=%s written_unique=%s incoming_min=%s incoming_max=%s written_min=%s written_max=%s intersection_count=%s",
                 symbol,
                 timeframe.value,
                 incoming_timestamps.dtype,
                 written_ts_dtype,
                 int(incoming_timestamps.nunique()),
                 int(written["timestamp"].nunique()) if "timestamp" in written.columns else 0,
+                incoming_min,
+                incoming_max,
+                written_min,
+                written_max,
+                intersection_count,
             )
-            written_batch_rows = written[written["timestamp"].isin(incoming_timestamps)]
-            if written_batch_rows.empty:
+
+            missing_timestamps = incoming_timestamp_index.difference(written_timestamp_index)
+            if not missing_timestamps.empty:
+                mismatch_sample_limit = 10
+                missing_values_sample = [int(value) for value in missing_timestamps[:mismatch_sample_limit]]
+                reason = "missing_written_batch_rows"
+                if len(written) == len(merged) and previous_count == 0:
+                    reason = "timestamp_canonicalization_mismatch"
                 _raise_validation_error(
-                    "missing_written_batch_rows",
+                    reason,
                     incoming_rows=len(incoming),
-                    matched_rows=0,
+                    incoming_unique=int(len(incoming_timestamp_index)),
+                    written_unique=int(len(written_timestamp_index)),
+                    intersection_count=intersection_count,
+                    missing_values_sample=missing_values_sample,
                 )
+
+            written_batch_rows = written[written_ts_canonical.isin(intersection_timestamps)]
             problematic_fields: dict[str, int] = {}
             for column in required_for_batch_rows:
                 null_count = int(written_batch_rows[column].isna().sum())
