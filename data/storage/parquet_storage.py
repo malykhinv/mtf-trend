@@ -160,17 +160,3 @@ class ParquetStorage:
 
         tmp_path.replace(path)
         return max(len(merged) - previous_count, 0)
-
-    def migrate_cache_file(self, symbol: str, timeframe: Timeframe) -> int:
-        path = self._data_path(symbol, timeframe)
-        if not path.exists():
-            return 0
-
-        raw = pd.read_parquet(path)
-        if raw.empty:
-            return 0
-
-        prepared = self._ensure_columns(raw)
-        prepared = prepared.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
-        prepared.to_parquet(path, index=False)
-        return len(prepared)
