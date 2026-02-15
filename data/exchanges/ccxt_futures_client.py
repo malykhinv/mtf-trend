@@ -16,7 +16,6 @@ from constants import (
     MILLISECONDS_IN_SECOND,
     OHLCV_FRAME_COLUMNS,
     OPEN_INTEREST_FRAME_COLUMNS,
-    TIMEFRAME_TO_DELTA,
 )
 from data.exchanges.ccxt_types import CcxtClientOptions, CcxtFuturesApi, CcxtOpenInterestApi
 from domain.abstract.exchange_client import ExchangeClient
@@ -240,7 +239,7 @@ class CcxtFuturesClient(ExchangeClient):
 
         since = start_timestamp_ms
         ccxt_timeframe = timeframe.value
-        timeframe_ms = int(TIMEFRAME_TO_DELTA[timeframe].total_seconds() * MILLISECONDS_IN_SECOND)
+        timeframe_ms = timeframe.to_milliseconds()
         oi_limit = min(DEFAULT_FETCH_BATCH_SIZE, 500) if self.exchange == Exchange.BINANCE else DEFAULT_FETCH_BATCH_SIZE
 
         rows: list[dict[str, object]] = []

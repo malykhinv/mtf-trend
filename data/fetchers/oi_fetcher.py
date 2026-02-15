@@ -9,7 +9,6 @@ from constants import (
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
     LOG_MSG_SKIP_UP_TO_DATE,
-    TIMEFRAME_TO_DELTA,
 )
 from data.quality.data_validator import DataValidator
 from data.quality.deduplicator import Deduplicator
@@ -50,7 +49,7 @@ class OiFetcher:
         watermark_column = "open_interest"
         last_timestamp_ms = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
         if last_timestamp_ms is not None:
-            timeframe_ms = int(TIMEFRAME_TO_DELTA[timeframe].total_seconds() * 1000)
+            timeframe_ms = timeframe.to_milliseconds()
             next_start_ms = max(start_timestamp_ms, last_timestamp_ms + timeframe_ms)
 
         self._logger.info(

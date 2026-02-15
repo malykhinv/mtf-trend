@@ -818,7 +818,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
             continue
 
         issues = validator.validate(symbol, config.fetch.timeframe, frame)
-        gaps = gap_detector.detect_gaps(frame, config.fetch.timeframe)
+        gaps = gap_detector.detect_gaps(frame, expected_step_ms=config.fetch.timeframe.to_milliseconds())
         oi_quality_issues = _collect_oi_quality_issues(frame)
 
         all_issue_types = [issue.issue_type for issue in issues]
