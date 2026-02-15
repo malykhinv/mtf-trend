@@ -36,27 +36,28 @@ class DailyVolumeRanker:
                 )
                 continue
 
-            if "datetime" not in frame.columns or "close" not in frame.columns or "volume" not in frame.columns:
+            if "timestamp" not in frame.columns or "close" not in frame.columns or "volume" not in frame.columns:
                 logger.info(
                     "ликвидность-кэш: символ=%s исключён: отсутствуют обязательные колонки для расчёта",
                     symbol,
                 )
                 continue
 
-            normalized = frame.copy()
-            normalized["datetime"] = pd.to_datetime(normalized["datetime"], errors="coerce")
-            normalized = normalized.dropna(subset=["datetime", "close", "volume"])
-            if normalized.empty:
+            prepared = frame.copy()
+            prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+            prepared = prepared.dropna(subset=["timestamp", "close", "volume"])
+            if prepared.empty:
                 logger.info(
                     "ликвидность-кэш: символ=%s исключён: после очистки не осталось валидных строк",
                     symbol,
                 )
                 continue
 
-            normalized["date"] = normalized["datetime"].dt.floor("D")
-            normalized["daily_volume_usd"] = normalized["close"] * normalized["volume"]
+            prepared["timestamp"] = prepared["timestamp"].astype("int64")
+            prepared["day_bucket"] = prepared["timestamp"] // 86_400_000
+            prepared["daily_volume_usd"] = prepared["close"] * prepared["volume"]
 
-            daily_volume = normalized.groupby("date", as_index=True)["daily_volume_usd"].sum(min_count=1).dropna()
+            daily_volume = prepared.groupby("day_bucket", as_index=True)["daily_volume_usd"].sum(min_count=1).dropna()
             if daily_volume.empty:
                 logger.info(
                     "ликвидность-кэш: символ=%s исключён: не удалось посчитать дневной USD-объём",

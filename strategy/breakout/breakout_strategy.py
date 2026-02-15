@@ -45,7 +45,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
     ANNOTATED_COLUMNS = [
-        "datetime",
+        "timestamp",
         "open",
         "high",
         "low",
@@ -81,7 +81,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
     def _to_candle(self, row: pd.Series) -> Candle:
         return Candle(
-            timestamp=row["datetime"].to_pydatetime(),
+            timestamp=pd.to_datetime(row["timestamp"], unit="ms").to_pydatetime(),
             open=Price(float(row["open"])),
             high=Price(float(row["high"])),
             low=Price(float(row["low"])),
@@ -170,7 +170,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         volume_before: float | None,
         volume_after: float | None = None,
     ) -> Level:
-        formation_dt = row["level_start_time"].to_pydatetime()
+        formation_dt = pd.to_datetime(row["level_start_time"], unit="ms").to_pydatetime()
         return Level(
             price=Price(price),
             level_type=LevelType.RESISTANCE if side == PositionSide.LONG else LevelType.SUPPORT,
@@ -183,9 +183,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         )
 
     @staticmethod
-    def _average_volume_before(*, annotated: pd.DataFrame, breakout_idx: int, level_start_time: pd.Timestamp) -> float | None:
+    def _average_volume_before(*, annotated: pd.DataFrame, breakout_idx: int, level_start_time: int) -> float | None:
         before_slice = annotated.iloc[:breakout_idx]
-        before_slice = before_slice[before_slice["datetime"] >= level_start_time]
+        before_slice = before_slice[before_slice["timestamp"] >= level_start_time]
         if before_slice.empty:
             return None
         return float(before_slice["volume"].mean())
@@ -216,14 +216,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         retest_idx: int,
         volume_mult: float,
     ) -> dict[str, float | bool]:
-        breakout_timestamp = annotated.iloc[breakout_idx]["datetime"]
-        retest_timestamp = annotated.iloc[retest_idx]["datetime"]
+        breakout_timestamp = annotated.iloc[breakout_idx]["timestamp"]
+        retest_timestamp = annotated.iloc[retest_idx]["timestamp"]
 
         before_slice = annotated[
-            (annotated["datetime"] >= breakout.level_start_time) & (annotated["datetime"] < breakout_timestamp)
+            (annotated["timestamp"] >= breakout.level_start_time) & (annotated["timestamp"] < breakout_timestamp)
         ]
         after_slice = annotated[
-            (annotated["datetime"] >= breakout_timestamp) & (annotated["datetime"] < retest_timestamp)
+            (annotated["timestamp"] >= breakout_timestamp) & (annotated["timestamp"] < retest_timestamp)
         ]
         if before_slice.empty or after_slice.empty:
             self._logger.debug(
@@ -308,7 +308,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         )
         return TradeSignal(
             entry_price=Price(entry_price),
-            entry_time=entry_row["datetime"].to_pydatetime(),
+            entry_time=pd.to_datetime(entry_row["timestamp"], unit="ms").to_pydatetime(),
             stop_loss=Price(float(stop)),
             take_profit_1=Price(float(tp1)),
             take_profit_2=Price(float(tp2)),
@@ -370,9 +370,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             raise ValueError(f"Отсутствуют обязательные колонки: {missing}")
 
         prepared = data.copy()
-        prepared["datetime"] = pd.to_datetime(prepared["timestamp"], unit="ms", errors="coerce")
-        prepared = prepared.dropna(subset=["datetime"])
-        prepared = prepared.sort_values("datetime").reset_index(drop=True)
+        prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+        prepared = prepared.dropna(subset=["timestamp"])
+        prepared["timestamp"] = prepared["timestamp"].astype("int64")
+        prepared = prepared.sort_values("timestamp").reset_index(drop=True)
 
         for col in ("open", "high", "low", "close", "volume"):
             prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
@@ -390,8 +391,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         higher_prepared = self.prepare_data(mtf_frames.get_frame(levels_timeframe))
         lower_prepared = self.prepare_data(mtf_frames.get_frame(entry_timeframe))
         return (
-            higher_prepared[["datetime", "high", "low"]].copy(),
-            lower_prepared[["datetime", "open", "high", "low", "close", "volume"]].copy(),
+            higher_prepared[["timestamp", "high", "low"]].copy(),
+            lower_prepared[["timestamp", "open", "high", "low", "close", "volume"]].copy(),
         )
 
     def prepare_annotated_multi_tf_data(
@@ -410,15 +411,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         higher_levels = higher_base.copy()
         higher_levels["level_high"] = higher_levels["high"].rolling(window=lookback).max().shift(1)
         higher_levels["level_low"] = higher_levels["low"].rolling(window=lookback).min().shift(1)
-        higher_levels["level_start_time"] = higher_levels["datetime"]
-        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("datetime")
+        higher_levels["level_start_time"] = higher_levels["timestamp"]
+        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("timestamp")
         if higher_levels.empty:
             return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
 
         annotated = pd.merge_asof(
-            lower_base.sort_values("datetime").reset_index(drop=True),
-            higher_levels[["datetime", "level_high", "level_low", "level_start_time"]],
-            on="datetime",
+            lower_base.sort_values("timestamp").reset_index(drop=True),
+            higher_levels[["timestamp", "level_high", "level_low", "level_start_time"]],
+            on="timestamp",
             direction="backward",
         )
         annotated = annotated.dropna(subset=["level_high", "level_low", "level_start_time"]).reset_index(drop=True)
@@ -536,15 +537,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
-                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            retest_start_time=pd.to_datetime(annotated.iloc[pending_retest.retest_start_idx]["timestamp"], unit="ms"),
+                            retest_end_time=pd.to_datetime(annotated.iloc[pending_retest.retest_end_idx]["timestamp"], unit="ms"),
                             status="confirmed",
                         )
                     )
                     self._logger.info(
                         "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
                         params.symbol,
-                        row["datetime"],
+                        row["timestamp"],
                         pending_retest.breakout.side.value,
                         params.entry_trigger.value,
                         entry_idx,
@@ -570,8 +571,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
-                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            retest_start_time=pd.to_datetime(annotated.iloc[pending_retest.retest_start_idx]["timestamp"], unit="ms"),
+                            retest_end_time=pd.to_datetime(annotated.iloc[pending_retest.retest_end_idx]["timestamp"], unit="ms"),
                             status="confirmation_expired",
                         )
                     )
@@ -580,7 +581,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         params.symbol,
                         pending_retest.confirmation_end_idx,
                         idx,
-                        row["datetime"],
+                        row["timestamp"],
                     )
                     pending_retest = None
                     continue
@@ -594,15 +595,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
-                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            retest_start_time=pd.to_datetime(annotated.iloc[pending_retest.retest_start_idx]["timestamp"], unit="ms"),
+                            retest_end_time=pd.to_datetime(annotated.iloc[pending_retest.retest_end_idx]["timestamp"], unit="ms"),
                             status="confirmed",
                         )
                     )
                     self._logger.info(
                         "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
                         params.symbol,
-                        row["datetime"],
+                        row["timestamp"],
                         pending_retest.breakout.side.value,
                         params.entry_trigger.value,
                         entry_idx,
@@ -627,8 +628,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
-                            retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                            retest_start_time=pd.to_datetime(annotated.iloc[pending_retest.retest_start_idx]["timestamp"], unit="ms"),
+                            retest_end_time=pd.to_datetime(annotated.iloc[pending_retest.retest_end_idx]["timestamp"], unit="ms"),
                             status="confirmation_not_received",
                         )
                     )
@@ -637,7 +638,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         params.symbol,
                         pending_retest.confirmation_end_idx,
                         idx,
-                        row["datetime"],
+                        row["timestamp"],
                     )
                     pending_retest = None
                 continue
@@ -651,7 +652,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     self._logger.debug(
                         "retest_candle_detected symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s",
                         params.symbol,
-                        row["datetime"],
+                        row["timestamp"],
                         pending_breakout.side.value,
                         pending_breakout.level.price.value,
                         breakout_idx,
@@ -687,7 +688,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         self._logger.info(
                             "retest accepted -> pending_retest created symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s entry_trigger=%s entry_idx=%s",
                             params.symbol,
-                            row["datetime"],
+                            row["timestamp"],
                             pending_breakout.side.value,
                             pending_breakout.level.price.value,
                             breakout_idx,
@@ -706,15 +707,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 level_price=pending_breakout.level.price.value,
                                 retest_low=float(row["low"]),
                                 retest_high=float(row["high"]),
-                                retest_start_time=pd.Timestamp(row["datetime"]),
-                                retest_end_time=pd.Timestamp(row["datetime"]),
+                                retest_start_time=pd.to_datetime(row["timestamp"], unit="ms"),
+                                retest_end_time=pd.to_datetime(row["timestamp"], unit="ms"),
                                 status="rejected_by_volume",
                             )
                         )
                         self._logger.info(
                             "retest_rejected_by_volume symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s v_before=%.6f v_after=%.6f threshold=%.6f volume_mult=%.4f volume_filter_passed=false",
                             params.symbol,
-                            row["datetime"],
+                            row["timestamp"],
                             pending_breakout.side.value,
                             pending_breakout.level.price.value,
                             breakout_idx,
@@ -733,15 +734,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 level_price=pending_breakout.level.price.value,
                                 retest_low=float(row["low"]),
                                 retest_high=float(row["high"]),
-                                retest_start_time=pd.Timestamp(row["datetime"]),
-                                retest_end_time=pd.Timestamp(row["datetime"]),
+                                retest_start_time=pd.to_datetime(row["timestamp"], unit="ms"),
+                                retest_end_time=pd.to_datetime(row["timestamp"], unit="ms"),
                                 status="rejected_by_extra_filters",
                             )
                         )
                         self._logger.info(
                             "retest_rejected_by_extra_filters symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s body_ratio=%.6f body_ratio_min=%.6f move_atr=%.6f move_atr_threshold=%.6f max_retest_depth=%.6f max_retest_depth_threshold=%.6f natr=%.6f",
                             params.symbol,
-                            row["datetime"],
+                            row["timestamp"],
                             pending_breakout.side.value,
                             pending_breakout.level.price.value,
                             breakout_idx,
@@ -822,15 +823,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     level_price=pending_retest.breakout.level.price.value,
                     retest_low=pending_retest.retest_low,
                     retest_high=pending_retest.retest_high,
-                    retest_start_time=pd.Timestamp(annotated.iloc[pending_retest.retest_start_idx]["datetime"]),
-                    retest_end_time=pd.Timestamp(annotated.iloc[pending_retest.retest_end_idx]["datetime"]),
+                    retest_start_time=pd.to_datetime(annotated.iloc[pending_retest.retest_start_idx]["timestamp"], unit="ms"),
+                    retest_end_time=pd.to_datetime(annotated.iloc[pending_retest.retest_end_idx]["timestamp"], unit="ms"),
                     status="pending_end_of_data",
                 )
             )
 
         if active_sim is not None and active_sim.position is not None:
             final_row = annotated.iloc[-1]
-            final_time = final_row["datetime"].to_pydatetime()
+            final_time = pd.to_datetime(final_row["timestamp"], unit="ms").to_pydatetime()
             trades.append(active_sim.close_position(price=float(final_row["close"]), exit_time=final_time))
 
         diagnostics["trades_generated"] = len(trades)
