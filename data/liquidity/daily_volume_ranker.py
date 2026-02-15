@@ -54,10 +54,9 @@ class DailyVolumeRanker:
                 continue
 
             prepared["timestamp"] = prepared["timestamp"].astype("int64")
-            prepared["day_bucket"] = prepared["timestamp"] // 86_400_000
             prepared["daily_volume_usd"] = prepared["close"] * prepared["volume"]
 
-            daily_volume = prepared.groupby("day_bucket", as_index=True)["daily_volume_usd"].sum(min_count=1).dropna()
+            daily_volume = prepared.sort_values("timestamp").dropna(subset=["daily_volume_usd"])["daily_volume_usd"]
             if daily_volume.empty:
                 logger.info(
                     "ликвидность-кэш: символ=%s исключён: не удалось посчитать дневной USD-объём",
@@ -77,4 +76,3 @@ class DailyVolumeRanker:
             result[symbol] = avg_daily_volume_usd
 
         return result
-
