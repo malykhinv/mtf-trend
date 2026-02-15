@@ -129,18 +129,53 @@ class ParquetStorage:
         if parsed_datetime.isna().any():
             _raise_validation_error("invalid_datetime_values", invalid_count=int(parsed_datetime.isna().sum()))
 
-        incoming_ts_canonical = pd.to_numeric(incoming["timestamp"], errors="coerce")
-        written_ts_canonical = pd.to_numeric(written["timestamp"], errors="coerce")
+        written_from_datetime_ms = (parsed_datetime.astype("int64") // 1_000_000).astype("Int64")
+        written_timestamp_numeric = pd.to_numeric(written["timestamp"], errors="coerce")
+        written_timestamp_int = written_timestamp_numeric.round().astype("Int64")
+        unit_mismatch_mask = (
+            written_timestamp_int.notna()
+            & parsed_datetime.notna()
+            & (written_timestamp_int != written_from_datetime_ms)
+        )
+        if unit_mismatch_mask.any():
+            mismatch_sample = written.loc[unit_mismatch_mask, ["timestamp", "datetime"]].head(5).to_dict("records")
+            _raise_validation_error(
+                "timestamp_datetime_unit_mismatch",
+                mismatch_count=int(unit_mismatch_mask.sum()),
+                mismatch_sample=mismatch_sample,
+            )
 
-        incoming_timestamps = incoming_ts_canonical.dropna().astype("int64")
-        written_timestamps = written_ts_canonical.dropna().astype("int64")
+        incoming_raw_timestamp_numeric = pd.to_numeric(incoming["timestamp"], errors="coerce")
+        written_raw_timestamp_numeric = pd.to_numeric(written["timestamp"], errors="coerce")
+
+        incoming_timestamp_ms, _ = normalize_timestamp_series(
+            timestamp_series=incoming["timestamp"],
+            datetime_fallback=incoming.get("datetime"),
+            logger=self._logger,
+            log_prefix="parquet-cache-incoming-timestamp-normalization",
+        )
+        written_timestamp_ms, _ = normalize_timestamp_series(
+            timestamp_series=written["timestamp"],
+            datetime_fallback=written.get("datetime"),
+            logger=self._logger,
+            log_prefix="parquet-cache-written-timestamp-normalization",
+        )
+
+        incoming_timestamps = incoming_timestamp_ms.dropna().astype("int64")
+        written_timestamps = written_timestamp_ms.dropna().astype("int64")
 
         incoming_timestamp_index = pd.Index(incoming_timestamps.unique())
         written_timestamp_index = pd.Index(written_timestamps.unique())
         intersection_timestamps = incoming_timestamp_index.intersection(written_timestamp_index)
 
+        incoming_raw_non_na = incoming_raw_timestamp_numeric.dropna()
+        written_raw_non_na = written_raw_timestamp_numeric.dropna()
+        incoming_raw_min = int(incoming_raw_non_na.min()) if not incoming_raw_non_na.empty else None
+        incoming_raw_max = int(incoming_raw_non_na.max()) if not incoming_raw_non_na.empty else None
         incoming_min = int(incoming_timestamp_index.min()) if not incoming_timestamp_index.empty else None
         incoming_max = int(incoming_timestamp_index.max()) if not incoming_timestamp_index.empty else None
+        written_raw_min = int(written_raw_non_na.min()) if not written_raw_non_na.empty else None
+        written_raw_max = int(written_raw_non_na.max()) if not written_raw_non_na.empty else None
         written_min = int(written_timestamp_index.min()) if not written_timestamp_index.empty else None
         written_max = int(written_timestamp_index.max()) if not written_timestamp_index.empty else None
         intersection_count = int(len(intersection_timestamps))
@@ -148,15 +183,19 @@ class ParquetStorage:
         required_for_batch_rows = ["datetime", *batch_domain_columns]
         if not incoming_timestamps.empty and required_for_batch_rows:
             self._logger.info(
-                "parquet-cache-timestamp-compare: symbol=%s timeframe=%s incoming_dtype=%s written_dtype=%s incoming_unique=%s written_unique=%s incoming_min=%s incoming_max=%s written_min=%s written_max=%s intersection_count=%s",
+                "parquet-cache-timestamp-compare: symbol=%s timeframe=%s incoming_dtype=%s written_dtype=%s incoming_unique=%s written_unique=%s incoming_raw_min=%s incoming_raw_max=%s incoming_min=%s incoming_max=%s written_raw_min=%s written_raw_max=%s written_min=%s written_max=%s intersection_count=%s",
                 symbol,
                 timeframe.value,
                 incoming_timestamps.dtype,
                 written_ts_dtype,
                 int(incoming_timestamps.nunique()),
                 int(written["timestamp"].nunique()) if "timestamp" in written.columns else 0,
+                incoming_raw_min,
+                incoming_raw_max,
                 incoming_min,
                 incoming_max,
+                written_raw_min,
+                written_raw_max,
                 written_min,
                 written_max,
                 intersection_count,
@@ -178,7 +217,8 @@ class ParquetStorage:
                     missing_values_sample=missing_values_sample,
                 )
 
-            written_batch_rows = written[written_ts_canonical.isin(intersection_timestamps)]
+            written_batch_mask = written_timestamp_ms.isin(intersection_timestamps).fillna(False)
+            written_batch_rows = written.loc[written_batch_mask]
             problematic_fields: dict[str, int] = {}
             for column in required_for_batch_rows:
                 null_count = int(written_batch_rows[column].isna().sum())
@@ -295,6 +335,13 @@ class ParquetStorage:
                     merged = merged.rename(columns={col: base_col})
 
         merged = self._ensure_utc_columns(merged)
+        merged_rechecked = self._ensure_utc_columns(merged)
+        if not merged["timestamp"].reset_index(drop=True).equals(merged_rechecked["timestamp"].reset_index(drop=True)):
+            raise ParquetCacheValidationError(
+                "parquet cache validation failed: reason=ensure_utc_non_idempotent, "
+                f"symbol={symbol}, timeframe={timeframe.value}, path={path}"
+            )
+        merged = merged_rechecked
         merged_nunique_before_dedup = int(merged["timestamp"].nunique())
         merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
         merged_nunique_after_dedup = int(merged["timestamp"].nunique()) if not merged.empty else 0
