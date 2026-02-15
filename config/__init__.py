@@ -89,7 +89,7 @@ def _parse_anchor_datetime(value: str | None, *, env_name: str) -> datetime | No
     except ValueError as error:
         raise ValueError(
             f"Invalid {env_name}: {value}. Expected ISO date/datetime, for example "
-            f"2025-01-31 or 2025-01-31T23:59:59+03:00"
+            f"2025-01-31 or 2025-01-31T23:59:59"
         ) from error
 
     return parsed
