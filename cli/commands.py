@@ -44,7 +44,9 @@ from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
+from domain.enums.position_side import PositionSide
 from domain.enums.timeframe import Timeframe
+from domain.models.retest_plot_span import RetestPlotSpan
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary
 from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
@@ -53,12 +55,12 @@ from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from strategy.breakout.breakout_strategy import BreakoutStrategy
-from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS
+from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from utils.formatters import datetime_to_utc
 from utils.logger import get_logger
 from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
-from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
+from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames, StrategyPlotter
 
 
 # region Приватные
@@ -865,30 +867,259 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("plot-daily-levels", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    logger.error("plot-daily-levels: режим пока не реализован")
-    logger.info(
-        "plot-daily-levels: получены аргументы symbols=%s levels_tf=%s entry_tf=%s output_dir=%s limit=%s",
-        args.symbols,
-        args.levels_tf,
-        args.entry_tf,
-        args.output_dir,
-        args.limit,
+
+    levels_timeframe = _resolve_timeframe(
+        getattr(args, "levels_tf", None),
+        fallback=config.strategy.levels_timeframe,
+        argument_name="--levels-tf",
     )
-    return 1
+    entry_timeframe = _resolve_timeframe(
+        getattr(args, "entry_tf", None),
+        fallback=config.strategy.entry_timeframe,
+        argument_name="--entry-tf",
+    )
+    if levels_timeframe == entry_timeframe:
+        raise ValueError("--levels-tf и --entry-tf должны отличаться")
+
+    limit = getattr(args, "limit", None)
+    if limit is not None and limit <= 0:
+        raise ValueError("--limit должен быть положительным числом")
+
+    output_dir_raw = str(getattr(args, "output_dir", "") or "").strip()
+    output_dir = Path(output_dir_raw) if output_dir_raw else config.backtest.results_dir / "charts"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols = list(dict.fromkeys(args.symbols or preparer.list_symbols(entry_timeframe)))
+    if not symbols:
+        logger.info("plot-daily-levels: нет символов для построения")
+        return 0
+
+    base_params = BacktestRunner.build_parameter_grid()[0]
+    strategy = BreakoutStrategy(
+        commission_rate=config.simulation.commission_rate,
+        slippage=config.simulation.slippage,
+        strategy_timezone=config.strategy.timezone,
+        simulation_timezone=config.simulation.timezone,
+        logger=logger,
+    )
+    plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
+
+    built = 0
+    failed = 0
+    skipped_empty = 0
+    for symbol in symbols:
+        params = BreakoutParams(
+            lookback=base_params.lookback,
+            volume_mult=base_params.volume_mult,
+            retest_window_hours=base_params.retest_window_hours,
+            retest_zone=base_params.retest_zone,
+            min_rr=base_params.min_rr,
+            sl_mode=base_params.sl_mode,
+            tp2_mult=base_params.tp2_mult,
+            min_body_ratio=base_params.min_body_ratio,
+            min_move_atr=base_params.min_move_atr,
+            max_retest_depth=base_params.max_retest_depth,
+            confirmation_bars=base_params.confirmation_bars,
+            entry_trigger=base_params.entry_trigger,
+            symbol=symbol,
+            retest_zone_atr=base_params.retest_zone_atr,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
+        try:
+            output_path = plotter.plot_daily_levels(symbol=symbol, params=params, output_dir=output_dir)
+            if output_path is None:
+                skipped_empty += 1
+                logger.warning("plot-daily-levels: %s пропущен — пустые данные", symbol)
+                continue
+            built += 1
+            logger.info("plot-daily-levels: сохранен график %s", output_path)
+        except Exception as exc:
+            failed += 1
+            logger.warning("plot-daily-levels: ошибка по символу %s: %s", symbol, exc)
+
+    logger.info(
+        "plot-daily-levels: итог symbols=%s saved=%s skipped_empty=%s failed=%s output_dir=%s limit=%s",
+        len(symbols),
+        built,
+        skipped_empty,
+        failed,
+        output_dir,
+        limit,
+    )
+    if built == 0 and failed > 0:
+        logger.error("plot-daily-levels: не удалось построить ни одного графика")
+        return 1
+    return 0
+
+
+def _load_retest_spans_artifact(path: Path, logger: Logger) -> list[RetestPlotSpan]:
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("plot-retests: не удалось прочитать артефакт ретестов %s: %s", path, exc)
+        return []
+
+    if not isinstance(raw, list):
+        logger.warning("plot-retests: артефакт ретестов %s имеет некорректный формат", path)
+        return []
+
+    spans: list[RetestPlotSpan] = []
+    for item in raw:
+        try:
+            if not isinstance(item, dict):
+                continue
+            spans.append(
+                RetestPlotSpan(
+                    symbol=str(item["symbol"]),
+                    side=PositionSide(str(item["side"])),
+                    level_price=float(item["level_price"]),
+                    retest_low=float(item["retest_low"]),
+                    retest_high=float(item["retest_high"]),
+                    retest_start_time=pd.Timestamp(item["retest_start_time"]),
+                    retest_end_time=pd.Timestamp(item["retest_end_time"]),
+                    status=str(item["status"]),
+                )
+            )
+        except Exception:
+            continue
+    return spans
 
 
 def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("plot-retests", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    logger.error("plot-retests: режим пока не реализован")
-    logger.info(
-        "plot-retests: получены аргументы symbols=%s levels_tf=%s entry_tf=%s output_dir=%s limit=%s",
-        args.symbols,
-        args.levels_tf,
-        args.entry_tf,
-        args.output_dir,
-        args.limit,
+
+    levels_timeframe = _resolve_timeframe(
+        getattr(args, "levels_tf", None),
+        fallback=config.strategy.levels_timeframe,
+        argument_name="--levels-tf",
     )
-    return 1
+    entry_timeframe = _resolve_timeframe(
+        getattr(args, "entry_tf", None),
+        fallback=config.strategy.entry_timeframe,
+        argument_name="--entry-tf",
+    )
+    if levels_timeframe == entry_timeframe:
+        raise ValueError("--levels-tf и --entry-tf должны отличаться")
+
+    limit = getattr(args, "limit", None)
+    if limit is not None and limit <= 0:
+        raise ValueError("--limit должен быть положительным числом")
+
+    output_dir_raw = str(getattr(args, "output_dir", "") or "").strip()
+    output_dir = Path(output_dir_raw) if output_dir_raw else config.backtest.results_dir / "charts"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols = list(dict.fromkeys(args.symbols or preparer.list_symbols(entry_timeframe)))
+    if not symbols:
+        logger.info("plot-retests: нет символов для построения")
+        return 0
+
+    base_params = BacktestRunner.build_parameter_grid()[0]
+    strategy = BreakoutStrategy(
+        commission_rate=config.simulation.commission_rate,
+        slippage=config.simulation.slippage,
+        strategy_timezone=config.strategy.timezone,
+        simulation_timezone=config.simulation.timezone,
+        logger=logger,
+    )
+    plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
+
+    retest_artifact_path = config.backtest.results_dir / "retest_plot_spans.json"
+    artifact_spans = _load_retest_spans_artifact(retest_artifact_path, logger)
+    artifact_spans_by_symbol: dict[str, list[RetestPlotSpan]] = {}
+    for span in artifact_spans:
+        artifact_spans_by_symbol.setdefault(span.symbol, []).append(span)
+
+    saved = 0
+    failed = 0
+    skipped_empty = 0
+    skipped_no_spans = 0
+
+    for symbol in symbols:
+        params = BreakoutParams(
+            lookback=base_params.lookback,
+            volume_mult=base_params.volume_mult,
+            retest_window_hours=base_params.retest_window_hours,
+            retest_zone=base_params.retest_zone,
+            min_rr=base_params.min_rr,
+            sl_mode=base_params.sl_mode,
+            tp2_mult=base_params.tp2_mult,
+            min_body_ratio=base_params.min_body_ratio,
+            min_move_atr=base_params.min_move_atr,
+            max_retest_depth=base_params.max_retest_depth,
+            confirmation_bars=base_params.confirmation_bars,
+            entry_trigger=base_params.entry_trigger,
+            symbol=symbol,
+            retest_zone_atr=base_params.retest_zone_atr,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
+        try:
+            mtf_frames = SymbolMtfFrames(
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                levels_frame=preparer.load_symbol_data(symbol, levels_timeframe),
+                entry_frame=preparer.load_symbol_data(symbol, entry_timeframe),
+            )
+            diagnostics_spans: list[RetestPlotSpan] = []
+            if not mtf_frames.levels_frame.empty and not mtf_frames.entry_frame.empty:
+                strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+                diagnostics = strategy.consume_last_generation_diagnostics()
+                raw_spans = diagnostics.get("retest_plot_spans", [])
+                diagnostics_spans = [span for span in raw_spans if isinstance(span, RetestPlotSpan)]
+
+            if diagnostics_spans:
+                retest_spans = diagnostics_spans
+            else:
+                retest_spans = artifact_spans_by_symbol.get(symbol, [])
+
+            if limit is not None and retest_spans:
+                retest_spans = retest_spans[:limit]
+
+            if not retest_spans:
+                if mtf_frames.levels_frame.empty or mtf_frames.entry_frame.empty:
+                    skipped_empty += 1
+                    logger.warning("plot-retests: %s пропущен — пустые данные", symbol)
+                else:
+                    skipped_no_spans += 1
+                    logger.info("plot-retests: %s пропущен — ретесты не найдены", symbol)
+                continue
+
+            saved_paths = plotter.plot_retests(
+                symbol=symbol,
+                params=params,
+                output_dir=output_dir,
+                retest_spans=retest_spans,
+            )
+            if not saved_paths:
+                skipped_empty += 1
+                logger.warning("plot-retests: %s пропущен — пустые данные для визуализации", symbol)
+                continue
+            saved += len(saved_paths)
+            logger.info("plot-retests: %s сохранено графиков=%s", symbol, len(saved_paths))
+        except Exception as exc:
+            failed += 1
+            logger.warning("plot-retests: ошибка по символу %s: %s", symbol, exc)
+
+    logger.info(
+        "plot-retests: итог symbols=%s saved=%s skipped_empty=%s skipped_no_spans=%s failed=%s output_dir=%s limit=%s",
+        len(symbols),
+        saved,
+        skipped_empty,
+        skipped_no_spans,
+        failed,
+        output_dir,
+        limit,
+    )
+    if saved == 0 and failed > 0:
+        logger.error("plot-retests: не удалось построить ни одного графика")
+        return 1
+    return 0
 
 
 # endregion Приватные
