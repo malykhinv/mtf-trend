@@ -20,7 +20,6 @@ from constants import (
     DEFAULT_RETRY_BACKOFF_SECONDS,
     DEFAULT_RESULTS_DIR,
     DEFAULT_SLIPPAGE,
-    DEFAULT_TIMEZONE,
     DEFAULT_SPREAD,
     DEFAULT_LOGS_DIR,
     DEFAULT_MIN_VOLUME_USD,
@@ -85,9 +84,8 @@ def _parse_anchor_datetime(value: str | None, *, env_name: str) -> datetime | No
     if not raw_value:
         return None
 
-    normalized_value = raw_value.replace("Z", "+00:00")
     try:
-        parsed = datetime.fromisoformat(normalized_value)
+        parsed = datetime.fromisoformat(raw_value)
     except ValueError as error:
         raise ValueError(
             f"Invalid {env_name}: {value}. Expected ISO date/datetime, for example "
@@ -104,17 +102,11 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     env_file = Path(env_path)
     _load_env_file(env_file)
 
-    default_timezone = os.getenv("TIMEZONE", DEFAULT_TIMEZONE)
-
-    fetch_timezone = os.getenv("FETCH_TIMEZONE", default_timezone)
-    strategy_timezone = os.getenv("STRATEGY_TIMEZONE", default_timezone)
-    simulation_timezone = os.getenv("SIMULATION_TIMEZONE", default_timezone)
 
     fetch_config = FetchConfig(
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
-        timezone=fetch_timezone,
         min_volume_usd=float(
             os.getenv("MIN_VOLUME_USD", os.getenv("FETCH_MIN_VOLUME_USD", str(DEFAULT_MIN_VOLUME_USD)))),
         coingecko_min_request_interval_seconds=float(
@@ -150,7 +142,6 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     )
 
     strategy_config = StrategyConfig(
-        timezone=strategy_timezone,
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
     )
@@ -159,7 +150,6 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         commission_rate=float(os.getenv("COMMISSION_RATE", str(DEFAULT_COMMISSION_RATE))),
         slippage=float(os.getenv("SLIPPAGE", str(DEFAULT_SLIPPAGE))),
         spread=float(os.getenv("SPREAD", str(DEFAULT_SPREAD))),
-        timezone=simulation_timezone,
     )
 
     backtest_config = BacktestConfig(

@@ -11,7 +11,6 @@ from constants import (
     DEFAULT_FETCH_TIMEFRAMES,
     DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
     DEFAULT_MIN_VOLUME_USD,
-    DEFAULT_TIMEZONE,
 )
 from domain.enums.timeframe import Timeframe
 
@@ -22,7 +21,6 @@ class FetchConfig:
     binance_secret_key: str
     coingecko_api_key: str
     timeframes: tuple[Timeframe, ...] = DEFAULT_FETCH_TIMEFRAMES
-    timezone: str = DEFAULT_TIMEZONE
     min_volume_usd: float = DEFAULT_MIN_VOLUME_USD
     coingecko_min_request_interval_seconds: float = DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS
     coingecko_volume_batch_size: int = DEFAULT_COINGECKO_VOLUME_BATCH_SIZE

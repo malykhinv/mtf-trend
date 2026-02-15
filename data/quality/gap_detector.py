@@ -33,6 +33,6 @@ class GapDetector:
         if ts.empty:
             return []
 
-        expected = pd.date_range(start=ts[0], end=ts[-1], freq=_TIMEFRAME_TO_DELTA[timeframe], tz="UTC")
+        expected = pd.date_range(start=ts[0], end=ts[-1], freq=_TIMEFRAME_TO_DELTA[timeframe])
         missing = expected.difference(ts)
         return list(missing)

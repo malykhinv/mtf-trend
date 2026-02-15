@@ -9,8 +9,8 @@ class TimeAlignment:
     """Класс."""
 
     @staticmethod
-    def align_to_utc(data: pd.DataFrame) -> pd.DataFrame:
-        """Возвращает данные без нормализации временных меток."""
+    def sort_by_exchange_timestamp(data: pd.DataFrame) -> pd.DataFrame:
+        """Сортирует данные по биржевым временным полям без преобразований."""
         if data.empty:
             return data.copy()
 

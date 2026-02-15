@@ -116,7 +116,6 @@ BINANCE_SECRET_KEY=секрет
 COINGECKO_API_KEY=ключ
 LOG_LEVEL=INFO
 CACHE_DIR=./cache
-TIMEZONE=Europe/Belgrade
 MAX_CONCURRENT_REQUESTS=10
 COMMISSION_RATE=0.0004
 SLIPPAGE=0.0005
@@ -126,7 +125,7 @@ SLIPPAGE=0.0005
 
 - Все конфигурационные классы как датаклассы
 - Группировка: FetchConfig, StrategyConfig, SimulationConfig, BacktestConfig
-- Настройки временных зон, комиссий, спредов
+- Настройки комиссий и спредов
 - Пути к данным и кэшам
 
 #### **Файл `constants.py`:**

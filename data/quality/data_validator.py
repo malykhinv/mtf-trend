@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pandas as pd
 
@@ -30,7 +30,7 @@ class DataValidator:
                     timeframe=timeframe,
                     issue_type=issue_type,
                     severity=severity,
-                    timestamp=datetime.fromtimestamp(0, tz=timezone.utc),
+                    timestamp=datetime.fromtimestamp(0),
                     description=description,
                 )
             )
