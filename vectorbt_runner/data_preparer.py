@@ -66,9 +66,7 @@ class DataPreparer:
 
         prepared = frame.copy()
         prepared["symbol"] = symbol
-        prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
         prepared = prepared.dropna(subset=["timestamp"])
-        prepared["timestamp"] = prepared["timestamp"].astype("int64")
 
         numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in prepared.columns]
         for col in numeric_cols:
