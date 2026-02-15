@@ -51,9 +51,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         "low",
         "close",
         "volume",
-        "level_high",
-        "level_low",
-        "level_start_time",
         "natr",
     ]
     def __init__(
@@ -165,7 +162,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         *,
         price: float,
         side: PositionSide,
-        row: pd.Series,
+        level_start_time: int,
         lookback: int,
         volume_before: float | None,
         volume_after: float | None = None,
@@ -173,7 +170,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return Level(
             price=Price(price),
             level_type=LevelType.RESISTANCE if side == PositionSide.LONG else LevelType.SUPPORT,
-            formation_timestamp_ms=int(row["level_start_time"]),
+            formation_timestamp_ms=level_start_time,
             lookback=lookback,
             shadow_ratio=0.0,
             volume_before=volume_before,
@@ -248,7 +245,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         updated_level = self._build_level(
             price=breakout.level.price.value,
             side=breakout.side,
-            row=annotated.iloc[breakout_idx],
+            level_start_time=breakout.level_start_time,
             lookback=breakout.level.lookback,
             volume_before=v_before,
             volume_after=v_after,
@@ -396,39 +393,34 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def prepare_annotated_multi_tf_data(
         self,
         *,
-        prepared_multi_tf: tuple[pd.DataFrame, pd.DataFrame],
+        lower_base: pd.DataFrame,
         lookback: int,
     ) -> pd.DataFrame:
-        """Строит аннотированный фрейм (уровни + NATR), готовый к проходу сигналов."""
-        higher_base, lower_base = prepared_multi_tf
-        if len(higher_base) < lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
-            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+        """Строит аннотированный фрейм младшего ТФ с NATR, готовый к проходу сигналов."""
         if len(lower_base) < STRATEGY_MIN_LOOKBACK_BUFFER:
             return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+
+        annotated = self._append_natr(
+            annotated=lower_base.sort_values("timestamp").reset_index(drop=True),
+            atr_window=lookback,
+        )
+        if annotated.empty:
+            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
+
+        return annotated[self.ANNOTATED_COLUMNS].copy()
+
+    @staticmethod
+    def prepare_higher_tf_levels(*, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
+        """Готовит уровни старшего ТФ без маппинга на младший ТФ."""
+        if len(higher_base) < lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
+            return pd.DataFrame(columns=["timestamp", "level_high", "level_low", "level_start_time"])
 
         higher_levels = higher_base.copy()
         higher_levels["level_high"] = higher_levels["high"].rolling(window=lookback).max().shift(1)
         higher_levels["level_low"] = higher_levels["low"].rolling(window=lookback).min().shift(1)
         higher_levels["level_start_time"] = higher_levels["timestamp"]
         higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("timestamp")
-        if higher_levels.empty:
-            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
-
-        annotated = pd.merge_asof(
-            lower_base.sort_values("timestamp").reset_index(drop=True),
-            higher_levels[["timestamp", "level_high", "level_low", "level_start_time"]],
-            on="timestamp",
-            direction="backward",
-        )
-        annotated = annotated.dropna(subset=["level_high", "level_low", "level_start_time"]).reset_index(drop=True)
-        if annotated.empty:
-            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
-
-        annotated = self._append_natr(annotated=annotated, atr_window=lookback)
-        if annotated.empty:
-            return pd.DataFrame(columns=self.ANNOTATED_COLUMNS)
-
-        return annotated[self.ANNOTATED_COLUMNS].copy()
+        return higher_levels[["timestamp", "level_high", "level_low", "level_start_time"]].reset_index(drop=True)
 
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         """Обратносовместимая обертка для вызовов с одним таймфреймом."""
@@ -458,15 +450,23 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             params.entry_timeframe.value,
         )
         if annotated is None:
-            prepared_multi_tf = self.prepare_multi_tf_data(
+            higher_base, lower_base = self.prepare_multi_tf_data(
                 mtf_frames=mtf_frames,
                 levels_timeframe=params.levels_timeframe,
                 entry_timeframe=params.entry_timeframe,
             )
             annotated = self.prepare_annotated_multi_tf_data(
-                prepared_multi_tf=prepared_multi_tf,
+                lower_base=lower_base,
                 lookback=params.lookback,
             )
+            higher_levels = self.prepare_higher_tf_levels(higher_base=higher_base, lookback=params.lookback)
+        else:
+            higher_base, _ = self.prepare_multi_tf_data(
+                mtf_frames=mtf_frames,
+                levels_timeframe=params.levels_timeframe,
+                entry_timeframe=params.entry_timeframe,
+            )
+            higher_levels = self.prepare_higher_tf_levels(higher_base=higher_base, lookback=params.lookback)
         diagnostics: dict[str, object] = {
             "annotated_rows": int(len(annotated)),
             "breakouts_found": 0,
@@ -493,6 +493,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if annotated.empty:
             self._last_generation_diagnostics = diagnostics
             return []
+        if higher_levels.empty:
+            self._last_generation_diagnostics = diagnostics
+            return []
 
         trades: list[TradeResult] = []
         retest_plot_spans: list[RetestPlotSpan] = []
@@ -501,10 +504,22 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         pending_retest: PendingRetest | None = None
         active_sim: StatefulPositionSimulator | None = None
         retest_window_candles = max(1, self._hours_to_candles(params.retest_window_hours, params.entry_timeframe))
+        level_idx = 0
+        active_level_high: float | None = None
+        active_level_low: float | None = None
+        active_level_start_time: int | None = None
 
         for idx in range(len(annotated)):
             row = annotated.iloc[idx]
             candle = self._to_candle(row)
+            row_timestamp = int(row["timestamp"])
+
+            while level_idx < len(higher_levels) and int(higher_levels.iloc[level_idx]["timestamp"]) <= row_timestamp:
+                level_row = higher_levels.iloc[level_idx]
+                active_level_high = float(level_row["level_high"])
+                active_level_low = float(level_row["level_low"])
+                active_level_start_time = int(level_row["level_start_time"])
+                level_idx += 1
 
             if pending_signal is not None and (active_sim is None or active_sim.position is None):
                 active_sim = StatefulPositionSimulator(
@@ -755,8 +770,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         )
 
             if pending_breakout is None:
-                level_high = float(row["level_high"])
-                level_low = float(row["level_low"])
+                if (
+                    active_level_high is None
+                    or active_level_low is None
+                    or active_level_start_time is None
+                ):
+                    continue
+                level_high = active_level_high
+                level_low = active_level_low
                 breakout_long = float(row["close"]) > level_high
                 breakout_short = float(row["close"]) < level_low
                 if breakout_long:
@@ -766,17 +787,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         level=self._build_level(
                             price=level_high,
                             side=PositionSide.LONG,
-                            row=row,
+                            level_start_time=active_level_start_time,
                             lookback=params.lookback,
                             volume_before=self._average_volume_before(
                                 annotated=annotated,
                                 breakout_idx=idx,
-                                level_start_time=row["level_start_time"],
+                                level_start_time=active_level_start_time,
                             ),
                         ),
                         breakout_extreme=float(row["low"]),
                         side=PositionSide.LONG,
-                        level_start_time=row["level_start_time"],
+                        level_start_time=active_level_start_time,
                     )
                 elif breakout_short:
                     diagnostics["breakouts_found"] += 1
@@ -785,17 +806,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         level=self._build_level(
                             price=level_low,
                             side=PositionSide.SHORT,
-                            row=row,
+                            level_start_time=active_level_start_time,
                             lookback=params.lookback,
                             volume_before=self._average_volume_before(
                                 annotated=annotated,
                                 breakout_idx=idx,
-                                level_start_time=row["level_start_time"],
+                                level_start_time=active_level_start_time,
                             ),
                         ),
                         breakout_extreme=float(row["high"]),
                         side=PositionSide.SHORT,
-                        level_start_time=row["level_start_time"],
+                        level_start_time=active_level_start_time,
                     )
 
         if pending_signal is not None:

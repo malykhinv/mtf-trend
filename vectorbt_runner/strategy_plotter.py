@@ -86,7 +86,7 @@ class StrategyPlotter:
             entry_timeframe=params.entry_timeframe,
         )
         annotated = self._strategy.prepare_annotated_multi_tf_data(
-            prepared_multi_tf=prepared,
+            lower_base=prepared[1],
             lookback=params.lookback,
         )
         daily_levels = self._build_daily_levels_frame(
