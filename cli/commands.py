@@ -281,9 +281,9 @@ def _parse_iso_datetime(
         *,
         argument_name: str,
 ) -> datetime:
-    normalized_value = value.strip().replace("Z", "+00:00")
+    raw_value = value.strip()
     try:
-        parsed = datetime.fromisoformat(normalized_value)
+        parsed = datetime.fromisoformat(raw_value)
     except ValueError as error:
         raise ValueError(
             f"Некорректный формат {argument_name}: {value}. "
@@ -592,8 +592,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     strategy = BreakoutStrategy(
         commission_rate=config.simulation.commission_rate,
         slippage=config.simulation.slippage,
-        strategy_timezone=config.strategy.timezone,
-        simulation_timezone=config.simulation.timezone,
         logger=logger,
     )
     runner = BacktestRunner(
@@ -1030,8 +1028,6 @@ def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int
     strategy = BreakoutStrategy(
         commission_rate=config.simulation.commission_rate,
         slippage=config.simulation.slippage,
-        strategy_timezone=config.strategy.timezone,
-        simulation_timezone=config.simulation.timezone,
         logger=logger,
     )
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
@@ -1154,8 +1150,6 @@ def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
     strategy = BreakoutStrategy(
         commission_rate=config.simulation.commission_rate,
         slippage=config.simulation.slippage,
-        strategy_timezone=config.strategy.timezone,
-        simulation_timezone=config.simulation.timezone,
         logger=logger,
     )
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
@@ -1288,7 +1282,7 @@ def clear_cache(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def migrate_cache_timestamps(config: AppConfig, args: argparse.Namespace) -> int:
-    """Мигрирует parquet-кэш в канонический timestamp(ms UTC)-формат."""
+    """Мигрирует parquet-кэш в канонический timestamp(ms)-формат без преобразования таймзон."""
     return _run_with_logging(
         "migrate-cache-timestamps",
         config,

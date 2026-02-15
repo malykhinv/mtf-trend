@@ -26,7 +26,6 @@ class StatefulPositionSimulator(PositionSimulator):
     side: PositionSide
     order_processor: OrderProcessor
     trade_classifier: TradeClassifier
-    simulation_timezone: str
 
     position: Position | None = None
     _pending_signal: TradeSignal | None = None

@@ -61,14 +61,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         *,
         commission_rate: float,
         slippage: float,
-        strategy_timezone: str,
-        simulation_timezone: str,
         logger: logging.Logger | None = None,
     ) -> None:
         self._commission_rate = commission_rate
         self._slippage = slippage
-        self._strategy_timezone = strategy_timezone
-        self._simulation_timezone = simulation_timezone
         self._logger = logger or logging.getLogger(__name__)
         self._last_generation_diagnostics: dict[str, object] = {}
 
@@ -516,7 +512,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     side=pending_signal.position_side,
                     order_processor=OrderProcessor(commission_rate=self._commission_rate, slippage=self._slippage),
                     trade_classifier=TradeClassifier(),
-                    simulation_timezone=self._simulation_timezone,
                 )
                 active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
                 pending_signal = None
