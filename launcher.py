@@ -16,6 +16,8 @@ MODE_BACKTEST = "analyze-cache"
 MODE_REPORT = "make-report"
 MODE_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
+MODE_PLOT_DAILY_LEVELS = "plot-daily-levels"
+MODE_PLOT_RETESTS = "plot-retests"
 
 MODE_LABELS: dict[str, str] = {
     MODE_FETCH_CACHE: "Сбор кэша",
@@ -24,6 +26,8 @@ MODE_LABELS: dict[str, str] = {
     MODE_REPORT: "Построение отчета",
     MODE_QUALITY: "Проверка качества кэша",
     MODE_CLEAR_CACHE: "Очистка кэша",
+    MODE_PLOT_DAILY_LEVELS: "Построение дневных уровней",
+    MODE_PLOT_RETESTS: "Построение ретестов",
 }
 
 
@@ -74,6 +78,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Не использовать CoinGecko при подборе символов для fetch/update",
     )
     parser.add_argument("--symbols", nargs="*", default=None, help="Список символов для backtest/check-quality")
+    parser.add_argument("--levels-tf", default="1d", help="Таймфрейм уровней для plot-режимов")
+    parser.add_argument("--entry-tf", default="15m", help="Таймфрейм входов для plot-режимов")
+    parser.add_argument("--output-dir", default=None, help="Директория сохранения изображений для plot-режимов")
+    parser.add_argument("--limit", type=int, default=None, help="Ограничение числа свечей/событий для plot-режимов")
     parser.add_argument("--input", default=None, help="Входной CSV для отчета")
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
     return parser
@@ -90,6 +98,14 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         days=int(task.get("days", cli_args.days)),
         end_datetime=task.get("end_datetime", cli_args.end_datetime),
         symbols=task.get("symbols", cli_args.symbols),
+        levels_tf=task.get("levels_tf", cli_args.levels_tf),
+        entry_tf=task.get("entry_tf", cli_args.entry_tf),
+        output_dir=task.get("output_dir", cli_args.output_dir),
+        limit=(
+            int(task["limit"])
+            if "limit" in task and task.get("limit") is not None
+            else cli_args.limit
+        ),
         input=task.get("input", cli_args.input),
         output=task.get("output", cli_args.output),
         ignore_coingecko=(
@@ -108,6 +124,8 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_REPORT: commands.make_report,
         MODE_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
+        MODE_PLOT_DAILY_LEVELS: commands.plot_daily_levels,
+        MODE_PLOT_RETESTS: commands.plot_retests,
     }
     return handlers[mode](config, task_args)
 

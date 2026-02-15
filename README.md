@@ -169,7 +169,9 @@ python launcher.py
 - обновление кэша;
 - анализ кэша стратегией (бектест);
 - построение отчета;
-- проверка качества кэша.
+- проверка качества кэша;
+- построение дневных уровней;
+- построение ретестов.
 
 ### 2) Запуск конкретного режима через параметры
 
@@ -182,6 +184,8 @@ python launcher.py --mode update-cache --top-n 100 --days 7 --ignore-coingecko
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
+python launcher.py --mode plot-daily-levels --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 300
+python launcher.py --mode plot-retests --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 100
 python launcher.py --mode clear-cache
 ```
 
@@ -198,7 +202,23 @@ python launcher.py --mode clear-cache
     { "mode": "update-cache", "top_n": 100, "days": 7, "ignore_coingecko": false },
     { "mode": "analyze-cache", "symbols": ["BTC/USDT", "ETH/USDT"] },
     { "mode": "make-report", "output": "./results/report.json" },
-    { "mode": "check-quality", "output": "./results/quality_report.json" }
+    { "mode": "check-quality", "output": "./results/quality_report.json" },
+    {
+      "mode": "plot-daily-levels",
+      "symbols": ["BTC/USDT", "ETH/USDT"],
+      "levels_tf": "1d",
+      "entry_tf": "15m",
+      "output_dir": "./results/charts",
+      "limit": 300
+    },
+    {
+      "mode": "plot-retests",
+      "symbols": ["BTC/USDT"],
+      "levels_tf": "1d",
+      "entry_tf": "15m",
+      "output_dir": "./results/charts",
+      "limit": 100
+    }
   ]
 }
 ```

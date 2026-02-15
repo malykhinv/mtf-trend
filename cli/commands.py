@@ -863,6 +863,34 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("plot-daily-levels", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    logger.error("plot-daily-levels: режим пока не реализован")
+    logger.info(
+        "plot-daily-levels: получены аргументы symbols=%s levels_tf=%s entry_tf=%s output_dir=%s limit=%s",
+        args.symbols,
+        args.levels_tf,
+        args.entry_tf,
+        args.output_dir,
+        args.limit,
+    )
+    return 1
+
+
+def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("plot-retests", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    logger.error("plot-retests: режим пока не реализован")
+    logger.info(
+        "plot-retests: получены аргументы symbols=%s levels_tf=%s entry_tf=%s output_dir=%s limit=%s",
+        args.symbols,
+        args.levels_tf,
+        args.entry_tf,
+        args.output_dir,
+        args.limit,
+    )
+    return 1
+
+
 # endregion Приватные
 
 # Публичные точки входа
@@ -895,3 +923,13 @@ def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
 def clear_cache(config: AppConfig, args: argparse.Namespace) -> int:
     """Очищает директорию локального кэша и пересоздаёт её."""
     return _run_with_logging("clear-cache", config, lambda: _clear_cache_inner(config, args))
+
+
+def plot_daily_levels(config: AppConfig, args: argparse.Namespace) -> int:
+    """Строит графики с дневными уровнями."""
+    return _run_with_logging("plot-daily-levels", config, lambda: _plot_daily_levels_inner(config, args))
+
+
+def plot_retests(config: AppConfig, args: argparse.Namespace) -> int:
+    """Строит графики с ретестами уровней."""
+    return _run_with_logging("plot-retests", config, lambda: _plot_retests_inner(config, args))
