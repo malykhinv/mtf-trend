@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from numbers import Integral
+
 from logging import Logger
 from pathlib import Path
 
@@ -13,6 +15,17 @@ from vectorbt_runner.data_preparer import DataPreparer
 
 class DailyVolumeRanker:
     """Ранжирует символы по среднему дневному USD-объёму из кэша."""
+
+    _UNIX_MS_MIN = 1_000_000_000_000
+    _UNIX_MS_MAX = 9_999_999_999_999
+
+    @classmethod
+    def _is_unix_ms(cls, value: object) -> bool:
+        return (
+            isinstance(value, Integral)
+            and not isinstance(value, bool)
+            and cls._UNIX_MS_MIN <= value <= cls._UNIX_MS_MAX
+        )
 
     def __init__(self, cache_dir: Path) -> None:
         self._preparer = DataPreparer(cache_dir)
@@ -44,7 +57,6 @@ class DailyVolumeRanker:
                 continue
 
             prepared = frame.copy()
-            prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
             prepared = prepared.dropna(subset=["timestamp", "close", "volume"])
             if prepared.empty:
                 logger.info(
@@ -53,7 +65,16 @@ class DailyVolumeRanker:
                 )
                 continue
 
-            prepared["timestamp"] = prepared["timestamp"].astype("int64")
+            invalid_timestamp_mask = ~prepared["timestamp"].map(self._is_unix_ms)
+            invalid_timestamp_count = int(invalid_timestamp_mask.sum())
+            if invalid_timestamp_count > 0:
+                logger.info(
+                    "ликвидность-кэш: символ=%s исключён: невалидный timestamp (%d строк), ожидаются целочисленные unix ms без преобразований",
+                    symbol,
+                    invalid_timestamp_count,
+                )
+                continue
+
             prepared["daily_volume_usd"] = prepared["close"] * prepared["volume"]
 
             daily_volume = prepared.sort_values("timestamp").dropna(subset=["daily_volume_usd"])["daily_volume_usd"]
