@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
-import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.ticker import FuncFormatter
 from matplotlib.patches import Rectangle
 
 from domain.enums.timeframe import Timeframe
@@ -34,9 +35,16 @@ class StrategyPlotter:
     def _format_date_range(annotated: pd.DataFrame) -> str:
         if annotated.empty:
             return "empty"
-        start = pd.to_datetime(annotated["timestamp"].iloc[0], unit="ms").strftime("%Y%m%d")
-        end = pd.to_datetime(annotated["timestamp"].iloc[-1], unit="ms").strftime("%Y%m%d")
+        start = datetime.fromtimestamp(int(annotated["timestamp"].iloc[0]) / 1000, tz=UTC).strftime("%Y%m%d")
+        end = datetime.fromtimestamp(int(annotated["timestamp"].iloc[-1]) / 1000, tz=UTC).strftime("%Y%m%d")
         return f"{start}_{end}"
+
+    @staticmethod
+    def _timestamp_formatter(fmt: str) -> FuncFormatter:
+        def _format_timestamp(value: float, _position: float) -> str:
+            return datetime.fromtimestamp(value / 1000, tz=UTC).strftime(fmt)
+
+        return FuncFormatter(_format_timestamp)
 
     @staticmethod
     def _build_mtf_frames(
@@ -94,7 +102,7 @@ class StrategyPlotter:
         annotated: pd.DataFrame,
         lookback: int,
     ) -> pd.DataFrame:
-        daily_from_levels = pd.DataFrame(columns=["date", "level_high", "level_low"])
+        daily_from_levels = pd.DataFrame(columns=["timestamp_ms", "level_high", "level_low"])
         if not higher_base.empty:
             daily_from_levels = higher_base.copy()
             daily_from_levels["level_high"] = daily_from_levels["high"].rolling(window=lookback).max().shift(1)
@@ -106,13 +114,13 @@ class StrategyPlotter:
                 .drop_duplicates(subset=["day_bucket"], keep="last")[["day_bucket", "level_high", "level_low"]]
                 .reset_index(drop=True)
             )
-            daily_from_levels["date"] = pd.to_datetime(daily_from_levels["day_bucket"] * 86_400_000, unit="ms")
-            daily_from_levels = daily_from_levels[["date", "level_high", "level_low"]]
+            daily_from_levels["timestamp_ms"] = daily_from_levels["day_bucket"] * 86_400_000
+            daily_from_levels = daily_from_levels[["timestamp_ms", "level_high", "level_low"]]
         if not daily_from_levels.empty:
             return daily_from_levels
 
         if annotated.empty:
-            return pd.DataFrame(columns=["date", "level_high", "level_low"])
+            return pd.DataFrame(columns=["timestamp_ms", "level_high", "level_low"])
 
         daily_from_annotated = annotated.copy()
         daily_from_annotated["day_bucket"] = (daily_from_annotated["timestamp"] // 86_400_000).astype("int64")
@@ -121,8 +129,8 @@ class StrategyPlotter:
             .drop_duplicates(subset=["day_bucket"], keep="last")[["day_bucket", "level_high", "level_low"]]
             .reset_index(drop=True)
         )
-        daily_from_annotated["date"] = pd.to_datetime(daily_from_annotated["day_bucket"] * 86_400_000, unit="ms")
-        return daily_from_annotated[["date", "level_high", "level_low"]]
+        daily_from_annotated["timestamp_ms"] = daily_from_annotated["day_bucket"] * 86_400_000
+        return daily_from_annotated[["timestamp_ms", "level_high", "level_low"]]
 
     def plot_daily_levels(
         self,
@@ -144,7 +152,7 @@ class StrategyPlotter:
             gridspec_kw={"height_ratios": [3, 2]},
         )
 
-        plot_time = pd.to_datetime(annotated["timestamp"], unit="ms")
+        plot_time = annotated["timestamp"]
         ax_top.plot(plot_time, annotated["close"], label="15m close", color="black", linewidth=1.0)
         ax_top.plot(plot_time, annotated["level_high"], label="1d level_high", color="green", linewidth=1.2)
         ax_top.plot(plot_time, annotated["level_low"], label="1d level_low", color="red", linewidth=1.2)
@@ -152,10 +160,10 @@ class StrategyPlotter:
         ax_top.grid(alpha=0.3)
         ax_top.legend(loc="upper left")
 
-        ax_bottom.plot(daily_levels["date"], daily_levels["level_high"], label="Daily level high", color="green")
-        ax_bottom.plot(daily_levels["date"], daily_levels["level_low"], label="Daily level low", color="red")
+        ax_bottom.plot(daily_levels["timestamp_ms"], daily_levels["level_high"], label="Daily level high", color="green")
+        ax_bottom.plot(daily_levels["timestamp_ms"], daily_levels["level_low"], label="Daily level low", color="red")
         ax_bottom.fill_between(
-            daily_levels["date"],
+            daily_levels["timestamp_ms"],
             daily_levels["level_low"],
             daily_levels["level_high"],
             color="lightgray",
@@ -166,8 +174,8 @@ class StrategyPlotter:
         ax_bottom.grid(alpha=0.3)
         ax_bottom.legend(loc="upper left")
 
-        ax_bottom.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-        fig.autofmt_xdate()
+        ax_bottom.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d"))
+        fig.autofmt_xdate(rotation=30)
 
         date_range = self._format_date_range(annotated)
         output_path = self._resolve_symbol_output_dir(output_dir=output_dir, symbol=symbol) / f"daily_levels_{date_range}.png"
@@ -197,12 +205,12 @@ class StrategyPlotter:
         saved_paths: list[Path] = []
         for span in symbol_spans:
             fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-            plot_time = pd.to_datetime(annotated["timestamp"], unit="ms")
+            plot_time = annotated["timestamp"]
             ax.plot(plot_time, annotated["close"], color="black", linewidth=1.0, label="15m close")
             ax.axhline(span.level_price, color="royalblue", linestyle="--", linewidth=1.2, label="daily level")
 
-            x_start = mdates.date2num(pd.to_datetime(span.retest_start_timestamp_ms, unit="ms").to_pydatetime())
-            x_end = mdates.date2num(pd.to_datetime(span.retest_end_timestamp_ms, unit="ms").to_pydatetime())
+            x_start = span.retest_start_timestamp_ms
+            x_end = span.retest_end_timestamp_ms
             rect = Rectangle(
                 (x_start, span.retest_low),
                 max(x_end - x_start, 1e-9),
@@ -214,14 +222,14 @@ class StrategyPlotter:
                 label=f"retest zone ({span.status})",
             )
             ax.add_patch(rect)
-            ax.xaxis_date()
             ax.grid(alpha=0.3)
             ax.legend(loc="upper left")
-            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {pd.to_datetime(span.retest_start_timestamp_ms, unit='ms')}")
-            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
-            fig.autofmt_xdate()
+            start_str = datetime.fromtimestamp(span.retest_start_timestamp_ms / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M:%S")
+            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {start_str}")
+            ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
+            fig.autofmt_xdate(rotation=30)
 
-            timestamp = pd.to_datetime(span.retest_start_timestamp_ms, unit="ms").strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.fromtimestamp(span.retest_start_timestamp_ms / 1000, tz=UTC).strftime("%Y%m%d_%H%M%S")
             output_path = symbol_dir / f"retest_{timestamp}_{span.side.value}_{span.status}.png"
             fig.tight_layout()
             fig.savefig(output_path, dpi=150)

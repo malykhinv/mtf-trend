@@ -25,12 +25,6 @@ from domain.models.trade_result import TradeResult
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
-# region Приватные
-def _to_timestamp(value: int) -> pd.Timestamp:
-    return pd.to_datetime(value, unit="ms")
-
-
-# endregion Приватные
 class DataPreparer:
     """Класс."""
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
@@ -88,7 +82,7 @@ class DataPreparer:
     def prepare_vectorbt_inputs(trades: list[TradeResult], initial_price: float = SIMULATION_PRICE_INIT) -> VectorbtInputs:
         """Метод."""
         if not trades:
-            index = pd.DatetimeIndex([])
+            index = pd.Index([], dtype="int64", name="timestamp_ms")
             empty_float = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
             empty_bool = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)
             trades_frame = pd.DataFrame(columns=DATA_PREPARER_TRADE_COLUMNS)
@@ -113,8 +107,10 @@ class DataPreparer:
         ]
         trades_frame = pd.DataFrame(trade_rows)
 
-        timeline = pd.DatetimeIndex(
-            sorted(set(trades_frame["entry_timestamp_ms"].map(_to_timestamp).tolist() + trades_frame["exit_timestamp_ms"].map(_to_timestamp).tolist()))
+        timeline = pd.Index(
+            sorted(set(trades_frame["entry_timestamp_ms"].tolist() + trades_frame["exit_timestamp_ms"].tolist())),
+            dtype="int64",
+            name="timestamp_ms",
         )
         close = pd.Series(initial_price, index=timeline, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
         entries = pd.Series(False, index=timeline, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)
@@ -124,8 +120,8 @@ class DataPreparer:
         running_price = float(initial_price)
         cumulative_pnl = SIMULATION_ZERO_VALUE
         for trade in trade_rows:
-            entry_time = _to_timestamp(int(trade["entry_timestamp_ms"]))
-            exit_time = _to_timestamp(int(trade["exit_timestamp_ms"]))
+            entry_time = int(trade["entry_timestamp_ms"])
+            exit_time = int(trade["exit_timestamp_ms"])
             pnl_percent = trade["pnl_percent"]
             pnl = trade["pnl"]
 
