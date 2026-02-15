@@ -8,6 +8,7 @@ from urllib.parse import quote, unquote
 
 import pandas as pd
 
+from data.quality.timestamp_normalization import normalize_timestamp_series
 from domain.enums.timeframe import Timeframe
 from utils.logger import get_logger
 
@@ -47,17 +48,21 @@ class ParquetStorage:
         symbol_path = self.encode_symbol_for_path(symbol)
         return self._base_dir / symbol_path / timeframe.value / "data.parquet"
 
-    @staticmethod
-    def _ensure_utc_columns(data: pd.DataFrame) -> pd.DataFrame:
+    def _ensure_utc_columns(self, data: pd.DataFrame) -> pd.DataFrame:
         normalized = data.copy()
         if "timestamp" not in normalized.columns:
             raise ValueError("data must contain 'timestamp' column")
 
-        ts = pd.to_datetime(normalized["timestamp"], unit="ms", utc=True, errors="coerce")
+        timestamp_ms, ts = normalize_timestamp_series(
+            timestamp_series=normalized["timestamp"],
+            datetime_fallback=normalized.get("datetime"),
+            logger=self._logger,
+            log_prefix="parquet-storage-normalization",
+        )
         normalized = normalized.loc[ts.notna()].copy()
         ts = ts.loc[ts.notna()]
 
-        normalized["timestamp"] = (ts.astype("int64") // 1_000_000).astype("int64")
+        normalized["timestamp"] = timestamp_ms.loc[ts.index].astype("int64")
         normalized["datetime"] = ts
         return normalized
 
