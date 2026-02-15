@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
+from logging import INFO
 from pathlib import Path
 from urllib.parse import quote, unquote
 
 import pandas as pd
 
 from domain.enums.timeframe import Timeframe
+from utils.logger import get_logger
 
 
 class ParquetStorage:
     """Класс."""
-    def __init__(self, base_dir: str | Path = "cache") -> None:
+    def __init__(
+        self,
+        base_dir: str | Path = "cache",
+        log_level: int | str = INFO,
+        logs_dir: str | Path = "logs",
+    ) -> None:
         self._base_dir = Path(base_dir)
+        self._logger = get_logger(
+            name="parquet-storage",
+            level=log_level,
+            logs_dir=logs_dir,
+        )
 
     # region Приватные
 
@@ -213,6 +225,34 @@ class ParquetStorage:
         merged = self._ensure_utc_columns(merged)
         merged = merged.drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
         merged.to_parquet(path, index=False)
-        self._validate_written_cache(symbol, timeframe, previous_count, incoming, merged)
+        incoming_rows = len(incoming)
+        final_rows = len(merged)
+        added_rows = max(final_rows - previous_count, 0)
 
-        return max(len(merged) - previous_count, 0)
+        try:
+            self._validate_written_cache(symbol, timeframe, previous_count, incoming, merged)
+        except Exception as exc:
+            self._logger.error(
+                "parquet-cache-validation: validation=error symbol=%s timeframe=%s path=%s previous_count=%s incoming_rows=%s added_rows=%s final_rows=%s reason=%s",
+                symbol,
+                timeframe.value,
+                path,
+                previous_count,
+                incoming_rows,
+                added_rows,
+                final_rows,
+                str(exc),
+            )
+            raise
+
+        self._logger.info(
+            "parquet-cache-validation: validation=ok symbol=%s timeframe=%s previous_count=%s incoming_rows=%s added_rows=%s final_rows=%s",
+            symbol,
+            timeframe.value,
+            previous_count,
+            incoming_rows,
+            added_rows,
+            final_rows,
+        )
+
+        return added_rows

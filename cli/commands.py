@@ -90,7 +90,11 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
         retry_attempts=config.backtest.retry_attempts,
         retry_backoff_seconds=config.backtest.retry_backoff_seconds,
     )
-    storage = ParquetStorage(base_dir=config.backtest.cache_dir)
+    storage = ParquetStorage(
+        base_dir=config.backtest.cache_dir,
+        log_level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
+    )
     ohlcv_fetcher = OhlcvFetcher(
         exchange_client=exchange_client,
         storage=storage,
