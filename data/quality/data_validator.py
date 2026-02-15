@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from numbers import Integral
+
 import pandas as pd
 
 from constants import SPREAD_TO_CLOSE_WARNING_THRESHOLD
@@ -12,6 +14,25 @@ from domain.models.data_quality_issue import DataQualityIssue
 
 class DataValidator:
     """Класс."""
+
+    _UNIX_MS_MIN = 1_000_000_000_000
+    _UNIX_MS_MAX = 9_999_999_999_999
+
+    @classmethod
+    def _is_valid_unix_ms_series(cls, series: pd.Series) -> pd.Series:
+        non_null = series.dropna()
+        if non_null.empty:
+            return pd.Series(False, index=series.index)
+
+        def _is_unix_ms(value: object) -> bool:
+            return (
+                isinstance(value, Integral)
+                and not isinstance(value, bool)
+                and cls._UNIX_MS_MIN <= value <= cls._UNIX_MS_MAX
+            )
+
+        return series.map(_is_unix_ms)
+
     @staticmethod
     def validate(symbol: str, timeframe: Timeframe, data: pd.DataFrame) -> list[DataQualityIssue]:
         """Проверяет данные и собирает найденные проблемы."""
@@ -41,12 +62,22 @@ class DataValidator:
             )
             return issues
 
-        ts = pd.to_numeric(normalized["timestamp"], errors="coerce")
-        if ts.notna().sum() == 0:
+        ts = normalized["timestamp"]
+        valid_ts_mask = DataValidator._is_valid_unix_ms_series(ts)
+        if not valid_ts_mask.any():
             add_dataset_issue(
                 "invalid_timestamp_series",
                 DataQualitySeverity.ERROR,
-                "Колонка timestamp не распознана как числовая серия: данные нельзя валидировать по времени, дальнейшие проверки остановлены.",
+                "Колонка timestamp должна содержать целочисленные unix ms без преобразований: данные нельзя валидировать по времени, дальнейшие проверки остановлены.",
+            )
+            return issues
+
+        invalid_ts_count = int((~valid_ts_mask).sum())
+        if invalid_ts_count > 0:
+            add_dataset_issue(
+                "invalid_timestamp_values",
+                DataQualitySeverity.ERROR,
+                f"Обнаружены невалидные timestamp ({invalid_ts_count}): требуются целочисленные unix ms без преобразований.",
             )
             return issues
 
@@ -57,9 +88,7 @@ class DataValidator:
         }
 
         def add_issue(pos: int, issue_type: str, severity: DataQualitySeverity, description: str) -> None:
-            if pd.isna(ts.iloc[pos]):
-                return
-            tstamp = int(ts.iloc[pos])
+            tstamp = ts.iloc[pos]
             issues.append(
                 DataQualityIssue(
                     symbol=symbol,
@@ -111,7 +140,7 @@ class DataValidator:
 
         for col, series in numeric_columns.items():
             if series.notna().sum() == 0:
-                valid_ts_positions = normalized.index[ts.notna()]
+                valid_ts_positions = normalized.index[valid_ts_mask]
                 if len(valid_ts_positions) == 0:
                     continue
                 add_issue(

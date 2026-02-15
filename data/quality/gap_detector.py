@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from numbers import Integral
+
 import pandas as pd
 
 from constants import MILLISECONDS_IN_SECOND, TIMEFRAME_TO_DELTA
@@ -15,14 +17,29 @@ _TIMEFRAME_TO_MS = {
 
 class GapDetector:
     """Класс."""
+
+    _UNIX_MS_MIN = 1_000_000_000_000
+    _UNIX_MS_MAX = 9_999_999_999_999
+
+    @classmethod
+    def _is_unix_ms(cls, value: object) -> bool:
+        return (
+            isinstance(value, Integral)
+            and not isinstance(value, bool)
+            and cls._UNIX_MS_MIN <= value <= cls._UNIX_MS_MAX
+        )
+
     @staticmethod
     def detect_gaps(data: pd.DataFrame, timeframe: Timeframe) -> list[int]:
         """Ищет пропуски во временном ряду свечей по исходным меткам времени биржи."""
         if data.empty or "timestamp" not in data.columns:
             return []
 
-        timestamps = pd.to_numeric(data["timestamp"], errors="coerce").dropna().astype("int64")
+        timestamps = data["timestamp"].dropna()
         if timestamps.empty:
+            return []
+
+        if not timestamps.map(GapDetector._is_unix_ms).all():
             return []
 
         ts = sorted(set(timestamps.tolist()))
