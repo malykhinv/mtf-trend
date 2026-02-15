@@ -53,6 +53,15 @@ class StrategyPlotter:
         )
 
     def _load_annotated(self, symbol: str, params: BreakoutParams) -> pd.DataFrame:
+        annotated, _ = self._load_annotated_and_daily_levels(symbol=symbol, params=params)
+        return annotated
+
+    def _load_annotated_and_daily_levels(
+        self,
+        *,
+        symbol: str,
+        params: BreakoutParams,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
         symbol_data = self._data_preparer.load_symbol_data_multi(
             symbol,
             (params.levels_timeframe, params.entry_timeframe),
@@ -67,9 +76,48 @@ class StrategyPlotter:
             levels_timeframe=params.levels_timeframe,
             entry_timeframe=params.entry_timeframe,
         )
-        return self._strategy.prepare_annotated_multi_tf_data(
+        annotated = self._strategy.prepare_annotated_multi_tf_data(
             prepared_multi_tf=prepared,
             lookback=params.lookback,
+        )
+        daily_levels = self._build_daily_levels_frame(
+            higher_base=prepared[0],
+            annotated=annotated,
+            lookback=params.lookback,
+        )
+        return annotated, daily_levels
+
+    @staticmethod
+    def _build_daily_levels_frame(
+        *,
+        higher_base: pd.DataFrame,
+        annotated: pd.DataFrame,
+        lookback: int,
+    ) -> pd.DataFrame:
+        daily_from_levels = pd.DataFrame(columns=["date", "level_high", "level_low"])
+        if not higher_base.empty:
+            daily_from_levels = higher_base.copy()
+            daily_from_levels["level_high"] = daily_from_levels["high"].rolling(window=lookback).max().shift(1)
+            daily_from_levels["level_low"] = daily_from_levels["low"].rolling(window=lookback).min().shift(1)
+            daily_from_levels["date"] = pd.to_datetime(daily_from_levels["datetime"]).dt.normalize()
+            daily_from_levels = (
+                daily_from_levels.dropna(subset=["level_high", "level_low"])
+                .sort_values("datetime")
+                .drop_duplicates(subset=["date"], keep="last")[["date", "level_high", "level_low"]]
+                .reset_index(drop=True)
+            )
+        if not daily_from_levels.empty:
+            return daily_from_levels
+
+        if annotated.empty:
+            return pd.DataFrame(columns=["date", "level_high", "level_low"])
+
+        daily_from_annotated = annotated.copy()
+        daily_from_annotated["date"] = pd.to_datetime(daily_from_annotated["datetime"]).dt.normalize()
+        return (
+            daily_from_annotated.sort_values("datetime")
+            .drop_duplicates(subset=["date"], keep="last")[["date", "level_high", "level_low"]]
+            .reset_index(drop=True)
         )
 
     def plot_daily_levels(
@@ -80,7 +128,7 @@ class StrategyPlotter:
         output_dir: Path | str,
     ) -> Path | None:
         """Строит 2 панели: 15m OHLC + дневные уровни high/low."""
-        annotated = self._load_annotated(symbol=symbol, params=params)
+        annotated, daily_levels = self._load_annotated_and_daily_levels(symbol=symbol, params=params)
         if annotated.empty:
             return None
 
@@ -99,22 +147,17 @@ class StrategyPlotter:
         ax_top.grid(alpha=0.3)
         ax_top.legend(loc="upper left")
 
-        daily_levels = (
-            annotated[["datetime", "level_high", "level_low"]]
-            .drop_duplicates(subset=["datetime", "level_high", "level_low"])
-            .sort_values("datetime")
-        )
-        ax_bottom.plot(daily_levels["datetime"], daily_levels["level_high"], label="1d high", color="green")
-        ax_bottom.plot(daily_levels["datetime"], daily_levels["level_low"], label="1d low", color="red")
+        ax_bottom.plot(daily_levels["date"], daily_levels["level_high"], label="Daily level high", color="green")
+        ax_bottom.plot(daily_levels["date"], daily_levels["level_low"], label="Daily level low", color="red")
         ax_bottom.fill_between(
-            daily_levels["datetime"],
+            daily_levels["date"],
             daily_levels["level_low"],
             daily_levels["level_high"],
             color="lightgray",
             alpha=0.35,
-            label="daily range",
+            label="Daily range",
         )
-        ax_bottom.set_title("Daily high/low levels")
+        ax_bottom.set_title("Daily high/low levels (1 point per day)")
         ax_bottom.grid(alpha=0.3)
         ax_bottom.legend(loc="upper left")
 
