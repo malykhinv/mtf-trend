@@ -34,8 +34,8 @@ class StrategyPlotter:
     def _format_date_range(annotated: pd.DataFrame) -> str:
         if annotated.empty:
             return "empty"
-        start = pd.Timestamp(annotated["datetime"].iloc[0]).strftime("%Y%m%d")
-        end = pd.Timestamp(annotated["datetime"].iloc[-1]).strftime("%Y%m%d")
+        start = pd.to_datetime(annotated["timestamp"].iloc[0], unit="ms").strftime("%Y%m%d")
+        end = pd.to_datetime(annotated["timestamp"].iloc[-1], unit="ms").strftime("%Y%m%d")
         return f"{start}_{end}"
 
     @staticmethod
@@ -99,13 +99,15 @@ class StrategyPlotter:
             daily_from_levels = higher_base.copy()
             daily_from_levels["level_high"] = daily_from_levels["high"].rolling(window=lookback).max().shift(1)
             daily_from_levels["level_low"] = daily_from_levels["low"].rolling(window=lookback).min().shift(1)
-            daily_from_levels["date"] = pd.to_datetime(daily_from_levels["datetime"]).dt.normalize()
+            daily_from_levels["day_bucket"] = (daily_from_levels["timestamp"] // 86_400_000).astype("int64")
             daily_from_levels = (
                 daily_from_levels.dropna(subset=["level_high", "level_low"])
-                .sort_values("datetime")
-                .drop_duplicates(subset=["date"], keep="last")[["date", "level_high", "level_low"]]
+                .sort_values("timestamp")
+                .drop_duplicates(subset=["day_bucket"], keep="last")[["day_bucket", "level_high", "level_low"]]
                 .reset_index(drop=True)
             )
+            daily_from_levels["date"] = pd.to_datetime(daily_from_levels["day_bucket"] * 86_400_000, unit="ms")
+            daily_from_levels = daily_from_levels[["date", "level_high", "level_low"]]
         if not daily_from_levels.empty:
             return daily_from_levels
 
@@ -113,12 +115,14 @@ class StrategyPlotter:
             return pd.DataFrame(columns=["date", "level_high", "level_low"])
 
         daily_from_annotated = annotated.copy()
-        daily_from_annotated["date"] = pd.to_datetime(daily_from_annotated["datetime"]).dt.normalize()
-        return (
-            daily_from_annotated.sort_values("datetime")
-            .drop_duplicates(subset=["date"], keep="last")[["date", "level_high", "level_low"]]
+        daily_from_annotated["day_bucket"] = (daily_from_annotated["timestamp"] // 86_400_000).astype("int64")
+        daily_from_annotated = (
+            daily_from_annotated.sort_values("timestamp")
+            .drop_duplicates(subset=["day_bucket"], keep="last")[["day_bucket", "level_high", "level_low"]]
             .reset_index(drop=True)
         )
+        daily_from_annotated["date"] = pd.to_datetime(daily_from_annotated["day_bucket"] * 86_400_000, unit="ms")
+        return daily_from_annotated[["date", "level_high", "level_low"]]
 
     def plot_daily_levels(
         self,
@@ -140,9 +144,10 @@ class StrategyPlotter:
             gridspec_kw={"height_ratios": [3, 2]},
         )
 
-        ax_top.plot(annotated["datetime"], annotated["close"], label="15m close", color="black", linewidth=1.0)
-        ax_top.plot(annotated["datetime"], annotated["level_high"], label="1d level_high", color="green", linewidth=1.2)
-        ax_top.plot(annotated["datetime"], annotated["level_low"], label="1d level_low", color="red", linewidth=1.2)
+        plot_time = pd.to_datetime(annotated["timestamp"], unit="ms")
+        ax_top.plot(plot_time, annotated["close"], label="15m close", color="black", linewidth=1.0)
+        ax_top.plot(plot_time, annotated["level_high"], label="1d level_high", color="green", linewidth=1.2)
+        ax_top.plot(plot_time, annotated["level_low"], label="1d level_low", color="red", linewidth=1.2)
         ax_top.set_title(f"{symbol}: 15m candles with 1d levels")
         ax_top.grid(alpha=0.3)
         ax_top.legend(loc="upper left")
@@ -192,7 +197,8 @@ class StrategyPlotter:
         saved_paths: list[Path] = []
         for span in symbol_spans:
             fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-            ax.plot(annotated["datetime"], annotated["close"], color="black", linewidth=1.0, label="15m close")
+            plot_time = pd.to_datetime(annotated["timestamp"], unit="ms")
+            ax.plot(plot_time, annotated["close"], color="black", linewidth=1.0, label="15m close")
             ax.axhline(span.level_price, color="royalblue", linestyle="--", linewidth=1.2, label="daily level")
 
             x_start = mdates.date2num(span.retest_start_time.to_pydatetime())

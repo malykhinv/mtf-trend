@@ -12,7 +12,6 @@ from constants import (
     DATA_PREPARER_EMPTY_FLOAT_DTYPE,
     DATA_PREPARER_NUMERIC_COLUMNS,
     DATA_PREPARER_TRADE_COLUMNS,
-    SIMULATION_DATETIME_UNIT_MS,
     SIMULATION_PARQUET_FILE_NAME,
     SIMULATION_PNL_PERCENT_DIVISOR,
     SIMULATION_PRICE_INIT,
@@ -65,18 +64,19 @@ class DataPreparer:
         if missing:
             return pd.DataFrame()
 
-        normalized = frame.copy()
-        normalized["symbol"] = symbol
-        normalized["datetime"] = pd.to_datetime(normalized["timestamp"], unit=SIMULATION_DATETIME_UNIT_MS, errors="coerce")
-        normalized = normalized.dropna(subset=["datetime"])
+        prepared = frame.copy()
+        prepared["symbol"] = symbol
+        prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+        prepared = prepared.dropna(subset=["timestamp"])
+        prepared["timestamp"] = prepared["timestamp"].astype("int64")
 
-        numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in normalized.columns]
+        numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in prepared.columns]
         for col in numeric_cols:
-            normalized[col] = pd.to_numeric(normalized[col], errors="coerce")
+            prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
 
-        normalized = normalized.dropna(subset=["open", "high", "low", "close", "volume"])
-        normalized = normalized.sort_values("datetime").drop_duplicates(subset=["timestamp"], keep="last")
-        return normalized.reset_index(drop=True)
+        prepared = prepared.dropna(subset=["open", "high", "low", "close", "volume"])
+        prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
+        return prepared.reset_index(drop=True)
 
 
     def load_symbol_data_multi(self, symbol: str, timeframes: Iterable[Timeframe]) -> dict[Timeframe, pd.DataFrame]:

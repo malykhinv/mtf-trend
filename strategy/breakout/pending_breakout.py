@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pandas as pd
-
 from domain.enums.position_side import PositionSide
 from domain.models.level import Level
 
@@ -16,4 +14,4 @@ class PendingBreakout:
     level: Level
     breakout_extreme: float
     side: PositionSide
-    level_start_time: pd.Timestamp
+    level_start_time: int
