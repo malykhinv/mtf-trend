@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from constants import (
     DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS,
@@ -26,7 +25,7 @@ class FetchConfig:
     coingecko_volume_batch_size: int = DEFAULT_COINGECKO_VOLUME_BATCH_SIZE
     liquidity_skip_error_ratio_threshold: float = DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD
     ignore_coingecko: bool = True
-    anchor_datetime: datetime | None = None
+    anchor_timestamp_ms: int | None = None
 
     def __post_init__(self) -> None:
         if not self.timeframes:
