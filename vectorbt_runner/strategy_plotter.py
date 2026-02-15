@@ -201,8 +201,8 @@ class StrategyPlotter:
             ax.plot(plot_time, annotated["close"], color="black", linewidth=1.0, label="15m close")
             ax.axhline(span.level_price, color="royalblue", linestyle="--", linewidth=1.2, label="daily level")
 
-            x_start = mdates.date2num(span.retest_start_time.to_pydatetime())
-            x_end = mdates.date2num(span.retest_end_time.to_pydatetime())
+            x_start = mdates.date2num(pd.to_datetime(span.retest_start_timestamp_ms, unit="ms").to_pydatetime())
+            x_end = mdates.date2num(pd.to_datetime(span.retest_end_timestamp_ms, unit="ms").to_pydatetime())
             rect = Rectangle(
                 (x_start, span.retest_low),
                 max(x_end - x_start, 1e-9),
@@ -217,11 +217,11 @@ class StrategyPlotter:
             ax.xaxis_date()
             ax.grid(alpha=0.3)
             ax.legend(loc="upper left")
-            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {span.retest_start_time}")
+            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {pd.to_datetime(span.retest_start_timestamp_ms, unit='ms')}")
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
             fig.autofmt_xdate()
 
-            timestamp = span.retest_start_time.strftime("%Y%m%d_%H%M%S")
+            timestamp = pd.to_datetime(span.retest_start_timestamp_ms, unit="ms").strftime("%Y%m%d_%H%M%S")
             output_path = symbol_dir / f"retest_{timestamp}_{span.side.value}_{span.status}.png"
             fig.tight_layout()
             fig.savefig(output_path, dpi=150)

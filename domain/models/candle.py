@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
@@ -11,7 +10,7 @@ from domain.value_objects.volume import Volume
 
 @dataclass(frozen=True, slots=True)
 class Candle:
-    timestamp: datetime
+    timestamp_ms: int
     open: Price
     high: Price
     low: Price
@@ -21,8 +20,8 @@ class Candle:
 
     # region Приватные
     def __post_init__(self) -> None:
-        if self.timestamp is None:
-            msg = "Candle timestamp is required."
+        if self.timestamp_ms is None:
+            msg = "Candle timestamp_ms is required."
             raise ValueError(msg)
 
         if self.high.value < self.low.value:

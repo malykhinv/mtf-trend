@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import pandas as pd
-
 from domain.enums.position_side import PositionSide
 
 
@@ -18,7 +16,7 @@ class RetestPlotSpan:
     level_price: float
     retest_low: float
     retest_high: float
-    retest_start_time: pd.Timestamp
-    retest_end_time: pd.Timestamp
+    retest_start_timestamp_ms: int
+    retest_end_timestamp_ms: int
     status: str
 

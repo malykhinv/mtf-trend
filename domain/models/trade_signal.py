@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 
 from domain.enums.position_side import PositionSide
 from domain.value_objects.price import Price
@@ -12,7 +11,7 @@ from domain.value_objects.price import Price
 @dataclass(frozen=True, slots=True)
 class TradeSignal:
     entry_price: Price
-    entry_time: datetime
+    entry_timestamp_ms: int
     stop_loss: Price
     take_profit_1: Price
     take_profit_2: Price
@@ -21,8 +20,8 @@ class TradeSignal:
 
     # region Приватные
     def __post_init__(self) -> None:
-        if self.entry_time is None:
-            msg = "Trade signal entry_time is required."
+        if self.entry_timestamp_ms is None:
+            msg = "Trade signal entry_timestamp_ms is required."
             raise ValueError(msg)
 
         if not self.symbol:

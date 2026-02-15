@@ -81,7 +81,7 @@ LOG_MSG_TASK_COMPLETED = "%s завершено"
 DATA_PREPARER_NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "open_interest")
 DATA_PREPARER_EMPTY_FLOAT_DTYPE = "float64"
 DATA_PREPARER_EMPTY_BOOL_DTYPE = "bool"
-DATA_PREPARER_TRADE_COLUMNS = ("entry_time", "exit_time", "pnl", "pnl_percent", "result_type")
+DATA_PREPARER_TRADE_COLUMNS = ("entry_timestamp_ms", "exit_timestamp_ms", "pnl", "pnl_percent", "result_type")
 SIMULATION_ZERO_VALUE = 0.0
 SIMULATION_UNIT_INCREMENT = 1.0
 
