@@ -12,6 +12,10 @@ from domain.enums.timeframe import Timeframe
 from utils.logger import get_logger
 
 
+class ParquetCacheValidationError(ValueError):
+    """Ошибка валидации записанного parquet-кэша."""
+
+
 class ParquetStorage:
     """Класс."""
     def __init__(
@@ -81,7 +85,7 @@ class ParquetStorage:
                 f"added_rows={added_rows}",
             ]
             context_parts.extend(f"{key}={value}" for key, value in details.items())
-            raise ValueError("parquet cache validation failed: " + ", ".join(context_parts))
+            raise ParquetCacheValidationError("parquet cache validation failed: " + ", ".join(context_parts))
 
         if len(written) != len(merged):
             if len(written) < previous_count or len(written) != previous_count + added_rows:
