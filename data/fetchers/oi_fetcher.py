@@ -14,7 +14,6 @@ from constants import (
 )
 from data.quality.data_validator import DataValidator
 from data.quality.deduplicator import Deduplicator
-from data.quality.oi_aligner import OiAligner
 from data.storage.parquet_storage import ParquetCacheValidationError, ParquetStorage
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
@@ -42,7 +41,6 @@ class OiFetcher:
         self._retry_backoff_seconds = retry_backoff_seconds
         self._logger = get_logger(self.__class__.__name__, level=log_level, logs_dir=logs_dir)
         self._deduplicator = Deduplicator()
-        self._oi_aligner = OiAligner()
         self._validator = DataValidator()
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
@@ -82,22 +80,6 @@ class OiFetcher:
 
         interval_mask = (data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_timestamp_ms)
         data = data.loc[interval_mask].copy()
-
-        ohlcv = self._storage.load(symbol, timeframe)
-        if not ohlcv.empty and "timestamp" in ohlcv.columns:
-            ohlcv_interval = ohlcv.loc[
-                (ohlcv["timestamp"] >= next_start_ms) & (ohlcv["timestamp"] <= end_timestamp_ms), ["timestamp"]
-            ].copy()
-            if not ohlcv_interval.empty:
-                aligned = self._oi_aligner.align(ohlcv_interval, data)
-                expected_columns = {"timestamp", "open_interest"}
-                missing_columns = expected_columns.difference(aligned.columns)
-                if missing_columns:
-                    raise ValueError(
-                        "OI align: после OiAligner.align отсутствуют ожидаемые колонки "
-                        f"{sorted(missing_columns)} для {symbol} {timeframe.value}"
-                    )
-                data = aligned[["timestamp", "open_interest"]]
 
         if not data.empty and "timestamp" in data.columns:
             data = data.loc[(data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_timestamp_ms)].copy()
