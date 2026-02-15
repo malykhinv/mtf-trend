@@ -21,9 +21,9 @@ from constants import (
     DEFAULT_REPORT_OUTPUT_FILE,
     OI_STALE_MIN_OBSERVATIONS,
     OI_STALE_RATIO_THRESHOLD,
-    QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE,
-    QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
-    QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE,
+    QUALITY_OI_LEADING_GAPS_ISSUE,
+    QUALITY_OI_MISSING_VALUES_ISSUE,
+    QUALITY_OI_STALE_SERIES_ISSUE,
     QUALITY_OI_MISSING_COLUMN_ISSUE,
     QUALITY_SEVERITY_CRITICAL,
     QUALITY_SEVERITY_ERROR,
@@ -688,7 +688,7 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
+def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     if "open_interest" not in frame.columns:
         return [
             {
@@ -704,9 +704,9 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     if oi.isna().any():
         issues.append(
             {
-                "issue_type": QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
+                "issue_type": QUALITY_OI_MISSING_VALUES_ISSUE,
                 "severity": QUALITY_SEVERITY_WARNING,
-                "description": "Есть пропуски open_interest после выравнивания",
+                "description": "Есть сырые пропуски open_interest",
             }
         )
 
@@ -717,28 +717,27 @@ def _collect_oi_alignment_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
             if leading_missing > 0:
                 issues.append(
                     {
-                        "issue_type": QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE,
+                        "issue_type": QUALITY_OI_LEADING_GAPS_ISSUE,
                         "severity": QUALITY_SEVERITY_WARNING,
                         "description": "Обнаружены пропуски open_interest в начале ряда",
                     }
                 )
 
-        aligned_oi = oi.ffill()
-        aligned_valid_mask = aligned_oi.notna()
-        comparison_mask = aligned_valid_mask & aligned_valid_mask.shift(1, fill_value=False)
+        valid_mask = oi.notna()
+        comparison_mask = valid_mask & valid_mask.shift(1, fill_value=False)
         compared_observations = int(comparison_mask.sum())
 
         if compared_observations >= OI_STALE_MIN_OBSERVATIONS:
-            stale_ratio = (aligned_oi.diff().eq(0) & comparison_mask).sum() / compared_observations
+            stale_ratio = (oi.diff().eq(0) & comparison_mask).sum() / compared_observations
         else:
             stale_ratio = 0.0
 
         if stale_ratio > OI_STALE_RATIO_THRESHOLD:
             issues.append(
                 {
-                    "issue_type": QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE,
+                    "issue_type": QUALITY_OI_STALE_SERIES_ISSUE,
                     "severity": QUALITY_SEVERITY_ERROR,
-                    "description": "open_interest почти не меняется, вероятна рассинхронизация",
+                    "description": "open_interest почти не меняется на сырых данных",
                 }
             )
 
@@ -758,12 +757,12 @@ def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, Q
 
     oi_problem_types = {
         QUALITY_OI_MISSING_COLUMN_ISSUE,
-        QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE,
-        QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE,
-        QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE,
+        QUALITY_OI_MISSING_VALUES_ISSUE,
+        QUALITY_OI_LEADING_GAPS_ISSUE,
+        QUALITY_OI_STALE_SERIES_ISSUE,
     }
     if any(problem in oi_problem_types for problem in summary.by_issue_type):
-        recommendations.append("Ресинхронизация OI: перезапустите загрузку OI с выравниванием относительно OHLCV")
+        recommendations.append("Проверка OI-источника: перезапустите загрузку OI и проверьте сырые пропуски/аномалии")
 
     if summary.issues_total > 0 or summary.gaps_total > 0:
         recommendations.append("Повторная валидация: после исправлений выполните check-quality повторно")
@@ -820,19 +819,19 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
         issues = validator.validate(symbol, config.fetch.timeframe, frame)
         gaps = gap_detector.detect_gaps(frame, config.fetch.timeframe)
-        oi_alignment_issues = _collect_oi_alignment_issues(frame)
+        oi_quality_issues = _collect_oi_quality_issues(frame)
 
         all_issue_types = [issue.issue_type for issue in issues]
         all_severities = [issue.severity.value for issue in issues]
-        all_issue_types.extend(item["issue_type"] for item in oi_alignment_issues)
-        all_severities.extend(item["severity"] for item in oi_alignment_issues)
+        all_issue_types.extend(item["issue_type"] for item in oi_quality_issues)
+        all_severities.extend(item["severity"] for item in oi_quality_issues)
 
         symbol_issue_counter = Counter(all_issue_types)
         symbol_severity_counter = Counter(all_severities)
         issues_by_type.update(symbol_issue_counter)
         issues_by_severity.update(symbol_severity_counter)
 
-        symbol_total_issues = len(issues) + len(oi_alignment_issues)
+        symbol_total_issues = len(issues) + len(oi_quality_issues)
         total_issues += symbol_total_issues
         total_gaps += len(gaps)
 
@@ -845,7 +844,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
         logger.info(
             f"проверка-качества: {symbol} проблемы={symbol_total_issues} пропуски={len(gaps)} "
-            f"проблемы_выравнивания_oi={len(oi_alignment_issues)}"
+            f"проблемы_oi={len(oi_quality_issues)}"
         )
 
     summary = QualitySummary(

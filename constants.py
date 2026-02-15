@@ -129,9 +129,9 @@ REPORT_TRADES_COUNT_FILTER = 30
 REPORT_PROFIT_FACTOR_FILTER = 1.0
 REPORT_PROFITABLE_PF_THRESHOLD = 1.0
 QUALITY_OI_MISSING_COLUMN_ISSUE = "oi_missing_column"
-QUALITY_OI_ALIGNMENT_MISSING_VALUES_ISSUE = "oi_alignment_missing_values"
-QUALITY_OI_ALIGNMENT_LEADING_GAPS_ISSUE = "oi_alignment_leading_gaps"
-QUALITY_OI_ALIGNMENT_STALE_SERIES_ISSUE = "oi_alignment_stale_series"
+QUALITY_OI_MISSING_VALUES_ISSUE = "oi_missing_values"
+QUALITY_OI_LEADING_GAPS_ISSUE = "oi_leading_gaps"
+QUALITY_OI_STALE_SERIES_ISSUE = "oi_stale_series"
 QUALITY_SEVERITY_ERROR = "ERROR"
 QUALITY_SEVERITY_WARNING = "WARNING"
 QUALITY_SEVERITY_CRITICAL = "CRITICAL"
@@ -166,7 +166,7 @@ SIMULATION_PARQUET_FILE_NAME = "data.parquet"
 # Пороги качества данных
 SPREAD_TO_CLOSE_WARNING_THRESHOLD = 0.3
 OI_STALE_RATIO_THRESHOLD = 0.98
-# Минимальное число выровненных сравнений ОИ, при котором оценка доли застоя имеет смысл.
+# Минимальное число последовательных сравнений ОИ, при котором оценка доли застоя имеет смысл.
 OI_STALE_MIN_OBSERVATIONS = 3
 
 # Пороги симуляции
