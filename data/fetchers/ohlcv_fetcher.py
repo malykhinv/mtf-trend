@@ -19,7 +19,6 @@ from data.storage.parquet_storage import ParquetCacheValidationError, ParquetSto
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
-from utils.formatters import format_datetime_human
 from utils.logger import get_logger
 
 
@@ -48,26 +47,29 @@ class OhlcvFetcher:
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
         """Загружает OHLCV-данные для одного символа."""
-        start_time_raw = start_time
-        end_time_raw = end_time
-        next_start = start_time_raw
+        start_timestamp_ms = int(start_time.timestamp() * 1000)
+        end_timestamp_ms = int(end_time.timestamp() * 1000)
+        next_start_ms = start_timestamp_ms
         watermark_column = "close"
-        last_timestamp = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
-        if last_timestamp is not None:
-            next_start = max(start_time_raw, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
+        last_timestamp_ms = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
+        if last_timestamp_ms is not None:
+            timeframe_ms = int(TIMEFRAME_TO_DELTA[timeframe].total_seconds() * 1000)
+            next_start_ms = max(start_timestamp_ms, last_timestamp_ms + timeframe_ms)
 
-        watermark_display = format_datetime_human(last_timestamp.to_pydatetime()) if last_timestamp is not None else "None"
-        next_start_display = format_datetime_human(next_start)
-        end_time_display = format_datetime_human(end_time_raw)
         self._logger.info(
-            f"OHLCV водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start_display}"
+            "OHLCV водораздел: %s %s колонка=%s последний_ms=%s выбранный_ms=%s",
+            symbol,
+            timeframe.value,
+            watermark_column,
+            last_timestamp_ms,
+            next_start_ms,
         )
-        self._logger.info(f"OHLCV старт: {symbol} {timeframe.value} {next_start_display} -> {end_time_display}")
-        if next_start > end_time_raw:
+        self._logger.info("OHLCV старт: %s %s %s -> %s", symbol, timeframe.value, next_start_ms, end_timestamp_ms)
+        if next_start_ms > end_timestamp_ms:
             self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OHLCV", symbol)
             return 0
 
-        data = self._exchange_client.fetch_ohlcv(symbol, timeframe, next_start, end_time_raw)
+        data = self._exchange_client.fetch_ohlcv(symbol, timeframe, next_start_ms, end_timestamp_ms)
         data = self._deduplicator.deduplicate(data)
 
         gaps = self._gap_detector.detect_gaps(data, timeframe)

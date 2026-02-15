@@ -19,7 +19,6 @@ from data.storage.parquet_storage import ParquetCacheValidationError, ParquetSto
 from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
-from utils.formatters import format_datetime_human
 from utils.logger import get_logger
 
 
@@ -48,26 +47,29 @@ class OiFetcher:
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> int:
         """Загружает историю open interest для одного символа."""
-        start_time_raw = start_time
-        end_time_raw = end_time
-        next_start = start_time_raw
+        start_timestamp_ms = int(start_time.timestamp() * 1000)
+        end_timestamp_ms = int(end_time.timestamp() * 1000)
+        next_start_ms = start_timestamp_ms
         watermark_column = "open_interest"
-        last_timestamp = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
-        if last_timestamp is not None:
-            next_start = max(start_time_raw, last_timestamp.to_pydatetime() + TIMEFRAME_TO_DELTA[timeframe])
+        last_timestamp_ms = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
+        if last_timestamp_ms is not None:
+            timeframe_ms = int(TIMEFRAME_TO_DELTA[timeframe].total_seconds() * 1000)
+            next_start_ms = max(start_timestamp_ms, last_timestamp_ms + timeframe_ms)
 
-        watermark_display = format_datetime_human(last_timestamp.to_pydatetime()) if last_timestamp is not None else "None"
-        next_start_display = format_datetime_human(next_start)
-        end_time_display = format_datetime_human(end_time_raw)
         self._logger.info(
-            f"OI водораздел: {symbol} {timeframe.value} колонка={watermark_column} последний={watermark_display} выбранный={next_start_display}"
+            "OI водораздел: %s %s колонка=%s последний_ms=%s выбранный_ms=%s",
+            symbol,
+            timeframe.value,
+            watermark_column,
+            last_timestamp_ms,
+            next_start_ms,
         )
-        self._logger.info(f"OI старт: {symbol} {timeframe.value} {next_start_display} -> {end_time_display}")
-        if next_start > end_time_raw:
+        self._logger.info("OI старт: %s %s %s -> %s", symbol, timeframe.value, next_start_ms, end_timestamp_ms)
+        if next_start_ms > end_timestamp_ms:
             self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OI", symbol)
             return 0
 
-        data = self._exchange_client.fetch_open_interest(symbol, timeframe, next_start, end_time_raw)
+        data = self._exchange_client.fetch_open_interest(symbol, timeframe, next_start_ms, end_timestamp_ms)
         data = self._deduplicator.deduplicate(data)
 
         if "timestamp" not in data.columns:
@@ -78,15 +80,13 @@ class OiFetcher:
                 f"OI fetch_symbol: отсутствует колонка 'timestamp' в непустом OI для {symbol} {timeframe.value}"
             )
 
-        next_start_ms = int(next_start.timestamp() * 1000)
-        end_time_ms = int(end_time_raw.timestamp() * 1000)
-        interval_mask = (data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_time_ms)
+        interval_mask = (data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_timestamp_ms)
         data = data.loc[interval_mask].copy()
 
         ohlcv = self._storage.load(symbol, timeframe)
         if not ohlcv.empty and "timestamp" in ohlcv.columns:
             ohlcv_interval = ohlcv.loc[
-                (ohlcv["timestamp"] >= next_start_ms) & (ohlcv["timestamp"] <= end_time_ms), ["timestamp"]
+                (ohlcv["timestamp"] >= next_start_ms) & (ohlcv["timestamp"] <= end_timestamp_ms), ["timestamp"]
             ].copy()
             if not ohlcv_interval.empty:
                 aligned = self._oi_aligner.align(ohlcv_interval, data)
@@ -100,7 +100,7 @@ class OiFetcher:
                 data = aligned[["timestamp", "open_interest"]]
 
         if not data.empty and "timestamp" in data.columns:
-            data = data.loc[(data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_time_ms)].copy()
+            data = data.loc[(data["timestamp"] >= next_start_ms) & (data["timestamp"] <= end_timestamp_ms)].copy()
 
         issues = self._validator.validate(symbol, timeframe, data)
         if issues:

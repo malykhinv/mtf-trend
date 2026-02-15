@@ -95,19 +95,23 @@ class ParquetStorage:
             return frame
         return self._ensure_columns(frame)
 
-    def get_last_timestamp(self, symbol: str, timeframe: Timeframe) -> pd.Timestamp | None:
+    def get_last_timestamp(self, symbol: str, timeframe: Timeframe) -> int | None:
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:
             return None
-        return pd.to_datetime(data["timestamp"], unit="ms", errors="coerce").max()
 
-    def get_last_timestamp_for_column(self, symbol: str, timeframe: Timeframe, column_name: str) -> pd.Timestamp | None:
+        timestamps = pd.to_numeric(data["timestamp"], errors="coerce").dropna()
+        if timestamps.empty:
+            return None
+        return int(timestamps.max())
+
+    def get_last_timestamp_for_column(self, symbol: str, timeframe: Timeframe, column_name: str) -> int | None:
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:
             return None
 
         if column_name == "timestamp":
-            return pd.to_datetime(data["timestamp"], unit="ms", errors="coerce").max()
+            return self.get_last_timestamp(symbol, timeframe)
 
         if column_name not in data.columns:
             return None
@@ -116,7 +120,10 @@ class ParquetStorage:
         if not valid_rows.any():
             return None
 
-        return pd.to_datetime(data.loc[valid_rows, "timestamp"], unit="ms", errors="coerce").max()
+        timestamps = pd.to_numeric(data.loc[valid_rows, "timestamp"], errors="coerce").dropna()
+        if timestamps.empty:
+            return None
+        return int(timestamps.max())
 
     def save_incremental(self, symbol: str, timeframe: Timeframe, new_data: pd.DataFrame) -> int:
         if new_data.empty:

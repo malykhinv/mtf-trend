@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
 from typing import Any, Callable, cast
 
 import pandas as pd
@@ -30,14 +29,6 @@ try:
     import ccxt  # type: ignore
 except ImportError:  # pragma: no cover
     ccxt = None
-
-
-# region Приватные
-
-def _to_exchange_ms(value: datetime) -> int:
-    return int(value.timestamp() * MILLISECONDS_IN_SECOND)
-
-# endregion Приватные
 
 
 class CcxtFuturesClient(ExchangeClient):
@@ -192,15 +183,19 @@ class CcxtFuturesClient(ExchangeClient):
 
         return sorted(set(symbols))
 
-    def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
         """Запрашивает свечи по символу и интервалу."""
         self._ensure_markets_loaded()
-        start_ms = _to_exchange_ms(start_time)
-        since = start_ms
-        end_ms = _to_exchange_ms(end_time)
+        since = start_timestamp_ms
 
         all_rows: list[list[float]] = []
-        while since <= end_ms:
+        while since <= end_timestamp_ms:
             batch = self._retry_exchange_call(
                 operation="ccxt_fetch_ohlcv",
                 symbol=symbol,
@@ -217,7 +212,7 @@ class CcxtFuturesClient(ExchangeClient):
                 break
             all_rows.extend(batch)
             last_ts = int(batch[-1][0])
-            if last_ts >= end_ms:
+            if last_ts >= end_timestamp_ms:
                 break
             since = last_ts + 1
 
@@ -225,26 +220,32 @@ class CcxtFuturesClient(ExchangeClient):
         if frame.empty:
             return frame
 
-        frame = frame.loc[(frame["timestamp"] >= start_ms) & (frame["timestamp"] <= end_ms)]
-        frame["datetime"] = pd.to_datetime(frame["timestamp"], unit="ms")
+        frame = frame.loc[
+            (frame["timestamp"] >= start_timestamp_ms)
+            & (frame["timestamp"] <= end_timestamp_ms)
+        ]
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
-    def fetch_open_interest(self, symbol: str, timeframe: Timeframe, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+    def fetch_open_interest(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
         """Запрашивает историю open interest по символу."""
         self._ensure_markets_loaded()
         if not isinstance(self._client, CcxtOpenInterestApi):
             raise NotImplementedError(f"Exchange {self.exchange.value} does not support fetch_open_interest_history in CCXT")
 
-        start_ms = _to_exchange_ms(start_time)
-        since = start_ms
-        end_ms = _to_exchange_ms(end_time)
+        since = start_timestamp_ms
         ccxt_timeframe = timeframe.value
         timeframe_ms = int(TIMEFRAME_TO_DELTA[timeframe].total_seconds() * MILLISECONDS_IN_SECOND)
         oi_limit = min(DEFAULT_FETCH_BATCH_SIZE, 500) if self.exchange == Exchange.BINANCE else DEFAULT_FETCH_BATCH_SIZE
 
         rows: list[dict[str, object]] = []
-        while since <= end_ms:
-            request_end_ms = min(end_ms, since + timeframe_ms * oi_limit - 1)
+        while since <= end_timestamp_ms:
+            request_end_ms = min(end_timestamp_ms, since + timeframe_ms * oi_limit - 1)
             params: dict[str, object] | None = None
             if self.exchange == Exchange.BINANCE:
                 params = {
@@ -282,7 +283,7 @@ class CcxtFuturesClient(ExchangeClient):
 
             rows.extend(batch)
             last_ts = int(batch[-1].get("timestamp") or 0)
-            if last_ts >= end_ms:
+            if last_ts >= end_timestamp_ms:
                 break
             if last_ts < since:
                 since = request_end_ms + 1
@@ -300,7 +301,9 @@ class CcxtFuturesClient(ExchangeClient):
         else:
             frame["open_interest"] = pd.to_numeric(frame.get("openInterest"), errors="coerce")
 
-        frame = frame.loc[(frame["timestamp"] >= start_ms) & (frame["timestamp"] <= end_ms)]
-        frame["datetime"] = pd.to_datetime(frame["timestamp"], unit="ms")
+        frame = frame.loc[
+            (frame["timestamp"] >= start_timestamp_ms)
+            & (frame["timestamp"] <= end_timestamp_ms)
+        ]
         frame = frame[list(OPEN_INTEREST_FRAME_COLUMNS)]
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
