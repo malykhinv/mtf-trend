@@ -45,9 +45,7 @@ class ParquetStorage:
             raise ValueError("data must contain 'timestamp' column")
 
         prepared = data.copy()
-        prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
         prepared = prepared.loc[prepared["timestamp"].notna()].copy()
-        prepared["timestamp"] = prepared["timestamp"].astype("int64")
         return prepared
 
     def _validate_written_cache(
@@ -76,8 +74,8 @@ class ParquetStorage:
                 f"symbol={symbol}, timeframe={timeframe.value}, path={path}, missing_column=timestamp"
             )
 
-        incoming_ts = set(pd.to_numeric(incoming["timestamp"], errors="coerce").dropna().astype("int64").tolist())
-        written_ts = set(pd.to_numeric(written["timestamp"], errors="coerce").dropna().astype("int64").tolist())
+        incoming_ts = set(incoming["timestamp"].dropna().tolist())
+        written_ts = set(written["timestamp"].dropna().tolist())
         missing = incoming_ts - written_ts
         if missing:
             raise ParquetCacheValidationError(
@@ -100,7 +98,7 @@ class ParquetStorage:
         if data.empty or "timestamp" not in data.columns:
             return None
 
-        timestamps = pd.to_numeric(data["timestamp"], errors="coerce").dropna()
+        timestamps = data["timestamp"].dropna()
         if timestamps.empty:
             return None
         return int(timestamps.max())
@@ -120,7 +118,7 @@ class ParquetStorage:
         if not valid_rows.any():
             return None
 
-        timestamps = pd.to_numeric(data.loc[valid_rows, "timestamp"], errors="coerce").dropna()
+        timestamps = data.loc[valid_rows, "timestamp"].dropna()
         if timestamps.empty:
             return None
         return int(timestamps.max())
