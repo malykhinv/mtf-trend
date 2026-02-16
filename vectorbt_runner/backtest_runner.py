@@ -39,7 +39,7 @@ from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 module_logger = logging.getLogger(__name__)
-PROGRESS_LOG_EVERY = 50
+PROGRESS_LOG_EVERY = 100
 DIAGNOSTIC_TOP_N = 5
 ZERO_ENTRY_REJECTION_KEYS = (
     "retest_rejected_by_volume",

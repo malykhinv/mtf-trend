@@ -443,12 +443,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     ) -> list[TradeResult]:
         """Генерирует сделки по уровням старшего ТФ и логике пробоя/ретеста младшего ТФ."""
         self.validate_config(params)
-        self._logger.info(
-            "генерация_сигналов_пробой символ=%s тф_уровней=%s тф_входа=%s",
-            params.symbol,
-            params.levels_timeframe.value,
-            params.entry_timeframe.value,
-        )
         if annotated is None:
             higher_base, lower_base = self.prepare_multi_tf_data(
                 mtf_frames=mtf_frames,
