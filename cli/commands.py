@@ -375,35 +375,23 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
-    if ignore_coingecko:
-        futures_symbol_map = {
-            normalize_symbol(symbol): symbol
-            for symbol in futures_symbols
-        }
-        exchange_symbols_normalized = sorted(futures_symbol_map)
-        bootstrap_symbols = exchange_symbols_normalized[:top_n]
-        symbols = [futures_symbol_map[symbol] for symbol in bootstrap_symbols]
-        logger.info(
-            "загрузка-данных: CoinGecko отключен, первичная загрузка кэша до расчёта ликвидности (bootstrap symbols=%s)",
-            len(symbols),
-        )
-    else:
-        symbols = _resolve_symbols(
-            exchange_client,
-            market_client,
-            top_n=top_n,
-            min_volume_usd=min_volume_usd,
-            logger=logger,
-            coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
-            ignore_coingecko=ignore_coingecko,
-            cache_dir=config.backtest.cache_dir,
-            liquidity_timeframe=config.fetch.timeframe,
-            futures_symbols_raw=futures_symbols,
-        )
+    symbols = _resolve_symbols(
+        exchange_client,
+        market_client,
+        top_n=top_n,
+        min_volume_usd=min_volume_usd,
+        logger=logger,
+        coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
+        ignore_coingecko=ignore_coingecko,
+        cache_dir=config.backtest.cache_dir,
+        liquidity_timeframe=config.fetch.timeframe,
+        futures_symbols_raw=futures_symbols,
+    )
     logger.info(
-        "загрузка-данных: найдено фьючерсов=%s отправлено в fetch_all=%s",
+        "загрузка-данных: найдено фьючерсов=%s выбрано_символов=%s (режим_подбора=%s)",
         all_futures_count,
         len(symbols),
+        "coingecko-disabled" if ignore_coingecko else "coingecko-enabled",
     )
     if not symbols:
         logger.info("загрузка-данных: не найдено символов для загрузки")
@@ -412,33 +400,47 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     failed_symbols: set[str] = set()
     fetch_summaries: dict[Timeframe, FetchSummary] = {}
-    for timeframe in config.fetch.timeframes:
-        logger.info("загрузка-данных: сбор кэша для TF=%s", timeframe.value)
-        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_timestamp_ms=start_timestamp_ms, end_timestamp_ms=end_timestamp_ms)
+
+    def _fetch_for_timeframe(timeframe: Timeframe, symbols_to_fetch: list[str], *, emit_log: bool = True) -> None:
+        logger.info(
+            "загрузка-данных: сбор кэша для TF=%s (символов=%s)",
+            timeframe.value,
+            len(symbols_to_fetch),
+        )
+        result = fetcher.fetch_all(
+            symbols=symbols_to_fetch,
+            timeframe=timeframe,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+        )
         fetch_summaries[timeframe] = _log_fetch_summary(
             f"fetch-data[{timeframe.value}]",
             logger,
-            len(symbols),
+            len(symbols_to_fetch),
             result.failed_symbols_count,
-            emit_log=(not ignore_coingecko or timeframe == config.fetch.timeframe),
+            emit_log=emit_log,
         )
         failed_symbols.update(
             symbol
-            for symbol in symbols
+            for symbol in symbols_to_fetch
             if (symbol in result.ohlcv and not result.ohlcv[symbol].success)
             or (symbol in result.open_interest and not result.open_interest[symbol].success)
             or isinstance(result.market_caps.market_caps.get(symbol), str)
         )
 
+    primary_timeframe = config.fetch.timeframe
+    _fetch_for_timeframe(primary_timeframe, symbols, emit_log=True)
+
     root_stage_status = "ok"
+    followup_symbols = symbols
     if ignore_coingecko:
-        liquidity_summary = fetch_summaries.get(config.fetch.timeframe)
+        liquidity_summary = fetch_summaries.get(primary_timeframe)
         skip_reason = _resolve_liquidity_skip_reason(
             liquidity_summary,
             config.fetch.liquidity_skip_error_ratio_threshold,
         )
         if skip_reason is None:
-            _ = _resolve_symbols(
+            followup_symbols = _resolve_symbols(
                 exchange_client,
                 market_client,
                 top_n=top_n,
@@ -450,20 +452,29 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 liquidity_timeframe=config.fetch.timeframe,
                 futures_symbols_raw=futures_symbols,
             )
+            logger.info(
+                "загрузка-данных: применён пересчитанный список ликвидных символов после первичной загрузки (символов=%s)",
+                len(followup_symbols),
+            )
         else:
             root_stage_status = "ohlcv_cache_failed"
             logger.warning(
                 "liquidity-skip: reason=%s timeframe=%s",
                 skip_reason,
-                config.fetch.timeframe.value,
+                primary_timeframe.value,
             )
+
+    for timeframe in config.fetch.timeframes:
+        if timeframe == primary_timeframe:
+            continue
+        _fetch_for_timeframe(timeframe, followup_symbols, emit_log=True)
 
     exit_code = _fetch_exit_code(len(failed_symbols))
     if root_stage_status == "ohlcv_cache_failed":
         exit_code = 2
 
     logger.info("fetch-data: status=%s exit_code=%s", root_stage_status, exit_code)
-    _log_loaded_coins(logger, len(symbols), "loaded")
+    _log_loaded_coins(logger, len(followup_symbols), "loaded")
     return exit_code
 
 
