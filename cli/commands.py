@@ -172,9 +172,24 @@ def _resolve_symbols(
         min_cache_ready_symbols = min(top_n, len(exchange_symbols_normalized))
         is_cold_start = len(symbols_with_volume) < min_cache_ready_symbols
         if is_cold_start:
-            bootstrap_symbols = exchange_symbols_normalized[:top_n]
+            try:
+                bootstrap_symbols = [
+                    normalize_symbol(symbol)
+                    for symbol in exchange_client.get_futures_symbols_by_quote_volume()[:top_n]
+                    if normalize_symbol(symbol) in futures_symbol_map
+                ]
+                bootstrap_mode = "bootstrap-exchange-volume"
+            except Exception as exc:
+                logger.warning(
+                    "подбор-символов: bootstrap по объёму биржи недоступен (%s), fallback на алфавит",
+                    exc,
+                )
+                bootstrap_symbols = exchange_symbols_normalized[:top_n]
+                bootstrap_mode = "bootstrap-alphabetical-fallback"
+
             logger.info(
-                "подбор-символов: кэш пуст, выполняется bootstrap без фильтра ликвидности (режим=bootstrap mode)"
+                "подбор-символов: кэш пуст, выполняется bootstrap без фильтра ликвидности (режим=%s)",
+                bootstrap_mode,
             )
             logger.info(
                 "подбор-символов: CoinGecko отключен, всего на бирже=%s → в кэше с объёмом=%s (порог готовности=%s) → после bootstrap top_n=%s",

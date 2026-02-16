@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from math import isfinite
 from typing import Any, Callable, cast
 
 import pandas as pd
@@ -181,6 +182,48 @@ class CcxtFuturesClient(ExchangeClient):
                 symbols.append(symbol)
 
         return sorted(set(symbols))
+
+    def get_futures_symbols_by_quote_volume(self) -> list[str]:
+        """Возвращает фьючерсные символы, отсортированные по 24ч quote volume (убывание)."""
+        symbols = self.get_futures_symbols()
+        if not symbols:
+            return []
+
+        tickers_payload = self._retry_exchange_startup_call(
+            operation="ccxt_fetch_tickers",
+            endpoint="fetch_tickers",
+            call=self._client.fetch_tickers,
+            args=(symbols,),
+        )
+        if not isinstance(tickers_payload, dict):
+            return symbols
+
+        def _safe_float(value: object) -> float:
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                return 0.0
+            return parsed if isfinite(parsed) and parsed > 0 else 0.0
+
+        volumes_by_symbol: dict[str, float] = {}
+        for symbol in symbols:
+            ticker = tickers_payload.get(symbol)
+            if not isinstance(ticker, dict):
+                volumes_by_symbol[symbol] = 0.0
+                continue
+
+            quote_volume = _safe_float(ticker.get("quoteVolume"))
+            if quote_volume == 0.0:
+                base_volume = _safe_float(ticker.get("baseVolume"))
+                last_price = _safe_float(ticker.get("last"))
+                quote_volume = base_volume * last_price
+            volumes_by_symbol[symbol] = quote_volume
+
+        return sorted(
+            symbols,
+            key=lambda symbol: (volumes_by_symbol.get(symbol, 0.0), symbol),
+            reverse=True,
+        )
 
     def fetch_ohlcv(
         self,
