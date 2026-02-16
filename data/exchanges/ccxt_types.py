@@ -21,6 +21,10 @@ class CcxtFuturesApi(Protocol):
         """Описывает загрузку свечей через API биржи."""
         ...
 
+    def fetch_tickers(self, symbols: list[str] | None = None) -> dict[str, dict[str, object]]:
+        """Описывает загрузку тикеров через API биржи."""
+        ...
+
 
 @runtime_checkable
 class CcxtOpenInterestApi(Protocol):
