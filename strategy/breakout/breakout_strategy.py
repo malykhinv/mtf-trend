@@ -15,7 +15,6 @@ from constants import (
     STRATEGY_MIN_TP2_MULT,
     STRATEGY_MIN_VOLUME_MULT,
     STRATEGY_POSITION_SIZE,
-    STRATEGY_PRICE_EPSILON,
     STRATEGY_REQUIRED_COLUMNS,
     STRATEGY_RISK_FLOOR,
 )
@@ -301,6 +300,20 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             tp2_mult=params.tp2_mult,
             side=pending_retest.breakout.side,
         )
+        if pending_retest.breakout.side == PositionSide.SHORT:
+            if tp1 < 0:
+                self._logger.info(
+                    "signal skipped: negative tp1 symbol=%s entry_price=%.8f risk=%.8f min_rr=%.8f tp1=%.8f tp2=%.8f",
+                    params.symbol,
+                    entry_price,
+                    risk,
+                    params.min_rr,
+                    tp1,
+                    tp2,
+                )
+                return None
+            if tp2 < 0:
+                tp2 = tp1
         return TradeSignal(
             entry_price=Price(entry_price),
             entry_timestamp_ms=int(entry_row["timestamp"]),
