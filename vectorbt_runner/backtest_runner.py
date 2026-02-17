@@ -49,6 +49,14 @@ ZERO_ENTRY_REJECTION_KEYS = (
 )
 
 
+def _format_duration_human(seconds: float) -> str:
+    """Преобразует длительность в человекоудобный формат `Hh Mm Ss`."""
+    total_seconds = max(0, int(seconds))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours}h {minutes}m {secs}s"
+
+
 class BacktestRunner:
     """Класс."""
     def __init__(
@@ -408,13 +416,13 @@ class BacktestRunner:
                 progress = (idx / total) * 100 if total else BACKTEST_ZERO_COUNT
                 eta_seconds = (elapsed_seconds / idx) * (total - idx) if idx else BACKTEST_ZERO_COUNT
                 self._logger.info(
-                    "run-progress: grid=%s/%s (%.1f%%), symbols=%s, elapsed=%ss, eta=%ss",
+                    "run-progress: grid=%s/%s (%.1f%%), symbols=%s, elapsed=%s, eta=%s",
                     idx,
                     total,
                     progress,
                     symbols_count,
-                    int(elapsed_seconds),
-                    int(eta_seconds),
+                    _format_duration_human(elapsed_seconds),
+                    _format_duration_human(eta_seconds),
                 )
 
         results = (
