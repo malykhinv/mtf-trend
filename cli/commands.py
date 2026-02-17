@@ -586,10 +586,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
     symbols_total = len(symbols)
+    symbols_prepare_started_at = time.perf_counter()
     symbols_missing_levels_tf = 0
     symbols_missing_entry_tf = 0
     symbols_used = 0
-    for symbol in symbols:
+    for idx, symbol in enumerate(symbols, start=1):
         frames_by_tf = preparer.load_symbol_data_multi(symbol, [levels_timeframe, entry_timeframe])
         levels_frame = frames_by_tf.get(levels_timeframe, pd.DataFrame())
         entry_frame = frames_by_tf.get(entry_timeframe, pd.DataFrame())
@@ -606,6 +607,18 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             levels_frame=levels_frame,
             entry_frame=entry_frame,
         )
+
+        if idx % 10 == 0 or idx == symbols_total:
+            elapsed_seconds = time.perf_counter() - symbols_prepare_started_at
+            progress = (idx / symbols_total) * 100 if symbols_total else 0.0
+            eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
+            logger.info(
+                "анализ-кэша: подготовка-символов %s/%s (%.1f%%), eta=%ss",
+                idx,
+                symbols_total,
+                progress,
+                int(eta_seconds),
+            )
     if not symbol_frames:
         logger.info("запуск-бектеста: не удалось подготовить данные")
         return 0
