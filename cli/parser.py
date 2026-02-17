@@ -13,14 +13,35 @@ from constants import DEFAULT_FETCH_DAYS, DEFAULT_MIN_VOLUME_USD, DEFAULT_QUALIT
 Handler = Callable[[AppConfig, argparse.Namespace], int]
 
 
+def positive_int(value: str, argument_name: str = "value") -> int:
+    """Преобразует строку в положительное целое число."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{argument_name} must be > 0") from exc
+
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError(f"{argument_name} must be > 0")
+    return parsed
+
+
+def _positive_int_for(argument_name: str) -> Callable[[str], int]:
+    """Возвращает валидатор положительного целого для конкретного аргумента."""
+
+    def _validator(value: str) -> int:
+        return positive_int(value, argument_name=argument_name)
+
+    return _validator
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Собирает и возвращает парсер аргументов CLI."""
     parser = argparse.ArgumentParser(prog="mtf-trend")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     fetch = subparsers.add_parser("fetch-data", help="Загрузка данных с бирж и CoinGecko")
-    fetch.add_argument("--top-n", type=int, default=None)
-    fetch.add_argument("--days", type=int, default=DEFAULT_FETCH_DAYS)
+    fetch.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
+    fetch.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_FETCH_DAYS)
     fetch.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
     fetch.add_argument("--end-timestamp-ms", type=int, default=None, help="Якорный timestamp окончания периода (unix ms)")
     fetch.add_argument(
@@ -31,8 +52,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     update = subparsers.add_parser("update-cache", help="Инкрементальное обновление кэша")
-    update.add_argument("--top-n", type=int, default=None)
-    update.add_argument("--days", type=int, default=DEFAULT_UPDATE_DAYS)
+    update.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
+    update.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_UPDATE_DAYS)
     update.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
     update.add_argument("--end-timestamp-ms", type=int, default=None, help="Якорный timestamp окончания периода (unix ms)")
     update.add_argument(
