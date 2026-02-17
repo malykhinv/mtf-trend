@@ -252,7 +252,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         breakout.level = updated_level
 
         if not is_ok:
-            self._logger.info(
+            self._logger.debug(
                 "режим_объема_отклонен объем_до=%.6f объем_после=%.6f множитель_объема=%.4f порог=%.6f",
                 v_before,
                 v_after,
@@ -609,7 +609,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             status="confirmed",
                         )
                     )
-                    self._logger.info(
+                    self._logger.debug(
                         "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
                         params.symbol,
                         row["timestamp"],
@@ -641,7 +641,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             status="confirmation_expired",
                         )
                     )
-                    self._logger.info(
+                    self._logger.debug(
                         "retest_confirmation_expired symbol=%s confirmation_end_idx=%s idx=%s candle_time=%s",
                         params.symbol,
                         pending_retest.confirmation_end_idx,
@@ -665,7 +665,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             status="confirmed",
                         )
                     )
-                    self._logger.info(
+                    self._logger.debug(
                         "signal built from retest symbol=%s datetime=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s",
                         params.symbol,
                         row["timestamp"],
@@ -696,7 +696,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             status="confirmation_not_received",
                         )
                     )
-                    self._logger.info(
+                    self._logger.debug(
                         "retest_confirmation_not_received symbol=%s confirmation_end_idx=%s idx=%s candle_time=%s",
                         params.symbol,
                         pending_retest.confirmation_end_idx,
@@ -748,7 +748,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             volume_threshold=volume_check["threshold"],
                             volume_filter_passed=volume_check["is_ok"],
                         )
-                        self._logger.info(
+                        self._logger.debug(
                             "retest accepted -> pending_retest created symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s entry_trigger=%s entry_idx=%s",
                             params.symbol,
                             row["timestamp"],
@@ -775,7 +775,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 status="rejected_by_volume",
                             )
                         )
-                        self._logger.info(
+                        self._logger.debug(
                             "retest_rejected_by_volume symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s v_before=%.6f v_after=%.6f threshold=%.6f volume_mult=%.4f volume_filter_passed=false",
                             params.symbol,
                             row["timestamp"],
@@ -802,7 +802,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 status="rejected_by_extra_filters",
                             )
                         )
-                        self._logger.info(
+                        self._logger.debug(
                             "retest_rejected_by_extra_filters symbol=%s datetime=%s side=%s level=%.8f breakout_idx=%s retest_idx=%s body_ratio=%.6f body_ratio_min=%.6f move_atr=%.6f move_atr_threshold=%.6f max_retest_depth=%.6f max_retest_depth_threshold=%.6f natr=%.6f",
                             params.symbol,
                             row["timestamp"],
@@ -871,7 +871,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         if pending_signal is not None:
             diagnostics["signal_not_filled_end_of_data"] += 1
-            self._logger.info(
+            self._logger.debug(
                 "сигнал_не_исполнен_конец_данных символ=%s тф_уровней=%s тф_входа=%s время_входа=%s цена_входа=%.8f",
                 params.symbol,
                 params.levels_timeframe.value,

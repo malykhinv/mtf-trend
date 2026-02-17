@@ -64,6 +64,8 @@ from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames, Strat
 
 # region Приватные
 
+_PROGRESS_LOG_EVERY = 100
+
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
     logger = get_logger(
         command_name,
@@ -608,7 +610,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             entry_frame=entry_frame,
         )
 
-        if idx % 10 == 0 or idx == symbols_total:
+        if idx % _PROGRESS_LOG_EVERY == 0 or idx == symbols_total:
             elapsed_seconds = time.perf_counter() - symbols_prepare_started_at
             progress = (idx / symbols_total) * 100 if symbols_total else 0.0
             eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0

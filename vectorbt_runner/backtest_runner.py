@@ -206,7 +206,7 @@ class BacktestRunner:
         }
         breakdown_message = ", ".join(f"{name}={value}" for name, value in breakdown.items())
 
-        self._logger.info(
+        self._logger.debug(
             "запуск-бэктеста: нулевые_входы_при_наличии_ретестов ключей=%s/%s доля_ключей=%.4f ретестов=%s/%s доля_ретестов=%.4f %s",
             problematic_count,
             keys_with_retests_count,
@@ -230,7 +230,7 @@ class BacktestRunner:
         )
         detail_limit = len(sorted_problematic) if self._logger.isEnabledFor(logging.DEBUG) else min(DIAGNOSTIC_TOP_N, len(sorted_problematic))
         for (symbol, params_signature), counter in sorted_problematic[:detail_limit]:
-            self._logger.info(
+            self._logger.debug(
                 "запуск-бэктеста: проблемный_ключ symbol=%s params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
                 symbol,
                 params_signature,
@@ -256,7 +256,7 @@ class BacktestRunner:
         )
         params_detail_limit = min(DIAGNOSTIC_TOP_N, len(sorted_by_params))
         for params_signature, counter in sorted_by_params[:params_detail_limit]:
-            self._logger.info(
+            self._logger.debug(
                 "запуск-бэктеста: проблемный_ключ_параметров params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
                 params_signature,
                 counter.get("retests_found", BACKTEST_ZERO_COUNT),
