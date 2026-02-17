@@ -16,7 +16,7 @@ from constants import (
     STRATEGY_MIN_VOLUME_MULT,
     STRATEGY_POSITION_SIZE,
     STRATEGY_REQUIRED_COLUMNS,
-    STRATEGY_RISK_FLOOR,
+    STRATEGY_RISK_FLOOR, STRATEGY_PRICE_EPSILON,
 )
 from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.level_type import LevelType
