@@ -302,6 +302,8 @@ def _resolve_fetch_anchor_timestamp_ms(config: AppConfig, end_timestamp_ms_raw: 
 
 
 def _fetch_period(config: AppConfig, days: int, end_timestamp_ms_raw: int | None = None) -> tuple[int, int]:
+    if days <= 0:
+        raise ValueError("--days must be > 0")
     end_timestamp_ms = _resolve_fetch_anchor_timestamp_ms(config, end_timestamp_ms_raw)
     start_timestamp_ms = end_timestamp_ms - (days * 86_400_000)
     return start_timestamp_ms, end_timestamp_ms
@@ -383,6 +385,14 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+
+    if args.top_n is not None and args.top_n <= 0:
+        logger.error("fetch-data: --top-n must be > 0")
+        return 1
+    if args.days <= 0:
+        logger.error("fetch-data: --days must be > 0")
+        return 1
+
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
@@ -495,6 +505,14 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+
+    if args.top_n is not None and args.top_n <= 0:
+        logger.error("update-cache: --top-n must be > 0")
+        return 1
+    if args.days <= 0:
+        logger.error("update-cache: --days must be > 0")
+        return 1
+
     fetcher, exchange_client, market_client = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
