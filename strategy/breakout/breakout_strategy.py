@@ -279,11 +279,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         entry_idx: int,
         pending_retest: PendingRetest,
         params: BreakoutParams,
-    ) -> TradeSignal:
+    ) -> TradeSignal | None:
         if entry_idx >= len(annotated):
-            raise ValueError(
-                f"entry_idx {entry_idx} out of range for annotated length {len(annotated)}"
-            )
+            return None
         entry_row = annotated.iloc[entry_idx]
         entry_price = float(entry_row["open"])
         stop = self._resolve_stop_loss(
@@ -306,24 +304,33 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         breakout_idx = pending_retest.breakout.breakout_idx
         retest_idx = pending_retest.retest_idx
 
-        def _raise_invalid_signal(reason: str) -> None:
-            raise ValueError(
-                "invalid signal levels: "
-                f"{reason}; symbol={params.symbol}; side={side.value}; sl_mode={params.sl_mode.value}; "
-                f"entry={entry_price:.8f}; stop={stop:.8f}; tp1={tp1:.8f}; tp2={tp2:.8f}; "
-                f"breakout_idx={breakout_idx}; retest_idx={retest_idx}; entry_idx={entry_idx}"
+        def _log_invalid_signal(reason: str) -> None:
+            self._logger.info(
+                "signal skipped: %s symbol=%s side=%s sl_mode=%s entry=%.8f stop=%.8f tp1=%.8f tp2=%.8f breakout_idx=%s retest_idx=%s",
+                reason,
+                params.symbol,
+                side.value,
+                params.sl_mode.value,
+                entry_price,
+                stop,
+                tp1,
+                tp2,
+                breakout_idx,
+                retest_idx,
             )
 
         if side == PositionSide.SHORT:
             if tp1 < 0:
-                _raise_invalid_signal(reason="negative tp1")
+                _log_invalid_signal(reason="negative tp1")
+                return None
             if tp2 < 0:
                 tp2 = tp1
         if side == PositionSide.LONG and not (stop < entry_price < tp1):
-            _raise_invalid_signal(reason="invalid LONG levels invariant")
+            _log_invalid_signal(reason="invalid LONG levels invariant")
+            return None
         if side == PositionSide.SHORT and not (stop > entry_price > tp1):
-            _raise_invalid_signal(reason="invalid SHORT levels invariant")
-
+            _log_invalid_signal(reason="invalid SHORT levels invariant")
+            return None
         return TradeSignal(
             entry_price=Price(entry_price),
             entry_timestamp_ms=int(entry_row["timestamp"]),
@@ -496,8 +503,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "signal_not_filled_end_of_data": 0,
             "breakout_pending_end_of_data": 0,
             "retest_pending_end_of_data": 0,
-            "signal_invalid_levels": 0,
-            "signal_build_unexpected_exceptions": 0,
             "trades_generated": 0,
             "retest_plot_spans": [],
         }
@@ -527,41 +532,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         active_level_high: float | None = None
         active_level_low: float | None = None
         active_level_start_time: int | None = None
-
-        def _safe_build_signal_from_retest(*, entry_idx: int, pending_retest_value: PendingRetest) -> TradeSignal | None:
-            try:
-                return self._build_signal_from_retest(
-                    annotated=annotated,
-                    entry_idx=entry_idx,
-                    pending_retest=pending_retest_value,
-                    params=params,
-                )
-            except ValueError as exc:
-                diagnostics["signal_invalid_levels"] += 1
-                self._logger.exception(
-                    "signal_invalid_levels symbol=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s error=%s",
-                    params.symbol,
-                    pending_retest_value.breakout.side.value,
-                    params.entry_trigger.value,
-                    entry_idx,
-                    pending_retest_value.retest_idx,
-                    pending_retest_value.breakout.breakout_idx,
-                    exc,
-                )
-                return None
-            except Exception as exc:  # pragma: no cover
-                diagnostics["signal_build_unexpected_exceptions"] += 1
-                self._logger.exception(
-                    "signal_build_unexpected_exception symbol=%s side=%s entry_trigger=%s entry_idx=%s retest_idx=%s breakout_idx=%s error=%s",
-                    params.symbol,
-                    pending_retest_value.breakout.side.value,
-                    params.entry_trigger.value,
-                    entry_idx,
-                    pending_retest_value.retest_idx,
-                    pending_retest_value.breakout.breakout_idx,
-                    exc,
-                )
-                return None
 
         for idx in range(len(annotated)):
             row = annotated.iloc[idx]
@@ -619,9 +589,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         pending_retest.retest_idx,
                         pending_retest.breakout.breakout_idx,
                     )
-                    pending_signal = _safe_build_signal_from_retest(
+                    pending_signal = self._build_signal_from_retest(
+                        annotated=annotated,
                         entry_idx=entry_idx,
-                        pending_retest_value=pending_retest,
+                        pending_retest=pending_retest,
+                        params=params,
                     )
                     pending_retest = None
                     continue
@@ -675,9 +647,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         pending_retest.retest_idx,
                         pending_retest.breakout.breakout_idx,
                     )
-                    pending_signal = _safe_build_signal_from_retest(
+                    pending_signal = self._build_signal_from_retest(
+                        annotated=annotated,
                         entry_idx=entry_idx,
-                        pending_retest_value=pending_retest,
+                        pending_retest=pending_retest,
+                        params=params,
                     )
                     pending_retest = None
                     continue
@@ -905,16 +879,6 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         diagnostics["trades_generated"] = len(trades)
         diagnostics["retest_plot_spans"] = retest_plot_spans
-        exception_log_path = getattr(self._logger, "exception_log_path", None)
-        diagnostics["exception_log_path"] = exception_log_path
-        self._logger.info(
-            "generation_summary symbol=%s trades_generated=%s signal_invalid_levels=%s signal_build_unexpected_exceptions=%s exception_log_path=%s",
-            params.symbol,
-            diagnostics["trades_generated"],
-            diagnostics["signal_invalid_levels"],
-            diagnostics["signal_build_unexpected_exceptions"],
-            exception_log_path,
-        )
         self._last_generation_diagnostics = diagnostics
         return trades
 
