@@ -300,27 +300,44 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             tp2_mult=params.tp2_mult,
             side=pending_retest.breakout.side,
         )
-        if pending_retest.breakout.side == PositionSide.SHORT:
+        side = pending_retest.breakout.side
+        breakout_idx = pending_retest.breakout.breakout_idx
+        retest_idx = pending_retest.retest_idx
+
+        def _log_invalid_signal(reason: str) -> None:
+            self._logger.info(
+                "signal skipped: %s symbol=%s side=%s sl_mode=%s entry=%.8f stop=%.8f tp1=%.8f tp2=%.8f breakout_idx=%s retest_idx=%s",
+                reason,
+                params.symbol,
+                side.value,
+                params.sl_mode.value,
+                entry_price,
+                stop,
+                tp1,
+                tp2,
+                breakout_idx,
+                retest_idx,
+            )
+
+        if side == PositionSide.SHORT:
             if tp1 < 0:
-                self._logger.info(
-                    "signal skipped: negative tp1 symbol=%s entry_price=%.8f risk=%.8f min_rr=%.8f tp1=%.8f tp2=%.8f",
-                    params.symbol,
-                    entry_price,
-                    risk,
-                    params.min_rr,
-                    tp1,
-                    tp2,
-                )
+                _log_invalid_signal(reason="negative tp1")
                 return None
             if tp2 < 0:
                 tp2 = tp1
+        if side == PositionSide.LONG and not (stop < entry_price < tp1):
+            _log_invalid_signal(reason="invalid LONG levels invariant")
+            return None
+        if side == PositionSide.SHORT and not (stop > entry_price > tp1):
+            _log_invalid_signal(reason="invalid SHORT levels invariant")
+            return None
         return TradeSignal(
             entry_price=Price(entry_price),
             entry_timestamp_ms=int(entry_row["timestamp"]),
             stop_loss=Price(float(stop)),
             take_profit_1=Price(float(tp1)),
             take_profit_2=Price(float(tp2)),
-            position_side=pending_retest.breakout.side,
+            position_side=side,
             symbol=params.symbol,
         )
 
