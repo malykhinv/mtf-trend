@@ -323,6 +323,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             retest_high=pending_retest.retest_high,
             zone_ratio=pending_retest.retest_zone_ratio,
         )
+        stop = self._normalize_stop_for_entry(
+            stop=stop,
+            entry_price=entry_price,
+            side=pending_retest.breakout.side,
+        )
         risk = self._risk_from_entry(entry_price=entry_price, stop=stop, side=pending_retest.breakout.side)
         tp1, tp2 = self._targets_from_entry(
             entry_price=entry_price,
@@ -400,8 +405,18 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     resolved_zone_ratio = params.resolve_retest_zone_ratio(0.0)
             return level * (1 - resolved_zone_ratio) if side == PositionSide.LONG else level * (1 + resolved_zone_ratio)
         if params.sl_mode.value == "BREAKOUT_EXTREME":
-            return breakout_extreme
+            if side == PositionSide.LONG:
+                return min(breakout_extreme, retest_low)
+            return max(breakout_extreme, retest_high)
         return retest_low if side == PositionSide.LONG else retest_high
+
+    @staticmethod
+    def _normalize_stop_for_entry(*, stop: float, entry_price: float, side: PositionSide) -> float:
+        """Гарантирует, что stop-loss находится по защитную сторону от цены входа."""
+        min_distance = max(entry_price * STRATEGY_RISK_FLOOR, STRATEGY_PRICE_EPSILON)
+        if side == PositionSide.LONG:
+            return min(stop, entry_price - min_distance)
+        return max(stop, entry_price + min_distance)
 
     @staticmethod
     def _risk_from_entry(*, entry_price: float, stop: float, side: PositionSide) -> float:
