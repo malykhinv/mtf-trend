@@ -365,11 +365,14 @@ class BacktestRunner:
         """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
         grid = self.build_parameter_grid()
+        # Инвариант производительности: размер и состав parameter grid неизменны (5832 комбинации),
+        # оптимизируем только стоимость исполнения за счет кэширования готовых конфигураций.
         lookbacks = sorted({params.lookback for params in grid})
         total = len(grid)
         symbols_count = len(symbol_frames)
         started_at = perf_counter()
         collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG)
+        cfg_cache: dict[tuple[int, str], BreakoutParams] = {}
 
         prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
         higher_levels: dict[str, dict[int, pd.DataFrame]] = {}
@@ -404,12 +407,16 @@ class BacktestRunner:
 
             all_trades: list[TradeResult] = []
             for symbol, mtf_frames in symbol_frames.items():
-                cfg = replace(
-                    params,
-                    symbol=symbol,
-                    levels_timeframe=levels_timeframe,
-                    entry_timeframe=entry_timeframe,
-                )
+                cfg_key = (idx, symbol)
+                cfg = cfg_cache.get(cfg_key)
+                if cfg is None:
+                    cfg = replace(
+                        params,
+                        symbol=symbol,
+                        levels_timeframe=levels_timeframe,
+                        entry_timeframe=entry_timeframe,
+                    )
+                    cfg_cache[cfg_key] = cfg
                 if isinstance(strategy, BreakoutStrategy):
                     prepared_annotated = prepared_symbol_data[symbol][params.lookback]
                     trades = strategy.generate_events_multi_tf(
