@@ -175,9 +175,9 @@ SIMULATION_PRICE_COMPARISON_EPSILON = 1e-8
 
 # Значения по умолчанию для рантайма
 DEFAULT_LOG_LEVEL = "INFO"
-DEFAULT_CACHE_DIR = "./cache"
-DEFAULT_LOGS_DIR = "./logs"
-DEFAULT_RESULTS_DIR = "./cache/results"
+DEFAULT_CACHE_DIR = "./.output/cache"
+DEFAULT_LOGS_DIR = "./.output/logs"
+DEFAULT_RESULTS_DIR = "./.output/results"
 DEFAULT_BACKTEST_OUTPUT_FILE = "backtest_results.csv"
 DEFAULT_REPORT_OUTPUT_FILE = "report.json"
 DEFAULT_QUALITY_REPORT_OUTPUT_FILE = "quality_report.json"
