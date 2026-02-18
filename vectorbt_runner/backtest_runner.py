@@ -27,7 +27,7 @@ from constants import (
 from domain.enums.timeframe import Timeframe
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, NamedTuple, cast
 
 if TYPE_CHECKING:
     from strategy.base_strategy import BaseStrategy
@@ -56,6 +56,14 @@ def _format_duration_human(seconds: float) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours}h {minutes}m {secs}s"
+
+
+class PreparedGridParams(NamedTuple):
+    """Предвычисленная конфигурация сетки без symbol-specific полей."""
+
+    params: BreakoutParams
+    params_signature: str
+    lookback: int
 
 
 class BacktestRunner:
@@ -365,22 +373,31 @@ class BacktestRunner:
         """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
         grid = self.build_parameter_grid()
+        prepared_grid = [
+            PreparedGridParams(
+                params=params,
+                params_signature=self._params_signature(params),
+                lookback=params.lookback,
+            )
+            for params in grid
+        ]
         # Инвариант производительности: размер и состав parameter grid неизменны (5832 комбинации).
-        lookbacks = sorted({params.lookback for params in grid})
-        total = len(grid)
+        lookbacks = sorted({prepared.lookback for prepared in prepared_grid})
+        total = len(prepared_grid)
         symbols_count = len(symbol_frames)
         started_at = perf_counter()
         collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG)
 
         prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
         higher_levels: dict[str, dict[int, pd.DataFrame]] = {}
+        params_cache: dict[tuple[int, str], BreakoutParams] = {}
         rejection_diagnostics_total: Counter[str] = Counter()
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         if isinstance(strategy, BreakoutStrategy):
             strategy.set_logger(self._logger)
             # Предварительная валидация вынесена из горячего цикла, чтобы снизить CPU-накладные расходы в основном расчете.
-            for params in grid:
-                strategy.validate_config(params)
+            for prepared in prepared_grid:
+                strategy.validate_config(prepared.params)
             for symbol, mtf_frames in symbol_frames.items():
                 higher_base, lower_base = strategy.prepare_multi_tf_data(
                     mtf_frames=mtf_frames,
@@ -402,23 +419,27 @@ class BacktestRunner:
                     for lookback in lookbacks
                 }
 
-        for idx, params in enumerate(grid, start=1):
+        for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
+            grid_idx = idx - 1
             for symbol, mtf_frames in symbol_frames.items():
-                # Убираем cfg_cache с низкой полезностью, чтобы снизить накладные расходы на словарь.
-                cfg = replace(
-                    params,
-                    symbol=symbol,
-                    levels_timeframe=levels_timeframe,
-                    entry_timeframe=entry_timeframe,
-                )
+                cache_key = (grid_idx, symbol)
+                cfg = params_cache.get(cache_key)
+                if cfg is None:
+                    cfg = replace(
+                        prepared.params,
+                        symbol=symbol,
+                        levels_timeframe=levels_timeframe,
+                        entry_timeframe=entry_timeframe,
+                    )
+                    params_cache[cache_key] = cfg
                 if isinstance(strategy, BreakoutStrategy):
-                    prepared_annotated = prepared_symbol_data[symbol][params.lookback]
+                    prepared_annotated = prepared_symbol_data[symbol][prepared.lookback]
                     trades = strategy.generate_events_multi_tf(
                         mtf_frames=mtf_frames,
                         params=cfg,
                         annotated=prepared_annotated,
-                        higher_levels=higher_levels[symbol][params.lookback],
+                        higher_levels=higher_levels[symbol][prepared.lookback],
                         skip_validation=True,
                     )
                     if collect_diagnostics:
@@ -429,7 +450,7 @@ class BacktestRunner:
                         context_symbol = symbol
                         if isinstance(context, dict) and isinstance(context.get("symbol"), str):
                             context_symbol = context["symbol"]
-                        key = (context_symbol, self._params_signature(cfg))
+                        key = (context_symbol, prepared.params_signature)
                         rejection_diagnostics_by_key[key].update(diagnostics_counter)
                 else:
                     trades = cast("BaseStrategy[BreakoutParams]", strategy).generate_events_multi_tf(
@@ -438,7 +459,7 @@ class BacktestRunner:
                     )
                 all_trades.extend(trades)
 
-            row = self._build_metrics_row(params, all_trades)
+            row = self._build_metrics_row(prepared.params, all_trades)
             rows.append(row)
 
             if idx % PROGRESS_LOG_EVERY == 0 or idx == total:
