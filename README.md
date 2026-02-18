@@ -96,6 +96,15 @@ CACHE_DIR=./cache
 --mode analyze-cache --symbols BTC/USDT ETH/USDT
 ```
 
+Если нужно ограничить набор для анализа по ликвидности, можно добавить `--top-n`:
+
+```bash
+--mode analyze-cache --top-n 50
+```
+
+Для `analyze-cache` отбор по `--top-n` выполняется по среднему объёму свечей (`volume`) на `levels_tf` (старший ТФ).
+Если одновременно переданы `--symbols` и `--top-n`, ранжируется только указанный поднабор символов.
+
 Результат бектеста сохраняется в CSV (по умолчанию):
 
 `cache/results/backtest_results.csv`
@@ -263,8 +272,10 @@ python main.py update-cache --top-n 100 --days 7 --ignore-coingecko
 
 # При --ignore-coingecko команда автоматически использует bootstrap mode (без фильтра ликвидности),
 # если кэш объёмов ещё не прогрет; после прогрева применяется cache-liquidity mode.
-python main.py run-backtest
+python main.py run-backtest --top-n 50
 python main.py make-report
+
+# Для run-backtest отбор по --top-n идёт по среднему объёму свечей (volume) на levels_tf.
 python main.py check-quality
 python main.py clear-cache
 ```
