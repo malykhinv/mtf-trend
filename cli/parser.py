@@ -66,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt = subparsers.add_parser("run-backtest", help="Запуск бектеста по данным в кэше")
     run_bt.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
     run_bt.add_argument(
+        "--top-n",
+        type=_positive_int_for("--top-n"),
+        default=None,
+        help="Количество символов для отбора по среднему объёму старшего ТФ",
+    )
+    run_bt.add_argument(
         "--levels-tf",
         default=None,
         help="Таймфрейм уровней (например 1d). Приоритетнее LEVELS_TIMEFRAME из env",

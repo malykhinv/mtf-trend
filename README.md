@@ -103,7 +103,9 @@ CACHE_DIR=./cache
 ```
 
 Для `analyze-cache` отбор по `--top-n` выполняется по среднему объёму свечей (`volume`) на `levels_tf` (старший ТФ).
-Если одновременно переданы `--symbols` и `--top-n`, ранжируется только указанный поднабор символов.
+Приоритеты такие:
+- если одновременно переданы `--symbols` и `--top-n`, ранжирование выполняется только внутри списка `--symbols`;
+- если `--symbols` не переданы, ранжирование по `--top-n` выполняется по всем символам из кэша.
 
 Результат бектеста сохраняется в CSV (по умолчанию):
 
@@ -190,6 +192,7 @@ python launcher.py --mode fetch-cache --top-n 100 --days 30 --ignore-coingecko
 python launcher.py --mode update-cache --top-n 100 --days 7
 python launcher.py --mode update-cache --top-n 100 --days 7 --ignore-coingecko
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
+python launcher.py --mode analyze-cache --top-n 50
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
 python launcher.py --mode plot-daily-levels --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 300
@@ -273,9 +276,12 @@ python main.py update-cache --top-n 100 --days 7 --ignore-coingecko
 # При --ignore-coingecko команда автоматически использует bootstrap mode (без фильтра ликвидности),
 # если кэш объёмов ещё не прогрет; после прогрева применяется cache-liquidity mode.
 python main.py run-backtest --top-n 50
+python main.py run-backtest --symbols BTC/USDT ETH/USDT --top-n 2
 python main.py make-report
 
 # Для run-backtest отбор по --top-n идёт по среднему объёму свечей (volume) на levels_tf.
+# Приоритеты: с --symbols ранжирование только внутри переданного списка,
+# без --symbols — по всем символам, найденным в кэше.
 python main.py check-quality
 python main.py clear-cache
 ```
