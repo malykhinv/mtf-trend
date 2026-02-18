@@ -35,6 +35,7 @@ from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BreakoutParams
+from strategy.breakout.indicators.level_detector import LevelDetector
 from strategy.breakout.pending_breakout import PendingBreakout
 from strategy.breakout.pending_retest import PendingRetest
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -64,6 +65,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         self._slippage = slippage
         self._logger = logger or logging.getLogger(__name__)
         self._last_generation_diagnostics: dict[str, object] = {}
+        self._level_detector = LevelDetector()
 
     def set_logger(self, logger: logging.Logger) -> None:
         self._logger = logger
@@ -166,6 +168,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         lookback: int,
         volume_before: float | None,
         volume_after: float | None = None,
+        touch_count: int = 0,
+        reaction_strength: float = 0.0,
+        level_score: float = 0.0,
     ) -> Level:
         return Level(
             price=Price(price),
@@ -175,6 +180,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             shadow_ratio=0.0,
             volume_before=volume_before,
             volume_after=volume_after,
+            touch_count=touch_count,
+            reaction_strength=reaction_strength,
+            level_score=level_score,
         )
 
     @staticmethod
@@ -278,6 +286,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             lookback=breakout.level.lookback,
             volume_before=v_before,
             volume_after=v_after,
+            touch_count=breakout.level.touch_count,
+            reaction_strength=breakout.level.reaction_strength,
+            level_score=breakout.level.level_score,
         )
         breakout.level = updated_level
 
@@ -477,7 +488,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         higher_prepared = self.prepare_data(mtf_frames.get_frame(levels_timeframe))
         lower_prepared = self.prepare_data(mtf_frames.get_frame(entry_timeframe))
         return (
-            higher_prepared[["timestamp", "high", "low"]].copy(),
+            higher_prepared[["timestamp", "high", "low", "close"]].copy(),
             lower_prepared[["timestamp", "open", "high", "low", "close", "volume"]].copy(),
         )
 
@@ -500,18 +511,23 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         return annotated[self.ANNOTATED_COLUMNS].copy()
 
-    @staticmethod
-    def prepare_higher_tf_levels(*, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    def prepare_higher_tf_levels(self, *, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
         """Готовит уровни старшего ТФ без маппинга на младший ТФ."""
         if len(higher_base) < lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
-            return pd.DataFrame(columns=["timestamp", "level_high", "level_low", "level_start_time"])
+            return pd.DataFrame(
+                columns=[
+                    "timestamp",
+                    "level_high",
+                    "level_low",
+                    "level_start_time",
+                    "touch_count",
+                    "reaction_strength",
+                    "level_score",
+                ],
+            )
 
-        higher_levels = higher_base.copy()
-        higher_levels["level_high"] = higher_levels["high"].rolling(window=lookback).max().shift(1)
-        higher_levels["level_low"] = higher_levels["low"].rolling(window=lookback).min().shift(1)
-        higher_levels["level_start_time"] = higher_levels["timestamp"]
-        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("timestamp")
-        return higher_levels[["timestamp", "level_high", "level_low", "level_start_time"]].reset_index(drop=True)
+        higher_levels = self._level_detector.detect(higher_base=higher_base, lookback=lookback)
+        return higher_levels.sort_values("timestamp").reset_index(drop=True)
 
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         """Обратносовместимая обертка для вызовов с одним таймфреймом."""
@@ -568,6 +584,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "retest_pending_end_of_data": 0,
             "trades_generated": 0,
             "retest_plot_spans": [],
+            "level_score_summary": {},
         }
         diagnostics["context"] = {
             "symbol": params.symbol,
@@ -585,7 +602,15 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             return []
 
         annotated_rows = list(annotated[self.ANNOTATED_COLUMNS].itertuples(index=False, name=None))
-        higher_level_columns = ["timestamp", "level_high", "level_low", "level_start_time"]
+        higher_level_columns = [
+            "timestamp",
+            "level_high",
+            "level_low",
+            "level_start_time",
+            "touch_count",
+            "reaction_strength",
+            "level_score",
+        ]
         higher_level_rows = list(higher_levels[higher_level_columns].itertuples(index=False, name=None))
         if (
             len(annotated_rows) != len(annotated)
@@ -594,6 +619,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             or (higher_level_rows and len(higher_level_rows[0]) != len(higher_level_columns))
         ):
             raise ValueError("Неконсистентные входные данные для генерации событий")
+
+        diagnostics["level_score_summary"] = {
+            "selected_levels": int(len(higher_levels)),
+            "touch_count_mean": float(higher_levels["touch_count"].mean()) if not higher_levels.empty else 0.0,
+            "reaction_strength_mean": float(higher_levels["reaction_strength"].mean()) if not higher_levels.empty else 0.0,
+            "level_score_mean": float(higher_levels["level_score"].mean()) if not higher_levels.empty else 0.0,
+            "level_score_min": float(higher_levels["level_score"].min()) if not higher_levels.empty else 0.0,
+            "level_score_max": float(higher_levels["level_score"].max()) if not higher_levels.empty else 0.0,
+        }
+        self._logger.debug("Breakout level diagnostics: %s", diagnostics["level_score_summary"])
 
         timestamps_by_idx = [int(row[0]) for row in annotated_rows]
         timestamps = annotated["timestamp"].to_numpy(dtype="int64", copy=False)
@@ -613,6 +648,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         active_level_high: float | None = None
         active_level_low: float | None = None
         active_level_start_time: int | None = None
+        active_touch_count: int = 0
+        active_reaction_strength: float = 0.0
+        active_level_score: float = 0.0
 
         for idx, row_values in enumerate(annotated_rows):
             row_timestamp = int(row_values[0])
@@ -646,6 +684,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 active_level_high = float(level_row[1])
                 active_level_low = float(level_row[2])
                 active_level_start_time = int(level_row[3])
+                active_touch_count = int(level_row[4])
+                active_reaction_strength = float(level_row[5])
+                active_level_score = float(level_row[6])
+                diagnostics["last_level_metrics"] = {
+                    "touch_count": active_touch_count,
+                    "reaction_strength": active_reaction_strength,
+                    "level_score": active_level_score,
+                }
                 level_idx += 1
 
             if pending_signal is not None and (active_sim is None or active_sim.position is None):
@@ -924,6 +970,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
+                            touch_count=active_touch_count,
+                            reaction_strength=active_reaction_strength,
+                            level_score=active_level_score,
                         ),
                         breakout_extreme=float(row["low"]),
                         side=PositionSide.LONG,
@@ -944,6 +993,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
+                            touch_count=active_touch_count,
+                            reaction_strength=active_reaction_strength,
+                            level_score=active_level_score,
                         ),
                         breakout_extreme=float(row["high"]),
                         side=PositionSide.SHORT,
