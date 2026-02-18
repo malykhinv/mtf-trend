@@ -84,6 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None, help="Ограничение числа свечей/событий для plot-режимов")
     parser.add_argument("--input", default=None, help="Входной CSV для отчета")
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
+    parser.add_argument("--plot", default=None, help="Строить графики сделок (true/false) для analyze-cache")
     return parser
 
 
@@ -108,6 +109,11 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         ),
         input=task.get("input", cli_args.input),
         output=task.get("output", cli_args.output),
+        plot=(
+            _to_bool(task.get("plot"), fallback=cli_args.plot)
+            if "plot" in task
+            else _to_bool(cli_args.plot, fallback=False)
+        ),
         ignore_coingecko=(
             _to_bool(task.get("ignore_coingecko"), fallback=cli_args.ignore_coingecko)
             if "ignore_coingecko" in task

@@ -11,6 +11,7 @@ from matplotlib.patches import Rectangle
 
 from domain.enums.timeframe import Timeframe
 from domain.models.retest_plot_span import RetestPlotSpan
+from domain.models.trade_plot_span import TradePlotSpan
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import BreakoutParams
 from vectorbt_runner.data_preparer import DataPreparer
@@ -179,6 +180,22 @@ class StrategyPlotter:
         plt.close(fig)
         return output_path
 
+
+    @staticmethod
+    def _select_trade_window(
+        annotated: pd.DataFrame,
+        *,
+        entry_timestamp_ms: int,
+        exit_timestamp_ms: int,
+        padding_bars: int = 40,
+    ) -> pd.DataFrame:
+        if annotated.empty:
+            return annotated
+        timestamps = annotated["timestamp"].to_numpy(dtype="int64", copy=False)
+        start_idx = max(int(timestamps.searchsorted(entry_timestamp_ms, side="left")) - padding_bars, 0)
+        end_idx = min(int(timestamps.searchsorted(exit_timestamp_ms, side="right")) + padding_bars, len(annotated))
+        return annotated.iloc[start_idx:end_idx].reset_index(drop=True)
+
     def plot_retests(
         self,
         *,
@@ -226,6 +243,62 @@ class StrategyPlotter:
 
             timestamp = span.retest_start_timestamp_ms
             output_path = symbol_dir / f"retest_{timestamp}_{span.side.value}_{span.status}.png"
+            fig.tight_layout()
+            fig.savefig(output_path, dpi=150)
+            plt.close(fig)
+            saved_paths.append(output_path)
+
+        return saved_paths
+
+
+    def plot_trade_setups(
+        self,
+        *,
+        symbol: str,
+        params: BreakoutParams,
+        output_dir: Path | str,
+        trade_spans: list[TradePlotSpan],
+    ) -> list[Path]:
+        """Строит отдельные графики сделок с точками входа/выхода и уровнями TP/SL."""
+        annotated = self._load_annotated(symbol=symbol, params=params)
+        if annotated.empty:
+            return []
+
+        symbol_trades = [span for span in trade_spans if span.symbol == symbol]
+        if not symbol_trades:
+            return []
+
+        symbol_dir = self._resolve_symbol_output_dir(output_dir=output_dir, symbol=symbol)
+        saved_paths: list[Path] = []
+
+        for span in symbol_trades:
+            trade_window = self._select_trade_window(
+                annotated,
+                entry_timestamp_ms=span.entry_timestamp_ms,
+                exit_timestamp_ms=span.exit_timestamp_ms,
+            )
+            if trade_window.empty:
+                continue
+
+            fig, ax = plt.subplots(1, 1, figsize=(14, 6))
+            plot_time = trade_window["timestamp"]
+            ax.plot(plot_time, trade_window["close"], color="black", linewidth=1.0, label="15m close")
+
+            ax.axhline(span.entry_price, color="royalblue", linestyle="-", linewidth=1.2, label="entry")
+            ax.axhline(span.stop_loss, color="red", linestyle="--", linewidth=1.2, label="stop_loss")
+            ax.axhline(span.take_profit_1, color="green", linestyle="--", linewidth=1.2, label="tp1")
+            ax.axhline(span.take_profit_2, color="darkgreen", linestyle="--", linewidth=1.2, label="tp2")
+
+            ax.scatter([span.entry_timestamp_ms], [span.entry_price], color="blue", marker="^", s=70, label="entry point")
+            ax.scatter([span.exit_timestamp_ms], [span.exit_price], color="purple", marker="X", s=70, label="exit point")
+
+            ax.grid(alpha=0.3)
+            ax.legend(loc="upper left")
+            ax.set_title(f"{symbol} trade {span.side.value}: result={span.result_type}")
+            ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
+            fig.autofmt_xdate(rotation=30)
+
+            output_path = symbol_dir / f"trade_{span.entry_timestamp_ms}_{span.side.value}_{span.result_type}.png"
             fig.tight_layout()
             fig.savefig(output_path, dpi=150)
             plt.close(fig)

@@ -26,6 +26,7 @@ from domain.enums.timeframe import Timeframe
 from domain.models.candle import Candle
 from domain.models.level import Level
 from domain.models.retest_plot_span import RetestPlotSpan
+from domain.models.trade_plot_span import TradePlotSpan
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
@@ -612,6 +613,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "retest_pending_end_of_data": 0,
             "trades_generated": 0,
             "retest_plot_spans": [],
+            "trade_plot_spans": [],
             "level_score_summary": {},
         }
         diagnostics["context"] = {
@@ -683,6 +685,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         pending_breakout: PendingBreakout | None = None
         pending_retest: PendingRetest | None = None
         active_sim: StatefulPositionSimulator | None = None
+        active_trade_signal: TradeSignal | None = None
         retest_window_candles = max(1, self._hours_to_candles(params.retest_window_hours, params.entry_timeframe))
         level_idx = 0
         active_level_high: float | None = None
@@ -765,12 +768,31 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     trade_classifier=TradeClassifier(),
                 )
                 active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
+                active_trade_signal = pending_signal
                 pending_signal = None
 
             if active_sim is not None:
                 result = active_sim.process_candle(candle)
                 if result is not None:
                     trades.append(result)
+                    if active_trade_signal is not None:
+                        diagnostics_trade_spans = diagnostics.get("trade_plot_spans")
+                        if isinstance(diagnostics_trade_spans, list):
+                            diagnostics_trade_spans.append(
+                                TradePlotSpan(
+                                    symbol=params.symbol,
+                                    side=active_trade_signal.position_side,
+                                    entry_timestamp_ms=active_trade_signal.entry_timestamp_ms,
+                                    exit_timestamp_ms=result.exit_timestamp_ms,
+                                    entry_price=active_trade_signal.entry_price.value,
+                                    exit_price=result.exit_price.value,
+                                    stop_loss=active_trade_signal.stop_loss.value,
+                                    take_profit_1=active_trade_signal.take_profit_1.value,
+                                    take_profit_2=active_trade_signal.take_profit_2.value,
+                                    result_type=result.result_type.value,
+                                )
+                            )
+                    active_trade_signal = None
 
             active_position = active_sim is not None and active_sim.position is not None
             if active_position or pending_signal is not None:
@@ -1124,7 +1146,26 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if active_sim is not None and active_sim.position is not None:
             final_row = annotated_rows[-1]
             final_timestamp_ms = int(final_row[0])
-            trades.append(active_sim.close_position(price=float(final_row[4]), exit_timestamp_ms=final_timestamp_ms))
+            forced_result = active_sim.close_position(price=float(final_row[4]), exit_timestamp_ms=final_timestamp_ms)
+            trades.append(forced_result)
+            if active_trade_signal is not None:
+                diagnostics_trade_spans = diagnostics.get("trade_plot_spans")
+                if isinstance(diagnostics_trade_spans, list):
+                    diagnostics_trade_spans.append(
+                        TradePlotSpan(
+                            symbol=params.symbol,
+                            side=active_trade_signal.position_side,
+                            entry_timestamp_ms=active_trade_signal.entry_timestamp_ms,
+                            exit_timestamp_ms=forced_result.exit_timestamp_ms,
+                            entry_price=active_trade_signal.entry_price.value,
+                            exit_price=forced_result.exit_price.value,
+                            stop_loss=active_trade_signal.stop_loss.value,
+                            take_profit_1=active_trade_signal.take_profit_1.value,
+                            take_profit_2=active_trade_signal.take_profit_2.value,
+                            result_type=forced_result.result_type.value,
+                        )
+                    )
+            active_trade_signal = None
 
         diagnostics["trades_generated"] = len(trades)
         diagnostics["retest_plot_spans"] = retest_plot_spans

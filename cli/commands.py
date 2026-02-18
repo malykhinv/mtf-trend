@@ -44,9 +44,12 @@ from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
+from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.position_side import PositionSide
+from domain.enums.sl_mode import SLMode
 from domain.enums.timeframe import Timeframe
 from domain.models.retest_plot_span import RetestPlotSpan
+from domain.models.trade_plot_span import TradePlotSpan
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary
 from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
@@ -65,6 +68,52 @@ from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames, Strat
 # region Приватные
 
 _PROGRESS_LOG_EVERY = 100
+
+
+def _to_bool_flag(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
+
+
+def _build_breakout_params_from_row(
+    row: pd.Series,
+    *,
+    symbol: str,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+) -> BreakoutParams:
+    return BreakoutParams(
+        lookback=int(row["lookback"]),
+        volume_mult=float(row["volume_mult"]),
+        retest_window_hours=int(row["retest_window_hours"]),
+        retest_zone=float(row["retest_zone"]),
+        min_rr=float(row["min_rr"]),
+        sl_mode=SLMode(str(row["sl_mode"])),
+        tp2_mult=float(row["tp2_mult"]),
+        min_body_ratio=float(row["min_body_ratio"]),
+        min_move_atr=float(row["min_move_atr"]),
+        max_retest_depth=float(row["max_retest_depth"]),
+        confirmation_bars=int(row["confirmation_bars"]),
+        entry_trigger=EntryTrigger(str(row["entry_trigger"])),
+        symbol=symbol,
+        retest_zone_atr=(
+            None
+            if pd.isna(row.get("retest_zone_atr"))
+            else float(row["retest_zone_atr"])
+        ),
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
 
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
     logger = get_logger(
@@ -753,6 +802,50 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             levels_timeframe.value,
             entry_timeframe.value,
         )
+
+    should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
+    if should_plot:
+        if results.empty:
+            logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
+            return 0
+
+        best_row = results.iloc[0]
+        output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
+        plotted_images = 0
+        symbols_with_plots = 0
+
+        for symbol, mtf_frames in symbol_frames.items():
+            cfg = _build_breakout_params_from_row(
+                best_row,
+                symbol=symbol,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+            strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=cfg)
+            diagnostics = strategy.consume_last_generation_diagnostics()
+            raw_spans = diagnostics.get("trade_plot_spans", [])
+            trade_spans = [span for span in raw_spans if isinstance(span, TradePlotSpan)]
+            saved_paths = plotter.plot_trade_setups(
+                symbol=symbol,
+                params=cfg,
+                output_dir=output_dir,
+                trade_spans=trade_spans,
+            )
+            if saved_paths:
+                symbols_with_plots += 1
+                plotted_images += len(saved_paths)
+
+        logger.info(
+            "запуск-бэктеста: plot=true, построены графики сделок symbols=%s images=%s output_dir=%s",
+            symbols_with_plots,
+            plotted_images,
+            output_dir,
+        )
+        if plotted_images == 0:
+            logger.warning("запуск-бэктеста: plot=true, но не найдено сделок для визуализации")
     return 0
 
 
