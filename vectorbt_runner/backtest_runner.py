@@ -191,10 +191,23 @@ class BacktestRunner:
 
     @staticmethod
     def _params_signature(params: BreakoutParams) -> str:
+        def _fmt_float(value: float | None) -> str:
+            if value is None:
+                return "none"
+            return f"{value:.4f}"
+
         return (
             f"lookback={params.lookback}|"
             f"volume_mult={params.volume_mult:.4f}|"
             f"retest_window_hours={params.retest_window_hours}|"
+            f"retest_zone={_fmt_float(params.retest_zone)}|"
+            f"retest_zone_atr={_fmt_float(params.retest_zone_atr)}|"
+            f"min_rr={_fmt_float(params.min_rr)}|"
+            f"sl_mode={params.sl_mode.value}|"
+            f"tp2_mult={_fmt_float(params.tp2_mult)}|"
+            f"min_body_ratio={_fmt_float(params.min_body_ratio)}|"
+            f"min_move_atr={_fmt_float(params.min_move_atr)}|"
+            f"max_retest_depth={_fmt_float(params.max_retest_depth)}|"
             f"entry_trigger={params.entry_trigger.value}|"
             f"confirmation_bars={params.confirmation_bars}"
         )
@@ -248,7 +261,7 @@ class BacktestRunner:
         breakdown_message = ", ".join(f"{name}={value}" for name, value in breakdown.items())
 
         self._logger.debug(
-            "запуск-бэктеста: нулевые_входы_при_наличии_ретестов ключей=%s/%s доля_ключей=%.4f ретестов=%s/%s доля_ретестов=%.4f %s",
+            "запуск-бэктеста: нулевые_входы_при_наличии_ретестов ключей=(symbol+полная_конфигурация_сетки)=%s/%s доля_ключей=%.4f ретестов=%s/%s доля_ретестов=%.4f %s",
             problematic_count,
             keys_with_retests_count,
             problematic_share,
@@ -272,7 +285,7 @@ class BacktestRunner:
         detail_limit = len(sorted_problematic) if self._logger.isEnabledFor(logging.DEBUG) else min(DIAGNOSTIC_TOP_N, len(sorted_problematic))
         for (symbol, params_signature), counter in sorted_problematic[:detail_limit]:
             self._logger.debug(
-                "запуск-бэктеста: проблемный_ключ symbol=%s params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
+                "запуск-бэктеста: проблемный_ключ symbol=%s grid_params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
                 symbol,
                 params_signature,
                 counter.get("retests_found", BACKTEST_ZERO_COUNT),
@@ -298,7 +311,7 @@ class BacktestRunner:
         params_detail_limit = min(DIAGNOSTIC_TOP_N, len(sorted_by_params))
         for params_signature, counter in sorted_by_params[:params_detail_limit]:
             self._logger.debug(
-                "запуск-бэктеста: проблемный_ключ_параметров params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
+                "запуск-бэктеста: проблемный_ключ_параметров full_grid_params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
                 params_signature,
                 counter.get("retests_found", BACKTEST_ZERO_COUNT),
                 counter.get("trades_generated", BACKTEST_ZERO_COUNT),
