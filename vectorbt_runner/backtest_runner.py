@@ -497,17 +497,30 @@ class BacktestRunner:
 
         combinations_with_trades = int((results["trades_count"] > BACKTEST_ZERO_COUNT).sum()) if not results.empty else BACKTEST_ZERO_COUNT
         combinations_without_trades = int((results["trades_count"] == BACKTEST_ZERO_COUNT).sum()) if not results.empty else BACKTEST_ZERO_COUNT
+        total_combinations = int(len(results)) if not results.empty else BACKTEST_ZERO_COUNT
         total_trades = int(results["trades_count"].sum()) if not results.empty else BACKTEST_ZERO_COUNT
+        average_trades_per_combination = (
+            total_trades / total_combinations
+            if total_combinations
+            else float(BACKTEST_ZERO_COUNT)
+        )
+        median_trades_per_combination = (
+            float(results["trades_count"].median())
+            if not results.empty
+            else float(BACKTEST_ZERO_COUNT)
+        )
         no_trades_share = (
             combinations_without_trades / len(results)
             if not results.empty
             else BACKTEST_ZERO_COUNT
         )
         self._logger.info(
-            "запуск-бэктеста: покрытие сделками: со_сделками=%s без_сделок=%s всего_сделок=%s доля_без_сделок=%.4f",
+            "запуск-бэктеста: покрытие сделками: со_сделками=%s без_сделок=%s сумма_сделок_по_сетке=%s среднее_сделок_на_комбинацию=%.4f медиана_сделок_на_комбинацию=%.4f доля_без_сделок=%.4f",
             combinations_with_trades,
             combinations_without_trades,
             total_trades,
+            average_trades_per_combination,
+            median_trades_per_combination,
             no_trades_share,
         )
         if collect_diagnostics and rejection_diagnostics_total:
