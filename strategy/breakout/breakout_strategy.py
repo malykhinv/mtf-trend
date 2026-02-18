@@ -521,6 +521,19 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             self._last_generation_diagnostics = diagnostics
             return []
 
+        annotated_rows = list(annotated[self.ANNOTATED_COLUMNS].itertuples(index=False, name=None))
+        higher_level_columns = ["timestamp", "level_high", "level_low", "level_start_time"]
+        higher_level_rows = list(higher_levels[higher_level_columns].itertuples(index=False, name=None))
+        if (
+            len(annotated_rows) != len(annotated)
+            or len(higher_level_rows) != len(higher_levels)
+            or (annotated_rows and len(annotated_rows[0]) != len(self.ANNOTATED_COLUMNS))
+            or (higher_level_rows and len(higher_level_rows[0]) != len(higher_level_columns))
+        ):
+            raise ValueError("Неконсистентные входные данные для генерации событий")
+
+        timestamps_by_idx = [int(row[0]) for row in annotated_rows]
+
         trades: list[TradeResult] = []
         retest_plot_spans: list[RetestPlotSpan] = []
         pending_signal: TradeSignal | None = None
@@ -533,16 +546,38 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         active_level_low: float | None = None
         active_level_start_time: int | None = None
 
-        for idx in range(len(annotated)):
-            row = annotated.iloc[idx]
-            candle = self._to_candle(row)
-            row_timestamp = int(row["timestamp"])
+        for idx, row_values in enumerate(annotated_rows):
+            row_timestamp = int(row_values[0])
+            row_open = float(row_values[1])
+            row_high = float(row_values[2])
+            row_low = float(row_values[3])
+            row_close = float(row_values[4])
+            row_volume = float(row_values[5])
+            row_natr = float(row_values[6])
+            row = {
+                "timestamp": row_timestamp,
+                "open": row_open,
+                "high": row_high,
+                "low": row_low,
+                "close": row_close,
+                "volume": row_volume,
+                "natr": row_natr,
+            }
+            candle = Candle(
+                timestamp_ms=row_timestamp,
+                open=Price(row_open),
+                high=Price(row_high),
+                low=Price(row_low),
+                close=Price(row_close),
+                volume=Volume(row_volume),
+                open_interest=Volume(float(STRATEGY_DEFAULT_OPEN_INTEREST)),
+            )
 
-            while level_idx < len(higher_levels) and int(higher_levels.iloc[level_idx]["timestamp"]) <= row_timestamp:
-                level_row = higher_levels.iloc[level_idx]
-                active_level_high = float(level_row["level_high"])
-                active_level_low = float(level_row["level_low"])
-                active_level_start_time = int(level_row["level_start_time"])
+            while level_idx < len(higher_level_rows) and int(higher_level_rows[level_idx][0]) <= row_timestamp:
+                level_row = higher_level_rows[level_idx]
+                active_level_high = float(level_row[1])
+                active_level_low = float(level_row[2])
+                active_level_start_time = int(level_row[3])
                 level_idx += 1
 
             if pending_signal is not None and (active_sim is None or active_sim.position is None):
@@ -574,8 +609,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_timestamp_ms=int(annotated.iloc[pending_retest.retest_start_idx]["timestamp"]),
-                            retest_end_timestamp_ms=int(annotated.iloc[pending_retest.retest_end_idx]["timestamp"]),
+                            retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
+                            retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmed",
                         )
                     )
@@ -608,8 +643,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_timestamp_ms=int(annotated.iloc[pending_retest.retest_start_idx]["timestamp"]),
-                            retest_end_timestamp_ms=int(annotated.iloc[pending_retest.retest_end_idx]["timestamp"]),
+                            retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
+                            retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmation_expired",
                         )
                     )
@@ -632,8 +667,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_timestamp_ms=int(annotated.iloc[pending_retest.retest_start_idx]["timestamp"]),
-                            retest_end_timestamp_ms=int(annotated.iloc[pending_retest.retest_end_idx]["timestamp"]),
+                            retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
+                            retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmed",
                         )
                     )
@@ -665,8 +700,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
-                            retest_start_timestamp_ms=int(annotated.iloc[pending_retest.retest_start_idx]["timestamp"]),
-                            retest_end_timestamp_ms=int(annotated.iloc[pending_retest.retest_end_idx]["timestamp"]),
+                            retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
+                            retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmation_not_received",
                         )
                     )
@@ -866,16 +901,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     level_price=pending_retest.breakout.level.price.value,
                     retest_low=pending_retest.retest_low,
                     retest_high=pending_retest.retest_high,
-                    retest_start_timestamp_ms=int(annotated.iloc[pending_retest.retest_start_idx]["timestamp"]),
-                    retest_end_timestamp_ms=int(annotated.iloc[pending_retest.retest_end_idx]["timestamp"]),
+                    retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
+                    retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                     status="pending_end_of_data",
                 )
             )
 
         if active_sim is not None and active_sim.position is not None:
-            final_row = annotated.iloc[-1]
-            final_timestamp_ms = int(final_row["timestamp"])
-            trades.append(active_sim.close_position(price=float(final_row["close"]), exit_timestamp_ms=final_timestamp_ms))
+            final_row = annotated_rows[-1]
+            final_timestamp_ms = int(final_row[0])
+            trades.append(active_sim.close_position(price=float(final_row[4]), exit_timestamp_ms=final_timestamp_ms))
 
         diagnostics["trades_generated"] = len(trades)
         diagnostics["retest_plot_spans"] = retest_plot_spans
