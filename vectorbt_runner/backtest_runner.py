@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter, defaultdict
+from dataclasses import replace
 from itertools import product
 from pathlib import Path
 from time import perf_counter
@@ -373,22 +374,13 @@ class BacktestRunner:
                 }
 
         for idx, params in enumerate(grid, start=1):
+            if isinstance(strategy, BreakoutStrategy):
+                strategy.validate_config(params)
+
             all_trades: list[TradeResult] = []
             for symbol, mtf_frames in symbol_frames.items():
-                cfg = BreakoutParams(
-                    lookback=params.lookback,
-                    volume_mult=params.volume_mult,
-                    retest_window_hours=params.retest_window_hours,
-                    retest_zone=params.retest_zone,
-                    min_rr=params.min_rr,
-                    retest_zone_atr=params.retest_zone_atr,
-                    sl_mode=params.sl_mode,
-                    tp2_mult=params.tp2_mult,
-                    min_body_ratio=params.min_body_ratio,
-                    min_move_atr=params.min_move_atr,
-                    max_retest_depth=params.max_retest_depth,
-                    confirmation_bars=params.confirmation_bars,
-                    entry_trigger=params.entry_trigger,
+                cfg = replace(
+                    params,
                     symbol=symbol,
                     levels_timeframe=levels_timeframe,
                     entry_timeframe=entry_timeframe,
@@ -400,6 +392,7 @@ class BacktestRunner:
                         params=cfg,
                         annotated=prepared_annotated,
                         higher_levels=higher_levels[symbol][params.lookback],
+                        skip_validation=True,
                     )
                     diagnostics_raw = strategy.consume_last_generation_diagnostics()
                     diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
