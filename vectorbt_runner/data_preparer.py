@@ -28,6 +28,8 @@ from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 class DataPreparer:
     """Класс."""
     REQUIRED_COLUMNS = STRATEGY_REQUIRED_COLUMNS
+    # Набор колонок, читаемых из parquet для подготовки входов стратегии.
+    INPUT_COLUMNS = tuple(dict.fromkeys((*STRATEGY_REQUIRED_COLUMNS, *DATA_PREPARER_NUMERIC_COLUMNS)))
 
     # region Приватные
     def __init__(self, cache_dir: Path) -> None:
@@ -47,13 +49,18 @@ class DataPreparer:
         return sorted(symbols)
 
     def load_symbol_data(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
-        """Загружает данные по одному символу для бэктеста."""
+        """Загружает данные по одному символу для бэктеста.
+
+        Читает из parquet только колонки, используемые в downstream-подготовке:
+        обязательные поля стратегии + числовые поля для нормализации типов.
+        """
         symbol_path = ParquetStorage.encode_symbol_for_path(symbol)
         path = self._cache_dir / symbol_path / timeframe.value / SIMULATION_PARQUET_FILE_NAME
         if not path.exists():
             return pd.DataFrame()
 
-        frame = pd.read_parquet(path)
+        required_columns_subset = list(self.INPUT_COLUMNS)
+        frame = pd.read_parquet(path, columns=required_columns_subset)
         missing = [col for col in self.REQUIRED_COLUMNS if col not in frame.columns]
         if missing:
             return pd.DataFrame()
