@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 
 from constants import (
@@ -177,12 +178,33 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         )
 
     @staticmethod
-    def _average_volume_before(*, annotated: pd.DataFrame, breakout_idx: int, level_start_time: int) -> float | None:
-        before_slice = annotated.iloc[:breakout_idx]
-        before_slice = before_slice[before_slice["timestamp"] >= level_start_time]
-        if before_slice.empty:
+    def _mean_volume_between_indices(
+        *,
+        prefix_volume_sum: np.ndarray,
+        start_idx: int,
+        end_idx: int,
+    ) -> float | None:
+        if end_idx <= start_idx:
             return None
-        return float(before_slice["volume"].mean())
+        interval_sum = float(prefix_volume_sum[end_idx] - prefix_volume_sum[start_idx])
+        return interval_sum / float(end_idx - start_idx)
+
+    @staticmethod
+    def _average_volume_before(
+        *,
+        timestamps: np.ndarray,
+        prefix_volume_sum: np.ndarray,
+        breakout_idx: int,
+        level_start_time: int,
+    ) -> float | None:
+        breakout_timestamp = int(timestamps[breakout_idx])
+        level_start_idx = int(np.searchsorted(timestamps, level_start_time, side="left"))
+        breakout_timestamp_idx = int(np.searchsorted(timestamps, breakout_timestamp, side="left"))
+        return BreakoutStrategy._mean_volume_between_indices(
+            prefix_volume_sum=prefix_volume_sum,
+            start_idx=level_start_idx,
+            end_idx=breakout_timestamp_idx,
+        )
 
     @staticmethod
     def _append_natr(*, annotated: pd.DataFrame, atr_window: int) -> pd.DataFrame:
@@ -204,22 +226,31 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def _evaluate_volume_regime(
         self,
         *,
-        annotated: pd.DataFrame,
+        timestamps: np.ndarray,
+        prefix_volume_sum: np.ndarray,
         breakout: PendingBreakout,
         breakout_idx: int,
         retest_idx: int,
         volume_mult: float,
     ) -> dict[str, float | bool]:
-        breakout_timestamp = annotated.iloc[breakout_idx]["timestamp"]
-        retest_timestamp = annotated.iloc[retest_idx]["timestamp"]
+        breakout_timestamp = int(timestamps[breakout_idx])
+        retest_timestamp = int(timestamps[retest_idx])
 
-        before_slice = annotated[
-            (annotated["timestamp"] >= breakout.level_start_time) & (annotated["timestamp"] < breakout_timestamp)
-        ]
-        after_slice = annotated[
-            (annotated["timestamp"] >= breakout_timestamp) & (annotated["timestamp"] < retest_timestamp)
-        ]
-        if before_slice.empty or after_slice.empty:
+        level_start_idx = int(np.searchsorted(timestamps, breakout.level_start_time, side="left"))
+        breakout_timestamp_idx = int(np.searchsorted(timestamps, breakout_timestamp, side="left"))
+        retest_timestamp_idx = int(np.searchsorted(timestamps, retest_timestamp, side="left"))
+
+        v_before_computed = self._mean_volume_between_indices(
+            prefix_volume_sum=prefix_volume_sum,
+            start_idx=level_start_idx,
+            end_idx=breakout_timestamp_idx,
+        )
+        v_after = self._mean_volume_between_indices(
+            prefix_volume_sum=prefix_volume_sum,
+            start_idx=breakout_timestamp_idx,
+            end_idx=retest_timestamp_idx,
+        )
+        if v_before_computed is None or v_after is None:
             self._logger.debug(
                 "режим_объема_отклонен_пустое_окно время_формирования=%s время_пробоя=%s время_ретеста=%s множитель_объема=%.4f",
                 breakout.level_start_time,
@@ -236,8 +267,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         v_before = breakout.level.volume_before
         if v_before is None:
-            v_before = float(before_slice["volume"].mean())
-        v_after = float(after_slice["volume"].mean())
+            v_before = v_before_computed
         threshold = v_before * volume_mult
         is_ok = v_after >= threshold
 
@@ -535,6 +565,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             raise ValueError("Неконсистентные входные данные для генерации событий")
 
         timestamps_by_idx = [int(row[0]) for row in annotated_rows]
+        timestamps = annotated["timestamp"].to_numpy(dtype="int64", copy=False)
+        volumes = annotated["volume"].to_numpy(dtype="float64", copy=False)
+        prefix_volume_sum = np.empty(len(volumes) + 1, dtype="float64")
+        prefix_volume_sum[0] = 0.0
+        np.cumsum(volumes, out=prefix_volume_sum[1:])
 
         trades: list[TradeResult] = []
         retest_plot_spans: list[RetestPlotSpan] = []
@@ -734,7 +769,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     )
                     diagnostics["retests_found"] += 1
                     volume_check = self._evaluate_volume_regime(
-                        annotated=annotated,
+                        timestamps=timestamps,
+                        prefix_volume_sum=prefix_volume_sum,
                         breakout=pending_breakout,
                         breakout_idx=breakout_idx,
                         retest_idx=idx,
@@ -851,7 +887,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_start_time=active_level_start_time,
                             lookback=params.lookback,
                             volume_before=self._average_volume_before(
-                                annotated=annotated,
+                                timestamps=timestamps,
+                                prefix_volume_sum=prefix_volume_sum,
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
@@ -870,7 +907,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             level_start_time=active_level_start_time,
                             lookback=params.lookback,
                             volume_before=self._average_volume_before(
-                                annotated=annotated,
+                                timestamps=timestamps,
+                                prefix_volume_sum=prefix_volume_sum,
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
