@@ -379,7 +379,7 @@ class StrategyPlotter:
         symbol_dir = self._resolve_symbol_output_dir(output_dir=output_dir, symbol=symbol)
         saved_paths: list[Path] = []
 
-        for span in symbol_trades:
+        for idx, span in enumerate(symbol_trades, start=1):
             trade_window = self._select_trade_window(
                 annotated,
                 entry_timestamp_ms=span.entry_timestamp_ms,
@@ -395,6 +395,8 @@ class StrategyPlotter:
 
             entry_time = pd.to_datetime(span.entry_timestamp_ms, unit="ms")
             exit_time = pd.to_datetime(span.exit_timestamp_ms, unit="ms")
+            entry_label = pd.to_datetime(span.entry_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
+            exit_label = pd.to_datetime(span.exit_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
 
             ax.hlines(span.entry_price, entry_time, exit_time, color="#38bdf8", linestyle="-", linewidth=1.8)
             ax.hlines(span.stop_loss, entry_time, exit_time, color="#ef4444", linestyle="--", linewidth=1.5)
@@ -423,7 +425,9 @@ class StrategyPlotter:
             ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
             fig.autofmt_xdate(rotation=30)
 
-            output_path = symbol_dir / f"trade_{span.entry_timestamp_ms}_{span.side.value}_{span.result_type}.png"
+            output_path = symbol_dir / (
+                f"trade_{idx:03d}_{entry_label}_to_{exit_label}_{span.side.value}_{span.result_type}.png"
+            )
             fig.tight_layout()
             fig.savefig(output_path, dpi=150)
             plt.close(fig)
