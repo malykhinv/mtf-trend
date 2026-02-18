@@ -44,6 +44,10 @@ class BreakoutParams:
     entry_trigger: EntryTrigger
     symbol: str
     retest_zone_atr: float | None = None
+    min_touches: int = 2
+    min_bars_between_touches: int = 2
+    max_touch_penetration_atr: float | None = None
+    max_touch_penetration_pct: float | None = None
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
 

@@ -15,3 +15,7 @@ class PendingBreakout:
     breakout_extreme: float
     side: PositionSide
     level_start_time: int
+    level_touch_count: int
+    level_min_bars_between_touches: int
+    level_max_penetration_atr: float
+    level_max_penetration_pct: float
