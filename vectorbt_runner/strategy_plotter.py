@@ -9,6 +9,7 @@ import pandas as pd
 from matplotlib.ticker import FuncFormatter
 from matplotlib.patches import Rectangle
 
+from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
 from domain.models.retest_plot_span import RetestPlotSpan
 from domain.models.trade_plot_span import TradePlotSpan
@@ -27,7 +28,8 @@ class StrategyPlotter:
 
     @staticmethod
     def _resolve_symbol_output_dir(output_dir: Path | str, symbol: str) -> Path:
-        symbol_dir = Path(output_dir) / symbol
+        encoded_symbol = ParquetStorage.encode_symbol_for_path(symbol)
+        symbol_dir = Path(output_dir) / encoded_symbol
         symbol_dir.mkdir(parents=True, exist_ok=True)
         return symbol_dir
 
