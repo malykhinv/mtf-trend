@@ -345,6 +345,7 @@ class BacktestRunner:
         total = len(grid)
         symbols_count = len(symbol_frames)
         started_at = perf_counter()
+        collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG)
 
         prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
         higher_levels: dict[str, dict[int, pd.DataFrame]] = {}
@@ -394,15 +395,16 @@ class BacktestRunner:
                         higher_levels=higher_levels[symbol][params.lookback],
                         skip_validation=True,
                     )
-                    diagnostics_raw = strategy.consume_last_generation_diagnostics()
-                    diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
-                    rejection_diagnostics_total.update(diagnostics_counter)
-                    context = diagnostics_raw.get("context")
-                    context_symbol = symbol
-                    if isinstance(context, dict) and isinstance(context.get("symbol"), str):
-                        context_symbol = context["symbol"]
-                    key = (context_symbol, self._params_signature(cfg))
-                    rejection_diagnostics_by_key[key].update(diagnostics_counter)
+                    if collect_diagnostics:
+                        diagnostics_raw = strategy.consume_last_generation_diagnostics()
+                        diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
+                        rejection_diagnostics_total.update(diagnostics_counter)
+                        context = diagnostics_raw.get("context")
+                        context_symbol = symbol
+                        if isinstance(context, dict) and isinstance(context.get("symbol"), str):
+                            context_symbol = context["symbol"]
+                        key = (context_symbol, self._params_signature(cfg))
+                        rejection_diagnostics_by_key[key].update(diagnostics_counter)
                 else:
                     trades = cast("BaseStrategy[BreakoutParams]", strategy).generate_events_multi_tf(
                         mtf_frames=mtf_frames,
@@ -448,7 +450,7 @@ class BacktestRunner:
             total_trades,
             no_trades_share,
         )
-        if rejection_diagnostics_total:
+        if collect_diagnostics and rejection_diagnostics_total:
             diagnostic_parts = [
                 f"{name}={value}"
                 for name, value in rejection_diagnostics_total.most_common()
@@ -459,7 +461,8 @@ class BacktestRunner:
                 ", ".join(diagnostic_parts),
             )
 
-        self._log_zero_entry_with_retests(dict(rejection_diagnostics_by_key))
+        if collect_diagnostics:
+            self._log_zero_entry_with_retests(dict(rejection_diagnostics_by_key))
 
         self._save_results(results)
         return results
