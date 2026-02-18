@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 import pandas as pd
+from pyarrow import parquet as pq
 
 from constants import (
     DATA_PREPARER_EMPTY_BOOL_DTYPE,
@@ -59,7 +60,9 @@ class DataPreparer:
         if not path.exists():
             return pd.DataFrame()
 
-        required_columns_subset = list(self.INPUT_COLUMNS)
+        parquet_schema = pq.ParquetFile(path).schema
+        available_columns = set(parquet_schema.names)
+        required_columns_subset = [column for column in self.INPUT_COLUMNS if column in available_columns]
         frame = pd.read_parquet(path, columns=required_columns_subset)
         missing = [col for col in self.REQUIRED_COLUMNS if col not in frame.columns]
         if missing:
