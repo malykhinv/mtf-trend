@@ -471,9 +471,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         params: BreakoutParams,
         annotated: pd.DataFrame | None = None,
         higher_levels: pd.DataFrame | None = None,
+        skip_validation: bool = False,
     ) -> list[TradeResult]:
         """Генерирует сделки по уровням старшего ТФ и логике пробоя/ретеста младшего ТФ."""
-        self.validate_config(params)
+        if not skip_validation:
+            self.validate_config(params)
         if annotated is None:
             higher_base, lower_base = self.prepare_multi_tf_data(
                 mtf_frames=mtf_frames,
