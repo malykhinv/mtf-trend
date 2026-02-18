@@ -104,10 +104,33 @@ class BacktestRunner:
                 "tp2_count": BACKTEST_ZERO_COUNT,
             }
 
-        pnl_values = [trade.pnl for trade in trades]
-        pnl_percent = sum(trade.pnl_percent.value for trade in trades)
-        profits = sum(value for value in pnl_values if value > 0)
-        losses = abs(sum(value for value in pnl_values if value < 0))
+        profits = BACKTEST_EMPTY_PNL_PERCENT
+        losses = BACKTEST_EMPTY_PNL_PERCENT
+        wins = BACKTEST_ZERO_COUNT
+        pnl_percent = BACKTEST_EMPTY_PNL_PERCENT
+        sl_count = BACKTEST_ZERO_COUNT
+        be_count = BACKTEST_ZERO_COUNT
+        tp1_be_count = BACKTEST_ZERO_COUNT
+        tp2_count = BACKTEST_ZERO_COUNT
+
+        # Оптимизация: формулы метрик неизменны, сокращаем только число проходов и аллокаций.
+        for trade in trades:
+            pnl_value = trade.pnl
+            pnl_percent += trade.pnl_percent.value
+            if pnl_value > 0:
+                profits += pnl_value
+                wins += 1
+            elif pnl_value < 0:
+                losses += abs(pnl_value)
+
+            if trade.result_type == TradeResultType.SL:
+                sl_count += 1
+            elif trade.result_type == TradeResultType.BE:
+                be_count += 1
+            elif trade.result_type == TradeResultType.TP1_BE:
+                tp1_be_count += 1
+            elif trade.result_type == TradeResultType.TP2:
+                tp2_count += 1
 
         if losses > 0:
             pf = profits / losses
@@ -116,7 +139,6 @@ class BacktestRunner:
         else:
             pf = BACKTEST_EMPTY_PF
 
-        wins = sum(1 for value in pnl_values if value > 0)
         win_rate = wins / len(trades)
 
         trades_count = len(trades)
@@ -127,7 +149,10 @@ class BacktestRunner:
             )
             raise RuntimeError(msg)
 
-        sorted_trades = sorted(trades, key=lambda trade: (trade.exit_timestamp_ms, trade.entry_timestamp_ms))
+        sorted_trades = sorted(
+            trades,
+            key=lambda trade: (trade.exit_timestamp_ms, trade.entry_timestamp_ms),
+        )
         cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
         peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
         max_dd = BACKTEST_EMPTY_MAX_DD
@@ -139,7 +164,6 @@ class BacktestRunner:
             if drawdown > max_dd:
                 max_dd = drawdown
 
-        result_types = [trade.result_type for trade in trades]
         return {
             **base_row,
             "profit_factor": round(float(pf), BACKTEST_ROUND_METRICS),
@@ -147,10 +171,10 @@ class BacktestRunner:
             "win_rate": round(float(win_rate), BACKTEST_ROUND_METRICS),
             "trades_count": trades_count,
             "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
-            "sl_count": result_types.count(TradeResultType.SL),
-            "be_count": result_types.count(TradeResultType.BE),
-            "tp1_be_count": result_types.count(TradeResultType.TP1_BE),
-            "tp2_count": result_types.count(TradeResultType.TP2),
+            "sl_count": sl_count,
+            "be_count": be_count,
+            "tp1_be_count": tp1_be_count,
+            "tp2_count": tp2_count,
         }
 
     def _save_results(self, results: pd.DataFrame) -> None:
