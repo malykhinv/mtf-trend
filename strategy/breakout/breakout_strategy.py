@@ -470,6 +470,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         mtf_frames: SymbolMtfFrames,
         params: BreakoutParams,
         annotated: pd.DataFrame | None = None,
+        higher_levels: pd.DataFrame | None = None,
     ) -> list[TradeResult]:
         """Генерирует сделки по уровням старшего ТФ и логике пробоя/ретеста младшего ТФ."""
         self.validate_config(params)
@@ -483,8 +484,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 lower_base=lower_base,
                 lookback=params.lookback,
             )
-            higher_levels = self.prepare_higher_tf_levels(higher_base=higher_base, lookback=params.lookback)
-        else:
+        if higher_levels is None:
             higher_base, _ = self.prepare_multi_tf_data(
                 mtf_frames=mtf_frames,
                 levels_timeframe=params.levels_timeframe,

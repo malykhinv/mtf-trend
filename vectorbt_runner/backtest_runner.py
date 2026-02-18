@@ -346,19 +346,27 @@ class BacktestRunner:
         started_at = perf_counter()
 
         prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
+        higher_levels: dict[str, dict[int, pd.DataFrame]] = {}
         rejection_diagnostics_total: Counter[str] = Counter()
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         if isinstance(strategy, BreakoutStrategy):
             strategy.set_logger(self._logger)
             for symbol, mtf_frames in symbol_frames.items():
-                prepared_multi_tf = strategy.prepare_multi_tf_data(
+                higher_base, lower_base = strategy.prepare_multi_tf_data(
                     mtf_frames=mtf_frames,
                     levels_timeframe=levels_timeframe,
                     entry_timeframe=entry_timeframe,
                 )
                 prepared_symbol_data[symbol] = {
                     lookback: strategy.prepare_annotated_multi_tf_data(
-                        lower_base=prepared_multi_tf[1],
+                        lower_base=lower_base,
+                        lookback=lookback,
+                    )
+                    for lookback in lookbacks
+                }
+                higher_levels[symbol] = {
+                    lookback: strategy.prepare_higher_tf_levels(
+                        higher_base=higher_base,
                         lookback=lookback,
                     )
                     for lookback in lookbacks
@@ -391,6 +399,7 @@ class BacktestRunner:
                         mtf_frames=mtf_frames,
                         params=cfg,
                         annotated=prepared_annotated,
+                        higher_levels=higher_levels[symbol][params.lookback],
                     )
                     diagnostics_raw = strategy.consume_last_generation_diagnostics()
                     diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
