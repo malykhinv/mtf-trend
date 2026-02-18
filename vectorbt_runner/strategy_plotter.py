@@ -5,7 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 import pandas as pd
+from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter
 from matplotlib.patches import Rectangle
 
@@ -43,12 +45,73 @@ class StrategyPlotter:
 
     @staticmethod
     def _timestamp_formatter(fmt: str) -> FuncFormatter:
-        _ = fmt
+        return FuncFormatter(lambda value, _position: mdates.num2date(value).strftime(fmt))
 
-        def _format_timestamp(value: float, _position: float) -> str:
-            return str(int(value))
+    @staticmethod
+    def _prepare_plot_frame(frame: pd.DataFrame) -> pd.DataFrame:
+        plot_frame = frame.copy()
+        plot_frame["plot_time"] = pd.to_datetime(plot_frame["timestamp"], unit="ms", utc=True).dt.tz_localize(None)
+        return plot_frame
 
-        return FuncFormatter(_format_timestamp)
+    @staticmethod
+    def _apply_dark_theme(ax: plt.Axes) -> None:
+        ax.set_facecolor("#0f172a")
+        ax.grid(color="#334155", alpha=0.45, linestyle="--", linewidth=0.8)
+        ax.tick_params(colors="#e2e8f0", labelsize=9)
+        for spine in ax.spines.values():
+            spine.set_color("#334155")
+
+    @staticmethod
+    def _add_styled_legend(ax: plt.Axes, handles: list[Line2D]) -> None:
+        legend = ax.legend(
+            handles=handles,
+            loc="upper left",
+            frameon=True,
+            fancybox=True,
+            framealpha=0.85,
+            edgecolor="#334155",
+            labelcolor="#e2e8f0",
+            fontsize=9,
+            ncol=2,
+        )
+        legend.get_frame().set_facecolor("#111827")
+
+    @staticmethod
+    def _plot_candles(ax: plt.Axes, frame: pd.DataFrame) -> None:
+        if frame.empty:
+            return
+
+        plot_time = mdates.date2num(frame["plot_time"])
+        if len(plot_time) > 1:
+            candle_width = (plot_time[1] - plot_time[0]) * 0.7
+        else:
+            candle_width = 0.005
+
+        for x_value, open_price, high_price, low_price, close_price in zip(
+            plot_time,
+            frame["open"],
+            frame["high"],
+            frame["low"],
+            frame["close"],
+            strict=False,
+        ):
+            is_bull = close_price >= open_price
+            body_color = "#22c55e" if is_bull else "#ef4444"
+            wick_color = "#86efac" if is_bull else "#fca5a5"
+
+            ax.vlines(x_value, low_price, high_price, color=wick_color, linewidth=1.05, zorder=2)
+            body_bottom = min(open_price, close_price)
+            body_height = max(abs(close_price - open_price), 1e-9)
+            body = Rectangle(
+                (x_value - candle_width / 2.0, body_bottom),
+                candle_width,
+                body_height,
+                facecolor=body_color,
+                edgecolor=body_color,
+                linewidth=0.8,
+                zorder=3,
+            )
+            ax.add_patch(body)
 
     @staticmethod
     def _build_mtf_frames(
@@ -142,6 +205,9 @@ class StrategyPlotter:
         if annotated.empty:
             return None
 
+        annotated = self._prepare_plot_frame(annotated)
+        daily_levels = self._prepare_plot_frame(daily_levels)
+
         fig, (ax_top, ax_bottom) = plt.subplots(
             2,
             1,
@@ -149,30 +215,48 @@ class StrategyPlotter:
             sharex=True,
             gridspec_kw={"height_ratios": [3, 2]},
         )
+        fig.patch.set_facecolor("#020617")
 
-        plot_time = annotated["timestamp"]
-        ax_top.plot(plot_time, annotated["close"], label="15m close", color="black", linewidth=1.0)
-        ax_top.plot(plot_time, annotated["level_high"], label="1d level_high", color="green", linewidth=1.2)
-        ax_top.plot(plot_time, annotated["level_low"], label="1d level_low", color="red", linewidth=1.2)
-        ax_top.set_title(f"{symbol}: 15m candles with 1d levels")
-        ax_top.grid(alpha=0.3)
-        ax_top.legend(loc="upper left")
+        self._apply_dark_theme(ax_top)
+        self._apply_dark_theme(ax_bottom)
 
-        ax_bottom.plot(daily_levels["timestamp"], daily_levels["level_high"], label="Daily level high", color="green")
-        ax_bottom.plot(daily_levels["timestamp"], daily_levels["level_low"], label="Daily level low", color="red")
+        plot_time = annotated["plot_time"]
+        self._plot_candles(ax_top, annotated)
+        high_line, = ax_top.plot(plot_time, annotated["level_high"], color="#38bdf8", linewidth=1.4)
+        low_line, = ax_top.plot(plot_time, annotated["level_low"], color="#f97316", linewidth=1.4)
+        ax_top.set_title(f"{symbol}: MTF levels overview", color="#f8fafc", fontsize=13, fontweight="bold")
+        self._add_styled_legend(
+            ax_top,
+            [
+                Line2D([0], [0], color="#22c55e", linewidth=6, label="🟩 Bull candle"),
+                Line2D([0], [0], color="#ef4444", linewidth=6, label="🟥 Bear candle"),
+                Line2D([0], [0], color=high_line.get_color(), linewidth=2.2, label="✨ 1D level high"),
+                Line2D([0], [0], color=low_line.get_color(), linewidth=2.2, label="🌙 1D level low"),
+            ],
+        )
+
+        daily_high_line, = ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_high"], color="#38bdf8", linewidth=1.5)
+        daily_low_line, = ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_low"], color="#f97316", linewidth=1.5)
         ax_bottom.fill_between(
-            daily_levels["timestamp"],
+            daily_levels["plot_time"],
             daily_levels["level_low"],
             daily_levels["level_high"],
-            color="lightgray",
-            alpha=0.35,
-            label="Daily range",
+            color="#94a3b8",
+            alpha=0.18,
         )
-        ax_bottom.set_title("Daily high/low levels (1 point per day)")
-        ax_bottom.grid(alpha=0.3)
-        ax_bottom.legend(loc="upper left")
+        ax_bottom.set_title("Daily high/low bands", color="#f8fafc", fontsize=11)
+        self._add_styled_legend(
+            ax_bottom,
+            [
+                Line2D([0], [0], color=daily_high_line.get_color(), linewidth=2.2, label="🔹 Daily high"),
+                Line2D([0], [0], color=daily_low_line.get_color(), linewidth=2.2, label="🔸 Daily low"),
+                Line2D([0], [0], color="#94a3b8", linewidth=6, alpha=0.5, label="☁️ Daily range"),
+            ],
+        )
 
+        ax_bottom.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
         ax_bottom.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d"))
+        ax_bottom.set_ylabel("Price", color="#cbd5e1")
         fig.autofmt_xdate(rotation=30)
 
         date_range = self._format_date_range(annotated)
@@ -210,6 +294,7 @@ class StrategyPlotter:
         annotated = self._load_annotated(symbol=symbol, params=params)
         if annotated.empty:
             return []
+        annotated = self._prepare_plot_frame(annotated)
 
         symbol_spans = [span for span in retest_spans if span.symbol == symbol]
         if not symbol_spans:
@@ -219,28 +304,48 @@ class StrategyPlotter:
         saved_paths: list[Path] = []
         for span in symbol_spans:
             fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-            plot_time = annotated["timestamp"]
-            ax.plot(plot_time, annotated["close"], color="black", linewidth=1.0, label="15m close")
-            ax.axhline(span.level_price, color="royalblue", linestyle="--", linewidth=1.2, label="daily level")
+            fig.patch.set_facecolor("#020617")
+            self._apply_dark_theme(ax)
+            plot_time = annotated["plot_time"]
+            self._plot_candles(ax, annotated)
+            ax.hlines(
+                y=span.level_price,
+                xmin=plot_time.iloc[0],
+                xmax=plot_time.iloc[-1],
+                color="#38bdf8",
+                linestyle="--",
+                linewidth=1.2,
+            )
 
-            x_start = span.retest_start_timestamp_ms
-            x_end = span.retest_end_timestamp_ms
+            x_start = pd.to_datetime(span.retest_start_timestamp_ms, unit="ms")
+            x_end = pd.to_datetime(span.retest_end_timestamp_ms, unit="ms")
+            x_start_num = mdates.date2num(x_start)
+            x_end_num = mdates.date2num(x_end)
+
             rect = Rectangle(
-                (x_start, span.retest_low),
-                max(x_end - x_start, 1e-9),
+                (x_start_num, span.retest_low),
+                max(x_end_num - x_start_num, 1e-9),
                 span.retest_high - span.retest_low,
-                facecolor="orange",
-                alpha=0.35,
-                edgecolor="darkorange",
+                facecolor="#f59e0b",
+                alpha=0.28,
+                edgecolor="#f97316",
                 linewidth=1.0,
-                label=f"retest zone ({span.status})",
             )
             ax.add_patch(rect)
-            ax.grid(alpha=0.3)
-            ax.legend(loc="upper left")
+            self._add_styled_legend(
+                ax,
+                [
+                    Line2D([0], [0], color="#22c55e", linewidth=6, label="🟩 Bull candle"),
+                    Line2D([0], [0], color="#ef4444", linewidth=6, label="🟥 Bear candle"),
+                    Line2D([0], [0], color="#38bdf8", linestyle="--", linewidth=2, label="🎯 Daily level"),
+                    Line2D([0], [0], color="#f59e0b", linewidth=6, alpha=0.6, label=f"🧡 Retest ({span.status})"),
+                ],
+            )
             start_str = str(span.retest_start_timestamp_ms)
-            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {start_str}")
+            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {start_str}", color="#f8fafc", fontweight="bold")
+            ax.set_ylabel("Price", color="#cbd5e1")
             ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
             fig.autofmt_xdate(rotation=30)
 
             timestamp = span.retest_start_timestamp_ms
@@ -265,6 +370,7 @@ class StrategyPlotter:
         annotated = self._load_annotated(symbol=symbol, params=params)
         if annotated.empty:
             return []
+        annotated = self._prepare_plot_frame(annotated)
 
         symbol_trades = [span for span in trade_spans if span.symbol == symbol]
         if not symbol_trades:
@@ -283,21 +389,38 @@ class StrategyPlotter:
                 continue
 
             fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-            plot_time = trade_window["timestamp"]
-            ax.plot(plot_time, trade_window["close"], color="black", linewidth=1.0, label="15m close")
+            fig.patch.set_facecolor("#020617")
+            self._apply_dark_theme(ax)
+            self._plot_candles(ax, trade_window)
 
-            ax.axhline(span.entry_price, color="royalblue", linestyle="-", linewidth=1.2, label="entry")
-            ax.axhline(span.stop_loss, color="red", linestyle="--", linewidth=1.2, label="stop_loss")
-            ax.axhline(span.take_profit_1, color="green", linestyle="--", linewidth=1.2, label="tp1")
-            ax.axhline(span.take_profit_2, color="darkgreen", linestyle="--", linewidth=1.2, label="tp2")
+            entry_time = pd.to_datetime(span.entry_timestamp_ms, unit="ms")
+            exit_time = pd.to_datetime(span.exit_timestamp_ms, unit="ms")
 
-            ax.scatter([span.entry_timestamp_ms], [span.entry_price], color="blue", marker="^", s=70, label="entry point")
-            ax.scatter([span.exit_timestamp_ms], [span.exit_price], color="purple", marker="X", s=70, label="exit point")
+            ax.hlines(span.entry_price, entry_time, exit_time, color="#38bdf8", linestyle="-", linewidth=1.8)
+            ax.hlines(span.stop_loss, entry_time, exit_time, color="#ef4444", linestyle="--", linewidth=1.5)
+            ax.hlines(span.take_profit_1, entry_time, exit_time, color="#22c55e", linestyle="--", linewidth=1.5)
+            ax.hlines(span.take_profit_2, entry_time, exit_time, color="#16a34a", linestyle="--", linewidth=1.5)
 
-            ax.grid(alpha=0.3)
-            ax.legend(loc="upper left")
-            ax.set_title(f"{symbol} trade {span.side.value}: result={span.result_type}")
+            ax.scatter([entry_time], [span.entry_price], color="#38bdf8", marker="^", s=85, zorder=5)
+            ax.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=85, zorder=5)
+
+            self._add_styled_legend(
+                ax,
+                [
+                    Line2D([0], [0], color="#22c55e", linewidth=6, label="🟩 Bull candle"),
+                    Line2D([0], [0], color="#ef4444", linewidth=6, label="🟥 Bear candle"),
+                    Line2D([0], [0], color="#38bdf8", linewidth=2.5, label="🚀 Entry"),
+                    Line2D([0], [0], color="#ef4444", linestyle="--", linewidth=2, label="🛡️ Stop loss"),
+                    Line2D([0], [0], color="#22c55e", linestyle="--", linewidth=2, label="🎯 TP1"),
+                    Line2D([0], [0], color="#16a34a", linestyle="--", linewidth=2, label="🏁 TP2"),
+                    Line2D([0], [0], marker="^", color="#38bdf8", linestyle="None", markersize=9, label="📍 Entry candle"),
+                    Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="🏆 Exit candle"),
+                ],
+            )
+            ax.set_title(f"{symbol} trade {span.side.value}: result={span.result_type}", color="#f8fafc", fontweight="bold")
+            ax.set_ylabel("Price", color="#cbd5e1")
             ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
             fig.autofmt_xdate(rotation=30)
 
             output_path = symbol_dir / f"trade_{span.entry_timestamp_ms}_{span.side.value}_{span.result_type}.png"
