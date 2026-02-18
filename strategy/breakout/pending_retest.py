@@ -15,6 +15,7 @@ class PendingRetest:
     retest_end_idx: int | None
     retest_low: float
     retest_high: float
+    retest_zone_ratio: float
     confirmation_end_idx: int
     volume_before: float
     volume_after: float

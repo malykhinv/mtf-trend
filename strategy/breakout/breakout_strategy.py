@@ -321,6 +321,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             breakout_extreme=pending_retest.breakout.breakout_extreme,
             retest_low=pending_retest.retest_low,
             retest_high=pending_retest.retest_high,
+            zone_ratio=pending_retest.retest_zone_ratio,
         )
         risk = self._risk_from_entry(entry_price=entry_price, stop=stop, side=pending_retest.breakout.side)
         tp1, tp2 = self._targets_from_entry(
@@ -380,9 +381,24 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         breakout_extreme: float,
         retest_low: float,
         retest_high: float,
+        natr: float | None = None,
+        zone_ratio: float | None = None,
     ) -> float:
+        """Рассчитывает SL; для режима LEVEL использует ту же зону, что и ретест.
+
+        Приоритет зоны: явный ``zone_ratio`` -> ``resolve_retest_zone_ratio(natr)`` ->
+        фиксированный ``retest_zone`` (когда ``retest_zone_atr is None``).
+        """
         if params.sl_mode.value == "LEVEL":
-            return level * (1 - params.retest_zone) if side == PositionSide.LONG else level * (1 + params.retest_zone)
+            resolved_zone_ratio = zone_ratio
+            if resolved_zone_ratio is None:
+                if natr is not None:
+                    resolved_zone_ratio = params.resolve_retest_zone_ratio(natr)
+                elif params.retest_zone_atr is None:
+                    resolved_zone_ratio = max(params.retest_zone, 0.0)
+                else:
+                    resolved_zone_ratio = params.resolve_retest_zone_ratio(0.0)
+            return level * (1 - resolved_zone_ratio) if side == PositionSide.LONG else level * (1 + resolved_zone_ratio)
         if params.sl_mode.value == "BREAKOUT_EXTREME":
             return breakout_extreme
         return retest_low if side == PositionSide.LONG else retest_high
@@ -789,6 +805,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_end_idx=None,
                             retest_low=float(row["low"]),
                             retest_high=float(row["high"]),
+                            retest_zone_ratio=params.resolve_retest_zone_ratio(max(float(row.get("natr", 0.0)), 0.0)),
                             confirmation_end_idx=idx + max(1, int(params.confirmation_bars)),
                             volume_before=volume_check["v_before"],
                             volume_after=volume_check["v_after"],
