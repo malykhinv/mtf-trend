@@ -26,6 +26,7 @@ from domain.enums.timeframe import Timeframe
 from domain.models.candle import Candle
 from domain.models.level import Level
 from domain.models.retest_plot_span import RetestPlotSpan
+from domain.models.trade_plot_span import TradePlotSpan
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
@@ -35,6 +36,7 @@ from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BreakoutParams
+from strategy.breakout.indicators.level_detector import LevelDetector
 from strategy.breakout.pending_breakout import PendingBreakout
 from strategy.breakout.pending_retest import PendingRetest
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -64,6 +66,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         self._slippage = slippage
         self._logger = logger or logging.getLogger(__name__)
         self._last_generation_diagnostics: dict[str, object] = {}
+        self._level_detector = LevelDetector()
 
     def set_logger(self, logger: logging.Logger) -> None:
         self._logger = logger
@@ -166,6 +169,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         lookback: int,
         volume_before: float | None,
         volume_after: float | None = None,
+        touch_count: int = 0,
+        reaction_strength: float = 0.0,
+        level_score: float = 0.0,
     ) -> Level:
         return Level(
             price=Price(price),
@@ -175,6 +181,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             shadow_ratio=0.0,
             volume_before=volume_before,
             volume_after=volume_after,
+            touch_count=touch_count,
+            reaction_strength=reaction_strength,
+            level_score=level_score,
         )
 
     @staticmethod
@@ -278,6 +287,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             lookback=breakout.level.lookback,
             volume_before=v_before,
             volume_after=v_after,
+            touch_count=breakout.level.touch_count,
+            reaction_strength=breakout.level.reaction_strength,
+            level_score=breakout.level.level_score,
         )
         breakout.level = updated_level
 
@@ -301,6 +313,25 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if retest.breakout.side == PositionSide.LONG:
             return float(row["close"]) > retest.retest_high
         return float(row["close"]) < retest.retest_low
+
+    @staticmethod
+    def _is_level_valid_for_breakout(
+        *,
+        touch_count: int,
+        min_touch_gap: int,
+        max_penetration_atr: float,
+        max_penetration_pct: float,
+        params: BreakoutParams,
+    ) -> bool:
+        if touch_count < params.min_touches:
+            return False
+        if touch_count >= 2 and min_touch_gap < params.min_bars_between_touches:
+            return False
+        if params.max_touch_penetration_atr is not None and max_penetration_atr > params.max_touch_penetration_atr:
+            return False
+        if params.max_touch_penetration_pct is not None and max_penetration_pct > params.max_touch_penetration_pct:
+            return False
+        return True
 
     def _build_signal_from_retest(
         self,
@@ -477,7 +508,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         higher_prepared = self.prepare_data(mtf_frames.get_frame(levels_timeframe))
         lower_prepared = self.prepare_data(mtf_frames.get_frame(entry_timeframe))
         return (
-            higher_prepared[["timestamp", "high", "low"]].copy(),
+            higher_prepared[["timestamp", "high", "low", "close"]].copy(),
             lower_prepared[["timestamp", "open", "high", "low", "close", "volume"]].copy(),
         )
 
@@ -500,18 +531,31 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
         return annotated[self.ANNOTATED_COLUMNS].copy()
 
-    @staticmethod
-    def prepare_higher_tf_levels(*, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
+    def prepare_higher_tf_levels(self, *, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
         """Готовит уровни старшего ТФ без маппинга на младший ТФ."""
         if len(higher_base) < lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
-            return pd.DataFrame(columns=["timestamp", "level_high", "level_low", "level_start_time"])
+            return pd.DataFrame(
+                columns=[
+                    "timestamp",
+                    "level_high",
+                    "level_low",
+                    "level_start_time",
+                    "touch_count",
+                    "reaction_strength",
+                    "level_score",
+                    "resistance_touch_count",
+                    "resistance_min_bars_between_touches",
+                    "resistance_max_penetration_atr",
+                    "resistance_max_penetration_pct",
+                    "support_touch_count",
+                    "support_min_bars_between_touches",
+                    "support_max_penetration_atr",
+                    "support_max_penetration_pct",
+                ],
+            )
 
-        higher_levels = higher_base.copy()
-        higher_levels["level_high"] = higher_levels["high"].rolling(window=lookback).max().shift(1)
-        higher_levels["level_low"] = higher_levels["low"].rolling(window=lookback).min().shift(1)
-        higher_levels["level_start_time"] = higher_levels["timestamp"]
-        higher_levels = higher_levels.dropna(subset=["level_high", "level_low"]).sort_values("timestamp")
-        return higher_levels[["timestamp", "level_high", "level_low", "level_start_time"]].reset_index(drop=True)
+        higher_levels = self._level_detector.detect(higher_base=higher_base, lookback=lookback)
+        return higher_levels.sort_values("timestamp").reset_index(drop=True)
 
     def generate_events(self, data: pd.DataFrame, params: BreakoutParams) -> list[TradeResult]:
         """Обратносовместимая обертка для вызовов с одним таймфреймом."""
@@ -557,6 +601,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         diagnostics: dict[str, object] = {
             "annotated_rows": int(len(annotated)),
             "breakouts_found": 0,
+            "breakout_rejected_by_level_filter": 0,
             "retests_found": 0,
             "retest_rejected_by_volume": 0,
             "retest_rejected_by_extra_filters": 0,
@@ -568,6 +613,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "retest_pending_end_of_data": 0,
             "trades_generated": 0,
             "retest_plot_spans": [],
+            "trade_plot_spans": [],
+            "level_score_summary": {},
         }
         diagnostics["context"] = {
             "symbol": params.symbol,
@@ -576,6 +623,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "retest_window_hours": params.retest_window_hours,
             "entry_trigger": params.entry_trigger.value,
             "confirmation_bars": params.confirmation_bars,
+            "min_touches": params.min_touches,
+            "min_bars_between_touches": params.min_bars_between_touches,
+            "max_touch_penetration_atr": params.max_touch_penetration_atr,
+            "max_touch_penetration_pct": params.max_touch_penetration_pct,
         }
         if annotated.empty:
             self._last_generation_diagnostics = diagnostics
@@ -585,7 +636,23 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             return []
 
         annotated_rows = list(annotated[self.ANNOTATED_COLUMNS].itertuples(index=False, name=None))
-        higher_level_columns = ["timestamp", "level_high", "level_low", "level_start_time"]
+        higher_level_columns = [
+            "timestamp",
+            "level_high",
+            "level_low",
+            "level_start_time",
+            "touch_count",
+            "reaction_strength",
+            "level_score",
+            "resistance_touch_count",
+            "resistance_min_bars_between_touches",
+            "resistance_max_penetration_atr",
+            "resistance_max_penetration_pct",
+            "support_touch_count",
+            "support_min_bars_between_touches",
+            "support_max_penetration_atr",
+            "support_max_penetration_pct",
+        ]
         higher_level_rows = list(higher_levels[higher_level_columns].itertuples(index=False, name=None))
         if (
             len(annotated_rows) != len(annotated)
@@ -594,6 +661,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             or (higher_level_rows and len(higher_level_rows[0]) != len(higher_level_columns))
         ):
             raise ValueError("Неконсистентные входные данные для генерации событий")
+
+        diagnostics["level_score_summary"] = {
+            "selected_levels": int(len(higher_levels)),
+            "touch_count_mean": float(higher_levels["touch_count"].mean()) if not higher_levels.empty else 0.0,
+            "reaction_strength_mean": float(higher_levels["reaction_strength"].mean()) if not higher_levels.empty else 0.0,
+            "level_score_mean": float(higher_levels["level_score"].mean()) if not higher_levels.empty else 0.0,
+            "level_score_min": float(higher_levels["level_score"].min()) if not higher_levels.empty else 0.0,
+            "level_score_max": float(higher_levels["level_score"].max()) if not higher_levels.empty else 0.0,
+        }
+        self._logger.debug("Breakout level diagnostics: %s", diagnostics["level_score_summary"])
 
         timestamps_by_idx = [int(row[0]) for row in annotated_rows]
         timestamps = annotated["timestamp"].to_numpy(dtype="int64", copy=False)
@@ -608,11 +685,23 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         pending_breakout: PendingBreakout | None = None
         pending_retest: PendingRetest | None = None
         active_sim: StatefulPositionSimulator | None = None
+        active_trade_signal: TradeSignal | None = None
         retest_window_candles = max(1, self._hours_to_candles(params.retest_window_hours, params.entry_timeframe))
         level_idx = 0
         active_level_high: float | None = None
         active_level_low: float | None = None
         active_level_start_time: int | None = None
+        active_touch_count: int = 0
+        active_reaction_strength: float = 0.0
+        active_level_score: float = 0.0
+        active_resistance_touch_count: int = 0
+        active_resistance_min_touch_gap: int = 0
+        active_resistance_max_penetration_atr: float = 0.0
+        active_resistance_max_penetration_pct: float = 0.0
+        active_support_touch_count: int = 0
+        active_support_min_touch_gap: int = 0
+        active_support_max_penetration_atr: float = 0.0
+        active_support_max_penetration_pct: float = 0.0
 
         for idx, row_values in enumerate(annotated_rows):
             row_timestamp = int(row_values[0])
@@ -646,6 +735,30 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 active_level_high = float(level_row[1])
                 active_level_low = float(level_row[2])
                 active_level_start_time = int(level_row[3])
+                active_touch_count = int(level_row[4])
+                active_reaction_strength = float(level_row[5])
+                active_level_score = float(level_row[6])
+                active_resistance_touch_count = int(level_row[7])
+                active_resistance_min_touch_gap = int(level_row[8])
+                active_resistance_max_penetration_atr = float(level_row[9])
+                active_resistance_max_penetration_pct = float(level_row[10])
+                active_support_touch_count = int(level_row[11])
+                active_support_min_touch_gap = int(level_row[12])
+                active_support_max_penetration_atr = float(level_row[13])
+                active_support_max_penetration_pct = float(level_row[14])
+                diagnostics["last_level_metrics"] = {
+                    "touch_count": active_touch_count,
+                    "reaction_strength": active_reaction_strength,
+                    "level_score": active_level_score,
+                    "resistance_touch_count": active_resistance_touch_count,
+                    "resistance_min_bars_between_touches": active_resistance_min_touch_gap,
+                    "resistance_max_penetration_atr": active_resistance_max_penetration_atr,
+                    "resistance_max_penetration_pct": active_resistance_max_penetration_pct,
+                    "support_touch_count": active_support_touch_count,
+                    "support_min_bars_between_touches": active_support_min_touch_gap,
+                    "support_max_penetration_atr": active_support_max_penetration_atr,
+                    "support_max_penetration_pct": active_support_max_penetration_pct,
+                }
                 level_idx += 1
 
             if pending_signal is not None and (active_sim is None or active_sim.position is None):
@@ -655,12 +768,31 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     trade_classifier=TradeClassifier(),
                 )
                 active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
+                active_trade_signal = pending_signal
                 pending_signal = None
 
             if active_sim is not None:
                 result = active_sim.process_candle(candle)
                 if result is not None:
                     trades.append(result)
+                    if active_trade_signal is not None:
+                        diagnostics_trade_spans = diagnostics.get("trade_plot_spans")
+                        if isinstance(diagnostics_trade_spans, list):
+                            diagnostics_trade_spans.append(
+                                TradePlotSpan(
+                                    symbol=params.symbol,
+                                    side=active_trade_signal.position_side,
+                                    entry_timestamp_ms=active_trade_signal.entry_timestamp_ms,
+                                    exit_timestamp_ms=result.exit_timestamp_ms,
+                                    entry_price=active_trade_signal.entry_price.value,
+                                    exit_price=result.exit_price.value,
+                                    stop_loss=active_trade_signal.stop_loss.value,
+                                    take_profit_1=active_trade_signal.take_profit_1.value,
+                                    take_profit_2=active_trade_signal.take_profit_2.value,
+                                    result_type=result.result_type.value,
+                                )
+                            )
+                    active_trade_signal = None
 
             active_position = active_sim is not None and active_sim.position is not None
             if active_position or pending_signal is not None:
@@ -907,8 +1039,26 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     continue
                 level_high = active_level_high
                 level_low = active_level_low
-                breakout_long = float(row["close"]) > level_high
-                breakout_short = float(row["close"]) < level_low
+                long_level_valid = self._is_level_valid_for_breakout(
+                    touch_count=active_resistance_touch_count,
+                    min_touch_gap=active_resistance_min_touch_gap,
+                    max_penetration_atr=active_resistance_max_penetration_atr,
+                    max_penetration_pct=active_resistance_max_penetration_pct,
+                    params=params,
+                )
+                short_level_valid = self._is_level_valid_for_breakout(
+                    touch_count=active_support_touch_count,
+                    min_touch_gap=active_support_min_touch_gap,
+                    max_penetration_atr=active_support_max_penetration_atr,
+                    max_penetration_pct=active_support_max_penetration_pct,
+                    params=params,
+                )
+                breakout_long = long_level_valid and float(row["close"]) > level_high
+                breakout_short = short_level_valid and float(row["close"]) < level_low
+                if not long_level_valid and float(row["close"]) > level_high:
+                    diagnostics["breakout_rejected_by_level_filter"] += 1
+                if not short_level_valid and float(row["close"]) < level_low:
+                    diagnostics["breakout_rejected_by_level_filter"] += 1
                 if breakout_long:
                     diagnostics["breakouts_found"] += 1
                     pending_breakout = PendingBreakout(
@@ -924,10 +1074,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
+                            touch_count=active_touch_count,
+                            reaction_strength=active_reaction_strength,
+                            level_score=active_level_score,
                         ),
                         breakout_extreme=float(row["low"]),
                         side=PositionSide.LONG,
                         level_start_time=active_level_start_time,
+                        level_touch_count=active_resistance_touch_count,
+                        level_min_bars_between_touches=active_resistance_min_touch_gap,
+                        level_max_penetration_atr=active_resistance_max_penetration_atr,
+                        level_max_penetration_pct=active_resistance_max_penetration_pct,
                     )
                 elif breakout_short:
                     diagnostics["breakouts_found"] += 1
@@ -944,10 +1101,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
+                            touch_count=active_touch_count,
+                            reaction_strength=active_reaction_strength,
+                            level_score=active_level_score,
                         ),
                         breakout_extreme=float(row["high"]),
                         side=PositionSide.SHORT,
                         level_start_time=active_level_start_time,
+                        level_touch_count=active_support_touch_count,
+                        level_min_bars_between_touches=active_support_min_touch_gap,
+                        level_max_penetration_atr=active_support_max_penetration_atr,
+                        level_max_penetration_pct=active_support_max_penetration_pct,
                     )
 
         if pending_signal is not None:
@@ -982,7 +1146,26 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if active_sim is not None and active_sim.position is not None:
             final_row = annotated_rows[-1]
             final_timestamp_ms = int(final_row[0])
-            trades.append(active_sim.close_position(price=float(final_row[4]), exit_timestamp_ms=final_timestamp_ms))
+            forced_result = active_sim.close_position(price=float(final_row[4]), exit_timestamp_ms=final_timestamp_ms)
+            trades.append(forced_result)
+            if active_trade_signal is not None:
+                diagnostics_trade_spans = diagnostics.get("trade_plot_spans")
+                if isinstance(diagnostics_trade_spans, list):
+                    diagnostics_trade_spans.append(
+                        TradePlotSpan(
+                            symbol=params.symbol,
+                            side=active_trade_signal.position_side,
+                            entry_timestamp_ms=active_trade_signal.entry_timestamp_ms,
+                            exit_timestamp_ms=forced_result.exit_timestamp_ms,
+                            entry_price=active_trade_signal.entry_price.value,
+                            exit_price=forced_result.exit_price.value,
+                            stop_loss=active_trade_signal.stop_loss.value,
+                            take_profit_1=active_trade_signal.take_profit_1.value,
+                            take_profit_2=active_trade_signal.take_profit_2.value,
+                            result_type=forced_result.result_type.value,
+                        )
+                    )
+            active_trade_signal = None
 
         diagnostics["trades_generated"] = len(trades)
         diagnostics["retest_plot_spans"] = retest_plot_spans

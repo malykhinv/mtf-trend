@@ -17,6 +17,9 @@ class Level:
     shadow_ratio: float
     volume_before: float | None = None
     volume_after: float | None = None
+    touch_count: int = 0
+    reaction_strength: float = 0.0
+    level_score: float = 0.0
 
     # region Приватные
     def __post_init__(self) -> None:
@@ -42,5 +45,17 @@ class Level:
 
         if self.volume_after is not None and self.volume_after < 0:
             msg = "Level volume_after cannot be negative."
+            raise ValueError(msg)
+
+        if self.touch_count < 0:
+            msg = "Level touch_count cannot be negative."
+            raise ValueError(msg)
+
+        if self.reaction_strength < 0:
+            msg = "Level reaction_strength cannot be negative."
+            raise ValueError(msg)
+
+        if self.level_score < 0:
+            msg = "Level level_score cannot be negative."
             raise ValueError(msg)
     # endregion Приватные

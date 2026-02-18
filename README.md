@@ -103,6 +103,7 @@ CACHE_DIR=./cache
 ```
 
 Для `analyze-cache` отбор по `--top-n` выполняется по среднему объёму свечей (`volume`) на `levels_tf` (старший ТФ).
+Чтобы сразу строить графики сделок с точкой входа, TP1, TP2, SL и финалом сделки, добавь `--plot true` (изображения сохраняются в `cache/results/trade_plots`, можно переопределить через `--output-dir`).
 Приоритеты такие:
 - если одновременно переданы `--symbols` и `--top-n`, ранжирование выполняется только внутри списка `--symbols`;
 - если `--symbols` не переданы, ранжирование по `--top-n` выполняется по всем символам из кэша.
@@ -193,6 +194,7 @@ python launcher.py --mode update-cache --top-n 100 --days 7
 python launcher.py --mode update-cache --top-n 100 --days 7 --ignore-coingecko
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode analyze-cache --top-n 50
+python launcher.py --mode analyze-cache --top-n 50 --plot true
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
 python launcher.py --mode plot-daily-levels --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 300
@@ -211,7 +213,7 @@ python launcher.py --mode clear-cache
   "tasks": [
     { "mode": "fetch-cache", "top_n": 100, "days": 30, "ignore_coingecko": true },
     { "mode": "update-cache", "top_n": 100, "days": 7, "ignore_coingecko": false },
-    { "mode": "analyze-cache", "symbols": ["BTC/USDT", "ETH/USDT"] },
+    { "mode": "analyze-cache", "symbols": ["BTC/USDT", "ETH/USDT"], "plot": true },
     { "mode": "make-report", "output": "./results/report.json" },
     { "mode": "check-quality", "output": "./results/quality_report.json" },
     {
