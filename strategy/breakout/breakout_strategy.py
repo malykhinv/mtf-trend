@@ -313,6 +313,25 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             return float(row["close"]) > retest.retest_high
         return float(row["close"]) < retest.retest_low
 
+    @staticmethod
+    def _is_level_valid_for_breakout(
+        *,
+        touch_count: int,
+        min_touch_gap: int,
+        max_penetration_atr: float,
+        max_penetration_pct: float,
+        params: BreakoutParams,
+    ) -> bool:
+        if touch_count < params.min_touches:
+            return False
+        if touch_count >= 2 and min_touch_gap < params.min_bars_between_touches:
+            return False
+        if params.max_touch_penetration_atr is not None and max_penetration_atr > params.max_touch_penetration_atr:
+            return False
+        if params.max_touch_penetration_pct is not None and max_penetration_pct > params.max_touch_penetration_pct:
+            return False
+        return True
+
     def _build_signal_from_retest(
         self,
         *,
@@ -523,6 +542,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     "touch_count",
                     "reaction_strength",
                     "level_score",
+                    "resistance_touch_count",
+                    "resistance_min_bars_between_touches",
+                    "resistance_max_penetration_atr",
+                    "resistance_max_penetration_pct",
+                    "support_touch_count",
+                    "support_min_bars_between_touches",
+                    "support_max_penetration_atr",
+                    "support_max_penetration_pct",
                 ],
             )
 
@@ -573,6 +600,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         diagnostics: dict[str, object] = {
             "annotated_rows": int(len(annotated)),
             "breakouts_found": 0,
+            "breakout_rejected_by_level_filter": 0,
             "retests_found": 0,
             "retest_rejected_by_volume": 0,
             "retest_rejected_by_extra_filters": 0,
@@ -593,6 +621,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "retest_window_hours": params.retest_window_hours,
             "entry_trigger": params.entry_trigger.value,
             "confirmation_bars": params.confirmation_bars,
+            "min_touches": params.min_touches,
+            "min_bars_between_touches": params.min_bars_between_touches,
+            "max_touch_penetration_atr": params.max_touch_penetration_atr,
+            "max_touch_penetration_pct": params.max_touch_penetration_pct,
         }
         if annotated.empty:
             self._last_generation_diagnostics = diagnostics
@@ -610,6 +642,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "touch_count",
             "reaction_strength",
             "level_score",
+            "resistance_touch_count",
+            "resistance_min_bars_between_touches",
+            "resistance_max_penetration_atr",
+            "resistance_max_penetration_pct",
+            "support_touch_count",
+            "support_min_bars_between_touches",
+            "support_max_penetration_atr",
+            "support_max_penetration_pct",
         ]
         higher_level_rows = list(higher_levels[higher_level_columns].itertuples(index=False, name=None))
         if (
@@ -651,6 +691,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         active_touch_count: int = 0
         active_reaction_strength: float = 0.0
         active_level_score: float = 0.0
+        active_resistance_touch_count: int = 0
+        active_resistance_min_touch_gap: int = 0
+        active_resistance_max_penetration_atr: float = 0.0
+        active_resistance_max_penetration_pct: float = 0.0
+        active_support_touch_count: int = 0
+        active_support_min_touch_gap: int = 0
+        active_support_max_penetration_atr: float = 0.0
+        active_support_max_penetration_pct: float = 0.0
 
         for idx, row_values in enumerate(annotated_rows):
             row_timestamp = int(row_values[0])
@@ -687,10 +735,26 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 active_touch_count = int(level_row[4])
                 active_reaction_strength = float(level_row[5])
                 active_level_score = float(level_row[6])
+                active_resistance_touch_count = int(level_row[7])
+                active_resistance_min_touch_gap = int(level_row[8])
+                active_resistance_max_penetration_atr = float(level_row[9])
+                active_resistance_max_penetration_pct = float(level_row[10])
+                active_support_touch_count = int(level_row[11])
+                active_support_min_touch_gap = int(level_row[12])
+                active_support_max_penetration_atr = float(level_row[13])
+                active_support_max_penetration_pct = float(level_row[14])
                 diagnostics["last_level_metrics"] = {
                     "touch_count": active_touch_count,
                     "reaction_strength": active_reaction_strength,
                     "level_score": active_level_score,
+                    "resistance_touch_count": active_resistance_touch_count,
+                    "resistance_min_bars_between_touches": active_resistance_min_touch_gap,
+                    "resistance_max_penetration_atr": active_resistance_max_penetration_atr,
+                    "resistance_max_penetration_pct": active_resistance_max_penetration_pct,
+                    "support_touch_count": active_support_touch_count,
+                    "support_min_bars_between_touches": active_support_min_touch_gap,
+                    "support_max_penetration_atr": active_support_max_penetration_atr,
+                    "support_max_penetration_pct": active_support_max_penetration_pct,
                 }
                 level_idx += 1
 
@@ -953,8 +1017,26 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     continue
                 level_high = active_level_high
                 level_low = active_level_low
-                breakout_long = float(row["close"]) > level_high
-                breakout_short = float(row["close"]) < level_low
+                long_level_valid = self._is_level_valid_for_breakout(
+                    touch_count=active_resistance_touch_count,
+                    min_touch_gap=active_resistance_min_touch_gap,
+                    max_penetration_atr=active_resistance_max_penetration_atr,
+                    max_penetration_pct=active_resistance_max_penetration_pct,
+                    params=params,
+                )
+                short_level_valid = self._is_level_valid_for_breakout(
+                    touch_count=active_support_touch_count,
+                    min_touch_gap=active_support_min_touch_gap,
+                    max_penetration_atr=active_support_max_penetration_atr,
+                    max_penetration_pct=active_support_max_penetration_pct,
+                    params=params,
+                )
+                breakout_long = long_level_valid and float(row["close"]) > level_high
+                breakout_short = short_level_valid and float(row["close"]) < level_low
+                if not long_level_valid and float(row["close"]) > level_high:
+                    diagnostics["breakout_rejected_by_level_filter"] += 1
+                if not short_level_valid and float(row["close"]) < level_low:
+                    diagnostics["breakout_rejected_by_level_filter"] += 1
                 if breakout_long:
                     diagnostics["breakouts_found"] += 1
                     pending_breakout = PendingBreakout(
@@ -977,6 +1059,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         breakout_extreme=float(row["low"]),
                         side=PositionSide.LONG,
                         level_start_time=active_level_start_time,
+                        level_touch_count=active_resistance_touch_count,
+                        level_min_bars_between_touches=active_resistance_min_touch_gap,
+                        level_max_penetration_atr=active_resistance_max_penetration_atr,
+                        level_max_penetration_pct=active_resistance_max_penetration_pct,
                     )
                 elif breakout_short:
                     diagnostics["breakouts_found"] += 1
@@ -1000,6 +1086,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         breakout_extreme=float(row["high"]),
                         side=PositionSide.SHORT,
                         level_start_time=active_level_start_time,
+                        level_touch_count=active_support_touch_count,
+                        level_min_bars_between_touches=active_support_min_touch_gap,
+                        level_max_penetration_atr=active_support_max_penetration_atr,
+                        level_max_penetration_pct=active_support_max_penetration_pct,
                     )
 
         if pending_signal is not None:
