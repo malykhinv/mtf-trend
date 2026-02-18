@@ -378,6 +378,9 @@ class BacktestRunner:
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         if isinstance(strategy, BreakoutStrategy):
             strategy.set_logger(self._logger)
+            # Предварительная валидация вынесена из горячего цикла, чтобы снизить CPU-накладные расходы в основном расчете.
+            for params in grid:
+                strategy.validate_config(params)
             for symbol, mtf_frames in symbol_frames.items():
                 higher_base, lower_base = strategy.prepare_multi_tf_data(
                     mtf_frames=mtf_frames,
@@ -400,9 +403,6 @@ class BacktestRunner:
                 }
 
         for idx, params in enumerate(grid, start=1):
-            if isinstance(strategy, BreakoutStrategy):
-                strategy.validate_config(params)
-
             all_trades: list[TradeResult] = []
             for symbol, mtf_frames in symbol_frames.items():
                 # Убираем cfg_cache с низкой полезностью, чтобы снизить накладные расходы на словарь.
