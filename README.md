@@ -195,6 +195,7 @@ python launcher.py --mode update-cache --top-n 100 --days 7 --ignore-coingecko
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode analyze-cache --top-n 50
 python launcher.py --mode analyze-cache --top-n 50 --plot true
+python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT --plot-from-results --results-input ./cache/results/backtest_results.csv
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
 python launcher.py --mode plot-daily-levels --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 300

@@ -85,6 +85,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", default=None, help="Входной CSV для отчета")
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
     parser.add_argument("--plot", default=None, help="Строить графики сделок (true/false) для analyze-cache")
+    parser.add_argument(
+        "--plot-from-results",
+        action="store_true",
+        help="Строить графики по готовому backtest_results.csv без полного analyze-cache",
+    )
+    parser.add_argument("--results-input", default=None, help="CSV с результатами для режима plot-from-results")
     return parser
 
 
@@ -109,10 +115,16 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         ),
         input=task.get("input", cli_args.input),
         output=task.get("output", cli_args.output),
+        results_input=task.get("results_input", cli_args.results_input),
         plot=(
             _to_bool(task.get("plot"), fallback=cli_args.plot)
             if "plot" in task
             else _to_bool(cli_args.plot, fallback=False)
+        ),
+        plot_from_results=(
+            _to_bool(task.get("plot_from_results"), fallback=cli_args.plot_from_results)
+            if "plot_from_results" in task
+            else cli_args.plot_from_results
         ),
         ignore_coingecko=(
             _to_bool(task.get("ignore_coingecko"), fallback=cli_args.ignore_coingecko)
