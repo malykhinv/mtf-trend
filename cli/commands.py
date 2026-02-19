@@ -840,11 +840,17 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             trade_spans: list[TradePlotSpan] = [
                 span for span in raw_spans if isinstance(span, TradePlotSpan)
             ]
+            raw_retest_spans_obj = diagnostics.get("retest_plot_spans", [])
+            raw_retest_spans = raw_retest_spans_obj if isinstance(raw_retest_spans_obj, list) else []
+            retest_spans: list[RetestPlotSpan] = [
+                span for span in raw_retest_spans if isinstance(span, RetestPlotSpan)
+            ]
             saved_paths = plotter.plot_trade_setups(
                 symbol=symbol,
                 params=cfg,
                 output_dir=output_dir,
                 trade_spans=trade_spans,
+                retest_spans=retest_spans,
             )
             if saved_paths:
                 symbols_with_plots += 1
@@ -1255,6 +1261,26 @@ def _load_retest_spans_artifact(path: Path, logger: Logger) -> list[RetestPlotSp
                     retest_start_timestamp_ms=int(item.get("retest_start_timestamp_ms", item["retest_start_time"])),
                     retest_end_timestamp_ms=int(item.get("retest_end_timestamp_ms", item["retest_end_time"])),
                     status=str(item["status"]),
+                    confirmation_timestamp_ms=(
+                        int(item["confirmation_timestamp_ms"])
+                        if item.get("confirmation_timestamp_ms") is not None
+                        else None
+                    ),
+                    confirmation_price=(
+                        float(item["confirmation_price"])
+                        if item.get("confirmation_price") is not None
+                        else None
+                    ),
+                    confirmation_candle_low=(
+                        float(item["confirmation_candle_low"])
+                        if item.get("confirmation_candle_low") is not None
+                        else None
+                    ),
+                    confirmation_candle_high=(
+                        float(item["confirmation_candle_high"])
+                        if item.get("confirmation_candle_high") is not None
+                        else None
+                    ),
                 )
             )
         except Exception:

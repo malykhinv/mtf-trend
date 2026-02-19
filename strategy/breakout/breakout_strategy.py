@@ -892,6 +892,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmed",
+                            confirmation_timestamp_ms=int(row["timestamp"]),
+                            confirmation_price=float(row["close"]),
+                            confirmation_candle_low=float(row["low"]),
+                            confirmation_candle_high=float(row["high"]),
                         )
                     )
                     self._logger.debug(
