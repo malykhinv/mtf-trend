@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from domain.enums.position_side import PositionSide
 
@@ -20,3 +20,7 @@ class TradePlotSpan:
     take_profit_1: float
     take_profit_2: float
     result_type: str
+    level_high: float
+    level_low: float
+    resistance_touch_timestamps_ms: tuple[int, ...] = field(default_factory=tuple)
+    support_touch_timestamps_ms: tuple[int, ...] = field(default_factory=tuple)

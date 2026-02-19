@@ -559,10 +559,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     "resistance_min_bars_between_touches",
                     "resistance_max_penetration_atr",
                     "resistance_max_penetration_pct",
+                    "resistance_touch_timestamps_ms",
                     "support_touch_count",
                     "support_min_bars_between_touches",
                     "support_max_penetration_atr",
                     "support_max_penetration_pct",
+                    "support_touch_timestamps_ms",
                 ],
             )
 
@@ -660,10 +662,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "resistance_min_bars_between_touches",
             "resistance_max_penetration_atr",
             "resistance_max_penetration_pct",
+            "resistance_touch_timestamps_ms",
             "support_touch_count",
             "support_min_bars_between_touches",
             "support_max_penetration_atr",
             "support_max_penetration_pct",
+            "support_touch_timestamps_ms",
         ]
         higher_level_rows = list(higher_levels[higher_level_columns].itertuples(index=False, name=None))
         if (
@@ -710,10 +714,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         active_resistance_min_touch_gap: int = 0
         active_resistance_max_penetration_atr: float = 0.0
         active_resistance_max_penetration_pct: float = 0.0
+        active_resistance_touch_timestamps_ms: tuple[int, ...] = ()
         active_support_touch_count: int = 0
         active_support_min_touch_gap: int = 0
         active_support_max_penetration_atr: float = 0.0
         active_support_max_penetration_pct: float = 0.0
+        active_support_touch_timestamps_ms: tuple[int, ...] = ()
 
         for idx, row_values in enumerate(annotated_rows):
             row_timestamp = int(row_values[0])
@@ -746,10 +752,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 active_resistance_min_touch_gap = int(level_row[8])
                 active_resistance_max_penetration_atr = float(level_row[9])
                 active_resistance_max_penetration_pct = float(level_row[10])
-                active_support_touch_count = int(level_row[11])
-                active_support_min_touch_gap = int(level_row[12])
-                active_support_max_penetration_atr = float(level_row[13])
-                active_support_max_penetration_pct = float(level_row[14])
+                active_resistance_touch_timestamps_ms = tuple(int(value) for value in level_row[11])
+                active_support_touch_count = int(level_row[12])
+                active_support_min_touch_gap = int(level_row[13])
+                active_support_max_penetration_atr = float(level_row[14])
+                active_support_max_penetration_pct = float(level_row[15])
+                active_support_touch_timestamps_ms = tuple(int(value) for value in level_row[16])
                 diagnostics["last_level_metrics"] = {
                     "touch_count": active_touch_count,
                     "reaction_strength": active_reaction_strength,
@@ -758,10 +766,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     "resistance_min_bars_between_touches": active_resistance_min_touch_gap,
                     "resistance_max_penetration_atr": active_resistance_max_penetration_atr,
                     "resistance_max_penetration_pct": active_resistance_max_penetration_pct,
+                    "resistance_touch_timestamps_ms": list(active_resistance_touch_timestamps_ms),
                     "support_touch_count": active_support_touch_count,
                     "support_min_bars_between_touches": active_support_min_touch_gap,
                     "support_max_penetration_atr": active_support_max_penetration_atr,
                     "support_max_penetration_pct": active_support_max_penetration_pct,
+                    "support_touch_timestamps_ms": list(active_support_touch_timestamps_ms),
                 }
                 level_idx += 1
 
@@ -795,6 +805,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                     take_profit_1=active_trade_signal.take_profit_1.value,
                                     take_profit_2=active_trade_signal.take_profit_2.value,
                                     result_type=result.result_type.value,
+                                    level_high=active_level_high if active_level_high is not None else 0.0,
+                                    level_low=active_level_low if active_level_low is not None else 0.0,
+                                    resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
+                                    support_touch_timestamps_ms=active_support_touch_timestamps_ms,
                                 )
                             )
                     active_trade_signal = None
@@ -1176,6 +1190,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             take_profit_1=active_trade_signal.take_profit_1.value,
                             take_profit_2=active_trade_signal.take_profit_2.value,
                             result_type=forced_result.result_type.value,
+                            level_high=active_level_high if active_level_high is not None else 0.0,
+                            level_low=active_level_low if active_level_low is not None else 0.0,
+                            resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
+                            support_touch_timestamps_ms=active_support_touch_timestamps_ms,
                         )
                     )
             active_trade_signal = None
