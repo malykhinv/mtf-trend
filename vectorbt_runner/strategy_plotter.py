@@ -25,6 +25,13 @@ from vectorbt_runner.mtf_frames import SymbolMtfFrames
 class StrategyPlotter:
     """Read-only визуализатор уровней старшего ТФ и ретестов младшего ТФ."""
 
+    TV_BG = "#0b0f14"
+    TV_GRID = "#1f2937"
+    TV_TEXT = "#d1d5db"
+    TV_BULL = "#089981"
+    TV_BEAR = "#f23645"
+    TV_ENTRY = "#4ea4dc"
+
     def __init__(self, data_preparer: DataPreparer, strategy: BreakoutStrategy) -> None:
         self._data_preparer = data_preparer
         self._strategy = strategy
@@ -56,24 +63,11 @@ class StrategyPlotter:
 
     @staticmethod
     def _apply_dark_theme(ax: plt.Axes) -> None:
-        ax.set_facecolor("none")
-        panel = FancyBboxPatch(
-            (0.0, 0.0),
-            1.0,
-            1.0,
-            transform=ax.transAxes,
-            boxstyle="round,pad=0.008,rounding_size=0.02",
-            facecolor="#0f172a",
-            edgecolor="#1f2937",
-            linewidth=1.0,
-            zorder=-10,
-            clip_on=False,
-        )
-        ax.add_artist(panel)
-        ax.grid(color="#334155", alpha=0.28, linestyle="-", linewidth=0.65)
-        ax.tick_params(colors="#e2e8f0", labelsize=9)
+        ax.set_facecolor(StrategyPlotter.TV_BG)
+        ax.grid(color=StrategyPlotter.TV_GRID, alpha=0.16, linestyle="-", linewidth=0.6)
+        ax.tick_params(colors=StrategyPlotter.TV_TEXT, labelsize=9)
         for spine in ax.spines.values():
-            spine.set_color("#334155")
+            spine.set_visible(False)
 
     @staticmethod
     def _add_price_zone(
@@ -96,11 +90,11 @@ class StrategyPlotter:
             (x0, y0),
             width,
             height,
-            boxstyle="round,pad=0.01,rounding_size=0.03",
-            linewidth=0.9,
+            boxstyle="round,pad=0.002,rounding_size=0.008",
+            linewidth=0.0,
             facecolor=facecolor,
-            edgecolor=edgecolor,
-            alpha=0.32,
+            edgecolor="none",
+            alpha=0.26,
             zorder=2.5,
         )
         ax.add_patch(zone)
@@ -115,10 +109,10 @@ class StrategyPlotter:
             ha="center",
             zorder=4,
             bbox={
-                "boxstyle": "round,pad=0.3,rounding_size=0.2",
-                "facecolor": "#020617",
-                "edgecolor": edgecolor,
-                "alpha": 0.55,
+                "boxstyle": "round,pad=0.22,rounding_size=0.08",
+                "facecolor": "#111827",
+                "edgecolor": "none",
+                "alpha": 0.7,
             },
         )
 
@@ -130,8 +124,8 @@ class StrategyPlotter:
             frameon=True,
             fancybox=True,
             framealpha=0.85,
-            edgecolor="#334155",
-            labelcolor="#e2e8f0",
+            edgecolor="none",
+            labelcolor=StrategyPlotter.TV_TEXT,
             fontsize=9,
             ncol=2,
         )
@@ -154,8 +148,8 @@ class StrategyPlotter:
             candle_width = 0.005
 
         is_bull = close_prices >= open_prices
-        wick_colors = np.where(is_bull, "#86efac", "#fca5a5")
-        body_colors = np.where(is_bull, "#22c55e", "#ef4444")
+        wick_colors = np.where(is_bull, StrategyPlotter.TV_BULL, StrategyPlotter.TV_BEAR)
+        body_colors = np.where(is_bull, StrategyPlotter.TV_BULL, StrategyPlotter.TV_BEAR)
 
         ax.vlines(plot_time, low_prices, high_prices, color=wick_colors, linewidth=1.0, zorder=2)
 
@@ -167,11 +161,17 @@ class StrategyPlotter:
             width=candle_width,
             bottom=body_bottom,
             color=body_colors,
-            edgecolor=body_colors,
-            linewidth=0.7,
+            edgecolor="none",
+            linewidth=0.0,
             align="center",
             zorder=3,
         )
+
+    @staticmethod
+    def _format_time_axis(ax: plt.Axes) -> None:
+        locator = mdates.AutoDateLocator(minticks=5, maxticks=8)
+        ax.xaxis.set_major_locator(locator)
+        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
 
     @staticmethod
     def _build_mtf_frames(
@@ -429,10 +429,17 @@ class StrategyPlotter:
         trade_spans: list[TradePlotSpan],
     ) -> list[Path]:
         """Строит отдельные графики сделок с точками входа/выхода и уровнями TP/SL."""
-        annotated = self._load_annotated(symbol=symbol, params=params)
+        annotated, higher_tf_levels = self._load_annotated_and_daily_levels(symbol=symbol, params=params)
         if annotated.empty:
             return []
         annotated = self._prepare_plot_frame(annotated)
+        higher_tf_levels = self._prepare_plot_frame(higher_tf_levels)
+
+        symbol_data = self._data_preparer.load_symbol_data_multi(
+            symbol,
+            (params.levels_timeframe,),
+        )
+        higher_tf_frame = self._prepare_plot_frame(symbol_data.get(params.levels_timeframe, pd.DataFrame()))
 
         symbol_trades = [span for span in trade_spans if span.symbol == symbol]
         if not symbol_trades:
@@ -450,74 +457,134 @@ class StrategyPlotter:
             if trade_window.empty:
                 continue
 
-            fig, ax = plt.subplots(1, 1, figsize=(14, 6))
-            fig.patch.set_facecolor("#020617")
-            self._apply_dark_theme(ax)
-            self._plot_candles(ax, trade_window)
+            fig, (ax_top, ax_bottom) = plt.subplots(
+                2,
+                1,
+                figsize=(16, 9),
+                gridspec_kw={"height_ratios": [3, 2]},
+            )
+            fig.patch.set_facecolor(self.TV_BG)
+            self._apply_dark_theme(ax_top)
+            self._apply_dark_theme(ax_bottom)
+            self._plot_candles(ax_top, trade_window)
 
             entry_time = pd.to_datetime(span.entry_timestamp_ms, unit="ms")
             exit_time = pd.to_datetime(span.exit_timestamp_ms, unit="ms")
             entry_label = pd.to_datetime(span.entry_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
             exit_label = pd.to_datetime(span.exit_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
 
-            ax.hlines(span.entry_price, entry_time, exit_time, color="#38bdf8", linestyle="-", linewidth=1.8)
+            entry_bar_width_days = 0.0
+            if len(trade_window) > 1:
+                trade_days = np.asarray(mdates.date2num(trade_window["plot_time"]), dtype=float)
+                entry_bar_width_days = float((trade_days[1] - trade_days[0]) * 15.0)
+            if entry_bar_width_days <= 0.0:
+                entry_bar_width_days = 0.8
+            zone_end = entry_time + pd.to_timedelta(entry_bar_width_days, unit="D")
+
+            ax_top.hlines(span.entry_price, entry_time, zone_end, color=self.TV_ENTRY, linestyle="-", linewidth=1.8)
 
             price_range = float(trade_window["high"].max() - trade_window["low"].min())
             vertical_padding = max(price_range * 0.005, 1e-9)
             self._add_price_zone(
-                ax,
+                ax_top,
                 x_start=entry_time,
-                x_end=exit_time,
+                x_end=zone_end,
                 price=span.stop_loss,
                 label="SL",
-                facecolor="#ef4444",
-                edgecolor="#f87171",
+                facecolor="#a6324a",
+                edgecolor="none",
                 text_color="#fecaca",
                 vertical_padding=vertical_padding,
             )
             self._add_price_zone(
-                ax,
+                ax_top,
                 x_start=entry_time,
-                x_end=exit_time,
+                x_end=zone_end,
                 price=span.take_profit_1,
                 label="TP1",
-                facecolor="#22c55e",
-                edgecolor="#4ade80",
+                facecolor="#21875e",
+                edgecolor="none",
                 text_color="#dcfce7",
                 vertical_padding=vertical_padding,
             )
             self._add_price_zone(
-                ax,
+                ax_top,
                 x_start=entry_time,
-                x_end=exit_time,
+                x_end=zone_end,
                 price=span.take_profit_2,
                 label="TP2",
-                facecolor="#16a34a",
-                edgecolor="#22c55e",
+                facecolor="#0f6d54",
+                edgecolor="none",
                 text_color="#bbf7d0",
                 vertical_padding=vertical_padding,
             )
 
-            ax.scatter([entry_time], [span.entry_price], color="#38bdf8", marker="^", s=85, zorder=5)
-            ax.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=85, zorder=5)
+            ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5)
+            ax_top.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=80, zorder=5)
+
+            if not higher_tf_frame.empty:
+                higher_window = higher_tf_frame[
+                    (higher_tf_frame["timestamp"] >= span.entry_timestamp_ms - 7 * 24 * 60 * 60 * 1000)
+                    & (higher_tf_frame["timestamp"] <= span.exit_timestamp_ms + 7 * 24 * 60 * 60 * 1000)
+                ].reset_index(drop=True)
+                if higher_window.empty:
+                    higher_window = higher_tf_frame
+                self._plot_candles(ax_bottom, higher_window)
+
+                level_slice = higher_tf_levels[
+                    (higher_tf_levels["timestamp"] >= higher_window["timestamp"].min())
+                    & (higher_tf_levels["timestamp"] <= higher_window["timestamp"].max())
+                ]
+                if not level_slice.empty:
+                    ax_bottom.plot(
+                        level_slice["plot_time"],
+                        level_slice["level_high"],
+                        color=self.TV_ENTRY,
+                        linewidth=1.3,
+                        linestyle="--",
+                        alpha=0.9,
+                    )
+                    ax_bottom.plot(
+                        level_slice["plot_time"],
+                        level_slice["level_low"],
+                        color="#f59e0b",
+                        linewidth=1.2,
+                        linestyle="--",
+                        alpha=0.8,
+                    )
 
             self._add_styled_legend(
-                ax,
+                ax_top,
                 [
-                    Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
-                    Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
-                    Line2D([0], [0], color="#38bdf8", linewidth=2.5, label="Entry"),
-                    Line2D([0], [0], color="#ef4444", linewidth=6, alpha=0.5, label="SL zone"),
-                    Line2D([0], [0], color="#22c55e", linewidth=6, alpha=0.5, label="TP1 zone"),
-                    Line2D([0], [0], color="#16a34a", linewidth=6, alpha=0.5, label="TP2 zone"),
-                    Line2D([0], [0], marker="^", color="#38bdf8", linestyle="None", markersize=9, label="Entry candle"),
+                    Line2D([0], [0], color=self.TV_BULL, linewidth=6, label="Bull candle"),
+                    Line2D([0], [0], color=self.TV_BEAR, linewidth=6, label="Bear candle"),
+                    Line2D([0], [0], color=self.TV_ENTRY, linewidth=2.5, label="Entry"),
+                    Line2D([0], [0], color="#a6324a", linewidth=6, alpha=0.6, label="SL zone"),
+                    Line2D([0], [0], color="#21875e", linewidth=6, alpha=0.6, label="TP1 zone"),
+                    Line2D([0], [0], color="#0f6d54", linewidth=6, alpha=0.6, label="TP2 zone"),
+                    Line2D([0], [0], marker="^", color=self.TV_ENTRY, linestyle="None", markersize=9, label="Entry candle"),
                     Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="Exit candle"),
                 ],
             )
-            ax.set_title(f"{symbol} trade {span.side.value}: result={span.result_type}", color="#f8fafc", fontweight="bold")
-            ax.set_ylabel("Price", color="#cbd5e1")
-            ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
+            self._add_styled_legend(
+                ax_bottom,
+                [
+                    Line2D([0], [0], color=self.TV_BULL, linewidth=6, label="Bull candle"),
+                    Line2D([0], [0], color=self.TV_BEAR, linewidth=6, label="Bear candle"),
+                    Line2D([0], [0], color=self.TV_ENTRY, linestyle="--", linewidth=2, label="Higher TF level high"),
+                    Line2D([0], [0], color="#f59e0b", linestyle="--", linewidth=2, label="Higher TF level low"),
+                ],
+            )
+            ax_top.set_title(
+                f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type}",
+                color="#f8fafc",
+                fontweight="bold",
+            )
+            ax_top.set_ylabel("Price", color=self.TV_TEXT)
+            ax_bottom.set_title(f"{params.levels_timeframe.value} context", color="#f8fafc", fontsize=10)
+            ax_bottom.set_ylabel("Price", color=self.TV_TEXT)
+            self._format_time_axis(ax_top)
+            self._format_time_axis(ax_bottom)
             fig.autofmt_xdate(rotation=30)
 
             output_path = symbol_dir / (
