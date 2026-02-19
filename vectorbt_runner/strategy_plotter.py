@@ -614,10 +614,12 @@ class StrategyPlotter:
             ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5)
             ax_top.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=80, zorder=5)
 
+            continuation_marker = "^" if span.side.name == "LONG" else "v"
+            continuation_label = f"Continuation confirmation ({span.side.value})"
+
             if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:
                 confirmation_time = pd.to_datetime(confirmation_span.confirmation_timestamp_ms, unit="ms")
                 confirmation_price = confirmation_span.confirmation_price if confirmation_span.confirmation_price is not None else span.entry_price
-                confirmation_marker = "^" if span.side.name == "LONG" else "v"
                 ax_top.axvspan(
                     confirmation_time - pd.to_timedelta(20, unit="m"),
                     confirmation_time + pd.to_timedelta(20, unit="m"),
@@ -625,7 +627,7 @@ class StrategyPlotter:
                     alpha=0.12,
                     zorder=1,
                 )
-                ax_top.scatter([confirmation_time], [confirmation_price], color="#a855f7", marker=confirmation_marker, s=96, zorder=6)
+                ax_top.scatter([confirmation_time], [confirmation_price], color="#a855f7", marker=continuation_marker, s=96, zorder=6)
 
             resistance_touch_times: list[pd.Timestamp] = []
             support_touch_times: list[pd.Timestamp] = []
@@ -710,16 +712,15 @@ class StrategyPlotter:
                 Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=8, label="Exit"),
             ]
             if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:
-                confirmation_marker = "^" if span.side.name == "LONG" else "v"
                 top_legend_handles.append(
                     Line2D(
                         [0],
                         [0],
-                        marker=confirmation_marker,
+                        marker=continuation_marker,
                         color="#a855f7",
                         linestyle="None",
                         markersize=8,
-                        label="Continuation confirmation",
+                        label=continuation_label,
                     )
                 )
 
