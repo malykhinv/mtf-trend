@@ -36,7 +36,7 @@ class LevelDetector:
         level: float,
         atr: float,
         is_resistance: bool,
-    ) -> tuple[int, float, float, int, float, float]:
+    ) -> tuple[int, float, float, int, float, float, list[int]]:
         atr_safe = max(float(atr), 1e-12)
         tolerance = self._config.tolerance_atr_mult * atr_safe
 
@@ -96,6 +96,7 @@ class LevelDetector:
             min_bars_between_touches,
             max_penetration_atr,
             max_penetration_pct,
+            touches,
         )
 
     def detect(self, *, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
@@ -114,10 +115,12 @@ class LevelDetector:
                     "resistance_min_bars_between_touches",
                     "resistance_max_penetration_atr",
                     "resistance_max_penetration_pct",
+                    "resistance_touch_timestamps_ms",
                     "support_touch_count",
                     "support_min_bars_between_touches",
                     "support_max_penetration_atr",
                     "support_max_penetration_pct",
+                    "support_touch_timestamps_ms",
                 ],
             )
 
@@ -148,10 +151,12 @@ class LevelDetector:
         resistance_min_bars_between_touches_values: list[float] = []
         resistance_max_penetration_atr_values: list[float] = []
         resistance_max_penetration_pct_values: list[float] = []
+        resistance_touch_timestamps_values: list[list[int]] = []
         support_touch_counts: list[float] = []
         support_min_bars_between_touches_values: list[float] = []
         support_max_penetration_atr_values: list[float] = []
         support_max_penetration_pct_values: list[float] = []
+        support_touch_timestamps_values: list[list[int]] = []
 
         for idx in range(len(frame)):
             candidate_high = frame.at[idx, "level_high"]
@@ -165,13 +170,16 @@ class LevelDetector:
                 resistance_min_bars_between_touches_values.append(np.nan)
                 resistance_max_penetration_atr_values.append(np.nan)
                 resistance_max_penetration_pct_values.append(np.nan)
+                resistance_touch_timestamps_values.append([])
                 support_touch_counts.append(np.nan)
                 support_min_bars_between_touches_values.append(np.nan)
                 support_max_penetration_atr_values.append(np.nan)
                 support_max_penetration_pct_values.append(np.nan)
+                support_touch_timestamps_values.append([])
                 continue
 
             window_slice = slice(idx - lookback, idx)
+            window_timestamps = frame["timestamp"].iloc[window_slice].to_numpy(dtype="int64", copy=False)
             (
                 high_touch_count,
                 high_reaction,
@@ -179,6 +187,7 @@ class LevelDetector:
                 high_min_bars_between_touches,
                 high_max_penetration_atr,
                 high_max_penetration_pct,
+                high_touch_indices,
             ) = self._score_level(
                 highs=highs[window_slice],
                 lows=lows[window_slice],
@@ -193,6 +202,7 @@ class LevelDetector:
                 low_min_bars_between_touches,
                 low_max_penetration_atr,
                 low_max_penetration_pct,
+                low_touch_indices,
             ) = self._score_level(
                 highs=highs[window_slice],
                 lows=lows[window_slice],
@@ -216,10 +226,12 @@ class LevelDetector:
             resistance_min_bars_between_touches_values.append(float(high_min_bars_between_touches))
             resistance_max_penetration_atr_values.append(float(high_max_penetration_atr))
             resistance_max_penetration_pct_values.append(float(high_max_penetration_pct))
+            resistance_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in high_touch_indices])
             support_touch_counts.append(float(low_touch_count))
             support_min_bars_between_touches_values.append(float(low_min_bars_between_touches))
             support_max_penetration_atr_values.append(float(low_max_penetration_atr))
             support_max_penetration_pct_values.append(float(low_max_penetration_pct))
+            support_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in low_touch_indices])
 
         frame["touch_count"] = touch_counts
         frame["reaction_strength"] = reaction_strengths
@@ -228,10 +240,12 @@ class LevelDetector:
         frame["resistance_min_bars_between_touches"] = resistance_min_bars_between_touches_values
         frame["resistance_max_penetration_atr"] = resistance_max_penetration_atr_values
         frame["resistance_max_penetration_pct"] = resistance_max_penetration_pct_values
+        frame["resistance_touch_timestamps_ms"] = resistance_touch_timestamps_values
         frame["support_touch_count"] = support_touch_counts
         frame["support_min_bars_between_touches"] = support_min_bars_between_touches_values
         frame["support_max_penetration_atr"] = support_max_penetration_atr_values
         frame["support_max_penetration_pct"] = support_max_penetration_pct_values
+        frame["support_touch_timestamps_ms"] = support_touch_timestamps_values
 
         frame = frame.dropna(
             subset=[
@@ -263,9 +277,11 @@ class LevelDetector:
                 "resistance_min_bars_between_touches",
                 "resistance_max_penetration_atr",
                 "resistance_max_penetration_pct",
+                "resistance_touch_timestamps_ms",
                 "support_touch_count",
                 "support_min_bars_between_touches",
                 "support_max_penetration_atr",
                 "support_max_penetration_pct",
+                "support_touch_timestamps_ms",
             ]
         ].reset_index(drop=True)

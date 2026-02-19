@@ -579,6 +579,37 @@ class StrategyPlotter:
                         alpha=0.8,
                     )
 
+                trade_touch_window_start = max(int(higher_window["timestamp"].min()), span.entry_timestamp_ms)
+                trade_touch_window_end = min(int(higher_window["timestamp"].max()), span.exit_timestamp_ms)
+                resistance_touch_times = [
+                    pd.to_datetime(timestamp_ms, unit="ms")
+                    for timestamp_ms in span.resistance_touch_timestamps_ms
+                    if trade_touch_window_start <= int(timestamp_ms) <= trade_touch_window_end
+                ]
+                support_touch_times = [
+                    pd.to_datetime(timestamp_ms, unit="ms")
+                    for timestamp_ms in span.support_touch_timestamps_ms
+                    if trade_touch_window_start <= int(timestamp_ms) <= trade_touch_window_end
+                ]
+                if resistance_touch_times:
+                    ax_bottom.scatter(
+                        resistance_touch_times,
+                        [span.level_high] * len(resistance_touch_times),
+                        color=self.TV_ENTRY,
+                        marker="v",
+                        s=48,
+                        zorder=6,
+                    )
+                if support_touch_times:
+                    ax_bottom.scatter(
+                        support_touch_times,
+                        [span.level_low] * len(support_touch_times),
+                        color="#f59e0b",
+                        marker="^",
+                        s=48,
+                        zorder=6,
+                    )
+
             self._add_styled_legend(
                 ax_top,
                 [
@@ -601,6 +632,8 @@ class StrategyPlotter:
                     Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
                     Line2D([0], [0], color=self.TV_ENTRY, linestyle="--", linewidth=2, label="Higher TF level high"),
                     Line2D([0], [0], color="#f59e0b", linestyle="--", linewidth=2, label="Higher TF level low"),
+                    Line2D([0], [0], marker="v", color=self.TV_ENTRY, linestyle="None", markersize=8, label="Level touch (resistance)"),
+                    Line2D([0], [0], marker="^", color="#f59e0b", linestyle="None", markersize=8, label="Level touch (support)"),
                 ],
             )
             ax_top.set_title(
