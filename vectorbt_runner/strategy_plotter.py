@@ -33,6 +33,42 @@ class StrategyPlotter:
     TV_ENTRY = "#4ea4dc"
     TV_LEVEL_START = "#94a3b8"
     TV_LEVEL_START_LINESTYLE = "-."
+    ENTRY_ZONE_WIDTH_BARS = 3.0
+    ENTRY_ZONE_MAX_OVERSHOOT_BARS = 1.0
+
+    @staticmethod
+    def _resolve_entry_zone_end(
+        trade_window: pd.DataFrame,
+        *,
+        entry_time: pd.Timestamp,
+        entry_timeframe: Timeframe,
+        width_bars: float,
+        max_overshoot_bars: float,
+    ) -> pd.Timestamp:
+        trade_days = np.asarray(mdates.date2num(trade_window["plot_time"]), dtype=float)
+        fallback_step_days = float(entry_timeframe.to_milliseconds()) / (24.0 * 60.0 * 60.0 * 1000.0)
+
+        base_step_days = fallback_step_days
+        if trade_days.size > 1:
+            day_diffs = np.diff(trade_days)
+            positive_diffs = day_diffs[day_diffs > 0.0]
+            if positive_diffs.size > 0:
+                base_step_days = float(np.median(positive_diffs))
+
+        base_step_days = max(base_step_days, fallback_step_days, 1e-9)
+        zone_width_days = base_step_days * max(width_bars, 1.0)
+        zone_end = entry_time + pd.to_timedelta(zone_width_days, unit="D")
+
+        window_end = trade_window["plot_time"].iloc[-1]
+        max_zone_end = window_end + pd.to_timedelta(base_step_days * max(max_overshoot_bars, 0.0), unit="D")
+        if zone_end > max_zone_end:
+            zone_end = max_zone_end
+
+        min_zone_end = entry_time + pd.to_timedelta(base_step_days, unit="D")
+        if zone_end <= entry_time:
+            zone_end = min_zone_end
+
+        return zone_end
 
     def __init__(self, data_preparer: DataPreparer, strategy: BreakoutStrategy) -> None:
         self._data_preparer = data_preparer
@@ -511,13 +547,13 @@ class StrategyPlotter:
                 if confirmation_span is None or retest_span.confirmation_timestamp_ms > confirmation_span.confirmation_timestamp_ms:
                     confirmation_span = retest_span
 
-            entry_bar_width_days = 0.0
-            if len(trade_window) > 1:
-                trade_days = np.asarray(mdates.date2num(trade_window["plot_time"]), dtype=float)
-                entry_bar_width_days = float((trade_days[1] - trade_days[0]) * 15.0)
-            if entry_bar_width_days <= 0.0:
-                entry_bar_width_days = 0.8
-            zone_end = entry_time + pd.to_timedelta(entry_bar_width_days, unit="D")
+            zone_end = self._resolve_entry_zone_end(
+                trade_window,
+                entry_time=entry_time,
+                entry_timeframe=params.entry_timeframe,
+                width_bars=self.ENTRY_ZONE_WIDTH_BARS,
+                max_overshoot_bars=self.ENTRY_ZONE_MAX_OVERSHOOT_BARS,
+            )
 
             ax_top.hlines(span.entry_price, entry_time, zone_end, color=self.TV_ENTRY, linestyle="-", linewidth=1.8)
             ax_top.axvline(
