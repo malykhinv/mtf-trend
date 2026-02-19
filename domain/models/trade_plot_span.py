@@ -11,6 +11,7 @@ from domain.enums.position_side import PositionSide
 class TradePlotSpan:
     symbol: str
     side: PositionSide
+    level_start_timestamp_ms: int
     entry_timestamp_ms: int
     exit_timestamp_ms: int
     entry_price: float
@@ -19,4 +20,3 @@ class TradePlotSpan:
     take_profit_1: float
     take_profit_2: float
     result_type: str
-

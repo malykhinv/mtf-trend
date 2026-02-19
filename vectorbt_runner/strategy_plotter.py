@@ -31,6 +31,8 @@ class StrategyPlotter:
     TV_BULL = "#089981"
     TV_BEAR = "#f23645"
     TV_ENTRY = "#4ea4dc"
+    TV_LEVEL_START = "#94a3b8"
+    TV_LEVEL_START_LINESTYLE = "-."
 
     def __init__(self, data_preparer: DataPreparer, strategy: BreakoutStrategy) -> None:
         self._data_preparer = data_preparer
@@ -378,6 +380,14 @@ class StrategyPlotter:
                 linestyle="--",
                 linewidth=1.2,
             )
+            level_start_time = pd.to_datetime(span.level_start_timestamp_ms, unit="ms")
+            ax.axvline(
+                x=level_start_time,
+                color=self.TV_LEVEL_START,
+                linestyle=self.TV_LEVEL_START_LINESTYLE,
+                linewidth=1.3,
+                alpha=0.9,
+            )
 
             x_start = pd.to_datetime(span.retest_start_timestamp_ms, unit="ms")
             x_end = pd.to_datetime(span.retest_end_timestamp_ms, unit="ms")
@@ -400,6 +410,7 @@ class StrategyPlotter:
                     Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
                     Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
                     Line2D([0], [0], color="#38bdf8", linestyle="--", linewidth=2, label="Daily level"),
+                    Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
                     Line2D([0], [0], color="#f59e0b", linewidth=6, alpha=0.6, label=f"Retest ({span.status})"),
                 ],
             )
@@ -468,6 +479,7 @@ class StrategyPlotter:
             self._apply_dark_theme(ax_bottom)
             self._plot_candles(ax_top, trade_window)
 
+            level_start_time = pd.to_datetime(span.level_start_timestamp_ms, unit="ms")
             entry_time = pd.to_datetime(span.entry_timestamp_ms, unit="ms")
             exit_time = pd.to_datetime(span.exit_timestamp_ms, unit="ms")
             entry_label = pd.to_datetime(span.entry_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
@@ -482,6 +494,13 @@ class StrategyPlotter:
             zone_end = entry_time + pd.to_timedelta(entry_bar_width_days, unit="D")
 
             ax_top.hlines(span.entry_price, entry_time, zone_end, color=self.TV_ENTRY, linestyle="-", linewidth=1.8)
+            ax_top.axvline(
+                x=level_start_time,
+                color=self.TV_LEVEL_START,
+                linestyle=self.TV_LEVEL_START_LINESTYLE,
+                linewidth=1.3,
+                alpha=0.9,
+            )
 
             price_range = float(trade_window["high"].max() - trade_window["low"].min())
             vertical_padding = max(price_range * 0.005, 1e-9)
@@ -530,6 +549,13 @@ class StrategyPlotter:
                 if higher_window.empty:
                     higher_window = higher_tf_frame
                 self._plot_candles(ax_bottom, higher_window)
+                ax_bottom.axvline(
+                    x=level_start_time,
+                    color=self.TV_LEVEL_START,
+                    linestyle=self.TV_LEVEL_START_LINESTYLE,
+                    linewidth=1.3,
+                    alpha=0.9,
+                )
 
                 level_slice = higher_tf_levels[
                     (higher_tf_levels["timestamp"] >= higher_window["timestamp"].min())
@@ -562,6 +588,7 @@ class StrategyPlotter:
                     Line2D([0], [0], color="#a6324a", linewidth=6, alpha=0.6, label="SL zone"),
                     Line2D([0], [0], color="#21875e", linewidth=6, alpha=0.6, label="TP1 zone"),
                     Line2D([0], [0], color="#0f6d54", linewidth=6, alpha=0.6, label="TP2 zone"),
+                    Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
                     Line2D([0], [0], marker="^", color=self.TV_ENTRY, linestyle="None", markersize=9, label="Entry candle"),
                     Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="Exit candle"),
                 ],
@@ -571,6 +598,7 @@ class StrategyPlotter:
                 [
                     Line2D([0], [0], color=self.TV_BULL, linewidth=6, label="Bull candle"),
                     Line2D([0], [0], color=self.TV_BEAR, linewidth=6, label="Bear candle"),
+                    Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
                     Line2D([0], [0], color=self.TV_ENTRY, linestyle="--", linewidth=2, label="Higher TF level high"),
                     Line2D([0], [0], color="#f59e0b", linestyle="--", linewidth=2, label="Higher TF level low"),
                 ],

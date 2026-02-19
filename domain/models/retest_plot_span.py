@@ -13,10 +13,10 @@ class RetestPlotSpan:
 
     symbol: str
     side: PositionSide
+    level_start_timestamp_ms: int
     level_price: float
     retest_low: float
     retest_high: float
     retest_start_timestamp_ms: int
     retest_end_timestamp_ms: int
     status: str
-
