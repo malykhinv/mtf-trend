@@ -122,7 +122,8 @@ class BacktestRunner:
         tp2_count = BACKTEST_ZERO_COUNT
 
         # Оптимизация: формулы метрик неизменны, сокращаем только число проходов и аллокаций.
-        for trade in trades:
+        normalized_trades: list[TradeResult] = trades
+        for trade in normalized_trades:
             pnl_value = trade.pnl
             pnl_percent += trade.pnl_percent.value
             if pnl_value > 0:
@@ -147,18 +148,18 @@ class BacktestRunner:
         else:
             pf = BACKTEST_EMPTY_PF
 
-        win_rate = wins / len(trades)
+        win_rate = wins / len(normalized_trades)
 
-        trades_count = len(trades)
-        if trades_count != len(trades):
+        trades_count = len(normalized_trades)
+        if trades_count != len(normalized_trades):
             msg = (
                 "обнаружено несоответствие trades_count: вычисленное значение "
-                f"({trades_count}) отличается от длины списка сделок ({len(trades)})."
+                f"({trades_count}) отличается от длины списка сделок ({len(normalized_trades)})."
             )
             raise RuntimeError(msg)
 
         sorted_trades = sorted(
-            trades,
+            normalized_trades,
             key=lambda trade: (trade.exit_timestamp_ms, trade.entry_timestamp_ms),
         )
         cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
@@ -448,7 +449,7 @@ class BacktestRunner:
                     params_cache[cache_key] = cfg
                 if isinstance(strategy, BreakoutStrategy):
                     prepared_annotated = prepared_symbol_data[symbol][prepared.lookback]
-                    trades = strategy.generate_events_multi_tf(
+                    trades: list[TradeResult] = strategy.generate_events_multi_tf(
                         mtf_frames=mtf_frames,
                         params=cfg,
                         annotated=prepared_annotated,
