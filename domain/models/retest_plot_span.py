@@ -20,3 +20,7 @@ class RetestPlotSpan:
     retest_start_timestamp_ms: int
     retest_end_timestamp_ms: int
     status: str
+    confirmation_timestamp_ms: int | None = None
+    confirmation_price: float | None = None
+    confirmation_candle_low: float | None = None
+    confirmation_candle_high: float | None = None

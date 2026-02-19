@@ -404,18 +404,31 @@ class StrategyPlotter:
                 linewidth=1.0,
             )
             ax.add_patch(rect)
-            self._add_styled_legend(
-                ax,
-                [
-                    Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
-                    Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
-                    Line2D([0], [0], color="#38bdf8", linestyle="--", linewidth=2, label="Daily level"),
-                    Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
-                    Line2D([0], [0], color="#f59e0b", linewidth=6, alpha=0.6, label=f"Retest ({span.status})"),
-                ],
-            )
+            has_confirmation = span.confirmation_timestamp_ms is not None
+            if has_confirmation:
+                confirmation_time = pd.to_datetime(span.confirmation_timestamp_ms, unit="ms")
+                marker_price = span.confirmation_price if span.confirmation_price is not None else span.level_price
+                marker = "^" if span.side.name == "LONG" else "v"
+                ax.axvspan(
+                    confirmation_time - pd.to_timedelta(20, unit="m"),
+                    confirmation_time + pd.to_timedelta(20, unit="m"),
+                    color="#a855f7",
+                    alpha=0.12,
+                    zorder=1,
+                )
+                ax.scatter([confirmation_time], [marker_price], color="#a855f7", marker=marker, s=90, zorder=6)
+
+            legend_items = [
+                Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
+                Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
+                Line2D([0], [0], color="#38bdf8", linestyle="--", linewidth=2, label="Daily level"),
+                Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
+                Line2D([0], [0], color="#f59e0b", linewidth=6, alpha=0.6, label=f"Retest ({span.status})"),
+                Line2D([0], [0], marker="^", color="#a855f7", linestyle="None", markersize=9, label="Continuation confirmation"),
+            ]
+            self._add_styled_legend(ax, legend_items)
             start_str = str(span.retest_start_timestamp_ms)
-            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) @ {start_str}", color="#f8fafc", fontweight="bold")
+            ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) • Continuation confirmation @ {start_str}", color="#f8fafc", fontweight="bold")
             ax.set_ylabel("Price", color="#cbd5e1")
             ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
             ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
@@ -438,6 +451,7 @@ class StrategyPlotter:
         params: BreakoutParams,
         output_dir: Path | str,
         trade_spans: list[TradePlotSpan],
+        retest_spans: list[RetestPlotSpan] | None = None,
     ) -> list[Path]:
         """Строит отдельные графики сделок с точками входа/выхода и уровнями TP/SL."""
         annotated, higher_tf_levels = self._load_annotated_and_daily_levels(symbol=symbol, params=params)
@@ -455,6 +469,7 @@ class StrategyPlotter:
         symbol_trades = [span for span in trade_spans if span.symbol == symbol]
         if not symbol_trades:
             return []
+        symbol_retests = [span for span in (retest_spans or []) if span.symbol == symbol]
 
         symbol_dir = self._resolve_symbol_output_dir(output_dir=output_dir, symbol=symbol)
         saved_paths: list[Path] = []
@@ -484,6 +499,17 @@ class StrategyPlotter:
             exit_time = pd.to_datetime(span.exit_timestamp_ms, unit="ms")
             entry_label = pd.to_datetime(span.entry_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
             exit_label = pd.to_datetime(span.exit_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
+
+            confirmation_span = None
+            for retest_span in symbol_retests:
+                if retest_span.side != span.side:
+                    continue
+                if retest_span.confirmation_timestamp_ms is None:
+                    continue
+                if retest_span.confirmation_timestamp_ms > span.entry_timestamp_ms:
+                    continue
+                if confirmation_span is None or retest_span.confirmation_timestamp_ms > confirmation_span.confirmation_timestamp_ms:
+                    confirmation_span = retest_span
 
             entry_bar_width_days = 0.0
             if len(trade_window) > 1:
@@ -540,6 +566,19 @@ class StrategyPlotter:
 
             ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5)
             ax_top.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=80, zorder=5)
+
+            if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:
+                confirmation_time = pd.to_datetime(confirmation_span.confirmation_timestamp_ms, unit="ms")
+                confirmation_price = confirmation_span.confirmation_price if confirmation_span.confirmation_price is not None else span.entry_price
+                confirmation_marker = "^" if span.side.name == "LONG" else "v"
+                ax_top.axvspan(
+                    confirmation_time - pd.to_timedelta(20, unit="m"),
+                    confirmation_time + pd.to_timedelta(20, unit="m"),
+                    color="#a855f7",
+                    alpha=0.12,
+                    zorder=1,
+                )
+                ax_top.scatter([confirmation_time], [confirmation_price], color="#a855f7", marker=confirmation_marker, s=96, zorder=6)
 
             if not higher_tf_frame.empty:
                 higher_window = higher_tf_frame[
@@ -622,6 +661,7 @@ class StrategyPlotter:
                     Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
                     Line2D([0], [0], marker="^", color=self.TV_ENTRY, linestyle="None", markersize=9, label="Entry candle"),
                     Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="Exit candle"),
+                    Line2D([0], [0], marker="^", color="#a855f7", linestyle="None", markersize=9, label="Continuation confirmation"),
                 ],
             )
             self._add_styled_legend(
@@ -637,7 +677,7 @@ class StrategyPlotter:
                 ],
             )
             ax_top.set_title(
-                f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type}",
+                f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type} • Continuation confirmation",
                 color="#f8fafc",
                 fontweight="bold",
             )
