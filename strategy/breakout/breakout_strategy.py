@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import NotRequired, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -42,6 +43,17 @@ from strategy.breakout.pending_retest import PendingRetest
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
+class CandleRow(TypedDict):
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    natr: float
+    open_interest: NotRequired[float | int]
+
+
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     """Стратегия пробоя/ретеста с подтверждением продолжения и проверкой режима объема."""
 
@@ -79,7 +91,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
 
     # region Приватные
 
-    def _to_candle(self, row: pd.Series) -> Candle:
+    def _to_candle(self, row: CandleRow) -> Candle:
         return Candle(
             timestamp_ms=int(row["timestamp"]),
             open=Price(float(row["open"])),
@@ -106,13 +118,13 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return max(1, int((hours * 60) / candle_minutes))
 
     @staticmethod
-    def _body_ratio(row: pd.Series) -> float:
+    def _body_ratio(row: CandleRow) -> float:
         high = float(row["high"])
         low = float(row["low"])
         spread = max(high - low, STRATEGY_PRICE_EPSILON)
         return abs(float(row["close"]) - float(row["open"])) / spread
 
-    def _is_retest_candle(self, *, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+    def _is_retest_candle(self, *, row: CandleRow, breakout: PendingBreakout, params: BreakoutParams) -> bool:
         level_price = breakout.level.price.value
         natr = max(float(row.get("natr", 0.0)), 0.0)
         zone_ratio = params.resolve_retest_zone_ratio(natr)
@@ -126,14 +138,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         return float(row["close"]) < float(row["open"]) and float(row["close"]) < zone_top
 
     @staticmethod
-    def _extra_retest_filters_ok(*, row: pd.Series, breakout: PendingBreakout, params: BreakoutParams) -> bool:
+    def _extra_retest_filters_ok(*, row: CandleRow, breakout: PendingBreakout, params: BreakoutParams) -> bool:
         metrics = BreakoutStrategy._extra_retest_filter_metrics(row=row, breakout=breakout, params=params)
         return bool(metrics["is_ok"])
 
     @staticmethod
     def _extra_retest_filter_metrics(
         *,
-        row: pd.Series,
+        row: CandleRow,
         breakout: PendingBreakout,
         params: BreakoutParams,
     ) -> dict[str, float | bool]:
@@ -309,7 +321,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         }
 
     @staticmethod
-    def _is_confirmation(*, row: pd.Series, retest: PendingRetest) -> bool:
+    def _is_confirmation(*, row: CandleRow, retest: PendingRetest) -> bool:
         if retest.breakout.side == PositionSide.LONG:
             return float(row["close"]) > retest.retest_high
         return float(row["close"]) < retest.retest_low
@@ -711,7 +723,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             row_close = float(row_values[4])
             row_volume = float(row_values[5])
             row_natr = float(row_values[6])
-            row = {
+            row: CandleRow = {
                 "timestamp": row_timestamp,
                 "open": row_open,
                 "high": row_high,
@@ -720,15 +732,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 "volume": row_volume,
                 "natr": row_natr,
             }
-            candle = Candle(
-                timestamp_ms=row_timestamp,
-                open=Price(row_open),
-                high=Price(row_high),
-                low=Price(row_low),
-                close=Price(row_close),
-                volume=Volume(row_volume),
-                open_interest=Volume(float(STRATEGY_DEFAULT_OPEN_INTEREST)),
-            )
+            candle = self._to_candle(row=row)
 
             while level_idx < len(higher_level_rows) and int(higher_level_rows[level_idx][0]) <= row_timestamp:
                 level_row = higher_level_rows[level_idx]
