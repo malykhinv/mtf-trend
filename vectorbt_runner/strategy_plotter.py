@@ -187,6 +187,8 @@ class StrategyPlotter:
             return pd.DataFrame(columns=["timestamp", "level_high", "level_low"])
 
         daily_from_annotated = annotated.copy()
+        if "level_high" not in daily_from_annotated.columns or "level_low" not in daily_from_annotated.columns:
+            return pd.DataFrame(columns=["timestamp", "level_high", "level_low"])
         return (
             daily_from_annotated.sort_values("timestamp")
             .drop_duplicates(subset=["timestamp"], keep="last")[["timestamp", "level_high", "level_low"]]
@@ -228,10 +230,10 @@ class StrategyPlotter:
         self._add_styled_legend(
             ax_top,
             [
-                Line2D([0], [0], color="#22c55e", linewidth=6, label="🟩 Bull candle"),
-                Line2D([0], [0], color="#ef4444", linewidth=6, label="🟥 Bear candle"),
-                Line2D([0], [0], color=high_line.get_color(), linewidth=2.2, label="✨ 1D level high"),
-                Line2D([0], [0], color=low_line.get_color(), linewidth=2.2, label="🌙 1D level low"),
+                Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
+                Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
+                Line2D([0], [0], color=high_line.get_color(), linewidth=2.2, label="1D level high"),
+                Line2D([0], [0], color=low_line.get_color(), linewidth=2.2, label="1D level low"),
             ],
         )
 
@@ -248,9 +250,9 @@ class StrategyPlotter:
         self._add_styled_legend(
             ax_bottom,
             [
-                Line2D([0], [0], color=daily_high_line.get_color(), linewidth=2.2, label="🔹 Daily high"),
-                Line2D([0], [0], color=daily_low_line.get_color(), linewidth=2.2, label="🔸 Daily low"),
-                Line2D([0], [0], color="#94a3b8", linewidth=6, alpha=0.5, label="☁️ Daily range"),
+                Line2D([0], [0], color=daily_high_line.get_color(), linewidth=2.2, label="Daily high"),
+                Line2D([0], [0], color=daily_low_line.get_color(), linewidth=2.2, label="Daily low"),
+                Line2D([0], [0], color="#94a3b8", linewidth=6, alpha=0.5, label="Daily range"),
             ],
         )
 
@@ -335,10 +337,10 @@ class StrategyPlotter:
             self._add_styled_legend(
                 ax,
                 [
-                    Line2D([0], [0], color="#22c55e", linewidth=6, label="🟩 Bull candle"),
-                    Line2D([0], [0], color="#ef4444", linewidth=6, label="🟥 Bear candle"),
-                    Line2D([0], [0], color="#38bdf8", linestyle="--", linewidth=2, label="🎯 Daily level"),
-                    Line2D([0], [0], color="#f59e0b", linewidth=6, alpha=0.6, label=f"🧡 Retest ({span.status})"),
+                    Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
+                    Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
+                    Line2D([0], [0], color="#38bdf8", linestyle="--", linewidth=2, label="Daily level"),
+                    Line2D([0], [0], color="#f59e0b", linewidth=6, alpha=0.6, label=f"Retest ({span.status})"),
                 ],
             )
             start_str = str(span.retest_start_timestamp_ms)
@@ -409,14 +411,14 @@ class StrategyPlotter:
             self._add_styled_legend(
                 ax,
                 [
-                    Line2D([0], [0], color="#22c55e", linewidth=6, label="🟩 Bull candle"),
-                    Line2D([0], [0], color="#ef4444", linewidth=6, label="🟥 Bear candle"),
-                    Line2D([0], [0], color="#38bdf8", linewidth=2.5, label="🚀 Entry"),
-                    Line2D([0], [0], color="#ef4444", linestyle="--", linewidth=2, label="🛡️ Stop loss"),
-                    Line2D([0], [0], color="#22c55e", linestyle="--", linewidth=2, label="🎯 TP1"),
-                    Line2D([0], [0], color="#16a34a", linestyle="--", linewidth=2, label="🏁 TP2"),
-                    Line2D([0], [0], marker="^", color="#38bdf8", linestyle="None", markersize=9, label="📍 Entry candle"),
-                    Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="🏆 Exit candle"),
+                    Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
+                    Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
+                    Line2D([0], [0], color="#38bdf8", linewidth=2.5, label="Entry"),
+                    Line2D([0], [0], color="#ef4444", linestyle="--", linewidth=2, label="Stop loss"),
+                    Line2D([0], [0], color="#22c55e", linestyle="--", linewidth=2, label="TP1"),
+                    Line2D([0], [0], color="#16a34a", linestyle="--", linewidth=2, label="TP2"),
+                    Line2D([0], [0], marker="^", color="#38bdf8", linestyle="None", markersize=9, label="Entry candle"),
+                    Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="Exit candle"),
                 ],
             )
             ax.set_title(f"{symbol} trade {span.side.value}: result={span.result_type}", color="#f8fafc", fontweight="bold")
