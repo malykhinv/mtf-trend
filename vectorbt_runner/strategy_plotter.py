@@ -155,17 +155,27 @@ class StrategyPlotter:
         )
 
     @staticmethod
-    def _add_styled_legend(ax: plt.Axes, handles: list[Line2D]) -> None:
+    def _add_styled_legend(
+        ax: plt.Axes,
+        handles: list[Line2D],
+        *,
+        loc: str = "lower left",
+        bbox_to_anchor: tuple[float, float] = (0.0, 1.02),
+    ) -> None:
         legend = ax.legend(
             handles=handles,
-            loc="upper left",
+            loc=loc,
+            bbox_to_anchor=bbox_to_anchor,
             frameon=True,
             fancybox=True,
             framealpha=0.85,
             edgecolor="none",
             labelcolor=StrategyPlotter.TV_TEXT,
-            fontsize=9,
-            ncol=2,
+            fontsize=8,
+            handlelength=1.6,
+            columnspacing=0.8,
+            ncol=1,
+            borderaxespad=0.0,
         )
         legend.get_frame().set_facecolor("#111827")
 
@@ -330,8 +340,8 @@ class StrategyPlotter:
             [
                 Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
                 Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
-                Line2D([0], [0], color=high_line.get_color(), linewidth=2.2, label="1D level high"),
-                Line2D([0], [0], color=low_line.get_color(), linewidth=2.2, label="1D level low"),
+                Line2D([0], [0], color=high_line.get_color(), linewidth=2.2, label="1D high"),
+                Line2D([0], [0], color=low_line.get_color(), linewidth=2.2, label="1D low"),
             ],
         )
 
@@ -352,6 +362,7 @@ class StrategyPlotter:
                 Line2D([0], [0], color=daily_low_line.get_color(), linewidth=2.2, label="Daily low"),
                 Line2D([0], [0], color="#94a3b8", linewidth=6, alpha=0.5, label="Daily range"),
             ],
+            bbox_to_anchor=(1.01, 1.02),
         )
 
         ax_bottom.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
@@ -361,7 +372,7 @@ class StrategyPlotter:
 
         date_range = self._format_date_range(annotated)
         output_path = self._resolve_symbol_output_dir(output_dir=output_dir, symbol=symbol) / f"daily_levels_{date_range}.png"
-        fig.tight_layout()
+        fig.tight_layout(rect=(0, 0, 0.98, 0.96))
         fig.savefig(output_path, dpi=150)
         plt.close(fig)
         return output_path
@@ -616,6 +627,9 @@ class StrategyPlotter:
                 )
                 ax_top.scatter([confirmation_time], [confirmation_price], color="#a855f7", marker=confirmation_marker, s=96, zorder=6)
 
+            resistance_touch_times: list[pd.Timestamp] = []
+            support_touch_times: list[pd.Timestamp] = []
+
             if not higher_tf_frame.empty:
                 higher_window = higher_tf_frame[
                     (higher_tf_frame["timestamp"] >= span.entry_timestamp_ms - 7 * 24 * 60 * 60 * 1000)
@@ -685,35 +699,49 @@ class StrategyPlotter:
                         zorder=6,
                     )
 
-            self._add_styled_legend(
-                ax_top,
-                [
-                    Line2D([0], [0], color=self.TV_BULL, linewidth=6, label="Bull candle"),
-                    Line2D([0], [0], color=self.TV_BEAR, linewidth=6, label="Bear candle"),
-                    Line2D([0], [0], color=self.TV_ENTRY, linewidth=2.5, label="Entry"),
-                    Line2D([0], [0], color="#a6324a", linewidth=6, alpha=0.6, label="SL zone"),
-                    Line2D([0], [0], color="#21875e", linewidth=6, alpha=0.6, label="TP1 zone"),
-                    Line2D([0], [0], color="#0f6d54", linewidth=6, alpha=0.6, label="TP2 zone"),
-                    Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
-                    Line2D([0], [0], marker="^", color=self.TV_ENTRY, linestyle="None", markersize=9, label="Entry candle"),
-                    Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="Exit candle"),
-                    Line2D([0], [0], marker="^", color="#a855f7", linestyle="None", markersize=9, label="Continuation confirmation"),
-                ],
-            )
-            self._add_styled_legend(
-                ax_bottom,
-                [
-                    Line2D([0], [0], color=self.TV_BULL, linewidth=6, label="Bull candle"),
-                    Line2D([0], [0], color=self.TV_BEAR, linewidth=6, label="Bear candle"),
-                    Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
-                    Line2D([0], [0], color=self.TV_ENTRY, linestyle="--", linewidth=2, label="Higher TF level high"),
-                    Line2D([0], [0], color="#f59e0b", linestyle="--", linewidth=2, label="Higher TF level low"),
-                    Line2D([0], [0], marker="v", color=self.TV_ENTRY, linestyle="None", markersize=8, label="Level touch (resistance)"),
-                    Line2D([0], [0], marker="^", color="#f59e0b", linestyle="None", markersize=8, label="Level touch (support)"),
-                ],
-            )
+            top_legend_handles = [
+                Line2D([0], [0], color=self.TV_BULL, linewidth=6, label="Bull candle"),
+                Line2D([0], [0], color=self.TV_BEAR, linewidth=6, label="Bear candle"),
+                Line2D([0], [0], color=self.TV_ENTRY, linewidth=2.5, label="Entry zone"),
+                Line2D([0], [0], color="#a6324a", linewidth=6, alpha=0.6, label="SL"),
+                Line2D([0], [0], color="#21875e", linewidth=6, alpha=0.6, label="TP1"),
+                Line2D([0], [0], color="#0f6d54", linewidth=6, alpha=0.6, label="TP2"),
+                Line2D([0], [0], marker="^", color=self.TV_ENTRY, linestyle="None", markersize=8, label="Entry"),
+                Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=8, label="Exit"),
+            ]
+            if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:
+                confirmation_marker = "^" if span.side.name == "LONG" else "v"
+                top_legend_handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        marker=confirmation_marker,
+                        color="#a855f7",
+                        linestyle="None",
+                        markersize=8,
+                        label="Continuation confirmation",
+                    )
+                )
+
+            bottom_legend_handles = [
+                Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
+                Line2D([0], [0], color=self.TV_ENTRY, linestyle="--", linewidth=2, label="HTF high"),
+                Line2D([0], [0], color="#f59e0b", linestyle="--", linewidth=2, label="HTF low"),
+            ]
+            if resistance_touch_times:
+                bottom_legend_handles.append(
+                    Line2D([0], [0], marker="v", color=self.TV_ENTRY, linestyle="None", markersize=7, label="Touch res")
+                )
+            if support_touch_times:
+                bottom_legend_handles.append(
+                    Line2D([0], [0], marker="^", color="#f59e0b", linestyle="None", markersize=7, label="Touch sup")
+                )
+
+            self._add_styled_legend(ax_top, top_legend_handles)
+            self._add_styled_legend(ax_bottom, bottom_legend_handles, bbox_to_anchor=(1.01, 1.02))
+            title_suffix = " • Continuation confirmation" if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None else ""
             ax_top.set_title(
-                f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type} • Continuation confirmation",
+                f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type}{title_suffix}",
                 color="#f8fafc",
                 fontweight="bold",
             )
@@ -727,7 +755,7 @@ class StrategyPlotter:
             output_path = symbol_dir / (
                 f"trade_{idx:03d}_{entry_label}_to_{exit_label}_{span.side.value}_{span.result_type}.png"
             )
-            fig.tight_layout()
+            fig.tight_layout(rect=(0, 0, 0.98, 0.96))
             fig.savefig(output_path, dpi=150)
             plt.close(fig)
             saved_paths.append(output_path)
