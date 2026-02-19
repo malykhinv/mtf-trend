@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import cast
 
 from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.sl_mode import SLMode
 from domain.enums.timeframe import Timeframe
 
-SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = tuple(Timeframe)
+SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = cast(tuple[Timeframe, ...], tuple(Timeframe))
 DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.D1, Timeframe.M15)
 
 # Лимиты АПИ
