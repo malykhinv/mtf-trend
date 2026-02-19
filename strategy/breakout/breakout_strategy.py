@@ -411,6 +411,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             _log_invalid_signal(reason="invalid SHORT levels invariant")
             return None
         return TradeSignal(
+            formation_timestamp_ms=pending_retest.breakout.level_start_time,
             entry_price=Price(entry_price),
             entry_timestamp_ms=int(entry_row["timestamp"]),
             stop_loss=Price(float(stop)),

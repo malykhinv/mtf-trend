@@ -10,6 +10,7 @@ from domain.value_objects.price import Price
 
 @dataclass(frozen=True, slots=True)
 class TradeSignal:
+    formation_timestamp_ms: int
     entry_price: Price
     entry_timestamp_ms: int
     stop_loss: Price
@@ -20,6 +21,14 @@ class TradeSignal:
 
     # region Приватные
     def __post_init__(self) -> None:
+        if self.formation_timestamp_ms is None:
+            msg = "Trade signal formation_timestamp_ms is required."
+            raise ValueError(msg)
+
+        if self.formation_timestamp_ms < 0:
+            msg = "Trade signal formation_timestamp_ms must be >= 0."
+            raise ValueError(msg)
+
         if self.entry_timestamp_ms is None:
             msg = "Trade signal entry_timestamp_ms is required."
             raise ValueError(msg)
