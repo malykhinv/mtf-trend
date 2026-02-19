@@ -115,6 +115,115 @@ def _build_breakout_params_from_row(
         entry_timeframe=entry_timeframe,
     )
 
+
+def _plot_trade_setups_for_symbols(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: BreakoutStrategy,
+    preparer: DataPreparer,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> None:
+    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
+    plotted_images = 0
+    symbols_with_plots = 0
+
+    for symbol, mtf_frames in symbol_frames.items():
+        cfg = _build_breakout_params_from_row(
+            params_row,
+            symbol=symbol,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
+        strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=cfg)
+        diagnostics = strategy.consume_last_generation_diagnostics()
+        raw_spans_obj = diagnostics.get("trade_plot_spans", [])
+        raw_spans = raw_spans_obj if isinstance(raw_spans_obj, list) else []
+        trade_spans: list[TradePlotSpan] = [
+            span for span in raw_spans if isinstance(span, TradePlotSpan)
+        ]
+        raw_retest_spans_obj = diagnostics.get("retest_plot_spans", [])
+        raw_retest_spans = raw_retest_spans_obj if isinstance(raw_retest_spans_obj, list) else []
+        retest_spans: list[RetestPlotSpan] = [
+            span for span in raw_retest_spans if isinstance(span, RetestPlotSpan)
+        ]
+        saved_paths = plotter.plot_trade_setups(
+            symbol=symbol,
+            params=cfg,
+            output_dir=output_dir,
+            trade_spans=trade_spans,
+            retest_spans=retest_spans,
+        )
+        if saved_paths:
+            symbols_with_plots += 1
+            plotted_images += len(saved_paths)
+
+    logger.info(
+        "%s: построены графики сделок symbols=%s images=%s output_dir=%s",
+        log_prefix,
+        symbols_with_plots,
+        plotted_images,
+        output_dir,
+    )
+    if plotted_images == 0:
+        logger.warning("%s: не найдено сделок для визуализации", log_prefix)
+
+
+def _load_plot_params_row_from_results(
+    config: AppConfig,
+    args: argparse.Namespace,
+    *,
+    logger: Logger,
+) -> pd.Series | None:
+    csv_path = Path(getattr(args, "results_input", None) or getattr(args, "input", None) or (
+        config.backtest.results_dir / config.backtest.results_file_name
+    ))
+    if not csv_path.exists():
+        logger.error("plot-from-results: файл результатов не найден: %s", csv_path)
+        return None
+
+    frame = pd.read_csv(csv_path)
+    if frame.empty:
+        logger.error("plot-from-results: файл результатов пустой: %s", csv_path)
+        return None
+
+    required_columns = [
+        "lookback",
+        "volume_mult",
+        "retest_window_hours",
+        "retest_zone",
+        "min_rr",
+        "sl_mode",
+        "tp2_mult",
+        "min_body_ratio",
+        "min_move_atr",
+        "max_retest_depth",
+        "confirmation_bars",
+        "entry_trigger",
+    ]
+    missing_columns = [column for column in required_columns if column not in frame.columns]
+    if missing_columns:
+        logger.error("plot-from-results: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
+        return None
+
+    sorted_frame = frame.sort_values(["profit_factor", "trades_count"], ascending=[False, False], na_position="last")
+    best_row = sorted_frame.iloc[0]
+    logger.info(
+        "plot-from-results: использованы параметры из %s (pf=%s, trades_count=%s)",
+        csv_path,
+        best_row.get("profit_factor", "n/a"),
+        best_row.get("trades_count", "n/a"),
+    )
+    return best_row
+
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
     logger = get_logger(
         command_name,
@@ -779,6 +888,25 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             symbols_used,
             symbols_total,
         )
+    plot_from_results = _to_bool_flag(getattr(args, "plot_from_results", None), default=False)
+    if plot_from_results:
+        best_row = _load_plot_params_row_from_results(config, args, logger=logger)
+        if best_row is None:
+            return 1
+        _plot_trade_setups_for_symbols(
+            config=config,
+            args=args,
+            logger=logger,
+            strategy=strategy,
+            preparer=preparer,
+            symbol_frames=symbol_frames,
+            params_row=best_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix="plot-from-results",
+        )
+        return 0
+
     results = runner.run(
         strategy,
         symbol_frames,
@@ -819,51 +947,18 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             return 0
 
         best_row = results.iloc[0]
-        output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
-        plotted_images = 0
-        symbols_with_plots = 0
-
-        for symbol, mtf_frames in symbol_frames.items():
-            cfg = _build_breakout_params_from_row(
-                best_row,
-                symbol=symbol,
-                levels_timeframe=levels_timeframe,
-                entry_timeframe=entry_timeframe,
-            )
-            strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=cfg)
-            diagnostics = strategy.consume_last_generation_diagnostics()
-            raw_spans_obj = diagnostics.get("trade_plot_spans", [])
-            raw_spans = raw_spans_obj if isinstance(raw_spans_obj, list) else []
-            trade_spans: list[TradePlotSpan] = [
-                span for span in raw_spans if isinstance(span, TradePlotSpan)
-            ]
-            raw_retest_spans_obj = diagnostics.get("retest_plot_spans", [])
-            raw_retest_spans = raw_retest_spans_obj if isinstance(raw_retest_spans_obj, list) else []
-            retest_spans: list[RetestPlotSpan] = [
-                span for span in raw_retest_spans if isinstance(span, RetestPlotSpan)
-            ]
-            saved_paths = plotter.plot_trade_setups(
-                symbol=symbol,
-                params=cfg,
-                output_dir=output_dir,
-                trade_spans=trade_spans,
-                retest_spans=retest_spans,
-            )
-            if saved_paths:
-                symbols_with_plots += 1
-                plotted_images += len(saved_paths)
-
-        logger.info(
-            "запуск-бэктеста: plot=true, построены графики сделок symbols=%s images=%s output_dir=%s",
-            symbols_with_plots,
-            plotted_images,
-            output_dir,
+        _plot_trade_setups_for_symbols(
+            config=config,
+            args=args,
+            logger=logger,
+            strategy=strategy,
+            preparer=preparer,
+            symbol_frames=symbol_frames,
+            params_row=best_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix="запуск-бэктеста: plot=true",
         )
-        if plotted_images == 0:
-            logger.warning("запуск-бэктеста: plot=true, но не найдено сделок для визуализации")
     return 0
 
 

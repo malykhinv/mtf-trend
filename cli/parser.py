@@ -82,6 +82,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Таймфрейм входов (например 15m). Приоритетнее ENTRY_TIMEFRAME из env",
     )
     run_bt.add_argument("--plot", default=False, help="Строить графики сделок (true/false)")
+    run_bt.add_argument(
+        "--plot-from-results",
+        action="store_true",
+        help="Построить графики по параметрам из backtest_results.csv без полного бэктеста",
+    )
+    run_bt.add_argument(
+        "--results-input",
+        default=None,
+        help="Путь к CSV с результатами для --plot-from-results",
+    )
 
     report = subparsers.add_parser("make-report", help="Сформировать JSON-отчет по результатам бектеста")
     report.add_argument("--input", default=None, help="Путь к CSV с результатами")
