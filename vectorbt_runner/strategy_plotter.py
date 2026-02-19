@@ -9,7 +9,8 @@ import matplotlib.dates as mdates
 import pandas as pd
 from matplotlib.lines import Line2D
 from matplotlib.ticker import FuncFormatter
-from matplotlib.patches import Rectangle
+import numpy as np
+from matplotlib.patches import FancyBboxPatch, Rectangle
 
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
@@ -55,11 +56,71 @@ class StrategyPlotter:
 
     @staticmethod
     def _apply_dark_theme(ax: plt.Axes) -> None:
-        ax.set_facecolor("#0f172a")
-        ax.grid(color="#334155", alpha=0.45, linestyle="--", linewidth=0.8)
+        ax.set_facecolor("none")
+        panel = FancyBboxPatch(
+            (0.0, 0.0),
+            1.0,
+            1.0,
+            transform=ax.transAxes,
+            boxstyle="round,pad=0.008,rounding_size=0.02",
+            facecolor="#0f172a",
+            edgecolor="#1f2937",
+            linewidth=1.0,
+            zorder=-10,
+            clip_on=False,
+        )
+        ax.add_artist(panel)
+        ax.grid(color="#334155", alpha=0.28, linestyle="-", linewidth=0.65)
         ax.tick_params(colors="#e2e8f0", labelsize=9)
         for spine in ax.spines.values():
             spine.set_color("#334155")
+
+    @staticmethod
+    def _add_price_zone(
+        ax: plt.Axes,
+        *,
+        x_start: pd.Timestamp,
+        x_end: pd.Timestamp,
+        price: float,
+        label: str,
+        facecolor: str,
+        edgecolor: str,
+        text_color: str,
+        vertical_padding: float,
+    ) -> None:
+        x0 = mdates.date2num(x_start)
+        width = max(mdates.date2num(x_end) - x0, 1e-9)
+        y0 = price - vertical_padding
+        height = max(vertical_padding * 2.0, 1e-9)
+        zone = FancyBboxPatch(
+            (x0, y0),
+            width,
+            height,
+            boxstyle="round,pad=0.01,rounding_size=0.03",
+            linewidth=0.9,
+            facecolor=facecolor,
+            edgecolor=edgecolor,
+            alpha=0.32,
+            zorder=2.5,
+        )
+        ax.add_patch(zone)
+        ax.text(
+            x0 + width / 2.0,
+            price,
+            f"{label} {price:.4f}",
+            color=text_color,
+            fontsize=8,
+            fontweight="semibold",
+            va="center",
+            ha="center",
+            zorder=4,
+            bbox={
+                "boxstyle": "round,pad=0.3,rounding_size=0.2",
+                "facecolor": "#020617",
+                "edgecolor": edgecolor,
+                "alpha": 0.55,
+            },
+        )
 
     @staticmethod
     def _add_styled_legend(ax: plt.Axes, handles: list[Line2D]) -> None:
@@ -81,37 +142,36 @@ class StrategyPlotter:
         if frame.empty:
             return
 
-        plot_time = mdates.date2num(frame["plot_time"])
+        plot_time = np.asarray(mdates.date2num(frame["plot_time"]), dtype=float)
+        open_prices = frame["open"].to_numpy(dtype=float, copy=False)
+        high_prices = frame["high"].to_numpy(dtype=float, copy=False)
+        low_prices = frame["low"].to_numpy(dtype=float, copy=False)
+        close_prices = frame["close"].to_numpy(dtype=float, copy=False)
+
         if len(plot_time) > 1:
-            candle_width = (plot_time[1] - plot_time[0]) * 0.7
+            candle_width = float((plot_time[1] - plot_time[0]) * 0.68)
         else:
             candle_width = 0.005
 
-        for x_value, open_price, high_price, low_price, close_price in zip(
-            plot_time,
-            frame["open"],
-            frame["high"],
-            frame["low"],
-            frame["close"],
-            strict=False,
-        ):
-            is_bull = close_price >= open_price
-            body_color = "#22c55e" if is_bull else "#ef4444"
-            wick_color = "#86efac" if is_bull else "#fca5a5"
+        is_bull = close_prices >= open_prices
+        wick_colors = np.where(is_bull, "#86efac", "#fca5a5")
+        body_colors = np.where(is_bull, "#22c55e", "#ef4444")
 
-            ax.vlines(x_value, low_price, high_price, color=wick_color, linewidth=1.05, zorder=2)
-            body_bottom = min(open_price, close_price)
-            body_height = max(abs(close_price - open_price), 1e-9)
-            body = Rectangle(
-                (x_value - candle_width / 2.0, body_bottom),
-                candle_width,
-                body_height,
-                facecolor=body_color,
-                edgecolor=body_color,
-                linewidth=0.8,
-                zorder=3,
-            )
-            ax.add_patch(body)
+        ax.vlines(plot_time, low_prices, high_prices, color=wick_colors, linewidth=1.0, zorder=2)
+
+        body_bottom = np.minimum(open_prices, close_prices)
+        body_height = np.maximum(np.abs(close_prices - open_prices), 1e-9)
+        ax.bar(
+            plot_time,
+            body_height,
+            width=candle_width,
+            bottom=body_bottom,
+            color=body_colors,
+            edgecolor=body_colors,
+            linewidth=0.7,
+            align="center",
+            zorder=3,
+        )
 
     @staticmethod
     def _build_mtf_frames(
@@ -401,9 +461,42 @@ class StrategyPlotter:
             exit_label = pd.to_datetime(span.exit_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
 
             ax.hlines(span.entry_price, entry_time, exit_time, color="#38bdf8", linestyle="-", linewidth=1.8)
-            ax.hlines(span.stop_loss, entry_time, exit_time, color="#ef4444", linestyle="--", linewidth=1.5)
-            ax.hlines(span.take_profit_1, entry_time, exit_time, color="#22c55e", linestyle="--", linewidth=1.5)
-            ax.hlines(span.take_profit_2, entry_time, exit_time, color="#16a34a", linestyle="--", linewidth=1.5)
+
+            price_range = float(trade_window["high"].max() - trade_window["low"].min())
+            vertical_padding = max(price_range * 0.005, 1e-9)
+            self._add_price_zone(
+                ax,
+                x_start=entry_time,
+                x_end=exit_time,
+                price=span.stop_loss,
+                label="SL",
+                facecolor="#ef4444",
+                edgecolor="#f87171",
+                text_color="#fecaca",
+                vertical_padding=vertical_padding,
+            )
+            self._add_price_zone(
+                ax,
+                x_start=entry_time,
+                x_end=exit_time,
+                price=span.take_profit_1,
+                label="TP1",
+                facecolor="#22c55e",
+                edgecolor="#4ade80",
+                text_color="#dcfce7",
+                vertical_padding=vertical_padding,
+            )
+            self._add_price_zone(
+                ax,
+                x_start=entry_time,
+                x_end=exit_time,
+                price=span.take_profit_2,
+                label="TP2",
+                facecolor="#16a34a",
+                edgecolor="#22c55e",
+                text_color="#bbf7d0",
+                vertical_padding=vertical_padding,
+            )
 
             ax.scatter([entry_time], [span.entry_price], color="#38bdf8", marker="^", s=85, zorder=5)
             ax.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=85, zorder=5)
@@ -414,9 +507,9 @@ class StrategyPlotter:
                     Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
                     Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
                     Line2D([0], [0], color="#38bdf8", linewidth=2.5, label="Entry"),
-                    Line2D([0], [0], color="#ef4444", linestyle="--", linewidth=2, label="Stop loss"),
-                    Line2D([0], [0], color="#22c55e", linestyle="--", linewidth=2, label="TP1"),
-                    Line2D([0], [0], color="#16a34a", linestyle="--", linewidth=2, label="TP2"),
+                    Line2D([0], [0], color="#ef4444", linewidth=6, alpha=0.5, label="SL zone"),
+                    Line2D([0], [0], color="#22c55e", linewidth=6, alpha=0.5, label="TP1 zone"),
+                    Line2D([0], [0], color="#16a34a", linewidth=6, alpha=0.5, label="TP2 zone"),
                     Line2D([0], [0], marker="^", color="#38bdf8", linestyle="None", markersize=9, label="Entry candle"),
                     Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=9, label="Exit candle"),
                 ],
