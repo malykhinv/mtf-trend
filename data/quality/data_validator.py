@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from numbers import Integral
+from typing import cast
 
 import pandas as pd
 
@@ -81,8 +82,8 @@ class DataValidator:
             )
             return issues
 
-        numeric_columns = {
-            col: pd.to_numeric(normalized[col], errors="coerce")
+        numeric_columns: dict[str, pd.Series] = {
+            col: cast(pd.Series, pd.to_numeric(normalized[col], errors="coerce"))
             for col in ("open", "high", "low", "close", "volume", "open_interest")
             if col in normalized.columns
         }
@@ -119,10 +120,10 @@ class DataValidator:
                     add_issue(int(pos), issue_type, DataQualitySeverity.ERROR, f"Negative {col} value")
 
         if {"high", "low", "close"}.issubset(numeric_columns):
-            spread = (numeric_columns["high"] - numeric_columns["low"]).abs()
-            base = numeric_columns["close"].abs().replace(0, pd.NA)
-            ratio = spread / base
-            suspicious_mask = ratio.gt(SPREAD_TO_CLOSE_WARNING_THRESHOLD) & ratio.notna()
+            spread: pd.Series = (numeric_columns["high"] - numeric_columns["low"]).abs()
+            base: pd.Series = numeric_columns["close"].abs().replace(0, pd.NA)
+            ratio: pd.Series = spread / base
+            suspicious_mask: pd.Series = ratio.gt(SPREAD_TO_CLOSE_WARNING_THRESHOLD) & ratio.notna()
             for pos in normalized.index[suspicious_mask]:
                 threshold_pct = int(SPREAD_TO_CLOSE_WARNING_THRESHOLD * 100)
                 add_issue(
