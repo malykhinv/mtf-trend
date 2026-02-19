@@ -786,6 +786,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 TradePlotSpan(
                                     symbol=params.symbol,
                                     side=active_trade_signal.position_side,
+                                    level_start_timestamp_ms=active_trade_signal.formation_timestamp_ms,
                                     entry_timestamp_ms=active_trade_signal.entry_timestamp_ms,
                                     exit_timestamp_ms=result.exit_timestamp_ms,
                                     entry_price=active_trade_signal.entry_price.value,
@@ -810,6 +811,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         RetestPlotSpan(
                             symbol=params.symbol,
                             side=pending_retest.breakout.side,
+                            level_start_timestamp_ms=pending_retest.breakout.level_start_time,
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
@@ -844,6 +846,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         RetestPlotSpan(
                             symbol=params.symbol,
                             side=pending_retest.breakout.side,
+                            level_start_timestamp_ms=pending_retest.breakout.level_start_time,
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
@@ -868,6 +871,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         RetestPlotSpan(
                             symbol=params.symbol,
                             side=pending_retest.breakout.side,
+                            level_start_timestamp_ms=pending_retest.breakout.level_start_time,
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
@@ -901,6 +905,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         RetestPlotSpan(
                             symbol=params.symbol,
                             side=pending_retest.breakout.side,
+                            level_start_timestamp_ms=pending_retest.breakout.level_start_time,
                             level_price=pending_retest.breakout.level.price.value,
                             retest_low=pending_retest.retest_low,
                             retest_high=pending_retest.retest_high,
@@ -982,6 +987,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             RetestPlotSpan(
                                 symbol=params.symbol,
                                 side=pending_breakout.side,
+                                level_start_timestamp_ms=pending_breakout.level_start_time,
                                 level_price=pending_breakout.level.price.value,
                                 retest_low=float(row["low"]),
                                 retest_high=float(row["high"]),
@@ -1009,6 +1015,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             RetestPlotSpan(
                                 symbol=params.symbol,
                                 side=pending_breakout.side,
+                                level_start_timestamp_ms=pending_breakout.level_start_time,
                                 level_price=pending_breakout.level.price.value,
                                 retest_low=float(row["low"]),
                                 retest_high=float(row["high"]),
@@ -1138,6 +1145,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 RetestPlotSpan(
                     symbol=params.symbol,
                     side=pending_retest.breakout.side,
+                    level_start_timestamp_ms=pending_retest.breakout.level_start_time,
                     level_price=pending_retest.breakout.level.price.value,
                     retest_low=pending_retest.retest_low,
                     retest_high=pending_retest.retest_high,
@@ -1159,6 +1167,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         TradePlotSpan(
                             symbol=params.symbol,
                             side=active_trade_signal.position_side,
+                            level_start_timestamp_ms=active_trade_signal.formation_timestamp_ms,
                             entry_timestamp_ms=active_trade_signal.entry_timestamp_ms,
                             exit_timestamp_ms=forced_result.exit_timestamp_ms,
                             entry_price=active_trade_signal.entry_price.value,

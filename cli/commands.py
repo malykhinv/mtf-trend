@@ -1248,6 +1248,7 @@ def _load_retest_spans_artifact(path: Path, logger: Logger) -> list[RetestPlotSp
                 RetestPlotSpan(
                     symbol=str(item["symbol"]),
                     side=PositionSide(str(item["side"])),
+                    level_start_timestamp_ms=int(item.get("level_start_timestamp_ms", item.get("level_start_time", item.get("retest_start_timestamp_ms", item["retest_start_time"])))),
                     level_price=float(item["level_price"]),
                     retest_low=float(item["retest_low"]),
                     retest_high=float(item["retest_high"]),
