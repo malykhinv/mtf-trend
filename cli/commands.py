@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 import time
 from logging import Logger
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
 
 import pandas as pd
 
@@ -658,7 +658,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             invalid_volume_symbols += 1
             continue
 
-        volume_series = pd.to_numeric(levels_frame["volume"], errors="coerce").dropna()
+        volume_series = cast(pd.Series, pd.to_numeric(levels_frame["volume"], errors="coerce").dropna())
         if volume_series.empty:
             logger.debug(
                 "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет валидного volume на levels_tf=%s",
@@ -835,8 +835,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             )
             strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=cfg)
             diagnostics = strategy.consume_last_generation_diagnostics()
-            raw_spans = diagnostics.get("trade_plot_spans", [])
-            trade_spans = [span for span in raw_spans if isinstance(span, TradePlotSpan)]
+            raw_spans_obj = diagnostics.get("trade_plot_spans", [])
+            raw_spans = raw_spans_obj if isinstance(raw_spans_obj, list) else []
+            trade_spans: list[TradePlotSpan] = [
+                span for span in raw_spans if isinstance(span, TradePlotSpan)
+            ]
             saved_paths = plotter.plot_trade_setups(
                 symbol=symbol,
                 params=cfg,
@@ -939,7 +942,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
             }
         ]
 
-    oi = pd.to_numeric(frame["open_interest"], errors="coerce")
+    oi: pd.Series = pd.to_numeric(frame["open_interest"], errors="coerce")
     issues: list[dict[str, str]] = []
 
     if oi.isna().any():
@@ -1337,8 +1340,11 @@ def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
             if not mtf_frames.levels_frame.empty and not mtf_frames.entry_frame.empty:
                 strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
                 diagnostics = strategy.consume_last_generation_diagnostics()
-                raw_spans = diagnostics.get("retest_plot_spans", [])
-                diagnostics_spans = [span for span in raw_spans if isinstance(span, RetestPlotSpan)]
+                raw_spans_obj = diagnostics.get("retest_plot_spans", [])
+                raw_spans = raw_spans_obj if isinstance(raw_spans_obj, list) else []
+                diagnostics_spans = [
+                    span for span in raw_spans if isinstance(span, RetestPlotSpan)
+                ]
 
             if diagnostics_spans:
                 retest_spans = diagnostics_spans
