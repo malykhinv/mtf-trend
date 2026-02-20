@@ -7,10 +7,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pandas as pd
-from matplotlib.lines import Line2D
-from matplotlib.ticker import FuncFormatter
 import numpy as np
-from matplotlib.patches import FancyBboxPatch, Rectangle
+from matplotlib.patches import Rectangle
 
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
@@ -90,10 +88,6 @@ class StrategyPlotter:
         return f"{start_ms}_{end_ms}"
 
     @staticmethod
-    def _timestamp_formatter(fmt: str) -> FuncFormatter:
-        return FuncFormatter(lambda value, _position: mdates.num2date(value).strftime(fmt))
-
-    @staticmethod
     def _prepare_plot_frame(frame: pd.DataFrame) -> pd.DataFrame:
         plot_frame = frame.copy()
         plot_frame["plot_time"] = pd.to_datetime(plot_frame["timestamp"], unit="ms", utc=True).dt.tz_localize(None)
@@ -108,7 +102,7 @@ class StrategyPlotter:
             spine.set_visible(False)
 
     @staticmethod
-    def _add_price_zone(
+    def _add_price_label(
         ax: plt.Axes,
         *,
         x_start: pd.Timestamp,
@@ -118,24 +112,9 @@ class StrategyPlotter:
         facecolor: str,
         edgecolor: str,
         text_color: str,
-        vertical_padding: float,
     ) -> None:
         x0 = mdates.date2num(x_start)
         width = max(mdates.date2num(x_end) - x0, 1e-9)
-        y0 = price - vertical_padding
-        height = max(vertical_padding * 2.0, 1e-9)
-        zone = FancyBboxPatch(
-            (x0, y0),
-            width,
-            height,
-            boxstyle="round,pad=0.002,rounding_size=0.008",
-            linewidth=0.0,
-            facecolor=facecolor,
-            edgecolor="none",
-            alpha=0.26,
-            zorder=2.5,
-        )
-        ax.add_patch(zone)
         ax.text(
             x0 + width / 2.0,
             price,
@@ -148,36 +127,12 @@ class StrategyPlotter:
             zorder=4,
             bbox={
                 "boxstyle": "round,pad=0.22,rounding_size=0.08",
-                "facecolor": "#111827",
-                "edgecolor": "none",
-                "alpha": 0.7,
+                "facecolor": facecolor,
+                "edgecolor": edgecolor,
+                "linewidth": 0.8,
+                "alpha": 0.95,
             },
         )
-
-    @staticmethod
-    def _add_styled_legend(
-        ax: plt.Axes,
-        handles: list[Line2D],
-        *,
-        loc: str = "lower left",
-        bbox_to_anchor: tuple[float, float] = (0.0, 1.02),
-    ) -> None:
-        legend = ax.legend(
-            handles=handles,
-            loc=loc,
-            bbox_to_anchor=bbox_to_anchor,
-            frameon=True,
-            fancybox=True,
-            framealpha=0.85,
-            edgecolor="none",
-            labelcolor=StrategyPlotter.TV_TEXT,
-            fontsize=8,
-            handlelength=1.6,
-            columnspacing=0.8,
-            ncol=1,
-            borderaxespad=0.0,
-        )
-        legend.get_frame().set_facecolor("#111827")
 
     @staticmethod
     def _plot_candles(ax: plt.Axes, frame: pd.DataFrame) -> None:
@@ -217,9 +172,21 @@ class StrategyPlotter:
 
     @staticmethod
     def _format_time_axis(ax: plt.Axes) -> None:
-        locator = mdates.AutoDateLocator(minticks=5, maxticks=8)
+        locator = mdates.AutoDateLocator(minticks=4, maxticks=7, interval_multiples=True)
+        formatter = mdates.ConciseDateFormatter(locator)
+        formatter.show_offset = False
         ax.xaxis.set_major_locator(locator)
-        ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+        ax.xaxis.set_major_formatter(formatter)
+        ax.xaxis.set_minor_locator(mdates.NullLocator())
+
+    @staticmethod
+    def _add_trade_rr_markup(ax: plt.Axes, *, entry_time: pd.Timestamp, zone_end: pd.Timestamp, entry_price: float, stop_loss: float, take_profit_1: float, take_profit_2: float) -> None:
+        ax.fill_between([entry_time, zone_end], [entry_price, entry_price], [take_profit_2, take_profit_2], color="#16a34a", alpha=0.28, zorder=1.6)
+        ax.fill_between([entry_time, zone_end], [stop_loss, stop_loss], [entry_price, entry_price], color="#dc2626", alpha=0.28, zorder=1.6)
+        ax.hlines(entry_price, entry_time, zone_end, color=StrategyPlotter.TV_ENTRY, linestyle="-", linewidth=1.8, zorder=3.1)
+        ax.hlines(take_profit_1, entry_time, zone_end, color="#22c55e", linestyle="--", linewidth=1.1, alpha=0.8, zorder=3.0)
+        ax.hlines(take_profit_2, entry_time, zone_end, color="#16a34a", linestyle="--", linewidth=1.2, alpha=0.85, zorder=3.0)
+        ax.hlines(stop_loss, entry_time, zone_end, color="#dc2626", linestyle="--", linewidth=1.2, alpha=0.85, zorder=3.0)
 
     @staticmethod
     def _build_mtf_frames(
@@ -332,21 +299,11 @@ class StrategyPlotter:
 
         plot_time = annotated["plot_time"]
         self._plot_candles(ax_top, annotated)
-        high_line, = ax_top.plot(plot_time, annotated["level_high"], color="#38bdf8", linewidth=1.4)
-        low_line, = ax_top.plot(plot_time, annotated["level_low"], color="#f97316", linewidth=1.4)
+        ax_top.plot(plot_time, annotated["level_high"], color="#38bdf8", linewidth=1.4)
+        ax_top.plot(plot_time, annotated["level_low"], color="#f97316", linewidth=1.4)
         ax_top.set_title(f"{symbol}: MTF levels overview", color="#f8fafc", fontsize=13, fontweight="bold")
-        self._add_styled_legend(
-            ax_top,
-            [
-                Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
-                Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
-                Line2D([0], [0], color=high_line.get_color(), linewidth=2.2, label="1D high"),
-                Line2D([0], [0], color=low_line.get_color(), linewidth=2.2, label="1D low"),
-            ],
-        )
-
-        daily_high_line, = ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_high"], color="#38bdf8", linewidth=1.5)
-        daily_low_line, = ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_low"], color="#f97316", linewidth=1.5)
+        ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_high"], color="#38bdf8", linewidth=1.5)
+        ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_low"], color="#f97316", linewidth=1.5)
         ax_bottom.fill_between(
             daily_levels["plot_time"],
             daily_levels["level_low"],
@@ -355,18 +312,7 @@ class StrategyPlotter:
             alpha=0.18,
         )
         ax_bottom.set_title("Daily high/low bands", color="#f8fafc", fontsize=11)
-        self._add_styled_legend(
-            ax_bottom,
-            [
-                Line2D([0], [0], color=daily_high_line.get_color(), linewidth=2.2, label="Daily high"),
-                Line2D([0], [0], color=daily_low_line.get_color(), linewidth=2.2, label="Daily low"),
-                Line2D([0], [0], color="#94a3b8", linewidth=6, alpha=0.5, label="Daily range"),
-            ],
-            bbox_to_anchor=(1.01, 1.02),
-        )
-
-        ax_bottom.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
-        ax_bottom.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d"))
+        self._format_time_axis(ax_bottom)
         ax_bottom.set_ylabel("Price", color="#cbd5e1")
         fig.autofmt_xdate(rotation=30)
 
@@ -465,20 +411,10 @@ class StrategyPlotter:
                 )
                 ax.scatter([confirmation_time], [marker_price], color="#a855f7", marker=marker, s=90, zorder=6)
 
-            legend_items = [
-                Line2D([0], [0], color="#22c55e", linewidth=6, label="Bull candle"),
-                Line2D([0], [0], color="#ef4444", linewidth=6, label="Bear candle"),
-                Line2D([0], [0], color="#38bdf8", linestyle="--", linewidth=2, label="Daily level"),
-                Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
-                Line2D([0], [0], color="#f59e0b", linewidth=6, alpha=0.6, label=f"Retest ({span.status})"),
-                Line2D([0], [0], marker="^", color="#a855f7", linestyle="None", markersize=9, label="Continuation confirmation"),
-            ]
-            self._add_styled_legend(ax, legend_items)
             start_str = str(span.retest_start_timestamp_ms)
             ax.set_title(f"{symbol} retest {span.side.value} ({span.status}) • Continuation confirmation @ {start_str}", color="#f8fafc", fontweight="bold")
             ax.set_ylabel("Price", color="#cbd5e1")
-            ax.xaxis.set_major_formatter(self._timestamp_formatter("%Y-%m-%d %H:%M"))
-            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=5, maxticks=9))
+            self._format_time_axis(ax)
             fig.autofmt_xdate(rotation=30)
 
             timestamp = span.retest_start_timestamp_ms
@@ -566,7 +502,15 @@ class StrategyPlotter:
                 max_overshoot_bars=self.ENTRY_ZONE_MAX_OVERSHOOT_BARS,
             )
 
-            ax_top.hlines(span.entry_price, entry_time, zone_end, color=self.TV_ENTRY, linestyle="-", linewidth=1.8)
+            self._add_trade_rr_markup(
+                ax_top,
+                entry_time=entry_time,
+                zone_end=zone_end,
+                entry_price=span.entry_price,
+                stop_loss=span.stop_loss,
+                take_profit_1=span.take_profit_1,
+                take_profit_2=span.take_profit_2,
+            )
             ax_top.axvline(
                 x=level_start_time,
                 color=self.TV_LEVEL_START,
@@ -574,49 +518,41 @@ class StrategyPlotter:
                 linewidth=1.3,
                 alpha=0.9,
             )
-
-            price_range = float(trade_window["high"].max() - trade_window["low"].min())
-            vertical_padding = max(price_range * 0.005, 1e-9)
-            self._add_price_zone(
+            self._add_price_label(
                 ax_top,
                 x_start=entry_time,
                 x_end=zone_end,
                 price=span.stop_loss,
                 label="SL",
-                facecolor="#a6324a",
-                edgecolor="none",
-                text_color="#fecaca",
-                vertical_padding=vertical_padding,
+                facecolor="#3b82f6",
+                edgecolor="#60a5fa",
+                text_color="#eff6ff",
             )
-            self._add_price_zone(
+            self._add_price_label(
                 ax_top,
                 x_start=entry_time,
                 x_end=zone_end,
                 price=span.take_profit_1,
                 label="TP1",
-                facecolor="#21875e",
-                edgecolor="none",
-                text_color="#dcfce7",
-                vertical_padding=vertical_padding,
+                facecolor="#3b82f6",
+                edgecolor="#60a5fa",
+                text_color="#eff6ff",
             )
-            self._add_price_zone(
+            self._add_price_label(
                 ax_top,
                 x_start=entry_time,
                 x_end=zone_end,
                 price=span.take_profit_2,
                 label="TP2",
-                facecolor="#0f6d54",
-                edgecolor="none",
-                text_color="#bbf7d0",
-                vertical_padding=vertical_padding,
+                facecolor="#3b82f6",
+                edgecolor="#60a5fa",
+                text_color="#eff6ff",
             )
 
             ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5)
             ax_top.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=80, zorder=5)
 
             continuation_marker = "^" if span.side.name == "LONG" else "v"
-            continuation_label = f"Continuation confirmation ({span.side.value})"
-
             if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:
                 confirmation_time = pd.to_datetime(confirmation_span.confirmation_timestamp_ms, unit="ms")
                 confirmation_price = confirmation_span.confirmation_price if confirmation_span.confirmation_price is not None else span.entry_price
@@ -700,46 +636,6 @@ class StrategyPlotter:
                         s=48,
                         zorder=6,
                     )
-
-            top_legend_handles = [
-                Line2D([0], [0], color=self.TV_BULL, linewidth=6, label="Bull candle"),
-                Line2D([0], [0], color=self.TV_BEAR, linewidth=6, label="Bear candle"),
-                Line2D([0], [0], color=self.TV_ENTRY, linewidth=2.5, label="Entry zone"),
-                Line2D([0], [0], color="#a6324a", linewidth=6, alpha=0.6, label="SL"),
-                Line2D([0], [0], color="#21875e", linewidth=6, alpha=0.6, label="TP1"),
-                Line2D([0], [0], color="#0f6d54", linewidth=6, alpha=0.6, label="TP2"),
-                Line2D([0], [0], marker="^", color=self.TV_ENTRY, linestyle="None", markersize=8, label="Entry"),
-                Line2D([0], [0], marker="X", color="#a855f7", linestyle="None", markersize=8, label="Exit"),
-            ]
-            if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:
-                top_legend_handles.append(
-                    Line2D(
-                        [0],
-                        [0],
-                        marker=continuation_marker,
-                        color="#a855f7",
-                        linestyle="None",
-                        markersize=8,
-                        label=continuation_label,
-                    )
-                )
-
-            bottom_legend_handles = [
-                Line2D([0], [0], color=self.TV_LEVEL_START, linestyle=self.TV_LEVEL_START_LINESTYLE, linewidth=2, label="Level start"),
-                Line2D([0], [0], color=self.TV_ENTRY, linestyle="--", linewidth=2, label="HTF high"),
-                Line2D([0], [0], color="#f59e0b", linestyle="--", linewidth=2, label="HTF low"),
-            ]
-            if resistance_touch_times:
-                bottom_legend_handles.append(
-                    Line2D([0], [0], marker="v", color=self.TV_ENTRY, linestyle="None", markersize=7, label="Touch res")
-                )
-            if support_touch_times:
-                bottom_legend_handles.append(
-                    Line2D([0], [0], marker="^", color="#f59e0b", linestyle="None", markersize=7, label="Touch sup")
-                )
-
-            self._add_styled_legend(ax_top, top_legend_handles)
-            self._add_styled_legend(ax_bottom, bottom_legend_handles, bbox_to_anchor=(1.01, 1.02))
             title_suffix = " • Continuation confirmation" if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None else ""
             ax_top.set_title(
                 f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type}{title_suffix}",
