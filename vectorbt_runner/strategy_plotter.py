@@ -644,11 +644,7 @@ class StrategyPlotter:
                 )
                 if retest_span_for_plot.breakout_timestamp_ms is not None:
                     breakout_time = pd.to_datetime(retest_span_for_plot.breakout_timestamp_ms, unit="ms")
-                    breakout_price = (
-                        retest_span_for_plot.breakout_price
-                        if retest_span_for_plot.breakout_price is not None
-                        else retest_span_for_plot.level_price
-                    )
+                    breakout_price = retest_span_for_plot.breakout_price
                     ax_top.axvline(
                         x=breakout_time,
                         color="#eab308",
@@ -656,15 +652,16 @@ class StrategyPlotter:
                         linewidth=1.1,
                         alpha=0.75,
                     )
-                    ax_top.scatter(
-                        [breakout_time],
-                        [breakout_price],
-                        color="#eab308",
-                        marker="D",
-                        s=64,
-                        zorder=6,
-                        label="Breakout event",
-                    )
+                    if breakout_price is not None:
+                        ax_top.scatter(
+                            [breakout_time],
+                            [breakout_price],
+                            color="#eab308",
+                            marker="D",
+                            s=64,
+                            zorder=6,
+                            label="Breakout event",
+                        )
 
             continuation_marker = "^" if span.side.name == "LONG" else "v"
             if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:

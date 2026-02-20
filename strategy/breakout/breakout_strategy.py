@@ -204,6 +204,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "natr": natr,
         }
 
+    @staticmethod
+    def _resolve_breakout_event_price(
+        *,
+        annotated_rows: list[tuple[object, ...]],
+        breakout_idx: int,
+        level_price: float,
+    ) -> float:
+        if 0 <= breakout_idx < len(annotated_rows) and len(annotated_rows[breakout_idx]) > 4:
+            return float(annotated_rows[breakout_idx][4])
+        return level_price
+
 
     def _build_level(
         self,
@@ -873,6 +884,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 continue
 
             if pending_retest is not None:
+                breakout_event_price = self._resolve_breakout_event_price(
+                    annotated_rows=annotated_rows,
+                    breakout_idx=pending_retest.breakout.breakout_idx,
+                    level_price=pending_retest.breakout.level.price.value,
+                )
                 if params.entry_trigger == EntryTrigger.IMMEDIATE:
                     entry_idx = pending_retest.retest_idx + 1
                     pending_retest.retest_end_idx = pending_retest.retest_idx
@@ -888,7 +904,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmed",
                             breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
-                            breakout_price=pending_retest.breakout.level.price.value,
+                            breakout_price=breakout_event_price,
                         )
                     )
                     self._logger.debug(
@@ -933,7 +949,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmation_expired",
                             breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
-                            breakout_price=pending_retest.breakout.level.price.value,
+                            breakout_price=breakout_event_price,
                         )
                     )
                     self._logger.debug(
@@ -960,7 +976,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmed",
                             breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
-                            breakout_price=pending_retest.breakout.level.price.value,
+                            breakout_price=breakout_event_price,
                             confirmation_timestamp_ms=int(row["timestamp"]),
                             confirmation_price=float(row["close"]),
                             confirmation_candle_low=float(row["low"]),
@@ -1008,7 +1024,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmation_not_received",
                             breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
-                            breakout_price=pending_retest.breakout.level.price.value,
+                            breakout_price=breakout_event_price,
                         )
                     )
                     self._logger.debug(
@@ -1080,6 +1096,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         continue
                     if not bool(volume_check["is_ok"]):
                         diagnostics["retest_rejected_by_volume"] += 1
+                        breakout_event_price = self._resolve_breakout_event_price(
+                            annotated_rows=annotated_rows,
+                            breakout_idx=pending_breakout.breakout_idx,
+                            level_price=pending_breakout.level.price.value,
+                        )
                         retest_plot_spans.append(
                             RetestPlotSpan(
                                 symbol=params.symbol,
@@ -1092,7 +1113,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 retest_end_timestamp_ms=int(row["timestamp"]),
                                 status="rejected_by_volume",
                                 breakout_timestamp_ms=timestamps_by_idx[pending_breakout.breakout_idx],
-                                breakout_price=pending_breakout.level.price.value,
+                                breakout_price=breakout_event_price,
                             )
                         )
                         self._logger.debug(
@@ -1110,6 +1131,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         )
                     else:
                         diagnostics["retest_rejected_by_extra_filters"] += 1
+                        breakout_event_price = self._resolve_breakout_event_price(
+                            annotated_rows=annotated_rows,
+                            breakout_idx=pending_breakout.breakout_idx,
+                            level_price=pending_breakout.level.price.value,
+                        )
                         retest_plot_spans.append(
                             RetestPlotSpan(
                                 symbol=params.symbol,
@@ -1122,7 +1148,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 retest_end_timestamp_ms=int(row["timestamp"]),
                                 status="rejected_by_extra_filters",
                                 breakout_timestamp_ms=timestamps_by_idx[pending_breakout.breakout_idx],
-                                breakout_price=pending_breakout.level.price.value,
+                                breakout_price=breakout_event_price,
                             )
                         )
                         self._logger.debug(
@@ -1242,6 +1268,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if pending_retest is not None:
             diagnostics["retest_pending_end_of_data"] += 1
             pending_retest.retest_end_idx = min(pending_retest.confirmation_end_idx, len(annotated) - 1)
+            breakout_event_price = self._resolve_breakout_event_price(
+                annotated_rows=annotated_rows,
+                breakout_idx=pending_retest.breakout.breakout_idx,
+                level_price=pending_retest.breakout.level.price.value,
+            )
             retest_plot_spans.append(
                 RetestPlotSpan(
                     symbol=params.symbol,
@@ -1254,7 +1285,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                     status="pending_end_of_data",
                     breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
-                    breakout_price=pending_retest.breakout.level.price.value,
+                    breakout_price=breakout_event_price,
                 )
             )
 
