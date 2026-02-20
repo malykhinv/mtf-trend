@@ -603,7 +603,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def prepare_higher_tf_levels(self, *, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
         """Готовит уровни старшего ТФ без маппинга на младший ТФ.
 
-        Поле `level_start_time` — это левая граница lookback-окна, на котором рассчитан уровень.
+        Поле `level_start_time` — это левая граница lookback-окна в unix-ms и всегда имеет целочисленный тип (`int`).
         """
         if len(higher_base) < lookback + STRATEGY_MIN_LOOKBACK_BUFFER:
             return pd.DataFrame(
