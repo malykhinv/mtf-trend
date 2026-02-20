@@ -101,32 +101,33 @@ class LevelDetector:
 
     def detect(self, *, higher_base: pd.DataFrame, lookback: int) -> pd.DataFrame:
         """Возвращает уровни-кандидаты с метриками и score-фильтром."""
+        result_columns = [
+            "timestamp",
+            "level_high",
+            "level_low",
+            "level_start_time",
+            "touch_count",
+            "reaction_strength",
+            "level_score",
+            "resistance_reaction_strength",
+            "resistance_level_score",
+            "resistance_touch_count",
+            "resistance_min_bars_between_touches",
+            "resistance_max_penetration_atr",
+            "resistance_max_penetration_pct",
+            "resistance_touch_timestamps_ms",
+            "support_touch_count",
+            "support_reaction_strength",
+            "support_level_score",
+            "support_min_bars_between_touches",
+            "support_max_penetration_atr",
+            "support_max_penetration_pct",
+            "support_touch_timestamps_ms",
+        ]
         if len(higher_base) < lookback + 2:
-            return pd.DataFrame(
-                columns=[
-                    "timestamp",
-                    "level_high",
-                    "level_low",
-                    "level_start_time",
-                    "touch_count",
-                    "reaction_strength",
-                    "level_score",
-                    "resistance_reaction_strength",
-                    "resistance_level_score",
-                    "resistance_touch_count",
-                    "resistance_min_bars_between_touches",
-                    "resistance_max_penetration_atr",
-                    "resistance_max_penetration_pct",
-                    "resistance_touch_timestamps_ms",
-                    "support_touch_count",
-                    "support_reaction_strength",
-                    "support_level_score",
-                    "support_min_bars_between_touches",
-                    "support_max_penetration_atr",
-                    "support_max_penetration_pct",
-                    "support_touch_timestamps_ms",
-                ],
-            )
+            empty = pd.DataFrame(columns=result_columns)
+            empty["level_start_time"] = empty["level_start_time"].astype("int64")
+            return empty
 
         frame = higher_base.copy().sort_values("timestamp").reset_index(drop=True)
 
@@ -146,7 +147,7 @@ class LevelDetector:
 
         frame["level_high"] = frame["high"].rolling(window=lookback).max().shift(1)
         frame["level_low"] = frame["low"].rolling(window=lookback).min().shift(1)
-        level_start_times: list[float] = []
+        level_start_times: list[int | float] = []
 
         touch_counts: list[float] = []
         reaction_strengths: list[float] = []
@@ -193,7 +194,7 @@ class LevelDetector:
 
             window_slice = slice(idx - lookback, idx)
             window_timestamps = frame["timestamp"].iloc[window_slice].to_numpy(dtype="int64", copy=False)
-            level_start_times.append(float(window_timestamps[0]))
+            level_start_times.append(int(window_timestamps[0]))
             (
                 high_touch_count,
                 high_reaction,
@@ -269,6 +270,7 @@ class LevelDetector:
         frame["support_max_penetration_atr"] = support_max_penetration_atr_values
         frame["support_max_penetration_pct"] = support_max_penetration_pct_values
         frame["support_touch_timestamps_ms"] = support_touch_timestamps_values
+        frame["level_start_time"] = frame["level_start_time"].astype("Int64")
 
         frame = frame.dropna(
             subset=[
@@ -292,28 +294,6 @@ class LevelDetector:
                 "support_max_penetration_pct",
             ]
         )
-        return frame[
-            [
-                "timestamp",
-                "level_high",
-                "level_low",
-                "level_start_time",
-                "touch_count",
-                "reaction_strength",
-                "level_score",
-                "resistance_reaction_strength",
-                "resistance_level_score",
-                "resistance_touch_count",
-                "resistance_min_bars_between_touches",
-                "resistance_max_penetration_atr",
-                "resistance_max_penetration_pct",
-                "resistance_touch_timestamps_ms",
-                "support_touch_count",
-                "support_reaction_strength",
-                "support_level_score",
-                "support_min_bars_between_touches",
-                "support_max_penetration_atr",
-                "support_max_penetration_pct",
-                "support_touch_timestamps_ms",
-            ]
-        ].reset_index(drop=True)
+        result = frame[result_columns].reset_index(drop=True)
+        result["level_start_time"] = result["level_start_time"].astype("int64")
+        return result
