@@ -299,11 +299,35 @@ class StrategyPlotter:
 
         plot_time = annotated["plot_time"]
         self._plot_candles(ax_top, annotated)
-        ax_top.plot(plot_time, annotated["level_high"], color="#38bdf8", linewidth=1.4)
-        ax_top.plot(plot_time, annotated["level_low"], color="#f97316", linewidth=1.4)
+        ax_top.plot(
+            plot_time,
+            annotated["level_high"],
+            color="#38bdf8",
+            linewidth=1.4,
+            drawstyle="steps-post",
+        )
+        ax_top.plot(
+            plot_time,
+            annotated["level_low"],
+            color="#f97316",
+            linewidth=1.4,
+            drawstyle="steps-post",
+        )
         ax_top.set_title(f"{symbol}: MTF levels overview", color="#f8fafc", fontsize=13, fontweight="bold")
-        ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_high"], color="#38bdf8", linewidth=1.5)
-        ax_bottom.plot(daily_levels["plot_time"], daily_levels["level_low"], color="#f97316", linewidth=1.5)
+        ax_bottom.plot(
+            daily_levels["plot_time"],
+            daily_levels["level_high"],
+            color="#38bdf8",
+            linewidth=1.5,
+            drawstyle="steps-post",
+        )
+        ax_bottom.plot(
+            daily_levels["plot_time"],
+            daily_levels["level_low"],
+            color="#f97316",
+            linewidth=1.5,
+            drawstyle="steps-post",
+        )
         ax_bottom.fill_between(
             daily_levels["plot_time"],
             daily_levels["level_low"],
@@ -596,6 +620,7 @@ class StrategyPlotter:
                         linewidth=1.3,
                         linestyle="--",
                         alpha=0.9,
+                        drawstyle="steps-post",
                     )
                     ax_bottom.plot(
                         level_slice["plot_time"],
@@ -604,6 +629,7 @@ class StrategyPlotter:
                         linewidth=1.2,
                         linestyle="--",
                         alpha=0.8,
+                        drawstyle="steps-post",
                     )
 
                 trade_touch_window_start = max(int(higher_window["timestamp"].min()), span.entry_timestamp_ms)
