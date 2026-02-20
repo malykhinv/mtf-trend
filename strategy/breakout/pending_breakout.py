@@ -19,3 +19,7 @@ class PendingBreakout:
     level_min_bars_between_touches: int
     level_max_penetration_atr: float
     level_max_penetration_pct: float
+    snapshot_level_high: float
+    snapshot_level_low: float
+    snapshot_resistance_touch_timestamps_ms: tuple[int, ...]
+    snapshot_support_touch_timestamps_ms: tuple[int, ...]
