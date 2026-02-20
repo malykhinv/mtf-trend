@@ -48,6 +48,8 @@ class StatefulPositionSimulator(PositionSimulator):
             stop_loss=signal.stop_loss,
             take_profit_1=signal.take_profit_1,
             take_profit_2=signal.take_profit_2,
+            breakout_timestamp_ms=signal.breakout_timestamp_ms,
+            retest_timestamp_ms=signal.retest_timestamp_ms,
         )
         self._realized_pnl = -fill.commission
         self._closed_size = 0.0

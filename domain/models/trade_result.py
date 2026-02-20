@@ -18,6 +18,8 @@ class TradeResult:
     result_type: TradeResultType
     pnl: float
     pnl_percent: Percentage
+    breakout_timestamp_ms: int | None = None
+    retest_timestamp_ms: int | None = None
 
     # region Приватные
     def __post_init__(self) -> None:
@@ -27,5 +29,13 @@ class TradeResult:
 
         if self.exit_timestamp_ms < self.entry_timestamp_ms:
             msg = "Trade result exit_timestamp_ms cannot be earlier than entry_timestamp_ms."
+            raise ValueError(msg)
+
+        if self.breakout_timestamp_ms is not None and self.breakout_timestamp_ms < 0:
+            msg = "Trade result breakout_timestamp_ms must be >= 0."
+            raise ValueError(msg)
+
+        if self.retest_timestamp_ms is not None and self.retest_timestamp_ms < 0:
+            msg = "Trade result retest_timestamp_ms must be >= 0."
             raise ValueError(msg)
     # endregion Приватные

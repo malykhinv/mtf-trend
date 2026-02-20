@@ -18,6 +18,8 @@ class TradeSignal:
     take_profit_2: Price
     position_side: PositionSide
     symbol: str
+    breakout_timestamp_ms: int | None = None
+    retest_timestamp_ms: int | None = None
 
     # region Приватные
     def __post_init__(self) -> None:
@@ -31,6 +33,14 @@ class TradeSignal:
 
         if self.entry_timestamp_ms is None:
             msg = "Trade signal entry_timestamp_ms is required."
+            raise ValueError(msg)
+
+        if self.breakout_timestamp_ms is not None and self.breakout_timestamp_ms < 0:
+            msg = "Trade signal breakout_timestamp_ms must be >= 0."
+            raise ValueError(msg)
+
+        if self.retest_timestamp_ms is not None and self.retest_timestamp_ms < 0:
+            msg = "Trade signal retest_timestamp_ms must be >= 0."
             raise ValueError(msg)
 
         if not self.symbol:

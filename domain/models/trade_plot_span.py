@@ -24,3 +24,5 @@ class TradePlotSpan:
     level_low: float
     resistance_touch_timestamps_ms: tuple[int, ...] = field(default_factory=tuple)
     support_touch_timestamps_ms: tuple[int, ...] = field(default_factory=tuple)
+    breakout_timestamp_ms: int | None = None
+    retest_timestamp_ms: int | None = None

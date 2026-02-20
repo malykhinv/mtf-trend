@@ -44,4 +44,6 @@ class TradeClassifier:
             result_type=result_type,
             pnl=pnl,
             pnl_percent=Percentage(pnl_percent_value),
+            breakout_timestamp_ms=position.breakout_timestamp_ms,
+            retest_timestamp_ms=position.retest_timestamp_ms,
         )

@@ -454,6 +454,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         if side == PositionSide.SHORT and not (stop > entry_price > tp1):
             _log_invalid_signal(reason="invalid SHORT levels invariant")
             return None
+        breakout_timestamp_ms = (
+            int(annotated.iloc[breakout_idx]["timestamp"])
+            if 0 <= breakout_idx < len(annotated)
+            else None
+        )
+        retest_timestamp_ms = (
+            int(annotated.iloc[retest_idx]["timestamp"])
+            if 0 <= retest_idx < len(annotated)
+            else None
+        )
         return TradeSignal(
             formation_timestamp_ms=pending_retest.breakout.level_start_time,
             entry_price=Price(entry_price),
@@ -463,6 +473,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             take_profit_2=Price(float(tp2)),
             position_side=side,
             symbol=params.symbol,
+            breakout_timestamp_ms=breakout_timestamp_ms,
+            retest_timestamp_ms=retest_timestamp_ms,
         )
 
     @staticmethod
@@ -878,6 +890,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                         if active_trade_level_context is not None
                                         else ()
                                     ),
+                                    breakout_timestamp_ms=active_trade_signal.breakout_timestamp_ms,
+                                    retest_timestamp_ms=active_trade_signal.retest_timestamp_ms,
                                 )
                             )
                     active_trade_signal = None
@@ -1334,6 +1348,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 if active_trade_level_context is not None
                                 else ()
                             ),
+                            breakout_timestamp_ms=active_trade_signal.breakout_timestamp_ms,
+                            retest_timestamp_ms=active_trade_signal.retest_timestamp_ms,
                         )
                     )
             active_trade_signal = None
