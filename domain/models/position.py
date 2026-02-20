@@ -38,4 +38,32 @@ class Position:
         if self.retest_timestamp_ms is not None and self.retest_timestamp_ms < 0:
             msg = "Position retest_timestamp_ms must be >= 0."
             raise ValueError(msg)
+
+        if (
+            self.breakout_timestamp_ms is not None
+            and self.retest_timestamp_ms is not None
+            and self.breakout_timestamp_ms > self.retest_timestamp_ms
+        ):
+            msg = (
+                "Position invalid timestamp order: breakout_timestamp_ms must be <= "
+                f"retest_timestamp_ms, got breakout_timestamp_ms={self.breakout_timestamp_ms}, "
+                f"retest_timestamp_ms={self.retest_timestamp_ms}."
+            )
+            raise ValueError(msg)
+
+        if self.breakout_timestamp_ms is not None and self.breakout_timestamp_ms > self.entry_timestamp_ms:
+            msg = (
+                "Position invalid timestamp order: breakout_timestamp_ms must be <= "
+                f"entry_timestamp_ms, got breakout_timestamp_ms={self.breakout_timestamp_ms}, "
+                f"entry_timestamp_ms={self.entry_timestamp_ms}."
+            )
+            raise ValueError(msg)
+
+        if self.retest_timestamp_ms is not None and self.retest_timestamp_ms > self.entry_timestamp_ms:
+            msg = (
+                "Position invalid timestamp order: retest_timestamp_ms must be <= "
+                f"entry_timestamp_ms, got retest_timestamp_ms={self.retest_timestamp_ms}, "
+                f"entry_timestamp_ms={self.entry_timestamp_ms}."
+            )
+            raise ValueError(msg)
     # endregion Приватные
