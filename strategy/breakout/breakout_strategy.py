@@ -615,12 +615,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     "touch_count",
                     "reaction_strength",
                     "level_score",
+                    "resistance_reaction_strength",
+                    "resistance_level_score",
                     "resistance_touch_count",
                     "resistance_min_bars_between_touches",
                     "resistance_max_penetration_atr",
                     "resistance_max_penetration_pct",
                     "resistance_touch_timestamps_ms",
                     "support_touch_count",
+                    "support_reaction_strength",
+                    "support_level_score",
                     "support_min_bars_between_touches",
                     "support_max_penetration_atr",
                     "support_max_penetration_pct",
@@ -719,12 +723,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "touch_count",
             "reaction_strength",
             "level_score",
+            "resistance_reaction_strength",
+            "resistance_level_score",
             "resistance_touch_count",
             "resistance_min_bars_between_touches",
             "resistance_max_penetration_atr",
             "resistance_max_penetration_pct",
             "resistance_touch_timestamps_ms",
             "support_touch_count",
+            "support_reaction_strength",
+            "support_level_score",
             "support_min_bars_between_touches",
             "support_max_penetration_atr",
             "support_max_penetration_pct",
@@ -773,12 +781,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         active_touch_count: int = 0
         active_reaction_strength: float = 0.0
         active_level_score: float = 0.0
+        active_resistance_reaction_strength: float = 0.0
+        active_resistance_level_score: float = 0.0
         active_resistance_touch_count: int = 0
         active_resistance_min_touch_gap: int = 0
         active_resistance_max_penetration_atr: float = 0.0
         active_resistance_max_penetration_pct: float = 0.0
         active_resistance_touch_timestamps_ms: tuple[int, ...] = ()
         active_support_touch_count: int = 0
+        active_support_reaction_strength: float = 0.0
+        active_support_level_score: float = 0.0
         active_support_min_touch_gap: int = 0
         active_support_max_penetration_atr: float = 0.0
         active_support_max_penetration_pct: float = 0.0
@@ -811,30 +823,44 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 active_touch_count = int(level_row[4])
                 active_reaction_strength = float(level_row[5])
                 active_level_score = float(level_row[6])
-                active_resistance_touch_count = int(level_row[7])
-                active_resistance_min_touch_gap = int(level_row[8])
-                active_resistance_max_penetration_atr = float(level_row[9])
-                active_resistance_max_penetration_pct = float(level_row[10])
-                active_resistance_touch_timestamps_ms = tuple(int(value) for value in level_row[11])
-                active_support_touch_count = int(level_row[12])
-                active_support_min_touch_gap = int(level_row[13])
-                active_support_max_penetration_atr = float(level_row[14])
-                active_support_max_penetration_pct = float(level_row[15])
-                active_support_touch_timestamps_ms = tuple(int(value) for value in level_row[16])
+                active_resistance_reaction_strength = float(level_row[7])
+                active_resistance_level_score = float(level_row[8])
+                active_resistance_touch_count = int(level_row[9])
+                active_resistance_min_touch_gap = int(level_row[10])
+                active_resistance_max_penetration_atr = float(level_row[11])
+                active_resistance_max_penetration_pct = float(level_row[12])
+                active_resistance_touch_timestamps_ms = tuple(int(value) for value in level_row[13])
+                active_support_touch_count = int(level_row[14])
+                active_support_reaction_strength = float(level_row[15])
+                active_support_level_score = float(level_row[16])
+                active_support_min_touch_gap = int(level_row[17])
+                active_support_max_penetration_atr = float(level_row[18])
+                active_support_max_penetration_pct = float(level_row[19])
+                active_support_touch_timestamps_ms = tuple(int(value) for value in level_row[20])
                 diagnostics["last_level_metrics"] = {
-                    "touch_count": active_touch_count,
-                    "reaction_strength": active_reaction_strength,
-                    "level_score": active_level_score,
-                    "resistance_touch_count": active_resistance_touch_count,
-                    "resistance_min_bars_between_touches": active_resistance_min_touch_gap,
-                    "resistance_max_penetration_atr": active_resistance_max_penetration_atr,
-                    "resistance_max_penetration_pct": active_resistance_max_penetration_pct,
-                    "resistance_touch_timestamps_ms": list(active_resistance_touch_timestamps_ms),
-                    "support_touch_count": active_support_touch_count,
-                    "support_min_bars_between_touches": active_support_min_touch_gap,
-                    "support_max_penetration_atr": active_support_max_penetration_atr,
-                    "support_max_penetration_pct": active_support_max_penetration_pct,
-                    "support_touch_timestamps_ms": list(active_support_touch_timestamps_ms),
+                    "aggregated": {
+                        "touch_count": active_touch_count,
+                        "reaction_strength": active_reaction_strength,
+                        "level_score": active_level_score,
+                    },
+                    "resistance": {
+                        "touch_count": active_resistance_touch_count,
+                        "reaction_strength": active_resistance_reaction_strength,
+                        "level_score": active_resistance_level_score,
+                        "min_bars_between_touches": active_resistance_min_touch_gap,
+                        "max_penetration_atr": active_resistance_max_penetration_atr,
+                        "max_penetration_pct": active_resistance_max_penetration_pct,
+                        "touch_timestamps_ms": list(active_resistance_touch_timestamps_ms),
+                    },
+                    "support": {
+                        "touch_count": active_support_touch_count,
+                        "reaction_strength": active_support_reaction_strength,
+                        "level_score": active_support_level_score,
+                        "min_bars_between_touches": active_support_min_touch_gap,
+                        "max_penetration_atr": active_support_max_penetration_atr,
+                        "max_penetration_pct": active_support_max_penetration_pct,
+                        "touch_timestamps_ms": list(active_support_touch_timestamps_ms),
+                    },
                 }
                 level_idx += 1
 
@@ -1230,9 +1256,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
-                            touch_count=active_touch_count,
-                            reaction_strength=active_reaction_strength,
-                            level_score=active_level_score,
+                            touch_count=active_resistance_touch_count,
+                            reaction_strength=active_resistance_reaction_strength,
+                            level_score=active_resistance_level_score,
                         ),
                         breakout_extreme=float(row["low"]),
                         side=PositionSide.LONG,
@@ -1257,9 +1283,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 breakout_idx=idx,
                                 level_start_time=active_level_start_time,
                             ),
-                            touch_count=active_touch_count,
-                            reaction_strength=active_reaction_strength,
-                            level_score=active_level_score,
+                            touch_count=active_support_touch_count,
+                            reaction_strength=active_support_reaction_strength,
+                            level_score=active_support_level_score,
                         ),
                         breakout_extreme=float(row["high"]),
                         side=PositionSide.SHORT,
