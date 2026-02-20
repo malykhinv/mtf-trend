@@ -86,6 +86,43 @@ def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     return default
 
 
+def _coerce_trade_plot_span(value: object) -> TradePlotSpan | None:
+    if isinstance(value, TradePlotSpan):
+        return value
+    if not isinstance(value, dict):
+        return None
+    try:
+        return TradePlotSpan(
+            symbol=str(value["symbol"]),
+            side=PositionSide(str(value["side"])),
+            level_start_timestamp_ms=int(value["level_start_timestamp_ms"]),
+            entry_timestamp_ms=int(value["entry_timestamp_ms"]),
+            exit_timestamp_ms=int(value["exit_timestamp_ms"]),
+            entry_price=float(value["entry_price"]),
+            exit_price=float(value["exit_price"]),
+            stop_loss=float(value["stop_loss"]),
+            take_profit_1=float(value["take_profit_1"]),
+            take_profit_2=float(value["take_profit_2"]),
+            result_type=str(value["result_type"]),
+            level_high=float(value["level_high"]),
+            level_low=float(value["level_low"]),
+            resistance_touch_timestamps_ms=tuple(int(ts) for ts in value.get("resistance_touch_timestamps_ms", ())),
+            support_touch_timestamps_ms=tuple(int(ts) for ts in value.get("support_touch_timestamps_ms", ())),
+            breakout_timestamp_ms=(
+                int(value["breakout_timestamp_ms"])
+                if value.get("breakout_timestamp_ms") is not None
+                else None
+            ),
+            retest_timestamp_ms=(
+                int(value["retest_timestamp_ms"])
+                if value.get("retest_timestamp_ms") is not None
+                else None
+            ),
+        )
+    except (TypeError, ValueError, KeyError):
+        return None
+
+
 def _build_breakout_params_from_row(
     row: pd.Series,
     *,
@@ -149,7 +186,9 @@ def _plot_trade_setups_for_symbols(
         raw_spans_obj = diagnostics.get("trade_plot_spans", [])
         raw_spans = raw_spans_obj if isinstance(raw_spans_obj, list) else []
         trade_spans: list[TradePlotSpan] = [
-            span for span in raw_spans if isinstance(span, TradePlotSpan)
+            span
+            for span in (_coerce_trade_plot_span(raw_span) for raw_span in raw_spans)
+            if span is not None
         ]
         raw_retest_spans_obj = diagnostics.get("retest_plot_spans", [])
         raw_retest_spans = raw_retest_spans_obj if isinstance(raw_retest_spans_obj, list) else []

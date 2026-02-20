@@ -16,6 +16,8 @@ class Position:
     stop_loss: Price
     take_profit_1: Price
     take_profit_2: Price
+    breakout_timestamp_ms: int | None = None
+    retest_timestamp_ms: int | None = None
     tp1_done: bool = False
     sl_moved_to_be: bool = False
 
@@ -27,5 +29,13 @@ class Position:
 
         if self.size.value <= 0:
             msg = "Position size must be positive."
+            raise ValueError(msg)
+
+        if self.breakout_timestamp_ms is not None and self.breakout_timestamp_ms < 0:
+            msg = "Position breakout_timestamp_ms must be >= 0."
+            raise ValueError(msg)
+
+        if self.retest_timestamp_ms is not None and self.retest_timestamp_ms < 0:
+            msg = "Position retest_timestamp_ms must be >= 0."
             raise ValueError(msg)
     # endregion Приватные

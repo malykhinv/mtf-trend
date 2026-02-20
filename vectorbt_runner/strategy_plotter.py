@@ -531,6 +531,16 @@ class StrategyPlotter:
                     nearest_retest_distance = distance
 
             retest_span_for_plot = confirmation_span if confirmation_span is not None else nearest_retest_span
+            breakout_time_from_trade = (
+                pd.to_datetime(span.breakout_timestamp_ms, unit="ms")
+                if span.breakout_timestamp_ms is not None
+                else None
+            )
+            retest_time_from_trade = (
+                pd.to_datetime(span.retest_timestamp_ms, unit="ms")
+                if span.retest_timestamp_ms is not None
+                else None
+            )
 
             zone_end = self._resolve_entry_zone_end(
                 trade_window,
@@ -663,6 +673,25 @@ class StrategyPlotter:
                             label="Breakout event",
                         )
 
+            if retest_span_for_plot is None and breakout_time_from_trade is not None:
+                ax_top.axvline(
+                    x=breakout_time_from_trade,
+                    color="#eab308",
+                    linestyle="--",
+                    linewidth=1.1,
+                    alpha=0.75,
+                    label="Breakout (trade)",
+                )
+            if retest_span_for_plot is None and retest_time_from_trade is not None:
+                ax_top.axvline(
+                    x=retest_time_from_trade,
+                    color="#a855f7",
+                    linestyle=":",
+                    linewidth=1.1,
+                    alpha=0.75,
+                    label="Retest (trade)",
+                )
+
             continuation_marker = "^" if span.side.name == "LONG" else "v"
             if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:
                 confirmation_time = pd.to_datetime(confirmation_span.confirmation_timestamp_ms, unit="ms")
@@ -782,8 +811,18 @@ class StrategyPlotter:
                         zorder=6,
                     )
             title_suffix = " • Continuation confirmation" if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None else ""
+            breakout_label = (
+                pd.to_datetime(span.breakout_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
+                if span.breakout_timestamp_ms is not None
+                else "n/a"
+            )
+            retest_label = (
+                pd.to_datetime(span.retest_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
+                if span.retest_timestamp_ms is not None
+                else "n/a"
+            )
             ax_top.set_title(
-                f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type}{title_suffix}",
+                f"{symbol} • {params.entry_timeframe.value} trade {span.side.value}: result={span.result_type} • B={breakout_label} • R={retest_label}{title_suffix}",
                 color="#f8fafc",
                 fontweight="bold",
             )
