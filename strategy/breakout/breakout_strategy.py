@@ -137,24 +137,24 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
     def _capture_trade_level_context(
         *,
         side: PositionSide,
-        active_level_high: float | None,
-        active_level_low: float | None,
-        resistance_touch_timestamps_ms: tuple[int, ...],
-        support_touch_timestamps_ms: tuple[int, ...],
+        snapshot_level_high: float | None,
+        snapshot_level_low: float | None,
+        snapshot_resistance_touch_timestamps_ms: tuple[int, ...],
+        snapshot_support_touch_timestamps_ms: tuple[int, ...],
         breakout_level_price: float,
     ) -> TradeLevelContext:
         if side == PositionSide.LONG:
-            trade_level_high = active_level_high if active_level_high is not None else breakout_level_price
-            trade_level_low = active_level_low if active_level_low is not None else breakout_level_price
+            trade_level_high = snapshot_level_high if snapshot_level_high is not None else breakout_level_price
+            trade_level_low = snapshot_level_low if snapshot_level_low is not None else breakout_level_price
         else:
-            trade_level_low = active_level_low if active_level_low is not None else breakout_level_price
-            trade_level_high = active_level_high if active_level_high is not None else breakout_level_price
+            trade_level_low = snapshot_level_low if snapshot_level_low is not None else breakout_level_price
+            trade_level_high = snapshot_level_high if snapshot_level_high is not None else breakout_level_price
 
         return TradeLevelContext(
             trade_level_high=trade_level_high,
             trade_level_low=trade_level_low,
-            resistance_touch_timestamps_ms=resistance_touch_timestamps_ms,
-            support_touch_timestamps_ms=support_touch_timestamps_ms,
+            resistance_touch_timestamps_ms=snapshot_resistance_touch_timestamps_ms,
+            support_touch_timestamps_ms=snapshot_support_touch_timestamps_ms,
         )
 
     def _is_retest_candle(self, *, row: CandleRow, breakout: PendingBreakout, params: BreakoutParams) -> bool:
@@ -969,10 +969,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     )
                     pending_signal_level_context = self._capture_trade_level_context(
                         side=pending_retest.breakout.side,
-                        active_level_high=active_level_high,
-                        active_level_low=active_level_low,
-                        resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
-                        support_touch_timestamps_ms=active_support_touch_timestamps_ms,
+                        snapshot_level_high=pending_retest.breakout.snapshot_level_high,
+                        snapshot_level_low=pending_retest.breakout.snapshot_level_low,
+                        snapshot_resistance_touch_timestamps_ms=pending_retest.breakout.snapshot_resistance_touch_timestamps_ms,
+                        snapshot_support_touch_timestamps_ms=pending_retest.breakout.snapshot_support_touch_timestamps_ms,
                         breakout_level_price=pending_retest.breakout.level.price.value,
                     )
                     pending_retest = None
@@ -1045,10 +1045,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     )
                     pending_signal_level_context = self._capture_trade_level_context(
                         side=pending_retest.breakout.side,
-                        active_level_high=active_level_high,
-                        active_level_low=active_level_low,
-                        resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
-                        support_touch_timestamps_ms=active_support_touch_timestamps_ms,
+                        snapshot_level_high=pending_retest.breakout.snapshot_level_high,
+                        snapshot_level_low=pending_retest.breakout.snapshot_level_low,
+                        snapshot_resistance_touch_timestamps_ms=pending_retest.breakout.snapshot_resistance_touch_timestamps_ms,
+                        snapshot_support_touch_timestamps_ms=pending_retest.breakout.snapshot_support_touch_timestamps_ms,
                         breakout_level_price=pending_retest.breakout.level.price.value,
                     )
                     pending_retest = None
@@ -1267,6 +1267,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         level_min_bars_between_touches=active_resistance_min_touch_gap,
                         level_max_penetration_atr=active_resistance_max_penetration_atr,
                         level_max_penetration_pct=active_resistance_max_penetration_pct,
+                        snapshot_level_high=level_high,
+                        snapshot_level_low=level_low,
+                        snapshot_resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
+                        snapshot_support_touch_timestamps_ms=active_support_touch_timestamps_ms,
                     )
                 elif breakout_short:
                     diagnostics["breakouts_found"] += 1
@@ -1294,6 +1298,10 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         level_min_bars_between_touches=active_support_min_touch_gap,
                         level_max_penetration_atr=active_support_max_penetration_atr,
                         level_max_penetration_pct=active_support_max_penetration_pct,
+                        snapshot_level_high=level_high,
+                        snapshot_level_low=level_low,
+                        snapshot_resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
+                        snapshot_support_touch_timestamps_ms=active_support_touch_timestamps_ms,
                     )
 
         if pending_signal is not None:
