@@ -111,12 +111,16 @@ class LevelDetector:
                     "touch_count",
                     "reaction_strength",
                     "level_score",
+                    "resistance_reaction_strength",
+                    "resistance_level_score",
                     "resistance_touch_count",
                     "resistance_min_bars_between_touches",
                     "resistance_max_penetration_atr",
                     "resistance_max_penetration_pct",
                     "resistance_touch_timestamps_ms",
                     "support_touch_count",
+                    "support_reaction_strength",
+                    "support_level_score",
                     "support_min_bars_between_touches",
                     "support_max_penetration_atr",
                     "support_max_penetration_pct",
@@ -147,12 +151,16 @@ class LevelDetector:
         touch_counts: list[float] = []
         reaction_strengths: list[float] = []
         level_scores: list[float] = []
+        resistance_reaction_strengths: list[float] = []
+        resistance_level_scores: list[float] = []
         resistance_touch_counts: list[float] = []
         resistance_min_bars_between_touches_values: list[float] = []
         resistance_max_penetration_atr_values: list[float] = []
         resistance_max_penetration_pct_values: list[float] = []
         resistance_touch_timestamps_values: list[list[int]] = []
         support_touch_counts: list[float] = []
+        support_reaction_strengths: list[float] = []
+        support_level_scores: list[float] = []
         support_min_bars_between_touches_values: list[float] = []
         support_max_penetration_atr_values: list[float] = []
         support_max_penetration_pct_values: list[float] = []
@@ -167,12 +175,16 @@ class LevelDetector:
                 touch_counts.append(np.nan)
                 reaction_strengths.append(np.nan)
                 level_scores.append(np.nan)
+                resistance_reaction_strengths.append(np.nan)
+                resistance_level_scores.append(np.nan)
                 resistance_touch_counts.append(np.nan)
                 resistance_min_bars_between_touches_values.append(np.nan)
                 resistance_max_penetration_atr_values.append(np.nan)
                 resistance_max_penetration_pct_values.append(np.nan)
                 resistance_touch_timestamps_values.append([])
                 support_touch_counts.append(np.nan)
+                support_reaction_strengths.append(np.nan)
+                support_level_scores.append(np.nan)
                 support_min_bars_between_touches_values.append(np.nan)
                 support_max_penetration_atr_values.append(np.nan)
                 support_max_penetration_pct_values.append(np.nan)
@@ -224,12 +236,16 @@ class LevelDetector:
             touch_counts.append(merged_touch_count)
             reaction_strengths.append(merged_reaction)
             level_scores.append(merged_score)
+            resistance_reaction_strengths.append(float(high_reaction))
+            resistance_level_scores.append(float(high_score))
             resistance_touch_counts.append(float(high_touch_count))
             resistance_min_bars_between_touches_values.append(float(high_min_bars_between_touches))
             resistance_max_penetration_atr_values.append(float(high_max_penetration_atr))
             resistance_max_penetration_pct_values.append(float(high_max_penetration_pct))
             resistance_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in high_touch_indices])
             support_touch_counts.append(float(low_touch_count))
+            support_reaction_strengths.append(float(low_reaction))
+            support_level_scores.append(float(low_score))
             support_min_bars_between_touches_values.append(float(low_min_bars_between_touches))
             support_max_penetration_atr_values.append(float(low_max_penetration_atr))
             support_max_penetration_pct_values.append(float(low_max_penetration_pct))
@@ -239,12 +255,16 @@ class LevelDetector:
         frame["touch_count"] = touch_counts
         frame["reaction_strength"] = reaction_strengths
         frame["level_score"] = level_scores
+        frame["resistance_reaction_strength"] = resistance_reaction_strengths
+        frame["resistance_level_score"] = resistance_level_scores
         frame["resistance_touch_count"] = resistance_touch_counts
         frame["resistance_min_bars_between_touches"] = resistance_min_bars_between_touches_values
         frame["resistance_max_penetration_atr"] = resistance_max_penetration_atr_values
         frame["resistance_max_penetration_pct"] = resistance_max_penetration_pct_values
         frame["resistance_touch_timestamps_ms"] = resistance_touch_timestamps_values
         frame["support_touch_count"] = support_touch_counts
+        frame["support_reaction_strength"] = support_reaction_strengths
+        frame["support_level_score"] = support_level_scores
         frame["support_min_bars_between_touches"] = support_min_bars_between_touches_values
         frame["support_max_penetration_atr"] = support_max_penetration_atr_values
         frame["support_max_penetration_pct"] = support_max_penetration_pct_values
@@ -258,11 +278,15 @@ class LevelDetector:
                 "touch_count",
                 "reaction_strength",
                 "level_score",
+                "resistance_reaction_strength",
+                "resistance_level_score",
                 "resistance_touch_count",
                 "resistance_min_bars_between_touches",
                 "resistance_max_penetration_atr",
                 "resistance_max_penetration_pct",
                 "support_touch_count",
+                "support_reaction_strength",
+                "support_level_score",
                 "support_min_bars_between_touches",
                 "support_max_penetration_atr",
                 "support_max_penetration_pct",
@@ -277,12 +301,16 @@ class LevelDetector:
                 "touch_count",
                 "reaction_strength",
                 "level_score",
+                "resistance_reaction_strength",
+                "resistance_level_score",
                 "resistance_touch_count",
                 "resistance_min_bars_between_touches",
                 "resistance_max_penetration_atr",
                 "resistance_max_penetration_pct",
                 "resistance_touch_timestamps_ms",
                 "support_touch_count",
+                "support_reaction_strength",
+                "support_level_score",
                 "support_min_bars_between_touches",
                 "support_max_penetration_atr",
                 "support_max_penetration_pct",
