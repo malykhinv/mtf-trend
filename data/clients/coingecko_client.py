@@ -223,7 +223,11 @@ class CoinGeckoClient(MarketDataClient):
 
     @staticmethod
     def _parse_expires_at_to_epoch_ms(value: object) -> int | None:
-        if value is None or pd.isna(value):
+        if value is None:
+            return None
+        if isinstance(value, (pd.Series, pd.DataFrame)):
+            return None
+        if pd.isna(value):
             return None
 
         if isinstance(value, (int, float)):

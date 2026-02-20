@@ -18,7 +18,7 @@ class GapDetector:
         return (
             isinstance(value, Integral)
             and not isinstance(value, bool)
-            and cls._UNIX_MS_MIN <= value <= cls._UNIX_MS_MAX
+            and cls._UNIX_MS_MIN <= int(value) <= cls._UNIX_MS_MAX
         )
 
     @staticmethod
