@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from typing import NotRequired, TypedDict
 
 import numpy as np
@@ -52,6 +53,14 @@ class CandleRow(TypedDict):
     volume: float
     natr: float
     open_interest: NotRequired[float | int]
+
+
+@dataclass(frozen=True, slots=True)
+class TradeLevelContext:
+    trade_level_high: float
+    trade_level_low: float
+    resistance_touch_timestamps_ms: tuple[int, ...]
+    support_touch_timestamps_ms: tuple[int, ...]
 
 
 class BreakoutStrategy(BaseStrategy[BreakoutParams]):
@@ -123,6 +132,30 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         low = float(row["low"])
         spread = max(high - low, STRATEGY_PRICE_EPSILON)
         return abs(float(row["close"]) - float(row["open"])) / spread
+
+    @staticmethod
+    def _capture_trade_level_context(
+        *,
+        side: PositionSide,
+        active_level_high: float | None,
+        active_level_low: float | None,
+        resistance_touch_timestamps_ms: tuple[int, ...],
+        support_touch_timestamps_ms: tuple[int, ...],
+        breakout_level_price: float,
+    ) -> TradeLevelContext:
+        if side == PositionSide.LONG:
+            trade_level_high = active_level_high if active_level_high is not None else breakout_level_price
+            trade_level_low = active_level_low if active_level_low is not None else breakout_level_price
+        else:
+            trade_level_low = active_level_low if active_level_low is not None else breakout_level_price
+            trade_level_high = active_level_high if active_level_high is not None else breakout_level_price
+
+        return TradeLevelContext(
+            trade_level_high=trade_level_high,
+            trade_level_low=trade_level_low,
+            resistance_touch_timestamps_ms=resistance_touch_timestamps_ms,
+            support_touch_timestamps_ms=support_touch_timestamps_ms,
+        )
 
     def _is_retest_candle(self, *, row: CandleRow, breakout: PendingBreakout, params: BreakoutParams) -> bool:
         level_price = breakout.level.price.value
@@ -699,10 +732,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         trades: list[TradeResult] = []
         retest_plot_spans: list[RetestPlotSpan] = []
         pending_signal: TradeSignal | None = None
+        pending_signal_level_context: TradeLevelContext | None = None
         pending_breakout: PendingBreakout | None = None
         pending_retest: PendingRetest | None = None
         active_sim: StatefulPositionSimulator | None = None
         active_trade_signal: TradeSignal | None = None
+        active_trade_level_context: TradeLevelContext | None = None
         retest_window_candles = max(1, self._hours_to_candles(params.retest_window_hours, params.entry_timeframe))
         level_idx = 0
         active_level_high: float | None = None
@@ -784,7 +819,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 )
                 active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
                 active_trade_signal = pending_signal
+                active_trade_level_context = pending_signal_level_context
                 pending_signal = None
+                pending_signal_level_context = None
 
             if active_sim is not None:
                 result = active_sim.process_candle(candle)
@@ -806,13 +843,30 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                     take_profit_1=active_trade_signal.take_profit_1.value,
                                     take_profit_2=active_trade_signal.take_profit_2.value,
                                     result_type=result.result_type.value,
-                                    level_high=active_level_high if active_level_high is not None else 0.0,
-                                    level_low=active_level_low if active_level_low is not None else 0.0,
-                                    resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
-                                    support_touch_timestamps_ms=active_support_touch_timestamps_ms,
+                                    level_high=(
+                                        active_trade_level_context.trade_level_high
+                                        if active_trade_level_context is not None
+                                        else 0.0
+                                    ),
+                                    level_low=(
+                                        active_trade_level_context.trade_level_low
+                                        if active_trade_level_context is not None
+                                        else 0.0
+                                    ),
+                                    resistance_touch_timestamps_ms=(
+                                        active_trade_level_context.resistance_touch_timestamps_ms
+                                        if active_trade_level_context is not None
+                                        else ()
+                                    ),
+                                    support_touch_timestamps_ms=(
+                                        active_trade_level_context.support_touch_timestamps_ms
+                                        if active_trade_level_context is not None
+                                        else ()
+                                    ),
                                 )
                             )
                     active_trade_signal = None
+                    active_trade_level_context = None
 
             active_position = active_sim is not None and active_sim.position is not None
             if active_position or pending_signal is not None:
@@ -852,6 +906,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         entry_idx=entry_idx,
                         pending_retest=pending_retest,
                         params=params,
+                    )
+                    pending_signal_level_context = self._capture_trade_level_context(
+                        side=pending_retest.breakout.side,
+                        active_level_high=active_level_high,
+                        active_level_low=active_level_low,
+                        resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
+                        support_touch_timestamps_ms=active_support_touch_timestamps_ms,
+                        breakout_level_price=pending_retest.breakout.level.price.value,
                     )
                     pending_retest = None
                     continue
@@ -920,6 +982,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         entry_idx=entry_idx,
                         pending_retest=pending_retest,
                         params=params,
+                    )
+                    pending_signal_level_context = self._capture_trade_level_context(
+                        side=pending_retest.breakout.side,
+                        active_level_high=active_level_high,
+                        active_level_low=active_level_low,
+                        resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
+                        support_touch_timestamps_ms=active_support_touch_timestamps_ms,
+                        breakout_level_price=pending_retest.breakout.level.price.value,
                     )
                     pending_retest = None
                     continue
@@ -1209,13 +1279,30 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             take_profit_1=active_trade_signal.take_profit_1.value,
                             take_profit_2=active_trade_signal.take_profit_2.value,
                             result_type=forced_result.result_type.value,
-                            level_high=active_level_high if active_level_high is not None else 0.0,
-                            level_low=active_level_low if active_level_low is not None else 0.0,
-                            resistance_touch_timestamps_ms=active_resistance_touch_timestamps_ms,
-                            support_touch_timestamps_ms=active_support_touch_timestamps_ms,
+                            level_high=(
+                                active_trade_level_context.trade_level_high
+                                if active_trade_level_context is not None
+                                else 0.0
+                            ),
+                            level_low=(
+                                active_trade_level_context.trade_level_low
+                                if active_trade_level_context is not None
+                                else 0.0
+                            ),
+                            resistance_touch_timestamps_ms=(
+                                active_trade_level_context.resistance_touch_timestamps_ms
+                                if active_trade_level_context is not None
+                                else ()
+                            ),
+                            support_touch_timestamps_ms=(
+                                active_trade_level_context.support_touch_timestamps_ms
+                                if active_trade_level_context is not None
+                                else ()
+                            ),
                         )
                     )
             active_trade_signal = None
+            active_trade_level_context = None
 
         diagnostics["trades_generated"] = len(trades)
         diagnostics["retest_plot_spans"] = retest_plot_spans
