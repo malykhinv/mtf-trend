@@ -559,7 +559,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
         prepared = prepared.dropna(subset=["timestamp"])
         prepared["timestamp"] = prepared["timestamp"].astype("int64")
-        prepared = prepared.sort_values("timestamp").reset_index(drop=True)
+        prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
 
         for col in ("open", "high", "low", "close", "volume"):
             prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
