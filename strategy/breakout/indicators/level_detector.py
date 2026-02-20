@@ -142,7 +142,7 @@ class LevelDetector:
 
         frame["level_high"] = frame["high"].rolling(window=lookback).max().shift(1)
         frame["level_low"] = frame["low"].rolling(window=lookback).min().shift(1)
-        frame["level_start_time"] = frame["timestamp"]
+        level_start_times: list[float] = []
 
         touch_counts: list[float] = []
         reaction_strengths: list[float] = []
@@ -163,6 +163,7 @@ class LevelDetector:
             candidate_low = frame.at[idx, "level_low"]
             atr_value = atr[idx]
             if pd.isna(candidate_high) or pd.isna(candidate_low) or pd.isna(atr_value) or idx < lookback:
+                level_start_times.append(np.nan)
                 touch_counts.append(np.nan)
                 reaction_strengths.append(np.nan)
                 level_scores.append(np.nan)
@@ -180,6 +181,7 @@ class LevelDetector:
 
             window_slice = slice(idx - lookback, idx)
             window_timestamps = frame["timestamp"].iloc[window_slice].to_numpy(dtype="int64", copy=False)
+            level_start_times.append(float(window_timestamps[0]))
             (
                 high_touch_count,
                 high_reaction,
@@ -233,6 +235,7 @@ class LevelDetector:
             support_max_penetration_pct_values.append(float(low_max_penetration_pct))
             support_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in low_touch_indices])
 
+        frame["level_start_time"] = level_start_times
         frame["touch_count"] = touch_counts
         frame["reaction_strength"] = reaction_strengths
         frame["level_score"] = level_scores
@@ -251,6 +254,7 @@ class LevelDetector:
             subset=[
                 "level_high",
                 "level_low",
+                "level_start_time",
                 "touch_count",
                 "reaction_strength",
                 "level_score",
