@@ -619,7 +619,7 @@ class StrategyPlotter:
                 text_color="#eff6ff",
             )
 
-            ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5, label="Breakout")
+            ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5, label="Entry")
             ax_top.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=80, zorder=5)
 
             if retest_span_for_plot is not None:
