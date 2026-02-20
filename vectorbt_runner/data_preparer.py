@@ -135,15 +135,15 @@ class DataPreparer:
             pnl_percent = trade["pnl_percent"]
             pnl = trade["pnl"]
 
-            entries.loc[entry_time] = True
-            exits.loc[exit_time] = True
-            close.loc[entry_time] = running_price
+            entries.at[entry_time] = True
+            exits.at[exit_time] = True
+            close.at[entry_time] = running_price
 
             running_price *= SIMULATION_UNIT_INCREMENT + (pnl_percent / SIMULATION_PNL_PERCENT_DIVISOR)
-            close.loc[exit_time] = running_price
+            close.at[exit_time] = running_price
 
             cumulative_pnl += pnl
-            equity_curve.loc[exit_time] = cumulative_pnl
+            equity_curve.at[exit_time] = cumulative_pnl
 
         close = close.ffill()
         equity_curve = equity_curve.replace(SIMULATION_ZERO_VALUE, pd.NA).ffill().fillna(SIMULATION_ZERO_VALUE)

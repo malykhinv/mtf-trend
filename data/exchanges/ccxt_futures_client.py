@@ -81,13 +81,14 @@ class CcxtFuturesClient(ExchangeClient):
                 defaultType=CCXT_MARKET_TYPE_SWAP,
                 fetchCurrencies=False,
             )
-            return ccxt.binanceusdm(cast(Any, params))
+            return cast(CcxtFuturesApi, ccxt.binanceusdm(cast(Any, params)))
         if exchange == Exchange.BYBIT:
             params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
-            return ccxt.bybit(cast(Any, params))
+            return cast(CcxtFuturesApi, ccxt.bybit(cast(Any, params)))
         if exchange == Exchange.OKX:
             params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
-            return ccxt.okx(cast(Any, params))
+            return cast(CcxtFuturesApi, ccxt.okx(cast(Any, params)))
+        raise ValueError(f"Unsupported exchange for CCXT futures client: {exchange}")
 
     def _retry_exchange_call(
         self,
@@ -199,6 +200,8 @@ class CcxtFuturesClient(ExchangeClient):
             return symbols
 
         def _safe_float(value: object) -> float:
+            if not isinstance(value, (int, float, str, bytes)):
+                return 0.0
             try:
                 parsed = float(value)
             except (TypeError, ValueError):

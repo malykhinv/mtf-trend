@@ -125,7 +125,7 @@ class BacktestRunner:
         normalized_trades: list[TradeResult] = trades
         for trade in normalized_trades:
             pnl_value = trade.pnl
-            pnl_percent += trade.pnl_percent.value
+            pnl_percent += float(trade.pnl_percent.value)
             if pnl_value > 0:
                 profits += pnl_value
                 wins += 1

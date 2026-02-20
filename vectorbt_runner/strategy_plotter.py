@@ -6,6 +6,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.ticker as mticker
 import pandas as pd
 import numpy as np
 from matplotlib.patches import Rectangle
@@ -90,7 +91,8 @@ class StrategyPlotter:
     @staticmethod
     def _prepare_plot_frame(frame: pd.DataFrame) -> pd.DataFrame:
         plot_frame = frame.copy()
-        plot_frame["plot_time"] = pd.to_datetime(plot_frame["timestamp"], unit="ms", utc=True).dt.tz_localize(None)
+        plot_dt = pd.to_datetime(plot_frame["timestamp"], unit="ms", utc=True)
+        plot_frame["plot_time"] = pd.DatetimeIndex(plot_dt).tz_localize(None)
         return plot_frame
 
     @staticmethod
@@ -177,7 +179,7 @@ class StrategyPlotter:
         formatter.show_offset = False
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(formatter)
-        ax.xaxis.set_minor_locator(mdates.NullLocator())
+        ax.xaxis.set_minor_locator(mticker.NullLocator())
 
     @staticmethod
     def _add_trade_rr_markup(ax: plt.Axes, *, entry_time: pd.Timestamp, zone_end: pd.Timestamp, entry_price: float, stop_loss: float, take_profit_1: float, take_profit_2: float) -> None:
@@ -397,7 +399,7 @@ class StrategyPlotter:
                 linestyle="--",
                 linewidth=1.2,
             )
-            level_start_time = pd.to_datetime(span.level_start_timestamp_ms, unit="ms")
+            level_start_time = mdates.date2num(pd.to_datetime(span.level_start_timestamp_ms, unit="ms"))
             ax.axvline(
                 x=level_start_time,
                 color=self.TV_LEVEL_START,
@@ -427,8 +429,8 @@ class StrategyPlotter:
                 marker_price = span.confirmation_price if span.confirmation_price is not None else span.level_price
                 marker = "^" if span.side.name == "LONG" else "v"
                 ax.axvspan(
-                    confirmation_time - pd.to_timedelta(20, unit="m"),
-                    confirmation_time + pd.to_timedelta(20, unit="m"),
+                    mdates.date2num(confirmation_time - pd.to_timedelta(20, unit="m")),
+                    mdates.date2num(confirmation_time + pd.to_timedelta(20, unit="m")),
                     color="#a855f7",
                     alpha=0.12,
                     zorder=1,
@@ -501,7 +503,7 @@ class StrategyPlotter:
             self._apply_dark_theme(ax_bottom)
             self._plot_candles(ax_top, trade_window)
 
-            level_start_time = pd.to_datetime(span.level_start_timestamp_ms, unit="ms")
+            level_start_time = mdates.date2num(pd.to_datetime(span.level_start_timestamp_ms, unit="ms"))
             entry_time = pd.to_datetime(span.entry_timestamp_ms, unit="ms")
             exit_time = pd.to_datetime(span.exit_timestamp_ms, unit="ms")
             entry_label = pd.to_datetime(span.entry_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
@@ -581,8 +583,8 @@ class StrategyPlotter:
                 confirmation_time = pd.to_datetime(confirmation_span.confirmation_timestamp_ms, unit="ms")
                 confirmation_price = confirmation_span.confirmation_price if confirmation_span.confirmation_price is not None else span.entry_price
                 ax_top.axvspan(
-                    confirmation_time - pd.to_timedelta(20, unit="m"),
-                    confirmation_time + pd.to_timedelta(20, unit="m"),
+                    mdates.date2num(confirmation_time - pd.to_timedelta(20, unit="m")),
+                    mdates.date2num(confirmation_time + pd.to_timedelta(20, unit="m")),
                     color="#a855f7",
                     alpha=0.12,
                     zorder=1,

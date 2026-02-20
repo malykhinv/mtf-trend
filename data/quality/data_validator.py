@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from numbers import Integral
-from typing import cast
 
 import pandas as pd
 
@@ -29,7 +28,7 @@ class DataValidator:
             return (
                 isinstance(value, Integral)
                 and not isinstance(value, bool)
-                and cls._UNIX_MS_MIN <= value <= cls._UNIX_MS_MAX
+                and cls._UNIX_MS_MIN <= int(value) <= cls._UNIX_MS_MAX
             )
 
         return series.map(_is_unix_ms)
@@ -83,7 +82,7 @@ class DataValidator:
             return issues
 
         numeric_columns: dict[str, pd.Series] = {
-            col: cast(pd.Series, pd.to_numeric(normalized[col], errors="coerce"))
+            col: pd.Series(pd.to_numeric(normalized[col], errors="coerce"), index=normalized.index)
             for col in ("open", "high", "low", "close", "volume", "open_interest")
             if col in normalized.columns
         }

@@ -768,7 +768,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             invalid_volume_symbols += 1
             continue
 
-        volume_series = cast(pd.Series, pd.to_numeric(levels_frame["volume"], errors="coerce").dropna())
+        volume_numeric = pd.Series(pd.to_numeric(levels_frame["volume"], errors="coerce"), index=levels_frame.index)
+        volume_series = volume_numeric.dropna()
         if volume_series.empty:
             logger.debug(
                 "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет валидного volume на levels_tf=%s",
@@ -1122,7 +1123,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
             }
         ]
 
-    oi: pd.Series = pd.to_numeric(frame["open_interest"], errors="coerce")
+    oi = pd.Series(pd.to_numeric(frame["open_interest"], errors="coerce"), index=frame.index)
     issues: list[dict[str, str]] = []
 
     if oi.isna().any():
