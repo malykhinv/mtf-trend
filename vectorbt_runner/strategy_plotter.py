@@ -484,6 +484,13 @@ class StrategyPlotter:
         saved_paths: list[Path] = []
 
         for idx, span in enumerate(symbol_trades, start=1):
+            is_long_trade = span.side.name == "LONG"
+            primary_level = span.level_high if is_long_trade else span.level_low
+            counter_level = span.level_low if is_long_trade else span.level_high
+            primary_level_color = self.TV_ENTRY if is_long_trade else "#f59e0b"
+            counter_level_color = "#f59e0b" if is_long_trade else self.TV_ENTRY
+            primary_level_linestyle = "--"
+
             trade_window = self._select_trade_window(
                 annotated,
                 entry_timestamp_ms=span.entry_timestamp_ms,
@@ -537,6 +544,38 @@ class StrategyPlotter:
                 take_profit_1=span.take_profit_1,
                 take_profit_2=span.take_profit_2,
             )
+            x_top_start = trade_window["plot_time"].iloc[0]
+            x_top_end = trade_window["plot_time"].iloc[-1]
+            ax_top.hlines(
+                y=primary_level,
+                xmin=x_top_start,
+                xmax=x_top_end,
+                color=primary_level_color,
+                linestyle=primary_level_linestyle,
+                linewidth=1.6,
+                alpha=0.95,
+                label="Working level",
+            )
+            ax_top.hlines(
+                y=counter_level,
+                xmin=x_top_start,
+                xmax=x_top_end,
+                color=counter_level_color,
+                linestyle=":",
+                linewidth=1.0,
+                alpha=0.45,
+                label="Counter level",
+            )
+            self._add_price_label(
+                ax_top,
+                x_start=x_top_start,
+                x_end=x_top_end,
+                price=primary_level,
+                label="Level",
+                facecolor="#1e293b",
+                edgecolor=primary_level_color,
+                text_color="#e2e8f0",
+            )
             ax_top.axvline(
                 x=level_start_time,
                 color=self.TV_LEVEL_START,
@@ -575,7 +614,7 @@ class StrategyPlotter:
                 text_color="#eff6ff",
             )
 
-            ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5)
+            ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5, label="Breakout")
             ax_top.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=80, zorder=5)
 
             continuation_marker = "^" if span.side.name == "LONG" else "v"
@@ -589,7 +628,7 @@ class StrategyPlotter:
                     alpha=0.12,
                     zorder=1,
                 )
-                ax_top.scatter([confirmation_time], [confirmation_price], color="#a855f7", marker=continuation_marker, s=96, zorder=6)
+                ax_top.scatter([confirmation_time], [confirmation_price], color="#a855f7", marker=continuation_marker, s=96, zorder=6, label="Return")
 
             resistance_touch_times: list[pd.Timestamp] = []
             support_touch_times: list[pd.Timestamp] = []
@@ -633,6 +672,38 @@ class StrategyPlotter:
                         alpha=0.8,
                         drawstyle="steps-post",
                     )
+                x_bottom_start = higher_window["plot_time"].iloc[0]
+                x_bottom_end = higher_window["plot_time"].iloc[-1]
+                ax_bottom.hlines(
+                    y=primary_level,
+                    xmin=x_bottom_start,
+                    xmax=x_bottom_end,
+                    color=primary_level_color,
+                    linestyle=primary_level_linestyle,
+                    linewidth=1.6,
+                    alpha=0.95,
+                    label="Working level",
+                )
+                ax_bottom.hlines(
+                    y=counter_level,
+                    xmin=x_bottom_start,
+                    xmax=x_bottom_end,
+                    color=counter_level_color,
+                    linestyle=":",
+                    linewidth=1.0,
+                    alpha=0.45,
+                    label="Counter level",
+                )
+                self._add_price_label(
+                    ax_bottom,
+                    x_start=x_bottom_start,
+                    x_end=x_bottom_end,
+                    price=primary_level,
+                    label="Level",
+                    facecolor="#1e293b",
+                    edgecolor=primary_level_color,
+                    text_color="#e2e8f0",
+                )
 
                 trade_touch_window_start = max(int(higher_window["timestamp"].min()), span.entry_timestamp_ms)
                 trade_touch_window_end = min(int(higher_window["timestamp"].max()), span.exit_timestamp_ms)
@@ -673,6 +744,23 @@ class StrategyPlotter:
             ax_top.set_ylabel("Price", color=self.TV_TEXT)
             ax_bottom.set_title(f"{params.levels_timeframe.value} context", color="#f8fafc", fontsize=10)
             ax_bottom.set_ylabel("Price", color=self.TV_TEXT)
+            for axis in (ax_top, ax_bottom):
+                handles, labels = axis.get_legend_handles_labels()
+                unique_items: dict[str, object] = {}
+                for handle, label in zip(handles, labels):
+                    if label and label not in unique_items:
+                        unique_items[label] = handle
+                if unique_items:
+                    axis.legend(
+                        unique_items.values(),
+                        unique_items.keys(),
+                        loc="upper left",
+                        fontsize=8,
+                        frameon=True,
+                        facecolor="#0f172a",
+                        edgecolor="#334155",
+                        labelcolor="#cbd5e1",
+                    )
             self._format_time_axis(ax_top)
             self._format_time_axis(ax_bottom)
             fig.autofmt_xdate(rotation=30)
