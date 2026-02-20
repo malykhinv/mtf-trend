@@ -43,6 +43,42 @@ class TradeSignal:
             msg = "Trade signal retest_timestamp_ms must be >= 0."
             raise ValueError(msg)
 
+        if (
+            self.breakout_timestamp_ms is not None
+            and self.retest_timestamp_ms is not None
+            and self.breakout_timestamp_ms > self.retest_timestamp_ms
+        ):
+            msg = (
+                "Trade signal invalid timestamp order: breakout_timestamp_ms must be <= "
+                f"retest_timestamp_ms, got breakout_timestamp_ms={self.breakout_timestamp_ms}, "
+                f"retest_timestamp_ms={self.retest_timestamp_ms}."
+            )
+            raise ValueError(msg)
+
+        if self.breakout_timestamp_ms is not None and self.breakout_timestamp_ms > self.entry_timestamp_ms:
+            msg = (
+                "Trade signal invalid timestamp order: breakout_timestamp_ms must be <= "
+                f"entry_timestamp_ms, got breakout_timestamp_ms={self.breakout_timestamp_ms}, "
+                f"entry_timestamp_ms={self.entry_timestamp_ms}."
+            )
+            raise ValueError(msg)
+
+        if self.retest_timestamp_ms is not None and self.retest_timestamp_ms > self.entry_timestamp_ms:
+            msg = (
+                "Trade signal invalid timestamp order: retest_timestamp_ms must be <= "
+                f"entry_timestamp_ms, got retest_timestamp_ms={self.retest_timestamp_ms}, "
+                f"entry_timestamp_ms={self.entry_timestamp_ms}."
+            )
+            raise ValueError(msg)
+
+        if self.breakout_timestamp_ms is not None and self.formation_timestamp_ms > self.breakout_timestamp_ms:
+            msg = (
+                "Trade signal invalid timestamp order: formation_timestamp_ms must be <= "
+                f"breakout_timestamp_ms, got formation_timestamp_ms={self.formation_timestamp_ms}, "
+                f"breakout_timestamp_ms={self.breakout_timestamp_ms}."
+            )
+            raise ValueError(msg)
+
         if not self.symbol:
             msg = "Trade signal symbol is required."
             raise ValueError(msg)
