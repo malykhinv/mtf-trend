@@ -833,6 +833,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmed",
+                            breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
+                            breakout_price=pending_retest.breakout.level.price.value,
                         )
                     )
                     self._logger.debug(
@@ -868,6 +870,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmation_expired",
+                            breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
+                            breakout_price=pending_retest.breakout.level.price.value,
                         )
                     )
                     self._logger.debug(
@@ -893,6 +897,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmed",
+                            breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
+                            breakout_price=pending_retest.breakout.level.price.value,
                             confirmation_timestamp_ms=int(row["timestamp"]),
                             confirmation_price=float(row["close"]),
                             confirmation_candle_low=float(row["low"]),
@@ -931,6 +937,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                             retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
                             retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                             status="confirmation_not_received",
+                            breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
+                            breakout_price=pending_retest.breakout.level.price.value,
                         )
                     )
                     self._logger.debug(
@@ -1013,6 +1021,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 retest_start_timestamp_ms=int(row["timestamp"]),
                                 retest_end_timestamp_ms=int(row["timestamp"]),
                                 status="rejected_by_volume",
+                                breakout_timestamp_ms=timestamps_by_idx[pending_breakout.breakout_idx],
+                                breakout_price=pending_breakout.level.price.value,
                             )
                         )
                         self._logger.debug(
@@ -1041,6 +1051,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                                 retest_start_timestamp_ms=int(row["timestamp"]),
                                 retest_end_timestamp_ms=int(row["timestamp"]),
                                 status="rejected_by_extra_filters",
+                                breakout_timestamp_ms=timestamps_by_idx[pending_breakout.breakout_idx],
+                                breakout_price=pending_breakout.level.price.value,
                             )
                         )
                         self._logger.debug(
@@ -1171,6 +1183,8 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     retest_start_timestamp_ms=timestamps_by_idx[pending_retest.retest_start_idx],
                     retest_end_timestamp_ms=timestamps_by_idx[pending_retest.retest_end_idx],
                     status="pending_end_of_data",
+                    breakout_timestamp_ms=timestamps_by_idx[pending_retest.breakout.breakout_idx],
+                    breakout_price=pending_retest.breakout.level.price.value,
                 )
             )
 

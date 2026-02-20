@@ -517,15 +517,20 @@ class StrategyPlotter:
             exit_label = pd.to_datetime(span.exit_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
 
             confirmation_span = None
+            nearest_retest_span = None
+            nearest_retest_distance = None
             for retest_span in symbol_retests:
                 if retest_span.side != span.side:
                     continue
-                if retest_span.confirmation_timestamp_ms is None:
-                    continue
-                if retest_span.confirmation_timestamp_ms > span.entry_timestamp_ms:
-                    continue
-                if confirmation_span is None or retest_span.confirmation_timestamp_ms > confirmation_span.confirmation_timestamp_ms:
-                    confirmation_span = retest_span
+                if retest_span.confirmation_timestamp_ms is not None and retest_span.confirmation_timestamp_ms <= span.entry_timestamp_ms:
+                    if confirmation_span is None or retest_span.confirmation_timestamp_ms > confirmation_span.confirmation_timestamp_ms:
+                        confirmation_span = retest_span
+                distance = abs(int(retest_span.retest_end_timestamp_ms) - int(span.entry_timestamp_ms))
+                if nearest_retest_distance is None or distance < nearest_retest_distance:
+                    nearest_retest_span = retest_span
+                    nearest_retest_distance = distance
+
+            retest_span_for_plot = confirmation_span if confirmation_span is not None else nearest_retest_span
 
             zone_end = self._resolve_entry_zone_end(
                 trade_window,
@@ -616,6 +621,50 @@ class StrategyPlotter:
 
             ax_top.scatter([entry_time], [span.entry_price], color=self.TV_ENTRY, marker="^", s=80, zorder=5, label="Breakout")
             ax_top.scatter([exit_time], [span.exit_price], color="#a855f7", marker="X", s=80, zorder=5)
+
+            if retest_span_for_plot is not None:
+                retest_start_time = pd.to_datetime(retest_span_for_plot.retest_start_timestamp_ms, unit="ms")
+                retest_end_time = pd.to_datetime(retest_span_for_plot.retest_end_timestamp_ms, unit="ms")
+                retest_rect_x0 = mdates.date2num(retest_start_time)
+                retest_rect_width = max(mdates.date2num(retest_end_time) - retest_rect_x0, 1e-9)
+                retest_rect_y0 = min(retest_span_for_plot.retest_low, retest_span_for_plot.retest_high)
+                retest_rect_height = max(abs(retest_span_for_plot.retest_high - retest_span_for_plot.retest_low), 1e-9)
+                ax_top.add_patch(
+                    Rectangle(
+                        (retest_rect_x0, retest_rect_y0),
+                        retest_rect_width,
+                        retest_rect_height,
+                        linewidth=1.1,
+                        edgecolor="#a855f7",
+                        facecolor="#a855f7",
+                        alpha=0.14,
+                        zorder=2,
+                        label="Retest zone",
+                    )
+                )
+                if retest_span_for_plot.breakout_timestamp_ms is not None:
+                    breakout_time = pd.to_datetime(retest_span_for_plot.breakout_timestamp_ms, unit="ms")
+                    breakout_price = (
+                        retest_span_for_plot.breakout_price
+                        if retest_span_for_plot.breakout_price is not None
+                        else retest_span_for_plot.level_price
+                    )
+                    ax_top.axvline(
+                        x=breakout_time,
+                        color="#eab308",
+                        linestyle="--",
+                        linewidth=1.1,
+                        alpha=0.75,
+                    )
+                    ax_top.scatter(
+                        [breakout_time],
+                        [breakout_price],
+                        color="#eab308",
+                        marker="D",
+                        s=64,
+                        zorder=6,
+                        label="Breakout event",
+                    )
 
             continuation_marker = "^" if span.side.name == "LONG" else "v"
             if confirmation_span is not None and confirmation_span.confirmation_timestamp_ms is not None:

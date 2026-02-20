@@ -1436,6 +1436,16 @@ def _load_retest_spans_artifact(path: Path, logger: Logger) -> list[RetestPlotSp
                     retest_start_timestamp_ms=int(item.get("retest_start_timestamp_ms", item["retest_start_time"])),
                     retest_end_timestamp_ms=int(item.get("retest_end_timestamp_ms", item["retest_end_time"])),
                     status=str(item["status"]),
+                    breakout_timestamp_ms=(
+                        int(item["breakout_timestamp_ms"])
+                        if item.get("breakout_timestamp_ms") is not None
+                        else None
+                    ),
+                    breakout_price=(
+                        float(item["breakout_price"])
+                        if item.get("breakout_price") is not None
+                        else None
+                    ),
                     confirmation_timestamp_ms=(
                         int(item["confirmation_timestamp_ms"])
                         if item.get("confirmation_timestamp_ms") is not None
