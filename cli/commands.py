@@ -53,6 +53,7 @@ from domain.models.trade_plot_span import TradePlotSpan
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary
 from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
+from domain.models.reporting.profitable_variant import ProfitableVariant
 from domain.models.reporting.quality_report import QualityReport
 from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
@@ -971,10 +972,18 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     frame = pd.read_csv(csv_path)
     required_columns = [
-        "trades_count",
-        "profit_factor",
         "lookback",
         "volume_mult",
+        "retest_window_hours",
+        "retest_zone",
+        "min_rr",
+        "sl_mode",
+        "tp2_mult",
+        "profit_factor",
+        "pnl_percent",
+        "win_rate",
+        "trades_count",
+        "max_dd",
         "sl_count",
         "be_count",
         "tp1_be_count",
@@ -1020,10 +1029,15 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
         TP2=int(source["tp2_count"].sum()),
     )
 
+    profitable_variants = _build_profitable_variants(frame)
+    ai_analysis_report = _build_ai_analysis_report(summary, profitable_variants)
+
     report = BacktestReport(
         summary=summary,
         optimal_ranges=optimal_ranges,
         trade_results_distribution=distribution,
+        profitable_variants=profitable_variants,
+        ai_analysis_report=ai_analysis_report,
     )
 
     output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
@@ -1031,6 +1045,71 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
     logger.info(f"подготовка-отчета: сохранено {output_path}")
     return 0
+
+
+
+def _build_profitable_variants(frame: pd.DataFrame) -> list[ProfitableVariant]:
+    profitable = frame[frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD].copy()
+    if profitable.empty:
+        return []
+
+    profitable = profitable.sort_values(["profit_factor", "pnl_percent", "trades_count"], ascending=[False, False, False])
+
+    variants: list[ProfitableVariant] = []
+    for index, (_, row) in enumerate(profitable.iterrows(), start=1):
+        variants.append(
+            ProfitableVariant(
+                rank=index,
+                lookback=int(row["lookback"]),
+                volume_mult=round(float(row["volume_mult"]), 4),
+                retest_window=int(row["retest_window_hours"]),
+                retest_zone=round(float(row["retest_zone"]), 4),
+                min_rr=round(float(row["min_rr"]), 4),
+                sl_mode=str(row["sl_mode"]),
+                tp2_mult=round(float(row["tp2_mult"]), 4),
+                profit_factor=round(float(row["profit_factor"]), 4),
+                pnl_percent=round(float(row["pnl_percent"]), 4),
+                win_rate=round(float(row["win_rate"]), 4),
+                trades_count=int(row["trades_count"]),
+                max_dd=round(float(row["max_dd"]), 4),
+                sl_count=int(row["sl_count"]),
+                be_count=int(row["be_count"]),
+                tp1_be_count=int(row["tp1_be_count"]),
+                tp2_count=int(row["tp2_count"]),
+            )
+        )
+    return variants
+
+
+def _build_ai_analysis_report(summary: BacktestSummary, variants: list[ProfitableVariant]) -> str:
+    if not variants:
+        return (
+            "Сценарии с profit_factor > 1.0 не найдены. "
+            "Рекомендуется расширить период данных или ослабить фильтры стратегии."
+        )
+
+    lines = [
+        "# Сравнительный отчет по прибыльным комбинациям",
+        f"Всего комбинаций: {summary.total_combinations}",
+        f"Прибыльных комбинаций (PF>1.0): {summary.profitable_combinations}",
+        f"Лучший Profit Factor: {summary.best_pf}",
+        "",
+        "## Все прибыльные варианты (для сравнения)",
+        "Формат строки: rank | PF | PnL% | WinRate% | Trades | MaxDD% | params",
+    ]
+
+    for variant in variants:
+        params = (
+            f"lookback={variant.lookback}, volume_mult={variant.volume_mult}, "
+            f"retest_window={variant.retest_window}, retest_zone={variant.retest_zone}, "
+            f"min_rr={variant.min_rr}, sl_mode={variant.sl_mode}, tp2_mult={variant.tp2_mult}"
+        )
+        lines.append(
+            f"{variant.rank} | {variant.profit_factor} | {variant.pnl_percent} | {variant.win_rate} | "
+            f"{variant.trades_count} | {variant.max_dd} | {params}"
+        )
+
+    return "\n".join(lines)
 
 
 def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
