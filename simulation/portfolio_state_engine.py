@@ -8,6 +8,7 @@ from enum import Enum
 import pandas as pd
 
 from domain.enums.position_side import PositionSide
+from domain.enums.trade_result_type import TradeResultType
 from domain.models.candle import Candle
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
@@ -53,7 +54,6 @@ class PortfolioEngineConfig:
 class SymbolState:
     state: PortfolioState = PortfolioState.IDLE
     age: int = 0
-    cooldown_bars_left: int = 0
     range_high: float | None = None
     range_low: float | None = None
     break_side: PositionSide | None = None
@@ -86,14 +86,23 @@ class PortfolioStateEngine:
     commission_rate: float
     slippage: float
     _states: dict[str, SymbolState] = field(default_factory=dict)
+    _cooldown_until_idx: dict[str, int] = field(default_factory=dict)
     _sims: dict[str, StatefulPositionSimulator] = field(default_factory=dict)
     _risk_manager: RiskManager | None = None
+    _current_timeline_idx: int = -1
 
     PROFILE_SCORE_THRESHOLDS: dict[str, float] = field(
         default_factory=lambda: {
             "A": 3.0,
             "B": 4.0,
             "C": 2.0,
+        }
+    )
+    PROFILE_COOLDOWN_HOURS: dict[str, int] = field(
+        default_factory=lambda: {
+            "A": 8,
+            "B": 6,
+            "C": 4,
         }
     )
 
@@ -112,7 +121,8 @@ class PortfolioStateEngine:
             )
 
         trades: list[TradeResult] = []
-        for ts in timeline:
+        for idx, ts in enumerate(timeline):
+            self._current_timeline_idx = idx
             candidates: list[EntryCandidate] = []
             for symbol, frame in symbol_frames.items():
                 row = self._row_by_timestamp(frame, ts)
@@ -125,7 +135,7 @@ class PortfolioStateEngine:
                 if closed_trade is not None:
                     trades.append(closed_trade)
 
-                candidate = self._update_state(symbol=symbol, state=state, row=row)
+                candidate = self._update_state(symbol=symbol, state=state, row=row, timeline_idx=idx)
                 if candidate is not None:
                     candidates.append(candidate)
 
@@ -202,20 +212,28 @@ class PortfolioStateEngine:
             state.lowest_break = None
             state.atr_bg = None
             state.age = 0
+            if result.result_type == TradeResultType.SL:
+                self._set_cooldown(symbol=symbol)
             return result
         return None
 
-    def _update_state(self, *, symbol: str, state: SymbolState, row: dict[str, float | None]) -> EntryCandidate | None:
+    def _update_state(
+        self,
+        *,
+        symbol: str,
+        state: SymbolState,
+        row: dict[str, float | None],
+        timeline_idx: int,
+    ) -> EntryCandidate | None:
         close = float(row["close"] or 0.0)
         state.age += 1
 
-        if state.cooldown_bars_left > 0:
-            state.cooldown_bars_left -= 1
-            return None
         if state.state == PortfolioState.IN_TRADE:
             return None
 
         if state.state == PortfolioState.IDLE:
+            if self._is_on_cooldown(symbol=symbol, timeline_idx=timeline_idx):
+                return None
             state.pump_anchor_close = close
             state.high_pump = float(row["high"] or close)
             state.state = PortfolioState.SEEK_PUMP
@@ -319,6 +337,7 @@ class PortfolioStateEngine:
 
             if state.break_fail_count >= self.config.break_fail_threshold or state.age > self.config.max_age_range:
                 self._reset_state(state)
+                self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
             return None
 
         if state.state == PortfolioState.ENTRY_SIGNAL and state.signal is not None:
@@ -493,7 +512,29 @@ class PortfolioStateEngine:
     def _reject_candidate(self, symbol: str) -> None:
         state = self._states[symbol]
         self._reset_state(state)
-        state.cooldown_bars_left = self.config.cooldown_bars
+        self._set_cooldown(symbol=symbol)
+
+    def _is_on_cooldown(self, *, symbol: str, timeline_idx: int) -> bool:
+        until_idx = self._cooldown_until_idx.get(symbol)
+        return until_idx is not None and timeline_idx < until_idx
+
+    def _set_cooldown(self, *, symbol: str, timeline_idx: int | None = None) -> None:
+        bars = self._resolve_cooldown_bars()
+        if bars <= 0:
+            self._cooldown_until_idx.pop(symbol, None)
+            return
+        start_idx = timeline_idx if timeline_idx is not None else self._current_timeline_idx
+        self._cooldown_until_idx[symbol] = start_idx + bars
+
+    def _resolve_cooldown_bars(self) -> int:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        if profile in self.PROFILE_COOLDOWN_HOURS:
+            return self._hours_to_15m_bars(self.PROFILE_COOLDOWN_HOURS[profile])
+        return self.config.cooldown_bars
+
+    @staticmethod
+    def _hours_to_15m_bars(hours: int) -> int:
+        return max(1, int((hours * 60) / 15))
 
     def _close_open_positions(self, *, symbol_frames: dict[str, pd.DataFrame], timeline: list[int]) -> list[TradeResult]:
         if not timeline:
