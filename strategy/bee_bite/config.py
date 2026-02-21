@@ -18,6 +18,24 @@ BEE_BITE_GRID_MODES: tuple[BeeBiteGridMode, ...] = ("baseline", "expanded")
 
 
 @dataclass(frozen=True, slots=True)
+class ScoreThreshold:
+    min_score: float
+
+
+BEE_BITE_PROFILE_SCORE_THRESHOLDS: dict[BeeBiteProfileId, ScoreThreshold] = {
+    "A": ScoreThreshold(min_score=3.0),
+    "B": ScoreThreshold(min_score=4.0),
+    "C": ScoreThreshold(min_score=2.0),
+}
+
+BEE_BITE_PROFILE_TOP_N: dict[BeeBiteProfileId, int] = {
+    "A": 2,
+    "B": 1,
+    "C": 3,
+}
+
+
+@dataclass(frozen=True, slots=True)
 class BeeBiteParams:
     bite_lookback: int
     bite_volume_mult: float
@@ -200,6 +218,14 @@ def validate_bee_bite_runtime(*, profile_id: BeeBiteProfileId, grid_mode: BeeBit
         raise ValueError("для bee_bite параметр --top-n должен быть в диапазоне [1, 500]")
     if grid_mode == "expanded" and top_n < 20:
         raise ValueError("для bee_bite в режиме expanded параметр --top-n должен быть >= 20")
+
+
+def get_bee_bite_score_threshold(profile_id: BeeBiteProfileId) -> ScoreThreshold:
+    return BEE_BITE_PROFILE_SCORE_THRESHOLDS[profile_id]
+
+
+def get_bee_bite_top_n(profile_id: BeeBiteProfileId) -> int:
+    return BEE_BITE_PROFILE_TOP_N[profile_id]
 
 
 def validate_bee_bite_params(params: BeeBiteParams) -> None:

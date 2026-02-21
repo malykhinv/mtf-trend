@@ -40,6 +40,7 @@ from simulation.trade_classifier import TradeClassifier
 from simulation.portfolio_state_engine import PortfolioEngineConfig, PortfolioStateEngine
 from simulation.risk_manager import RiskConfig, RiskManager
 from strategy.base_strategy import BaseStrategy
+from strategy.bee_bite.config import get_bee_bite_score_threshold, get_bee_bite_top_n
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, BreakoutParams
 from strategy.breakout.indicators.level_detector import LevelDetector
 from strategy.breakout.pending_breakout import PendingBreakout
@@ -763,13 +764,23 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             frame = mtf.entry_frame
             if frame.empty:
                 continue
-            entry_frames[symbol] = frame[["timestamp", "open", "high", "low", "close", "volume"]].copy()
+            columns = ["timestamp", "open", "high", "low", "close", "volume"]
+            if "open_interest" in frame.columns:
+                columns.append("open_interest")
+            if "taker_buy_volume" in frame.columns:
+                columns.append("taker_buy_volume")
+            entry_frames[symbol] = frame[columns].copy()
         if not entry_frames:
             return []
 
+        profile_id = getattr(params, "bite_profile_id", None)
+        profile_top_n = get_bee_bite_top_n(profile_id) if profile_id is not None else 1
+        score_threshold = get_bee_bite_score_threshold(profile_id).min_score if profile_id is not None else 0.0
+
         engine = PortfolioStateEngine(
             config=PortfolioEngineConfig(
-                top_n=1,
+                top_n=profile_top_n,
+                score_threshold=score_threshold,
                 r_trade=params.r_trade,
                 portfolio_risk_limit=params.portfolio_risk_limit,
                 min_stop_atr_ratio=params.min_stop_atr_ratio,
