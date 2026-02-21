@@ -47,6 +47,10 @@ class SetupContext:
     reclaim_idx: int | None = None
     lowest_break: float | None = None
     retest_touch_idx: int | None = None
+    t_pump_start: int | None = None
+    t_pump_end: int | None = None
+    high_pump: float | None = None
+    low_before_pump: float | None = None
 
 
 class BeeBiteEngine:
@@ -56,6 +60,11 @@ class BeeBiteEngine:
     DEFAULT_RECLAIM_LIMIT = 4
     CONSERVATIVE_RECLAIM_LIMIT = 6
     CONSERVATIVE_RETEST_LIMIT = 6
+    IMPULSE_THRESHOLDS: dict[str, float] = {
+        "A": 2.0,
+        "B": 2.2,
+        "C": 2.5,
+    }
 
     def __init__(self) -> None:
         self._detector = LevelDetector()
@@ -136,7 +145,16 @@ class BeeBiteEngine:
             if state == BeeBiteState.SEEK_PUMP:
                 pump_signal = self._resolve_pump_signal(rows=rows, idx=i, params=params)
                 if pump_signal is not None:
-                    side, level_price, pump_height, atr_pre = pump_signal
+                    (
+                        side,
+                        level_price,
+                        pump_height,
+                        atr_pre,
+                        t_pump_start,
+                        t_pump_end,
+                        high_pump,
+                        low_before_pump,
+                    ) = pump_signal
                     setup = SetupContext(
                         side=side,
                         level_price=level_price,
@@ -144,6 +162,10 @@ class BeeBiteEngine:
                         breakout_timestamp=timestamp,
                         pump_height=pump_height,
                         atr_pre=atr_pre,
+                        t_pump_start=t_pump_start,
+                        t_pump_end=t_pump_end,
+                        high_pump=high_pump,
+                        low_before_pump=low_before_pump,
                     )
                     state = BeeBiteState.SEEK_RANGE
                     diagnostics["states"].append(state.value)
@@ -384,30 +406,63 @@ class BeeBiteEngine:
         rows: list[object],
         idx: int,
         params: BeeBiteParams,
-    ) -> tuple[PositionSide, float, float, float] | None:
-        if idx < 11:
+    ) -> tuple[PositionSide, float, float, float, int, int, float, float] | None:
+        pump_window = 6
+        pre_pump_len = 14
+        before_pump_idx = idx - pump_window
+        atr_start_idx = before_pump_idx - pre_pump_len
+        if atr_start_idx < 0:
             return None
 
-        recent = rows[idx - 5 : idx + 1]
-        before = rows[idx - 11 : idx - 5]
-        atr_pre = float(np.mean([float(item.atr14) for item in before]))
+        recent = rows[idx - pump_window + 1 : idx + 1]
+        before_pump = rows[before_pump_idx]
+        atr_window = rows[atr_start_idx:before_pump_idx]
+
+        tr_values: list[float] = []
+        for n, item in enumerate(atr_window):
+            prev_close = float(rows[atr_start_idx + n - 1].close)
+            high = float(item.high)
+            low = float(item.low)
+            tr_values.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        atr_pre = float(np.mean(tr_values)) if tr_values else 0.0
         if atr_pre <= 0:
             return None
 
         high_pump = max(float(item.high) for item in recent)
         low_pump = min(float(item.low) for item in recent)
-        low_before_pump = min(float(item.low) for item in before)
-        high_before_pump = max(float(item.high) for item in before)
+        low_before_pump = float(before_pump.low)
+        high_before_pump = float(before_pump.high)
 
         up_impulse = high_pump - low_before_pump
         down_impulse = high_before_pump - low_pump
-        impulse_threshold = params.bite_min_move_atr * atr_pre
+        impulse_multiplier = self.IMPULSE_THRESHOLDS.get(params.bite_profile_id, self.IMPULSE_THRESHOLDS["B"])
+        impulse_threshold = impulse_multiplier * atr_pre
         if up_impulse < impulse_threshold and down_impulse < impulse_threshold:
             return None
 
+        t_pump_start = int(recent[0].timestamp)
+        t_pump_end = int(recent[-1].timestamp)
         if up_impulse >= down_impulse:
-            return PositionSide.LONG, high_pump, up_impulse, atr_pre
-        return PositionSide.SHORT, low_pump, down_impulse, atr_pre
+            return (
+                PositionSide.LONG,
+                high_pump,
+                up_impulse,
+                atr_pre,
+                t_pump_start,
+                t_pump_end,
+                high_pump,
+                low_before_pump,
+            )
+        return (
+            PositionSide.SHORT,
+            low_pump,
+            down_impulse,
+            atr_pre,
+            t_pump_start,
+            t_pump_end,
+            high_pump,
+            low_before_pump,
+        )
 
     def _freeze_range(
         self,
