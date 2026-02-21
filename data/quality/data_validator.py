@@ -83,7 +83,7 @@ class DataValidator:
 
         numeric_columns: dict[str, pd.Series] = {
             col: pd.Series(pd.to_numeric(normalized[col], errors="coerce"), index=normalized.index)
-            for col in ("open", "high", "low", "close", "volume", "open_interest")
+            for col in ("open", "high", "low", "close", "volume", "open_interest", "taker_buy_volume")
             if col in normalized.columns
         }
 
@@ -110,6 +110,7 @@ class DataValidator:
         issue_type_by_column = {
             "volume": "negative_volume",
             "open_interest": "negative_open_interest",
+            "taker_buy_volume": "negative_taker_buy_volume",
         }
         for col, issue_type in issue_type_by_column.items():
             if col in numeric_columns:

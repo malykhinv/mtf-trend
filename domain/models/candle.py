@@ -17,6 +17,7 @@ class Candle:
     close: Price
     volume: Volume
     open_interest: Volume
+    taker_buy_volume: Volume | None = None
 
     # region Приватные
     def __post_init__(self) -> None:
