@@ -39,6 +39,10 @@ class SetupContext:
     retest_timestamp: int | None = None
     range_high: float | None = None
     range_low: float | None = None
+    pump_height: float = 0.0
+    atr_pre: float = 0.0
+    atr_bg: float = 0.0
+    core_width: float = 0.0
 
 
 class BeeBiteEngine:
@@ -76,13 +80,13 @@ class BeeBiteEngine:
 
     def generate_events(self, data: pd.DataFrame, params: BeeBiteParams) -> list[TradeResult]:
         prepared = self.prepare_data(data)
-        annotated = self._append_natr(prepared, window=params.bite_lookback)
+        annotated = self._append_volatility(prepared)
         return self._run_fsm(annotated=annotated, higher_levels=pd.DataFrame(), params=params)
 
     def generate_events_multi_tf(self, *, mtf_frames: SymbolMtfFrames, params: BeeBiteParams) -> list[TradeResult]:
         higher = self.prepare_data(mtf_frames.get_frame(params.levels_timeframe))[["timestamp", "high", "low", "close"]].copy()
         lower = self.prepare_data(mtf_frames.get_frame(params.entry_timeframe))[["timestamp", "open", "high", "low", "close", "volume"]].copy()
-        annotated = self._append_natr(lower, window=params.bite_lookback)
+        annotated = self._append_volatility(lower)
         higher_levels = self._detector.detect(higher_base=higher, lookback=params.bite_lookback)
         return self._run_fsm(annotated=annotated, higher_levels=higher_levels, params=params)
 
@@ -120,43 +124,41 @@ class BeeBiteEngine:
                 state = BeeBiteState.SEEK_PUMP
                 diagnostics["states"].append(state.value)
 
-            if state == BeeBiteState.SEEK_PUMP and level_high is not None and level_low is not None:
-                if price_close > level_high and self._body_ratio(row) >= params.bite_min_body_ratio:
+            if state == BeeBiteState.SEEK_PUMP:
+                pump_signal = self._resolve_pump_signal(rows=rows, idx=i, params=params)
+                if pump_signal is not None:
+                    side, level_price, pump_height, atr_pre = pump_signal
                     setup = SetupContext(
-                        side=PositionSide.LONG,
-                        level_price=level_high,
+                        side=side,
+                        level_price=level_price,
                         breakout_idx=i,
                         breakout_timestamp=timestamp,
-                    )
-                    state = BeeBiteState.SEEK_RANGE
-                    diagnostics["states"].append(state.value)
-                elif price_close < level_low and self._body_ratio(row) >= params.bite_min_body_ratio:
-                    setup = SetupContext(
-                        side=PositionSide.SHORT,
-                        level_price=level_low,
-                        breakout_idx=i,
-                        breakout_timestamp=timestamp,
+                        pump_height=pump_height,
+                        atr_pre=atr_pre,
                     )
                     state = BeeBiteState.SEEK_RANGE
                     diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.SEEK_RANGE and setup is not None:
+                window_len = max(6, params.bite_lookback)
                 max_wait = max(1, self._hours_to_candles(params.bite_retest_window_hours, params.entry_timeframe))
-                if i - setup.breakout_idx > max_wait:
+                elapsed = i - setup.breakout_idx
+                if elapsed > max_wait:
                     setup = None
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
-                    continue
-                zone = self._resolve_retest_zone_ratio(params=params, natr=float(row.natr))
-                zone_top = setup.level_price * (1 + zone)
-                zone_bottom = setup.level_price * (1 - zone)
-                if float(row.low) <= zone_top and float(row.high) >= zone_bottom:
-                    setup.retest_idx = i
-                    setup.retest_timestamp = timestamp
-                    setup.range_low = float(row.low)
-                    setup.range_high = float(row.high)
-                    state = BeeBiteState.RANGE_LOCKED
-                    diagnostics["states"].append(state.value)
+                elif elapsed >= window_len:
+                    range_setup = self._freeze_range(rows=rows, end_idx=i, setup=setup, params=params, window_len=window_len)
+                    if range_setup is not None:
+                        setup.range_low, setup.range_high, setup.core_width, setup.atr_bg = range_setup
+                        setup.retest_idx = i
+                        setup.retest_timestamp = timestamp
+                        state = BeeBiteState.RANGE_LOCKED
+                        diagnostics["states"].append(state.value)
+                    else:
+                        setup = None
+                        state = BeeBiteState.IDLE
+                        diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.RANGE_LOCKED and setup is not None:
                 state = BeeBiteState.BREAK_ACTIVE
@@ -275,7 +277,7 @@ class BeeBiteEngine:
         return abs(float(row.close) - float(row.open)) / spread
 
     @staticmethod
-    def _append_natr(frame: pd.DataFrame, *, window: int) -> pd.DataFrame:
+    def _append_volatility(frame: pd.DataFrame) -> pd.DataFrame:
         if frame.empty:
             return frame.assign(natr=np.nan)
 
@@ -289,9 +291,86 @@ class BeeBiteEngine:
             ],
             axis=1,
         ).max(axis=1)
-        atr = tr.rolling(window=max(2, int(window)), min_periods=max(2, int(window))).mean()
-        work["natr"] = (atr / work["close"].replace(0, np.nan)).fillna(0.0)
+        atr = tr.rolling(window=14, min_periods=14).mean()
+        work["atr14"] = atr.fillna(0.0)
+        work["natr"] = (work["atr14"] / work["close"].replace(0, np.nan)).fillna(0.0)
         return work
+
+    def _resolve_pump_signal(
+        self,
+        *,
+        rows: list[object],
+        idx: int,
+        params: BeeBiteParams,
+    ) -> tuple[PositionSide, float, float, float] | None:
+        if idx < 11:
+            return None
+
+        recent = rows[idx - 5 : idx + 1]
+        before = rows[idx - 11 : idx - 5]
+        atr_pre = float(np.mean([float(item.atr14) for item in before]))
+        if atr_pre <= 0:
+            return None
+
+        high_pump = max(float(item.high) for item in recent)
+        low_pump = min(float(item.low) for item in recent)
+        low_before_pump = min(float(item.low) for item in before)
+        high_before_pump = max(float(item.high) for item in before)
+
+        up_impulse = high_pump - low_before_pump
+        down_impulse = high_before_pump - low_pump
+        impulse_threshold = params.bite_min_move_atr * atr_pre
+        if up_impulse < impulse_threshold and down_impulse < impulse_threshold:
+            return None
+
+        if up_impulse >= down_impulse:
+            return PositionSide.LONG, high_pump, up_impulse, atr_pre
+        return PositionSide.SHORT, low_pump, down_impulse, atr_pre
+
+    def _freeze_range(
+        self,
+        *,
+        rows: list[object],
+        end_idx: int,
+        setup: SetupContext,
+        params: BeeBiteParams,
+        window_len: int,
+    ) -> tuple[float, float, float, float] | None:
+        start_idx = setup.breakout_idx + 1
+        if end_idx - start_idx + 1 < window_len:
+            return None
+
+        window = rows[start_idx : start_idx + window_len]
+        lows = np.array([float(item.low) for item in window])
+        highs = np.array([float(item.high) for item in window])
+        atr_bg = float(np.mean([float(item.atr14) for item in window]))
+        if atr_bg <= 0:
+            return None
+
+        p10 = float(np.quantile(lows, 0.10))
+        p85 = float(np.quantile(highs, 0.85))
+        p90 = float(np.quantile(highs, 0.90))
+        core_width = max(p85 - p10, 0.0)
+
+        width_limit = min(0.45 * setup.pump_height, 7.0 * atr_bg)
+        if core_width > width_limit:
+            return None
+
+        p10_windows: list[float] = []
+        for w_end in range(5, len(window)):
+            sub_lows = lows[w_end - 5 : w_end + 1]
+            p10_windows.append(float(np.quantile(sub_lows, 0.10)))
+        if len(p10_windows) < 6:
+            return None
+
+        p10_last6 = p10_windows[-6:]
+        if max(p10_last6) - min(p10_last6) > params.bite_max_retest_depth * atr_bg:
+            return None
+
+        delta = 0.2 * atr_bg
+        support = p10 - delta
+        resistance = p90 + delta
+        return support, resistance, core_width, atr_bg
 
 
     @staticmethod
