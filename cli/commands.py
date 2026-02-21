@@ -884,12 +884,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         config.strategy.bee_bite_cooldown_bars = (
             int(getattr(args, "bee_bite_cooldown_bars", None))
             if getattr(args, "bee_bite_cooldown_bars", None) is not None
-            else profile_runtime.cooldown_bars
+            else profile_runtime.cooldown_hours
         )
         config.strategy.bee_bite_max_age_range = (
             int(getattr(args, "bee_bite_max_age_range", None))
             if getattr(args, "bee_bite_max_age_range", None) is not None
-            else profile_runtime.max_age_range
+            else profile_runtime.max_age_range_hours
         )
         validate_bee_bite_runtime(
             profile_id=config.strategy.bee_bite_profile,

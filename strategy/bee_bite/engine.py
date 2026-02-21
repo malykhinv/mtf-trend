@@ -72,12 +72,12 @@ class BeeBiteEngine:
     }
     FIXED_RANGE_WINDOW: int | None = None
     PROFILE_STABILITY_THRESHOLD: dict[str, float] = {
-        "A": 0.8,
-        "B": 1.0,
-        "C": 1.2,
+        "A": 0.20,
+        "B": 0.25,
+        "C": 0.30,
     }
     PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = {
-        "A": 10,
+        "A": 12,
         "B": 8,
         "C": 6,
     }
@@ -218,7 +218,8 @@ class BeeBiteEngine:
             if state == BeeBiteState.RANGE_LOCKED and setup is not None:
                 range_started_idx = setup.retest_idx if setup.retest_idx is not None else i
                 elapsed_in_range = i - range_started_idx
-                if elapsed_in_range > params.bite_max_age_range:
+                max_age_range_candles = self._hours_to_candles(params.bite_max_age_range, params.entry_timeframe)
+                if elapsed_in_range > max_age_range_candles:
                     setup = None
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)

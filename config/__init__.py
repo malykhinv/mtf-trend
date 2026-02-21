@@ -175,8 +175,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             os.getenv("BEE_BITE_RETEST_MODE"),
             default=bee_bite_runtime.retest_mode,
         ),
-        bee_bite_cooldown_bars=int(os.getenv("BEE_BITE_COOLDOWN_BARS", str(bee_bite_runtime.cooldown_bars))),
-        bee_bite_max_age_range=int(os.getenv("BEE_BITE_MAX_AGE_RANGE", str(bee_bite_runtime.max_age_range))),
+        bee_bite_cooldown_bars=int(os.getenv("BEE_BITE_COOLDOWN_BARS", str(bee_bite_runtime.cooldown_hours))),
+        bee_bite_max_age_range=int(os.getenv("BEE_BITE_MAX_AGE_RANGE", str(bee_bite_runtime.max_age_range_hours))),
     )
 
     simulation_config = SimulationConfig(
