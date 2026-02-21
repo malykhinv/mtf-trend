@@ -12,6 +12,7 @@ from domain.models.candle import Candle
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
+from simulation.exit_manager import ExitManager, ExitManagerConfig
 from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
@@ -45,6 +46,7 @@ class PortfolioEngineConfig:
     min_break_pct: float = 0.003
     min_reclaim_pct: float = 0.001
     rr: float = 2.0
+    bee_bite_profile_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -59,6 +61,11 @@ class SymbolState:
     break_fail_count: int = 0
     break_price: float | None = None
     pump_anchor_close: float | None = None
+    high_pump: float | None = None
+    support: float | None = None
+    resistance: float | None = None
+    lowest_break: float | None = None
+    atr_bg: float | None = None
     signal: TradeSignal | None = None
 
 
@@ -147,6 +154,11 @@ class PortfolioStateEngine:
             "volume": float(item["volume"]),
             "open_interest": _to_optional_float(item.get("open_interest")),
             "taker_buy_volume": _to_optional_float(item.get("taker_buy_volume")),
+            "atr_bg": _to_optional_float(item.get("atr_bg")),
+            "high_pump": _to_optional_float(item.get("high_pump")),
+            "lowest_break": _to_optional_float(item.get("lowest_break")),
+            "support": _to_optional_float(item.get("support")),
+            "resistance": _to_optional_float(item.get("resistance")),
         }
 
     def _new_simulator(self) -> StatefulPositionSimulator:
@@ -154,6 +166,7 @@ class PortfolioStateEngine:
             side=PositionSide.LONG,
             order_processor=OrderProcessor(commission_rate=self.commission_rate, slippage=self.slippage),
             trade_classifier=TradeClassifier(),
+            exit_manager=ExitManager(config=ExitManagerConfig(bee_bite_mode=True)),
             max_bars_in_trade=self.config.t_max_in_trade,
         )
 
@@ -173,6 +186,12 @@ class PortfolioStateEngine:
         if result is not None:
             state.state = PortfolioState.IDLE
             state.signal = None
+            state.pump_anchor_close = None
+            state.high_pump = None
+            state.support = None
+            state.resistance = None
+            state.lowest_break = None
+            state.atr_bg = None
             state.age = 0
             return result
         return None
@@ -189,25 +208,37 @@ class PortfolioStateEngine:
 
         if state.state == PortfolioState.IDLE:
             state.pump_anchor_close = close
+            state.high_pump = float(row["high"] or close)
             state.state = PortfolioState.SEEK_PUMP
             state.age = 0
             return None
 
         if state.state == PortfolioState.SEEK_PUMP:
             assert state.pump_anchor_close is not None
+            state.high_pump = max(state.high_pump or close, float(row["high"] or close))
             if (close - state.pump_anchor_close) / max(state.pump_anchor_close, 1e-12) >= self.config.min_pump_pct:
                 state.state = PortfolioState.SEEK_RANGE
-                state.range_high = row["high"]
-                state.range_low = row["low"]
+                state.range_high = float(row["high"] or close)
+                state.range_low = float(row["low"] or close)
+                state.support = state.range_low
+                state.resistance = state.range_high
+                row_atr = row.get("atr_bg")
+                state.atr_bg = float(row_atr) if row_atr is not None and row_atr > 0 else state.range_high - state.range_low
                 state.age = 0
             elif state.age > self.config.max_age_range:
                 self._reset_state(state)
             return None
 
         if state.state == PortfolioState.SEEK_RANGE:
-            state.range_high = max(state.range_high or row["high"], row["high"])
-            state.range_low = min(state.range_low or row["low"], row["low"])
+            high = float(row["high"] or close)
+            low = float(row["low"] or close)
+            state.range_high = max(state.range_high or high, high)
+            state.range_low = min(state.range_low or low, low)
             assert state.range_high is not None and state.range_low is not None
+            state.support = state.range_low
+            state.resistance = state.range_high
+            candle_range = max(high - low, 1e-12)
+            state.atr_bg = candle_range if state.atr_bg is None else (state.atr_bg * 0.7 + candle_range * 0.3)
             width_pct = (state.range_high - state.range_low) / max(close, 1e-12)
             if width_pct <= self.config.max_range_width_pct and state.age >= 2:
                 state.state = PortfolioState.RANGE_LOCKED
@@ -222,6 +253,7 @@ class PortfolioStateEngine:
                 state.state = PortfolioState.BREAK_ACTIVE
                 state.break_side = PositionSide.LONG
                 state.break_price = close
+                state.lowest_break = float(row["low"] or close)
                 state.reclaim_count = 0
                 state.break_fail_count = 0
                 state.age = 0
@@ -229,6 +261,7 @@ class PortfolioStateEngine:
                 state.state = PortfolioState.BREAK_ACTIVE
                 state.break_side = PositionSide.SHORT
                 state.break_price = close
+                state.lowest_break = float(row["high"] or close)
                 state.reclaim_count = 0
                 state.break_fail_count = 0
                 state.age = 0
@@ -238,6 +271,10 @@ class PortfolioStateEngine:
 
         if state.state == PortfolioState.BREAK_ACTIVE:
             assert state.break_side is not None and state.break_price is not None
+            if state.break_side == PositionSide.LONG:
+                state.lowest_break = min(state.lowest_break or float(row["low"] or close), float(row["low"] or close))
+            else:
+                state.lowest_break = max(state.lowest_break or float(row["high"] or close), float(row["high"] or close))
             if state.break_side == PositionSide.LONG and close >= state.break_price * (1 + self.config.min_reclaim_pct):
                 state.reclaim_count += 1
             elif state.break_side == PositionSide.SHORT and close <= state.break_price * (1 - self.config.min_reclaim_pct):
@@ -246,7 +283,7 @@ class PortfolioStateEngine:
                 state.break_fail_count += 1
 
             if state.reclaim_count >= self.config.reclaim_limit:
-                signal = self._build_signal(symbol=symbol, row=row, side=state.break_side)
+                signal = self._build_signal(symbol=symbol, row=row, side=state.break_side, state=state)
                 if signal is None:
                     self._reset_state(state)
                     return None
@@ -382,6 +419,9 @@ class PortfolioStateEngine:
         if not self._risk_manager.can_open_with_portfolio_limit(active_positions=active_positions, signal=candidate.signal):
             self._reject_candidate(candidate.symbol)
             return
+        if not self._risk_manager.check_stop_distance_by_atr(signal=candidate.signal, atr_bg=float(candidate.signal.atr_bg or 0.0)):
+            self._reject_candidate(candidate.symbol)
+            return
         size = self._risk_manager.calc_position_size(signal=candidate.signal)
         sim.register_signal(candidate.signal, size=size)
         state.state = PortfolioState.IN_TRADE
@@ -408,19 +448,36 @@ class PortfolioStateEngine:
             state = self._states[symbol]
             state.state = PortfolioState.IDLE
             state.signal = None
+            state.pump_anchor_close = None
+            state.high_pump = None
+            state.support = None
+            state.resistance = None
+            state.lowest_break = None
+            state.atr_bg = None
         return trades
 
-    def _build_signal(self, *, symbol: str, row: dict[str, float], side: PositionSide) -> TradeSignal | None:
-        entry = row["close"]
-        risk = max(entry * 0.005, 1e-8)
+    def _build_signal(self, *, symbol: str, row: dict[str, float], side: PositionSide, state: SymbolState) -> TradeSignal | None:
+        entry = float(row["close"])
+        support = float(state.support if state.support is not None else entry)
+        resistance = float(state.resistance if state.resistance is not None else entry)
+        atr_bg = float(state.atr_bg if state.atr_bg is not None else max(abs(resistance - support) * 0.25, entry * 0.001))
+        high_pump = float(state.high_pump if state.high_pump is not None else max(entry, resistance))
+
         if side == PositionSide.LONG:
-            stop = entry - risk
-            tp1 = entry + risk
-            tp2 = entry + risk * self.config.rr
+            lowest_break = float(state.lowest_break if state.lowest_break is not None else support)
+            stop = min(lowest_break, support - 0.1 * atr_bg)
+            if (entry - stop) < (0.3 * atr_bg):
+                return None
+            tp1 = max(resistance, entry + 0.5 * atr_bg)
+            tp2 = max(high_pump, tp1 + atr_bg)
         else:
-            stop = entry + risk
-            tp1 = entry - risk
-            tp2 = entry - risk * self.config.rr
+            lowest_break = float(state.lowest_break if state.lowest_break is not None else resistance)
+            stop = max(lowest_break, resistance + 0.1 * atr_bg)
+            if (stop - entry) < (0.3 * atr_bg):
+                return None
+            tp1 = min(support, entry - 0.5 * atr_bg)
+            tp2 = min(high_pump if high_pump < entry else entry - atr_bg, tp1 - atr_bg)
+
         signal = TradeSignal(
             symbol=symbol,
             position_side=side,
@@ -432,8 +489,19 @@ class PortfolioStateEngine:
             take_profit_2=Price(tp2),
             breakout_timestamp_ms=int(row["timestamp"]),
             retest_timestamp_ms=int(row["timestamp"]),
+            atr_bg=atr_bg,
+            high_pump=high_pump,
+            tp1_close_ratio=self._resolve_tp1_close_ratio(),
         )
         return signal
+
+    def _resolve_tp1_close_ratio(self) -> float:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        if profile == "B":
+            return 0.6
+        if profile == "C":
+            return 0.7
+        return 0.5
 
     @staticmethod
     def _to_candle(row: dict[str, float | None]) -> Candle:
@@ -461,6 +529,12 @@ class PortfolioStateEngine:
         state.reclaim_count = 0
         state.break_fail_count = 0
         state.signal = None
+        state.pump_anchor_close = None
+        state.high_pump = None
+        state.support = None
+        state.resistance = None
+        state.lowest_break = None
+        state.atr_bg = None
 
 
 

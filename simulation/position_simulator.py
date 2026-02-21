@@ -54,6 +54,9 @@ class StatefulPositionSimulator(PositionSimulator):
             take_profit_2=signal.take_profit_2,
             breakout_timestamp_ms=signal.breakout_timestamp_ms,
             retest_timestamp_ms=signal.retest_timestamp_ms,
+            atr_bg=signal.atr_bg,
+            high_pump=signal.high_pump,
+            tp1_close_ratio=signal.tp1_close_ratio,
         )
         self._realized_pnl = -fill.commission
         self._closed_size = 0.0
@@ -142,7 +145,7 @@ class StatefulPositionSimulator(PositionSimulator):
             return None
 
         self._bars_in_trade += 1
-        if self.max_bars_in_trade is not None and self._bars_in_trade >= self.max_bars_in_trade:
+        if self.max_bars_in_trade is not None and self._bars_in_trade >= self.max_bars_in_trade and not self.position.tp1_done:
             return self._finalize(candle, candle.close.value, exit_at_be=False, exit_at_tp2=False)
 
         if self.side == PositionSide.LONG:
