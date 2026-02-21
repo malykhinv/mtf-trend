@@ -765,10 +765,25 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             if frame.empty:
                 continue
             columns = ["timestamp", "open", "high", "low", "close", "volume"]
-            if "open_interest" in frame.columns:
-                columns.append("open_interest")
-            if "taker_buy_volume" in frame.columns:
-                columns.append("taker_buy_volume")
+            optional_columns = [
+                "open_interest",
+                "taker_buy_volume",
+                "taker_buy_ratio",
+                "taker_ratio",
+                "avg_volume_range",
+                "avg_range_volume",
+                "range_volume_avg",
+                "oi_reclaim",
+                "oi_break_avg",
+                "range_volume_zscore",
+                "volume_range_zscore",
+                "zscore_range_volume",
+                "atr_bg",
+                "spread",
+                "bid_ask_spread",
+                "effective_spread",
+            ]
+            columns.extend(column for column in optional_columns if column in frame.columns)
             entry_frames[symbol] = frame[columns].copy()
         if not entry_frames:
             return []
@@ -790,7 +805,16 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             commission_rate=self._commission_rate,
             slippage=self._slippage,
         )
-        return engine.run(entry_frames)
+        trades = engine.run(entry_frames)
+        self._last_generation_diagnostics = {
+            "mode": "portfolio",
+            "profile_id": profile_id,
+            "top_n": profile_top_n,
+            "score_threshold": engine._resolve_score_threshold(),
+            "portfolio_score": engine.consume_last_run_diagnostics(),
+            "trades_generated": len(trades),
+        }
+        return trades
 
     def generate_events_multi_tf(
         self,
