@@ -79,6 +79,7 @@ class EntryCandidate:
     reclaim_bars: int
     liquidity: float
     reclaim_candle_score: float
+    score_trace: dict[str, float]
 
 
 @dataclass(slots=True)
@@ -91,6 +92,8 @@ class PortfolioStateEngine:
     _sims: dict[str, StatefulPositionSimulator] = field(default_factory=dict)
     _risk_manager: RiskManager | None = None
     _current_timeline_idx: int = -1
+    _last_run_diagnostics: dict[str, object] = field(default_factory=dict)
+    _build_score_trace: dict[str, float] = field(default_factory=dict)
 
     PROFILE_SCORE_THRESHOLDS: dict[str, float] = field(
         default_factory=lambda: {
@@ -115,6 +118,12 @@ class PortfolioStateEngine:
     )
 
     def run(self, symbol_frames: dict[str, pd.DataFrame]) -> list[TradeResult]:
+        self._last_run_diagnostics = {
+            "score_threshold": self._resolve_score_threshold(),
+            "profile": (self.config.bee_bite_profile_id or "").upper() or None,
+            "candidates": [],
+            "selected_symbols": [],
+        }
         timeline = self._build_timeline(symbol_frames)
         if not timeline:
             return []
@@ -149,6 +158,7 @@ class PortfolioStateEngine:
 
             winners = self._pick_top_candidates(candidates)
             winners_symbols = {candidate.symbol for candidate in winners}
+            self._record_candidates_diagnostics(candidates=candidates, winners_symbols=winners_symbols)
             for candidate in winners:
                 self._activate_candidate(candidate)
             for candidate in candidates:
@@ -157,6 +167,11 @@ class PortfolioStateEngine:
 
         trades.extend(self._close_open_positions(symbol_frames=symbol_frames, timeline=timeline))
         return sorted(trades, key=lambda trade: (trade.exit_timestamp_ms, trade.entry_timestamp_ms))
+
+    def consume_last_run_diagnostics(self) -> dict[str, object]:
+        diagnostics = self._last_run_diagnostics.copy()
+        self._last_run_diagnostics = {}
+        return diagnostics
 
     def _build_timeline(self, symbol_frames: dict[str, pd.DataFrame]) -> list[int]:
         timeline: set[int] = set()
@@ -190,6 +205,9 @@ class PortfolioStateEngine:
             "range_volume_zscore": _to_optional_float(item.get("range_volume_zscore")),
             "volume_range_zscore": _to_optional_float(item.get("volume_range_zscore")),
             "zscore_range_volume": _to_optional_float(item.get("zscore_range_volume")),
+            "spread": _to_optional_float(item.get("spread")),
+            "bid_ask_spread": _to_optional_float(item.get("bid_ask_spread")),
+            "effective_spread": _to_optional_float(item.get("effective_spread")),
             "atr_bg": _to_optional_float(item.get("atr_bg")),
             "high_pump": _to_optional_float(item.get("high_pump")),
             "lowest_break": _to_optional_float(item.get("lowest_break")),
@@ -341,7 +359,9 @@ class PortfolioStateEngine:
                     range_high=state.range_high,
                     range_low=state.range_low,
                     reclaim_bars=reclaim_bars,
+                    atr_bg=state.atr_bg,
                 )
+                score_trace = self._build_score_trace.copy()
                 return EntryCandidate(
                     symbol=symbol,
                     score=score,
@@ -350,6 +370,7 @@ class PortfolioStateEngine:
                     reclaim_bars=reclaim_bars,
                     liquidity=float(row["volume"] or 0.0),
                     reclaim_candle_score=reclaim_candle_score,
+                    score_trace=score_trace,
                 )
 
             if state.break_fail_count >= self.config.break_fail_threshold or state.age > self.config.max_age_range:
@@ -365,7 +386,9 @@ class PortfolioStateEngine:
                 range_high=state.range_high,
                 range_low=state.range_low,
                 reclaim_bars=reclaim_bars,
+                atr_bg=state.atr_bg,
             )
+            score_trace = self._build_score_trace.copy()
             return EntryCandidate(
                 symbol=symbol,
                 score=score,
@@ -374,6 +397,7 @@ class PortfolioStateEngine:
                 reclaim_bars=reclaim_bars,
                 liquidity=float(row["volume"] or 0.0),
                 reclaim_candle_score=reclaim_candle_score,
+                score_trace=score_trace,
             )
 
         return None
@@ -386,42 +410,48 @@ class PortfolioStateEngine:
         range_high: float | None,
         range_low: float | None,
         reclaim_bars: int,
+        atr_bg: float | None,
     ) -> tuple[float, float]:
         close = float(row["close"] or 0.0)
-        open_ = float(row["open"] or 0.0)
         high = float(row["high"] or 0.0)
         low = float(row["low"] or 0.0)
         volume = float(row["volume"] or 0.0)
 
-        spread = max(high - low, 1e-12)
-        body_ratio = abs(close - open_) / spread
-        close_position = (close - low) / spread if side == PositionSide.LONG else (high - close) / spread
+        candle_range = max(high - low, 1e-12)
+        close_position = (close - low) / candle_range if side == PositionSide.LONG else (high - close) / candle_range
 
         profile = (self.config.bee_bite_profile_id or "B").upper()
-        # A=Conservative, B=Balanced, C=Aggressive.
-        score_threshold = self.PROFILE_SCORE_THRESHOLDS.get(profile, self.config.score_threshold)
 
         score = 0.0
         reclaim_candle_score = 0.0
+        score_trace: dict[str, float] = {
+            "reclaim_speed": 0.0,
+            "reclaim_candle_quality": 0.0,
+            "reclaim_volume_ratio": 0.0,
+            "taker_ratio": 0.0,
+            "oi_relation": 0.0,
+            "depth_vs_atr": 0.0,
+            "range_volume_zscore": 0.0,
+            "profile_penalty": 0.0,
+            "spread_penalty": 0.0,
+        }
 
-        # 1) Скорость reclaim.
+        # 1) Reclaim speed: +2 same candle, +1 within 2 candles.
         if reclaim_bars <= 1:
-            score += 2.0
+            score_trace["reclaim_speed"] = 2.0
         elif reclaim_bars <= 2:
-            score += 1.0
-        elif reclaim_bars >= 5:
-            score -= 1.0
+            score_trace["reclaim_speed"] = 1.0
+        score += score_trace["reclaim_speed"]
 
-        # 2) Качество reclaim-свечи.
-        if body_ratio >= 0.6 and close_position >= 0.7:
-            reclaim_candle_score = 2.0
-        elif body_ratio >= 0.4 and close_position >= 0.55:
+        # 2) Reclaim candle quality (close-location).
+        if close_position >= 0.75:
             reclaim_candle_score = 1.0
-        elif body_ratio < 0.2 or close_position < 0.45:
+        elif close_position < 0.45:
             reclaim_candle_score = -1.0
+        score_trace["reclaim_candle_quality"] = reclaim_candle_score
         score += reclaim_candle_score
 
-        # 3) Объём reclaim против avg_volume_range.
+        # 3) Reclaim volume > 1.5x range average.
         avg_volume_range = _first_valid_positive(
             row,
             "avg_volume_range",
@@ -430,96 +460,97 @@ class PortfolioStateEngine:
         )
         if avg_volume_range is not None:
             reclaim_to_avg = volume / max(avg_volume_range, 1e-12)
-            if reclaim_to_avg >= 1.4:
-                score += 1.5
-            elif reclaim_to_avg >= 1.0:
-                score += 0.5
-            elif reclaim_to_avg < 0.7:
-                score -= 1.0
+            if reclaim_to_avg > 1.5:
+                score_trace["reclaim_volume_ratio"] = 1.0
+        score += score_trace["reclaim_volume_ratio"]
 
-        # 4) taker_buy_ratio (если валиден).
+        # 4) Taker ratio condition.
         taker_buy_ratio = _first_valid_ratio(
             row,
             "taker_buy_ratio",
             "taker_ratio",
         )
         if taker_buy_ratio is not None:
-            if side == PositionSide.LONG:
-                if taker_buy_ratio >= 0.55:
-                    score += 1.0
-                elif taker_buy_ratio <= 0.45:
-                    score -= 1.0
-            else:
-                if taker_buy_ratio <= 0.45:
-                    score += 1.0
-                elif taker_buy_ratio >= 0.55:
-                    score -= 1.0
+            if side == PositionSide.LONG and taker_buy_ratio > 0.55:
+                score_trace["taker_ratio"] = 1.0
+            if side == PositionSide.SHORT and taker_buy_ratio < 0.45:
+                score_trace["taker_ratio"] = 1.0
+        score += score_trace["taker_ratio"]
 
-        # 5) OI_reclaim vs OI_break_avg (если валиден).
+        # 5) OI: OI_reclaim < OI_break_avg -> +1.
         oi_reclaim = _first_valid_positive(row, "oi_reclaim", "OI_reclaim")
         oi_break_avg = _first_valid_positive(row, "oi_break_avg", "OI_break_avg")
-        if oi_reclaim is not None and oi_break_avg is not None:
-            oi_ratio = oi_reclaim / max(oi_break_avg, 1e-12)
-            if oi_ratio >= 1.1:
-                score += 1.0
-            elif oi_ratio < 0.9:
-                score -= 1.0
+        if oi_reclaim is not None and oi_break_avg is not None and oi_reclaim < oi_break_avg:
+            score_trace["oi_relation"] = 1.0
+        score += score_trace["oi_relation"]
 
-        # 6) Глубина прокола.
+        # 6) Depth: > 0.2 * ATR_bg -> +1.
         depth = 0.0
         if range_high is not None and range_low is not None:
-            range_width = max(range_high - range_low, 1e-12)
             if side == PositionSide.LONG:
-                depth = max((range_low - low) / range_width, 0.0)
+                depth = max(range_low - low, 0.0)
             else:
-                depth = max((high - range_high) / range_width, 0.0)
-        if 0.05 <= depth <= 0.5:
-            score += 1.5
-        elif depth > 0.8:
-            score -= 1.5
-        elif depth < 0.02:
-            score -= 0.5
+                depth = max(high - range_high, 0.0)
+        atr_ref = float(atr_bg) if atr_bg is not None and atr_bg > 0 else None
+        if atr_ref is not None and depth > 0.2 * atr_ref:
+            score_trace["depth_vs_atr"] = 1.0
+        score += score_trace["depth_vs_atr"]
 
-        # 7) z-score диапазонного объёма.
+        # 7) Range-volume z-score > 0.5 -> +1.
         zscore_range_volume = _first_valid_float(
             row,
             "range_volume_zscore",
             "volume_range_zscore",
             "zscore_range_volume",
         )
-        if zscore_range_volume is not None:
-            if zscore_range_volume >= 1.0:
-                score += 1.0
-            elif zscore_range_volume <= -1.0:
-                score -= 1.0
+        if zscore_range_volume is not None and zscore_range_volume > 0.5:
+            score_trace["range_volume_zscore"] = 1.0
+        score += score_trace["range_volume_zscore"]
 
-        # Профильные штрафы.
-        if profile == "A":  # Conservative
-            if reclaim_bars >= 3:
-                score -= 1.0
-            if reclaim_candle_score <= 0.0:
-                score -= 0.75
-            if depth > 0.6:
-                score -= 0.75
-        elif profile == "B":  # Balanced
-            if reclaim_bars >= 4:
-                score -= 0.5
-            if reclaim_candle_score < 0.0:
-                score -= 0.25
-        else:  # C / Aggressive
-            if reclaim_bars >= 5:
-                score -= 0.25
+        # 8) Profile penalties (6–8 bars).
+        if profile == "A" and reclaim_bars >= 6:
+            score_trace["profile_penalty"] = -1.0
+        elif profile == "B" and reclaim_bars >= 7:
+            score_trace["profile_penalty"] = -1.0
+        elif profile == "C" and reclaim_bars >= 8:
+            score_trace["profile_penalty"] = -1.0
+        score += score_trace["profile_penalty"]
 
-        if score_threshold >= 4.0 and score < 0.0:
-            score -= 0.5
+        # Optional spread penalty when spread data is present.
+        quoted_spread = _first_valid_positive(row, "spread", "bid_ask_spread", "effective_spread")
+        if quoted_spread is not None:
+            spread_ratio = quoted_spread / max(close, 1e-12)
+            if spread_ratio > 0.001:
+                score_trace["spread_penalty"] = -1.0
+        score += score_trace["spread_penalty"]
 
+        score_trace["total"] = score
+        self._build_score_trace = score_trace
         return score, reclaim_candle_score
 
     def _resolve_score_threshold(self) -> float:
         profile = (self.config.bee_bite_profile_id or "").upper()
         if profile in self.PROFILE_SCORE_THRESHOLDS:
             return self.PROFILE_SCORE_THRESHOLDS[profile]
-        return self.config.score_threshold
+        return self.PROFILE_SCORE_THRESHOLDS["B"]
+
+    def _record_candidates_diagnostics(self, *, candidates: list[EntryCandidate], winners_symbols: set[str]) -> None:
+        diagnostics_candidates = self._last_run_diagnostics.get("candidates")
+        if isinstance(diagnostics_candidates, list):
+            for candidate in candidates:
+                diagnostics_candidates.append(
+                    {
+                        "symbol": candidate.symbol,
+                        "timestamp_ms": candidate.signal.entry_timestamp_ms,
+                        "score": candidate.score,
+                        "reclaim_bars": candidate.reclaim_bars,
+                        "selected": candidate.symbol in winners_symbols,
+                        "score_trace": candidate.score_trace,
+                    }
+                )
+        selected_symbols = self._last_run_diagnostics.get("selected_symbols")
+        if isinstance(selected_symbols, list):
+            selected_symbols.extend(sorted(winners_symbols))
 
     def _pick_top_candidates(self, candidates: list[EntryCandidate]) -> list[EntryCandidate]:
         if not candidates:
