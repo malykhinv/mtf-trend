@@ -81,6 +81,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Таймфрейм входов (например 15m). Приоритетнее ENTRY_TIMEFRAME из env",
     )
+    run_bt.add_argument(
+        "--strategy",
+        choices=["breakout", "bee_bite"],
+        default=None,
+        help="Идентификатор стратегии. Приоритетнее STRATEGY_ID из env",
+    )
     run_bt.add_argument("--plot", default=False, help="Строить графики сделок (true/false)")
     run_bt.add_argument(
         "--plot-from-results",

@@ -37,6 +37,8 @@ __all__ = [
     "load_config",
 ]
 
+SUPPORTED_STRATEGY_IDS = {"breakout", "bee_bite"}
+
 
 # region Приватные
 
@@ -73,6 +75,14 @@ def _parse_bool(value: str | None, *, default: bool = False) -> bool:
     if normalized in {"0", "false", "no", "n", "off"}:
         return False
     raise ValueError(f"Invalid boolean value: {value}")
+
+
+def _parse_strategy_id(value: str | None, *, default: str = "breakout") -> str:
+    strategy_id = (value or default).strip().lower()
+    if strategy_id not in SUPPORTED_STRATEGY_IDS:
+        supported = ", ".join(sorted(SUPPORTED_STRATEGY_IDS))
+        raise ValueError(f"Invalid STRATEGY_ID: {strategy_id}. Supported values: {supported}")
+    return strategy_id
 
 
 def _parse_anchor_timestamp_ms(value: str | None, *, env_name: str) -> int | None:
@@ -143,6 +153,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     )
 
     strategy_config = StrategyConfig(
+        strategy_id=_parse_strategy_id(os.getenv("STRATEGY_ID")),
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
     )
