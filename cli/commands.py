@@ -786,60 +786,71 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     symbols_before_ranking = len(symbols)
     top_n = getattr(args, "top_n", None)
+    pre_rank_enabled = top_n is not None and top_n > 0
     ranked_symbols: list[tuple[str, float]] = []
     invalid_volume_symbols = 0
-    for symbol in symbols:
-        levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
-        if levels_frame.empty:
-            logger.debug(
-                "запуск-бэктеста: символ %s исключён из pre-rank, причина=пустой levels_tf=%s",
-                symbol,
-                levels_timeframe.value,
-            )
-            invalid_volume_symbols += 1
-            continue
-        if "volume" not in levels_frame.columns:
-            logger.info(
-                "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет колонки volume на levels_tf=%s",
-                symbol,
-                levels_timeframe.value,
-            )
-            invalid_volume_symbols += 1
-            continue
+    preloaded_levels_frames: dict[str, pd.DataFrame] = {}
+    pre_rank_started_at = time.perf_counter()
+    if pre_rank_enabled:
+        for symbol in symbols:
+            levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
+            preloaded_levels_frames[symbol] = levels_frame
+            if levels_frame.empty:
+                logger.debug(
+                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=пустой levels_tf=%s",
+                    symbol,
+                    levels_timeframe.value,
+                )
+                invalid_volume_symbols += 1
+                continue
+            if "volume" not in levels_frame.columns:
+                logger.info(
+                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет колонки volume на levels_tf=%s",
+                    symbol,
+                    levels_timeframe.value,
+                )
+                invalid_volume_symbols += 1
+                continue
 
-        volume_numeric = pd.Series(pd.to_numeric(levels_frame["volume"], errors="coerce"), index=levels_frame.index)
-        volume_series = volume_numeric.dropna()
-        if volume_series.empty:
-            logger.debug(
-                "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет валидного volume на levels_tf=%s",
-                symbol,
-                levels_timeframe.value,
-            )
-            invalid_volume_symbols += 1
-            continue
+            volume_numeric = pd.Series(pd.to_numeric(levels_frame["volume"], errors="coerce"), index=levels_frame.index)
+            volume_series = volume_numeric.dropna()
+            if volume_series.empty:
+                logger.debug(
+                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет валидного volume на levels_tf=%s",
+                    symbol,
+                    levels_timeframe.value,
+                )
+                invalid_volume_symbols += 1
+                continue
 
-        ranked_symbols.append((symbol, float(volume_series.mean())))
+            ranked_symbols.append((symbol, float(volume_series.mean())))
 
-    ranked_symbols.sort(key=lambda item: item[1], reverse=True)
-    ranked_symbols_count = len(ranked_symbols)
-
-    if top_n is not None and top_n > 0:
+        ranked_symbols.sort(key=lambda item: item[1], reverse=True)
+        ranked_symbols_count = len(ranked_symbols)
         selected_ranked_symbols = ranked_symbols[:top_n]
         symbols = [symbol for symbol, _ in selected_ranked_symbols]
         top_n_applied = top_n
+
+        preview = selected_ranked_symbols[:10]
+        top_preview_text = ", ".join(
+            f"{symbol} avg_volume={avg_volume:.4f}"
+            for symbol, avg_volume in preview
+        )
+        if not top_preview_text:
+            top_preview_text = "пусто"
     else:
-        selected_ranked_symbols = ranked_symbols
+        ranked_symbols_count = 0
+        selected_ranked_symbols = []
         symbols = list(symbols)
         top_n_applied = "не применялся"
+        top_preview_text = "pre-rank отключён"
 
-    preview = selected_ranked_symbols[:10]
-    top_preview_text = ", ".join(
-        f"{symbol} avg_volume={avg_volume:.4f}"
-        for symbol, avg_volume in preview
+    pre_rank_elapsed_seconds = time.perf_counter() - pre_rank_started_at
+    logger.info(
+        "запуск-бэктеста: pre-rank время=%.3fs enabled=%s",
+        pre_rank_elapsed_seconds,
+        pre_rank_enabled,
     )
-    if not top_preview_text:
-        top_preview_text = "пусто"
-
     logger.info(
         "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s невалидный_volume=%s top_n=%s выбрано_после_отсечения=%s",
         symbols_before_ranking,
@@ -848,7 +859,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         top_n_applied,
         len(symbols),
     )
-    if top_n is None or top_n <= 0:
+    if not pre_rank_enabled:
         logger.info(
             "запуск-бэктеста: pre-rank top_n не задан или <= 0, используется исходный список символов (%s)",
             len(symbols),
@@ -872,9 +883,13 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     symbols_missing_entry_tf = 0
     symbols_used = 0
     for idx, symbol in enumerate(symbols, start=1):
-        frames_by_tf = preparer.load_symbol_data_multi(symbol, [levels_timeframe, entry_timeframe])
-        levels_frame = frames_by_tf.get(levels_timeframe, pd.DataFrame())
-        entry_frame = frames_by_tf.get(entry_timeframe, pd.DataFrame())
+        levels_frame = preloaded_levels_frames.get(symbol)
+        if levels_frame is None:
+            levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
+        if levels_timeframe == entry_timeframe:
+            entry_frame = levels_frame
+        else:
+            entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
         if levels_frame.empty:
             symbols_missing_levels_tf += 1
         if entry_frame.empty:
