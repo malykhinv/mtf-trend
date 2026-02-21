@@ -26,14 +26,14 @@ class ScoreThreshold:
 
 
 BEE_BITE_PROFILE_SCORE_THRESHOLDS: dict[BeeBiteProfileId, ScoreThreshold] = {
-    "A": ScoreThreshold(min_score=3.0),
-    "B": ScoreThreshold(min_score=4.0),
+    "A": ScoreThreshold(min_score=4.0),
+    "B": ScoreThreshold(min_score=3.0),
     "C": ScoreThreshold(min_score=2.0),
 }
 
 BEE_BITE_PROFILE_TOP_N: dict[BeeBiteProfileId, int] = {
-    "A": 2,
-    "B": 1,
+    "A": 1,
+    "B": 2,
     "C": 3,
 }
 
@@ -84,8 +84,8 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
     "A": BeeBiteProfileRuntime(
         reclaim_mode="strict",
         retest_mode="confirmation",
-        top_n_min=20,
-        top_n_max=120,
+        top_n_min=5,
+        top_n_max=50,
         cooldown_bars=8,
         min_depth_threshold=0.3,
         micro_offset=0.2,
@@ -106,8 +106,8 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
     "C": BeeBiteProfileRuntime(
         reclaim_mode="aggressive",
         retest_mode="immediate",
-        top_n_min=5,
-        top_n_max=50,
+        top_n_min=20,
+        top_n_max=120,
         cooldown_bars=4,
         min_depth_threshold=0.2,
         micro_offset=0.1,
@@ -295,10 +295,26 @@ def validate_bee_bite_runtime(
         raise ValueError(f"Неподдерживаемый reclaim-режим bee_bite: {reclaim_mode}")
     if retest_mode not in BEE_BITE_RETEST_MODES:
         raise ValueError(f"Неподдерживаемый retest-режим bee_bite: {retest_mode}")
-    if reclaim_mode != runtime.reclaim_mode:
-        raise ValueError(f"профиль {profile_id} требует reclaim_mode={runtime.reclaim_mode}")
-    if retest_mode != runtime.retest_mode:
-        raise ValueError(f"профиль {profile_id} требует retest_mode={runtime.retest_mode}")
+    allowed_reclaim_by_profile: dict[BeeBiteProfileId, tuple[BeeBiteReclaimMode, ...]] = {
+        "A": ("strict",),
+        "B": ("strict", "balanced"),
+        "C": ("balanced", "aggressive"),
+    }
+    allowed_retest_by_profile: dict[BeeBiteProfileId, tuple[BeeBiteRetestMode, ...]] = {
+        "A": ("confirmation",),
+        "B": ("confirmation",),
+        "C": ("confirmation", "immediate"),
+    }
+
+    allowed_reclaim = allowed_reclaim_by_profile[profile_id]
+    if reclaim_mode not in allowed_reclaim:
+        supported = ", ".join(allowed_reclaim)
+        raise ValueError(f"профиль {profile_id} поддерживает reclaim_mode только из [{supported}]")
+
+    allowed_retest = allowed_retest_by_profile[profile_id]
+    if retest_mode not in allowed_retest:
+        supported = ", ".join(allowed_retest)
+        raise ValueError(f"профиль {profile_id} поддерживает retest_mode только из [{supported}]")
 
     if cooldown_bars != runtime.cooldown_bars:
         raise ValueError(f"профиль {profile_id} требует cooldown_bars={runtime.cooldown_bars}")
