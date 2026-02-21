@@ -24,8 +24,8 @@ class BeeBiteTradePlan:
     be_stop: float
 
 
-def resolve_profile_tp1_share(profile_id: str | None, fallback: float = 0.5) -> float:
-    raw = PROFILE_TP1_SHARE.get((profile_id or "").upper(), fallback)
+def resolve_profile_tp1_share(profile_id: str | None) -> float:
+    raw = PROFILE_TP1_SHARE.get((profile_id or "").upper(), PROFILE_TP1_SHARE["C"])
     return min(max(raw, 0.05), 0.95)
 
 
@@ -35,10 +35,10 @@ def build_bee_bite_trade_plan(
     entry_price: float,
     atr_bg: float,
     stop_loss: float,
+    support: float,
+    resistance: float,
     high_pump: float | None,
     low_before_pump: float | None,
-    be_offset_ratio: float,
-    trailing_tp2_atr_multiplier: float = 10.0,
 ) -> BeeBiteTradePlan | None:
     if atr_bg <= 0:
         return None
@@ -50,16 +50,17 @@ def build_bee_bite_trade_plan(
     if stop_distance <= 0:
         return None
 
+    mid = (support + resistance) / 2.0
     if side == PositionSide.LONG:
-        tp1 = entry_price + stop_distance
+        tp1 = mid if mid > entry_price else resistance
         fixed_tp2 = high_pump if high_pump is not None and (high_pump - entry_price) >= atr_bg else None
-        trailing_tp2 = entry_price + trailing_tp2_atr_multiplier * atr_bg
-        be_stop = entry_price * (1 + be_offset_ratio)
+        trailing_tp2 = entry_price + atr_bg
+        be_stop = entry_price * 1.001
     else:
-        tp1 = entry_price - stop_distance
+        tp1 = mid if mid < entry_price else support
         fixed_tp2 = low_before_pump if low_before_pump is not None and (entry_price - low_before_pump) >= atr_bg else None
-        trailing_tp2 = entry_price - trailing_tp2_atr_multiplier * atr_bg
-        be_stop = entry_price * (1 - be_offset_ratio)
+        trailing_tp2 = entry_price - atr_bg
+        be_stop = entry_price * 0.999
 
     trailing_mode = fixed_tp2 is None
     tp2 = trailing_tp2 if trailing_mode else fixed_tp2
