@@ -73,11 +73,11 @@ class BeeBiteProfileRuntime:
     retest_mode: BeeBiteRetestMode
     top_n_min: int
     top_n_max: int
-    cooldown_bars: int
+    cooldown_hours: int
     min_depth_threshold: float
     micro_offset: float
     reclaim_limit: int
-    max_age_range: int
+    max_age_range_hours: int
 
 
 BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
@@ -86,33 +86,33 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
         retest_mode="confirmation",
         top_n_min=5,
         top_n_max=50,
-        cooldown_bars=8,
-        min_depth_threshold=0.3,
-        micro_offset=0.2,
-        reclaim_limit=6,
-        max_age_range=24,
+        cooldown_hours=8,
+        min_depth_threshold=0.15,
+        micro_offset=0.15,
+        reclaim_limit=5,
+        max_age_range_hours=12,
     ),
     "B": BeeBiteProfileRuntime(
         reclaim_mode="balanced",
         retest_mode="confirmation",
         top_n_min=10,
         top_n_max=80,
-        cooldown_bars=6,
-        min_depth_threshold=0.25,
-        micro_offset=0.15,
-        reclaim_limit=4,
-        max_age_range=20,
+        cooldown_hours=6,
+        min_depth_threshold=0.12,
+        micro_offset=0.10,
+        reclaim_limit=6,
+        max_age_range_hours=8,
     ),
     "C": BeeBiteProfileRuntime(
         reclaim_mode="aggressive",
         retest_mode="immediate",
         top_n_min=20,
         top_n_max=120,
-        cooldown_bars=4,
-        min_depth_threshold=0.2,
-        micro_offset=0.1,
-        reclaim_limit=3,
-        max_age_range=16,
+        cooldown_hours=4,
+        min_depth_threshold=0.10,
+        micro_offset=0.05,
+        reclaim_limit=8,
+        max_age_range_hours=6,
     ),
 }
 
@@ -131,7 +131,7 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["A"].min_depth_threshold,
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["A"].micro_offset,
         bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["A"].reclaim_limit,
-        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["A"].max_age_range,
+        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["A"].max_age_range_hours,
         symbol="",
         bite_profile_id="A",
         bite_grid_mode="baseline",
@@ -149,7 +149,7 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["B"].min_depth_threshold,
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["B"].micro_offset,
         bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["B"].reclaim_limit,
-        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["B"].max_age_range,
+        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["B"].max_age_range_hours,
         symbol="",
         bite_profile_id="B",
         bite_grid_mode="baseline",
@@ -167,7 +167,7 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["C"].min_depth_threshold,
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["C"].micro_offset,
         bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["C"].reclaim_limit,
-        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["C"].max_age_range,
+        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["C"].max_age_range_hours,
         symbol="",
         bite_profile_id="C",
         bite_grid_mode="baseline",
@@ -316,10 +316,10 @@ def validate_bee_bite_runtime(
         supported = ", ".join(allowed_retest)
         raise ValueError(f"профиль {profile_id} поддерживает retest_mode только из [{supported}]")
 
-    if cooldown_bars != runtime.cooldown_bars:
-        raise ValueError(f"профиль {profile_id} требует cooldown_bars={runtime.cooldown_bars}")
-    if max_age_range != runtime.max_age_range:
-        raise ValueError(f"профиль {profile_id} требует max_age_range={runtime.max_age_range}")
+    if cooldown_bars != runtime.cooldown_hours:
+        raise ValueError(f"профиль {profile_id} требует cooldown_bars={runtime.cooldown_hours}")
+    if max_age_range != runtime.max_age_range_hours:
+        raise ValueError(f"профиль {profile_id} требует max_age_range={runtime.max_age_range_hours}")
 
     if top_n is None:
         return
