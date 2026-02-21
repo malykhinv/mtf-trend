@@ -456,11 +456,6 @@ class BeeBiteEngine:
 
 
     @staticmethod
-    def _resolve_retest_zone_ratio(*, params: BeeBiteParams, natr: float) -> float:
-        if params.bite_retest_zone_atr is None:
-            return max(params.bite_retest_zone, 0.0)
-        return max(params.bite_retest_zone_atr * max(natr, 0.0), 0.0)
-    @staticmethod
     def _hours_to_candles(hours: int, timeframe) -> int:
         timeframe_minutes = {
             "1m": 1,

@@ -5,12 +5,15 @@ from strategy.bee_bite.config import (
     BeeBiteGridMode,
     BeeBiteParams,
     BeeBiteProfileId,
-    parse_bee_bite_grid_mode,
-    parse_bee_bite_profile_id,
-    validate_bee_bite_runtime,
     ScoreThreshold,
+    get_bee_bite_runtime,
     get_bee_bite_score_threshold,
     get_bee_bite_top_n,
+    parse_bee_bite_grid_mode,
+    parse_bee_bite_profile_id,
+    parse_bee_bite_reclaim_mode,
+    parse_bee_bite_retest_mode,
+    validate_bee_bite_runtime,
 )
 
 __all__ = [
@@ -22,8 +25,11 @@ __all__ = [
     "BEE_BITE_GRID_MODES",
     "parse_bee_bite_profile_id",
     "parse_bee_bite_grid_mode",
+    "parse_bee_bite_reclaim_mode",
+    "parse_bee_bite_retest_mode",
     "validate_bee_bite_runtime",
     "ScoreThreshold",
     "get_bee_bite_score_threshold",
     "get_bee_bite_top_n",
+    "get_bee_bite_runtime",
 ]

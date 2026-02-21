@@ -59,7 +59,14 @@ from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
-from strategy.bee_bite import parse_bee_bite_grid_mode, parse_bee_bite_profile_id, validate_bee_bite_runtime
+from strategy.bee_bite import (
+    get_bee_bite_runtime,
+    parse_bee_bite_grid_mode,
+    parse_bee_bite_profile_id,
+    parse_bee_bite_reclaim_mode,
+    parse_bee_bite_retest_mode,
+    validate_bee_bite_runtime,
+)
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from strategy.factory import build_breakout_strategy, build_strategy
@@ -275,11 +282,8 @@ def _load_plot_params_row_from_results(
             "bite_lookback",
             "bite_volume_mult",
             "bite_retest_window_hours",
-            "bite_retest_zone",
             "bite_min_rr",
-            "bite_sl_mode",
             "bite_tp2_mult",
-            "bite_min_body_ratio",
             "bite_min_move_atr",
             "bite_max_retest_depth",
             "bite_confirmation_bars",
@@ -864,14 +868,37 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             getattr(args, "bee_bite_profile", None),
             default=config.strategy.bee_bite_profile,
         )
+        profile_runtime = get_bee_bite_runtime(config.strategy.bee_bite_profile)
         config.strategy.bee_bite_grid_mode = parse_bee_bite_grid_mode(
             getattr(args, "bee_bite_grid", None),
             default=config.strategy.bee_bite_grid_mode,
+        )
+        config.strategy.bee_bite_reclaim_mode = parse_bee_bite_reclaim_mode(
+            getattr(args, "bee_bite_reclaim_mode", None),
+            default=profile_runtime.reclaim_mode,
+        )
+        config.strategy.bee_bite_retest_mode = parse_bee_bite_retest_mode(
+            getattr(args, "bee_bite_retest_mode", None),
+            default=profile_runtime.retest_mode,
+        )
+        config.strategy.bee_bite_cooldown_bars = (
+            int(getattr(args, "bee_bite_cooldown_bars", None))
+            if getattr(args, "bee_bite_cooldown_bars", None) is not None
+            else profile_runtime.cooldown_bars
+        )
+        config.strategy.bee_bite_max_age_range = (
+            int(getattr(args, "bee_bite_max_age_range", None))
+            if getattr(args, "bee_bite_max_age_range", None) is not None
+            else profile_runtime.max_age_range
         )
         validate_bee_bite_runtime(
             profile_id=config.strategy.bee_bite_profile,
             grid_mode=config.strategy.bee_bite_grid_mode,
             top_n=getattr(args, "top_n", None),
+            reclaim_mode=config.strategy.bee_bite_reclaim_mode,
+            retest_mode=config.strategy.bee_bite_retest_mode,
+            cooldown_bars=config.strategy.bee_bite_cooldown_bars,
+            max_age_range=config.strategy.bee_bite_max_age_range,
         )
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),
