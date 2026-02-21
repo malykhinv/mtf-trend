@@ -60,6 +60,7 @@ from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
+from strategy.factory import build_breakout_strategy, build_strategy
 from utils.logger import get_logger
 from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
@@ -123,31 +124,46 @@ def _coerce_trade_plot_span(value: object) -> TradePlotSpan | None:
         return None
 
 
+def _resolve_strategy_id(config: AppConfig, args: argparse.Namespace) -> str:
+    strategy_override = getattr(args, "strategy", None)
+    if strategy_override is not None:
+        return str(strategy_override).strip().lower()
+    return config.strategy.strategy_id
+
+
 def _build_breakout_params_from_row(
     row: pd.Series,
     *,
     symbol: str,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
+    strategy_id: str,
 ) -> BreakoutParams:
+    if strategy_id == "breakout":
+        prefix = ""
+    elif strategy_id == "bee_bite":
+        prefix = "bite_"
+    else:
+        raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
+
     return BreakoutParams(
-        lookback=int(row["lookback"]),
-        volume_mult=float(row["volume_mult"]),
-        retest_window_hours=int(row["retest_window_hours"]),
-        retest_zone=float(row["retest_zone"]),
-        min_rr=float(row["min_rr"]),
-        sl_mode=SLMode(str(row["sl_mode"])),
-        tp2_mult=float(row["tp2_mult"]),
-        min_body_ratio=float(row["min_body_ratio"]),
-        min_move_atr=float(row["min_move_atr"]),
-        max_retest_depth=float(row["max_retest_depth"]),
-        confirmation_bars=int(row["confirmation_bars"]),
-        entry_trigger=EntryTrigger(str(row["entry_trigger"])),
+        lookback=int(row[f"{prefix}lookback"]),
+        volume_mult=float(row[f"{prefix}volume_mult"]),
+        retest_window_hours=int(row[f"{prefix}retest_window_hours"]),
+        retest_zone=float(row[f"{prefix}retest_zone"]),
+        min_rr=float(row[f"{prefix}min_rr"]),
+        sl_mode=SLMode(str(row[f"{prefix}sl_mode"])),
+        tp2_mult=float(row[f"{prefix}tp2_mult"]),
+        min_body_ratio=float(row[f"{prefix}min_body_ratio"]),
+        min_move_atr=float(row[f"{prefix}min_move_atr"]),
+        max_retest_depth=float(row[f"{prefix}max_retest_depth"]),
+        confirmation_bars=int(row[f"{prefix}confirmation_bars"]),
+        entry_trigger=EntryTrigger(str(row[f"{prefix}entry_trigger"])),
         symbol=symbol,
         retest_zone_atr=(
             None
-            if pd.isna(row.get("retest_zone_atr"))
-            else float(row["retest_zone_atr"])
+            if pd.isna(row.get(f"{prefix}retest_zone_atr"))
+            else float(row[f"{prefix}retest_zone_atr"])
         ),
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
@@ -166,6 +182,7 @@ def _plot_trade_setups_for_symbols(
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
     log_prefix: str,
+    strategy_id: str,
 ) -> None:
     output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -180,6 +197,7 @@ def _plot_trade_setups_for_symbols(
             symbol=symbol,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
+            strategy_id=strategy_id,
         )
         strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=cfg)
         diagnostics = strategy.consume_last_generation_diagnostics()
@@ -222,6 +240,7 @@ def _load_plot_params_row_from_results(
     args: argparse.Namespace,
     *,
     logger: Logger,
+    strategy_id: str,
 ) -> pd.Series | None:
     csv_path = Path(getattr(args, "results_input", None) or getattr(args, "input", None) or (
         config.backtest.results_dir / config.backtest.results_file_name
@@ -235,20 +254,40 @@ def _load_plot_params_row_from_results(
         logger.error("plot-from-results: файл результатов пустой: %s", csv_path)
         return None
 
-    required_columns = [
-        "lookback",
-        "volume_mult",
-        "retest_window_hours",
-        "retest_zone",
-        "min_rr",
-        "sl_mode",
-        "tp2_mult",
-        "min_body_ratio",
-        "min_move_atr",
-        "max_retest_depth",
-        "confirmation_bars",
-        "entry_trigger",
-    ]
+    required_columns_by_strategy = {
+        "breakout": [
+            "lookback",
+            "volume_mult",
+            "retest_window_hours",
+            "retest_zone",
+            "min_rr",
+            "sl_mode",
+            "tp2_mult",
+            "min_body_ratio",
+            "min_move_atr",
+            "max_retest_depth",
+            "confirmation_bars",
+            "entry_trigger",
+        ],
+        "bee_bite": [
+            "bite_lookback",
+            "bite_volume_mult",
+            "bite_retest_window_hours",
+            "bite_retest_zone",
+            "bite_min_rr",
+            "bite_sl_mode",
+            "bite_tp2_mult",
+            "bite_min_body_ratio",
+            "bite_min_move_atr",
+            "bite_max_retest_depth",
+            "bite_confirmation_bars",
+            "bite_entry_trigger",
+        ],
+    }
+    required_columns = required_columns_by_strategy.get(strategy_id)
+    if required_columns is None:
+        logger.error("plot-from-results: неподдерживаемая стратегия %s", strategy_id)
+        return None
     missing_columns = [column for column in required_columns if column not in frame.columns]
     if missing_columns:
         logger.error("plot-from-results: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
@@ -762,6 +801,8 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    strategy_id = _resolve_strategy_id(config, args)
+    config.strategy.strategy_id = strategy_id
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),
         fallback=config.strategy.levels_timeframe,
@@ -919,11 +960,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("запуск-бектеста: не удалось подготовить данные")
         return 0
 
-    strategy = BreakoutStrategy(
-        commission_rate=config.simulation.commission_rate,
-        slippage=config.simulation.slippage,
-        logger=logger,
-    )
+    strategy = build_strategy(config, logger)
+    breakout_strategy = build_breakout_strategy(config, logger)
     runner = BacktestRunner(
         config.backtest.results_dir,
         config.backtest.results_file_name,
@@ -946,20 +984,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
     plot_from_results = _to_bool_flag(getattr(args, "plot_from_results", None), default=False)
     if plot_from_results:
-        best_row = _load_plot_params_row_from_results(config, args, logger=logger)
+        best_row = _load_plot_params_row_from_results(config, args, logger=logger, strategy_id=strategy_id)
         if best_row is None:
             return 1
         _plot_trade_setups_for_symbols(
             config=config,
             args=args,
             logger=logger,
-            strategy=strategy,
+            strategy=breakout_strategy,
             preparer=preparer,
             symbol_frames=symbol_frames,
             params_row=best_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
             log_prefix="plot-from-results",
+            strategy_id=strategy_id,
         )
         return 0
 
@@ -970,13 +1009,13 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         entry_timeframe=entry_timeframe,
     )
     summary = runner.build_summary(results)
-    if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
+    if strategy_id == "breakout" and PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
         logger.warning(
             "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
             PARAMETER_GRID_SIZE,
             TARGET_PARAMETER_COMBINATIONS,
         )
-    if len(results) != TARGET_PARAMETER_COMBINATIONS:
+    if strategy_id == "breakout" and len(results) != TARGET_PARAMETER_COMBINATIONS:
         logger.warning(
             "запуск-бэктеста: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
             len(results),
@@ -1019,13 +1058,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             config=config,
             args=args,
             logger=logger,
-            strategy=strategy,
+            strategy=breakout_strategy,
             preparer=preparer,
             symbol_frames=symbol_frames,
             params_row=best_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
             log_prefix="запуск-бэктеста: plot=true",
+            strategy_id=strategy_id,
         )
     return 0
 
@@ -1416,11 +1456,10 @@ def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int
         logger.info("plot-daily-levels: нет символов для построения")
         return 0
 
-    strategy = BreakoutStrategy(
-        commission_rate=config.simulation.commission_rate,
-        slippage=config.simulation.slippage,
-        logger=logger,
-    )
+    strategy = build_strategy(config, logger)
+    if not isinstance(strategy, BreakoutStrategy):
+        logger.error("plot-daily-levels поддерживает только breakout")
+        return 1
     base_params = strategy.build_parameter_grid()[0]
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
 
@@ -1569,11 +1608,10 @@ def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("plot-retests: нет символов для построения")
         return 0
 
-    strategy = BreakoutStrategy(
-        commission_rate=config.simulation.commission_rate,
-        slippage=config.simulation.slippage,
-        logger=logger,
-    )
+    strategy = build_strategy(config, logger)
+    if not isinstance(strategy, BreakoutStrategy):
+        logger.error("plot-retests поддерживает только breakout")
+        return 1
     base_params = strategy.build_parameter_grid()[0]
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
 

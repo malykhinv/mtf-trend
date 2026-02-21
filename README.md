@@ -196,6 +196,9 @@ python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode analyze-cache --top-n 50
 python launcher.py --mode analyze-cache --top-n 50 --plot true
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT --plot-from-results --results-input ./cache/results/backtest_results.csv
+python launcher.py --mode analyze-cache --top-n 50 --strategy breakout
+python launcher.py --mode analyze-cache --top-n 50 --strategy bee_bite
+python launcher.py --mode analyze-cache --symbols BTC/USDT --strategy bee_bite --plot-from-results --results-input ./cache/results/backtest_results.csv
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
 python launcher.py --mode plot-daily-levels --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 300
@@ -243,6 +246,26 @@ python launcher.py --mode clear-cache
 python launcher.py --config run_config.json
 ```
 
+
+
+### Выбор стратегии (`breakout` / `bee_bite`)
+
+По умолчанию используется `breakout`. Можно задать через `.env`:
+
+```env
+STRATEGY_ID=bee_bite
+```
+
+Или переопределить на конкретный запуск через CLI (имеет приоритет над `.env`):
+
+```bash
+python main.py run-backtest --strategy breakout
+python main.py run-backtest --strategy bee_bite
+```
+
+`--plot-from-results` автоматически читает нужные колонки под выбранную стратегию:
+- `breakout` — поля `lookback`, `volume_mult`, ...
+- `bee_bite` — поля `bite_lookback`, `bite_volume_mult`, ...
 
 ### Фиксация конца периода загрузки (повторяемые прогоны)
 

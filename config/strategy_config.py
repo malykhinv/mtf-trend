@@ -9,5 +9,6 @@ from domain.enums.timeframe import Timeframe
 
 @dataclass(slots=True)
 class StrategyConfig:
+    strategy_id: str = "breakout"
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
