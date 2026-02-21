@@ -15,6 +15,7 @@ from domain.models.trade_result import TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from strategy.bee_bite.config import BeeBiteParams
+from strategy.bee_bite.trade_plan import build_bee_bite_trade_plan, resolve_profile_tp1_share
 from strategy.breakout.indicators.level_detector import LevelDetector
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
@@ -74,11 +75,6 @@ class BeeBiteEngine:
         "A": 0.8,
         "B": 1.0,
         "C": 1.2,
-    }
-    PROFILE_TP1_SHARE: dict[str, float] = {
-        "A": 0.6,
-        "B": 0.5,
-        "C": 0.4,
     }
     PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = {
         "A": 10,
@@ -352,14 +348,21 @@ class BeeBiteEngine:
         if setup.range_low is None or setup.range_high is None:
             return None, entry_idx
 
-        if setup.side == PositionSide.LONG:
-            stop = min(setup.range_low, setup.level_price)
-            risk = max(entry_price - stop, entry_price * 0.0001)
-            tp1 = entry_price + risk
-        else:
-            stop = max(setup.range_high, setup.level_price)
-            risk = max(stop - entry_price, entry_price * 0.0001)
-            tp1 = entry_price - risk
+        stop = min(setup.range_low, setup.level_price) if setup.side == PositionSide.LONG else max(setup.range_high, setup.level_price)
+        trade_plan = build_bee_bite_trade_plan(
+            side=setup.side,
+            entry_price=entry_price,
+            atr_bg=setup.atr_bg,
+            stop_loss=stop,
+            high_pump=setup.high_pump,
+            low_before_pump=setup.low_before_pump,
+            be_offset_ratio=params.bite_tp1_stop_buffer_pct,
+        )
+        if trade_plan is None:
+            return None, entry_idx
+        risk = max(trade_plan.stop_distance, entry_price * 0.0001)
+        stop = trade_plan.stop_loss
+        tp1 = trade_plan.tp1
 
         trade_risk = params.bite_r_trade
         if trade_risk > params.bite_portfolio_risk_limit:
@@ -367,20 +370,14 @@ class BeeBiteEngine:
 
         position_size = params.bite_r_trade / risk
         tp1_share = min(max(params.bite_tp1_share, 0.05), 0.95)
-        profile_tp1_share = self.PROFILE_TP1_SHARE.get(params.bite_profile_id, tp1_share)
-        tp1_share = min(max(profile_tp1_share, 0.05), 0.95)
+        tp1_share = resolve_profile_tp1_share(params.bite_profile_id, tp1_share)
         remainder_share = 1.0 - tp1_share
 
-        tp2_fixed = self._resolve_fixed_tp2(entry_price=entry_price, setup=setup)
-        trailing_mode = tp2_fixed is None
+        trailing_mode = trade_plan.trailing_mode
+        tp2_fixed = None if trailing_mode else trade_plan.tp2
         trailing_reference = entry_price
         tp1_hit = False
-
-        stop_after_tp1 = (
-            entry_price * (1 + params.bite_tp1_stop_buffer_pct)
-            if setup.side == PositionSide.LONG
-            else entry_price * (1 - params.bite_tp1_stop_buffer_pct)
-        )
+        stop_after_tp1 = trade_plan.be_stop
 
         time_exit_hours = self.PROFILE_TIME_EXIT_HOURS_NO_TP1.get(params.bite_profile_id, 8)
         time_exit_candles = max(1, self._hours_to_candles(time_exit_hours, params.entry_timeframe))
@@ -508,20 +505,6 @@ class BeeBiteEngine:
             retest_timestamp_ms=setup.retest_timestamp,
         )
         return trade, exit_idx
-
-    def _resolve_fixed_tp2(self, *, entry_price: float, setup: SetupContext) -> float | None:
-        if setup.atr_bg <= 0:
-            return None
-        if setup.side == PositionSide.LONG:
-            if setup.high_pump is None:
-                return None
-            distance = setup.high_pump - entry_price
-            return setup.high_pump if distance >= setup.atr_bg else None
-
-        if setup.low_before_pump is None:
-            return None
-        distance = entry_price - setup.low_before_pump
-        return setup.low_before_pump if distance >= setup.atr_bg else None
 
     @staticmethod
     def _body_ratio(row: object) -> float:
