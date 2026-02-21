@@ -43,10 +43,19 @@ class SetupContext:
     atr_pre: float = 0.0
     atr_bg: float = 0.0
     core_width: float = 0.0
+    break_idx: int | None = None
+    reclaim_idx: int | None = None
+    lowest_break: float | None = None
+    retest_touch_idx: int | None = None
 
 
 class BeeBiteEngine:
     REQUIRED_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
+    MIN_DEPTH_THRESHOLD = 0.25
+    MICRO_OFFSET = 0.15
+    DEFAULT_RECLAIM_LIMIT = 4
+    CONSERVATIVE_RECLAIM_LIMIT = 6
+    CONSERVATIVE_RETEST_LIMIT = 6
 
     def __init__(self) -> None:
         self._detector = LevelDetector()
@@ -153,6 +162,10 @@ class BeeBiteEngine:
                         setup.range_low, setup.range_high, setup.core_width, setup.atr_bg = range_setup
                         setup.retest_idx = i
                         setup.retest_timestamp = timestamp
+                        setup.break_idx = None
+                        setup.reclaim_idx = None
+                        setup.lowest_break = None
+                        setup.retest_touch_idx = None
                         state = BeeBiteState.RANGE_LOCKED
                         diagnostics["states"].append(state.value)
                     else:
@@ -161,22 +174,91 @@ class BeeBiteEngine:
                         diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.RANGE_LOCKED and setup is not None:
-                state = BeeBiteState.BREAK_ACTIVE
-                diagnostics["states"].append(state.value)
+                boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
+                puncture_price = float(row.low) if setup.side == PositionSide.LONG else float(row.high)
+                puncture_detected = puncture_price < boundary if setup.side == PositionSide.LONG else puncture_price > boundary
+                if puncture_detected and setup.atr_bg > 0 and setup.core_width > 0:
+                    depth = abs(puncture_price - boundary)
+                    min_depth = self.MIN_DEPTH_THRESHOLD * setup.atr_bg
+                    max_depth = 0.5 * setup.core_width
+                    if min_depth <= depth <= max_depth:
+                        setup.break_idx = i
+                        setup.lowest_break = puncture_price
+                        setup.reclaim_idx = None
+                        setup.retest_touch_idx = None
+                        state = BeeBiteState.BREAK_ACTIVE
+                        diagnostics["states"].append(state.value)
 
-            if state == BeeBiteState.BREAK_ACTIVE and setup is not None and setup.retest_idx is not None:
-                if params.bite_entry_trigger == EntryTrigger.IMMEDIATE:
-                    state = BeeBiteState.ENTRY_SIGNAL
+            if state == BeeBiteState.BREAK_ACTIVE and setup is not None and setup.break_idx is not None:
+                boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
+                break_price = float(row.low) if setup.side == PositionSide.LONG else float(row.high)
+                if setup.lowest_break is None:
+                    setup.lowest_break = break_price
+                elif setup.side == PositionSide.LONG:
+                    setup.lowest_break = min(setup.lowest_break, break_price)
+                else:
+                    setup.lowest_break = max(setup.lowest_break, break_price)
+                reclaim_limit = (
+                    self.CONSERVATIVE_RECLAIM_LIMIT if params.bite_profile_id == "A" else self.DEFAULT_RECLAIM_LIMIT
+                )
+                elapsed_since_break = i - setup.break_idx
+                emergency_level = 0.7 * setup.core_width
+                emergency_break = (
+                    float(row.low) < (boundary - emergency_level)
+                    if setup.side == PositionSide.LONG
+                    else float(row.high) > (boundary + emergency_level)
+                )
+                if emergency_break or elapsed_since_break > reclaim_limit:
+                    setup = None
+                    state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
                 else:
-                    confirm_idx = setup.retest_idx + params.bite_confirmation_bars
-                    if i >= confirm_idx:
-                        ok = (setup.side == PositionSide.LONG and price_close > setup.level_price) or (
-                            setup.side == PositionSide.SHORT and price_close < setup.level_price
-                        )
-                        if ok:
+                    offset_threshold = self.MICRO_OFFSET * setup.atr_bg
+                    reclaim_ok = price_close > boundary if setup.side == PositionSide.LONG else price_close < boundary
+                    micro_ok = (
+                        price_close > (boundary + offset_threshold)
+                        if setup.side == PositionSide.LONG
+                        else price_close < (boundary - offset_threshold)
+                    )
+                    if setup.reclaim_idx is None and reclaim_ok and micro_ok:
+                        setup.reclaim_idx = i
+
+                    if setup.reclaim_idx is not None:
+                        if params.bite_profile_id == "A":
+                            retest_deadline = setup.reclaim_idx + self.CONSERVATIVE_RETEST_LIMIT
+                            touch_zone = (
+                                float(row.low) <= (boundary + offset_threshold)
+                                if setup.side == PositionSide.LONG
+                                else float(row.high) >= (boundary - offset_threshold)
+                            )
+                            if touch_zone:
+                                setup.retest_touch_idx = i
+                            confirm_close = (
+                                price_close > (boundary + offset_threshold)
+                                if setup.side == PositionSide.LONG
+                                else price_close < (boundary - offset_threshold)
+                            )
+                            if setup.retest_touch_idx is not None and i > setup.retest_touch_idx and confirm_close:
+                                state = BeeBiteState.ENTRY_SIGNAL
+                                diagnostics["states"].append(state.value)
+                            elif i > retest_deadline:
+                                setup = None
+                                state = BeeBiteState.IDLE
+                                diagnostics["states"].append(state.value)
+                        elif params.bite_entry_trigger == EntryTrigger.IMMEDIATE:
                             state = BeeBiteState.ENTRY_SIGNAL
                             diagnostics["states"].append(state.value)
+                        else:
+                            confirm_idx = setup.reclaim_idx + params.bite_confirmation_bars
+                            if i >= confirm_idx:
+                                confirm_close = (
+                                    price_close > (boundary + offset_threshold)
+                                    if setup.side == PositionSide.LONG
+                                    else price_close < (boundary - offset_threshold)
+                                )
+                                if confirm_close:
+                                    state = BeeBiteState.ENTRY_SIGNAL
+                                    diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.ENTRY_SIGNAL and setup is not None and setup.retest_idx is not None:
                 trade, exit_idx = self._simulate_trade(rows=rows, entry_idx=i, setup=setup, params=params)
