@@ -173,6 +173,7 @@ class BeeBiteEngine:
                         level_price,
                         pump_height,
                         atr_pre,
+                        atr_bg,
                         t_pump_start,
                         t_pump_end,
                         high_pump,
@@ -185,6 +186,7 @@ class BeeBiteEngine:
                         breakout_timestamp=timestamp,
                         pump_height=pump_height,
                         atr_pre=atr_pre,
+                        atr_bg=atr_bg,
                         t_pump_start=t_pump_start,
                         t_pump_end=t_pump_end,
                         high_pump=high_pump,
@@ -204,7 +206,7 @@ class BeeBiteEngine:
                 elif elapsed >= window_len:
                     range_setup = self._freeze_range(rows=rows, end_idx=i, setup=setup, params=params, window_len=window_len)
                     if range_setup is not None:
-                        setup.range_low, setup.range_high, setup.core_width, setup.atr_bg = range_setup
+                        setup.range_low, setup.range_high, setup.core_width = range_setup
                         setup.retest_idx = i
                         setup.retest_timestamp = timestamp
                         setup.break_idx = None
@@ -541,12 +543,17 @@ class BeeBiteEngine:
         rows: list[object],
         idx: int,
         params: BeeBiteParams,
-    ) -> tuple[PositionSide, float, float, float, int, int, float, float] | None:
+    ) -> tuple[PositionSide, float, float, float, float, int, int, float, float] | None:
         pump_window = 6
         pre_pump_len = 14
+        atr_bg_window_len = 96
         before_pump_idx = idx - pump_window
         atr_start_idx = before_pump_idx - pre_pump_len
+        pump_start_idx = idx - pump_window + 1
+        atr_bg_start_idx = pump_start_idx - atr_bg_window_len
         if atr_start_idx < 0:
+            return None
+        if atr_bg_start_idx < 0:
             return None
 
         recent = rows[idx - pump_window + 1 : idx + 1]
@@ -561,6 +568,11 @@ class BeeBiteEngine:
             tr_values.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
         atr_pre = float(np.mean(tr_values)) if tr_values else 0.0
         if atr_pre <= 0:
+            return None
+
+        atr_bg_values = [float(item.atr14) for item in rows[atr_bg_start_idx:pump_start_idx]]
+        atr_bg = float(np.median(atr_bg_values)) if atr_bg_values else 0.0
+        if atr_bg <= 0:
             return None
 
         high_pump = max(float(item.high) for item in recent)
@@ -583,6 +595,7 @@ class BeeBiteEngine:
                 high_pump,
                 up_impulse,
                 atr_pre,
+                atr_bg,
                 t_pump_start,
                 t_pump_end,
                 high_pump,
@@ -593,6 +606,7 @@ class BeeBiteEngine:
             low_pump,
             down_impulse,
             atr_pre,
+            atr_bg,
             t_pump_start,
             t_pump_end,
             high_pump,
@@ -607,7 +621,7 @@ class BeeBiteEngine:
         setup: SetupContext,
         params: BeeBiteParams,
         window_len: int,
-    ) -> tuple[float, float, float, float] | None:
+    ) -> tuple[float, float, float] | None:
         min_start_idx = setup.breakout_idx + 1
         start_idx = end_idx - window_len + 1
         if start_idx < min_start_idx:
@@ -616,10 +630,9 @@ class BeeBiteEngine:
         window = rows[start_idx : end_idx + 1]
         lows = np.array([float(item.low) for item in window])
         highs = np.array([float(item.high) for item in window])
-        atr_bg = float(np.mean([float(item.atr14) for item in window]))
+        atr_bg = float(setup.atr_bg)
         if atr_bg <= 0:
             return None
-
         p10 = float(np.quantile(lows, 0.10))
         p85 = float(np.quantile(highs, 0.85))
         p90 = float(np.quantile(highs, 0.90))
@@ -641,7 +654,7 @@ class BeeBiteEngine:
         support_cluster = lows[(lows >= p10) & (lows <= support_band_high)]
         support = float(np.median(support_cluster)) if support_cluster.size >= 2 else p10
         resistance = p85
-        return support, resistance, core_width, atr_bg
+        return support, resistance, core_width
 
     def _resolve_range_window_len(self, profile_id: str) -> int:
         if self.FIXED_RANGE_WINDOW is not None:
