@@ -61,6 +61,8 @@ class BeeBiteParams:
     bite_portfolio_risk_limit: float = 3.0
     bite_min_stop_atr_ratio: float = 0.3
     bite_t_max_in_trade: int | None = None
+    bite_tp1_share: float = 0.5
+    bite_tp1_stop_buffer_pct: float = 0.001
     bite_profile_id: BeeBiteProfileId = "A"
     bite_grid_mode: BeeBiteGridMode = "baseline"
 
