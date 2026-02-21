@@ -93,9 +93,9 @@ class PortfolioStateEngine:
 
     PROFILE_SCORE_THRESHOLDS: dict[str, float] = field(
         default_factory=lambda: {
-            "A": 3.0,
-            "B": 4.0,
-            "C": 2.0,
+            "A": 4.0,  # Conservative
+            "B": 3.0,  # Balanced
+            "C": 2.0,  # Aggressive
         }
     )
     PROFILE_COOLDOWN_HOURS: dict[str, int] = field(
@@ -173,6 +173,15 @@ class PortfolioStateEngine:
             "volume": float(item["volume"]),
             "open_interest": _to_optional_float(item.get("open_interest")),
             "taker_buy_volume": _to_optional_float(item.get("taker_buy_volume")),
+            "taker_buy_ratio": _to_optional_float(item.get("taker_buy_ratio")),
+            "avg_volume_range": _to_optional_float(item.get("avg_volume_range")),
+            "avg_range_volume": _to_optional_float(item.get("avg_range_volume")),
+            "range_volume_avg": _to_optional_float(item.get("range_volume_avg")),
+            "oi_reclaim": _to_optional_float(item.get("oi_reclaim")),
+            "oi_break_avg": _to_optional_float(item.get("oi_break_avg")),
+            "range_volume_zscore": _to_optional_float(item.get("range_volume_zscore")),
+            "volume_range_zscore": _to_optional_float(item.get("volume_range_zscore")),
+            "zscore_range_volume": _to_optional_float(item.get("zscore_range_volume")),
             "atr_bg": _to_optional_float(item.get("atr_bg")),
             "high_pump": _to_optional_float(item.get("high_pump")),
             "lowest_break": _to_optional_float(item.get("lowest_break")),
@@ -378,12 +387,16 @@ class PortfolioStateEngine:
 
         spread = max(high - low, 1e-12)
         body_ratio = abs(close - open_) / spread
-        spread_to_close = spread / max(close, 1e-12)
+        close_position = (close - low) / spread if side == PositionSide.LONG else (high - close) / spread
+
+        profile = (self.config.bee_bite_profile_id or "B").upper()
+        # A=Conservative, B=Balanced, C=Aggressive.
+        score_threshold = self.PROFILE_SCORE_THRESHOLDS.get(profile, self.config.score_threshold)
 
         score = 0.0
         reclaim_candle_score = 0.0
 
-        # Скорость reclaim.
+        # 1) Скорость reclaim.
         if reclaim_bars <= 1:
             score += 2.0
         elif reclaim_bars <= 2:
@@ -391,26 +404,60 @@ class PortfolioStateEngine:
         elif reclaim_bars >= 5:
             score -= 1.0
 
-        # Свеча reclaim.
-        close_position = (close - low) / spread if side == PositionSide.LONG else (high - close) / spread
+        # 2) Качество reclaim-свечи.
         if body_ratio >= 0.6 and close_position >= 0.7:
             reclaim_candle_score = 2.0
         elif body_ratio >= 0.4 and close_position >= 0.55:
             reclaim_candle_score = 1.0
-        elif body_ratio < 0.2:
+        elif body_ratio < 0.2 or close_position < 0.45:
             reclaim_candle_score = -1.0
         score += reclaim_candle_score
 
-        # Объём диапазона.
-        range_volume = volume * spread_to_close
-        if range_volume >= 10_000:
-            score += 2.0
-        elif range_volume >= 2_500:
-            score += 1.0
-        else:
-            score -= 1.0
+        # 3) Объём reclaim против avg_volume_range.
+        avg_volume_range = _first_valid_positive(
+            row,
+            "avg_volume_range",
+            "avg_range_volume",
+            "range_volume_avg",
+        )
+        if avg_volume_range is not None:
+            reclaim_to_avg = volume / max(avg_volume_range, 1e-12)
+            if reclaim_to_avg >= 1.4:
+                score += 1.5
+            elif reclaim_to_avg >= 1.0:
+                score += 0.5
+            elif reclaim_to_avg < 0.7:
+                score -= 1.0
 
-        # Глубина прокола.
+        # 4) taker_buy_ratio (если валиден).
+        taker_buy_ratio = _first_valid_ratio(
+            row,
+            "taker_buy_ratio",
+            "taker_ratio",
+        )
+        if taker_buy_ratio is not None:
+            if side == PositionSide.LONG:
+                if taker_buy_ratio >= 0.55:
+                    score += 1.0
+                elif taker_buy_ratio <= 0.45:
+                    score -= 1.0
+            else:
+                if taker_buy_ratio <= 0.45:
+                    score += 1.0
+                elif taker_buy_ratio >= 0.55:
+                    score -= 1.0
+
+        # 5) OI_reclaim vs OI_break_avg (если валиден).
+        oi_reclaim = _first_valid_positive(row, "oi_reclaim", "OI_reclaim")
+        oi_break_avg = _first_valid_positive(row, "oi_break_avg", "OI_break_avg")
+        if oi_reclaim is not None and oi_break_avg is not None:
+            oi_ratio = oi_reclaim / max(oi_break_avg, 1e-12)
+            if oi_ratio >= 1.1:
+                score += 1.0
+            elif oi_ratio < 0.9:
+                score -= 1.0
+
+        # 6) Глубина прокола.
         depth = 0.0
         if range_high is not None and range_low is not None:
             range_width = max(range_high - range_low, 1e-12)
@@ -425,47 +472,38 @@ class PortfolioStateEngine:
         elif depth < 0.02:
             score -= 0.5
 
-        # Штрафы за шумную свечу.
-        if spread_to_close <= 0.01:
-            score += 1.0
-        elif spread_to_close > 0.03:
-            score -= 1.5
-
-        if side == PositionSide.LONG and close < open_:
-            score -= 1.0
-        if side == PositionSide.SHORT and close > open_:
-            score -= 1.0
-
-        # Ликвидность.
-        if volume >= 1_000_000:
-            score += 2.0
-        elif volume >= 250_000:
-            score += 1.0
-        elif volume < 25_000:
-            score -= 1.5
-
-        # OI/taker применяем условно только при наличии валидных данных.
-        open_interest = row.get("open_interest")
-        if open_interest is not None and open_interest > 0.0:
-            oi_to_volume = float(open_interest) / max(volume, 1e-12)
-            if oi_to_volume >= 5.0:
+        # 7) z-score диапазонного объёма.
+        zscore_range_volume = _first_valid_float(
+            row,
+            "range_volume_zscore",
+            "volume_range_zscore",
+            "zscore_range_volume",
+        )
+        if zscore_range_volume is not None:
+            if zscore_range_volume >= 1.0:
                 score += 1.0
-            elif oi_to_volume < 1.0:
+            elif zscore_range_volume <= -1.0:
                 score -= 1.0
 
-        taker_buy_volume = row.get("taker_buy_volume")
-        if taker_buy_volume is not None and taker_buy_volume > 0.0:
-            taker_share = float(taker_buy_volume) / max(volume, 1e-12)
-            if side == PositionSide.LONG:
-                if taker_share >= 0.55:
-                    score += 1.0
-                elif taker_share <= 0.45:
-                    score -= 1.0
-            else:
-                if taker_share <= 0.45:
-                    score += 1.0
-                elif taker_share >= 0.55:
-                    score -= 1.0
+        # Профильные штрафы.
+        if profile == "A":  # Conservative
+            if reclaim_bars >= 3:
+                score -= 1.0
+            if reclaim_candle_score <= 0.0:
+                score -= 0.75
+            if depth > 0.6:
+                score -= 0.75
+        elif profile == "B":  # Balanced
+            if reclaim_bars >= 4:
+                score -= 0.5
+            if reclaim_candle_score < 0.0:
+                score -= 0.25
+        else:  # C / Aggressive
+            if reclaim_bars >= 5:
+                score -= 0.25
+
+        if score_threshold >= 4.0 and score < 0.0:
+            score -= 0.5
 
         return score, reclaim_candle_score
 
@@ -641,6 +679,30 @@ class PortfolioStateEngine:
         state.atr_bg = None
 
 
+
+
+def _first_valid_float(row: dict[str, float | None], *keys: str) -> float | None:
+    for key in keys:
+        value = _to_optional_float(row.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _first_valid_positive(row: dict[str, float | None], *keys: str) -> float | None:
+    value = _first_valid_float(row, *keys)
+    if value is None or value <= 0.0:
+        return None
+    return value
+
+
+def _first_valid_ratio(row: dict[str, float | None], *keys: str) -> float | None:
+    value = _first_valid_float(row, *keys)
+    if value is None:
+        return None
+    if 0.0 <= value <= 1.0:
+        return value
+    return None
 
 def _to_optional_float(value: object) -> float | None:
     if value is None:
