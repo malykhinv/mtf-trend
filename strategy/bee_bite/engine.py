@@ -65,6 +65,17 @@ class BeeBiteEngine:
         "B": 2.2,
         "C": 2.5,
     }
+    PROFILE_RANGE_WINDOW: dict[str, int] = {
+        "A": 32,
+        "B": 40,
+        "C": 48,
+    }
+    FIXED_RANGE_WINDOW: int | None = None
+    PROFILE_STABILITY_THRESHOLD: dict[str, float] = {
+        "A": 0.8,
+        "B": 1.0,
+        "C": 1.2,
+    }
 
     def __init__(self) -> None:
         self._detector = LevelDetector()
@@ -171,7 +182,7 @@ class BeeBiteEngine:
                     diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.SEEK_RANGE and setup is not None:
-                window_len = max(6, params.bite_lookback)
+                window_len = self._resolve_range_window_len(params.bite_profile_id)
                 max_wait = max(1, self._hours_to_candles(params.bite_retest_window_hours, params.entry_timeframe))
                 elapsed = i - setup.breakout_idx
                 if elapsed > max_wait:
@@ -189,10 +200,6 @@ class BeeBiteEngine:
                         setup.lowest_break = None
                         setup.retest_touch_idx = None
                         state = BeeBiteState.RANGE_LOCKED
-                        diagnostics["states"].append(state.value)
-                    else:
-                        setup = None
-                        state = BeeBiteState.IDLE
                         diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.RANGE_LOCKED and setup is not None:
@@ -473,11 +480,12 @@ class BeeBiteEngine:
         params: BeeBiteParams,
         window_len: int,
     ) -> tuple[float, float, float, float] | None:
-        start_idx = setup.breakout_idx + 1
-        if end_idx - start_idx + 1 < window_len:
+        min_start_idx = setup.breakout_idx + 1
+        start_idx = end_idx - window_len + 1
+        if start_idx < min_start_idx:
             return None
 
-        window = rows[start_idx : start_idx + window_len]
+        window = rows[start_idx : end_idx + 1]
         lows = np.array([float(item.low) for item in window])
         highs = np.array([float(item.high) for item in window])
         atr_bg = float(np.mean([float(item.atr14) for item in window]))
@@ -487,27 +495,30 @@ class BeeBiteEngine:
         p10 = float(np.quantile(lows, 0.10))
         p85 = float(np.quantile(highs, 0.85))
         p90 = float(np.quantile(highs, 0.90))
-        core_width = max(p85 - p10, 0.0)
+        core_width = max(p90 - p10, 0.0)
 
         width_limit = min(0.45 * setup.pump_height, 7.0 * atr_bg)
         if core_width > width_limit:
             return None
 
-        p10_windows: list[float] = []
-        for w_end in range(5, len(window)):
-            sub_lows = lows[w_end - 5 : w_end + 1]
-            p10_windows.append(float(np.quantile(sub_lows, 0.10)))
-        if len(p10_windows) < 6:
+        if len(window) < 6:
             return None
 
-        p10_last6 = p10_windows[-6:]
-        if max(p10_last6) - min(p10_last6) > params.bite_max_retest_depth * atr_bg:
+        p10_last6 = [float(np.quantile(lows[w_end - 5 : w_end + 1], 0.10)) for w_end in range(len(window) - 6, len(window))]
+        stability_threshold = self.PROFILE_STABILITY_THRESHOLD.get(params.bite_profile_id, params.bite_max_retest_depth)
+        if max(p10_last6) - min(p10_last6) > stability_threshold * atr_bg:
             return None
 
-        delta = 0.2 * atr_bg
-        support = p10 - delta
-        resistance = p90 + delta
+        support_band_high = p10 + (0.2 * atr_bg)
+        support_cluster = lows[(lows >= p10) & (lows <= support_band_high)]
+        support = float(np.median(support_cluster)) if support_cluster.size >= 2 else p10
+        resistance = p85
         return support, resistance, core_width, atr_bg
+
+    def _resolve_range_window_len(self, profile_id: str) -> int:
+        if self.FIXED_RANGE_WINDOW is not None:
+            return max(6, int(self.FIXED_RANGE_WINDOW))
+        return max(6, int(self.PROFILE_RANGE_WINDOW.get(profile_id, 40)))
 
 
     @staticmethod
