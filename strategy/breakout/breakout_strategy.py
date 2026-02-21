@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import NotRequired, TypedDict
+from itertools import product
+from typing import Any, NotRequired, TypedDict
 
 import numpy as np
 import pandas as pd
@@ -37,7 +38,7 @@ from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
 from strategy.base_strategy import BaseStrategy
-from strategy.breakout.config import BreakoutParams
+from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, BreakoutParams
 from strategy.breakout.indicators.level_detector import LevelDetector
 from strategy.breakout.pending_breakout import PendingBreakout
 from strategy.breakout.pending_retest import PendingRetest
@@ -97,6 +98,94 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         diagnostics = self._last_generation_diagnostics.copy()
         self._last_generation_diagnostics = {}
         return diagnostics
+
+    def build_parameter_grid(self) -> list[BreakoutParams]:
+        """Собирает декартово произведение диапазонов параметров в полный набор конфигураций стратегии."""
+        lookback = BREAKOUT_PARAMETER_GRID["lookback"]
+        volume_mult = BREAKOUT_PARAMETER_GRID["volume_mult"]
+        retest_window_hours = BREAKOUT_PARAMETER_GRID["retest_window_hours"]
+        retest_zone = BREAKOUT_PARAMETER_GRID["retest_zone"]
+        min_rr = BREAKOUT_PARAMETER_GRID["min_rr"]
+        retest_zone_atr = BREAKOUT_PARAMETER_GRID["retest_zone_atr"]
+        sl_mode = BREAKOUT_PARAMETER_GRID["sl_mode"]
+        tp2_mult = BREAKOUT_PARAMETER_GRID["tp2_mult"]
+        min_body_ratio = BREAKOUT_PARAMETER_GRID["min_body_ratio"]
+        min_move_atr = BREAKOUT_PARAMETER_GRID["min_move_atr"]
+        max_retest_depth = BREAKOUT_PARAMETER_GRID["max_retest_depth"]
+        confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
+        entry_trigger = BREAKOUT_PARAMETER_GRID["entry_trigger"]
+
+        return [
+            BreakoutParams(
+                lookback=int(lb),
+                volume_mult=float(vm),
+                retest_window_hours=int(rw),
+                retest_zone=float(rz),
+                min_rr=float(rr),
+                retest_zone_atr=float(rza),
+                sl_mode=sl,
+                tp2_mult=float(tp2),
+                min_body_ratio=float(body_ratio),
+                min_move_atr=float(min_move),
+                max_retest_depth=float(max_depth),
+                confirmation_bars=int(confirm_bars),
+                entry_trigger=entry_trg,
+                symbol="",
+            )
+            for lb, vm, rw, rz, rza, rr, sl, tp2, body_ratio, min_move, max_depth, confirm_bars, entry_trg in product(
+                lookback,
+                volume_mult,
+                retest_window_hours,
+                retest_zone,
+                retest_zone_atr,
+                min_rr,
+                sl_mode,
+                tp2_mult,
+                min_body_ratio,
+                min_move_atr,
+                max_retest_depth,
+                confirmation_bars,
+                entry_trigger,
+            )
+        ]
+
+    def params_to_row(self, params: BreakoutParams) -> dict[str, int | float | str | None]:
+        return {
+            "lookback": params.lookback,
+            "volume_mult": params.volume_mult,
+            "retest_window_hours": params.retest_window_hours,
+            "retest_zone": params.retest_zone,
+            "min_rr": params.min_rr,
+            "retest_zone_atr": params.retest_zone_atr,
+            "sl_mode": params.sl_mode.value,
+            "tp2_mult": params.tp2_mult,
+            "min_body_ratio": params.min_body_ratio,
+            "min_move_atr": params.min_move_atr,
+            "max_retest_depth": params.max_retest_depth,
+            "confirmation_bars": params.confirmation_bars,
+            "entry_trigger": params.entry_trigger.value,
+        }
+
+    def prepare_symbol_context(
+        self,
+        *,
+        symbol: str,
+        mtf_frames: SymbolMtfFrames,
+        params: BreakoutParams,
+    ) -> dict[str, Any] | None:
+        higher_base, lower_base = self.prepare_multi_tf_data(
+            mtf_frames=mtf_frames,
+            levels_timeframe=params.levels_timeframe,
+            entry_timeframe=params.entry_timeframe,
+        )
+        return {
+            "annotated": self.prepare_annotated_multi_tf_data(
+                lower_base=lower_base,
+                lookback=params.lookback,
+            ),
+            "higher_levels": self.prepare_higher_tf_levels(higher_base=higher_base, lookback=params.lookback),
+            "skip_validation": True,
+        }
 
     # region Приватные
 

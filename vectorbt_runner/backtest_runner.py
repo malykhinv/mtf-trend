@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 from collections import Counter, defaultdict
-from dataclasses import replace
-from itertools import product
+from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from time import perf_counter
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import pandas as pd
 
@@ -27,16 +27,11 @@ from constants import (
 from domain.enums.timeframe import Timeframe
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
-from typing import TYPE_CHECKING, NamedTuple, cast
+from vectorbt_runner.backtest_summary import BacktestSummary
+from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 if TYPE_CHECKING:
     from strategy.base_strategy import BaseStrategy
-
-from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, \
-    BreakoutParams
-from strategy.breakout.breakout_strategy import BreakoutStrategy
-from vectorbt_runner.backtest_summary import BacktestSummary
-from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 module_logger = logging.getLogger(__name__)
@@ -61,13 +56,13 @@ def _format_duration_human(seconds: float) -> str:
 class PreparedGridParams(NamedTuple):
     """Предвычисленная конфигурация сетки без symbol-specific полей."""
 
-    params: BreakoutParams
+    params: object
     params_signature: str
-    lookback: int
 
 
 class BacktestRunner:
     """Класс."""
+
     def __init__(
         self,
         results_dir: Path,
@@ -78,26 +73,11 @@ class BacktestRunner:
         self._results_file_name = results_file_name
         self._logger = logger or module_logger
 
-    # region Приватные
-
     @staticmethod
-    def _build_metrics_row(params: BreakoutParams, trades: list[TradeResult]) -> dict[str, int | float | str | None]:
-        base_row: dict[str, int | float | str | None] = {
-            "lookback": params.lookback,
-            "volume_mult": params.volume_mult,
-            "retest_window_hours": params.retest_window_hours,
-            "retest_zone": params.retest_zone,
-            "min_rr": params.min_rr,
-            "retest_zone_atr": params.retest_zone_atr,
-            "sl_mode": params.sl_mode.value,
-            "tp2_mult": params.tp2_mult,
-            "min_body_ratio": params.min_body_ratio,
-            "min_move_atr": params.min_move_atr,
-            "max_retest_depth": params.max_retest_depth,
-            "confirmation_bars": params.confirmation_bars,
-            "entry_trigger": params.entry_trigger.value,
-        }
-
+    def _build_metrics_row(
+        base_row: dict[str, int | float | str | None],
+        trades: list[TradeResult],
+    ) -> dict[str, int | float | str | None]:
         if not trades:
             return {
                 **base_row,
@@ -121,7 +101,6 @@ class BacktestRunner:
         tp1_be_count = BACKTEST_ZERO_COUNT
         tp2_count = BACKTEST_ZERO_COUNT
 
-        # Оптимизация: формулы метрик неизменны, сокращаем только число проходов и аллокаций.
         normalized_trades: list[TradeResult] = trades
         for trade in normalized_trades:
             pnl_value = trade.pnl
@@ -149,14 +128,7 @@ class BacktestRunner:
             pf = BACKTEST_EMPTY_PF
 
         win_rate = wins / len(normalized_trades)
-
         trades_count = len(normalized_trades)
-        if trades_count != len(normalized_trades):
-            msg = (
-                "обнаружено несоответствие trades_count: вычисленное значение "
-                f"({trades_count}) отличается от длины списка сделок ({len(normalized_trades)})."
-            )
-            raise RuntimeError(msg)
 
         sorted_trades = sorted(
             normalized_trades,
@@ -191,27 +163,34 @@ class BacktestRunner:
         results.to_csv(self._results_dir / self._results_file_name, index=False)
 
     @staticmethod
-    def _params_signature(params: BreakoutParams) -> str:
-        def _fmt_float(value: float | None) -> str:
-            if value is None:
-                return "none"
-            return f"{value:.4f}"
+    def _params_signature(
+        strategy: BaseStrategy[object],
+        params: object,
+    ) -> str:
+        params_row = strategy.params_to_row(params)
+        return "|".join(f"{key}={params_row[key]}" for key in sorted(params_row.keys()))
 
-        return (
-            f"lookback={params.lookback}|"
-            f"volume_mult={params.volume_mult:.4f}|"
-            f"retest_window_hours={params.retest_window_hours}|"
-            f"retest_zone={_fmt_float(params.retest_zone)}|"
-            f"retest_zone_atr={_fmt_float(params.retest_zone_atr)}|"
-            f"min_rr={_fmt_float(params.min_rr)}|"
-            f"sl_mode={params.sl_mode.value}|"
-            f"tp2_mult={_fmt_float(params.tp2_mult)}|"
-            f"min_body_ratio={_fmt_float(params.min_body_ratio)}|"
-            f"min_move_atr={_fmt_float(params.min_move_atr)}|"
-            f"max_retest_depth={_fmt_float(params.max_retest_depth)}|"
-            f"entry_trigger={params.entry_trigger.value}|"
-            f"confirmation_bars={params.confirmation_bars}"
-        )
+    @staticmethod
+    def _inject_runtime_fields(
+        params: object,
+        *,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> object:
+        if not is_dataclass(params):
+            return params
+        field_names = {field.name for field in fields(params)}
+        updates: dict[str, object] = {}
+        if "symbol" in field_names:
+            updates["symbol"] = symbol
+        if "levels_timeframe" in field_names:
+            updates["levels_timeframe"] = levels_timeframe
+        if "entry_timeframe" in field_names:
+            updates["entry_timeframe"] = entry_timeframe
+        if not updates:
+            return params
+        return replace(params, **updates)
 
     @staticmethod
     def _extract_diagnostic_counter(diagnostics: dict[str, object]) -> Counter[str]:
@@ -297,88 +276,9 @@ class BacktestRunner:
                 counter.get("retest_confirmation_expired", BACKTEST_ZERO_COUNT),
             )
 
-        breakdown_by_params: dict[str, Counter[str]] = defaultdict(Counter)
-        for (_, params_signature), counter in problematic:
-            breakdown_by_params[params_signature].update(counter)
-
-        sorted_by_params = sorted(
-            breakdown_by_params.items(),
-            key=lambda item: (
-                sum(item[1].get(name, BACKTEST_ZERO_COUNT) for name in ZERO_ENTRY_REJECTION_KEYS),
-                item[1].get("retests_found", BACKTEST_ZERO_COUNT),
-            ),
-            reverse=True,
-        )
-        params_detail_limit = min(DIAGNOSTIC_TOP_N, len(sorted_by_params))
-        for params_signature, counter in sorted_by_params[:params_detail_limit]:
-            self._logger.debug(
-                "запуск-бэктеста: проблемный_ключ_параметров full_grid_params=%s retests_found=%s trades_generated=%s retest_rejected_by_volume=%s retest_rejected_by_extra_filters=%s retest_confirmation_not_received=%s retest_confirmation_expired=%s",
-                params_signature,
-                counter.get("retests_found", BACKTEST_ZERO_COUNT),
-                counter.get("trades_generated", BACKTEST_ZERO_COUNT),
-                counter.get("retest_rejected_by_volume", BACKTEST_ZERO_COUNT),
-                counter.get("retest_rejected_by_extra_filters", BACKTEST_ZERO_COUNT),
-                counter.get("retest_confirmation_not_received", BACKTEST_ZERO_COUNT),
-                counter.get("retest_confirmation_expired", BACKTEST_ZERO_COUNT),
-            )
-
-    # endregion Приватные
-
-    @staticmethod
-    def build_parameter_grid() -> list[BreakoutParams]:
-        """Собирает декартово произведение диапазонов параметров в полный набор конфигураций стратегии."""
-
-        lookback = BREAKOUT_PARAMETER_GRID["lookback"]
-        volume_mult = BREAKOUT_PARAMETER_GRID["volume_mult"]
-        retest_window_hours = BREAKOUT_PARAMETER_GRID["retest_window_hours"]
-        retest_zone = BREAKOUT_PARAMETER_GRID["retest_zone"]
-        min_rr = BREAKOUT_PARAMETER_GRID["min_rr"]
-        retest_zone_atr = BREAKOUT_PARAMETER_GRID["retest_zone_atr"]
-        sl_mode = BREAKOUT_PARAMETER_GRID["sl_mode"]
-        tp2_mult = BREAKOUT_PARAMETER_GRID["tp2_mult"]
-        min_body_ratio = BREAKOUT_PARAMETER_GRID["min_body_ratio"]
-        min_move_atr = BREAKOUT_PARAMETER_GRID["min_move_atr"]
-        max_retest_depth = BREAKOUT_PARAMETER_GRID["max_retest_depth"]
-        confirmation_bars = BREAKOUT_PARAMETER_GRID["confirmation_bars"]
-        entry_trigger = BREAKOUT_PARAMETER_GRID["entry_trigger"]
-
-        return [
-            BreakoutParams(
-                lookback=int(lb),
-                volume_mult=float(vm),
-                retest_window_hours=int(rw),
-                retest_zone=float(rz),
-                min_rr=float(rr),
-                retest_zone_atr=float(rza),
-                sl_mode=sl,
-                tp2_mult=float(tp2),
-                min_body_ratio=float(body_ratio),
-                min_move_atr=float(min_move),
-                max_retest_depth=float(max_depth),
-                confirmation_bars=int(confirm_bars),
-                entry_trigger=entry_trg,
-                symbol="",
-            )
-            for lb, vm, rw, rz, rza, rr, sl, tp2, body_ratio, min_move, max_depth, confirm_bars, entry_trg in product(
-                lookback,
-                volume_mult,
-                retest_window_hours,
-                retest_zone,
-                retest_zone_atr,
-                min_rr,
-                sl_mode,
-                tp2_mult,
-                min_body_ratio,
-                min_move_atr,
-                max_retest_depth,
-                confirmation_bars,
-                entry_trigger,
-            )
-        ]
-
     def run(
         self,
-        strategy: "BaseStrategy[BreakoutParams]",
+        strategy: BaseStrategy[object],
         symbol_frames: dict[str, SymbolMtfFrames],
         *,
         levels_timeframe: Timeframe = Timeframe.D1,
@@ -386,94 +286,60 @@ class BacktestRunner:
     ) -> pd.DataFrame:
         """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
-        grid = self.build_parameter_grid()
+        grid = strategy.build_parameter_grid()
         prepared_grid = [
             PreparedGridParams(
                 params=params,
-                params_signature=self._params_signature(params),
-                lookback=params.lookback,
+                params_signature=self._params_signature(strategy, params),
             )
             for params in grid
         ]
-        # Инвариант производительности: размер и состав parameter grid неизменны (5832 комбинации).
-        lookbacks = sorted({prepared.lookback for prepared in prepared_grid})
+        for prepared in prepared_grid:
+            strategy.validate_config(prepared.params)
+
         total = len(prepared_grid)
         symbols_count = len(symbol_frames)
         started_at = perf_counter()
         collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG)
 
-        prepared_symbol_data: dict[str, dict[int, pd.DataFrame]] = {}
-        higher_levels: dict[str, dict[int, pd.DataFrame]] = {}
-        params_cache: dict[tuple[int, str], BreakoutParams] = {}
         rejection_diagnostics_total: Counter[str] = Counter()
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
-        if isinstance(strategy, BreakoutStrategy):
-            strategy.set_logger(self._logger)
-            # Предварительная валидация вынесена из горячего цикла, чтобы снизить CPU-накладные расходы в основном расчете.
-            for prepared in prepared_grid:
-                strategy.validate_config(prepared.params)
-            for symbol, mtf_frames in symbol_frames.items():
-                higher_base, lower_base = strategy.prepare_multi_tf_data(
-                    mtf_frames=mtf_frames,
-                    levels_timeframe=levels_timeframe,
-                    entry_timeframe=entry_timeframe,
-                )
-                prepared_symbol_data[symbol] = {
-                    lookback: strategy.prepare_annotated_multi_tf_data(
-                        lower_base=lower_base,
-                        lookback=lookback,
-                    )
-                    for lookback in lookbacks
-                }
-                higher_levels[symbol] = {
-                    lookback: strategy.prepare_higher_tf_levels(
-                        higher_base=higher_base,
-                        lookback=lookback,
-                    )
-                    for lookback in lookbacks
-                }
+        diagnostics_method = getattr(strategy, "consume_last_generation_diagnostics", None)
 
         for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
-            grid_idx = idx - 1
             for symbol, mtf_frames in symbol_frames.items():
-                cache_key = (grid_idx, symbol)
-                cfg = params_cache.get(cache_key)
-                if cfg is None:
-                    cfg = replace(
-                        prepared.params,
-                        symbol=symbol,
-                        levels_timeframe=levels_timeframe,
-                        entry_timeframe=entry_timeframe,
-                    )
-                    params_cache[cache_key] = cfg
-                if isinstance(strategy, BreakoutStrategy):
-                    prepared_annotated = prepared_symbol_data[symbol][prepared.lookback]
-                    trades: list[TradeResult] = strategy.generate_events_multi_tf(
-                        mtf_frames=mtf_frames,
-                        params=cfg,
-                        annotated=prepared_annotated,
-                        higher_levels=higher_levels[symbol][prepared.lookback],
-                        skip_validation=True,
-                    )
-                    if collect_diagnostics:
-                        diagnostics_raw = strategy.consume_last_generation_diagnostics()
-                        diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
-                        rejection_diagnostics_total.update(diagnostics_counter)
-                        context = diagnostics_raw.get("context")
-                        context_symbol = symbol
-                        if isinstance(context, dict) and isinstance(context.get("symbol"), str):
-                            context_symbol = context["symbol"]
-                        key = (context_symbol, prepared.params_signature)
-                        rejection_diagnostics_by_key[key].update(diagnostics_counter)
-                else:
-                    trades = cast("BaseStrategy[BreakoutParams]", strategy).generate_events_multi_tf(
-                        mtf_frames=mtf_frames,
-                        params=cfg,
-                    )
+                cfg = self._inject_runtime_fields(
+                    prepared.params,
+                    symbol=symbol,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                )
+                context = strategy.prepare_symbol_context(
+                    symbol=symbol,
+                    mtf_frames=mtf_frames,
+                    params=cfg,
+                )
+                trades = strategy.generate_events_multi_tf(
+                    mtf_frames=mtf_frames,
+                    params=cfg,
+                    **(context or {}),
+                )
                 all_trades.extend(trades)
 
-            row = self._build_metrics_row(prepared.params, all_trades)
+                if collect_diagnostics and callable(diagnostics_method):
+                    diagnostics_raw = diagnostics_method()
+                    if isinstance(diagnostics_raw, dict):
+                        diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
+                        rejection_diagnostics_total.update(diagnostics_counter)
+                        raw_context = diagnostics_raw.get("context")
+                        context_symbol = symbol
+                        if isinstance(raw_context, dict) and isinstance(raw_context.get("symbol"), str):
+                            context_symbol = raw_context["symbol"]
+                        key = (context_symbol, prepared.params_signature)
+                        rejection_diagnostics_by_key[key].update(diagnostics_counter)
+
+            row = self._build_metrics_row(strategy.params_to_row(prepared.params), all_trades)
             rows.append(row)
 
             if idx % PROGRESS_LOG_EVERY == 0 or idx == total:
@@ -543,19 +409,6 @@ class BacktestRunner:
 
     def build_summary(self, results: pd.DataFrame) -> BacktestSummary:
         """Собирает краткую сводку по результатам бэктеста."""
-        if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
-            self._logger.warning(
-                "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
-                PARAMETER_GRID_SIZE,
-                TARGET_PARAMETER_COMBINATIONS,
-            )
-        if len(results) != TARGET_PARAMETER_COMBINATIONS:
-            self._logger.warning(
-                "запуск-бэктеста: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
-                len(results),
-                TARGET_PARAMETER_COMBINATIONS,
-            )
-
         profitable = int((results["profit_factor"] > BACKTEST_PROFITABLE_PF_THRESHOLD).sum()) if not results.empty else BACKTEST_ZERO_COUNT
         best_pf = float(results["profit_factor"].max()) if not results.empty else BACKTEST_EMPTY_PF
         return BacktestSummary(
