@@ -200,6 +200,10 @@ class CcxtFuturesClient(ExchangeClient):
         if not symbols:
             return []
 
+        QUALITY_STATE_OK = "ok"
+        QUALITY_STATE_LOW = "low_quality"
+        QUALITY_STATE_MISSING = "missing"
+
         tickers_payload = self._retry_exchange_startup_call(
             operation="ccxt_fetch_tickers",
             endpoint="fetch_tickers",
@@ -263,6 +267,15 @@ class CcxtFuturesClient(ExchangeClient):
                     return parsed
             return 0.0
 
+        def _resolve_quality_state(value: float, *, quote_volume: float, low_ratio_threshold: float) -> str:
+            if value <= 0.0:
+                return QUALITY_STATE_MISSING
+            if quote_volume <= 0.0:
+                return QUALITY_STATE_LOW
+            if (value / quote_volume) < low_ratio_threshold:
+                return QUALITY_STATE_LOW
+            return QUALITY_STATE_OK
+
         records: list[dict[str, object]] = []
         for symbol in symbols:
             ticker = tickers_payload.get(symbol) if isinstance(tickers_payload, dict) else None
@@ -277,6 +290,8 @@ class CcxtFuturesClient(ExchangeClient):
                         "no_oi": True,
                         "no_taker": True,
                         "questionable_sync": True,
+                        "oi_quality_state": QUALITY_STATE_MISSING,
+                        "taker_quality_state": QUALITY_STATE_MISSING,
                     },
                 })
                 continue
@@ -290,6 +305,22 @@ class CcxtFuturesClient(ExchangeClient):
             trade_count_24h = _extract_trade_count_24h(ticker)
             open_interest_24h = _extract_open_interest(ticker)
             taker_buy_volume_24h = _extract_taker_buy_volume(ticker)
+            oi_quality_state = _resolve_quality_state(
+                open_interest_24h,
+                quote_volume=quote_volume,
+                low_ratio_threshold=0.001,
+            )
+            taker_quality_state = _resolve_quality_state(
+                taker_buy_volume_24h,
+                quote_volume=quote_volume,
+                low_ratio_threshold=0.005,
+            )
+
+            liquidity_score = quote_volume if quote_volume > 0.0 else 0.0
+            if oi_quality_state == QUALITY_STATE_OK:
+                liquidity_score *= 1.05
+            if taker_quality_state == QUALITY_STATE_OK:
+                liquidity_score *= 1.05
 
             quality_metadata = {
                 "no_oi": open_interest_24h <= 0.0,
@@ -297,19 +328,29 @@ class CcxtFuturesClient(ExchangeClient):
                 "questionable_sync": quote_volume <= 0.0 or trade_count_24h <= 0,
                 "open_interest_24h": open_interest_24h,
                 "taker_buy_volume_24h": taker_buy_volume_24h,
+                "oi_quality_state": oi_quality_state,
+                "taker_quality_state": taker_quality_state,
             }
             quality_flags = [flag for flag in ("no_oi", "no_taker", "questionable_sync") if bool(quality_metadata[flag])]
+            if oi_quality_state == QUALITY_STATE_LOW:
+                quality_flags.append("oi_low_quality")
+            if taker_quality_state == QUALITY_STATE_LOW:
+                quality_flags.append("taker_low_quality")
 
             records.append({
                 "symbol": symbol,
                 "quote_volume": quote_volume,
                 "trade_count_24h": trade_count_24h,
-                "liquidity_score": quote_volume if quote_volume > 0.0 else 0.0,
+                "liquidity_score": liquidity_score,
                 "quality_flags": quality_flags,
                 "quality_metadata": quality_metadata,
             })
 
-        return sorted(records, key=lambda row: (float(row["quote_volume"]), str(row["symbol"])), reverse=True)
+        return sorted(
+            records,
+            key=lambda row: (float(row["liquidity_score"]), float(row["quote_volume"]), str(row["symbol"])),
+            reverse=True,
+        )
 
     def fetch_ohlcv(
         self,
