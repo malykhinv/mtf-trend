@@ -314,6 +314,8 @@ class BacktestRunner:
             )
             if portfolio_trades is not None:
                 all_trades.extend(portfolio_trades)
+            elif strategy.__class__.__name__ == "BeeBiteStrategy":
+                raise RuntimeError("BeeBiteStrategy должен использовать только portfolio pipeline.")
             else:
                 for symbol, mtf_frames in symbol_frames.items():
                     cfg = self._inject_runtime_fields(
