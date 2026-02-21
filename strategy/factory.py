@@ -19,12 +19,10 @@ def build_breakout_strategy(config: AppConfig, logger: Logger) -> BreakoutStrate
 
 
 def build_strategy(config: AppConfig, logger: Logger) -> BaseStrategy[object]:
-    breakout = build_breakout_strategy(config, logger)
     if config.strategy.strategy_id == "breakout":
-        return breakout
+        return build_breakout_strategy(config, logger)
     if config.strategy.strategy_id == "bee_bite":
         return BeeBiteStrategy(
-            breakout,
             profile_id=config.strategy.bee_bite_profile,
             grid_mode=config.strategy.bee_bite_grid_mode,
         )
