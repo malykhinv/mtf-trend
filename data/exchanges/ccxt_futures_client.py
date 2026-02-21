@@ -22,6 +22,7 @@ from data.exchanges.ccxt_types import CcxtClientOptions, CcxtFuturesApi, CcxtOpe
 from domain.abstract.exchange_client import ExchangeClient
 from domain.exceptions import ExchangeConnectivityError
 from domain.enums.exchange import Exchange
+from domain.enums.liquidity_quality_state import LiquidityQualityState
 from domain.enums.timeframe import Timeframe
 from utils.retry import RetryExhaustedError, run_with_retry
 
@@ -200,9 +201,6 @@ class CcxtFuturesClient(ExchangeClient):
         if not symbols:
             return []
 
-        QUALITY_STATE_OK = "ok"
-        QUALITY_STATE_LOW = "low_quality"
-        QUALITY_STATE_MISSING = "missing"
 
         tickers_payload = self._retry_exchange_startup_call(
             operation="ccxt_fetch_tickers",
@@ -267,14 +265,19 @@ class CcxtFuturesClient(ExchangeClient):
                     return parsed
             return 0.0
 
-        def _resolve_quality_state(value: float, *, quote_volume: float, low_ratio_threshold: float) -> str:
+        def _resolve_quality_state(
+            value: float,
+            *,
+            quote_volume: float,
+            low_ratio_threshold: float,
+        ) -> LiquidityQualityState:
             if value <= 0.0:
-                return QUALITY_STATE_MISSING
+                return LiquidityQualityState.MISSING
             if quote_volume <= 0.0:
-                return QUALITY_STATE_LOW
+                return LiquidityQualityState.LOW_QUALITY
             if (value / quote_volume) < low_ratio_threshold:
-                return QUALITY_STATE_LOW
-            return QUALITY_STATE_OK
+                return LiquidityQualityState.LOW_QUALITY
+            return LiquidityQualityState.OK
 
         records: list[dict[str, object]] = []
         for symbol in symbols:
@@ -290,8 +293,8 @@ class CcxtFuturesClient(ExchangeClient):
                         "no_oi": True,
                         "no_taker": True,
                         "questionable_sync": True,
-                        "oi_quality_state": QUALITY_STATE_MISSING,
-                        "taker_quality_state": QUALITY_STATE_MISSING,
+                        "oi_quality_state": LiquidityQualityState.MISSING.value,
+                        "taker_quality_state": LiquidityQualityState.MISSING.value,
                     },
                 })
                 continue
@@ -317,9 +320,9 @@ class CcxtFuturesClient(ExchangeClient):
             )
 
             liquidity_score = quote_volume if quote_volume > 0.0 else 0.0
-            if oi_quality_state == QUALITY_STATE_OK:
+            if oi_quality_state == LiquidityQualityState.OK:
                 liquidity_score *= 1.05
-            if taker_quality_state == QUALITY_STATE_OK:
+            if taker_quality_state == LiquidityQualityState.OK:
                 liquidity_score *= 1.05
 
             quality_metadata = {
@@ -328,13 +331,13 @@ class CcxtFuturesClient(ExchangeClient):
                 "questionable_sync": quote_volume <= 0.0 or trade_count_24h <= 0,
                 "open_interest_24h": open_interest_24h,
                 "taker_buy_volume_24h": taker_buy_volume_24h,
-                "oi_quality_state": oi_quality_state,
-                "taker_quality_state": taker_quality_state,
+                "oi_quality_state": oi_quality_state.value,
+                "taker_quality_state": taker_quality_state.value,
             }
             quality_flags = [flag for flag in ("no_oi", "no_taker", "questionable_sync") if bool(quality_metadata[flag])]
-            if oi_quality_state == QUALITY_STATE_LOW:
+            if oi_quality_state == LiquidityQualityState.LOW_QUALITY:
                 quality_flags.append("oi_low_quality")
-            if taker_quality_state == QUALITY_STATE_LOW:
+            if taker_quality_state == LiquidityQualityState.LOW_QUALITY:
                 quality_flags.append("taker_low_quality")
 
             records.append({
