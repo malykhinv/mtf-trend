@@ -308,36 +308,43 @@ class BacktestRunner:
 
         for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
-            for symbol, mtf_frames in symbol_frames.items():
-                cfg = self._inject_runtime_fields(
-                    prepared.params,
-                    symbol=symbol,
-                    levels_timeframe=levels_timeframe,
-                    entry_timeframe=entry_timeframe,
-                )
-                context = strategy.prepare_symbol_context(
-                    symbol=symbol,
-                    mtf_frames=mtf_frames,
-                    params=cfg,
-                )
-                trades = strategy.generate_events_multi_tf(
-                    mtf_frames=mtf_frames,
-                    params=cfg,
-                    **(context or {}),
-                )
-                all_trades.extend(trades)
+            portfolio_trades = strategy.generate_events_portfolio(
+                symbol_frames=symbol_frames,
+                params=prepared.params,
+            )
+            if portfolio_trades is not None:
+                all_trades.extend(portfolio_trades)
+            else:
+                for symbol, mtf_frames in symbol_frames.items():
+                    cfg = self._inject_runtime_fields(
+                        prepared.params,
+                        symbol=symbol,
+                        levels_timeframe=levels_timeframe,
+                        entry_timeframe=entry_timeframe,
+                    )
+                    context = strategy.prepare_symbol_context(
+                        symbol=symbol,
+                        mtf_frames=mtf_frames,
+                        params=cfg,
+                    )
+                    trades = strategy.generate_events_multi_tf(
+                        mtf_frames=mtf_frames,
+                        params=cfg,
+                        **(context or {}),
+                    )
+                    all_trades.extend(trades)
 
-                if collect_diagnostics and callable(diagnostics_method):
-                    diagnostics_raw = diagnostics_method()
-                    if isinstance(diagnostics_raw, dict):
-                        diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
-                        rejection_diagnostics_total.update(diagnostics_counter)
-                        raw_context = diagnostics_raw.get("context")
-                        context_symbol = symbol
-                        if isinstance(raw_context, dict) and isinstance(raw_context.get("symbol"), str):
-                            context_symbol = raw_context["symbol"]
-                        key = (context_symbol, prepared.params_signature)
-                        rejection_diagnostics_by_key[key].update(diagnostics_counter)
+                    if collect_diagnostics and callable(diagnostics_method):
+                        diagnostics_raw = diagnostics_method()
+                        if isinstance(diagnostics_raw, dict):
+                            diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
+                            rejection_diagnostics_total.update(diagnostics_counter)
+                            raw_context = diagnostics_raw.get("context")
+                            context_symbol = symbol
+                            if isinstance(raw_context, dict) and isinstance(raw_context.get("symbol"), str):
+                                context_symbol = raw_context["symbol"]
+                            key = (context_symbol, prepared.params_signature)
+                            rejection_diagnostics_by_key[key].update(diagnostics_counter)
 
             row = self._build_metrics_row(strategy.params_to_row(prepared.params), all_trades)
             rows.append(row)
