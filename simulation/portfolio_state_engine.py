@@ -620,15 +620,14 @@ class PortfolioStateEngine:
         atr_bg = float(state.atr_bg if state.atr_bg is not None else max(abs(resistance - support) * 0.25, entry * 0.001))
         high_pump = float(state.high_pump if state.high_pump is not None else max(entry, resistance))
 
+        buffer = max(0.1 * atr_bg, 0.001 * entry)
         if side == PositionSide.LONG:
             lowest_break = float(state.lowest_break if state.lowest_break is not None else support)
-            stop = min(lowest_break, support - 0.1 * atr_bg)
-            tp1_floor = max(resistance, entry + 0.5 * atr_bg)
+            stop = lowest_break - buffer
             low_before_pump = None
         else:
             lowest_break = float(state.lowest_break if state.lowest_break is not None else resistance)
-            stop = max(lowest_break, resistance + 0.1 * atr_bg)
-            tp1_floor = min(support, entry - 0.5 * atr_bg)
+            stop = lowest_break + buffer
             low_before_pump = high_pump if high_pump < entry else entry - atr_bg
 
         plan = build_bee_bite_trade_plan(
@@ -636,14 +635,15 @@ class PortfolioStateEngine:
             entry_price=entry,
             atr_bg=atr_bg,
             stop_loss=stop,
+            support=support,
+            resistance=resistance,
             high_pump=high_pump,
             low_before_pump=low_before_pump,
-            be_offset_ratio=0.001,
         )
         if plan is None or plan.stop_distance < (0.3 * atr_bg):
             return None
 
-        tp1 = max(plan.tp1, tp1_floor) if side == PositionSide.LONG else min(plan.tp1, tp1_floor)
+        tp1 = plan.tp1
         tp2 = plan.tp2
 
         signal = TradeSignal(
@@ -652,14 +652,14 @@ class PortfolioStateEngine:
             entry_price=Price(entry),
             entry_timestamp_ms=int(row["timestamp"]),
             formation_timestamp_ms=int(row["timestamp"]),
-            stop_loss=Price(stop),
+            stop_loss=Price(plan.stop_loss),
             take_profit_1=Price(tp1),
             take_profit_2=Price(tp2),
             breakout_timestamp_ms=int(row["timestamp"]),
             retest_timestamp_ms=int(row["timestamp"]),
             atr_bg=atr_bg,
             high_pump=high_pump,
-            tp1_close_ratio=resolve_profile_tp1_share(self.config.bee_bite_profile_id, 0.5),
+            tp1_close_ratio=resolve_profile_tp1_share(self.config.bee_bite_profile_id),
         )
         return signal
 

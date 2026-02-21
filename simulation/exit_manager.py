@@ -58,8 +58,8 @@ class ExitManager:
         breakeven_price: Callable[[float, PositionSide], float],
         update_stop: Callable[[float], None],
     ) -> tuple[float | None, bool]:
-        if candle.low.value <= position.stop_loss.value:
-            return position.stop_loss.value, position.sl_moved_to_be
+        if not position.tp1_done and candle.low.value <= position.stop_loss.value:
+            return position.stop_loss.value, False
 
         if not position.tp1_done and candle.high.value >= position.take_profit_1.value:
             tp1_ratio = position.tp1_close_ratio if position.tp1_close_ratio is not None else self.config.tp1_close_ratio
@@ -68,22 +68,20 @@ class ExitManager:
             position.tp1_done = True
             position.sl_moved_to_be = True
             if self.config.bee_bite_mode:
-                be_plus = position.entry_price.value * (1 + 0.001)
-                update_stop(be_plus)
+                update_stop(position.entry_price.value * 1.001)
                 position.highest_close_since_tp1 = candle.close.value
             else:
                 be = breakeven_price(position.entry_price.value, PositionSide.LONG)
-                be_plus = be * (1 + self.config.be_plus_offset_ratio)
-                update_stop(be_plus)
-            if candle.low.value <= position.stop_loss.value:
-                return position.stop_loss.value, True
+                update_stop(be * (1 + self.config.be_plus_offset_ratio))
+
+        if not position.tp1_done:
+            return None, False
 
         self._maybe_update_trailing_stop(candle=candle, position=position, side=PositionSide.LONG, update_stop=update_stop)
-
-        if candle.low.value <= position.stop_loss.value:
-            return position.stop_loss.value, True
         if candle.high.value >= position.take_profit_2.value:
             return position.take_profit_2.value, False
+        if candle.low.value <= position.stop_loss.value:
+            return position.stop_loss.value, True
         return None, False
 
     def _process_short(
@@ -95,8 +93,8 @@ class ExitManager:
         breakeven_price: Callable[[float, PositionSide], float],
         update_stop: Callable[[float], None],
     ) -> tuple[float | None, bool]:
-        if candle.high.value >= position.stop_loss.value:
-            return position.stop_loss.value, position.sl_moved_to_be
+        if not position.tp1_done and candle.high.value >= position.stop_loss.value:
+            return position.stop_loss.value, False
 
         if not position.tp1_done and candle.low.value <= position.take_profit_1.value:
             tp1_ratio = position.tp1_close_ratio if position.tp1_close_ratio is not None else self.config.tp1_close_ratio
@@ -105,22 +103,20 @@ class ExitManager:
             position.tp1_done = True
             position.sl_moved_to_be = True
             if self.config.bee_bite_mode:
-                be_plus = position.entry_price.value * (1 - 0.001)
-                update_stop(be_plus)
+                update_stop(position.entry_price.value * 0.999)
                 position.lowest_close_since_tp1 = candle.close.value
             else:
                 be = breakeven_price(position.entry_price.value, PositionSide.SHORT)
-                be_plus = be * (1 - self.config.be_plus_offset_ratio)
-                update_stop(be_plus)
-            if candle.high.value >= position.stop_loss.value:
-                return position.stop_loss.value, True
+                update_stop(be * (1 - self.config.be_plus_offset_ratio))
+
+        if not position.tp1_done:
+            return None, False
 
         self._maybe_update_trailing_stop(candle=candle, position=position, side=PositionSide.SHORT, update_stop=update_stop)
-
-        if candle.high.value >= position.stop_loss.value:
-            return position.stop_loss.value, True
         if candle.low.value <= position.take_profit_2.value:
             return position.take_profit_2.value, False
+        if candle.high.value >= position.stop_loss.value:
+            return position.stop_loss.value, True
         return None, False
 
     def _maybe_update_trailing_stop(

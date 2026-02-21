@@ -349,17 +349,26 @@ class BeeBiteEngine:
         if setup.range_low is None or setup.range_high is None:
             return None, entry_idx
 
-        stop = min(setup.range_low, setup.level_price) if setup.side == PositionSide.LONG else max(setup.range_high, setup.level_price)
+        buffer = max(0.1 * setup.atr_bg, 0.001 * entry_price)
+        if setup.side == PositionSide.LONG:
+            if setup.lowest_break is None:
+                return None, entry_idx
+            stop = float(setup.lowest_break) - buffer
+        else:
+            if setup.lowest_break is None:
+                return None, entry_idx
+            stop = float(setup.lowest_break) + buffer
         trade_plan = build_bee_bite_trade_plan(
             side=setup.side,
             entry_price=entry_price,
             atr_bg=setup.atr_bg,
             stop_loss=stop,
+            support=float(setup.range_low),
+            resistance=float(setup.range_high),
             high_pump=setup.high_pump,
             low_before_pump=setup.low_before_pump,
-            be_offset_ratio=params.bite_tp1_stop_buffer_pct,
         )
-        if trade_plan is None:
+        if trade_plan is None or trade_plan.stop_distance < (0.3 * setup.atr_bg):
             return None, entry_idx
         risk = max(trade_plan.stop_distance, entry_price * 0.0001)
         stop = trade_plan.stop_loss
@@ -370,8 +379,7 @@ class BeeBiteEngine:
             return None, entry_idx
 
         position_size = params.bite_r_trade / risk
-        tp1_share = min(max(params.bite_tp1_share, 0.05), 0.95)
-        tp1_share = resolve_profile_tp1_share(params.bite_profile_id, tp1_share)
+        tp1_share = resolve_profile_tp1_share(params.bite_profile_id)
         remainder_share = 1.0 - tp1_share
 
         trailing_mode = trade_plan.trailing_mode
