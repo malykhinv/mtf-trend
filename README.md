@@ -267,6 +267,17 @@ python main.py run-backtest --strategy bee_bite
 - `breakout` — поля `lookback`, `volume_mult`, ...
 - `bee_bite` — поля `bite_lookback`, `bite_volume_mult`, ...
 
+Для `bee_bite` доступны профиль и режим сетки:
+- `--bee-bite-profile {A,B,C}` — фиксированный baseline-профиль;
+- `--bee-bite-grid {baseline,expanded}` — baseline (узкий) или controlled-grid (широкий) вокруг baseline.
+
+Переменные окружения для `bee_bite`:
+
+```env
+BEE_BITE_PROFILE=A
+BEE_BITE_GRID_MODE=baseline
+```
+
 ### Фиксация конца периода загрузки (повторяемые прогоны)
 
 Можно зафиксировать «текущий момент» для `fetch-data` и `update-cache`, чтобы получать повторяемые выборки:
@@ -315,3 +326,17 @@ python main.py clear-cache
 ## Параметры breakout-стратегии
 
 По умолчанию грид `retest_window_hours` для перебора параметров: `12, 24, 36, 48` (в часах).
+
+## Сценарии запуска Bee Bite
+
+Узкий baseline (один валидный профиль):
+
+```bash
+python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-grid baseline --top-n 50
+```
+
+Широкая controlled-сетка вокруг профиля:
+
+```bash
+python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-grid expanded --top-n 100
+```

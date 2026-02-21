@@ -59,6 +59,7 @@ from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
+from strategy.bee_bite import parse_bee_bite_grid_mode, parse_bee_bite_profile_id, validate_bee_bite_runtime
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from strategy.factory import build_breakout_strategy, build_strategy
@@ -857,6 +858,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     strategy_id = _resolve_strategy_id(config, args)
     config.strategy.strategy_id = strategy_id
+
+    if strategy_id == "bee_bite":
+        config.strategy.bee_bite_profile = parse_bee_bite_profile_id(
+            getattr(args, "bee_bite_profile", None),
+            default=config.strategy.bee_bite_profile,
+        )
+        config.strategy.bee_bite_grid_mode = parse_bee_bite_grid_mode(
+            getattr(args, "bee_bite_grid", None),
+            default=config.strategy.bee_bite_grid_mode,
+        )
+        validate_bee_bite_runtime(
+            profile_id=config.strategy.bee_bite_profile,
+            grid_mode=config.strategy.bee_bite_grid_mode,
+            top_n=getattr(args, "top_n", None),
+        )
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),
         fallback=config.strategy.levels_timeframe,

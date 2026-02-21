@@ -87,6 +87,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Идентификатор стратегии. Приоритетнее STRATEGY_ID из env",
     )
+    run_bt.add_argument(
+        "--bee-bite-profile",
+        choices=["A", "B", "C"],
+        default=None,
+        help="Профиль bee_bite (A/B/C). Используется как baseline.",
+    )
+    run_bt.add_argument(
+        "--bee-bite-grid",
+        choices=["baseline", "expanded"],
+        default=None,
+        help="Режим сетки bee_bite: baseline (узкий) или expanded (широкий).",
+    )
     run_bt.add_argument("--plot", default=False, help="Строить графики сделок (true/false)")
     run_bt.add_argument(
         "--plot-from-results",
