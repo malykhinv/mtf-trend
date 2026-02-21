@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from constants import SIMULATION_PRICE_COMPARISON_EPSILON, TP1_CLOSE_RATIO
 from domain.abstract.position_simulator import PositionSimulator
@@ -14,6 +14,7 @@ from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
+from simulation.exit_manager import ExitManager, ExitManagerConfig
 from simulation.order_processor import OrderProcessor
 from simulation.trade_classifier import TradeClassifier
 
@@ -25,6 +26,8 @@ class StatefulPositionSimulator(PositionSimulator):
     side: PositionSide
     order_processor: OrderProcessor
     trade_classifier: TradeClassifier
+    exit_manager: ExitManager = field(default_factory=lambda: ExitManager(config=ExitManagerConfig(tp1_close_ratio=TP1_CLOSE_RATIO)))
+    max_bars_in_trade: int | None = None
 
     position: Position | None = None
     _pending_signal: TradeSignal | None = None
@@ -32,6 +35,7 @@ class StatefulPositionSimulator(PositionSimulator):
     _realized_pnl: float = 0.0
     _closed_size: float = 0.0
     _last_exit_price: float = 0.0
+    _bars_in_trade: int = 0
 
     # region Приватные
 
@@ -54,54 +58,37 @@ class StatefulPositionSimulator(PositionSimulator):
         self._realized_pnl = -fill.commission
         self._closed_size = 0.0
         self._last_exit_price = fill.price
+        self._bars_in_trade = 0
         self._pending_signal = None
         self._pending_size = 0.0
 
     def _process_long(self, candle: Candle) -> TradeResult | None:
         assert self.position is not None
-
-        if candle.low.value <= self.position.stop_loss.value:
-            return self._finalize(candle, self.position.stop_loss.value, exit_at_be=self.position.sl_moved_to_be)
-
-        if not self.position.tp1_done and candle.high.value >= self.position.take_profit_1.value:
-            self._take_tp1()
-            if candle.low.value <= self.position.stop_loss.value:
-                return self._finalize(candle, self.position.stop_loss.value, exit_at_be=True)
-
-        if self.position.tp1_done and candle.low.value <= self.position.stop_loss.value:
-            return self._finalize(candle, self.position.stop_loss.value, exit_at_be=True)
-
-        if candle.high.value >= self.position.take_profit_2.value:
-            return self._finalize(candle, self.position.take_profit_2.value, exit_at_tp2=True)
-
+        target, exit_at_be = self.exit_manager.process(
+            candle=candle,
+            position=self.position,
+            side=self.side,
+            close_leg=lambda size, price: self._close_leg(size=size, target_price=price),
+            breakeven_price=self.order_processor.breakeven_price,
+            update_stop=lambda stop: self.update_stop(stop),
+        )
+        if target is not None:
+            return self._finalize(candle, target, exit_at_be=exit_at_be, exit_at_tp2=math.isclose(target, self.position.take_profit_2.value, abs_tol=SIMULATION_PRICE_COMPARISON_EPSILON))
         return None
 
     def _process_short(self, candle: Candle) -> TradeResult | None:
         assert self.position is not None
-
-        if candle.high.value >= self.position.stop_loss.value:
-            return self._finalize(candle, self.position.stop_loss.value, exit_at_be=self.position.sl_moved_to_be)
-
-        if not self.position.tp1_done and candle.low.value <= self.position.take_profit_1.value:
-            self._take_tp1()
-            if candle.high.value >= self.position.stop_loss.value:
-                return self._finalize(candle, self.position.stop_loss.value, exit_at_be=True)
-
-        if self.position.tp1_done and candle.high.value >= self.position.stop_loss.value:
-            return self._finalize(candle, self.position.stop_loss.value, exit_at_be=True)
-
-        if candle.low.value <= self.position.take_profit_2.value:
-            return self._finalize(candle, self.position.take_profit_2.value, exit_at_tp2=True)
-
+        target, exit_at_be = self.exit_manager.process(
+            candle=candle,
+            position=self.position,
+            side=self.side,
+            close_leg=lambda size, price: self._close_leg(size=size, target_price=price),
+            breakeven_price=self.order_processor.breakeven_price,
+            update_stop=lambda stop: self.update_stop(stop),
+        )
+        if target is not None:
+            return self._finalize(candle, target, exit_at_be=exit_at_be, exit_at_tp2=math.isclose(target, self.position.take_profit_2.value, abs_tol=SIMULATION_PRICE_COMPARISON_EPSILON))
         return None
-
-    def _take_tp1(self) -> None:
-        assert self.position is not None
-        tp1_size = self.position.size.value * TP1_CLOSE_RATIO
-        self._close_leg(size=tp1_size, target_price=self.position.take_profit_1.value)
-        self.position.tp1_done = True
-        self.position.sl_moved_to_be = True
-        self.position.stop_loss = Price(self.order_processor.breakeven_price(self.position.entry_price.value, self.side))
 
     def _close_leg(self, *, size: float, target_price: float) -> None:
         assert self.position is not None
@@ -136,6 +123,7 @@ class StatefulPositionSimulator(PositionSimulator):
             pnl=self._realized_pnl,
         )
         self.position = None
+        self._bars_in_trade = 0
         return trade_result
 
     # endregion Приватные
@@ -153,6 +141,10 @@ class StatefulPositionSimulator(PositionSimulator):
         if self.position is None:
             return None
 
+        self._bars_in_trade += 1
+        if self.max_bars_in_trade is not None and self._bars_in_trade >= self.max_bars_in_trade:
+            return self._finalize(candle, candle.close.value, exit_at_be=False, exit_at_tp2=False)
+
         if self.side == PositionSide.LONG:
             return self._process_long(candle)
         return self._process_short(candle)
@@ -163,6 +155,7 @@ class StatefulPositionSimulator(PositionSimulator):
         self._realized_pnl = 0.0
         self._closed_size = 0.0
         self._last_exit_price = position.entry_price.value
+        self._bars_in_trade = 0
 
     def close_position(self, price: float, exit_timestamp_ms: int) -> TradeResult:
         """Закрывает остаток позиции по заданной цене и времени, затем возвращает классифицированный результат сделки."""
@@ -188,6 +181,7 @@ class StatefulPositionSimulator(PositionSimulator):
             pnl=self._realized_pnl,
         )
         self.position = None
+        self._bars_in_trade = 0
         return trade_result
 
     def update_stop(self, new_stop: float) -> None:

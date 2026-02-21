@@ -1,0 +1,62 @@
+"""Общий риск-менеджер: размер позиции, фильтры риска и лимит портфеля."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from constants import STRATEGY_PRICE_EPSILON
+from domain.enums.position_side import PositionSide
+from domain.models.position import Position
+from domain.models.trade_signal import TradeSignal
+
+
+@dataclass(frozen=True, slots=True)
+class RiskConfig:
+    r_trade: float
+    portfolio_risk_limit: float
+    min_stop_atr_ratio: float = 0.3
+
+
+@dataclass(slots=True)
+class RiskManager:
+    config: RiskConfig
+
+    @staticmethod
+    def per_unit_risk(*, entry_price: float, stop_loss: float, side: PositionSide) -> float:
+        if side == PositionSide.LONG:
+            return max(entry_price - stop_loss, STRATEGY_PRICE_EPSILON)
+        return max(stop_loss - entry_price, STRATEGY_PRICE_EPSILON)
+
+    def calc_position_size(self, *, signal: TradeSignal) -> float:
+        risk = self.per_unit_risk(
+            entry_price=signal.entry_price.value,
+            stop_loss=signal.stop_loss.value,
+            side=signal.position_side,
+        )
+        return self.config.r_trade / risk
+
+    def check_stop_distance_by_atr(self, *, signal: TradeSignal, atr_bg: float) -> bool:
+        if atr_bg <= 0:
+            return True
+        stop_distance = self.per_unit_risk(
+            entry_price=signal.entry_price.value,
+            stop_loss=signal.stop_loss.value,
+            side=signal.position_side,
+        )
+        return stop_distance >= self.config.min_stop_atr_ratio * atr_bg
+
+    def total_open_risk(self, positions: list[tuple[Position, PositionSide]]) -> float:
+        return sum(
+            self.per_unit_risk(
+                entry_price=position.entry_price.value,
+                stop_loss=position.stop_loss.value,
+                side=side,
+            )
+            * position.size.value
+            for position, side in positions
+        )
+
+    def can_open_with_portfolio_limit(self, *, active_positions: list[tuple[Position, PositionSide]], signal: TradeSignal) -> bool:
+        current_risk = self.total_open_risk(active_positions)
+        new_trade_risk = self.config.r_trade
+        return (current_risk + new_trade_risk) <= self.config.portfolio_risk_limit

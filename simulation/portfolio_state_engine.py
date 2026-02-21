@@ -7,7 +7,6 @@ from enum import Enum
 
 import pandas as pd
 
-from constants import STRATEGY_POSITION_SIZE
 from domain.enums.position_side import PositionSide
 from domain.models.candle import Candle
 from domain.models.trade_result import TradeResult
@@ -16,6 +15,7 @@ from domain.value_objects.price import Price
 from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
+from simulation.risk_manager import RiskConfig, RiskManager
 
 
 class PortfolioState(str, Enum):
@@ -31,6 +31,10 @@ class PortfolioState(str, Enum):
 @dataclass(slots=True)
 class PortfolioEngineConfig:
     top_n: int = 1
+    r_trade: float = 1.0
+    portfolio_risk_limit: float = 3.0
+    min_stop_atr_ratio: float = 0.3
+    t_max_in_trade: int | None = None
     cooldown_bars: int = 8
     max_age_range: int = 24
     reclaim_limit: int = 3
@@ -73,11 +77,21 @@ class PortfolioStateEngine:
     slippage: float
     _states: dict[str, SymbolState] = field(default_factory=dict)
     _sims: dict[str, StatefulPositionSimulator] = field(default_factory=dict)
+    _risk_manager: RiskManager | None = None
 
     def run(self, symbol_frames: dict[str, pd.DataFrame]) -> list[TradeResult]:
         timeline = self._build_timeline(symbol_frames)
         if not timeline:
             return []
+
+        if self._risk_manager is None:
+            self._risk_manager = RiskManager(
+                RiskConfig(
+                    r_trade=self.config.r_trade,
+                    portfolio_risk_limit=self.config.portfolio_risk_limit,
+                    min_stop_atr_ratio=self.config.min_stop_atr_ratio,
+                )
+            )
 
         trades: list[TradeResult] = []
         for ts in timeline:
@@ -136,6 +150,7 @@ class PortfolioStateEngine:
             side=PositionSide.LONG,
             order_processor=OrderProcessor(commission_rate=self.commission_rate, slippage=self.slippage),
             trade_classifier=TradeClassifier(),
+            max_bars_in_trade=self.config.t_max_in_trade,
         )
 
     def _process_active_trade(
@@ -228,6 +243,9 @@ class PortfolioStateEngine:
 
             if state.reclaim_count >= self.config.reclaim_limit:
                 signal = self._build_signal(symbol=symbol, row=row, side=state.break_side)
+                if signal is None:
+                    self._reset_state(state)
+                    return None
                 state.signal = signal
                 state.state = PortfolioState.ENTRY_SIGNAL
                 state.age = 0
@@ -276,7 +294,17 @@ class PortfolioStateEngine:
         state = self._states[candidate.symbol]
         sim = self._sims[candidate.symbol]
         sim.side = candidate.side
-        sim.register_signal(candidate.signal, size=STRATEGY_POSITION_SIZE)
+        assert self._risk_manager is not None
+        active_positions = [
+            (other_sim.position, other_sim.side)
+            for other_sim in self._sims.values()
+            if other_sim.position is not None
+        ]
+        if not self._risk_manager.can_open_with_portfolio_limit(active_positions=active_positions, signal=candidate.signal):
+            self._reject_candidate(candidate.symbol)
+            return
+        size = self._risk_manager.calc_position_size(signal=candidate.signal)
+        sim.register_signal(candidate.signal, size=size)
         state.state = PortfolioState.IN_TRADE
         state.age = 0
 
@@ -303,7 +331,7 @@ class PortfolioStateEngine:
             state.signal = None
         return trades
 
-    def _build_signal(self, *, symbol: str, row: dict[str, float], side: PositionSide) -> TradeSignal:
+    def _build_signal(self, *, symbol: str, row: dict[str, float], side: PositionSide) -> TradeSignal | None:
         entry = row["close"]
         risk = max(entry * 0.005, 1e-8)
         if side == PositionSide.LONG:
@@ -314,7 +342,7 @@ class PortfolioStateEngine:
             stop = entry + risk
             tp1 = entry - risk
             tp2 = entry - risk * self.config.rr
-        return TradeSignal(
+        signal = TradeSignal(
             symbol=symbol,
             position_side=side,
             entry_price=Price(entry),
@@ -326,6 +354,7 @@ class PortfolioStateEngine:
             breakout_timestamp_ms=int(row["timestamp"]),
             retest_timestamp_ms=int(row["timestamp"]),
         )
+        return signal
 
     @staticmethod
     def _to_candle(row: dict[str, float]) -> Candle:

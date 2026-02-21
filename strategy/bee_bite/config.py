@@ -27,3 +27,7 @@ class BeeBiteParams:
     bite_retest_zone_atr: float | None = None
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
+    bite_r_trade: float = 1.0
+    bite_portfolio_risk_limit: float = 3.0
+    bite_min_stop_atr_ratio: float = 0.3
+    bite_t_max_in_trade: int | None = None
