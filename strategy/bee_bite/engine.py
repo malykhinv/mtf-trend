@@ -57,14 +57,14 @@ class BeeBiteEngine:
     REQUIRED_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
     CONSERVATIVE_RETEST_LIMIT = 6
     IMPULSE_THRESHOLDS: dict[str, float] = {
-        "A": 2.0,
+        "A": 2.5,
         "B": 2.2,
-        "C": 2.5,
+        "C": 2.0,
     }
     PROFILE_RANGE_WINDOW: dict[str, int] = {
-        "A": 32,
+        "A": 48,
         "B": 40,
-        "C": 48,
+        "C": 32,
     }
     FIXED_RANGE_WINDOW: int | None = None
     PROFILE_STABILITY_THRESHOLD: dict[str, float] = {
@@ -73,12 +73,12 @@ class BeeBiteEngine:
         "C": 1.2,
     }
     PROFILE_TP1_SHARE: dict[str, float] = {
-        "A": 0.4,
+        "A": 0.6,
         "B": 0.5,
-        "C": 0.6,
+        "C": 0.4,
     }
     PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = {
-        "A": 12,
+        "A": 10,
         "B": 8,
         "C": 6,
     }
