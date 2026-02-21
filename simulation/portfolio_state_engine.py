@@ -13,6 +13,7 @@ from domain.models.candle import Candle
 from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
+from strategy.bee_bite.trade_plan import build_bee_bite_trade_plan, resolve_profile_tp1_share
 from simulation.exit_manager import ExitManager, ExitManagerConfig
 from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
@@ -103,6 +104,13 @@ class PortfolioStateEngine:
             "A": 8,
             "B": 6,
             "C": 4,
+        }
+    )
+    PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = field(
+        default_factory=lambda: {
+            "A": 10,
+            "B": 8,
+            "C": 6,
         }
     )
 
@@ -543,6 +551,7 @@ class PortfolioStateEngine:
             self._reject_candidate(candidate.symbol)
             return
         size = self._risk_manager.calc_position_size(signal=candidate.signal)
+        sim.max_bars_in_trade = self._resolve_time_exit_bars()
         sim.register_signal(candidate.signal, size=size)
         state.state = PortfolioState.IN_TRADE
         state.age = 0
@@ -569,6 +578,12 @@ class PortfolioStateEngine:
         if profile in self.PROFILE_COOLDOWN_HOURS:
             return self._hours_to_15m_bars(self.PROFILE_COOLDOWN_HOURS[profile])
         return self.config.cooldown_bars
+
+    def _resolve_time_exit_bars(self) -> int | None:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        if profile in self.PROFILE_TIME_EXIT_HOURS_NO_TP1:
+            return self._hours_to_15m_bars(self.PROFILE_TIME_EXIT_HOURS_NO_TP1[profile])
+        return self.config.t_max_in_trade
 
     @staticmethod
     def _hours_to_15m_bars(hours: int) -> int:
@@ -608,17 +623,28 @@ class PortfolioStateEngine:
         if side == PositionSide.LONG:
             lowest_break = float(state.lowest_break if state.lowest_break is not None else support)
             stop = min(lowest_break, support - 0.1 * atr_bg)
-            if (entry - stop) < (0.3 * atr_bg):
-                return None
-            tp1 = max(resistance, entry + 0.5 * atr_bg)
-            tp2 = max(high_pump, tp1 + atr_bg)
+            tp1_floor = max(resistance, entry + 0.5 * atr_bg)
+            low_before_pump = None
         else:
             lowest_break = float(state.lowest_break if state.lowest_break is not None else resistance)
             stop = max(lowest_break, resistance + 0.1 * atr_bg)
-            if (stop - entry) < (0.3 * atr_bg):
-                return None
-            tp1 = min(support, entry - 0.5 * atr_bg)
-            tp2 = min(high_pump if high_pump < entry else entry - atr_bg, tp1 - atr_bg)
+            tp1_floor = min(support, entry - 0.5 * atr_bg)
+            low_before_pump = high_pump if high_pump < entry else entry - atr_bg
+
+        plan = build_bee_bite_trade_plan(
+            side=side,
+            entry_price=entry,
+            atr_bg=atr_bg,
+            stop_loss=stop,
+            high_pump=high_pump,
+            low_before_pump=low_before_pump,
+            be_offset_ratio=0.001,
+        )
+        if plan is None or plan.stop_distance < (0.3 * atr_bg):
+            return None
+
+        tp1 = max(plan.tp1, tp1_floor) if side == PositionSide.LONG else min(plan.tp1, tp1_floor)
+        tp2 = plan.tp2
 
         signal = TradeSignal(
             symbol=symbol,
@@ -633,17 +659,9 @@ class PortfolioStateEngine:
             retest_timestamp_ms=int(row["timestamp"]),
             atr_bg=atr_bg,
             high_pump=high_pump,
-            tp1_close_ratio=self._resolve_tp1_close_ratio(),
+            tp1_close_ratio=resolve_profile_tp1_share(self.config.bee_bite_profile_id, 0.5),
         )
         return signal
-
-    def _resolve_tp1_close_ratio(self) -> float:
-        profile = (self.config.bee_bite_profile_id or "").upper()
-        if profile == "B":
-            return 0.6
-        if profile == "C":
-            return 0.7
-        return 0.5
 
     @staticmethod
     def _to_candle(row: dict[str, float | None]) -> Candle:
