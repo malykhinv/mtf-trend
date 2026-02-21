@@ -785,6 +785,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                 portfolio_risk_limit=params.portfolio_risk_limit,
                 min_stop_atr_ratio=params.min_stop_atr_ratio,
                 t_max_in_trade=params.t_max_in_trade,
+                bee_bite_profile_id=profile_id,
             ),
             commission_rate=self._commission_rate,
             slippage=self._slippage,

@@ -18,6 +18,11 @@ class Position:
     take_profit_2: Price
     breakout_timestamp_ms: int | None = None
     retest_timestamp_ms: int | None = None
+    atr_bg: float | None = None
+    high_pump: float | None = None
+    tp1_close_ratio: float | None = None
+    highest_close_since_tp1: float | None = None
+    lowest_close_since_tp1: float | None = None
     tp1_done: bool = False
     sl_moved_to_be: bool = False
 

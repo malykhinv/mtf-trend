@@ -20,6 +20,9 @@ class TradeSignal:
     symbol: str
     breakout_timestamp_ms: int | None = None
     retest_timestamp_ms: int | None = None
+    atr_bg: float | None = None
+    high_pump: float | None = None
+    tp1_close_ratio: float | None = None
 
     # region Приватные
     def __post_init__(self) -> None:

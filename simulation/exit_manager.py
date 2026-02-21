@@ -16,6 +16,7 @@ class ExitManagerConfig:
     tp1_close_ratio: float = TP1_CLOSE_RATIO
     be_plus_offset_ratio: float = 0.0
     trailing_offset_ratio: float | None = None
+    bee_bite_mode: bool = False
 
 
 @dataclass(slots=True)
@@ -61,13 +62,19 @@ class ExitManager:
             return position.stop_loss.value, position.sl_moved_to_be
 
         if not position.tp1_done and candle.high.value >= position.take_profit_1.value:
-            tp1_size = position.size.value * self.config.tp1_close_ratio
+            tp1_ratio = position.tp1_close_ratio if position.tp1_close_ratio is not None else self.config.tp1_close_ratio
+            tp1_size = position.size.value * tp1_ratio
             close_leg(tp1_size, position.take_profit_1.value)
             position.tp1_done = True
             position.sl_moved_to_be = True
-            be = breakeven_price(position.entry_price.value, PositionSide.LONG)
-            be_plus = be * (1 + self.config.be_plus_offset_ratio)
-            update_stop(be_plus)
+            if self.config.bee_bite_mode:
+                be_plus = position.entry_price.value * (1 + 0.001)
+                update_stop(be_plus)
+                position.highest_close_since_tp1 = candle.close.value
+            else:
+                be = breakeven_price(position.entry_price.value, PositionSide.LONG)
+                be_plus = be * (1 + self.config.be_plus_offset_ratio)
+                update_stop(be_plus)
             if candle.low.value <= position.stop_loss.value:
                 return position.stop_loss.value, True
 
@@ -92,13 +99,19 @@ class ExitManager:
             return position.stop_loss.value, position.sl_moved_to_be
 
         if not position.tp1_done and candle.low.value <= position.take_profit_1.value:
-            tp1_size = position.size.value * self.config.tp1_close_ratio
+            tp1_ratio = position.tp1_close_ratio if position.tp1_close_ratio is not None else self.config.tp1_close_ratio
+            tp1_size = position.size.value * tp1_ratio
             close_leg(tp1_size, position.take_profit_1.value)
             position.tp1_done = True
             position.sl_moved_to_be = True
-            be = breakeven_price(position.entry_price.value, PositionSide.SHORT)
-            be_plus = be * (1 - self.config.be_plus_offset_ratio)
-            update_stop(be_plus)
+            if self.config.bee_bite_mode:
+                be_plus = position.entry_price.value * (1 - 0.001)
+                update_stop(be_plus)
+                position.lowest_close_since_tp1 = candle.close.value
+            else:
+                be = breakeven_price(position.entry_price.value, PositionSide.SHORT)
+                be_plus = be * (1 - self.config.be_plus_offset_ratio)
+                update_stop(be_plus)
             if candle.high.value >= position.stop_loss.value:
                 return position.stop_loss.value, True
 
@@ -118,6 +131,25 @@ class ExitManager:
         side: PositionSide,
         update_stop: Callable[[float], None],
     ) -> None:
+        if self.config.bee_bite_mode and position.tp1_done and position.atr_bg is not None and position.atr_bg > 0:
+            if side == PositionSide.LONG:
+                if position.highest_close_since_tp1 is None:
+                    position.highest_close_since_tp1 = candle.close.value
+                else:
+                    position.highest_close_since_tp1 = max(position.highest_close_since_tp1, candle.close.value)
+                candidate = position.highest_close_since_tp1 - position.atr_bg
+                if candidate > position.stop_loss.value:
+                    update_stop(candidate)
+            else:
+                if position.lowest_close_since_tp1 is None:
+                    position.lowest_close_since_tp1 = candle.close.value
+                else:
+                    position.lowest_close_since_tp1 = min(position.lowest_close_since_tp1, candle.close.value)
+                candidate = position.lowest_close_since_tp1 + position.atr_bg
+                if candidate < position.stop_loss.value:
+                    update_stop(candidate)
+            return
+
         trailing = self.config.trailing_offset_ratio
         if trailing is None or not position.tp1_done:
             return
