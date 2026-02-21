@@ -58,8 +58,8 @@ class SymbolState:
     range_high: float | None = None
     range_low: float | None = None
     break_side: PositionSide | None = None
-    reclaim_count: int = 0
-    break_fail_count: int = 0
+    break_start_timeline_idx: int | None = None
+    break_start_timestamp_ms: int | None = None
     break_price: float | None = None
     pump_anchor_close: float | None = None
     high_pump: float | None = None
@@ -316,16 +316,16 @@ class PortfolioStateEngine:
                 state.break_side = PositionSide.LONG
                 state.break_price = close
                 state.lowest_break = float(row["low"] or close)
-                state.reclaim_count = 0
-                state.break_fail_count = 0
+                state.break_start_timeline_idx = timeline_idx
+                state.break_start_timestamp_ms = int(row["timestamp"])
                 state.age = 0
             elif close < state.range_low * (1 - self.config.min_break_pct):
                 state.state = PortfolioState.BREAK_ACTIVE
                 state.break_side = PositionSide.SHORT
                 state.break_price = close
                 state.lowest_break = float(row["high"] or close)
-                state.reclaim_count = 0
-                state.break_fail_count = 0
+                state.break_start_timeline_idx = timeline_idx
+                state.break_start_timestamp_ms = int(row["timestamp"])
                 state.age = 0
             elif state.age > self.config.max_age_range:
                 self._reset_state(state)
@@ -333,23 +333,37 @@ class PortfolioStateEngine:
 
         if state.state == PortfolioState.BREAK_ACTIVE:
             assert state.break_side is not None and state.break_price is not None
+            break_start_idx = state.break_start_timeline_idx if state.break_start_timeline_idx is not None else timeline_idx
+            reclaim_bars = max(timeline_idx - break_start_idx + 1, 1)
+            if (timeline_idx - break_start_idx) > self.config.reclaim_limit:
+                self._reset_state(state)
+                return None
+
             if state.break_side == PositionSide.LONG:
                 state.lowest_break = min(state.lowest_break or float(row["low"] or close), float(row["low"] or close))
             else:
                 state.lowest_break = max(state.lowest_break or float(row["high"] or close), float(row["high"] or close))
-            if state.break_side == PositionSide.LONG and close >= state.break_price * (1 + self.config.min_reclaim_pct):
-                state.reclaim_count += 1
-            elif state.break_side == PositionSide.SHORT and close <= state.break_price * (1 - self.config.min_reclaim_pct):
-                state.reclaim_count += 1
-            else:
-                state.break_fail_count += 1
 
-            if state.reclaim_count >= self.config.reclaim_limit:
+            core_width = abs(float((state.resistance or close) - (state.support or close)))
+            if (
+                state.break_side == PositionSide.LONG
+                and state.support is not None
+                and close < (state.support - 0.7 * core_width)
+            ):
+                self._reset_state(state)
+                self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
+                return None
+
+            reclaim_confirmed = (
+                (state.break_side == PositionSide.LONG and state.support is not None and close > state.support)
+                or (state.break_side == PositionSide.SHORT and state.resistance is not None and close < state.resistance)
+            )
+
+            if reclaim_confirmed:
                 signal = self._build_signal(symbol=symbol, row=row, side=state.break_side, state=state)
                 if signal is None:
                     self._reset_state(state)
                     return None
-                reclaim_bars = max(state.age, 1)
                 state.signal = signal
                 state.state = PortfolioState.ENTRY_SIGNAL
                 state.age = 0
@@ -372,10 +386,6 @@ class PortfolioStateEngine:
                     reclaim_candle_score=reclaim_candle_score,
                     score_trace=score_trace,
                 )
-
-            if state.break_fail_count >= self.config.break_fail_threshold or state.age > self.config.max_age_range:
-                self._reset_state(state)
-                self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
             return None
 
         if state.state == PortfolioState.ENTRY_SIGNAL and state.signal is not None:
@@ -717,8 +727,8 @@ class PortfolioStateEngine:
         state.range_low = None
         state.break_side = None
         state.break_price = None
-        state.reclaim_count = 0
-        state.break_fail_count = 0
+        state.break_start_timeline_idx = None
+        state.break_start_timestamp_ms = None
         state.signal = None
         state.pump_anchor_close = None
         state.high_pump = None
