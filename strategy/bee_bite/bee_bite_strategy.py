@@ -68,6 +68,13 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
     def generate_events_multi_tf(self, *, mtf_frames: SymbolMtfFrames, params: BeeBiteParams):
         return self._breakout.generate_events_multi_tf(mtf_frames=mtf_frames, params=self._to_breakout_params(params))
 
+
+    def generate_events_portfolio(self, *, symbol_frames: dict[str, SymbolMtfFrames], params: BeeBiteParams):
+        return self._breakout.generate_events_portfolio(
+            symbol_frames=symbol_frames,
+            params=self._to_breakout_params(params),
+        )
+
     def build_parameter_grid(self) -> list[BeeBiteParams]:
         return [self._from_breakout_params(params) for params in self._breakout.build_parameter_grid()]
 

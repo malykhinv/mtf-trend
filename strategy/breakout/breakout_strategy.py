@@ -37,6 +37,7 @@ from domain.value_objects.volume import Volume
 from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
+from simulation.portfolio_state_engine import PortfolioEngineConfig, PortfolioStateEngine
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, BreakoutParams
 from strategy.breakout.indicators.level_detector import LevelDetector
@@ -741,6 +742,30 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             ),
             params=params,
         )
+
+
+    def generate_events_portfolio(
+        self,
+        *,
+        symbol_frames: dict[str, SymbolMtfFrames],
+        params: BreakoutParams,
+    ) -> list[TradeResult] | None:
+        """Портфельный режим: единый проход 15m с выбором top-N кандидатов между символами."""
+        entry_frames: dict[str, pd.DataFrame] = {}
+        for symbol, mtf in symbol_frames.items():
+            frame = mtf.entry_frame
+            if frame.empty:
+                continue
+            entry_frames[symbol] = frame[["timestamp", "open", "high", "low", "close", "volume"]].copy()
+        if not entry_frames:
+            return []
+
+        engine = PortfolioStateEngine(
+            config=PortfolioEngineConfig(top_n=1),
+            commission_rate=self._commission_rate,
+            slippage=self._slippage,
+        )
+        return engine.run(entry_frames)
 
     def generate_events_multi_tf(
         self,

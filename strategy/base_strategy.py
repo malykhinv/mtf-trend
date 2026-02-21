@@ -37,6 +37,16 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
     ) -> list[TradeResult]:
         """Метод."""
 
+
+    def generate_events_portfolio(
+        self,
+        *,
+        symbol_frames: dict[str, SymbolMtfFrames],
+        params: StrategyParamsT,
+    ) -> list[TradeResult] | None:
+        """Опциональный портфельный запуск, когда стратегия должна выбирать кандидатов между символами синхронно."""
+        return None
+
     @abstractmethod
     def build_parameter_grid(self) -> list[StrategyParamsT]:
         """Возвращает полный набор параметров стратегии для бэктеста."""
