@@ -38,7 +38,7 @@ TIMEFRAME_TO_DELTA = {
     Timeframe.W1: timedelta(weeks=1),
 }
 
-OHLCV_FRAME_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+OHLCV_FRAME_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume", "taker_buy_volume")
 OPEN_INTEREST_FRAME_COLUMNS = ("timestamp", "open_interest")
 CCXT_MARKET_TYPE_SWAP = "swap"
 FUTURES_SETTLEMENT_QUOTE_ASSET = "USDT"
@@ -79,7 +79,7 @@ LOG_MSG_SKIP_UP_TO_DATE = "%s пропуск: %s уже актуален"
 LOG_MSG_TASK_COMPLETED = "%s завершено"
 
 # Константы подготовщика данных
-DATA_PREPARER_NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "open_interest")
+DATA_PREPARER_NUMERIC_COLUMNS = ("open", "high", "low", "close", "volume", "open_interest", "taker_buy_volume")
 DATA_PREPARER_EMPTY_FLOAT_DTYPE = "float64"
 DATA_PREPARER_EMPTY_BOOL_DTYPE = "bool"
 DATA_PREPARER_TRADE_COLUMNS = ("entry_timestamp_ms", "exit_timestamp_ms", "pnl", "pnl_percent", "result_type")

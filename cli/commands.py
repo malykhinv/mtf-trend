@@ -58,6 +58,7 @@ from domain.models.reporting.quality_report import QualityReport
 from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
+from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from strategy.breakout.breakout_strategy import BreakoutStrategy
 from strategy.breakout.config import PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from strategy.factory import build_breakout_strategy, build_strategy
@@ -382,8 +383,9 @@ def _resolve_symbols(
         cache_dir: Path,
         liquidity_timeframe: Timeframe,
         futures_symbols_raw: list[str] | None = None,
-) -> list[str]:
+) -> tuple[list[str], dict[str, dict[str, object]]]:
     futures_symbols_raw = futures_symbols_raw or exchange_client.get_futures_symbols()
+    liquidity_quality_by_symbol: dict[str, dict[str, object]] = {}
     futures_symbol_map = {
         normalize_symbol(symbol): symbol
         for symbol in futures_symbols_raw
@@ -412,11 +414,27 @@ def _resolve_symbols(
         is_cold_start = len(symbols_with_volume) < min_cache_ready_symbols
         if is_cold_start:
             try:
-                bootstrap_symbols = [
-                    normalize_symbol(symbol)
-                    for symbol in exchange_client.get_futures_symbols_by_quote_volume()[:top_n]
-                    if normalize_symbol(symbol) in futures_symbol_map
+                ranked_metrics = exchange_client.get_futures_symbols_with_liquidity_metrics()
+                ranked_filtered = [
+                    item
+                    for item in ranked_metrics
+                    if float(item.get("quote_volume", 0.0) or 0.0) >= 10_000_000.0
                 ]
+                bootstrap_symbols = [
+                    normalize_symbol(str(item["symbol"]))
+                    for item in ranked_filtered[:top_n]
+                    if normalize_symbol(str(item["symbol"])) in futures_symbol_map
+                ]
+                liquidity_quality_by_symbol.update({
+                    str(item["symbol"]): {
+                        "liquidity_score": float(item.get("liquidity_score", 0.0) or 0.0),
+                        "quote_volume": float(item.get("quote_volume", 0.0) or 0.0),
+                        "trade_count_24h": int(item.get("trade_count_24h", 0) or 0),
+                        "quality_flags": list(item.get("quality_flags", [])),
+                        "quality_metadata": dict(item.get("quality_metadata", {})),
+                    }
+                    for item in ranked_metrics
+                })
                 bootstrap_mode = "bootstrap-exchange-volume"
             except Exception as exc:
                 logger.warning(
@@ -437,7 +455,7 @@ def _resolve_symbols(
                 min_cache_ready_symbols,
                 len(bootstrap_symbols),
             )
-            return [futures_symbol_map[symbol] for symbol in bootstrap_symbols]
+            return [futures_symbol_map[symbol] for symbol in bootstrap_symbols], liquidity_quality_by_symbol
 
         liquid_symbols = [
             symbol
@@ -463,7 +481,7 @@ def _resolve_symbols(
             min_volume_usd,
             len(symbols_with_volume) - len(liquid_symbols),
         )
-        return [futures_symbol_map[symbol] for symbol in ranked_top_symbols]
+        return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
 
     market_caps_by_symbol = market_client.get_market_caps(exchange_symbols_normalized)
     ranked_symbols = sorted(
@@ -527,7 +545,7 @@ def _resolve_symbols(
         excluded_by_liquidity,
         len(liquid_symbols),
     )
-    return [futures_symbol_map[symbol] for symbol in liquid_symbols]
+    return [futures_symbol_map[symbol] for symbol in liquid_symbols], liquidity_quality_by_symbol
 
 
 def _resolve_fetch_anchor_timestamp_ms(config: AppConfig, end_timestamp_ms_raw: int | None) -> int:
@@ -609,6 +627,28 @@ def _log_loaded_coins(logger: Logger, count: int, action: str) -> None:
     logger.info(template, count)
 
 
+def _attach_liquidity_quality_metadata(
+    results: dict[str, SymbolFetchResult],
+    liquidity_quality_by_symbol: dict[str, dict[str, object]],
+) -> dict[str, SymbolFetchResult]:
+    if not liquidity_quality_by_symbol:
+        return results
+
+    enriched: dict[str, SymbolFetchResult] = {}
+    for symbol, symbol_result in results.items():
+        metadata = liquidity_quality_by_symbol.get(symbol, {})
+        if not metadata:
+            enriched[symbol] = symbol_result
+            continue
+        enriched[symbol] = SymbolFetchResult(
+            success=symbol_result.success,
+            message=symbol_result.message,
+            added_rows=symbol_result.added_rows,
+            quality_metadata=dict(metadata),
+        )
+    return enriched
+
+
 def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name: str) -> Timeframe:
     if value is None:
         return fallback
@@ -639,7 +679,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
-    symbols = _resolve_symbols(
+    symbols, liquidity_quality_by_symbol = _resolve_symbols(
         exchange_client,
         market_client,
         top_n=top_n,
@@ -658,6 +698,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         "coingecko-disabled" if ignore_coingecko else "coingecko-enabled",
     )
     if not symbols:
+        liquidity_quality_by_symbol = {}
         logger.info("загрузка-данных: не найдено символов для загрузки")
         return 0
 
@@ -677,6 +718,13 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             start_timestamp_ms=start_timestamp_ms,
             end_timestamp_ms=end_timestamp_ms,
         )
+        enriched_ohlcv = _attach_liquidity_quality_metadata(result.ohlcv, liquidity_quality_by_symbol)
+        result.ohlcv.clear()
+        result.ohlcv.update(enriched_ohlcv)
+        enriched_open_interest = _attach_liquidity_quality_metadata(result.open_interest, liquidity_quality_by_symbol)
+        result.open_interest.clear()
+        result.open_interest.update(enriched_open_interest)
+
         fetch_summaries[timeframe] = _log_fetch_summary(
             f"fetch-data[{timeframe.value}]",
             logger,
@@ -704,7 +752,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             config.fetch.liquidity_skip_error_ratio_threshold,
         )
         if skip_reason is None:
-            followup_symbols = _resolve_symbols(
+            followup_symbols, liquidity_quality_by_symbol = _resolve_symbols(
                 exchange_client,
                 market_client,
                 top_n=top_n,
@@ -759,7 +807,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
     market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
-    symbols = _resolve_symbols(
+    symbols, liquidity_quality_by_symbol = _resolve_symbols(
         exchange_client,
         market_client,
         top_n=top_n,
@@ -785,6 +833,12 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     for timeframe in config.fetch.timeframes:
         logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
         result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_timestamp_ms=start_timestamp_ms, end_timestamp_ms=end_timestamp_ms)
+        enriched_ohlcv = _attach_liquidity_quality_metadata(result.ohlcv, liquidity_quality_by_symbol)
+        result.ohlcv.clear()
+        result.ohlcv.update(enriched_ohlcv)
+        enriched_open_interest = _attach_liquidity_quality_metadata(result.open_interest, liquidity_quality_by_symbol)
+        result.open_interest.clear()
+        result.open_interest.update(enriched_open_interest)
         _log_fetch_summary(f"update-cache[{timeframe.value}]", logger, len(symbols), result.failed_symbols_count)
         failed_symbols.update(
             symbol

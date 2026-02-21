@@ -54,6 +54,7 @@ class CandleRow(TypedDict):
     volume: float
     natr: float
     open_interest: NotRequired[float | int]
+    taker_buy_volume: NotRequired[float | int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +199,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             close=Price(float(row["close"])),
             volume=Volume(float(row["volume"])),
             open_interest=Volume(float(row.get("open_interest", STRATEGY_DEFAULT_OPEN_INTEREST))),
+            taker_buy_volume=(
+                Volume(float(row.get("taker_buy_volume")))
+                if row.get("taker_buy_volume") is not None and str(row.get("taker_buy_volume")).strip() != ""
+                else None
+            ),
         )
 
     @staticmethod

@@ -186,6 +186,16 @@ class CcxtFuturesClient(ExchangeClient):
 
     def get_futures_symbols_by_quote_volume(self) -> list[str]:
         """Возвращает фьючерсные символы, отсортированные по 24ч quote volume (убывание)."""
+        ranked = self.get_futures_symbols_with_liquidity_metrics()
+        min_quote_volume = 10_000_000.0
+        return [
+            str(item["symbol"])
+            for item in ranked
+            if float(item.get("quote_volume", 0.0) or 0.0) >= min_quote_volume
+        ]
+
+    def get_futures_symbols_with_liquidity_metrics(self) -> list[dict[str, object]]:
+        """Возвращает символы с 24ч метриками ликвидности и quality-флагами."""
         symbols = self.get_futures_symbols()
         if not symbols:
             return []
@@ -196,8 +206,6 @@ class CcxtFuturesClient(ExchangeClient):
             call=self._client.fetch_tickers,
             args=(symbols,),
         )
-        if not isinstance(tickers_payload, dict):
-            return symbols
 
         def _safe_float(value: object) -> float:
             if not isinstance(value, (int, float, str, bytes)):
@@ -208,11 +216,69 @@ class CcxtFuturesClient(ExchangeClient):
                 return 0.0
             return parsed if isfinite(parsed) and parsed > 0 else 0.0
 
-        volumes_by_symbol: dict[str, float] = {}
+        def _safe_int(value: object) -> int:
+            if not isinstance(value, (int, float, str, bytes)):
+                return 0
+            try:
+                parsed = int(float(value))
+            except (TypeError, ValueError):
+                return 0
+            return parsed if parsed > 0 else 0
+
+        def _extract_trade_count_24h(ticker: dict[str, object]) -> int:
+            info = ticker.get("info")
+            candidates = [ticker.get("count"), ticker.get("trades")]
+            if isinstance(info, dict):
+                candidates.extend([info.get("count"), info.get("tradeCount"), info.get("numberOfTrades")])
+            for candidate in candidates:
+                parsed = _safe_int(candidate)
+                if parsed > 0:
+                    return parsed
+            return 0
+
+        def _extract_open_interest(ticker: dict[str, object]) -> float:
+            info = ticker.get("info")
+            candidates = [ticker.get("openInterest")]
+            if isinstance(info, dict):
+                candidates.extend([info.get("openInterest"), info.get("openInterestValue")])
+            for candidate in candidates:
+                parsed = _safe_float(candidate)
+                if parsed > 0.0:
+                    return parsed
+            return 0.0
+
+        def _extract_taker_buy_volume(ticker: dict[str, object]) -> float:
+            info = ticker.get("info")
+            if not isinstance(info, dict):
+                return 0.0
+            candidates = [
+                info.get("takerBuyQuoteVolume"),
+                info.get("taker_buy_quote_volume"),
+                info.get("takerBuyVolume"),
+                info.get("taker_buy_volume"),
+            ]
+            for candidate in candidates:
+                parsed = _safe_float(candidate)
+                if parsed > 0.0:
+                    return parsed
+            return 0.0
+
+        records: list[dict[str, object]] = []
         for symbol in symbols:
-            ticker = tickers_payload.get(symbol)
+            ticker = tickers_payload.get(symbol) if isinstance(tickers_payload, dict) else None
             if not isinstance(ticker, dict):
-                volumes_by_symbol[symbol] = 0.0
+                records.append({
+                    "symbol": symbol,
+                    "quote_volume": 0.0,
+                    "trade_count_24h": 0,
+                    "liquidity_score": 0.0,
+                    "quality_flags": ["no_oi", "no_taker", "questionable_sync"],
+                    "quality_metadata": {
+                        "no_oi": True,
+                        "no_taker": True,
+                        "questionable_sync": True,
+                    },
+                })
                 continue
 
             quote_volume = _safe_float(ticker.get("quoteVolume"))
@@ -220,13 +286,30 @@ class CcxtFuturesClient(ExchangeClient):
                 base_volume = _safe_float(ticker.get("baseVolume"))
                 last_price = _safe_float(ticker.get("last"))
                 quote_volume = base_volume * last_price
-            volumes_by_symbol[symbol] = quote_volume
 
-        return sorted(
-            symbols,
-            key=lambda symbol: (volumes_by_symbol.get(symbol, 0.0), symbol),
-            reverse=True,
-        )
+            trade_count_24h = _extract_trade_count_24h(ticker)
+            open_interest_24h = _extract_open_interest(ticker)
+            taker_buy_volume_24h = _extract_taker_buy_volume(ticker)
+
+            quality_metadata = {
+                "no_oi": open_interest_24h <= 0.0,
+                "no_taker": taker_buy_volume_24h <= 0.0,
+                "questionable_sync": quote_volume <= 0.0 or trade_count_24h <= 0,
+                "open_interest_24h": open_interest_24h,
+                "taker_buy_volume_24h": taker_buy_volume_24h,
+            }
+            quality_flags = [flag for flag in ("no_oi", "no_taker", "questionable_sync") if bool(quality_metadata[flag])]
+
+            records.append({
+                "symbol": symbol,
+                "quote_volume": quote_volume,
+                "trade_count_24h": trade_count_24h,
+                "liquidity_score": quote_volume if quote_volume > 0.0 else 0.0,
+                "quality_flags": quality_flags,
+                "quality_metadata": quality_metadata,
+            })
+
+        return sorted(records, key=lambda row: (float(row["quote_volume"]), str(row["symbol"])), reverse=True)
 
     def fetch_ohlcv(
         self,
@@ -261,7 +344,13 @@ class CcxtFuturesClient(ExchangeClient):
                 break
             since = last_ts + 1
 
-        frame = pd.DataFrame(all_rows, columns=OHLCV_FRAME_COLUMNS)
+        normalized_rows = [
+            list(row[: len(OHLCV_FRAME_COLUMNS)])
+            if len(row) >= len(OHLCV_FRAME_COLUMNS)
+            else [*row, None]
+            for row in all_rows
+        ]
+        frame = pd.DataFrame(normalized_rows, columns=OHLCV_FRAME_COLUMNS)
         if frame.empty:
             return frame
 
