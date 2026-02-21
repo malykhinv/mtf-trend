@@ -27,6 +27,7 @@ from constants import (
     DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
 )
 from domain.enums.timeframe import Timeframe
+from strategy.bee_bite.config import parse_bee_bite_grid_mode, parse_bee_bite_profile_id
 
 __all__ = [
     "AppConfig",
@@ -156,6 +157,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         strategy_id=_parse_strategy_id(os.getenv("STRATEGY_ID")),
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
+        bee_bite_profile=parse_bee_bite_profile_id(os.getenv("BEE_BITE_PROFILE")),
+        bee_bite_grid_mode=parse_bee_bite_grid_mode(os.getenv("BEE_BITE_GRID_MODE")),
     )
 
     simulation_config = SimulationConfig(

@@ -23,5 +23,9 @@ def build_strategy(config: AppConfig, logger: Logger) -> BaseStrategy[object]:
     if config.strategy.strategy_id == "breakout":
         return breakout
     if config.strategy.strategy_id == "bee_bite":
-        return BeeBiteStrategy(breakout)
+        return BeeBiteStrategy(
+            breakout,
+            profile_id=config.strategy.bee_bite_profile,
+            grid_mode=config.strategy.bee_bite_grid_mode,
+        )
     raise ValueError(f"Неподдерживаемый strategy_id: {config.strategy.strategy_id}")
