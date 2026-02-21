@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 import pandas as pd
 
@@ -35,3 +36,21 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
         params: StrategyParamsT,
     ) -> list[TradeResult]:
         """Метод."""
+
+    @abstractmethod
+    def build_parameter_grid(self) -> list[StrategyParamsT]:
+        """Возвращает полный набор параметров стратегии для бэктеста."""
+
+    @abstractmethod
+    def params_to_row(self, params: StrategyParamsT) -> dict[str, int | float | str | None]:
+        """Преобразует параметры стратегии в базовые колонки результирующей строки."""
+
+    def prepare_symbol_context(
+        self,
+        *,
+        symbol: str,
+        mtf_frames: SymbolMtfFrames,
+        params: StrategyParamsT,
+    ) -> dict[str, Any] | None:
+        """Опциональная подготовка symbol-specific контекста перед генерацией сделок."""
+        return None

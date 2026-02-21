@@ -59,7 +59,7 @@ from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from strategy.breakout.breakout_strategy import BreakoutStrategy
-from strategy.breakout.config import TARGET_PARAMETER_COMBINATIONS, BreakoutParams
+from strategy.breakout.config import PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
 from utils.logger import get_logger
 from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
@@ -970,6 +970,18 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         entry_timeframe=entry_timeframe,
     )
     summary = runner.build_summary(results)
+    if PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
+        logger.warning(
+            "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
+            PARAMETER_GRID_SIZE,
+            TARGET_PARAMETER_COMBINATIONS,
+        )
+    if len(results) != TARGET_PARAMETER_COMBINATIONS:
+        logger.warning(
+            "запуск-бэктеста: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
+            len(results),
+            TARGET_PARAMETER_COMBINATIONS,
+        )
     combinations_with_trades = int((results["trades_count"] > 0).sum()) if not results.empty else 0
     total_trades = int(results["trades_count"].sum()) if not results.empty else 0
     average_trades_per_combination = (
@@ -1404,12 +1416,12 @@ def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int
         logger.info("plot-daily-levels: нет символов для построения")
         return 0
 
-    base_params = BacktestRunner.build_parameter_grid()[0]
     strategy = BreakoutStrategy(
         commission_rate=config.simulation.commission_rate,
         slippage=config.simulation.slippage,
         logger=logger,
     )
+    base_params = strategy.build_parameter_grid()[0]
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
 
     built = 0
@@ -1557,12 +1569,12 @@ def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("plot-retests: нет символов для построения")
         return 0
 
-    base_params = BacktestRunner.build_parameter_grid()[0]
     strategy = BreakoutStrategy(
         commission_rate=config.simulation.commission_rate,
         slippage=config.simulation.slippage,
         logger=logger,
     )
+    base_params = strategy.build_parameter_grid()[0]
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
 
     retest_artifact_path = config.backtest.results_dir / "retest_plot_spans.json"
