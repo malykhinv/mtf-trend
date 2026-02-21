@@ -47,6 +47,7 @@ class SetupContext:
     reclaim_idx: int | None = None
     lowest_break: float | None = None
     retest_touch_idx: int | None = None
+    retest_deadline_idx: int | None = None
     t_pump_start: int | None = None
     t_pump_end: int | None = None
     high_pump: float | None = None
@@ -56,6 +57,8 @@ class SetupContext:
 class BeeBiteEngine:
     REQUIRED_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
     CONSERVATIVE_RETEST_LIMIT = 6
+    CONSERVATIVE_RETEST_TOUCH_OFFSET_ATR_BG = 0.05
+    CONSERVATIVE_RETEST_CONFIRM_OFFSET_ATR_BG = 0.10
     IMPULSE_THRESHOLDS: dict[str, float] = {
         "A": 2.5,
         "B": 2.2,
@@ -262,30 +265,38 @@ class BeeBiteEngine:
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
                 else:
-                    offset_threshold = params.bite_micro_offset * setup.atr_bg
+                    reclaim_offset_threshold = params.bite_micro_offset * setup.atr_bg
                     reclaim_ok = price_close > boundary if setup.side == PositionSide.LONG else price_close < boundary
                     micro_ok = (
-                        price_close > (boundary + offset_threshold)
+                        price_close > (boundary + reclaim_offset_threshold)
                         if setup.side == PositionSide.LONG
-                        else price_close < (boundary - offset_threshold)
+                        else price_close < (boundary - reclaim_offset_threshold)
                     )
                     if setup.reclaim_idx is None and reclaim_ok and micro_ok:
                         setup.reclaim_idx = i
+                        if params.bite_profile_id == "A":
+                            setup.retest_deadline_idx = i + self.CONSERVATIVE_RETEST_LIMIT
+                            setup.retest_touch_idx = None
 
                     if setup.reclaim_idx is not None:
                         if params.bite_profile_id == "A":
-                            retest_deadline = setup.reclaim_idx + self.CONSERVATIVE_RETEST_LIMIT
+                            retest_touch_offset = self.CONSERVATIVE_RETEST_TOUCH_OFFSET_ATR_BG * setup.atr_bg
+                            retest_confirm_offset = self.CONSERVATIVE_RETEST_CONFIRM_OFFSET_ATR_BG * setup.atr_bg
+                            retest_deadline = setup.retest_deadline_idx
+                            if retest_deadline is None:
+                                retest_deadline = setup.reclaim_idx + self.CONSERVATIVE_RETEST_LIMIT
+                                setup.retest_deadline_idx = retest_deadline
                             touch_zone = (
-                                float(row.low) <= (boundary + offset_threshold)
+                                float(row.low) <= (boundary + retest_touch_offset)
                                 if setup.side == PositionSide.LONG
-                                else float(row.high) >= (boundary - offset_threshold)
+                                else float(row.high) >= (boundary - retest_touch_offset)
                             )
-                            if touch_zone:
+                            if setup.retest_touch_idx is None and touch_zone:
                                 setup.retest_touch_idx = i
                             confirm_close = (
-                                price_close > (boundary + offset_threshold)
+                                price_close > (boundary + retest_confirm_offset)
                                 if setup.side == PositionSide.LONG
-                                else price_close < (boundary - offset_threshold)
+                                else price_close < (boundary - retest_confirm_offset)
                             )
                             if setup.retest_touch_idx is not None and i > setup.retest_touch_idx and confirm_close:
                                 state = BeeBiteState.ENTRY_SIGNAL
@@ -301,9 +312,9 @@ class BeeBiteEngine:
                             confirm_idx = setup.reclaim_idx + params.bite_confirmation_bars
                             if i >= confirm_idx:
                                 confirm_close = (
-                                    price_close > (boundary + offset_threshold)
+                                    price_close > (boundary + reclaim_offset_threshold)
                                     if setup.side == PositionSide.LONG
-                                    else price_close < (boundary - offset_threshold)
+                                    else price_close < (boundary - reclaim_offset_threshold)
                                 )
                                 if confirm_close:
                                     state = BeeBiteState.ENTRY_SIGNAL
