@@ -31,6 +31,7 @@ class PortfolioState(str, Enum):
 @dataclass(slots=True)
 class PortfolioEngineConfig:
     top_n: int = 1
+    score_threshold: float = 0.0
     r_trade: float = 1.0
     portfolio_risk_limit: float = 3.0
     min_stop_atr_ratio: float = 0.3
@@ -67,7 +68,8 @@ class EntryCandidate:
     score: float
     signal: TradeSignal
     side: PositionSide
-    tie_breaker_age: int
+    reclaim_bars: int
+    liquidity: float
 
 
 @dataclass(slots=True)
@@ -131,7 +133,7 @@ class PortfolioStateEngine:
         return sorted(timeline)
 
     @staticmethod
-    def _row_by_timestamp(frame: pd.DataFrame, timestamp_ms: int) -> dict[str, float] | None:
+    def _row_by_timestamp(frame: pd.DataFrame, timestamp_ms: int) -> dict[str, float | None] | None:
         row = frame.loc[frame["timestamp"] == timestamp_ms]
         if row.empty:
             return None
@@ -143,6 +145,8 @@ class PortfolioStateEngine:
             "low": float(item["low"]),
             "close": float(item["close"]),
             "volume": float(item["volume"]),
+            "open_interest": _to_optional_float(item.get("open_interest")),
+            "taker_buy_volume": _to_optional_float(item.get("taker_buy_volume")),
         }
 
     def _new_simulator(self) -> StatefulPositionSimulator:
@@ -159,7 +163,7 @@ class PortfolioStateEngine:
         symbol: str,
         state: SymbolState,
         sim: StatefulPositionSimulator,
-        row: dict[str, float],
+        row: dict[str, float | None],
     ) -> TradeResult | None:
         if state.state != PortfolioState.IN_TRADE:
             return None
@@ -173,8 +177,8 @@ class PortfolioStateEngine:
             return result
         return None
 
-    def _update_state(self, *, symbol: str, state: SymbolState, row: dict[str, float]) -> EntryCandidate | None:
-        close = row["close"]
+    def _update_state(self, *, symbol: str, state: SymbolState, row: dict[str, float | None]) -> EntryCandidate | None:
+        close = float(row["close"] or 0.0)
         state.age += 1
 
         if state.cooldown_bars_left > 0:
@@ -246,6 +250,7 @@ class PortfolioStateEngine:
                 if signal is None:
                     self._reset_state(state)
                     return None
+                reclaim_bars = max(state.age, 1)
                 state.signal = signal
                 state.state = PortfolioState.ENTRY_SIGNAL
                 state.age = 0
@@ -255,7 +260,8 @@ class PortfolioStateEngine:
                     score=score,
                     signal=signal,
                     side=state.break_side,
-                    tie_breaker_age=state.age,
+                    reclaim_bars=reclaim_bars,
+                    liquidity=float(row["volume"] or 0.0),
                 )
 
             if state.break_fail_count >= self.config.break_fail_threshold or state.age > self.config.max_age_range:
@@ -269,25 +275,98 @@ class PortfolioStateEngine:
                 score=score,
                 signal=state.signal,
                 side=state.signal.position_side,
-                tie_breaker_age=state.age,
+                reclaim_bars=max(state.age, 1),
+                liquidity=float(row["volume"] or 0.0),
             )
 
         return None
 
-    def _score_candidate(self, *, row: dict[str, float], side: PositionSide, range_high: float | None, range_low: float | None) -> float:
-        body = abs(row["close"] - row["open"]) / max(row["close"], 1e-12)
+    def _score_candidate(self, *, row: dict[str, float | None], side: PositionSide, range_high: float | None, range_low: float | None) -> float:
+        close = float(row["close"] or 0.0)
+        open_ = float(row["open"] or 0.0)
+        high = float(row["high"] or 0.0)
+        low = float(row["low"] or 0.0)
+        volume = float(row["volume"] or 0.0)
+
+        spread = max(high - low, 1e-12)
+        body_ratio = abs(close - open_) / spread
+        spread_to_close = spread / max(close, 1e-12)
+
         if range_high is None or range_low is None:
             breakout_strength = 0.0
         elif side == PositionSide.LONG:
-            breakout_strength = (row["close"] - range_high) / max(range_high, 1e-12)
+            breakout_strength = (close - range_high) / max(range_high, 1e-12)
         else:
-            breakout_strength = (range_low - row["close"]) / max(range_low, 1e-12)
-        return float(row["volume"]) * 0.5 + body * 100.0 + breakout_strength * 200.0
+            breakout_strength = (range_low - close) / max(range_low, 1e-12)
+
+        score = 0.0
+
+        # Импульс свечи (плюсы/штрафы).
+        if breakout_strength >= 0.004:
+            score += 3.0
+        elif breakout_strength >= 0.002:
+            score += 2.0
+        elif breakout_strength > 0.0:
+            score += 1.0
+        else:
+            score -= 2.0
+
+        if body_ratio >= 0.7:
+            score += 2.0
+        elif body_ratio >= 0.45:
+            score += 1.0
+        elif body_ratio < 0.2:
+            score -= 1.0
+
+        if spread_to_close <= 0.008:
+            score += 1.0
+        elif spread_to_close > 0.03:
+            score -= 2.0
+
+        # Ликвидность (обязательный компонент).
+        if volume >= 1_000_000:
+            score += 2.0
+        elif volume >= 250_000:
+            score += 1.0
+        elif volume < 25_000:
+            score -= 1.0
+
+        # OI/taker применяем условно только при наличии валидных данных.
+        open_interest = row.get("open_interest")
+        if open_interest is not None and open_interest > 0.0:
+            oi_to_volume = float(open_interest) / max(volume, 1e-12)
+            if oi_to_volume >= 5.0:
+                score += 1.0
+            elif oi_to_volume < 1.0:
+                score -= 1.0
+
+        taker_buy_volume = row.get("taker_buy_volume")
+        if taker_buy_volume is not None and taker_buy_volume > 0.0:
+            taker_share = float(taker_buy_volume) / max(volume, 1e-12)
+            if side == PositionSide.LONG:
+                if taker_share >= 0.55:
+                    score += 1.0
+                elif taker_share <= 0.45:
+                    score -= 1.0
+            else:
+                if taker_share <= 0.45:
+                    score += 1.0
+                elif taker_share >= 0.55:
+                    score -= 1.0
+
+        return score
 
     def _pick_top_candidates(self, candidates: list[EntryCandidate]) -> list[EntryCandidate]:
         if not candidates:
             return []
-        ordered = sorted(candidates, key=lambda c: (c.score, -c.tie_breaker_age, c.symbol), reverse=True)
+        filtered = [candidate for candidate in candidates if candidate.score >= self.config.score_threshold]
+        if not filtered:
+            return []
+        ordered = sorted(
+            filtered,
+            key=lambda c: (c.score, -c.reclaim_bars, c.liquidity, c.symbol),
+            reverse=True,
+        )
         return ordered[: self.config.top_n]
 
     def _activate_candidate(self, candidate: EntryCandidate) -> None:
@@ -357,7 +436,7 @@ class PortfolioStateEngine:
         return signal
 
     @staticmethod
-    def _to_candle(row: dict[str, float]) -> Candle:
+    def _to_candle(row: dict[str, float | None]) -> Candle:
         from domain.value_objects.volume import Volume
 
         return Candle(
@@ -383,3 +462,15 @@ class PortfolioStateEngine:
         state.break_fail_count = 0
         state.signal = None
 
+
+
+def _to_optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result
