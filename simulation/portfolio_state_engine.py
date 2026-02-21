@@ -77,6 +77,7 @@ class EntryCandidate:
     side: PositionSide
     reclaim_bars: int
     liquidity: float
+    reclaim_candle_score: float
 
 
 @dataclass(slots=True)
@@ -87,6 +88,14 @@ class PortfolioStateEngine:
     _states: dict[str, SymbolState] = field(default_factory=dict)
     _sims: dict[str, StatefulPositionSimulator] = field(default_factory=dict)
     _risk_manager: RiskManager | None = None
+
+    PROFILE_SCORE_THRESHOLDS: dict[str, float] = field(
+        default_factory=lambda: {
+            "A": 3.0,
+            "B": 4.0,
+            "C": 2.0,
+        }
+    )
 
     def run(self, symbol_frames: dict[str, pd.DataFrame]) -> list[TradeResult]:
         timeline = self._build_timeline(symbol_frames)
@@ -291,7 +300,13 @@ class PortfolioStateEngine:
                 state.signal = signal
                 state.state = PortfolioState.ENTRY_SIGNAL
                 state.age = 0
-                score = self._score_candidate(row=row, side=state.break_side, range_high=state.range_high, range_low=state.range_low)
+                score, reclaim_candle_score = self._score_candidate(
+                    row=row,
+                    side=state.break_side,
+                    range_high=state.range_high,
+                    range_low=state.range_low,
+                    reclaim_bars=reclaim_bars,
+                )
                 return EntryCandidate(
                     symbol=symbol,
                     score=score,
@@ -299,6 +314,7 @@ class PortfolioStateEngine:
                     side=state.break_side,
                     reclaim_bars=reclaim_bars,
                     liquidity=float(row["volume"] or 0.0),
+                    reclaim_candle_score=reclaim_candle_score,
                 )
 
             if state.break_fail_count >= self.config.break_fail_threshold or state.age > self.config.max_age_range:
@@ -306,19 +322,35 @@ class PortfolioStateEngine:
             return None
 
         if state.state == PortfolioState.ENTRY_SIGNAL and state.signal is not None:
-            score = self._score_candidate(row=row, side=state.signal.position_side, range_high=state.range_high, range_low=state.range_low)
+            reclaim_bars = max(state.age, 1)
+            score, reclaim_candle_score = self._score_candidate(
+                row=row,
+                side=state.signal.position_side,
+                range_high=state.range_high,
+                range_low=state.range_low,
+                reclaim_bars=reclaim_bars,
+            )
             return EntryCandidate(
                 symbol=symbol,
                 score=score,
                 signal=state.signal,
                 side=state.signal.position_side,
-                reclaim_bars=max(state.age, 1),
+                reclaim_bars=reclaim_bars,
                 liquidity=float(row["volume"] or 0.0),
+                reclaim_candle_score=reclaim_candle_score,
             )
 
         return None
 
-    def _score_candidate(self, *, row: dict[str, float | None], side: PositionSide, range_high: float | None, range_low: float | None) -> float:
+    def _score_candidate(
+        self,
+        *,
+        row: dict[str, float | None],
+        side: PositionSide,
+        range_high: float | None,
+        range_low: float | None,
+        reclaim_bars: int,
+    ) -> tuple[float, float]:
         close = float(row["close"] or 0.0)
         open_ = float(row["open"] or 0.0)
         high = float(row["high"] or 0.0)
@@ -329,44 +361,69 @@ class PortfolioStateEngine:
         body_ratio = abs(close - open_) / spread
         spread_to_close = spread / max(close, 1e-12)
 
-        if range_high is None or range_low is None:
-            breakout_strength = 0.0
-        elif side == PositionSide.LONG:
-            breakout_strength = (close - range_high) / max(range_high, 1e-12)
-        else:
-            breakout_strength = (range_low - close) / max(range_low, 1e-12)
-
         score = 0.0
+        reclaim_candle_score = 0.0
 
-        # Импульс свечи (плюсы/штрафы).
-        if breakout_strength >= 0.004:
-            score += 3.0
-        elif breakout_strength >= 0.002:
+        # Скорость reclaim.
+        if reclaim_bars <= 1:
             score += 2.0
-        elif breakout_strength > 0.0:
+        elif reclaim_bars <= 2:
             score += 1.0
-        else:
-            score -= 2.0
-
-        if body_ratio >= 0.7:
-            score += 2.0
-        elif body_ratio >= 0.45:
-            score += 1.0
-        elif body_ratio < 0.2:
+        elif reclaim_bars >= 5:
             score -= 1.0
 
-        if spread_to_close <= 0.008:
+        # Свеча reclaim.
+        close_position = (close - low) / spread if side == PositionSide.LONG else (high - close) / spread
+        if body_ratio >= 0.6 and close_position >= 0.7:
+            reclaim_candle_score = 2.0
+        elif body_ratio >= 0.4 and close_position >= 0.55:
+            reclaim_candle_score = 1.0
+        elif body_ratio < 0.2:
+            reclaim_candle_score = -1.0
+        score += reclaim_candle_score
+
+        # Объём диапазона.
+        range_volume = volume * spread_to_close
+        if range_volume >= 10_000:
+            score += 2.0
+        elif range_volume >= 2_500:
+            score += 1.0
+        else:
+            score -= 1.0
+
+        # Глубина прокола.
+        depth = 0.0
+        if range_high is not None and range_low is not None:
+            range_width = max(range_high - range_low, 1e-12)
+            if side == PositionSide.LONG:
+                depth = max((range_low - low) / range_width, 0.0)
+            else:
+                depth = max((high - range_high) / range_width, 0.0)
+        if 0.05 <= depth <= 0.5:
+            score += 1.5
+        elif depth > 0.8:
+            score -= 1.5
+        elif depth < 0.02:
+            score -= 0.5
+
+        # Штрафы за шумную свечу.
+        if spread_to_close <= 0.01:
             score += 1.0
         elif spread_to_close > 0.03:
-            score -= 2.0
+            score -= 1.5
 
-        # Ликвидность (обязательный компонент).
+        if side == PositionSide.LONG and close < open_:
+            score -= 1.0
+        if side == PositionSide.SHORT and close > open_:
+            score -= 1.0
+
+        # Ликвидность.
         if volume >= 1_000_000:
             score += 2.0
         elif volume >= 250_000:
             score += 1.0
         elif volume < 25_000:
-            score -= 1.0
+            score -= 1.5
 
         # OI/taker применяем условно только при наличии валидных данных.
         open_interest = row.get("open_interest")
@@ -391,18 +448,24 @@ class PortfolioStateEngine:
                 elif taker_share >= 0.55:
                     score -= 1.0
 
-        return score
+        return score, reclaim_candle_score
+
+    def _resolve_score_threshold(self) -> float:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        if profile in self.PROFILE_SCORE_THRESHOLDS:
+            return self.PROFILE_SCORE_THRESHOLDS[profile]
+        return self.config.score_threshold
 
     def _pick_top_candidates(self, candidates: list[EntryCandidate]) -> list[EntryCandidate]:
         if not candidates:
             return []
-        filtered = [candidate for candidate in candidates if candidate.score >= self.config.score_threshold]
+        score_threshold = self._resolve_score_threshold()
+        filtered = [candidate for candidate in candidates if candidate.score >= score_threshold]
         if not filtered:
             return []
         ordered = sorted(
             filtered,
-            key=lambda c: (c.score, -c.reclaim_bars, c.liquidity, c.symbol),
-            reverse=True,
+            key=lambda c: (-c.score, c.reclaim_bars, -c.reclaim_candle_score, -c.liquidity, c.symbol),
         )
         return ordered[: self.config.top_n]
 
