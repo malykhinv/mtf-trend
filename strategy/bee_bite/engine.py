@@ -14,8 +14,8 @@ from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
-from strategy.bee_bite.config import BeeBiteParams
-from strategy.bee_bite.trade_plan import build_bee_bite_trade_plan, resolve_profile_tp1_share
+from strategy.bee_bite.config import BeeBiteParams, get_bee_bite_runtime, get_bee_bite_score_threshold
+from strategy.bee_bite.trade_plan import BeeBiteTradePlan, build_bee_bite_trade_plan, resolve_profile_tp1_share
 from strategy.breakout.indicators.level_detector import LevelDetector
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
@@ -81,6 +81,11 @@ class BeeBiteEngine:
         "B": 8,
         "C": 6,
     }
+    PROFILE_RECLAIM_TIMEOUT: dict[str, int] = {
+        "A": 5,
+        "B": 6,
+        "C": 8,
+    }
 
     def __init__(self) -> None:
         self._detector = LevelDetector()
@@ -144,6 +149,7 @@ class BeeBiteEngine:
         setup: SetupContext | None = None
         trades: list[TradeResult] = []
         level_idx = 0
+        cooldown_until_idx = -1
 
         rows = list(annotated.itertuples(index=False))
         levels = list(higher_levels.itertuples(index=False)) if not higher_levels.empty else []
@@ -165,6 +171,9 @@ class BeeBiteEngine:
                 diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.SEEK_PUMP:
+                if i <= cooldown_until_idx:
+                    i += 1
+                    continue
                 pump_signal = self._resolve_pump_signal(rows=rows, idx=i, params=params)
                 if pump_signal is not None:
                     (
@@ -249,7 +258,7 @@ class BeeBiteEngine:
                     setup.lowest_break = min(setup.lowest_break, break_price)
                 else:
                     setup.lowest_break = max(setup.lowest_break, break_price)
-                reclaim_limit = params.bite_reclaim_limit
+                reclaim_limit = self.PROFILE_RECLAIM_TIMEOUT.get(params.bite_profile_id, params.bite_reclaim_limit)
                 elapsed_since_break = i - setup.break_idx
                 emergency_level = 0.7 * setup.core_width
                 emergency_break = (
@@ -269,6 +278,14 @@ class BeeBiteEngine:
                         if setup.side == PositionSide.LONG
                         else price_close < (boundary - reclaim_offset_threshold)
                     )
+                    if reclaim_ok and not micro_ok:
+                        cooldown_bars = self._hours_to_candles(get_bee_bite_runtime(params.bite_profile_id).cooldown_hours, params.entry_timeframe)
+                        cooldown_until_idx = i + cooldown_bars
+                        setup = None
+                        state = BeeBiteState.IDLE
+                        diagnostics["states"].append(state.value)
+                        i += 1
+                        continue
                     if setup.reclaim_idx is None and reclaim_ok and micro_ok:
                         setup.reclaim_idx = i
                         if params.bite_profile_id == "A":
@@ -318,10 +335,13 @@ class BeeBiteEngine:
                                     diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.ENTRY_SIGNAL and setup is not None and setup.retest_idx is not None:
-                trade, exit_idx = self._simulate_trade(rows=rows, entry_idx=i, setup=setup, params=params)
+                trade, exit_idx, rejected = self._simulate_trade(rows=rows, entry_idx=i, setup=setup, params=params)
                 if trade is not None:
                     trades.append(trade)
                     diagnostics["trades_generated"] = int(diagnostics["trades_generated"]) + 1
+                elif rejected:
+                    cooldown_bars = self._hours_to_candles(get_bee_bite_runtime(params.bite_profile_id).cooldown_hours, params.entry_timeframe)
+                    cooldown_until_idx = i + cooldown_bars
                 i = max(i, exit_idx)
                 state = BeeBiteState.IN_TRADE
                 diagnostics["states"].append(state.value)
@@ -343,20 +363,20 @@ class BeeBiteEngine:
         entry_idx: int,
         setup: SetupContext,
         params: BeeBiteParams,
-    ) -> tuple[TradeResult | None, int]:
+    ) -> tuple[TradeResult | None, int, bool]:
         entry_row = rows[entry_idx]
         entry_price = float(entry_row.close)
         if setup.range_low is None or setup.range_high is None:
-            return None, entry_idx
+            return None, entry_idx, False
 
         buffer = max(0.1 * setup.atr_bg, 0.001 * entry_price)
         if setup.side == PositionSide.LONG:
             if setup.lowest_break is None:
-                return None, entry_idx
+                return None, entry_idx, False
             stop = float(setup.lowest_break) - buffer
         else:
             if setup.lowest_break is None:
-                return None, entry_idx
+                return None, entry_idx, False
             stop = float(setup.lowest_break) + buffer
         trade_plan = build_bee_bite_trade_plan(
             side=setup.side,
@@ -368,15 +388,22 @@ class BeeBiteEngine:
             high_pump=setup.high_pump,
             low_before_pump=setup.low_before_pump,
         )
-        if trade_plan is None or trade_plan.stop_distance < (0.3 * setup.atr_bg):
-            return None, entry_idx
+        if trade_plan is None:
+            return None, entry_idx, False
+        if trade_plan.stop_distance < (0.3 * setup.atr_bg):
+            return None, entry_idx, True
+
+        score_threshold = get_bee_bite_score_threshold(params.bite_profile_id).min_score
+        trade_score = self._score_trade_plan(setup=setup, plan=trade_plan, entry_price=entry_price)
+        if trade_score < score_threshold:
+            return None, entry_idx, True
         risk = max(trade_plan.stop_distance, entry_price * 0.0001)
         stop = trade_plan.stop_loss
         tp1 = trade_plan.tp1
 
         trade_risk = params.bite_r_trade
         if trade_risk > params.bite_portfolio_risk_limit:
-            return None, entry_idx
+            return None, entry_idx, False
 
         position_size = params.bite_r_trade / risk
         tp1_share = resolve_profile_tp1_share(params.bite_profile_id)
@@ -513,7 +540,18 @@ class BeeBiteEngine:
             breakout_timestamp_ms=setup.breakout_timestamp,
             retest_timestamp_ms=setup.retest_timestamp,
         )
-        return trade, exit_idx
+        return trade, exit_idx, False
+
+    @staticmethod
+    def _score_trade_plan(*, setup: SetupContext, plan: BeeBiteTradePlan, entry_price: float) -> float:
+        tp1 = float(plan.tp1)
+        stop_distance = max(float(plan.stop_distance), 1e-12)
+        if setup.side == PositionSide.LONG:
+            reward = max(tp1 - entry_price, 0.0)
+        else:
+            reward = max(entry_price - tp1, 0.0)
+        rr = reward / stop_distance
+        return max(rr * 2.0, 0.0)
 
     @staticmethod
     def _body_ratio(row: object) -> float:
@@ -633,6 +671,7 @@ class BeeBiteEngine:
         window = rows[start_idx : end_idx + 1]
         lows = np.array([float(item.low) for item in window])
         highs = np.array([float(item.high) for item in window])
+        closes = np.array([float(item.close) for item in window])
         atr_bg = float(setup.atr_bg)
         if atr_bg <= 0:
             return None
@@ -648,7 +687,8 @@ class BeeBiteEngine:
         if len(window) < 6:
             return None
 
-        p10_last6 = [float(np.quantile(lows[w_end - 5 : w_end + 1], 0.10)) for w_end in range(len(window) - 6, len(window))]
+        close_last6 = closes[-6:]
+        p10_last6 = [float(np.quantile(close_last6[: idx + 1], 0.10)) for idx in range(len(close_last6))]
         stability_threshold = self.PROFILE_STABILITY_THRESHOLD.get(params.bite_profile_id, params.bite_max_retest_depth)
         if max(p10_last6) - min(p10_last6) > stability_threshold * atr_bg:
             return None
