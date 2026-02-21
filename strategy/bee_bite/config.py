@@ -50,6 +50,10 @@ class BeeBiteParams:
     bite_max_retest_depth: float
     bite_confirmation_bars: int
     bite_entry_trigger: EntryTrigger
+    bite_min_depth_threshold: float
+    bite_micro_offset: float
+    bite_reclaim_limit: int
+    bite_max_age_range: int
     symbol: str
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
@@ -68,6 +72,9 @@ class BeeBiteProfileRuntime:
     top_n_min: int
     top_n_max: int
     cooldown_bars: int
+    min_depth_threshold: float
+    micro_offset: float
+    reclaim_limit: int
     max_age_range: int
 
 
@@ -78,6 +85,9 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
         top_n_min=20,
         top_n_max=120,
         cooldown_bars=8,
+        min_depth_threshold=0.3,
+        micro_offset=0.2,
+        reclaim_limit=6,
         max_age_range=24,
     ),
     "B": BeeBiteProfileRuntime(
@@ -86,6 +96,9 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
         top_n_min=10,
         top_n_max=80,
         cooldown_bars=6,
+        min_depth_threshold=0.25,
+        micro_offset=0.15,
+        reclaim_limit=4,
         max_age_range=20,
     ),
     "C": BeeBiteProfileRuntime(
@@ -94,6 +107,9 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
         top_n_min=5,
         top_n_max=50,
         cooldown_bars=4,
+        min_depth_threshold=0.2,
+        micro_offset=0.1,
+        reclaim_limit=3,
         max_age_range=16,
     ),
 }
@@ -110,6 +126,10 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_max_retest_depth=1.0,
         bite_confirmation_bars=2,
         bite_entry_trigger=EntryTrigger.PRICE_CONFIRMATION,
+        bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["A"].min_depth_threshold,
+        bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["A"].micro_offset,
+        bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["A"].reclaim_limit,
+        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["A"].max_age_range,
         symbol="",
         bite_profile_id="A",
         bite_grid_mode="baseline",
@@ -124,6 +144,10 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_max_retest_depth=1.0,
         bite_confirmation_bars=2,
         bite_entry_trigger=EntryTrigger.PRICE_CONFIRMATION,
+        bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["B"].min_depth_threshold,
+        bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["B"].micro_offset,
+        bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["B"].reclaim_limit,
+        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["B"].max_age_range,
         symbol="",
         bite_profile_id="B",
         bite_grid_mode="baseline",
@@ -138,6 +162,10 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_max_retest_depth=1.0,
         bite_confirmation_bars=1,
         bite_entry_trigger=EntryTrigger.IMMEDIATE,
+        bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["C"].min_depth_threshold,
+        bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["C"].micro_offset,
+        bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["C"].reclaim_limit,
+        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["C"].max_age_range,
         symbol="",
         bite_profile_id="C",
         bite_grid_mode="baseline",
@@ -312,6 +340,14 @@ def validate_bee_bite_params(params: BeeBiteParams) -> None:
         raise ValueError("параметр bite_tp2_mult должен быть в диапазоне (1.0, 4.0]")
     if params.bite_confirmation_bars < 1 or params.bite_confirmation_bars > 6:
         raise ValueError("параметр bite_confirmation_bars должен быть в диапазоне [1, 6]")
+    if params.bite_min_depth_threshold <= 0.0 or params.bite_min_depth_threshold > 1.0:
+        raise ValueError("параметр bite_min_depth_threshold должен быть в диапазоне (0, 1]")
+    if params.bite_micro_offset < 0.0 or params.bite_micro_offset > 1.0:
+        raise ValueError("параметр bite_micro_offset должен быть в диапазоне [0, 1]")
+    if params.bite_reclaim_limit < 1 or params.bite_reclaim_limit > 20:
+        raise ValueError("параметр bite_reclaim_limit должен быть в диапазоне [1, 20]")
+    if params.bite_max_age_range < 1 or params.bite_max_age_range > 100:
+        raise ValueError("параметр bite_max_age_range должен быть в диапазоне [1, 100]")
 
     if params.bite_entry_trigger == EntryTrigger.PRICE_CONFIRMATION and params.bite_confirmation_bars < 2:
         raise ValueError("режим reclaim (PRICE_CONFIRMATION) требует bite_confirmation_bars >= 2")

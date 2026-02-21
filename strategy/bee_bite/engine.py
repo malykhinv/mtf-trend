@@ -55,10 +55,6 @@ class SetupContext:
 
 class BeeBiteEngine:
     REQUIRED_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
-    MIN_DEPTH_THRESHOLD = 0.25
-    MICRO_OFFSET = 0.15
-    DEFAULT_RECLAIM_LIMIT = 4
-    CONSERVATIVE_RECLAIM_LIMIT = 6
     CONSERVATIVE_RETEST_LIMIT = 6
     IMPULSE_THRESHOLDS: dict[str, float] = {
         "A": 2.0,
@@ -203,12 +199,20 @@ class BeeBiteEngine:
                         diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.RANGE_LOCKED and setup is not None:
+                range_started_idx = setup.retest_idx if setup.retest_idx is not None else i
+                elapsed_in_range = i - range_started_idx
+                if elapsed_in_range > params.bite_max_age_range:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(state.value)
+                    i += 1
+                    continue
                 boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
                 puncture_price = float(row.low) if setup.side == PositionSide.LONG else float(row.high)
                 puncture_detected = puncture_price < boundary if setup.side == PositionSide.LONG else puncture_price > boundary
                 if puncture_detected and setup.atr_bg > 0 and setup.core_width > 0:
                     depth = abs(puncture_price - boundary)
-                    min_depth = self.MIN_DEPTH_THRESHOLD * setup.atr_bg
+                    min_depth = params.bite_min_depth_threshold * setup.atr_bg
                     max_depth = 0.5 * setup.core_width
                     if min_depth <= depth <= max_depth:
                         setup.break_idx = i
@@ -227,9 +231,7 @@ class BeeBiteEngine:
                     setup.lowest_break = min(setup.lowest_break, break_price)
                 else:
                     setup.lowest_break = max(setup.lowest_break, break_price)
-                reclaim_limit = (
-                    self.CONSERVATIVE_RECLAIM_LIMIT if params.bite_profile_id == "A" else self.DEFAULT_RECLAIM_LIMIT
-                )
+                reclaim_limit = params.bite_reclaim_limit
                 elapsed_since_break = i - setup.break_idx
                 emergency_level = 0.7 * setup.core_width
                 emergency_break = (
@@ -242,7 +244,7 @@ class BeeBiteEngine:
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
                 else:
-                    offset_threshold = self.MICRO_OFFSET * setup.atr_bg
+                    offset_threshold = params.bite_micro_offset * setup.atr_bg
                     reclaim_ok = price_close > boundary if setup.side == PositionSide.LONG else price_close < boundary
                     micro_ok = (
                         price_close > (boundary + offset_threshold)
