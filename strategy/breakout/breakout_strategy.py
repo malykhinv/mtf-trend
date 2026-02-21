@@ -18,7 +18,6 @@ from constants import (
     STRATEGY_MIN_RR,
     STRATEGY_MIN_TP2_MULT,
     STRATEGY_MIN_VOLUME_MULT,
-    STRATEGY_POSITION_SIZE,
     STRATEGY_REQUIRED_COLUMNS,
     STRATEGY_RISK_FLOOR, STRATEGY_PRICE_EPSILON,
 )
@@ -28,6 +27,7 @@ from domain.enums.position_side import PositionSide
 from domain.enums.timeframe import Timeframe
 from domain.models.candle import Candle
 from domain.models.level import Level
+from domain.models.position import Position
 from domain.models.retest_plot_span import RetestPlotSpan
 from domain.models.trade_plot_span import TradePlotSpan
 from domain.models.trade_result import TradeResult
@@ -38,6 +38,7 @@ from simulation.order_processor import OrderProcessor
 from simulation.position_simulator import StatefulPositionSimulator
 from simulation.trade_classifier import TradeClassifier
 from simulation.portfolio_state_engine import PortfolioEngineConfig, PortfolioStateEngine
+from simulation.risk_manager import RiskConfig, RiskManager
 from strategy.base_strategy import BaseStrategy
 from strategy.breakout.config import BREAKOUT_PARAMETER_GRID, BreakoutParams
 from strategy.breakout.indicators.level_detector import LevelDetector
@@ -492,6 +493,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         entry_idx: int,
         pending_retest: PendingRetest,
         params: BreakoutParams,
+        risk_manager: RiskManager,
     ) -> TradeSignal | None:
         if entry_idx >= len(annotated):
             return None
@@ -560,7 +562,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             if 0 <= retest_idx < len(annotated)
             else None
         )
-        return TradeSignal(
+        signal = TradeSignal(
             formation_timestamp_ms=pending_retest.breakout.level_start_time,
             entry_price=Price(entry_price),
             entry_timestamp_ms=int(entry_row["timestamp"]),
@@ -572,6 +574,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             breakout_timestamp_ms=breakout_timestamp_ms,
             retest_timestamp_ms=retest_timestamp_ms,
         )
+        atr_bg = max(float(entry_row.get("natr", 0.0)), 0.0) * max(entry_price, STRATEGY_PRICE_EPSILON)
+        if not risk_manager.check_stop_distance_by_atr(signal=signal, atr_bg=atr_bg):
+            _log_invalid_signal(reason="stop distance too close to ATR filter")
+            return None
+        return signal
 
     @staticmethod
     def _resolve_stop_loss(
@@ -761,7 +768,13 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             return []
 
         engine = PortfolioStateEngine(
-            config=PortfolioEngineConfig(top_n=1),
+            config=PortfolioEngineConfig(
+                top_n=1,
+                r_trade=params.r_trade,
+                portfolio_risk_limit=params.portfolio_risk_limit,
+                min_stop_atr_ratio=params.min_stop_atr_ratio,
+                t_max_in_trade=params.t_max_in_trade,
+            ),
             commission_rate=self._commission_rate,
             slippage=self._slippage,
         )
@@ -826,6 +839,14 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             "max_touch_penetration_atr": params.max_touch_penetration_atr,
             "max_touch_penetration_pct": params.max_touch_penetration_pct,
         }
+
+        risk_manager = RiskManager(
+            RiskConfig(
+                r_trade=params.r_trade,
+                portfolio_risk_limit=params.portfolio_risk_limit,
+                min_stop_atr_ratio=params.min_stop_atr_ratio,
+            )
+        )
         if annotated.empty:
             self._last_generation_diagnostics = diagnostics
             return []
@@ -989,8 +1010,17 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                     side=pending_signal.position_side,
                     order_processor=OrderProcessor(commission_rate=self._commission_rate, slippage=self._slippage),
                     trade_classifier=TradeClassifier(),
+                    max_bars_in_trade=params.t_max_in_trade,
                 )
-                active_sim.register_signal(pending_signal, size=STRATEGY_POSITION_SIZE)
+                active_positions: list[tuple[Position, PositionSide]] = []
+                if active_sim.position is not None:
+                    active_positions.append((active_sim.position, active_sim.side))
+                if not risk_manager.can_open_with_portfolio_limit(active_positions=active_positions, signal=pending_signal):
+                    pending_signal = None
+                    pending_signal_level_context = None
+                    continue
+                size = risk_manager.calc_position_size(signal=pending_signal)
+                active_sim.register_signal(pending_signal, size=size)
                 active_trade_signal = pending_signal
                 active_trade_level_context = pending_signal_level_context
                 pending_signal = None
@@ -1086,6 +1116,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         entry_idx=entry_idx,
                         pending_retest=pending_retest,
                         params=params,
+                        risk_manager=risk_manager,
                     )
                     pending_signal_level_context = self._capture_trade_level_context(
                         side=pending_retest.breakout.side,
@@ -1162,6 +1193,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         entry_idx=entry_idx,
                         pending_retest=pending_retest,
                         params=params,
+                        risk_manager=risk_manager,
                     )
                     pending_signal_level_context = self._capture_trade_level_context(
                         side=pending_retest.breakout.side,
@@ -1229,6 +1261,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
                         row=row,
                         breakout=pending_breakout,
                         params=params,
+                        risk_manager=risk_manager,
                     )
                     if volume_check["is_ok"] and extra_filters["is_ok"]:
                         pending_retest = PendingRetest(

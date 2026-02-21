@@ -50,6 +50,10 @@ class BreakoutParams:
     max_touch_penetration_pct: float | None = None
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
+    r_trade: float = 1.0
+    portfolio_risk_limit: float = 3.0
+    min_stop_atr_ratio: float = 0.3
+    t_max_in_trade: int | None = None
 
     def resolve_retest_zone_ratio(self, natr: float) -> float:
         """Возвращает долю зоны ретеста/SL в режиме LEVEL по единому правилу.

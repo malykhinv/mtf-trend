@@ -33,6 +33,10 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             retest_zone_atr=params.bite_retest_zone_atr,
             levels_timeframe=params.levels_timeframe,
             entry_timeframe=params.entry_timeframe,
+            bite_r_trade=params.r_trade,
+            bite_portfolio_risk_limit=params.portfolio_risk_limit,
+            bite_min_stop_atr_ratio=params.min_stop_atr_ratio,
+            bite_t_max_in_trade=params.t_max_in_trade,
         )
 
     @staticmethod
@@ -54,6 +58,10 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             bite_retest_zone_atr=params.retest_zone_atr,
             levels_timeframe=params.levels_timeframe,
             entry_timeframe=params.entry_timeframe,
+            bite_r_trade=params.r_trade,
+            bite_portfolio_risk_limit=params.portfolio_risk_limit,
+            bite_min_stop_atr_ratio=params.min_stop_atr_ratio,
+            bite_t_max_in_trade=params.t_max_in_trade,
         )
 
     def validate_config(self, params: BeeBiteParams) -> None:
@@ -93,6 +101,10 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             "bite_max_retest_depth": params.bite_max_retest_depth,
             "bite_confirmation_bars": params.bite_confirmation_bars,
             "bite_entry_trigger": params.bite_entry_trigger.value,
+            "bite_r_trade": params.bite_r_trade,
+            "bite_portfolio_risk_limit": params.bite_portfolio_risk_limit,
+            "bite_min_stop_atr_ratio": params.bite_min_stop_atr_ratio,
+            "bite_t_max_in_trade": params.bite_t_max_in_trade,
         }
 
     def prepare_symbol_context(self, *, symbol: str, mtf_frames: SymbolMtfFrames, params: BeeBiteParams):
