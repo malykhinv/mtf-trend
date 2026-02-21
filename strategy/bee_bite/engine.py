@@ -72,6 +72,16 @@ class BeeBiteEngine:
         "B": 1.0,
         "C": 1.2,
     }
+    PROFILE_TP1_SHARE: dict[str, float] = {
+        "A": 0.4,
+        "B": 0.5,
+        "C": 0.6,
+    }
+    PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = {
+        "A": 12,
+        "B": 8,
+        "C": 6,
+    }
 
     def __init__(self) -> None:
         self._detector = LevelDetector()
@@ -87,6 +97,12 @@ class BeeBiteEngine:
             raise ValueError("bite_lookback должен быть >= 5")
         if params.bite_confirmation_bars < 1:
             raise ValueError("bite_confirmation_bars должен быть >= 1")
+        if not 0.0 < params.bite_tp1_share < 1.0:
+            raise ValueError("bite_tp1_share должен быть в интервале (0, 1)")
+        if params.bite_r_trade <= 0:
+            raise ValueError("bite_r_trade должен быть > 0")
+        if params.bite_portfolio_risk_limit <= 0:
+            raise ValueError("bite_portfolio_risk_limit должен быть > 0")
 
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         missing = [col for col in self.REQUIRED_COLUMNS if col not in data.columns]
@@ -326,11 +342,35 @@ class BeeBiteEngine:
         if setup.side == PositionSide.LONG:
             stop = min(setup.range_low, setup.level_price)
             risk = max(entry_price - stop, entry_price * 0.0001)
-            tp2 = entry_price + risk * params.bite_min_rr * params.bite_tp2_mult
+            tp1 = entry_price + risk
         else:
             stop = max(setup.range_high, setup.level_price)
             risk = max(stop - entry_price, entry_price * 0.0001)
-            tp2 = entry_price - risk * params.bite_min_rr * params.bite_tp2_mult
+            tp1 = entry_price - risk
+
+        trade_risk = params.bite_r_trade
+        if trade_risk > params.bite_portfolio_risk_limit:
+            return None, entry_idx
+
+        position_size = params.bite_r_trade / risk
+        tp1_share = min(max(params.bite_tp1_share, 0.05), 0.95)
+        profile_tp1_share = self.PROFILE_TP1_SHARE.get(params.bite_profile_id, tp1_share)
+        tp1_share = min(max(profile_tp1_share, 0.05), 0.95)
+        remainder_share = 1.0 - tp1_share
+
+        tp2_fixed = self._resolve_fixed_tp2(entry_price=entry_price, setup=setup)
+        trailing_mode = tp2_fixed is None
+        trailing_reference = entry_price
+        tp1_hit = False
+
+        stop_after_tp1 = (
+            entry_price * (1 + params.bite_tp1_stop_buffer_pct)
+            if setup.side == PositionSide.LONG
+            else entry_price * (1 - params.bite_tp1_stop_buffer_pct)
+        )
+
+        time_exit_hours = self.PROFILE_TIME_EXIT_HOURS_NO_TP1.get(params.bite_profile_id, 8)
+        time_exit_candles = max(1, self._hours_to_candles(time_exit_hours, params.entry_timeframe))
 
         limit = len(rows) - 1
         if params.bite_t_max_in_trade is not None:
@@ -339,37 +379,109 @@ class BeeBiteEngine:
         result_type = TradeResultType.BE
         exit_price = entry_price
         exit_idx = limit
+        realized_pnl = 0.0
         for idx in range(entry_idx + 1, limit + 1):
             row = rows[idx]
             low = float(row.low)
             high = float(row.high)
             close = float(row.close)
+
+            if not tp1_hit and (idx - entry_idx) >= time_exit_candles:
+                exit_price = close
+                result_type = TradeResultType.BE
+                exit_idx = idx
+                break
+
             if setup.side == PositionSide.LONG:
-                if low <= stop:
-                    exit_price = stop
+                active_stop = stop_after_tp1 if tp1_hit else stop
+                if low <= active_stop:
+                    exit_price = active_stop
+                    if tp1_hit:
+                        realized_pnl += (active_stop - entry_price) * remainder_share * position_size
+                        result_type = TradeResultType.TP1_BE
+                    else:
+                        realized_pnl += (active_stop - entry_price) * position_size
                     result_type = TradeResultType.SL
+                    if tp1_hit:
+                        result_type = TradeResultType.TP1_BE
                     exit_idx = idx
                     break
-                if high >= tp2:
-                    exit_price = tp2
-                    result_type = TradeResultType.TP2
-                    exit_idx = idx
-                    break
+                if not tp1_hit and high >= tp1:
+                    tp1_hit = True
+                    realized_pnl += (tp1 - entry_price) * tp1_share * position_size
+                    trailing_reference = max(trailing_reference, close)
+                if tp1_hit:
+                    trailing_reference = max(trailing_reference, close)
+                    trailing_stop = trailing_reference - setup.atr_bg
+                    tp2_target = tp2_fixed if not trailing_mode else trailing_stop
+                    if high >= tp2_target:
+                        exit_price = tp2_target
+                        realized_pnl += (tp2_target - entry_price) * remainder_share * position_size
+                        result_type = TradeResultType.TP2
+                        exit_idx = idx
+                        break
+                    if low <= stop_after_tp1:
+                        exit_price = stop_after_tp1
+                        realized_pnl += (stop_after_tp1 - entry_price) * remainder_share * position_size
+                        result_type = TradeResultType.TP1_BE
+                        exit_idx = idx
+                        break
             else:
-                if high >= stop:
-                    exit_price = stop
-                    result_type = TradeResultType.SL
+                active_stop = stop_after_tp1 if tp1_hit else stop
+                if high >= active_stop:
+                    exit_price = active_stop
+                    if tp1_hit:
+                        realized_pnl += (entry_price - active_stop) * remainder_share * position_size
+                        result_type = TradeResultType.TP1_BE
+                    else:
+                        realized_pnl += (entry_price - active_stop) * position_size
+                        result_type = TradeResultType.SL
                     exit_idx = idx
                     break
-                if low <= tp2:
-                    exit_price = tp2
-                    result_type = TradeResultType.TP2
-                    exit_idx = idx
-                    break
+                if not tp1_hit and low <= tp1:
+                    tp1_hit = True
+                    realized_pnl += (entry_price - tp1) * tp1_share * position_size
+                    trailing_reference = min(trailing_reference, close)
+                if tp1_hit:
+                    trailing_reference = min(trailing_reference, close)
+                    trailing_stop = trailing_reference + setup.atr_bg
+                    tp2_target = tp2_fixed if not trailing_mode else trailing_stop
+                    if low <= tp2_target:
+                        exit_price = tp2_target
+                        realized_pnl += (entry_price - tp2_target) * remainder_share * position_size
+                        result_type = TradeResultType.TP2
+                        exit_idx = idx
+                        break
+                    if high >= stop_after_tp1:
+                        exit_price = stop_after_tp1
+                        realized_pnl += (entry_price - stop_after_tp1) * remainder_share * position_size
+                        result_type = TradeResultType.TP1_BE
+                        exit_idx = idx
+                        break
+
             exit_price = close
 
-        direction = 1.0 if setup.side == PositionSide.LONG else -1.0
-        pnl = (exit_price - entry_price) * direction
+        if exit_idx == limit:
+            if tp1_hit:
+                if setup.side == PositionSide.LONG:
+                    realized_pnl += (exit_price - entry_price) * remainder_share * position_size
+                    result_type = TradeResultType.TP1_BE
+                else:
+                    realized_pnl += (entry_price - exit_price) * remainder_share * position_size
+                    result_type = TradeResultType.TP1_BE
+            else:
+                if setup.side == PositionSide.LONG:
+                    realized_pnl = (exit_price - entry_price) * position_size
+                else:
+                    realized_pnl = (entry_price - exit_price) * position_size
+
+        if exit_idx != limit and not tp1_hit and result_type != TradeResultType.SL:
+            if setup.side == PositionSide.LONG:
+                realized_pnl = (exit_price - entry_price) * position_size
+            else:
+                realized_pnl = (entry_price - exit_price) * position_size
+
+        pnl = realized_pnl
         pnl_percent = 0.0 if entry_price == 0 else (pnl / entry_price) * 100.0
         trade = TradeResult(
             entry_price=Price(entry_price),
@@ -383,6 +495,20 @@ class BeeBiteEngine:
             retest_timestamp_ms=setup.retest_timestamp,
         )
         return trade, exit_idx
+
+    def _resolve_fixed_tp2(self, *, entry_price: float, setup: SetupContext) -> float | None:
+        if setup.atr_bg <= 0:
+            return None
+        if setup.side == PositionSide.LONG:
+            if setup.high_pump is None:
+                return None
+            distance = setup.high_pump - entry_price
+            return setup.high_pump if distance >= setup.atr_bg else None
+
+        if setup.low_before_pump is None:
+            return None
+        distance = entry_price - setup.low_before_pump
+        return setup.low_before_pump if distance >= setup.atr_bg else None
 
     @staticmethod
     def _body_ratio(row: object) -> float:
