@@ -27,7 +27,13 @@ from constants import (
     DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
 )
 from domain.enums.timeframe import Timeframe
-from strategy.bee_bite.config import parse_bee_bite_grid_mode, parse_bee_bite_profile_id
+from strategy.bee_bite.config import (
+    get_bee_bite_runtime,
+    parse_bee_bite_grid_mode,
+    parse_bee_bite_profile_id,
+    parse_bee_bite_reclaim_mode,
+    parse_bee_bite_retest_mode,
+)
 
 __all__ = [
     "AppConfig",
@@ -153,12 +159,24 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         env_name="ENTRY_TIMEFRAME",
     )
 
+    bee_bite_profile = parse_bee_bite_profile_id(os.getenv("BEE_BITE_PROFILE"))
+    bee_bite_runtime = get_bee_bite_runtime(bee_bite_profile)
     strategy_config = StrategyConfig(
         strategy_id=_parse_strategy_id(os.getenv("STRATEGY_ID")),
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
-        bee_bite_profile=parse_bee_bite_profile_id(os.getenv("BEE_BITE_PROFILE")),
+        bee_bite_profile=bee_bite_profile,
         bee_bite_grid_mode=parse_bee_bite_grid_mode(os.getenv("BEE_BITE_GRID_MODE")),
+        bee_bite_reclaim_mode=parse_bee_bite_reclaim_mode(
+            os.getenv("BEE_BITE_RECLAIM_MODE"),
+            default=bee_bite_runtime.reclaim_mode,
+        ),
+        bee_bite_retest_mode=parse_bee_bite_retest_mode(
+            os.getenv("BEE_BITE_RETEST_MODE"),
+            default=bee_bite_runtime.retest_mode,
+        ),
+        bee_bite_cooldown_bars=int(os.getenv("BEE_BITE_COOLDOWN_BARS", str(bee_bite_runtime.cooldown_bars))),
+        bee_bite_max_age_range=int(os.getenv("BEE_BITE_MAX_AGE_RANGE", str(bee_bite_runtime.max_age_range))),
     )
 
     simulation_config = SimulationConfig(

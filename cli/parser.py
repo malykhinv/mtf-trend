@@ -99,6 +99,30 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Режим сетки bee_bite: baseline (узкий) или expanded (широкий).",
     )
+    run_bt.add_argument(
+        "--bee-bite-reclaim-mode",
+        choices=["strict", "balanced", "aggressive"],
+        default=None,
+        help="Режим reclaim в bee_bite (валидируется против выбранного профиля).",
+    )
+    run_bt.add_argument(
+        "--bee-bite-retest-mode",
+        choices=["confirmation", "immediate"],
+        default=None,
+        help="Режим retest в bee_bite (валидируется против выбранного профиля).",
+    )
+    run_bt.add_argument(
+        "--bee-bite-cooldown-bars",
+        type=_positive_int_for("--bee-bite-cooldown-bars"),
+        default=None,
+        help="Cooldown (в барах) для профиля bee_bite.",
+    )
+    run_bt.add_argument(
+        "--bee-bite-max-age-range",
+        type=_positive_int_for("--bee-bite-max-age-range"),
+        default=None,
+        help="Максимальный возраст range (в барах) для профиля bee_bite.",
+    )
     run_bt.add_argument("--plot", default=False, help="Строить графики сделок (true/false)")
     run_bt.add_argument(
         "--plot-from-results",

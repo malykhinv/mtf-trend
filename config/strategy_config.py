@@ -5,7 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from domain.enums.timeframe import Timeframe
-from strategy.bee_bite.config import BeeBiteGridMode, BeeBiteProfileId
+from strategy.bee_bite.config import (
+    BeeBiteGridMode,
+    BeeBiteProfileId,
+    BeeBiteReclaimMode,
+    BeeBiteRetestMode,
+)
 
 
 @dataclass(slots=True)
@@ -15,3 +20,7 @@ class StrategyConfig:
     entry_timeframe: Timeframe = Timeframe.M15
     bee_bite_profile: BeeBiteProfileId = "A"
     bee_bite_grid_mode: BeeBiteGridMode = "baseline"
+    bee_bite_reclaim_mode: BeeBiteReclaimMode = "strict"
+    bee_bite_retest_mode: BeeBiteRetestMode = "confirmation"
+    bee_bite_cooldown_bars: int = 8
+    bee_bite_max_age_range: int = 24
