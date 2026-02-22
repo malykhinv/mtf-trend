@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
+from typing import TypedDict
 
 import numpy as np
 import pandas as pd
@@ -20,7 +21,7 @@ from strategy.breakout.indicators.level_detector import LevelDetector
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
-class BeeBiteState(StrEnum):
+class BeeBiteState(str, Enum):
     IDLE = "IDLE"
     SEEK_PUMP = "SEEK_PUMP"
     SEEK_RANGE = "SEEK_RANGE"
@@ -53,6 +54,29 @@ class SetupContext:
     t_pump_end: int | None = None
     high_pump: float | None = None
     low_before_pump: float | None = None
+
+
+@dataclass(slots=True)
+class PriceRow:
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    atr14: float
+
+
+@dataclass(slots=True)
+class LevelRow:
+    timestamp: int
+    level_high: float
+    level_low: float
+
+
+class GenerationDiagnostics(TypedDict):
+    states: list[str]
+    trades_generated: int
+    symbol: str
 
 
 class BeeBiteEngine:
@@ -89,11 +113,19 @@ class BeeBiteEngine:
 
     def __init__(self) -> None:
         self._detector = LevelDetector()
-        self._last_generation_diagnostics: dict[str, object] = {}
+        self._last_generation_diagnostics: GenerationDiagnostics = {
+            "states": [],
+            "trades_generated": 0,
+            "symbol": "",
+        }
 
-    def consume_last_generation_diagnostics(self) -> dict[str, object]:
+    def consume_last_generation_diagnostics(self) -> GenerationDiagnostics:
         diagnostics = self._last_generation_diagnostics.copy()
-        self._last_generation_diagnostics = {}
+        self._last_generation_diagnostics = {
+            "states": [],
+            "trades_generated": 0,
+            "symbol": "",
+        }
         return diagnostics
 
     def validate_config(self, params: BeeBiteParams) -> None:
@@ -136,7 +168,7 @@ class BeeBiteEngine:
         return self._run_fsm(annotated=annotated, higher_levels=higher_levels, params=params)
 
     def _run_fsm(self, *, annotated: pd.DataFrame, higher_levels: pd.DataFrame, params: BeeBiteParams) -> list[TradeResult]:
-        diagnostics: dict[str, object] = {
+        diagnostics: GenerationDiagnostics = {
             "states": [BeeBiteState.IDLE.value],
             "trades_generated": 0,
             "symbol": params.symbol,
@@ -151,8 +183,8 @@ class BeeBiteEngine:
         level_idx = 0
         cooldown_until_idx = -1
 
-        rows = list(annotated.itertuples(index=False))
-        levels = list(higher_levels.itertuples(index=False)) if not higher_levels.empty else []
+        rows = self._build_price_rows(annotated)
+        levels = self._build_level_rows(higher_levels) if not higher_levels.empty else []
 
         i = 0
         while i < len(rows):
@@ -235,6 +267,12 @@ class BeeBiteEngine:
                     i += 1
                     continue
                 boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
+                if boundary is None:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(state.value)
+                    i += 1
+                    continue
                 puncture_price = float(row.low) if setup.side == PositionSide.LONG else float(row.high)
                 puncture_detected = puncture_price < boundary if setup.side == PositionSide.LONG else puncture_price > boundary
                 if puncture_detected and setup.atr_bg > 0 and setup.core_width > 0:
@@ -251,6 +289,12 @@ class BeeBiteEngine:
 
             if state == BeeBiteState.BREAK_ACTIVE and setup is not None and setup.break_idx is not None:
                 boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
+                if boundary is None:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(state.value)
+                    i += 1
+                    continue
                 break_price = float(row.low) if setup.side == PositionSide.LONG else float(row.high)
                 if setup.lowest_break is None:
                     setup.lowest_break = break_price
@@ -338,7 +382,7 @@ class BeeBiteEngine:
                 trade, exit_idx, rejected = self._simulate_trade(rows=rows, entry_idx=i, setup=setup, params=params)
                 if trade is not None:
                     trades.append(trade)
-                    diagnostics["trades_generated"] = int(diagnostics["trades_generated"]) + 1
+                    diagnostics["trades_generated"] += 1
                 elif rejected:
                     cooldown_bars = self._hours_to_candles(params.bite_cooldown_bars, params.entry_timeframe)
                     cooldown_until_idx = i + cooldown_bars
@@ -356,10 +400,39 @@ class BeeBiteEngine:
         self._last_generation_diagnostics = diagnostics
         return trades
 
+    @staticmethod
+    def _build_price_rows(frame: pd.DataFrame) -> list[PriceRow]:
+        rows: list[PriceRow] = []
+        for row in frame.itertuples(index=False):
+            rows.append(
+                PriceRow(
+                    timestamp=int(row.timestamp),
+                    open=float(row.open),
+                    high=float(row.high),
+                    low=float(row.low),
+                    close=float(row.close),
+                    atr14=float(row.atr14),
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _build_level_rows(frame: pd.DataFrame) -> list[LevelRow]:
+        rows: list[LevelRow] = []
+        for row in frame.itertuples(index=False):
+            rows.append(
+                LevelRow(
+                    timestamp=int(row.timestamp),
+                    level_high=float(row.level_high),
+                    level_low=float(row.level_low),
+                )
+            )
+        return rows
+
     def _simulate_trade(
         self,
         *,
-        rows: list[object],
+        rows: list[PriceRow],
         entry_idx: int,
         setup: SetupContext,
         params: BeeBiteParams,
@@ -410,7 +483,7 @@ class BeeBiteEngine:
         remainder_share = 1.0 - tp1_share
 
         trailing_mode = trade_plan.trailing_mode
-        tp2_fixed = None if trailing_mode else trade_plan.tp2
+        tp2_fixed = float(trade_plan.tp2) if (not trailing_mode and trade_plan.tp2 is not None) else None
         trailing_reference = entry_price
         tp1_hit = False
         stop_after_tp1 = trade_plan.be_stop
@@ -459,7 +532,7 @@ class BeeBiteEngine:
                 if tp1_hit:
                     trailing_reference = max(trailing_reference, close)
                     trailing_stop = trailing_reference - setup.atr_bg
-                    tp2_target = tp2_fixed if not trailing_mode else trailing_stop
+                    tp2_target = tp2_fixed if tp2_fixed is not None else trailing_stop
                     if high >= tp2_target:
                         exit_price = tp2_target
                         realized_pnl += (tp2_target - entry_price) * remainder_share * position_size
@@ -491,7 +564,7 @@ class BeeBiteEngine:
                 if tp1_hit:
                     trailing_reference = min(trailing_reference, close)
                     trailing_stop = trailing_reference + setup.atr_bg
-                    tp2_target = tp2_fixed if not trailing_mode else trailing_stop
+                    tp2_target = tp2_fixed if tp2_fixed is not None else trailing_stop
                     if low <= tp2_target:
                         exit_price = tp2_target
                         realized_pnl += (entry_price - tp2_target) * remainder_share * position_size
@@ -554,7 +627,7 @@ class BeeBiteEngine:
         return max(rr * 2.0, 0.0)
 
     @staticmethod
-    def _body_ratio(row: object) -> float:
+    def _body_ratio(row: PriceRow) -> float:
         spread = max(float(row.high) - float(row.low), 1e-12)
         return abs(float(row.close) - float(row.open)) / spread
 
@@ -581,7 +654,7 @@ class BeeBiteEngine:
     def _resolve_pump_signal(
         self,
         *,
-        rows: list[object],
+        rows: list[PriceRow],
         idx: int,
         params: BeeBiteParams,
     ) -> tuple[PositionSide, float, float, float, float, int, int, float, float] | None:
@@ -659,7 +732,7 @@ class BeeBiteEngine:
     def _freeze_range(
         self,
         *,
-        rows: list[object],
+        rows: list[PriceRow],
         end_idx: int,
         setup: SetupContext,
         params: BeeBiteParams,
