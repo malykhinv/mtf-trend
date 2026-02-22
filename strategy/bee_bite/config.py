@@ -416,7 +416,7 @@ def validate_bee_bite_params(params: BeeBiteParams) -> None:
         raise ValueError("параметр bite_min_rr должен быть в диапазоне (1.0, 8.0]")
     if params.bite_tp2_mult <= 1.0 or params.bite_tp2_mult > 4.0:
         raise ValueError("параметр bite_tp2_mult должен быть в диапазоне (1.0, 4.0]")
-    if params.bite_max_retest_depth <= 0.0 or params.bite_max_retest_depth > 2.0:
+    if not 0.0 < params.bite_max_retest_depth <= 2.0:
         raise ValueError("параметр bite_max_retest_depth должен быть в диапазоне (0, 2]")
     if params.bite_confirmation_bars < 1 or params.bite_confirmation_bars > 6:
         raise ValueError("параметр bite_confirmation_bars должен быть в диапазоне [1, 6]")
