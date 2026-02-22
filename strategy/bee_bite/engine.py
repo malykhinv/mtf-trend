@@ -596,13 +596,17 @@ class BeeBiteEngine:
                 else:
                     realized_pnl = (entry_price - exit_price) * position_size
 
-        if exit_idx != limit and not tp1_hit and result_type != TradeResultType.SL:
+        if not tp1_hit and time_exit_triggered:
             if setup.side == PositionSide.LONG:
                 realized_pnl = (exit_price - entry_price) * position_size
             else:
                 realized_pnl = (entry_price - exit_price) * position_size
-            if time_exit_triggered:
-                result_type = self._classify_time_exit_result(realized_pnl)
+            result_type = self._classify_time_exit_result(realized_pnl)
+        elif exit_idx != limit and not tp1_hit and result_type != TradeResultType.SL:
+            if setup.side == PositionSide.LONG:
+                realized_pnl = (exit_price - entry_price) * position_size
+            else:
+                realized_pnl = (entry_price - exit_price) * position_size
 
         pnl = realized_pnl
         pnl_percent = 0.0 if entry_price == 0 else (pnl / entry_price) * 100.0
