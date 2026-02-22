@@ -82,13 +82,13 @@ class CcxtFuturesClient(ExchangeClient):
                 defaultType=CCXT_MARKET_TYPE_SWAP,
                 fetchCurrencies=False,
             )
-            return cast(CcxtFuturesApi, ccxt.binanceusdm(cast(Any, params)))
+            return cast(CcxtFuturesApi, cast(object, ccxt.binanceusdm(cast(Any, params))))
         if exchange == Exchange.BYBIT:
             params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
-            return cast(CcxtFuturesApi, ccxt.bybit(cast(Any, params)))
+            return cast(CcxtFuturesApi, cast(object, ccxt.bybit(cast(Any, params))))
         if exchange == Exchange.OKX:
             params["options"] = CcxtClientOptions(defaultType=CCXT_MARKET_TYPE_SWAP)
-            return cast(CcxtFuturesApi, ccxt.okx(cast(Any, params)))
+            return cast(CcxtFuturesApi, cast(object, ccxt.okx(cast(Any, params))))
         raise ValueError(f"Unsupported exchange for CCXT futures client: {exchange}")
 
     def _retry_exchange_call(
