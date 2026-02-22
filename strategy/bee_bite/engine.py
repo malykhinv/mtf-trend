@@ -616,7 +616,8 @@ class BeeBiteEngine:
         if atr_bg <= 0:
             return None
 
-        high_pump = max(float(item.high) for item in recent)
+        pump_highs = [float(item.high) for item in recent]
+        high_pump = max(pump_highs)
         low_pump = min(float(item.low) for item in recent)
         low_before_pump = float(before_pump.low)
         high_before_pump = float(before_pump.high)
@@ -629,7 +630,8 @@ class BeeBiteEngine:
             return None
 
         t_pump_start = int(recent[0].timestamp)
-        t_pump_end = int(recent[-1].timestamp)
+        pump_peak_offset = int(np.argmax(pump_highs))
+        t_pump_end = int(recent[pump_peak_offset].timestamp)
         if up_impulse >= down_impulse:
             return (
                 PositionSide.LONG,
