@@ -22,13 +22,14 @@ python main.py run-backtest --strategy bee_bite --top-n 50
 ## Профиль и сетка
 
 - `--bee-bite-profile {A,B,C}` — выбор baseline-профиля.
-- `--bee-bite-grid {baseline,expanded}` — узкая или расширенная сетка параметров.
+- `--bee-bite-grid {baseline,expanded,research}` — узкая, расширенная или research-сетка параметров.
 
 Примеры:
 
 ```bash
 python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-grid baseline --top-n 50
 python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-grid expanded --top-n 100
+python main.py run-backtest --strategy bee_bite --bee-bite-profile C --bee-bite-grid research --top-n 120
 ```
 
 - Единицы bee_bite заданы явно:
@@ -66,7 +67,7 @@ BEE_BITE_GRID_MODE=baseline
 
 1. Если передан `--top-n` в `run-backtest`, это значение прокидывается в `BeeBiteStrategy` и затем в `PortfolioEngineConfig(top_n=...)`.
 2. Если `--top-n` не передан, используется профильный fallback из `BEE_BITE_PROFILE_TOP_N` (`A=5`, `B=10`, `C=20`).
-3. Для CLI-значения действует runtime-валидация `validate_bee_bite_runtime()` по диапазонам профиля (`top_n_min..top_n_max`) и доп. ограничению для `expanded` (`>= 20`).
+3. Для CLI-значения действует runtime-валидация `validate_bee_bite_runtime()` по диапазонам профиля (`top_n_min..top_n_max`) и доп. ограничению для `expanded` (`>= 20`) и `research` (`>= 30`).
 
 Итог: в portfolio mode источник `top_n` — сначала CLI/конфиг запуска, иначе профильный дефолт.
 
