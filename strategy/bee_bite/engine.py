@@ -598,12 +598,6 @@ class BeeBiteEngine:
             high = float(row.high)
             close = float(row.close)
 
-            if not tp1_hit and (idx - entry_idx) >= time_exit_candles:
-                exit_price = close
-                exit_idx = idx
-                time_exit_triggered = True
-                break
-
             if setup.side == PositionSide.LONG:
                 active_stop = stop_after_tp1 if tp1_hit else stop
                 if low <= active_stop:
@@ -670,6 +664,12 @@ class BeeBiteEngine:
                         result_type = TradeResultType.TP1_BE
                         exit_idx = idx
                         break
+
+            if not tp1_hit and (idx - entry_idx) >= time_exit_candles:
+                exit_price = close
+                exit_idx = idx
+                time_exit_triggered = True
+                break
 
             exit_price = close
 
