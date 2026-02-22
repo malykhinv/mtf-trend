@@ -196,6 +196,7 @@ python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode analyze-cache --top-n 50
 python launcher.py --mode analyze-cache --top-n 50 --plot true
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT --plot-from-results --results-input ./cache/results/backtest_results.csv
+python launcher.py --mode analyze-cache --plot-from-results --results-input ./cache/results/strategy/retest/results.csv --id 1156 --strategy retest
 python launcher.py --mode analyze-cache --top-n 50 --strategy breakout
 python launcher.py --mode analyze-cache --top-n 50 --strategy bee_bite
 python launcher.py --mode analyze-cache --symbols BTC/USDT --strategy bee_bite --plot-from-results --results-input ./cache/results/backtest_results.csv
@@ -266,6 +267,12 @@ python main.py run-backtest --strategy bee_bite
 `--plot-from-results` автоматически читает нужные колонки под выбранную стратегию:
 - `breakout` — поля `lookback`, `volume_mult`, ...
 - `bee_bite` — поля `bite_lookback`, `bite_volume_mult`, ...
+
+Опционально можно выбрать конкретную комбинацию через `--id`:
+- сначала ищется точное совпадение в колонках `id` / `combination_id` / `rank`;
+- если таких колонок нет — `--id` трактуется как 1-based номер строки в CSV.
+
+`--strategy retest` поддерживается как alias для `breakout`.
 
 Для `bee_bite` доступны профиль и режим сетки:
 - `--bee-bite-profile {A,B,C}` — фиксированный baseline-профиль;

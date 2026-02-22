@@ -138,7 +138,10 @@ def _coerce_trade_plot_span(value: object) -> TradePlotSpan | None:
 def _resolve_strategy_id(config: AppConfig, args: argparse.Namespace) -> str:
     strategy_override = getattr(args, "strategy", None)
     if strategy_override is not None:
-        return str(strategy_override).strip().lower()
+        normalized = str(strategy_override).strip().lower()
+        if normalized == "retest":
+            return "breakout"
+        return normalized
     return config.strategy.strategy_id
 
 
@@ -455,15 +458,56 @@ def _load_plot_params_row_from_results(
         logger.error("plot-from-results: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
         return None
 
-    sorted_frame = frame.sort_values(["profit_factor", "trades_count"], ascending=[False, False], na_position="last")
-    best_row = sorted_frame.iloc[0]
+    selected_id_raw = getattr(args, "id", None)
+    selected_row: pd.Series
+    if selected_id_raw is not None:
+        selected_id = int(selected_id_raw)
+        id_columns = ("id", "combination_id", "rank")
+        matched_by_column: pd.DataFrame | None = None
+        for column in id_columns:
+            if column not in frame.columns:
+                continue
+            numeric_column = pd.to_numeric(frame[column], errors="coerce")
+            matches = frame[numeric_column == selected_id]
+            if not matches.empty:
+                matched_by_column = matches
+                logger.info(
+                    "plot-from-results: найдена комбинация по колонке %s, id=%s, совпадений=%s",
+                    column,
+                    selected_id,
+                    len(matches),
+                )
+                break
+
+        if matched_by_column is not None:
+            selected_row = matched_by_column.iloc[0]
+        else:
+            row_index = selected_id - 1
+            if row_index < 0 or row_index >= len(frame):
+                logger.error(
+                    "plot-from-results: id=%s не найден (нет колонок id/combination_id/rank и номер строки вне диапазона 1..%s)",
+                    selected_id,
+                    len(frame),
+                )
+                return None
+            selected_row = frame.iloc[row_index]
+            logger.warning(
+                "plot-from-results: id=%s не найден в id/combination_id/rank, использован 1-based номер строки=%s",
+                selected_id,
+                selected_id,
+            )
+    else:
+        sorted_frame = frame.sort_values(["profit_factor", "trades_count"], ascending=[False, False], na_position="last")
+        selected_row = sorted_frame.iloc[0]
+
     logger.info(
-        "plot-from-results: использованы параметры из %s (pf=%s, trades_count=%s)",
+        "plot-from-results: использованы параметры из %s (pf=%s, trades_count=%s, id=%s)",
         csv_path,
-        best_row.get("profit_factor", "n/a"),
-        best_row.get("trades_count", "n/a"),
+        selected_row.get("profit_factor", "n/a"),
+        selected_row.get("trades_count", "n/a"),
+        selected_id_raw if selected_id_raw is not None else "best",
     )
-    return best_row
+    return selected_row
 
 def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], int]) -> int:
     logger = get_logger(

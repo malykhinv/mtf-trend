@@ -83,9 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_bt.add_argument(
         "--strategy",
-        choices=["breakout", "bee_bite"],
+        choices=["breakout", "bee_bite", "retest"],
         default=None,
-        help="Идентификатор стратегии. Приоритетнее STRATEGY_ID из env",
+        help="Идентификатор стратегии (retest = alias для breakout). Приоритетнее STRATEGY_ID из env",
     )
     run_bt.add_argument(
         "--bee-bite-profile",
@@ -133,6 +133,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--results-input",
         default=None,
         help="Путь к CSV с результатами для --plot-from-results",
+    )
+    run_bt.add_argument(
+        "--id",
+        type=_positive_int_for("--id"),
+        default=None,
+        help="ID комбинации в CSV (по колонке id/combination_id/rank или по 1-based номеру строки)",
     )
 
     report = subparsers.add_parser("make-report", help="Сформировать JSON-отчет по результатам бектеста")
