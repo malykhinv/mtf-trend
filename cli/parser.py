@@ -95,9 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_bt.add_argument(
         "--bee-bite-grid",
-        choices=["baseline", "expanded"],
+        choices=["baseline", "expanded", "research"],
         default=None,
-        help="Режим сетки bee_bite: baseline (узкий) или expanded (широкий).",
+        help="Режим сетки bee_bite: baseline (узкий), expanded (широкий) или research (максимально широкий).",
     )
     run_bt.add_argument(
         "--bee-bite-reclaim-mode",

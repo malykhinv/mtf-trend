@@ -10,12 +10,12 @@ from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.timeframe import Timeframe
 
 BeeBiteProfileId = Literal["A", "B", "C"]
-BeeBiteGridMode = Literal["baseline", "expanded"]
+BeeBiteGridMode = Literal["baseline", "expanded", "research"]
 BeeBiteReclaimMode = Literal["strict", "balanced", "aggressive"]
 BeeBiteRetestMode = Literal["confirmation", "immediate"]
 
 BEE_BITE_PROFILE_IDS: tuple[BeeBiteProfileId, ...] = ("A", "B", "C")
-BEE_BITE_GRID_MODES: tuple[BeeBiteGridMode, ...] = ("baseline", "expanded")
+BEE_BITE_GRID_MODES: tuple[BeeBiteGridMode, ...] = ("baseline", "expanded", "research")
 BEE_BITE_RECLAIM_MODES: tuple[BeeBiteReclaimMode, ...] = ("strict", "balanced", "aggressive")
 BEE_BITE_RETEST_MODES: tuple[BeeBiteRetestMode, ...] = ("confirmation", "immediate")
 
@@ -226,6 +226,18 @@ BEE_BITE_EXTENDED_GRID_OFFSETS: dict[str, tuple[int | float | EntryTrigger, ...]
     "bite_entry_trigger": (EntryTrigger.IMMEDIATE, EntryTrigger.PRICE_CONFIRMATION),
 }
 
+BEE_BITE_RESEARCH_GRID_OFFSETS: dict[str, tuple[int | float | EntryTrigger, ...]] = {
+    "bite_lookback": (-8, -4, 0, 4, 8),
+    "bite_volume_mult": (-0.5, -0.25, 0.0, 0.25, 0.5),
+    "bite_retest_window_hours": (-18, -9, 0, 9, 18),
+    "bite_min_rr": (-0.75, -0.35, 0.0, 0.35, 0.75),
+    "bite_tp2_mult": (-0.75, -0.35, 0.0, 0.35, 0.75),
+    "bite_min_move_atr": (-0.2, -0.1, 0.0, 0.1, 0.2),
+    "bite_max_retest_depth": (-0.10, -0.05, 0.0, 0.05, 0.10),
+    "bite_confirmation_bars": (-1, 0, 1),
+    "bite_entry_trigger": (EntryTrigger.IMMEDIATE, EntryTrigger.PRICE_CONFIRMATION),
+}
+
 
 def parse_bee_bite_profile_id(raw_value: str | None, *, default: BeeBiteProfileId = "A") -> BeeBiteProfileId:
     profile = (raw_value or default).strip().upper()
@@ -286,27 +298,33 @@ def build_bee_bite_grid(
     if grid_mode == "baseline":
         return [baseline]
 
-    lookbacks = _numeric_candidates(baseline.bite_lookback, BEE_BITE_EXTENDED_GRID_OFFSETS["bite_lookback"])
-    volume_mult = _numeric_candidates(baseline.bite_volume_mult, BEE_BITE_EXTENDED_GRID_OFFSETS["bite_volume_mult"])
+    offsets_map = BEE_BITE_EXTENDED_GRID_OFFSETS if grid_mode == "expanded" else BEE_BITE_RESEARCH_GRID_OFFSETS
+
+    lookbacks = _numeric_candidates(baseline.bite_lookback, offsets_map["bite_lookback"])
+    volume_mult = _numeric_candidates(baseline.bite_volume_mult, offsets_map["bite_volume_mult"])
     retest_windows = _numeric_candidates(
         baseline.bite_retest_window_hours,
-        BEE_BITE_EXTENDED_GRID_OFFSETS["bite_retest_window_hours"],
+        offsets_map["bite_retest_window_hours"],
     )
-    min_rr = _numeric_candidates(baseline.bite_min_rr, BEE_BITE_EXTENDED_GRID_OFFSETS["bite_min_rr"])
-    tp2_mult = _numeric_candidates(baseline.bite_tp2_mult, BEE_BITE_EXTENDED_GRID_OFFSETS["bite_tp2_mult"])
+    min_rr = _numeric_candidates(baseline.bite_min_rr, offsets_map["bite_min_rr"])
+    tp2_mult = _numeric_candidates(baseline.bite_tp2_mult, offsets_map["bite_tp2_mult"])
+    min_move_atr = _numeric_candidates(baseline.bite_min_move_atr, offsets_map["bite_min_move_atr"])
+    max_retest_depth = _numeric_candidates(baseline.bite_max_retest_depth, offsets_map["bite_max_retest_depth"])
     confirmation_bars = _numeric_candidates(
         baseline.bite_confirmation_bars,
-        BEE_BITE_EXTENDED_GRID_OFFSETS["bite_confirmation_bars"],
+        offsets_map["bite_confirmation_bars"],
     )
-    entry_triggers = tuple(BEE_BITE_EXTENDED_GRID_OFFSETS["bite_entry_trigger"])
+    entry_triggers = tuple(offsets_map["bite_entry_trigger"])
 
     combinations: list[BeeBiteParams] = []
-    for lb, vm, rw, rr, tp2, confirm_bars, trigger in product(
+    for lb, vm, rw, rr, tp2, mma, mrd, confirm_bars, trigger in product(
         lookbacks,
         volume_mult,
         retest_windows,
         min_rr,
         tp2_mult,
+        min_move_atr,
+        max_retest_depth,
         confirmation_bars,
         entry_triggers,
     ):
@@ -317,9 +335,11 @@ def build_bee_bite_grid(
             bite_retest_window_hours=int(rw),
             bite_min_rr=float(rr),
             bite_tp2_mult=float(tp2),
+            bite_min_move_atr=float(mma),
+            bite_max_retest_depth=float(mrd),
             bite_confirmation_bars=int(confirm_bars),
             bite_entry_trigger=trigger,
-            bite_grid_mode="expanded",
+            bite_grid_mode=grid_mode,
         )
         try:
             validate_bee_bite_params(params)
@@ -387,6 +407,8 @@ def validate_bee_bite_runtime(
         )
     if grid_mode == "expanded" and top_n < max(20, runtime.top_n_min):
         raise ValueError("для bee_bite в режиме expanded параметр --top-n должен быть >= 20")
+    if grid_mode == "research" and top_n < max(30, runtime.top_n_min):
+        raise ValueError("для bee_bite в режиме research параметр --top-n должен быть >= 30")
 
 
 def get_bee_bite_score_threshold(profile_id: BeeBiteProfileId) -> ScoreThreshold:
