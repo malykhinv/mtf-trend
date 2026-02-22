@@ -12,9 +12,6 @@ PROFILE_TP1_SHARE: dict[str, float] = {
     "B": 0.6,  # Balanced
     "C": 0.5,  # Aggressive
 }
-BE_OFFSET_RATIO = 0.001
-
-
 @dataclass(frozen=True, slots=True)
 class BeeBiteTradePlan:
     stop_loss: float
@@ -42,6 +39,7 @@ def build_bee_bite_trade_plan(
     resistance: float,
     high_pump: float | None,
     low_before_pump: float | None,
+    be_offset_ratio: float,
 ) -> BeeBiteTradePlan | None:
     """Собирает план сделки bee_bite c выбором fixed/trailing TP2 по стороне.
 
@@ -53,6 +51,8 @@ def build_bee_bite_trade_plan(
     Если fixed TP2 недоступен, используется fallback на trailing TP2.
     """
     if atr_bg <= 0:
+        return None
+    if be_offset_ratio < 0:
         return None
 
     if side == PositionSide.LONG:
@@ -68,7 +68,7 @@ def build_bee_bite_trade_plan(
         tp1 = mid if mid > entry_price else resistance
         fixed_tp2 = high_pump if use_fixed_tp2 else None
         trailing_tp2 = entry_price + atr_bg
-        be_stop = entry_price * (1.0 + BE_OFFSET_RATIO)
+        be_stop = entry_price * (1.0 + be_offset_ratio)
     else:
         use_fixed_tp2 = (
             low_before_pump is not None and (entry_price - low_before_pump) >= atr_bg
@@ -76,7 +76,7 @@ def build_bee_bite_trade_plan(
         tp1 = mid if mid < entry_price else support
         fixed_tp2 = low_before_pump if use_fixed_tp2 else None
         trailing_tp2 = entry_price - atr_bg
-        be_stop = entry_price * (1.0 - BE_OFFSET_RATIO)
+        be_stop = entry_price * (1.0 - be_offset_ratio)
 
     trailing_mode = fixed_tp2 is None
     tp2 = trailing_tp2 if trailing_mode else fixed_tp2

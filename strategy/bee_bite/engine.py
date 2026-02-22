@@ -460,6 +460,7 @@ class BeeBiteEngine:
             resistance=float(setup.range_high),
             high_pump=setup.high_pump,
             low_before_pump=setup.low_before_pump,
+            be_offset_ratio=params.bite_tp1_stop_buffer_pct,
         )
         if trade_plan is None:
             return None, entry_idx, False
