@@ -86,6 +86,13 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
     parser.add_argument("--plot", default=None, help="Строить графики сделок (true/false) для analyze-cache")
     parser.add_argument(
+        "--strategy",
+        choices=("breakout", "bee_bite", "retest"),
+        default=None,
+        help="Идентификатор стратегии (retest = alias для breakout)",
+    )
+    parser.add_argument("--id", type=int, default=None, help="ID комбинации для режима plot-from-results")
+    parser.add_argument(
         "--plot-from-results",
         action="store_true",
         help="Строить графики по готовому backtest_results.csv без полного analyze-cache",
@@ -125,6 +132,12 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
             _to_bool(task.get("plot_from_results"), fallback=cli_args.plot_from_results)
             if "plot_from_results" in task
             else cli_args.plot_from_results
+        ),
+        strategy=task.get("strategy", cli_args.strategy),
+        id=(
+            int(task["id"])
+            if "id" in task and task.get("id") is not None
+            else cli_args.id
         ),
         ignore_coingecko=(
             _to_bool(task.get("ignore_coingecko"), fallback=cli_args.ignore_coingecko)
