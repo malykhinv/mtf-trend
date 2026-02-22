@@ -25,8 +25,10 @@ class BeeBiteTradePlan:
     be_stop: float
 
 
-def resolve_profile_tp1_share(profile_id: str | None) -> float:
-    raw = PROFILE_TP1_SHARE.get((profile_id or "").upper(), PROFILE_TP1_SHARE["C"])
+def resolve_profile_tp1_share(profile_id: str | None, tp1_share_override: float | None = None) -> float:
+    raw = tp1_share_override
+    if raw is None:
+        raw = PROFILE_TP1_SHARE.get((profile_id or "").upper(), PROFILE_TP1_SHARE["C"])
     return min(max(raw, 0.05), 0.95)
 
 
