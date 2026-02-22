@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--bee-bite-reclaim-mode",
         choices=["strict", "balanced", "aggressive"],
         default=None,
-        help="Режим reclaim в bee_bite: влияет на глубину reclaim/offset и лимит ожидания reclaim (валидируется профилем).",
+        help="Режим reclaim в bee_bite: влияет на глубину reclaim/offset и лимит ожидания reclaim в барах 15m (валидируется профилем).",
     )
     run_bt.add_argument(
         "--bee-bite-retest-mode",
@@ -117,7 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="bee_bite_cooldown_hours",
         type=_positive_int_for("--bee-bite-cooldown-hours"),
         default=None,
-        help="Cooldown (в часах) для bee_bite: применяется в движке после неудачного reclaim/отклонённого входа.",
+        help="Cooldown для bee_bite в часах (конвертируется в бары 15m внутри портфельного движка).",
     )
     run_bt.add_argument(
         "--bee-bite-max-age-range-hours",
@@ -125,7 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
         dest="bee_bite_max_age_range_hours",
         type=_positive_int_for("--bee-bite-max-age-range-hours"),
         default=None,
-        help="Максимальный возраст range (в часах) для bee_bite: после этого setup сбрасывается.",
+        help="Максимальный возраст range для bee_bite в часах (конвертируется в бары 15m внутри портфельного движка).",
     )
     run_bt.add_argument("--plot", default=False, help="Строить графики сделок (true/false)")
     run_bt.add_argument(

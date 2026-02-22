@@ -43,7 +43,7 @@ class PortfolioEngineConfig:
     t_max_in_trade: int | None = None
     cooldown_bars: int = 8
     max_age_range_bars: int = 24
-    reclaim_limit_bars: int = 3
+    reclaim_limit_bars: int = 0
     break_fail_threshold: int = 2
     min_pump_pct: float = 0.02
     max_range_width_pct: float = 0.03
@@ -738,10 +738,15 @@ class PortfolioStateEngine:
         return min(profile_bars, config_bars)
 
     def _resolve_reclaim_limit_bars(self) -> int:
+        # Явный приоритет: runtime-конфиг (в барах 15m) важнее профильного override.
+        runtime_limit_bars = int(self.config.reclaim_limit_bars)
+        if runtime_limit_bars > 0:
+            return runtime_limit_bars
+
         profile = (self.config.bee_bite_profile_id or "").upper()
         if profile in self.PROFILE_RECLAIM_TIMEOUT:
             return int(self.PROFILE_RECLAIM_TIMEOUT[profile])
-        return self.config.reclaim_limit_bars
+        return 3
 
     def _resolve_range_window_len(self) -> int:
         if self.FIXED_RANGE_WINDOW is not None:

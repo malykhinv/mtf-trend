@@ -29,6 +29,10 @@ python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-
 python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-grid expanded --top-n 100
 ```
 
+- Единицы bee_bite заданы явно:
+  - `bite_reclaim_limit_bars` — лимит ожидания reclaim в барах entry-TF (для портфельного режима это бары 15m);
+  - `bite_cooldown_hours` и `bite_max_age_range_hours` — runtime-параметры в часах с конвертацией в бары 15m внутри `PortfolioStateEngine`.
+
 Переменные окружения:
 
 ```env

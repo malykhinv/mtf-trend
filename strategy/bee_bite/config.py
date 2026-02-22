@@ -52,9 +52,9 @@ class BeeBiteParams:
     bite_entry_trigger: EntryTrigger
     bite_min_depth_threshold: float
     bite_micro_offset: float
-    bite_reclaim_limit: int
-    bite_max_age_range: int
-    bite_cooldown_bars: int
+    bite_reclaim_limit_bars: int
+    bite_max_age_range_hours: int
+    bite_cooldown_hours: int
     bite_reclaim_mode: BeeBiteReclaimMode
     bite_retest_mode: BeeBiteRetestMode
     symbol: str
@@ -79,7 +79,7 @@ class BeeBiteProfileRuntime:
     cooldown_hours: int
     min_depth_threshold: float
     micro_offset: float
-    reclaim_limit: int
+    reclaim_limit_bars: int
     max_age_range_hours: int
 
 
@@ -92,7 +92,7 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
         cooldown_hours=8,
         min_depth_threshold=0.15,
         micro_offset=0.15,
-        reclaim_limit=5,
+        reclaim_limit_bars=5,
         max_age_range_hours=12,
     ),
     "B": BeeBiteProfileRuntime(
@@ -103,7 +103,7 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
         cooldown_hours=6,
         min_depth_threshold=0.12,
         micro_offset=0.10,
-        reclaim_limit=6,
+        reclaim_limit_bars=6,
         max_age_range_hours=8,
     ),
     "C": BeeBiteProfileRuntime(
@@ -114,7 +114,7 @@ BEE_BITE_PROFILE_RUNTIME: dict[BeeBiteProfileId, BeeBiteProfileRuntime] = {
         cooldown_hours=4,
         min_depth_threshold=0.10,
         micro_offset=0.05,
-        reclaim_limit=8,
+        reclaim_limit_bars=8,
         max_age_range_hours=6,
     ),
 }
@@ -133,9 +133,9 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_entry_trigger=EntryTrigger.PRICE_CONFIRMATION,
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["A"].min_depth_threshold,
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["A"].micro_offset,
-        bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["A"].reclaim_limit,
-        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["A"].max_age_range_hours,
-        bite_cooldown_bars=BEE_BITE_PROFILE_RUNTIME["A"].cooldown_hours,
+        bite_reclaim_limit_bars=BEE_BITE_PROFILE_RUNTIME["A"].reclaim_limit_bars,
+        bite_max_age_range_hours=BEE_BITE_PROFILE_RUNTIME["A"].max_age_range_hours,
+        bite_cooldown_hours=BEE_BITE_PROFILE_RUNTIME["A"].cooldown_hours,
         bite_reclaim_mode=BEE_BITE_PROFILE_RUNTIME["A"].reclaim_mode,
         bite_retest_mode=BEE_BITE_PROFILE_RUNTIME["A"].retest_mode,
         symbol="",
@@ -154,9 +154,9 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_entry_trigger=EntryTrigger.PRICE_CONFIRMATION,
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["B"].min_depth_threshold,
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["B"].micro_offset,
-        bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["B"].reclaim_limit,
-        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["B"].max_age_range_hours,
-        bite_cooldown_bars=BEE_BITE_PROFILE_RUNTIME["B"].cooldown_hours,
+        bite_reclaim_limit_bars=BEE_BITE_PROFILE_RUNTIME["B"].reclaim_limit_bars,
+        bite_max_age_range_hours=BEE_BITE_PROFILE_RUNTIME["B"].max_age_range_hours,
+        bite_cooldown_hours=BEE_BITE_PROFILE_RUNTIME["B"].cooldown_hours,
         bite_reclaim_mode=BEE_BITE_PROFILE_RUNTIME["B"].reclaim_mode,
         bite_retest_mode=BEE_BITE_PROFILE_RUNTIME["B"].retest_mode,
         symbol="",
@@ -175,9 +175,9 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_entry_trigger=EntryTrigger.IMMEDIATE,
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["C"].min_depth_threshold,
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["C"].micro_offset,
-        bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["C"].reclaim_limit,
-        bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["C"].max_age_range_hours,
-        bite_cooldown_bars=BEE_BITE_PROFILE_RUNTIME["C"].cooldown_hours,
+        bite_reclaim_limit_bars=BEE_BITE_PROFILE_RUNTIME["C"].reclaim_limit_bars,
+        bite_max_age_range_hours=BEE_BITE_PROFILE_RUNTIME["C"].max_age_range_hours,
+        bite_cooldown_hours=BEE_BITE_PROFILE_RUNTIME["C"].cooldown_hours,
         bite_reclaim_mode=BEE_BITE_PROFILE_RUNTIME["C"].reclaim_mode,
         bite_retest_mode=BEE_BITE_PROFILE_RUNTIME["C"].retest_mode,
         symbol="",
@@ -388,12 +388,12 @@ def validate_bee_bite_params(params: BeeBiteParams) -> None:
         raise ValueError("параметр bite_min_depth_threshold должен быть в диапазоне (0, 1]")
     if params.bite_micro_offset < 0.0 or params.bite_micro_offset > 1.0:
         raise ValueError("параметр bite_micro_offset должен быть в диапазоне [0, 1]")
-    if params.bite_reclaim_limit < 1 or params.bite_reclaim_limit > 20:
-        raise ValueError("параметр bite_reclaim_limit должен быть в диапазоне [1, 20]")
-    if params.bite_max_age_range < 1 or params.bite_max_age_range > 100:
-        raise ValueError("параметр bite_max_age_range должен быть в диапазоне [1, 100]")
-    if params.bite_cooldown_bars < 1 or params.bite_cooldown_bars > 100:
-        raise ValueError("параметр bite_cooldown_bars должен быть в диапазоне [1, 100]")
+    if params.bite_reclaim_limit_bars < 1 or params.bite_reclaim_limit_bars > 20:
+        raise ValueError("параметр bite_reclaim_limit_bars должен быть в диапазоне [1, 20]")
+    if params.bite_max_age_range_hours < 1 or params.bite_max_age_range_hours > 100:
+        raise ValueError("параметр bite_max_age_range_hours должен быть в диапазоне [1, 100]")
+    if params.bite_cooldown_hours < 1 or params.bite_cooldown_hours > 100:
+        raise ValueError("параметр bite_cooldown_hours должен быть в диапазоне [1, 100]")
 
     if params.bite_entry_trigger == EntryTrigger.PRICE_CONFIRMATION and params.bite_confirmation_bars < 2:
         raise ValueError("режим reclaim (PRICE_CONFIRMATION) требует bite_confirmation_bars >= 2")
@@ -451,9 +451,9 @@ def _apply_runtime_modes(
         bite_confirmation_bars=confirmation_bars,
         bite_reclaim_mode=reclaim_mode,
         bite_retest_mode=retest_mode,
-        bite_cooldown_bars=cooldown_hours,
-        bite_max_age_range=max_age_range_hours,
+        bite_cooldown_hours=cooldown_hours,
+        bite_max_age_range_hours=max_age_range_hours,
         bite_min_depth_threshold=min_depth,
         bite_micro_offset=runtime.micro_offset * reclaim_multiplier[reclaim_mode],
-        bite_reclaim_limit=runtime.reclaim_limit + reclaim_limit_boost[reclaim_mode],
+        bite_reclaim_limit_bars=runtime.reclaim_limit_bars + reclaim_limit_boost[reclaim_mode],
     )
