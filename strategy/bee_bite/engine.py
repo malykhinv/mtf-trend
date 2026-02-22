@@ -671,7 +671,6 @@ class BeeBiteEngine:
         window = rows[start_idx : end_idx + 1]
         lows = np.array([float(item.low) for item in window])
         highs = np.array([float(item.high) for item in window])
-        closes = np.array([float(item.close) for item in window])
         atr_bg = float(setup.atr_bg)
         if atr_bg <= 0:
             return None
@@ -687,8 +686,15 @@ class BeeBiteEngine:
         if len(window) < 6:
             return None
 
-        close_last6 = closes[-6:]
-        p10_last6 = [float(np.quantile(close_last6[: idx + 1], 0.10)) for idx in range(len(close_last6))]
+        p10_last6: list[float] = []
+        for idx in range(end_idx - 5, end_idx + 1):
+            rolling_start_idx = idx - window_len + 1
+            if rolling_start_idx < min_start_idx:
+                return None
+            rolling_window = rows[rolling_start_idx : idx + 1]
+            rolling_lows = np.array([float(item.low) for item in rolling_window])
+            p10_last6.append(float(np.quantile(rolling_lows, 0.10)))
+
         stability_threshold = self.PROFILE_STABILITY_THRESHOLD.get(params.bite_profile_id, params.bite_max_retest_depth)
         if max(p10_last6) - min(p10_last6) > stability_threshold * atr_bg:
             return None
