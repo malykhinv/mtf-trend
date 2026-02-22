@@ -154,6 +154,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         )
 
     def params_to_row(self, params: BeeBiteParams) -> dict[str, int | float | str | None]:
+        """Параметры, влияющие на поведение алгоритма и отчёт оптимизации."""
         return {
             "bite_profile_id": params.bite_profile_id,
             "bite_grid_mode": params.bite_grid_mode,
