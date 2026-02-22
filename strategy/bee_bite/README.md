@@ -37,6 +37,7 @@ python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-
 ## Параметры, которые влияют на вход и TP
 
 - `bite_min_move_atr`: в `SEEK_PUMP` сетап допускается только если импульс `up_impulse/down_impulse >= bite_min_move_atr * atr_bg` (дополнительный фильтр поверх профильного `IMPULSE_THRESHOLDS`).
+- `bite_volume_mult`: в `SEEK_PUMP` используется фильтр аномального объёма: средний объём последних `pump_window=6` свечей должен быть не меньше `bite_volume_mult * median(volume)` по rolling-базе `atr_bg_window_len=96` свечей до пампа.
 - `bite_tp2_mult`: участвует в расчёте TP2-дистанции в trade-plan как `tp2_distance = max(bite_tp2_mult * atr_bg, bite_tp2_mult * stop_distance)`.
   - fixed-TP2 доступен только если экстремум пампа покрывает эту дистанцию;
   - иначе используется fallback на trailing-цель с тем же `tp2_distance`.
