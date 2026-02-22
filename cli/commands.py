@@ -1454,10 +1454,16 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
         "max_dd",
         "sl_count",
         "be_count",
+        "time_exit_profit_count",
         "tp1_be_count",
         "tp2_count",
     ]
     missing_columns = [column for column in required_columns if column not in frame.columns]
+    if missing_columns:
+        if missing_columns == ["time_exit_profit_count"]:
+            frame = frame.copy()
+            frame["time_exit_profit_count"] = 0
+            missing_columns = []
     if missing_columns:
         logger.error("подготовка-отчета: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
         return 1
@@ -1493,6 +1499,7 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     distribution = TradeResultsDistribution(
         SL=int(source["sl_count"].sum()),
         BE=int(source["be_count"].sum()),
+        TIME_EXIT_PROFIT=int(source["time_exit_profit_count"].sum()),
         TP1_BE=int(source["tp1_be_count"].sum()),
         TP2=int(source["tp2_count"].sum()),
     )

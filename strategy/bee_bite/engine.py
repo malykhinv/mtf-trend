@@ -500,6 +500,7 @@ class BeeBiteEngine:
         exit_price = entry_price
         exit_idx = limit
         realized_pnl = 0.0
+        time_exit_triggered = False
         for idx in range(entry_idx + 1, limit + 1):
             row = rows[idx]
             low = float(row.low)
@@ -508,8 +509,8 @@ class BeeBiteEngine:
 
             if not tp1_hit and (idx - entry_idx) >= time_exit_candles:
                 exit_price = close
-                result_type = TradeResultType.BE
                 exit_idx = idx
+                time_exit_triggered = True
                 break
 
             if setup.side == PositionSide.LONG:
@@ -600,6 +601,8 @@ class BeeBiteEngine:
                 realized_pnl = (exit_price - entry_price) * position_size
             else:
                 realized_pnl = (entry_price - exit_price) * position_size
+            if time_exit_triggered:
+                result_type = self._classify_time_exit_result(realized_pnl)
 
         pnl = realized_pnl
         pnl_percent = 0.0 if entry_price == 0 else (pnl / entry_price) * 100.0
@@ -615,6 +618,15 @@ class BeeBiteEngine:
             retest_timestamp_ms=setup.retest_timestamp,
         )
         return trade, exit_idx, False
+
+    @staticmethod
+    def _classify_time_exit_result(pnl: float) -> TradeResultType:
+        epsilon = 1e-9
+        if pnl < -epsilon:
+            return TradeResultType.SL
+        if pnl > epsilon:
+            return TradeResultType.TIME_EXIT_PROFIT
+        return TradeResultType.BE
 
     @staticmethod
     def _score_trade_plan(*, setup: SetupContext, plan: BeeBiteTradePlan, entry_price: float) -> float:

@@ -88,6 +88,7 @@ class BacktestRunner:
                 "max_dd": BACKTEST_EMPTY_MAX_DD,
                 "sl_count": BACKTEST_ZERO_COUNT,
                 "be_count": BACKTEST_ZERO_COUNT,
+                "time_exit_profit_count": BACKTEST_ZERO_COUNT,
                 "tp1_be_count": BACKTEST_ZERO_COUNT,
                 "tp2_count": BACKTEST_ZERO_COUNT,
             }
@@ -98,6 +99,7 @@ class BacktestRunner:
         pnl_percent = BACKTEST_EMPTY_PNL_PERCENT
         sl_count = BACKTEST_ZERO_COUNT
         be_count = BACKTEST_ZERO_COUNT
+        time_exit_profit_count = BACKTEST_ZERO_COUNT
         tp1_be_count = BACKTEST_ZERO_COUNT
         tp2_count = BACKTEST_ZERO_COUNT
 
@@ -115,6 +117,8 @@ class BacktestRunner:
                 sl_count += 1
             elif trade.result_type == TradeResultType.BE:
                 be_count += 1
+            elif trade.result_type == TradeResultType.TIME_EXIT_PROFIT:
+                time_exit_profit_count += 1
             elif trade.result_type == TradeResultType.TP1_BE:
                 tp1_be_count += 1
             elif trade.result_type == TradeResultType.TP2:
@@ -154,6 +158,7 @@ class BacktestRunner:
             "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
             "sl_count": sl_count,
             "be_count": be_count,
+            "time_exit_profit_count": time_exit_profit_count,
             "tp1_be_count": tp1_be_count,
             "tp2_count": tp2_count,
         }
