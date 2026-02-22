@@ -1159,6 +1159,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             cooldown_hours=config.strategy.bee_bite_cooldown_hours,
             max_age_range_hours=config.strategy.bee_bite_max_age_range_hours,
         )
+        config.strategy.bee_bite_portfolio_top_n = getattr(args, "top_n", None)
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),
         fallback=config.strategy.levels_timeframe,

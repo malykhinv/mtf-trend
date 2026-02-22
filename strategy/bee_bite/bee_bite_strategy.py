@@ -34,6 +34,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         retest_mode: BeeBiteRetestMode,
         cooldown_hours: int,
         max_age_range_hours: int,
+        portfolio_top_n: int | None = None,
     ) -> None:
         self._profile_id = profile_id
         self._grid_mode = grid_mode
@@ -41,6 +42,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         self._retest_mode = retest_mode
         self._cooldown_hours = cooldown_hours
         self._max_age_range_hours = max_age_range_hours
+        self._portfolio_top_n = portfolio_top_n
         self._engine = BeeBiteEngine()
         self._last_generation_diagnostics: dict[str, object] = {}
 
@@ -109,9 +111,10 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             return []
 
         profile_id = params.bite_profile_id
+        resolved_top_n = self._portfolio_top_n if self._portfolio_top_n is not None else get_bee_bite_top_n(profile_id)
         engine = PortfolioStateEngine(
             config=PortfolioEngineConfig(
-                top_n=get_bee_bite_top_n(profile_id),
+                top_n=resolved_top_n,
                 score_threshold=get_bee_bite_score_threshold(profile_id).min_score,
                 r_trade=params.bite_r_trade,
                 portfolio_risk_limit=params.bite_portfolio_risk_limit,
@@ -129,7 +132,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         self._last_generation_diagnostics = {
             "mode": "portfolio_only",
             "profile_id": profile_id,
-            "top_n": get_bee_bite_top_n(profile_id),
+            "top_n": resolved_top_n,
             "score_threshold": get_bee_bite_score_threshold(profile_id).min_score,
             "portfolio_score": engine.consume_last_run_diagnostics(),
             "trades_generated": len(trades),

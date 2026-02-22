@@ -87,10 +87,12 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         commission_rate: float,
         slippage: float,
         logger: logging.Logger | None = None,
+        portfolio_top_n: int | None = None,
     ) -> None:
         self._commission_rate = commission_rate
         self._slippage = slippage
         self._logger = logger or logging.getLogger(__name__)
+        self._portfolio_top_n = portfolio_top_n
         self._last_generation_diagnostics: dict[str, object] = {}
         self._level_detector = LevelDetector()
 
@@ -791,7 +793,11 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
             return []
 
         profile_id = getattr(params, "bite_profile_id", None)
-        profile_top_n = get_bee_bite_top_n(profile_id) if profile_id is not None else 1
+        profile_top_n = (
+            self._portfolio_top_n
+            if self._portfolio_top_n is not None
+            else (get_bee_bite_top_n(profile_id) if profile_id is not None else len(entry_frames))
+        )
         score_threshold = get_bee_bite_score_threshold(profile_id).min_score if profile_id is not None else 0.0
 
         engine = PortfolioStateEngine(
