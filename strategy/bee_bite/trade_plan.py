@@ -39,18 +39,23 @@ def build_bee_bite_trade_plan(
     resistance: float,
     high_pump: float | None,
     low_before_pump: float | None,
+    tp2_mult: float = 1.0,
     be_offset_ratio: float,
 ) -> BeeBiteTradePlan | None:
     """Собирает план сделки bee_bite c выбором fixed/trailing TP2 по стороне.
 
-    Критерий fixed TP2:
-    - LONG: доступен, если ``high_pump - entry_price >= atr_bg``.
-    - SHORT: доступен, если ``low_before_pump`` задан и
-      ``entry_price - low_before_pump >= atr_bg``.
+    TP2-дистанция рассчитывается как ``tp2_distance = max(tp2_mult * atr_bg, tp2_mult * stop_distance)``.
 
-    Если fixed TP2 недоступен, используется fallback на trailing TP2.
+    Критерий fixed TP2:
+    - LONG: доступен, если ``high_pump - entry_price >= tp2_distance``.
+    - SHORT: доступен, если ``low_before_pump`` задан и
+      ``entry_price - low_before_pump >= tp2_distance``.
+
+    Если fixed TP2 недоступен, используется fallback на trailing TP2 с той же дистанцией.
     """
     if atr_bg <= 0:
+        return None
+    if tp2_mult <= 0:
         return None
     if be_offset_ratio < 0:
         return None
@@ -62,20 +67,22 @@ def build_bee_bite_trade_plan(
     if stop_distance <= 0:
         return None
 
+    tp2_distance = max(tp2_mult * atr_bg, tp2_mult * stop_distance)
+
     mid = (support + resistance) / 2.0
     if side == PositionSide.LONG:
-        use_fixed_tp2 = high_pump is not None and (high_pump - entry_price) >= atr_bg
+        use_fixed_tp2 = high_pump is not None and (high_pump - entry_price) >= tp2_distance
         tp1 = mid if mid > entry_price else resistance
         fixed_tp2 = high_pump if use_fixed_tp2 else None
-        trailing_tp2 = entry_price + atr_bg
+        trailing_tp2 = entry_price + tp2_distance
         be_stop = entry_price * (1.0 + be_offset_ratio)
     else:
         use_fixed_tp2 = (
-            low_before_pump is not None and (entry_price - low_before_pump) >= atr_bg
+            low_before_pump is not None and (entry_price - low_before_pump) >= tp2_distance
         )
         tp1 = mid if mid < entry_price else support
         fixed_tp2 = low_before_pump if use_fixed_tp2 else None
-        trailing_tp2 = entry_price - atr_bg
+        trailing_tp2 = entry_price - tp2_distance
         be_stop = entry_price * (1.0 - be_offset_ratio)
 
     trailing_mode = fixed_tp2 is None

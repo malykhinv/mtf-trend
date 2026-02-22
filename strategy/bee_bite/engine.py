@@ -531,11 +531,21 @@ class BeeBiteEngine:
             resistance=float(setup.range_high),
             high_pump=setup.high_pump,
             low_before_pump=setup.low_before_pump,
+            tp2_mult=params.bite_tp2_mult,
             be_offset_ratio=params.bite_tp1_stop_buffer_pct,
         )
         if trade_plan is None:
             return None, entry_idx, False
         if trade_plan.stop_distance < (0.3 * setup.atr_bg):
+            return None, entry_idx, True
+
+        rr_to_tp2 = self._resolve_reward_risk(
+            side=setup.side,
+            entry_price=entry_price,
+            stop_distance=trade_plan.stop_distance,
+            target=trade_plan.tp2,
+        )
+        if rr_to_tp2 < params.bite_min_rr:
             return None, entry_idx, True
 
         score_threshold = get_bee_bite_score_threshold(params.bite_profile_id).min_score
@@ -705,14 +715,22 @@ class BeeBiteEngine:
 
     @staticmethod
     def _score_trade_plan(*, setup: SetupContext, plan: BeeBiteTradePlan, entry_price: float) -> float:
-        tp1 = float(plan.tp1)
-        stop_distance = max(float(plan.stop_distance), 1e-12)
-        if setup.side == PositionSide.LONG:
-            reward = max(tp1 - entry_price, 0.0)
-        else:
-            reward = max(entry_price - tp1, 0.0)
-        rr = reward / stop_distance
+        rr = BeeBiteEngine._resolve_reward_risk(
+            side=setup.side,
+            entry_price=entry_price,
+            stop_distance=plan.stop_distance,
+            target=plan.tp1,
+        )
         return max(rr * 2.0, 0.0)
+
+    @staticmethod
+    def _resolve_reward_risk(*, side: PositionSide, entry_price: float, stop_distance: float, target: float) -> float:
+        safe_stop_distance = max(float(stop_distance), 1e-12)
+        if side == PositionSide.LONG:
+            reward = max(float(target) - float(entry_price), 0.0)
+        else:
+            reward = max(float(entry_price) - float(target), 0.0)
+        return reward / safe_stop_distance
 
     @staticmethod
     def _body_ratio(row: PriceRow) -> float:
@@ -792,6 +810,9 @@ class BeeBiteEngine:
         impulse_multiplier = self.IMPULSE_THRESHOLDS.get(params.bite_profile_id, self.IMPULSE_THRESHOLDS["B"])
         impulse_threshold = impulse_multiplier * atr_pre
         if up_impulse < impulse_threshold and down_impulse < impulse_threshold:
+            return None
+        min_move_threshold = params.bite_min_move_atr * atr_bg
+        if up_impulse < min_move_threshold and down_impulse < min_move_threshold:
             return None
 
         t_pump_start = int(recent[0].timestamp)
