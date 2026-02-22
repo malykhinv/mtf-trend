@@ -79,6 +79,10 @@ class SymbolState:
     range_window_end_idx: int | None = None
     core_width: float | None = None
     recent_rows: list[dict[str, float | None]] = field(default_factory=list)
+    score_reclaim_row: dict[str, float | None] | None = None
+    score_reclaim_timeline_idx: int | None = None
+    score_entry_timeline_idx: int | None = None
+    score_reclaim_bars: int | None = None
 
 
 @dataclass(slots=True)
@@ -90,7 +94,7 @@ class EntryCandidate:
     reclaim_bars: int
     liquidity: float
     reclaim_candle_score: float
-    score_trace: dict[str, float]
+    score_trace: dict[str, object]
 
 
 @dataclass(slots=True)
@@ -104,7 +108,7 @@ class PortfolioStateEngine:
     _risk_manager: RiskManager | None = None
     _current_timeline_idx: int = -1
     _last_run_diagnostics: dict[str, object] = field(default_factory=dict)
-    _build_score_trace: dict[str, float] = field(default_factory=dict)
+    _build_score_trace: dict[str, object] = field(default_factory=dict)
 
     PROFILE_SCORE_THRESHOLDS: dict[str, float] = field(
         default_factory=lambda: {
@@ -401,13 +405,19 @@ class PortfolioStateEngine:
                 state.signal = signal
                 state.state = PortfolioState.ENTRY_SIGNAL
                 state.age = 0
+                state.score_reclaim_row = row.copy()
+                state.score_reclaim_timeline_idx = timeline_idx
+                state.score_entry_timeline_idx = timeline_idx
+                state.score_reclaim_bars = reclaim_bars
                 score, reclaim_candle_score = self._score_candidate(
-                    row=row,
+                    score_row=state.score_reclaim_row,
                     side=PositionSide.LONG,
                     range_high=state.range_high,
                     range_low=state.range_low,
-                    reclaim_bars=reclaim_bars,
+                    reclaim_bars=int(state.score_reclaim_bars or reclaim_bars),
                     atr_bg=state.atr_bg,
+                    score_reclaim_timeline_idx=state.score_reclaim_timeline_idx,
+                    score_entry_timeline_idx=state.score_entry_timeline_idx,
                 )
                 score_trace = self._build_score_trace.copy()
                 return EntryCandidate(
@@ -423,14 +433,17 @@ class PortfolioStateEngine:
             return None
 
         if state.state == PortfolioState.ENTRY_SIGNAL and state.signal is not None:
-            reclaim_bars = max(state.age, 1)
+            score_row = state.score_reclaim_row or row
+            reclaim_bars = int(state.score_reclaim_bars or max(state.age, 1))
             score, reclaim_candle_score = self._score_candidate(
-                row=row,
+                score_row=score_row,
                 side=state.signal.position_side,
                 range_high=state.range_high,
                 range_low=state.range_low,
                 reclaim_bars=reclaim_bars,
                 atr_bg=state.atr_bg,
+                score_reclaim_timeline_idx=state.score_reclaim_timeline_idx,
+                score_entry_timeline_idx=state.score_entry_timeline_idx,
             )
             score_trace = self._build_score_trace.copy()
             return EntryCandidate(
@@ -449,26 +462,29 @@ class PortfolioStateEngine:
     def _score_candidate(
         self,
         *,
-        row: dict[str, float | None],
+        score_row: dict[str, float | None],
         side: PositionSide,
         range_high: float | None,
         range_low: float | None,
         reclaim_bars: int,
         atr_bg: float | None,
+        score_reclaim_timeline_idx: int | None,
+        score_entry_timeline_idx: int | None,
     ) -> tuple[float, float]:
-        close = float(row["close"] or 0.0)
-        high = float(row["high"] or 0.0)
-        low = float(row["low"] or 0.0)
-        volume = float(row["volume"] or 0.0)
+        close = float(score_row["close"] or 0.0)
+        high = float(score_row["high"] or 0.0)
+        low = float(score_row["low"] or 0.0)
+        volume = float(score_row["volume"] or 0.0)
 
         candle_range = max(high - low, 1e-12)
         close_position = (close - low) / candle_range if side == PositionSide.LONG else (high - close) / candle_range
 
-        profile = (self.config.bee_bite_profile_id or "B").upper()
-
         score = 0.0
         reclaim_candle_score = 0.0
-        score_trace: dict[str, float] = {
+        score_trace: dict[str, object] = {
+            "score_eval_reclaim_timeline_idx": score_reclaim_timeline_idx,
+            "score_eval_entry_timeline_idx": score_entry_timeline_idx,
+            "score_eval_timestamp_ms": score_row.get("timestamp"),
             "reclaim_speed": 0.0,
             "reclaim_candle_quality": 0.0,
             "reclaim_volume_ratio": 0.0,
@@ -476,18 +492,17 @@ class PortfolioStateEngine:
             "oi_relation": 0.0,
             "depth_vs_atr": 0.0,
             "range_volume_zscore": 0.0,
-            "profile_penalty": 0.0,
-            "spread_penalty": 0.0,
+            "data_quality_notes": [],
         }
+        quality_notes: list[str] = []
+        score_trace["data_quality_notes"] = quality_notes
 
-        # 1) Reclaim speed: +2 same candle, +1 within 2 candles.
         if reclaim_bars <= 1:
             score_trace["reclaim_speed"] = 2.0
         elif reclaim_bars <= 2:
             score_trace["reclaim_speed"] = 1.0
-        score += score_trace["reclaim_speed"]
+        score += float(score_trace["reclaim_speed"])
 
-        # 2) Reclaim candle quality (close-location).
         if close_position >= 0.75:
             reclaim_candle_score = 1.0
         elif close_position < 0.45:
@@ -495,40 +510,38 @@ class PortfolioStateEngine:
         score_trace["reclaim_candle_quality"] = reclaim_candle_score
         score += reclaim_candle_score
 
-        # 3) Reclaim volume > 1.5x range average.
-        avg_volume_range = _first_valid_positive(
-            row,
-            "avg_volume_range",
-            "avg_range_volume",
-            "range_volume_avg",
-        )
-        if avg_volume_range is not None:
-            reclaim_to_avg = volume / max(avg_volume_range, 1e-12)
+        avg_volume_range_raw = _first_valid_float(score_row, "avg_volume_range", "avg_range_volume", "range_volume_avg")
+        if avg_volume_range_raw is None:
+            quality_notes.append("avg_range_volume: данные отсутствуют -> 0 баллов")
+        elif avg_volume_range_raw <= 0.0:
+            quality_notes.append("avg_range_volume: низкое качество (<=0) -> 0 баллов")
+        else:
+            reclaim_to_avg = volume / max(avg_volume_range_raw, 1e-12)
             if reclaim_to_avg > 1.5:
                 score_trace["reclaim_volume_ratio"] = 1.0
-        score += score_trace["reclaim_volume_ratio"]
+        score += float(score_trace["reclaim_volume_ratio"])
 
-        # 4) Taker ratio condition.
-        taker_buy_ratio = _first_valid_ratio(
-            row,
-            "taker_buy_ratio",
-            "taker_ratio",
-        )
-        if taker_buy_ratio is not None:
-            if side == PositionSide.LONG and taker_buy_ratio > 0.55:
-                score_trace["taker_ratio"] = 1.0
-            if side == PositionSide.SHORT and taker_buy_ratio < 0.45:
-                score_trace["taker_ratio"] = 1.0
-        score += score_trace["taker_ratio"]
+        taker_buy_ratio = _first_valid_float(score_row, "taker_buy_ratio", "taker_ratio")
+        if taker_buy_ratio is None:
+            quality_notes.append("taker_ratio: данные отсутствуют -> 0 баллов")
+        elif not 0.0 <= taker_buy_ratio <= 1.0:
+            quality_notes.append("taker_ratio: низкое качество (вне [0,1]) -> 0 баллов")
+        elif side == PositionSide.LONG and taker_buy_ratio > 0.55:
+            score_trace["taker_ratio"] = 1.0
+        elif side == PositionSide.SHORT and taker_buy_ratio < 0.45:
+            score_trace["taker_ratio"] = 1.0
+        score += float(score_trace["taker_ratio"])
 
-        # 5) OI: OI_reclaim < OI_break_avg -> +1.
-        oi_reclaim = _first_valid_positive(row, "oi_reclaim", "OI_reclaim")
-        oi_break_avg = _first_valid_positive(row, "oi_break_avg", "OI_break_avg")
-        if oi_reclaim is not None and oi_break_avg is not None and oi_reclaim < oi_break_avg:
+        oi_reclaim = _first_valid_float(score_row, "oi_reclaim", "OI_reclaim")
+        oi_break_avg = _first_valid_float(score_row, "oi_break_avg", "OI_break_avg")
+        if oi_reclaim is None or oi_break_avg is None:
+            quality_notes.append("oi_relation: данные отсутствуют -> 0 баллов")
+        elif oi_reclaim <= 0.0 or oi_break_avg <= 0.0:
+            quality_notes.append("oi_relation: низкое качество (<=0) -> 0 баллов")
+        elif oi_reclaim < oi_break_avg:
             score_trace["oi_relation"] = 1.0
-        score += score_trace["oi_relation"]
+        score += float(score_trace["oi_relation"])
 
-        # 6) Depth: > 0.2 * ATR_bg -> +1.
         depth = 0.0
         if range_high is not None and range_low is not None:
             if side == PositionSide.LONG:
@@ -538,31 +551,16 @@ class PortfolioStateEngine:
         atr_ref = float(atr_bg) if atr_bg is not None and atr_bg > 0 else None
         if atr_ref is not None and depth > 0.2 * atr_ref:
             score_trace["depth_vs_atr"] = 1.0
-        score += score_trace["depth_vs_atr"]
+        score += float(score_trace["depth_vs_atr"])
 
-        # 7) Range-volume z-score > 0.5 -> +1.
-        zscore_range_volume = _first_valid_float(
-            row,
-            "range_volume_zscore",
-            "volume_range_zscore",
-            "zscore_range_volume",
-        )
-        if zscore_range_volume is not None and zscore_range_volume > 0.5:
+        zscore_range_volume = _first_valid_float(score_row, "range_volume_zscore", "volume_range_zscore", "zscore_range_volume")
+        if zscore_range_volume is None:
+            quality_notes.append("range_volume_zscore: данные отсутствуют -> 0 баллов")
+        elif not np.isfinite(zscore_range_volume):
+            quality_notes.append("range_volume_zscore: низкое качество (нечисловое) -> 0 баллов")
+        elif zscore_range_volume > 0.5:
             score_trace["range_volume_zscore"] = 1.0
-        score += score_trace["range_volume_zscore"]
-
-        # 8) Profile penalties: only for B/C when reclaim window is 6..8 bars.
-        if profile in {"B", "C"} and 6 <= reclaim_bars <= 8:
-            score_trace["profile_penalty"] = -1.0
-        score += score_trace["profile_penalty"]
-
-        # Optional spread penalty when spread data is present.
-        quoted_spread = _first_valid_positive(row, "spread", "bid_ask_spread", "effective_spread")
-        if quoted_spread is not None:
-            spread_ratio = quoted_spread / max(close, 1e-12)
-            if spread_ratio > 0.001:
-                score_trace["spread_penalty"] = -1.0
-        score += score_trace["spread_penalty"]
+        score += float(score_trace["range_volume_zscore"])
 
         score_trace["total"] = score
         self._build_score_trace = score_trace
@@ -873,6 +871,10 @@ class PortfolioStateEngine:
         state.t_pump_end_idx = None
         state.range_window_end_idx = None
         state.core_width = None
+        state.score_reclaim_row = None
+        state.score_reclaim_timeline_idx = None
+        state.score_entry_timeline_idx = None
+        state.score_reclaim_bars = None
 
 
 
