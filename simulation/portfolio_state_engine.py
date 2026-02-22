@@ -136,6 +136,7 @@ class PortfolioStateEngine:
     FIXED_RANGE_WINDOW: int | None = None
     PROFILE_STABILITY_THRESHOLD: dict[str, float] = field(default_factory=lambda: {"A": 0.20, "B": 0.25, "C": 0.30})
     PROFILE_RECLAIM_TIMEOUT: dict[str, int] = field(default_factory=lambda: {"A": 5, "B": 6, "C": 8})
+    PROFILE_MICRO_OFFSETS: dict[str, float] = field(default_factory=lambda: {"A": 0.15, "B": 0.10, "C": 0.05})
     RESET_REASONS: tuple[str, ...] = (
         "max_age_range",
         "reclaim_timeout",
@@ -407,6 +408,13 @@ class PortfolioStateEngine:
                 reclaim_confirmed = state.touched_retest_zone and close > trigger_close
 
             if reclaim_confirmed:
+                support = float(state.support if state.support is not None else close)
+                atr_ref = float(state.atr_bg if state.atr_bg is not None else 0.0)
+                micro_offset = self._resolve_micro_offset()
+                if close <= (support + micro_offset * atr_ref):
+                    self._reset_symbol(symbol=symbol, state=state, reason="micro_filter_fail", timeline_idx=timeline_idx)
+                    return None
+
                 signal = self._build_signal(symbol=symbol, row=row, side=state.break_side, state=state)
                 if signal is None:
                     self._reset_symbol(symbol=symbol, state=state, reason="micro_filter_fail", timeline_idx=timeline_idx)
@@ -701,6 +709,10 @@ class PortfolioStateEngine:
         profile = (self.config.bee_bite_profile_id or "").upper()
         mapping = {"A": 0.15, "B": 0.12, "C": 0.10}
         return float(mapping.get(profile, 0.12))
+
+    def _resolve_micro_offset(self) -> float:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        return float(self.PROFILE_MICRO_OFFSETS.get(profile, 0.10))
 
     def _resolve_pump_signal(
         self,
