@@ -479,7 +479,7 @@ class BeeBiteEngine:
             return None, entry_idx, False
 
         position_size = params.bite_r_trade / risk
-        tp1_share = resolve_profile_tp1_share(params.bite_profile_id)
+        tp1_share = resolve_profile_tp1_share(params.bite_profile_id, params.bite_tp1_share)
         remainder_share = 1.0 - tp1_share
 
         trailing_mode = trade_plan.trailing_mode

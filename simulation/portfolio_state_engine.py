@@ -52,6 +52,7 @@ class PortfolioEngineConfig:
     min_reclaim_pct: float = 0.001
     rr: float = 2.0
     bee_bite_profile_id: str | None = None
+    bee_bite_tp1_share: float | None = None
 
 
 @dataclass(slots=True)
@@ -983,7 +984,7 @@ class PortfolioStateEngine:
             retest_timestamp_ms=int(row["timestamp"]),
             atr_bg=atr_bg,
             high_pump=high_pump,
-            tp1_close_ratio=resolve_profile_tp1_share(self.config.bee_bite_profile_id),
+            tp1_close_ratio=resolve_profile_tp1_share(self.config.bee_bite_profile_id, self.config.bee_bite_tp1_share),
         )
         return signal
 
