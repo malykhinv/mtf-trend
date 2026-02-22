@@ -54,6 +54,9 @@ class BeeBiteParams:
     bite_micro_offset: float
     bite_reclaim_limit: int
     bite_max_age_range: int
+    bite_cooldown_bars: int
+    bite_reclaim_mode: BeeBiteReclaimMode
+    bite_retest_mode: BeeBiteRetestMode
     symbol: str
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
@@ -132,6 +135,9 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["A"].micro_offset,
         bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["A"].reclaim_limit,
         bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["A"].max_age_range_hours,
+        bite_cooldown_bars=BEE_BITE_PROFILE_RUNTIME["A"].cooldown_hours,
+        bite_reclaim_mode=BEE_BITE_PROFILE_RUNTIME["A"].reclaim_mode,
+        bite_retest_mode=BEE_BITE_PROFILE_RUNTIME["A"].retest_mode,
         symbol="",
         bite_profile_id="A",
         bite_grid_mode="baseline",
@@ -150,6 +156,9 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["B"].micro_offset,
         bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["B"].reclaim_limit,
         bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["B"].max_age_range_hours,
+        bite_cooldown_bars=BEE_BITE_PROFILE_RUNTIME["B"].cooldown_hours,
+        bite_reclaim_mode=BEE_BITE_PROFILE_RUNTIME["B"].reclaim_mode,
+        bite_retest_mode=BEE_BITE_PROFILE_RUNTIME["B"].retest_mode,
         symbol="",
         bite_profile_id="B",
         bite_grid_mode="baseline",
@@ -168,6 +177,9 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_micro_offset=BEE_BITE_PROFILE_RUNTIME["C"].micro_offset,
         bite_reclaim_limit=BEE_BITE_PROFILE_RUNTIME["C"].reclaim_limit,
         bite_max_age_range=BEE_BITE_PROFILE_RUNTIME["C"].max_age_range_hours,
+        bite_cooldown_bars=BEE_BITE_PROFILE_RUNTIME["C"].cooldown_hours,
+        bite_reclaim_mode=BEE_BITE_PROFILE_RUNTIME["C"].reclaim_mode,
+        bite_retest_mode=BEE_BITE_PROFILE_RUNTIME["C"].retest_mode,
         symbol="",
         bite_profile_id="C",
         bite_grid_mode="baseline",
@@ -225,8 +237,22 @@ def parse_bee_bite_retest_mode(
     return retest_mode  # type: ignore[return-value]
 
 
-def build_bee_bite_grid(*, profile_id: BeeBiteProfileId, grid_mode: BeeBiteGridMode) -> list[BeeBiteParams]:
-    baseline = BEE_BITE_PROFILE_BASELINES[profile_id]
+def build_bee_bite_grid(
+    *,
+    profile_id: BeeBiteProfileId,
+    grid_mode: BeeBiteGridMode,
+    reclaim_mode: BeeBiteReclaimMode,
+    retest_mode: BeeBiteRetestMode,
+    cooldown_bars: int,
+    max_age_range: int,
+) -> list[BeeBiteParams]:
+    baseline = _apply_runtime_modes(
+        params=BEE_BITE_PROFILE_BASELINES[profile_id],
+        reclaim_mode=reclaim_mode,
+        retest_mode=retest_mode,
+        cooldown_bars=cooldown_bars,
+        max_age_range=max_age_range,
+    )
     if grid_mode == "baseline":
         return [baseline]
 
@@ -366,6 +392,8 @@ def validate_bee_bite_params(params: BeeBiteParams) -> None:
         raise ValueError("параметр bite_reclaim_limit должен быть в диапазоне [1, 20]")
     if params.bite_max_age_range < 1 or params.bite_max_age_range > 100:
         raise ValueError("параметр bite_max_age_range должен быть в диапазоне [1, 100]")
+    if params.bite_cooldown_bars < 1 or params.bite_cooldown_bars > 100:
+        raise ValueError("параметр bite_cooldown_bars должен быть в диапазоне [1, 100]")
 
     if params.bite_entry_trigger == EntryTrigger.PRICE_CONFIRMATION and params.bite_confirmation_bars < 2:
         raise ValueError("режим reclaim (PRICE_CONFIRMATION) требует bite_confirmation_bars >= 2")
@@ -390,3 +418,42 @@ def _numeric_candidates(
         else:
             values.add(round(float(candidate), 4))
     return tuple(sorted(values))
+
+
+def _apply_runtime_modes(
+    *,
+    params: BeeBiteParams,
+    reclaim_mode: BeeBiteReclaimMode,
+    retest_mode: BeeBiteRetestMode,
+    cooldown_bars: int,
+    max_age_range: int,
+) -> BeeBiteParams:
+    runtime = get_bee_bite_runtime(params.bite_profile_id)
+
+    reclaim_multiplier: dict[BeeBiteReclaimMode, float] = {
+        "strict": 1.0,
+        "balanced": 0.75,
+        "aggressive": 0.5,
+    }
+    reclaim_limit_boost: dict[BeeBiteReclaimMode, int] = {
+        "strict": 0,
+        "balanced": 1,
+        "aggressive": 2,
+    }
+
+    entry_trigger = EntryTrigger.IMMEDIATE if retest_mode == "immediate" else EntryTrigger.PRICE_CONFIRMATION
+    confirmation_bars = 1 if retest_mode == "immediate" else max(2, params.bite_confirmation_bars)
+    min_depth = runtime.min_depth_threshold * reclaim_multiplier[reclaim_mode]
+
+    return replace(
+        params,
+        bite_entry_trigger=entry_trigger,
+        bite_confirmation_bars=confirmation_bars,
+        bite_reclaim_mode=reclaim_mode,
+        bite_retest_mode=retest_mode,
+        bite_cooldown_bars=cooldown_bars,
+        bite_max_age_range=max_age_range,
+        bite_min_depth_threshold=min_depth,
+        bite_micro_offset=runtime.micro_offset * reclaim_multiplier[reclaim_mode],
+        bite_reclaim_limit=runtime.reclaim_limit + reclaim_limit_boost[reclaim_mode],
+    )

@@ -14,7 +14,7 @@ from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
-from strategy.bee_bite.config import BeeBiteParams, get_bee_bite_runtime, get_bee_bite_score_threshold
+from strategy.bee_bite.config import BeeBiteParams, get_bee_bite_score_threshold
 from strategy.bee_bite.trade_plan import BeeBiteTradePlan, build_bee_bite_trade_plan, resolve_profile_tp1_share
 from strategy.breakout.indicators.level_detector import LevelDetector
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -258,7 +258,7 @@ class BeeBiteEngine:
                     setup.lowest_break = min(setup.lowest_break, break_price)
                 else:
                     setup.lowest_break = max(setup.lowest_break, break_price)
-                reclaim_limit = self.PROFILE_RECLAIM_TIMEOUT.get(params.bite_profile_id, params.bite_reclaim_limit)
+                reclaim_limit = params.bite_reclaim_limit
                 elapsed_since_break = i - setup.break_idx
                 emergency_level = 0.7 * setup.core_width
                 emergency_break = (
@@ -279,7 +279,7 @@ class BeeBiteEngine:
                         else price_close < (boundary - reclaim_offset_threshold)
                     )
                     if reclaim_ok and not micro_ok:
-                        cooldown_bars = self._hours_to_candles(get_bee_bite_runtime(params.bite_profile_id).cooldown_hours, params.entry_timeframe)
+                        cooldown_bars = self._hours_to_candles(params.bite_cooldown_bars, params.entry_timeframe)
                         cooldown_until_idx = i + cooldown_bars
                         setup = None
                         state = BeeBiteState.IDLE
@@ -288,12 +288,12 @@ class BeeBiteEngine:
                         continue
                     if setup.reclaim_idx is None and reclaim_ok and micro_ok:
                         setup.reclaim_idx = i
-                        if params.bite_profile_id == "A":
+                        if params.bite_retest_mode == "confirmation" and params.bite_confirmation_bars >= 2:
                             setup.retest_deadline_idx = i + self.CONSERVATIVE_RETEST_LIMIT
                             setup.retest_touch_idx = None
 
                     if setup.reclaim_idx is not None:
-                        if params.bite_profile_id == "A":
+                        if params.bite_retest_mode == "confirmation" and params.bite_confirmation_bars >= 2:
                             retest_touch_offset = self.CONSERVATIVE_RETEST_TOUCH_OFFSET_ATR_BG * setup.atr_bg
                             retest_confirm_offset = self.CONSERVATIVE_RETEST_CONFIRM_OFFSET_ATR_BG * setup.atr_bg
                             retest_deadline = setup.retest_deadline_idx
@@ -319,7 +319,7 @@ class BeeBiteEngine:
                                 setup = None
                                 state = BeeBiteState.IDLE
                                 diagnostics["states"].append(state.value)
-                        elif params.bite_entry_trigger == EntryTrigger.IMMEDIATE:
+                        elif params.bite_retest_mode == "immediate" or params.bite_entry_trigger == EntryTrigger.IMMEDIATE:
                             state = BeeBiteState.ENTRY_SIGNAL
                             diagnostics["states"].append(state.value)
                         else:
@@ -340,7 +340,7 @@ class BeeBiteEngine:
                     trades.append(trade)
                     diagnostics["trades_generated"] = int(diagnostics["trades_generated"]) + 1
                 elif rejected:
-                    cooldown_bars = self._hours_to_candles(get_bee_bite_runtime(params.bite_profile_id).cooldown_hours, params.entry_timeframe)
+                    cooldown_bars = self._hours_to_candles(params.bite_cooldown_bars, params.entry_timeframe)
                     cooldown_until_idx = i + cooldown_bars
                 i = max(i, exit_idx)
                 state = BeeBiteState.IN_TRADE
