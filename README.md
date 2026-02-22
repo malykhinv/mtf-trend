@@ -263,6 +263,8 @@ python launcher.py --config run_config.json
 
 По умолчанию используется `retest`. Можно задать через `.env`:
 
+Ограничение: `bee_bite` — long-only (SHORT-входы не поддерживаются).
+
 ```env
 STRATEGY_ID=bee_bite
 ```
