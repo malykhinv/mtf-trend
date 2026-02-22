@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from itertools import product
-from typing import Any, NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict, cast
 
 import numpy as np
 import pandas as pd
@@ -310,7 +310,7 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         level_price: float,
     ) -> float:
         if 0 <= breakout_idx < len(annotated_rows) and len(annotated_rows[breakout_idx]) > 4:
-            return float(annotated_rows[breakout_idx][4])
+            return float(cast(float, annotated_rows[breakout_idx][4]))
         return level_price
 
 

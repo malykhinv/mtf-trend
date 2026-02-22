@@ -9,6 +9,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import pandas as pd
 import requests
@@ -227,7 +228,7 @@ class CoinGeckoClient(MarketDataClient):
             return None
         if isinstance(value, (pd.Series, pd.DataFrame)):
             return None
-        if pd.isna(value):
+        if pd.isna(cast(Any, value)):
             return None
 
         if isinstance(value, (int, float)):
