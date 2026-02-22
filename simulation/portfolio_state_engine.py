@@ -111,7 +111,7 @@ class PortfolioStateEngine:
     )
     PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = field(
         default_factory=lambda: {
-            "A": 10,
+            "A": 12,
             "B": 8,
             "C": 6,
         }
