@@ -122,6 +122,18 @@ CACHE_DIR=./cache
 
 `cache/results/backtest_results.csv`
 
+Пример файла с контрольными точками для `bee_bite` (монета + ТФ + момент времени + ожидаемое решение):
+
+`examples/bee_bite_checkpoints.csv`
+
+Запуск `analyze-cache` по всем монетам из этого файла:
+
+```bash
+python launcher.py --mode analyze-cache --strategy bee_bite --symbols $(python -c "import csv; from pathlib import Path; p=Path('examples/bee_bite_checkpoints.csv'); rows=csv.DictReader(p.open(encoding='utf-8')); print(' '.join(dict.fromkeys(r['symbol'] for r in rows if r.get('symbol'))))")
+```
+
+
+
 ---
 
 ### 3) Как обработать результат
