@@ -92,7 +92,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--strategy",
         choices=["retest", "breakout", "bee_bite"],
         default=None,
-        help="Идентификатор стратегии. Приоритетнее STRATEGY_ID из env",
+        help="Идентификатор стратегии (breakout = alias для retest). Приоритетнее STRATEGY_ID из env",
     )
     parser.add_argument(
         "--bee-bite-profile",
@@ -135,12 +135,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input", default=None, help="Входной CSV для отчета")
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
     parser.add_argument("--plot", default=None, help="Строить графики сделок (true/false)")
-    parser.add_argument(
-        "--strategy",
-        choices=("retest", "breakout", "bee_bite"),
-        default=None,
-        help="Идентификатор стратегии (breakout = alias для retest)",
-    )
     parser.add_argument("--id", type=int, default=None, help="ID комбинации для режима plot-from-results")
     parser.add_argument(
         "--plot-from-results",
