@@ -54,6 +54,7 @@ class PortfolioEngineConfig:
     bee_bite_profile_id: str | None = None
     bee_bite_tp1_share: float | None = None
     bee_bite_tp1_stop_buffer_pct: float = 0.001
+    bite_volume_mult: float = 1.0
 
 
 @dataclass(slots=True)
@@ -878,6 +879,21 @@ class PortfolioStateEngine:
         atr_bg_values = [float(item["atr_bg"]) for item in atr_bg_window if item.get("atr_bg") is not None and float(item["atr_bg"] or 0.0) > 0]
         atr_bg = float(np.median(atr_bg_values)) if atr_bg_values else atr_pre
         if atr_bg <= 0:
+            return None
+
+        pump_volumes = [float(item["volume"] or 0.0) for item in recent]
+        baseline_volumes = [
+            float(item["volume"] or 0.0)
+            for item in atr_bg_window
+            if item.get("volume") is not None and float(item["volume"] or 0.0) > 0.0
+        ]
+        if not pump_volumes or not baseline_volumes:
+            return None
+        baseline_volume = float(np.median(baseline_volumes))
+        if baseline_volume <= 0.0:
+            return None
+        pump_volume = float(np.mean(pump_volumes))
+        if pump_volume < (float(self.config.bite_volume_mult) * baseline_volume):
             return None
 
         recent_highs = [float(item["high"] or 0.0) for item in recent]

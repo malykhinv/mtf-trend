@@ -63,6 +63,7 @@ class PriceRow:
     high: float
     low: float
     close: float
+    volume: float
     atr14: float
 
 
@@ -446,6 +447,7 @@ class BeeBiteEngine:
                     high=float(row.high),
                     low=float(row.low),
                     close=float(row.close),
+                    volume=float(row.volume),
                     atr14=float(row.atr14),
                 )
             )
@@ -797,6 +799,17 @@ class BeeBiteEngine:
         atr_bg_values = [float(item.atr14) for item in rows[atr_bg_start_idx:pump_start_idx]]
         atr_bg = float(np.median(atr_bg_values)) if atr_bg_values else 0.0
         if atr_bg <= 0:
+            return None
+
+        pump_volumes = [float(item.volume) for item in recent]
+        baseline_volumes = [float(item.volume) for item in rows[atr_bg_start_idx:pump_start_idx]]
+        if not pump_volumes or not baseline_volumes:
+            return None
+        baseline_volume = float(np.median(baseline_volumes))
+        if baseline_volume <= 0:
+            return None
+        pump_volume = float(np.mean(pump_volumes))
+        if pump_volume < (params.bite_volume_mult * baseline_volume):
             return None
 
         pump_highs = [float(item.high) for item in recent]

@@ -143,6 +143,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
                 max_age_range_bars=self._hours_to_15m_bars(params.bite_max_age_range_hours),
                 reclaim_limit_bars=params.bite_reclaim_limit_bars,
                 bee_bite_profile_id=profile_id,
+                bite_volume_mult=params.bite_volume_mult,
             ),
             commission_rate=0.0,
             slippage=0.0,

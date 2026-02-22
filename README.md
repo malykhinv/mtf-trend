@@ -276,7 +276,7 @@ python main.py run-backtest --strategy bee_bite
 
 `--plot-from-results` автоматически читает нужные колонки под выбранную стратегию:
 - `retest` — поля `lookback`, `volume_mult`, ...
-- `bee_bite` — поля `bite_lookback`, `bite_volume_mult`, ...
+- `bee_bite` — поля `bite_lookback`, `bite_volume_mult`, ... (`bite_volume_mult` реально участвует во входе: фильтр аномального объёма в `SEEK_PUMP`).
 
 Опционально можно выбрать конкретную комбинацию через `--id`:
 - сначала ищется точное совпадение в колонках `id` / `combination_id` / `rank`;
