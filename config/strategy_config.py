@@ -24,3 +24,4 @@ class StrategyConfig:
     bee_bite_retest_mode: BeeBiteRetestMode = "confirmation"
     bee_bite_cooldown_hours: int = 8
     bee_bite_max_age_range_hours: int = 24
+    bee_bite_portfolio_top_n: int | None = None
