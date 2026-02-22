@@ -243,15 +243,15 @@ def build_bee_bite_grid(
     grid_mode: BeeBiteGridMode,
     reclaim_mode: BeeBiteReclaimMode,
     retest_mode: BeeBiteRetestMode,
-    cooldown_bars: int,
-    max_age_range: int,
+    cooldown_hours: int,
+    max_age_range_hours: int,
 ) -> list[BeeBiteParams]:
     baseline = _apply_runtime_modes(
         params=BEE_BITE_PROFILE_BASELINES[profile_id],
         reclaim_mode=reclaim_mode,
         retest_mode=retest_mode,
-        cooldown_bars=cooldown_bars,
-        max_age_range=max_age_range,
+        cooldown_hours=cooldown_hours,
+        max_age_range_hours=max_age_range_hours,
     )
     if grid_mode == "baseline":
         return [baseline]
@@ -307,8 +307,8 @@ def validate_bee_bite_runtime(
     top_n: int | None,
     reclaim_mode: BeeBiteReclaimMode,
     retest_mode: BeeBiteRetestMode,
-    cooldown_bars: int,
-    max_age_range: int,
+    cooldown_hours: int,
+    max_age_range_hours: int,
 ) -> None:
     if profile_id not in BEE_BITE_PROFILE_IDS:
         raise ValueError(f"Неподдерживаемый профиль bee_bite: {profile_id}")
@@ -342,10 +342,10 @@ def validate_bee_bite_runtime(
         supported = ", ".join(allowed_retest)
         raise ValueError(f"профиль {profile_id} поддерживает retest_mode только из [{supported}]")
 
-    if cooldown_bars != runtime.cooldown_hours:
-        raise ValueError(f"профиль {profile_id} требует cooldown_bars={runtime.cooldown_hours}")
-    if max_age_range != runtime.max_age_range_hours:
-        raise ValueError(f"профиль {profile_id} требует max_age_range={runtime.max_age_range_hours}")
+    if cooldown_hours < 1 or cooldown_hours > 100:
+        raise ValueError("параметр cooldown_hours должен быть в диапазоне [1, 100]")
+    if max_age_range_hours < 1 or max_age_range_hours > 100:
+        raise ValueError("параметр max_age_range_hours должен быть в диапазоне [1, 100]")
 
     if top_n is None:
         return
@@ -425,8 +425,8 @@ def _apply_runtime_modes(
     params: BeeBiteParams,
     reclaim_mode: BeeBiteReclaimMode,
     retest_mode: BeeBiteRetestMode,
-    cooldown_bars: int,
-    max_age_range: int,
+    cooldown_hours: int,
+    max_age_range_hours: int,
 ) -> BeeBiteParams:
     runtime = get_bee_bite_runtime(params.bite_profile_id)
 
@@ -451,8 +451,8 @@ def _apply_runtime_modes(
         bite_confirmation_bars=confirmation_bars,
         bite_reclaim_mode=reclaim_mode,
         bite_retest_mode=retest_mode,
-        bite_cooldown_bars=cooldown_bars,
-        bite_max_age_range=max_age_range,
+        bite_cooldown_bars=cooldown_hours,
+        bite_max_age_range=max_age_range_hours,
         bite_min_depth_threshold=min_depth,
         bite_micro_offset=runtime.micro_offset * reclaim_multiplier[reclaim_mode],
         bite_reclaim_limit=runtime.reclaim_limit + reclaim_limit_boost[reclaim_mode],
