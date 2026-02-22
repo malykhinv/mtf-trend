@@ -30,8 +30,6 @@ class StrategyPlotter:
     TV_BULL = "#089981"
     TV_BEAR = "#f23645"
     TV_ENTRY = "#4ea4dc"
-    TV_LEVEL_START = "#94a3b8"
-    TV_LEVEL_START_LINESTYLE = "-."
     ENTRY_ZONE_WIDTH_BARS = 3.0
     ENTRY_ZONE_MAX_OVERSHOOT_BARS = 1.0
 
@@ -180,6 +178,7 @@ class StrategyPlotter:
         ax.xaxis.set_major_locator(locator)
         ax.xaxis.set_major_formatter(formatter)
         ax.xaxis.set_minor_locator(mticker.NullLocator())
+        ax.margins(x=0.015)
 
     @staticmethod
     def _add_trade_rr_markup(ax: plt.Axes, *, entry_time: pd.Timestamp, zone_end: pd.Timestamp, entry_price: float, stop_loss: float, take_profit_1: float, take_profit_2: float) -> None:
@@ -399,15 +398,6 @@ class StrategyPlotter:
                 linestyle="--",
                 linewidth=1.2,
             )
-            level_start_time = mdates.date2num(pd.to_datetime(span.level_start_timestamp_ms, unit="ms"))
-            ax.axvline(
-                x=level_start_time,
-                color=self.TV_LEVEL_START,
-                linestyle=self.TV_LEVEL_START_LINESTYLE,
-                linewidth=1.3,
-                alpha=0.9,
-            )
-
             x_start = pd.to_datetime(span.retest_start_timestamp_ms, unit="ms")
             x_end = pd.to_datetime(span.retest_end_timestamp_ms, unit="ms")
             x_start_num = mdates.date2num(x_start)
@@ -510,7 +500,6 @@ class StrategyPlotter:
             self._apply_dark_theme(ax_bottom)
             self._plot_candles(ax_top, trade_window)
 
-            level_start_time = mdates.date2num(pd.to_datetime(span.level_start_timestamp_ms, unit="ms"))
             entry_time = pd.to_datetime(span.entry_timestamp_ms, unit="ms")
             exit_time = pd.to_datetime(span.exit_timestamp_ms, unit="ms")
             entry_label = pd.to_datetime(span.entry_timestamp_ms, unit="ms", utc=True).strftime("%Y%m%d_%H%M")
@@ -590,13 +579,6 @@ class StrategyPlotter:
                 facecolor="#1e293b",
                 edgecolor=primary_level_color,
                 text_color="#e2e8f0",
-            )
-            ax_top.axvline(
-                x=level_start_time,
-                color=self.TV_LEVEL_START,
-                linestyle=self.TV_LEVEL_START_LINESTYLE,
-                linewidth=1.3,
-                alpha=0.9,
             )
             self._add_price_label(
                 ax_top,
@@ -716,14 +698,6 @@ class StrategyPlotter:
                 if higher_window.empty:
                     higher_window = higher_tf_frame
                 self._plot_candles(ax_bottom, higher_window)
-                ax_bottom.axvline(
-                    x=level_start_time,
-                    color=self.TV_LEVEL_START,
-                    linestyle=self.TV_LEVEL_START_LINESTYLE,
-                    linewidth=1.3,
-                    alpha=0.9,
-                )
-
                 level_slice = higher_tf_levels[
                     (higher_tf_levels["timestamp"] >= higher_window["timestamp"].min())
                     & (higher_tf_levels["timestamp"] <= higher_window["timestamp"].max())
@@ -829,23 +803,6 @@ class StrategyPlotter:
             ax_top.set_ylabel("Price", color=self.TV_TEXT)
             ax_bottom.set_title(f"{params.levels_timeframe.value} context", color="#f8fafc", fontsize=10)
             ax_bottom.set_ylabel("Price", color=self.TV_TEXT)
-            for axis in (ax_top, ax_bottom):
-                handles, labels = axis.get_legend_handles_labels()
-                unique_items: dict[str, object] = {}
-                for handle, label in zip(handles, labels):
-                    if label and label not in unique_items:
-                        unique_items[label] = handle
-                if unique_items:
-                    axis.legend(
-                        unique_items.values(),
-                        unique_items.keys(),
-                        loc="upper left",
-                        fontsize=8,
-                        frameon=True,
-                        facecolor="#0f172a",
-                        edgecolor="#334155",
-                        labelcolor="#cbd5e1",
-                    )
             self._format_time_axis(ax_top)
             self._format_time_axis(ax_bottom)
             fig.autofmt_xdate(rotation=30)
