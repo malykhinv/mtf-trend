@@ -243,6 +243,12 @@ class BeeBiteEngine:
                     diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.SEEK_RANGE and setup is not None:
+                if setup.side != PositionSide.LONG:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(f"{BeeBiteState.IDLE.value}:LONG_ONLY_REJECT")
+                    i += 1
+                    continue
                 window_len = self._resolve_range_window_len(params.bite_profile_id)
                 max_wait = max(1, self._hours_to_candles(params.bite_retest_window_hours, params.entry_timeframe))
                 elapsed = i - setup.breakout_idx
@@ -278,6 +284,12 @@ class BeeBiteEngine:
                             diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.RANGE_LOCKED and setup is not None:
+                if setup.side != PositionSide.LONG:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(f"{BeeBiteState.IDLE.value}:LONG_ONLY_REJECT")
+                    i += 1
+                    continue
                 range_started_idx = setup.retest_idx if setup.retest_idx is not None else i
                 elapsed_in_range = i - range_started_idx
                 max_age_range_candles = self._hours_to_candles(params.bite_max_age_range_hours, params.entry_timeframe)
@@ -287,25 +299,21 @@ class BeeBiteEngine:
                     diagnostics["states"].append(state.value)
                     i += 1
                     continue
-                boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
+                boundary = setup.range_low
                 if boundary is None:
                     setup = None
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
                     i += 1
                     continue
-                htf_boundary = current_level_low if setup.side == PositionSide.LONG else current_level_high
+                htf_boundary = current_level_low
                 reclaim_reference = self._resolve_reclaim_reference(
                     side=setup.side,
                     boundary=boundary,
                     htf_boundary=htf_boundary,
                 )
-                puncture_price = float(row.low) if setup.side == PositionSide.LONG else float(row.high)
-                puncture_detected = (
-                    puncture_price < boundary and puncture_price < reclaim_reference
-                    if setup.side == PositionSide.LONG
-                    else puncture_price > boundary and puncture_price > reclaim_reference
-                )
+                puncture_price = float(row.low)
+                puncture_detected = puncture_price < boundary and puncture_price < reclaim_reference
                 if puncture_detected and setup.atr_bg > 0 and setup.core_width > 0:
                     depth = abs(puncture_price - boundary)
                     min_depth = params.bite_min_depth_threshold * setup.atr_bg
@@ -319,49 +327,43 @@ class BeeBiteEngine:
                         diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.BREAK_ACTIVE and setup is not None and setup.break_idx is not None:
+                if setup.side != PositionSide.LONG:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(f"{BeeBiteState.IDLE.value}:LONG_ONLY_REJECT")
+                    i += 1
+                    continue
                 reclaim_settings = get_bee_bite_reclaim_settings(params.bite_reclaim_mode)
-                boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
+                boundary = setup.range_low
                 if boundary is None:
                     setup = None
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
                     i += 1
                     continue
-                htf_boundary = current_level_low if setup.side == PositionSide.LONG else current_level_high
+                htf_boundary = current_level_low
                 reclaim_reference = self._resolve_reclaim_reference(
                     side=setup.side,
                     boundary=boundary,
                     htf_boundary=htf_boundary,
                 )
-                break_price = float(row.low) if setup.side == PositionSide.LONG else float(row.high)
+                break_price = float(row.low)
                 if setup.lowest_break is None:
                     setup.lowest_break = break_price
-                elif setup.side == PositionSide.LONG:
-                    setup.lowest_break = min(setup.lowest_break, break_price)
                 else:
-                    setup.lowest_break = max(setup.lowest_break, break_price)
+                    setup.lowest_break = min(setup.lowest_break, break_price)
                 reclaim_limit = params.bite_reclaim_limit_bars
                 elapsed_since_break = i - setup.break_idx
                 emergency_level = reclaim_settings.emergency_reset_ratio * setup.core_width
-                emergency_break = (
-                    float(row.low) < (boundary - emergency_level)
-                    if setup.side == PositionSide.LONG
-                    else float(row.high) > (boundary + emergency_level)
-                )
+                emergency_break = float(row.low) < (boundary - emergency_level)
                 if emergency_break or elapsed_since_break > reclaim_limit:
                     setup = None
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
                 else:
                     reclaim_offset_threshold = params.bite_micro_offset * setup.atr_bg
-                    reclaim_ok = (
-                        price_close > reclaim_reference if setup.side == PositionSide.LONG else price_close < reclaim_reference
-                    )
-                    micro_ok = (
-                        price_close > (reclaim_reference + reclaim_offset_threshold)
-                        if setup.side == PositionSide.LONG
-                        else price_close < (reclaim_reference - reclaim_offset_threshold)
-                    )
+                    reclaim_ok = price_close > reclaim_reference
+                    micro_ok = price_close > (reclaim_reference + reclaim_offset_threshold)
                     if reclaim_ok and not micro_ok:
                         cooldown_bars = self._hours_to_candles(params.bite_cooldown_hours, params.entry_timeframe)
                         cooldown_until_idx = i + cooldown_bars
@@ -392,18 +394,10 @@ class BeeBiteEngine:
                             if retest_deadline is None:
                                 retest_deadline = setup.reclaim_idx + reclaim_settings.retest_limit_bars
                                 setup.retest_deadline_idx = retest_deadline
-                            touch_zone = (
-                                float(row.low) <= (reclaim_reference + retest_touch_offset)
-                                if setup.side == PositionSide.LONG
-                                else float(row.high) >= (reclaim_reference - retest_touch_offset)
-                            )
+                            touch_zone = float(row.low) <= (reclaim_reference + retest_touch_offset)
                             if setup.retest_touch_idx is None and touch_zone:
                                 setup.retest_touch_idx = i
-                            confirm_close = (
-                                price_close > (reclaim_reference + retest_confirm_offset)
-                                if setup.side == PositionSide.LONG
-                                else price_close < (reclaim_reference - retest_confirm_offset)
-                            )
+                            confirm_close = price_close > (reclaim_reference + retest_confirm_offset)
                             if setup.retest_touch_idx is not None and i > setup.retest_touch_idx and confirm_close:
                                 state = BeeBiteState.ENTRY_SIGNAL
                                 diagnostics["states"].append(state.value)
@@ -417,16 +411,18 @@ class BeeBiteEngine:
                         else:
                             confirm_idx = setup.reclaim_idx + params.bite_confirmation_bars
                             if i >= confirm_idx:
-                                confirm_close = (
-                                    price_close > (reclaim_reference + reclaim_offset_threshold)
-                                    if setup.side == PositionSide.LONG
-                                    else price_close < (reclaim_reference - reclaim_offset_threshold)
-                                )
+                                confirm_close = price_close > (reclaim_reference + reclaim_offset_threshold)
                                 if confirm_close:
                                     state = BeeBiteState.ENTRY_SIGNAL
                                     diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.ENTRY_SIGNAL and setup is not None and setup.retest_idx is not None:
+                if setup.side != PositionSide.LONG:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(f"{BeeBiteState.IDLE.value}:LONG_ONLY_REJECT")
+                    i += 1
+                    continue
                 trade, exit_idx, rejected = self._simulate_trade(rows=rows, entry_idx=i, setup=setup, params=params)
                 if trade is not None:
                     trades.append(trade)
@@ -480,11 +476,11 @@ class BeeBiteEngine:
 
     @staticmethod
     def _resolve_reclaim_reference(*, side: PositionSide, boundary: float, htf_boundary: float | None) -> float:
+        if side != PositionSide.LONG:
+            return boundary
         if htf_boundary is None:
             return boundary
-        if side == PositionSide.LONG:
-            return max(boundary, htf_boundary)
-        return min(boundary, htf_boundary)
+        return max(boundary, htf_boundary)
 
     @staticmethod
     def _is_direction_allowed_by_htf(
@@ -494,11 +490,11 @@ class BeeBiteEngine:
         level_high: float | None,
         level_low: float | None,
     ) -> bool:
+        if side != PositionSide.LONG:
+            return False
         if level_high is None or level_low is None:
             return True
-        if side == PositionSide.LONG:
-            return level_price <= level_low
-        return level_price >= level_high
+        return level_price <= level_low
 
     @staticmethod
     def _is_range_aligned_with_htf(
@@ -509,9 +505,11 @@ class BeeBiteEngine:
         level_high: float | None,
         level_low: float | None,
     ) -> bool:
+        if side != PositionSide.LONG:
+            return False
         if level_high is None or level_low is None:
             return True
-        anchor = level_low if side == PositionSide.LONG else level_high
+        anchor = level_low
         return range_low <= anchor <= range_high
 
     def _simulate_trade(
@@ -522,20 +520,17 @@ class BeeBiteEngine:
         setup: SetupContext,
         params: BeeBiteParams,
     ) -> tuple[TradeResult | None, int, bool]:
+        if setup.side != PositionSide.LONG:
+            return None, entry_idx, False
         entry_row = rows[entry_idx]
         entry_price = float(entry_row.close)
         if setup.range_low is None or setup.range_high is None:
             return None, entry_idx, False
 
         buffer = max(0.1 * setup.atr_bg, 0.001 * entry_price)
-        if setup.side == PositionSide.LONG:
-            if setup.lowest_break is None:
-                return None, entry_idx, False
-            stop = float(setup.lowest_break) - buffer
-        else:
-            if setup.lowest_break is None:
-                return None, entry_idx, False
-            stop = float(setup.lowest_break) + buffer
+        if setup.lowest_break is None:
+            return None, entry_idx, False
+        stop = float(setup.lowest_break) - buffer
         trade_plan = build_bee_bite_trade_plan(
             side=setup.side,
             entry_price=entry_price,
@@ -583,8 +578,6 @@ class BeeBiteEngine:
         tp2_target = float(trade_plan.tp2)
         if setup.side == PositionSide.LONG and tp2_target <= entry_price:
             tp2_target = entry_price + abs(tp2_target - entry_price)
-        if setup.side == PositionSide.SHORT and tp2_target >= entry_price:
-            tp2_target = entry_price - abs(tp2_target - entry_price)
         trailing_reference = entry_price
         tp1_hit = False
         stop_after_tp1 = trade_plan.be_stop
@@ -649,44 +642,6 @@ class BeeBiteEngine:
                         result_type = TradeResultType.TP2
                         exit_idx = idx
                         break
-            else:
-                active_stop = stop_after_tp1 if tp1_hit else stop
-                if high >= active_stop:
-                    exit_price = active_stop
-                    if tp1_hit:
-                        realized_pnl += (entry_price - active_stop) * remainder_share * position_size
-                        result_type = TradeResultType.TP1_BE
-                    else:
-                        realized_pnl += (entry_price - active_stop) * position_size
-                        result_type = TradeResultType.SL
-                    exit_idx = idx
-                    break
-                if not tp1_hit and low <= tp1:
-                    tp1_hit = True
-                    realized_pnl += (entry_price - tp1) * tp1_share * position_size
-                    trailing_reference = min(trailing_reference, close)
-                if tp1_hit:
-                    # Консервативная политика для одной свечи после TP1:
-                    # если одновременно задеты TP2 и защитный стоп, считаем,
-                    # что сначала отработал защитный стоп.
-                    # Для LONG/SHORT порядок проверок зеркален и одинаков по смыслу.
-                    trailing_reference = min(trailing_reference, close)
-                    trailing_stop = trailing_reference + setup.atr_bg
-                    protective_stop_level = min(stop_after_tp1, trailing_stop) if trailing_mode else stop_after_tp1
-                    take_profit_level = tp2_target
-                    if high >= protective_stop_level:
-                        exit_price = protective_stop_level
-                        realized_pnl += (entry_price - protective_stop_level) * remainder_share * position_size
-                        result_type = TradeResultType.TP1_BE
-                        exit_idx = idx
-                        break
-                    if low <= take_profit_level:
-                        exit_price = take_profit_level
-                        realized_pnl += (entry_price - take_profit_level) * remainder_share * position_size
-                        result_type = TradeResultType.TP2
-                        exit_idx = idx
-                        break
-
             if not tp1_hit and idx == time_exit_idx:
                 exit_price = close
                 exit_idx = idx
@@ -697,29 +652,16 @@ class BeeBiteEngine:
 
         if exit_idx == limit:
             if tp1_hit:
-                if setup.side == PositionSide.LONG:
-                    realized_pnl += (exit_price - entry_price) * remainder_share * position_size
-                    result_type = TradeResultType.TP1_BE
-                else:
-                    realized_pnl += (entry_price - exit_price) * remainder_share * position_size
-                    result_type = TradeResultType.TP1_BE
+                realized_pnl += (exit_price - entry_price) * remainder_share * position_size
+                result_type = TradeResultType.TP1_BE
             else:
-                if setup.side == PositionSide.LONG:
-                    realized_pnl = (exit_price - entry_price) * position_size
-                else:
-                    realized_pnl = (entry_price - exit_price) * position_size
+                realized_pnl = (exit_price - entry_price) * position_size
 
         if not tp1_hit and time_exit_triggered:
-            if setup.side == PositionSide.LONG:
-                realized_pnl = (exit_price - entry_price) * position_size
-            else:
-                realized_pnl = (entry_price - exit_price) * position_size
+            realized_pnl = (exit_price - entry_price) * position_size
             result_type = self._classify_time_exit_result(realized_pnl)
         elif exit_idx != limit and not tp1_hit and result_type != TradeResultType.SL:
-            if setup.side == PositionSide.LONG:
-                realized_pnl = (exit_price - entry_price) * position_size
-            else:
-                realized_pnl = (entry_price - exit_price) * position_size
+            realized_pnl = (exit_price - entry_price) * position_size
 
         pnl = realized_pnl
         pnl_percent = 0.0 if entry_price == 0 else (pnl / entry_price) * 100.0
@@ -861,22 +803,12 @@ class BeeBiteEngine:
         t_pump_start = int(recent[0].timestamp)
         pump_peak_offset = int(np.argmax(pump_highs))
         t_pump_end = int(recent[pump_peak_offset].timestamp)
-        if up_impulse >= down_impulse:
-            return (
-                PositionSide.LONG,
-                high_pump,
-                up_impulse,
-                atr_pre,
-                atr_bg,
-                t_pump_start,
-                t_pump_end,
-                high_pump,
-                low_before_pump,
-            )
+        if up_impulse < down_impulse:
+            return None
         return (
-            PositionSide.SHORT,
-            low_pump,
-            down_impulse,
+            PositionSide.LONG,
+            high_pump,
+            up_impulse,
             atr_pre,
             atr_bg,
             t_pump_start,
