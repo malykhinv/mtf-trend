@@ -44,6 +44,7 @@ class PortfolioEngineConfig:
     cooldown_bars: int = 8
     max_age_range_bars: int = 24
     reclaim_limit_bars: int = 0
+    retest_limit_bars: int = 0
     break_fail_threshold: int = 2
     min_pump_pct: float = 0.02
     max_range_width_pct: float = 0.03
@@ -137,10 +138,12 @@ class PortfolioStateEngine:
     FIXED_RANGE_WINDOW: int | None = None
     PROFILE_STABILITY_THRESHOLD: dict[str, float] = field(default_factory=lambda: {"A": 0.20, "B": 0.25, "C": 0.30})
     PROFILE_RECLAIM_TIMEOUT: dict[str, int] = field(default_factory=lambda: {"A": 5, "B": 6, "C": 8})
+    PROFILE_RETEST_TIMEOUT: dict[str, int] = field(default_factory=lambda: {"A": 6, "B": 6, "C": 8})
     PROFILE_MICRO_OFFSETS: dict[str, float] = field(default_factory=lambda: {"A": 0.15, "B": 0.10, "C": 0.05})
     RESET_REASONS: tuple[str, ...] = (
         "max_age_range",
         "reclaim_timeout",
+        "retest_timeout",
         "micro_filter_fail",
         "stop_distance_fail",
         "score_fail",
@@ -387,7 +390,14 @@ class PortfolioStateEngine:
             break_start_idx = state.break_start_timeline_idx if state.break_start_timeline_idx is not None else timeline_idx
             reclaim_anchor_idx = state.reclaim_bar_timeline_idx if state.reclaim_bar_timeline_idx is not None else break_start_idx
             reclaim_bars = max(timeline_idx - reclaim_anchor_idx + 1, 1)
-            if (timeline_idx - break_start_idx) > self._resolve_reclaim_limit_bars():
+
+            profile = (self.config.bee_bite_profile_id or "").upper()
+            primary_reclaim_fixed = profile == "A" and state.reclaim_bar_timeline_idx is not None
+            if primary_reclaim_fixed:
+                if state.retest_deadline_timeline_idx is not None and timeline_idx > state.retest_deadline_timeline_idx:
+                    self._reset_symbol(symbol=symbol, state=state, reason="retest_timeout", timeline_idx=timeline_idx)
+                    return None
+            elif (timeline_idx - break_start_idx) > self._resolve_reclaim_limit_bars():
                 self._reset_symbol(symbol=symbol, state=state, reason="reclaim_timeout", timeline_idx=timeline_idx)
                 return None
 
@@ -409,17 +419,12 @@ class PortfolioStateEngine:
 
             reclaim_confirmed = state.support is not None and close > state.support and depth >= min_depth
 
-            profile = (self.config.bee_bite_profile_id or "").upper()
             if profile == "A" and reclaim_confirmed and state.reclaim_bar_timeline_idx is None:
                 state.reclaim_bar_timeline_idx = timeline_idx
-                state.retest_deadline_timeline_idx = timeline_idx + 6
+                state.retest_deadline_timeline_idx = timeline_idx + self._resolve_retest_limit_bars()
                 state.touched_retest_zone = False
 
             if profile == "A" and state.reclaim_bar_timeline_idx is not None:
-                if state.retest_deadline_timeline_idx is not None and timeline_idx > state.retest_deadline_timeline_idx:
-                    self._reset_symbol(symbol=symbol, state=state, reason="reclaim_timeout", timeline_idx=timeline_idx)
-                    return None
-
                 support = float(state.support if state.support is not None else close)
                 atr_ref = float(state.atr_bg if state.atr_bg is not None else 0.0)
                 zone_upper = support + (0.05 * atr_ref)
@@ -747,6 +752,16 @@ class PortfolioStateEngine:
         if profile in self.PROFILE_RECLAIM_TIMEOUT:
             return int(self.PROFILE_RECLAIM_TIMEOUT[profile])
         return 3
+
+    def _resolve_retest_limit_bars(self) -> int:
+        runtime_limit_bars = int(self.config.retest_limit_bars)
+        if runtime_limit_bars > 0:
+            return runtime_limit_bars
+
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        if profile in self.PROFILE_RETEST_TIMEOUT:
+            return int(self.PROFILE_RETEST_TIMEOUT[profile])
+        return 6
 
     def _resolve_range_window_len(self) -> int:
         if self.FIXED_RANGE_WINDOW is not None:
