@@ -15,7 +15,7 @@ from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
-from strategy.bee_bite.config import BeeBiteParams, get_bee_bite_score_threshold
+from strategy.bee_bite.config import BeeBiteParams, get_bee_bite_reclaim_settings, get_bee_bite_score_threshold
 from strategy.bee_bite.trade_plan import BeeBiteTradePlan, build_bee_bite_trade_plan, resolve_profile_tp1_share
 from strategy.breakout.indicators.level_detector import LevelDetector
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -82,7 +82,6 @@ class GenerationDiagnostics(TypedDict):
 
 class BeeBiteEngine:
     REQUIRED_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
-    CONSERVATIVE_RETEST_LIMIT = 6
     CONSERVATIVE_RETEST_TOUCH_OFFSET_ATR_BG = 0.05
     CONSERVATIVE_RETEST_CONFIRM_OFFSET_ATR_BG = 0.10
     IMPULSE_THRESHOLDS: dict[str, float] = {
@@ -316,6 +315,7 @@ class BeeBiteEngine:
                         diagnostics["states"].append(state.value)
 
             if state == BeeBiteState.BREAK_ACTIVE and setup is not None and setup.break_idx is not None:
+                reclaim_settings = get_bee_bite_reclaim_settings(params.bite_reclaim_mode)
                 boundary = setup.range_low if setup.side == PositionSide.LONG else setup.range_high
                 if boundary is None:
                     setup = None
@@ -338,7 +338,7 @@ class BeeBiteEngine:
                     setup.lowest_break = max(setup.lowest_break, break_price)
                 reclaim_limit = params.bite_reclaim_limit_bars
                 elapsed_since_break = i - setup.break_idx
-                emergency_level = 0.7 * setup.core_width
+                emergency_level = reclaim_settings.emergency_reset_ratio * setup.core_width
                 emergency_break = (
                     float(row.low) < (boundary - emergency_level)
                     if setup.side == PositionSide.LONG
@@ -368,17 +368,25 @@ class BeeBiteEngine:
                         continue
                     if setup.reclaim_idx is None and reclaim_ok and micro_ok:
                         setup.reclaim_idx = i
-                        if params.bite_retest_mode == "confirmation" and params.bite_confirmation_bars >= 2:
-                            setup.retest_deadline_idx = i + self.CONSERVATIVE_RETEST_LIMIT
+                        if (
+                            params.bite_retest_mode == "confirmation"
+                            and params.bite_confirmation_bars >= 2
+                            and reclaim_settings.retest_limit_bars > 0
+                        ):
+                            setup.retest_deadline_idx = i + reclaim_settings.retest_limit_bars
                             setup.retest_touch_idx = None
 
                     if setup.reclaim_idx is not None:
-                        if params.bite_retest_mode == "confirmation" and params.bite_confirmation_bars >= 2:
+                        if (
+                            params.bite_retest_mode == "confirmation"
+                            and params.bite_confirmation_bars >= 2
+                            and reclaim_settings.retest_limit_bars > 0
+                        ):
                             retest_touch_offset = self.CONSERVATIVE_RETEST_TOUCH_OFFSET_ATR_BG * setup.atr_bg
                             retest_confirm_offset = self.CONSERVATIVE_RETEST_CONFIRM_OFFSET_ATR_BG * setup.atr_bg
                             retest_deadline = setup.retest_deadline_idx
                             if retest_deadline is None:
-                                retest_deadline = setup.reclaim_idx + self.CONSERVATIVE_RETEST_LIMIT
+                                retest_deadline = setup.reclaim_idx + reclaim_settings.retest_limit_bars
                                 setup.retest_deadline_idx = retest_deadline
                             touch_zone = (
                                 float(row.low) <= (reclaim_reference + retest_touch_offset)

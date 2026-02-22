@@ -25,6 +25,14 @@ class ScoreThreshold:
     min_score: float
 
 
+@dataclass(frozen=True, slots=True)
+class BeeBiteReclaimSettings:
+    micro_offset_multiplier: float
+    reclaim_limit_delta: int
+    retest_limit_bars: int
+    emergency_reset_ratio: float
+
+
 BEE_BITE_PROFILE_SCORE_THRESHOLDS: dict[BeeBiteProfileId, ScoreThreshold] = {
     "A": ScoreThreshold(min_score=4.0),
     "B": ScoreThreshold(min_score=3.0),
@@ -35,6 +43,28 @@ BEE_BITE_PROFILE_TOP_N: dict[BeeBiteProfileId, int] = {
     "A": 5,
     "B": 10,
     "C": 20,
+}
+
+
+BEE_BITE_RECLAIM_SETTINGS: dict[BeeBiteReclaimMode, BeeBiteReclaimSettings] = {
+    "strict": BeeBiteReclaimSettings(
+        micro_offset_multiplier=1.0,
+        reclaim_limit_delta=0,
+        retest_limit_bars=6,
+        emergency_reset_ratio=0.70,
+    ),
+    "balanced": BeeBiteReclaimSettings(
+        micro_offset_multiplier=0.75,
+        reclaim_limit_delta=1,
+        retest_limit_bars=0,
+        emergency_reset_ratio=0.65,
+    ),
+    "aggressive": BeeBiteReclaimSettings(
+        micro_offset_multiplier=0.50,
+        reclaim_limit_delta=2,
+        retest_limit_bars=0,
+        emergency_reset_ratio=0.60,
+    ),
 }
 
 
@@ -371,6 +401,10 @@ def get_bee_bite_runtime(profile_id: BeeBiteProfileId) -> BeeBiteProfileRuntime:
     return BEE_BITE_PROFILE_RUNTIME[profile_id]
 
 
+def get_bee_bite_reclaim_settings(reclaim_mode: BeeBiteReclaimMode) -> BeeBiteReclaimSettings:
+    return BEE_BITE_RECLAIM_SETTINGS[reclaim_mode]
+
+
 def validate_bee_bite_params(params: BeeBiteParams) -> None:
     if params.bite_lookback < 5 or params.bite_lookback > 120:
         raise ValueError("параметр bite_lookback должен быть в диапазоне [5, 120]")
@@ -431,21 +465,11 @@ def _apply_runtime_modes(
     max_age_range_hours: int,
 ) -> BeeBiteParams:
     runtime = get_bee_bite_runtime(params.bite_profile_id)
-
-    reclaim_multiplier: dict[BeeBiteReclaimMode, float] = {
-        "strict": 1.0,
-        "balanced": 0.75,
-        "aggressive": 0.5,
-    }
-    reclaim_limit_boost: dict[BeeBiteReclaimMode, int] = {
-        "strict": 0,
-        "balanced": 1,
-        "aggressive": 2,
-    }
+    reclaim_settings = get_bee_bite_reclaim_settings(reclaim_mode)
 
     entry_trigger = EntryTrigger.IMMEDIATE if retest_mode == "immediate" else EntryTrigger.PRICE_CONFIRMATION
     confirmation_bars = 1 if retest_mode == "immediate" else max(2, params.bite_confirmation_bars)
-    min_depth = runtime.min_depth_threshold * reclaim_multiplier[reclaim_mode]
+    min_depth = runtime.min_depth_threshold * reclaim_settings.micro_offset_multiplier
 
     return replace(
         params,
@@ -456,6 +480,6 @@ def _apply_runtime_modes(
         bite_cooldown_hours=cooldown_hours,
         bite_max_age_range_hours=max_age_range_hours,
         bite_min_depth_threshold=min_depth,
-        bite_micro_offset=runtime.micro_offset * reclaim_multiplier[reclaim_mode],
-        bite_reclaim_limit_bars=runtime.reclaim_limit_bars + reclaim_limit_boost[reclaim_mode],
+        bite_micro_offset=runtime.micro_offset * reclaim_settings.micro_offset_multiplier,
+        bite_reclaim_limit_bars=runtime.reclaim_limit_bars + reclaim_settings.reclaim_limit_delta,
     )

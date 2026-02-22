@@ -34,6 +34,12 @@ python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-
   - `bite_reclaim_limit_bars` — лимит ожидания reclaim в барах entry-TF (для портфельного режима это бары 15m);
   - `bite_cooldown_hours` и `bite_max_age_range_hours` — runtime-параметры в часах с конвертацией в бары 15m внутри `PortfolioStateEngine`.
 
+- `bite_reclaim_mode` теперь детерминированно управляет reclaim-логикой через единый map `BEE_BITE_RECLAIM_SETTINGS`:
+  - `strict`: `micro_offset x1.00`, `reclaim_limit +0`, `retest_limit=6`, `emergency_reset=0.70 * core_width`;
+  - `balanced`: `micro_offset x0.75`, `reclaim_limit +1`, `retest_limit=0`, `emergency_reset=0.65 * core_width`;
+  - `aggressive`: `micro_offset x0.50`, `reclaim_limit +2`, `retest_limit=0`, `emergency_reset=0.60 * core_width`.
+
+
 ## Параметры, которые влияют на вход и TP
 
 - `bite_min_move_atr`: в `SEEK_PUMP` сетап допускается только если импульс `up_impulse/down_impulse >= bite_min_move_atr * atr_bg` (дополнительный фильтр поверх профильного `IMPULSE_THRESHOLDS`).
