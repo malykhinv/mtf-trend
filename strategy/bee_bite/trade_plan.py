@@ -12,6 +12,7 @@ PROFILE_TP1_SHARE: dict[str, float] = {
     "B": 0.6,  # Balanced
     "C": 0.5,  # Aggressive
 }
+BE_OFFSET_RATIO = 0.001
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,17 +51,19 @@ def build_bee_bite_trade_plan(
     if stop_distance <= 0:
         return None
 
+    use_fixed_tp2 = high_pump is not None and (high_pump - entry_price) >= atr_bg
+
     mid = (support + resistance) / 2.0
     if side == PositionSide.LONG:
         tp1 = mid if mid > entry_price else resistance
-        fixed_tp2 = high_pump if high_pump is not None and (high_pump - entry_price) >= atr_bg else None
+        fixed_tp2 = high_pump if use_fixed_tp2 else None
         trailing_tp2 = entry_price + atr_bg
-        be_stop = entry_price * 1.001
+        be_stop = entry_price * (1.0 + BE_OFFSET_RATIO)
     else:
         tp1 = mid if mid < entry_price else support
-        fixed_tp2 = low_before_pump if low_before_pump is not None and (entry_price - low_before_pump) >= atr_bg else None
+        fixed_tp2 = low_before_pump if use_fixed_tp2 and low_before_pump is not None else None
         trailing_tp2 = entry_price - atr_bg
-        be_stop = entry_price * 0.999
+        be_stop = entry_price * (1.0 - BE_OFFSET_RATIO)
 
     trailing_mode = fixed_tp2 is None
     tp2 = trailing_tp2 if trailing_mode else fixed_tp2
