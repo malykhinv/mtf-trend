@@ -17,6 +17,8 @@ import pandas as pd
 
 from config import AppConfig
 from constants import (
+    DEFAULT_BACKTEST_OUTPUT_FILE,
+    DEFAULT_RESULTS_DIR,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     DEFAULT_REPORT_OUTPUT_FILE,
     OI_STALE_MIN_OBSERVATIONS,
@@ -415,9 +417,22 @@ def _load_plot_params_row_from_results(
     logger: Logger,
     strategy_id: str,
 ) -> pd.Series | None:
-    csv_path = Path(getattr(args, "results_input", None) or getattr(args, "input", None) or (
-        config.backtest.results_dir / config.backtest.results_file_name
-    ))
+    explicit_csv_path = getattr(args, "results_input", None) or getattr(args, "input", None)
+    if explicit_csv_path is not None:
+        csv_path = Path(explicit_csv_path)
+    else:
+        configured_results_dir = Path(config.backtest.results_dir)
+        strategy_results_dir = _resolve_results_dir_for_strategy(configured_results_dir, strategy_id)
+        fallback_results_dir = _resolve_results_dir_for_strategy(Path(DEFAULT_RESULTS_DIR), strategy_id)
+        candidate_paths = [
+            strategy_results_dir / config.backtest.results_file_name,
+            strategy_results_dir / "results.csv",
+            configured_results_dir / config.backtest.results_file_name,
+            fallback_results_dir / "results.csv",
+            fallback_results_dir / DEFAULT_BACKTEST_OUTPUT_FILE,
+        ]
+        csv_path = next((candidate for candidate in candidate_paths if candidate.exists()), candidate_paths[0])
+
     if not csv_path.exists():
         logger.error("plot-from-results: файл результатов не найден: %s", csv_path)
         return None
