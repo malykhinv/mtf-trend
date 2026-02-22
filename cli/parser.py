@@ -83,9 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_bt.add_argument(
         "--strategy",
-        choices=["breakout", "bee_bite", "retest"],
+        choices=["retest", "breakout", "bee_bite"],
         default=None,
-        help="Идентификатор стратегии (retest = alias для breakout). Приоритетнее STRATEGY_ID из env",
+        help="Идентификатор стратегии (breakout = alias для retest). Приоритетнее STRATEGY_ID из env",
     )
     run_bt.add_argument(
         "--bee-bite-profile",

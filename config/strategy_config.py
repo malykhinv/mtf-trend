@@ -15,7 +15,7 @@ from strategy.bee_bite.config import (
 
 @dataclass(slots=True)
 class StrategyConfig:
-    strategy_id: str = "breakout"
+    strategy_id: str = "retest"
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
     bee_bite_profile: BeeBiteProfileId = "A"
