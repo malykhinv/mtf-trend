@@ -116,8 +116,20 @@ BEE_BITE_GRID_MODE=baseline
 - не менее `32` валидных значений (`finite && > 0`);
 - покрытие валидными значениями не ниже `0.90` по фрейму.
 
+Контракт на уровне `BeeBiteStrategy.generate_events_portfolio`:
+- если `oi_break_avg` отсутствует у **всех** подготовленных символов, выбрасывается `ValueError` с перечнем символов;
+- если колонка отсутствует только у части символов, формируется предупреждение (`RuntimeWarning`), а символы исключаются на этапе валидации engine.
+
 Если критерии не выполнены, символ пропускается до начала FSM. Причина попадает в diagnostics-флаг
-`portfolio_score.oi_break_avg_validation.skipped_symbols`.
+`portfolio_score.oi_break_avg_validation.skipped_symbols` в структурированном виде:
+- `reason`: `missing_column | insufficient_valid_samples | low_valid_coverage`;
+- `valid_samples`: число валидных значений (для `missing_column` — `null`);
+- `sample_count`: размер entry-frame;
+- `coverage`: доля валидных значений (для `missing_column` — `null`).
+
+Сводка по проверке: `validated_count`, `skipped_count`, а также пороги `min_valid_samples` и `min_valid_coverage`.
+Дополнительно в `portfolio_score.oi_break_avg_validation.precheck` сохраняется покрытие входных символов
+на уровне стратегии (`missing_column_count`, `coverage_ratio`, список символов без колонки).
 
 ### Опциональные поля и fallback
 

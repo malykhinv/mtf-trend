@@ -165,8 +165,12 @@ class PortfolioStateEngine:
             "oi_break_avg_validation": {
                 "source": "upstream_feature_pipeline",
                 "required": True,
+                "min_valid_coverage": self.OI_BREAK_AVG_MIN_VALID_COVERAGE,
+                "min_valid_samples": self.OI_BREAK_AVG_MIN_VALID_SAMPLES,
                 "validated_symbols": [],
                 "skipped_symbols": {},
+                "validated_count": 0,
+                "skipped_count": 0,
             },
         }
         symbol_frames = self._filter_frames_by_oi_break_avg(symbol_frames)
@@ -221,26 +225,38 @@ class PortfolioStateEngine:
         validated: dict[str, pd.DataFrame] = {}
         diagnostics = self._last_run_diagnostics.get("oi_break_avg_validation")
         validated_symbols: list[str] = []
-        skipped_symbols: dict[str, str] = {}
+        skipped_symbols: dict[str, dict[str, float | int | str | None]] = {}
 
         for symbol, frame in symbol_frames.items():
             if "oi_break_avg" not in frame.columns:
-                skipped_symbols[symbol] = "missing_column"
+                skipped_symbols[symbol] = {
+                    "reason": "missing_column",
+                    "valid_samples": None,
+                    "sample_count": int(len(frame.index)),
+                    "coverage": None,
+                }
                 continue
 
             numeric = pd.to_numeric(frame["oi_break_avg"], errors="coerce")
             finite_positive = numeric.notna() & np.isfinite(numeric) & (numeric > 0.0)
             valid_count = int(finite_positive.sum())
-            coverage = float(valid_count / max(len(frame.index), 1))
+            sample_count = int(len(frame.index))
+            coverage = float(valid_count / max(sample_count, 1))
             if valid_count < self.OI_BREAK_AVG_MIN_VALID_SAMPLES:
-                skipped_symbols[symbol] = (
-                    f"insufficient_valid_samples:{valid_count}<{self.OI_BREAK_AVG_MIN_VALID_SAMPLES}"
-                )
+                skipped_symbols[symbol] = {
+                    "reason": "insufficient_valid_samples",
+                    "valid_samples": valid_count,
+                    "sample_count": sample_count,
+                    "coverage": coverage,
+                }
                 continue
             if coverage < self.OI_BREAK_AVG_MIN_VALID_COVERAGE:
-                skipped_symbols[symbol] = (
-                    f"low_valid_coverage:{coverage:.3f}<{self.OI_BREAK_AVG_MIN_VALID_COVERAGE:.3f}"
-                )
+                skipped_symbols[symbol] = {
+                    "reason": "low_valid_coverage",
+                    "valid_samples": valid_count,
+                    "sample_count": sample_count,
+                    "coverage": coverage,
+                }
                 continue
 
             prepared = frame.copy()
@@ -251,6 +267,8 @@ class PortfolioStateEngine:
         if isinstance(diagnostics, dict):
             diagnostics["validated_symbols"] = validated_symbols
             diagnostics["skipped_symbols"] = skipped_symbols
+            diagnostics["validated_count"] = len(validated_symbols)
+            diagnostics["skipped_count"] = len(skipped_symbols)
         return validated
 
     def consume_last_run_diagnostics(self) -> dict[str, object]:

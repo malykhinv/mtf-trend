@@ -78,6 +78,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         params: BeeBiteParams,
     ) -> list[TradeResult]:
         entry_frames: dict[str, pd.DataFrame] = {}
+        missing_oi_symbols: list[str] = []
         for symbol, mtf in sorted(symbol_frames.items(), key=lambda item: item[0]):
             frame = self._engine.prepare_data(mtf.entry_frame)
             if frame.empty:
@@ -106,9 +107,27 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
                 "resistance",
             ]
             columns.extend(column for column in optional_columns if column in frame.columns)
+            if "oi_break_avg" not in frame.columns:
+                missing_oi_symbols.append(symbol)
             entry_frames[symbol] = frame[columns].copy()
         if not entry_frames:
             return []
+
+        if len(missing_oi_symbols) == len(entry_frames):
+            symbols_text = ", ".join(sorted(missing_oi_symbols))
+            raise ValueError(
+                "BeeBite portfolio mode requires 'oi_break_avg' in entry_frame for at least one symbol; "
+                f"missing for all prepared symbols: {symbols_text}."
+            )
+
+        if missing_oi_symbols:
+            warnings.warn(
+                "BeeBite portfolio mode: missing 'oi_break_avg' for symbols: "
+                f"{', '.join(sorted(missing_oi_symbols))}. "
+                "These symbols will be excluded during engine validation.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
 
         profile_id = params.bite_profile_id
         resolved_top_n = self._portfolio_top_n if self._portfolio_top_n is not None else get_bee_bite_top_n(profile_id)
@@ -129,12 +148,24 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             slippage=0.0,
         )
         trades = engine.run(entry_frames)
+        portfolio_score_diagnostics = engine.consume_last_run_diagnostics()
+        oi_validation = portfolio_score_diagnostics.get("oi_break_avg_validation")
+        if isinstance(oi_validation, dict):
+            oi_validation.setdefault("precheck", {})
+            precheck = oi_validation["precheck"]
+            if isinstance(precheck, dict):
+                precheck["prepared_symbols"] = sorted(entry_frames.keys())
+                precheck["missing_column_symbols"] = sorted(missing_oi_symbols)
+                precheck["missing_column_count"] = len(missing_oi_symbols)
+                precheck["coverage_ratio"] = float(
+                    1.0 - (len(missing_oi_symbols) / max(len(entry_frames), 1))
+                )
         self._last_generation_diagnostics = {
             "mode": "portfolio_only",
             "profile_id": profile_id,
             "top_n": resolved_top_n,
             "score_threshold": get_bee_bite_score_threshold(profile_id).min_score,
-            "portfolio_score": engine.consume_last_run_diagnostics(),
+            "portfolio_score": portfolio_score_diagnostics,
             "trades_generated": len(trades),
         }
         return trades
