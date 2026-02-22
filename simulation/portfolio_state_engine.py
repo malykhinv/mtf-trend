@@ -53,6 +53,7 @@ class PortfolioEngineConfig:
     rr: float = 2.0
     bee_bite_profile_id: str | None = None
     bee_bite_tp1_share: float | None = None
+    bee_bite_tp1_stop_buffer_pct: float = 0.001
 
 
 @dataclass(slots=True)
@@ -964,6 +965,7 @@ class PortfolioStateEngine:
             resistance=resistance,
             high_pump=high_pump,
             low_before_pump=low_before_pump,
+            be_offset_ratio=self.config.bee_bite_tp1_stop_buffer_pct,
         )
         if plan is None or plan.stop_distance < (0.3 * atr_bg):
             return None
