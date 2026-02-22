@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, NamedTuple
 
 import pandas as pd
 
@@ -101,11 +101,10 @@ class BacktestRunner:
         tp1_be_count = BACKTEST_ZERO_COUNT
         tp2_count = BACKTEST_ZERO_COUNT
 
-        normalized_trades: list[TradeResult] = cast(list[TradeResult], trades)
+        normalized_trades: list[TradeResult] = trades
         for trade in normalized_trades:
             pnl_value = trade.pnl
-            trade_pnl_percent: float = float(trade.pnl_percent.value)
-            pnl_percent += trade_pnl_percent
+            pnl_percent += float(trade.pnl_percent.value)
             if pnl_value > 0:
                 profits += pnl_value
                 wins += 1

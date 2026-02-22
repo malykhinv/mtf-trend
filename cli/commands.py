@@ -6,9 +6,9 @@ import argparse
 import csv
 import json
 import shutil
+import time
 from collections import Counter
 from dataclasses import asdict, dataclass
-import time
 from logging import Logger
 from pathlib import Path
 from typing import Callable, cast
@@ -45,13 +45,11 @@ from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
-from domain.enums.exchange import Exchange
 from domain.enums.entry_trigger import EntryTrigger
+from domain.enums.exchange import Exchange
 from domain.enums.position_side import PositionSide
 from domain.enums.sl_mode import SLMode
 from domain.enums.timeframe import Timeframe
-from domain.models.retest_plot_span import RetestPlotSpan
-from domain.models.trade_plot_span import TradePlotSpan
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary
 from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
@@ -59,8 +57,10 @@ from domain.models.reporting.profitable_variant import ProfitableVariant
 from domain.models.reporting.quality_report import QualityReport
 from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
-from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
+from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
+from domain.models.retest_plot_span import RetestPlotSpan
+from domain.models.trade_plot_span import TradePlotSpan
 from strategy.bee_bite import (
     BeeBiteParams,
     BeeBiteStrategy,
@@ -78,7 +78,6 @@ from utils.logger import get_logger
 from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames, StrategyPlotter
-
 
 # region Приватные
 

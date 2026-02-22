@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-from numbers import Integral
-
 from logging import Logger
+from numbers import Integral
 from pathlib import Path
-
-import pandas as pd
 
 from domain.enums.timeframe import Timeframe
 from vectorbt_runner.data_preparer import DataPreparer
