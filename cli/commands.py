@@ -145,6 +145,17 @@ def _resolve_strategy_id(config: AppConfig, args: argparse.Namespace) -> str:
     return config.strategy.strategy_id
 
 
+def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) -> Path:
+    strategy_folder_by_id = {
+        "breakout": "retest",
+        "bee_bite": "bee_bite",
+    }
+    strategy_folder = strategy_folder_by_id.get(strategy_id)
+    if strategy_folder is None:
+        return base_results_dir
+    return base_results_dir / "strategy" / strategy_folder
+
+
 def _build_breakout_params_from_row(
     row: pd.Series,
     *,
@@ -1062,6 +1073,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     strategy_id = _resolve_strategy_id(config, args)
     config.strategy.strategy_id = strategy_id
+    config.backtest.results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, strategy_id)
 
     if strategy_id == "bee_bite":
         config.strategy.bee_bite_profile = parse_bee_bite_profile_id(
