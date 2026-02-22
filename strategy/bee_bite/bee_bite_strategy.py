@@ -103,9 +103,9 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
                 portfolio_risk_limit=params.bite_portfolio_risk_limit,
                 min_stop_atr_ratio=params.bite_min_stop_atr_ratio,
                 t_max_in_trade=params.bite_t_max_in_trade,
-                cooldown_bars=get_bee_bite_runtime(profile_id).cooldown_hours,
-                max_age_range=params.bite_max_age_range,
-                reclaim_limit=params.bite_reclaim_limit,
+                cooldown_bars=self._hours_to_15m_bars(get_bee_bite_runtime(profile_id).cooldown_hours),
+                max_age_range_bars=self._hours_to_15m_bars(params.bite_max_age_range),
+                reclaim_limit_bars=self._hours_to_15m_bars(params.bite_reclaim_limit),
                 bee_bite_profile_id=profile_id,
             ),
             commission_rate=0.0,
@@ -121,6 +121,10 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             "trades_generated": len(trades),
         }
         return trades
+
+    @staticmethod
+    def _hours_to_15m_bars(hours: int) -> int:
+        return max(1, hours * 4)
 
     def build_parameter_grid(self) -> list[BeeBiteParams]:
         return build_bee_bite_grid(profile_id=self._profile_id, grid_mode=self._grid_mode)
