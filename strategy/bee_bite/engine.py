@@ -595,6 +595,8 @@ class BeeBiteEngine:
 
         limit = len(rows) - 1
         if params.bite_t_max_in_trade is not None:
+            # Основной контроль диапазона делается в validate_bee_bite_params;
+            # max(1, ...) оставляем только как safety-net на уровне исполнения.
             limit = min(limit, entry_idx + max(1, params.bite_t_max_in_trade))
 
         result_type = TradeResultType.BE

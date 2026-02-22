@@ -432,6 +432,8 @@ def validate_bee_bite_params(params: BeeBiteParams) -> None:
         raise ValueError("параметр bite_cooldown_hours должен быть в диапазоне [1, 100]")
     if params.bite_min_stop_atr_ratio <= 0.0 or params.bite_min_stop_atr_ratio > 1.0:
         raise ValueError("параметр bite_min_stop_atr_ratio должен быть в диапазоне (0, 1]")
+    if params.bite_t_max_in_trade is not None and params.bite_t_max_in_trade < 1:
+        raise ValueError("параметр bite_t_max_in_trade должен быть >= 1 или None")
 
     if params.bite_entry_trigger == EntryTrigger.PRICE_CONFIRMATION and params.bite_confirmation_bars < 2:
         raise ValueError("режим reclaim (PRICE_CONFIRMATION) требует bite_confirmation_bars >= 2")
