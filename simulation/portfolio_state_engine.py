@@ -792,13 +792,16 @@ class PortfolioStateEngine:
         if atr_bg <= 0:
             return None
 
-        high_pump = max(float(item["high"] or 0.0) for item in recent)
+        recent_highs = [float(item["high"] or 0.0) for item in recent]
+        high_pump = max(recent_highs)
+        local_pump_idx = max(idx for idx, high in enumerate(recent_highs) if high == high_pump)
+        t_pump_end_idx = timeline_idx - (pump_window - 1) + local_pump_idx
         low_before_pump = float(before_pump["low"] or 0.0)
         pump_height = high_pump - low_before_pump
         impulse_threshold = self.IMPULSE_THRESHOLDS.get((self.config.bee_bite_profile_id or "").upper(), 2.2) * atr_pre
         if pump_height < impulse_threshold:
             return None
-        return high_pump, pump_height, atr_pre, atr_bg, low_before_pump, timeline_idx
+        return high_pump, pump_height, atr_pre, atr_bg, low_before_pump, t_pump_end_idx
 
     def _try_freeze_range(self, *, state: SymbolState, timeline_idx: int) -> tuple[float, float, float, int] | None:
         if state.t_pump_end_idx is None or state.pump_height is None or state.atr_bg is None:
