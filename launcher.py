@@ -77,20 +77,74 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Не использовать CoinGecko при подборе символов для fetch/update",
     )
-    parser.add_argument("--symbols", nargs="*", default=None, help="Список символов для backtest/check-quality")
-    parser.add_argument("--levels-tf", default="1d", help="Таймфрейм уровней для plot-режимов")
-    parser.add_argument("--entry-tf", default="15m", help="Таймфрейм входов для plot-режимов")
+    parser.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
+    parser.add_argument(
+        "--levels-tf",
+        default=None,
+        help="Таймфрейм уровней (например 1d). Приоритетнее LEVELS_TIMEFRAME из env",
+    )
+    parser.add_argument(
+        "--entry-tf",
+        default=None,
+        help="Таймфрейм входов (например 15m). Приоритетнее ENTRY_TIMEFRAME из env",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=["breakout", "bee_bite"],
+        default=None,
+        help="Идентификатор стратегии. Приоритетнее STRATEGY_ID из env",
+    )
+    parser.add_argument(
+        "--bee-bite-profile",
+        choices=["A", "B", "C"],
+        default=None,
+        help="Профиль bee_bite (A/B/C). Используется как baseline.",
+    )
+    parser.add_argument(
+        "--bee-bite-grid",
+        choices=["baseline", "expanded"],
+        default=None,
+        help="Режим сетки bee_bite: baseline (узкий) или expanded (широкий).",
+    )
+    parser.add_argument(
+        "--bee-bite-reclaim-mode",
+        choices=["strict", "balanced", "aggressive"],
+        default=None,
+        help="Режим reclaim в bee_bite (валидируется против выбранного профиля).",
+    )
+    parser.add_argument(
+        "--bee-bite-retest-mode",
+        choices=["confirmation", "immediate"],
+        default=None,
+        help="Режим retest в bee_bite (валидируется против выбранного профиля).",
+    )
+    parser.add_argument(
+        "--bee-bite-cooldown-bars",
+        type=int,
+        default=None,
+        help="Cooldown (в барах) для профиля bee_bite.",
+    )
+    parser.add_argument(
+        "--bee-bite-max-age-range",
+        type=int,
+        default=None,
+        help="Максимальный возраст range (в барах) для профиля bee_bite.",
+    )
     parser.add_argument("--output-dir", default=None, help="Директория сохранения изображений для plot-режимов")
     parser.add_argument("--limit", type=int, default=None, help="Ограничение числа свечей/событий для plot-режимов")
     parser.add_argument("--input", default=None, help="Входной CSV для отчета")
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
-    parser.add_argument("--plot", default=None, help="Строить графики сделок (true/false) для analyze-cache")
+    parser.add_argument("--plot", default=None, help="Строить графики сделок (true/false)")
     parser.add_argument(
         "--plot-from-results",
         action="store_true",
-        help="Строить графики по готовому backtest_results.csv без полного analyze-cache",
+        help="Построить графики по параметрам из backtest_results.csv без полного бэктеста",
     )
-    parser.add_argument("--results-input", default=None, help="CSV с результатами для режима plot-from-results")
+    parser.add_argument(
+        "--results-input",
+        default=None,
+        help="Путь к CSV с результатами для --plot-from-results",
+    )
     return parser
 
 
@@ -107,6 +161,21 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         symbols=task.get("symbols", cli_args.symbols),
         levels_tf=task.get("levels_tf", cli_args.levels_tf),
         entry_tf=task.get("entry_tf", cli_args.entry_tf),
+        strategy=task.get("strategy", cli_args.strategy),
+        bee_bite_profile=task.get("bee_bite_profile", cli_args.bee_bite_profile),
+        bee_bite_grid=task.get("bee_bite_grid", cli_args.bee_bite_grid),
+        bee_bite_reclaim_mode=task.get("bee_bite_reclaim_mode", cli_args.bee_bite_reclaim_mode),
+        bee_bite_retest_mode=task.get("bee_bite_retest_mode", cli_args.bee_bite_retest_mode),
+        bee_bite_cooldown_bars=(
+            int(task["bee_bite_cooldown_bars"])
+            if "bee_bite_cooldown_bars" in task and task.get("bee_bite_cooldown_bars") is not None
+            else cli_args.bee_bite_cooldown_bars
+        ),
+        bee_bite_max_age_range=(
+            int(task["bee_bite_max_age_range"])
+            if "bee_bite_max_age_range" in task and task.get("bee_bite_max_age_range") is not None
+            else cli_args.bee_bite_max_age_range
+        ),
         output_dir=task.get("output_dir", cli_args.output_dir),
         limit=(
             int(task["limit"])
