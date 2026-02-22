@@ -1132,10 +1132,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     config.backtest.results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, strategy_id)
 
     if strategy_id == "bee_bite":
-        config.strategy.bee_bite_profile = parse_bee_bite_profile_id(
-            getattr(args, "bee_bite_profile", None),
-            default=config.strategy.bee_bite_profile,
-        )
         profile_runtime = get_bee_bite_runtime(config.strategy.bee_bite_profile)
         config.strategy.bee_bite_grid_mode = parse_bee_bite_grid_mode(
             getattr(args, "bee_bite_grid", None),

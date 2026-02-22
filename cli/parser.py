@@ -88,12 +88,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Идентификатор стратегии (breakout = alias для retest). Приоритетнее STRATEGY_ID из env",
     )
     run_bt.add_argument(
-        "--bee-bite-profile",
-        choices=["A", "B", "C"],
-        default=None,
-        help="Профиль bee_bite (A/B/C). Используется как baseline.",
-    )
-    run_bt.add_argument(
         "--bee-bite-grid",
         choices=["baseline", "expanded", "research"],
         default=None,
@@ -103,13 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--bee-bite-reclaim-mode",
         choices=["strict", "balanced", "aggressive"],
         default=None,
-        help="Режим reclaim в bee_bite: влияет на глубину reclaim/offset и лимит ожидания reclaim в барах 15m (валидируется профилем).",
+        help="Режим reclaim в bee_bite: влияет на глубину reclaim/offset и лимит ожидания reclaim в барах 15m.",
     )
     run_bt.add_argument(
         "--bee-bite-retest-mode",
         choices=["confirmation", "immediate"],
         default=None,
-        help="Режим retest в bee_bite: immediate=мгновенный вход, confirmation=вход после подтверждения (валидируется профилем).",
+        help="Режим retest в bee_bite: immediate=мгновенный вход, confirmation=вход после подтверждения.",
     )
     run_bt.add_argument(
         "--bee-bite-cooldown-hours",

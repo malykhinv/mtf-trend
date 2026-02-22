@@ -298,8 +298,7 @@ python main.py run-backtest --strategy bee_bite
 
 `--strategy breakout` поддерживается как alias для `retest`.
 
-Для `bee_bite` доступны профиль, сетка и runtime-режимы:
-- `--bee-bite-profile {A,B,C}` — фиксированный baseline-профиль;
+Для `bee_bite` доступны режим сетки и runtime-параметры:
 - `--bee-bite-grid {baseline,expanded,research}` — baseline (узкий), expanded (широкий) или research (максимально широкий) вокруг baseline;
 - `--bee-bite-reclaim-mode {strict,balanced,aggressive}` — меняет reclaim-offset и лимит ожидания reclaim в **барах 15m** внутри движка;
 - `--bee-bite-retest-mode {confirmation,immediate}` — выбирает механику входа (подтверждение или мгновенный вход после reclaim);
@@ -308,7 +307,6 @@ python main.py run-backtest --strategy bee_bite
 Переменные окружения для `bee_bite`:
 
 ```env
-BEE_BITE_PROFILE=A
 BEE_BITE_GRID_MODE=baseline
 BEE_BITE_COOLDOWN_HOURS=8
 BEE_BITE_MAX_AGE_RANGE_HOURS=12
@@ -365,15 +363,15 @@ python main.py clear-cache
 
 ## Сценарии запуска Bee Bite
 
-Узкий baseline (один валидный профиль):
+Узкая baseline-сетка (базовые точки по всем режимам):
 
 ```bash
-python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-grid baseline --top-n 50
+python main.py run-backtest --strategy bee_bite --bee-bite-grid baseline --top-n 50
 ```
 
-Широкая controlled-сетка вокруг профиля:
+Широкая controlled-сетка:
 
 ```bash
-python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-grid expanded --top-n 100
-python main.py run-backtest --strategy bee_bite --bee-bite-profile C --bee-bite-grid research --top-n 120
+python main.py run-backtest --strategy bee_bite --bee-bite-grid expanded --top-n 100
+python main.py run-backtest --strategy bee_bite --bee-bite-grid research --top-n 120
 ```

@@ -288,64 +288,69 @@ def build_bee_bite_grid(
     cooldown_hours: int,
     max_age_range_hours: int,
 ) -> list[BeeBiteParams]:
-    baseline = _apply_runtime_modes(
-        params=BEE_BITE_PROFILE_BASELINES[profile_id],
-        reclaim_mode=reclaim_mode,
-        retest_mode=retest_mode,
-        cooldown_hours=cooldown_hours,
-        max_age_range_hours=max_age_range_hours,
-    )
+    _ = profile_id
+    baselines = [
+        _apply_runtime_modes(
+            params=BEE_BITE_PROFILE_BASELINES[current_profile_id],
+            reclaim_mode=reclaim_mode,
+            retest_mode=retest_mode,
+            cooldown_hours=cooldown_hours,
+            max_age_range_hours=max_age_range_hours,
+        )
+        for current_profile_id in BEE_BITE_PROFILE_IDS
+    ]
     if grid_mode == "baseline":
-        return [baseline]
+        return baselines
 
     offsets_map = BEE_BITE_EXTENDED_GRID_OFFSETS if grid_mode == "expanded" else BEE_BITE_RESEARCH_GRID_OFFSETS
-
-    lookbacks = _numeric_candidates(baseline.bite_lookback, offsets_map["bite_lookback"])
-    volume_mult = _numeric_candidates(baseline.bite_volume_mult, offsets_map["bite_volume_mult"])
-    retest_windows = _numeric_candidates(
-        baseline.bite_retest_window_hours,
-        offsets_map["bite_retest_window_hours"],
-    )
-    min_rr = _numeric_candidates(baseline.bite_min_rr, offsets_map["bite_min_rr"])
-    tp2_mult = _numeric_candidates(baseline.bite_tp2_mult, offsets_map["bite_tp2_mult"])
-    min_move_atr = _numeric_candidates(baseline.bite_min_move_atr, offsets_map["bite_min_move_atr"])
-    max_retest_depth = _numeric_candidates(baseline.bite_max_retest_depth, offsets_map["bite_max_retest_depth"])
-    confirmation_bars = _numeric_candidates(
-        baseline.bite_confirmation_bars,
-        offsets_map["bite_confirmation_bars"],
-    )
-    entry_triggers = tuple(offsets_map["bite_entry_trigger"])
-
     combinations: list[BeeBiteParams] = []
-    for lb, vm, rw, rr, tp2, mma, mrd, confirm_bars, trigger in product(
-        lookbacks,
-        volume_mult,
-        retest_windows,
-        min_rr,
-        tp2_mult,
-        min_move_atr,
-        max_retest_depth,
-        confirmation_bars,
-        entry_triggers,
-    ):
-        params = replace(
-            baseline,
-            bite_lookback=int(lb),
-            bite_volume_mult=float(vm),
-            bite_retest_window_hours=int(rw),
-            bite_min_rr=float(rr),
-            bite_tp2_mult=float(tp2),
-            bite_min_move_atr=float(mma),
-            bite_max_retest_depth=float(mrd),
-            bite_confirmation_bars=int(confirm_bars),
-            bite_entry_trigger=trigger,
-            bite_grid_mode=grid_mode,
+
+    for baseline in baselines:
+        lookbacks = _numeric_candidates(baseline.bite_lookback, offsets_map["bite_lookback"])
+        volume_mult = _numeric_candidates(baseline.bite_volume_mult, offsets_map["bite_volume_mult"])
+        retest_windows = _numeric_candidates(
+            baseline.bite_retest_window_hours,
+            offsets_map["bite_retest_window_hours"],
         )
-        try:
-            validate_bee_bite_params(params)
-        except ValueError:
-            continue
-        combinations.append(params)
+        min_rr = _numeric_candidates(baseline.bite_min_rr, offsets_map["bite_min_rr"])
+        tp2_mult = _numeric_candidates(baseline.bite_tp2_mult, offsets_map["bite_tp2_mult"])
+        min_move_atr = _numeric_candidates(baseline.bite_min_move_atr, offsets_map["bite_min_move_atr"])
+        max_retest_depth = _numeric_candidates(baseline.bite_max_retest_depth, offsets_map["bite_max_retest_depth"])
+        confirmation_bars = _numeric_candidates(
+            baseline.bite_confirmation_bars,
+            offsets_map["bite_confirmation_bars"],
+        )
+        entry_triggers = tuple(offsets_map["bite_entry_trigger"])
+
+        for lb, vm, rw, rr, tp2, mma, mrd, confirm_bars, trigger in product(
+            lookbacks,
+            volume_mult,
+            retest_windows,
+            min_rr,
+            tp2_mult,
+            min_move_atr,
+            max_retest_depth,
+            confirmation_bars,
+            entry_triggers,
+        ):
+            params = replace(
+                baseline,
+                bite_lookback=int(lb),
+                bite_volume_mult=float(vm),
+                bite_retest_window_hours=int(rw),
+                bite_min_rr=float(rr),
+                bite_tp2_mult=float(tp2),
+                bite_min_move_atr=float(mma),
+                bite_max_retest_depth=float(mrd),
+                bite_confirmation_bars=int(confirm_bars),
+                bite_entry_trigger=trigger,
+                bite_grid_mode=grid_mode,
+            )
+            try:
+                validate_bee_bite_params(params)
+            except ValueError:
+                continue
+            combinations.append(params)
 
     return combinations
 
@@ -365,32 +370,10 @@ def validate_bee_bite_runtime(
     if grid_mode not in BEE_BITE_GRID_MODES:
         raise ValueError(f"Неподдерживаемый режим сетки bee_bite: {grid_mode}")
 
-    runtime = BEE_BITE_PROFILE_RUNTIME[profile_id]
-
     if reclaim_mode not in BEE_BITE_RECLAIM_MODES:
         raise ValueError(f"Неподдерживаемый reclaim-режим bee_bite: {reclaim_mode}")
     if retest_mode not in BEE_BITE_RETEST_MODES:
         raise ValueError(f"Неподдерживаемый retest-режим bee_bite: {retest_mode}")
-    allowed_reclaim_by_profile: dict[BeeBiteProfileId, tuple[BeeBiteReclaimMode, ...]] = {
-        "A": ("strict",),
-        "B": ("strict", "balanced"),
-        "C": ("balanced", "aggressive"),
-    }
-    allowed_retest_by_profile: dict[BeeBiteProfileId, tuple[BeeBiteRetestMode, ...]] = {
-        "A": ("confirmation",),
-        "B": ("confirmation",),
-        "C": ("confirmation", "immediate"),
-    }
-
-    allowed_reclaim = allowed_reclaim_by_profile[profile_id]
-    if reclaim_mode not in allowed_reclaim:
-        supported = ", ".join(allowed_reclaim)
-        raise ValueError(f"профиль {profile_id} поддерживает reclaim_mode только из [{supported}]")
-
-    allowed_retest = allowed_retest_by_profile[profile_id]
-    if retest_mode not in allowed_retest:
-        supported = ", ".join(allowed_retest)
-        raise ValueError(f"профиль {profile_id} поддерживает retest_mode только из [{supported}]")
 
     if cooldown_hours < 1 or cooldown_hours > 100:
         raise ValueError("параметр cooldown_hours должен быть в диапазоне [1, 100]")
@@ -400,14 +383,16 @@ def validate_bee_bite_runtime(
     if top_n is None:
         return
 
-    if top_n < runtime.top_n_min or top_n > runtime.top_n_max:
+    min_top_n = min(item.top_n_min for item in BEE_BITE_PROFILE_RUNTIME.values())
+    max_top_n = max(item.top_n_max for item in BEE_BITE_PROFILE_RUNTIME.values())
+    if top_n < min_top_n or top_n > max_top_n:
         raise ValueError(
-            f"для bee_bite профиля {profile_id} параметр --top-n должен быть в диапазоне "
-            f"[{runtime.top_n_min}, {runtime.top_n_max}]"
+            f"для bee_bite параметр --top-n должен быть в диапазоне "
+            f"[{min_top_n}, {max_top_n}]"
         )
-    if grid_mode == "expanded" and top_n < max(20, runtime.top_n_min):
+    if grid_mode == "expanded" and top_n < 20:
         raise ValueError("для bee_bite в режиме expanded параметр --top-n должен быть >= 20")
-    if grid_mode == "research" and top_n < max(30, runtime.top_n_min):
+    if grid_mode == "research" and top_n < 30:
         raise ValueError("для bee_bite в режиме research параметр --top-n должен быть >= 30")
 
 
