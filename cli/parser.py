@@ -131,7 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt.add_argument(
         "--plot-from-results",
         action="store_true",
-        help="Построить графики по параметрам из backtest_results.csv без полного бэктеста",
+        help="Построить графики по параметрам из results.csv без полного бэктеста",
     )
     run_bt.add_argument(
         "--results-input",

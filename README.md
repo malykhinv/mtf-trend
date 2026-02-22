@@ -137,7 +137,7 @@ CSV неудобно читать «глазами», поэтому делае�
 Или вручную указать вход/выход:
 
 ```bash
---mode make-report --input ./cache/results/backtest_results.csv --output ./cache/results/report.json
+--mode make-report --input ./.output/results/strategy/retest/results.csv --output ./cache/results/report.json
 ```
 
 ---
@@ -205,12 +205,12 @@ python launcher.py --mode update-cache --top-n 100 --days 7 --ignore-coingecko
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT
 python launcher.py --mode analyze-cache --top-n 50
 python launcher.py --mode analyze-cache --top-n 50 --plot true
-python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT --plot-from-results --results-input ./cache/results/backtest_results.csv
+python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT --plot-from-results --results-input ./cache/results/results.csv
 python launcher.py --mode analyze-cache --plot-from-results --results-input ./cache/results/strategy/retest/results.csv --id 1156 --strategy retest
 python launcher.py --mode analyze-cache --top-n 50 --strategy retest
 python launcher.py --mode analyze-cache --top-n 50 --strategy bee_bite
-python launcher.py --mode analyze-cache --symbols BTC/USDT --strategy bee_bite --plot-from-results --results-input ./cache/results/backtest_results.csv
-python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
+python launcher.py --mode analyze-cache --symbols BTC/USDT --strategy bee_bite --plot-from-results --results-input ./cache/results/results.csv
+python launcher.py --mode make-report --input ./results/results.csv --output ./results/report.json
 python launcher.py --mode check-quality --symbols BTC/USDT ETH/USDT --output ./results/quality_report.json
 python launcher.py --mode plot-daily-levels --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 300
 python launcher.py --mode plot-retests --symbols BTC/USDT ETH/USDT --levels-tf 1d --entry-tf 15m --output-dir ./results/charts --limit 100

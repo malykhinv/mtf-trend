@@ -10,7 +10,7 @@ from domain.enums.sl_mode import SLMode
 from domain.enums.timeframe import Timeframe
 
 SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = cast(tuple[Timeframe, ...], tuple(Timeframe))
-DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.D1, Timeframe.M15)
+DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.D1, Timeframe.H4, Timeframe.H1, Timeframe.M15, Timeframe.M5)
 
 # Лимиты АПИ
 DEFAULT_FETCH_BATCH_SIZE = 1000
@@ -179,7 +179,7 @@ DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_CACHE_DIR = "./.output/cache"
 DEFAULT_LOGS_DIR = "./.output/logs"
 DEFAULT_RESULTS_DIR = "./.output/results"
-DEFAULT_BACKTEST_OUTPUT_FILE = "backtest_results.csv"
+DEFAULT_BACKTEST_OUTPUT_FILE = "results.csv"
 DEFAULT_REPORT_OUTPUT_FILE = "report.json"
 DEFAULT_QUALITY_REPORT_OUTPUT_FILE = "quality_report.json"
 
