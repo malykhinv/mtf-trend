@@ -128,7 +128,7 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_min_rr=3.0,
         bite_tp2_mult=2.0,
         bite_min_move_atr=0.5,
-        bite_max_retest_depth=1.0,
+        bite_max_retest_depth=0.20,
         bite_confirmation_bars=2,
         bite_entry_trigger=EntryTrigger.PRICE_CONFIRMATION,
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["A"].min_depth_threshold,
@@ -149,7 +149,7 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_min_rr=3.5,
         bite_tp2_mult=2.5,
         bite_min_move_atr=0.5,
-        bite_max_retest_depth=1.0,
+        bite_max_retest_depth=0.25,
         bite_confirmation_bars=2,
         bite_entry_trigger=EntryTrigger.PRICE_CONFIRMATION,
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["B"].min_depth_threshold,
@@ -170,7 +170,7 @@ BEE_BITE_PROFILE_BASELINES: dict[BeeBiteProfileId, BeeBiteParams] = {
         bite_min_rr=2.5,
         bite_tp2_mult=1.5,
         bite_min_move_atr=0.5,
-        bite_max_retest_depth=1.0,
+        bite_max_retest_depth=0.30,
         bite_confirmation_bars=1,
         bite_entry_trigger=EntryTrigger.IMMEDIATE,
         bite_min_depth_threshold=BEE_BITE_PROFILE_RUNTIME["C"].min_depth_threshold,
@@ -382,6 +382,8 @@ def validate_bee_bite_params(params: BeeBiteParams) -> None:
         raise ValueError("параметр bite_min_rr должен быть в диапазоне (1.0, 8.0]")
     if params.bite_tp2_mult <= 1.0 or params.bite_tp2_mult > 4.0:
         raise ValueError("параметр bite_tp2_mult должен быть в диапазоне (1.0, 4.0]")
+    if params.bite_max_retest_depth <= 0.0 or params.bite_max_retest_depth > 2.0:
+        raise ValueError("параметр bite_max_retest_depth должен быть в диапазоне (0, 2]")
     if params.bite_confirmation_bars < 1 or params.bite_confirmation_bars > 6:
         raise ValueError("параметр bite_confirmation_bars должен быть в диапазоне [1, 6]")
     if params.bite_min_depth_threshold <= 0.0 or params.bite_min_depth_threshold > 1.0:

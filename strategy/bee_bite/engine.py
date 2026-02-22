@@ -95,11 +95,6 @@ class BeeBiteEngine:
         "C": 32,
     }
     FIXED_RANGE_WINDOW: int | None = None
-    PROFILE_STABILITY_THRESHOLD: dict[str, float] = {
-        "A": 0.20,
-        "B": 0.25,
-        "C": 0.30,
-    }
     PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = {
         "A": 12,
         "B": 8,
@@ -863,7 +858,7 @@ class BeeBiteEngine:
             rolling_lows = np.array([float(item.low) for item in rolling_window])
             p10_last6.append(float(np.quantile(rolling_lows, 0.10)))
 
-        stability_threshold = self.PROFILE_STABILITY_THRESHOLD.get(params.bite_profile_id, params.bite_max_retest_depth)
+        stability_threshold = params.bite_max_retest_depth
         if max(p10_last6) - min(p10_last6) > stability_threshold * atr_bg:
             return None
 

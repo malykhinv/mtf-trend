@@ -30,6 +30,7 @@ python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-
 ```
 
 - Единицы bee_bite заданы явно:
+  - `bite_max_retest_depth` — порог стабильности range в ATR (`stability_threshold` в `_freeze_range`), диапазон `(0, 2]`;
   - `bite_reclaim_limit_bars` — лимит ожидания reclaim в барах entry-TF (для портфельного режима это бары 15m);
   - `bite_cooldown_hours` и `bite_max_age_range_hours` — runtime-параметры в часах с конвертацией в бары 15m внутри `PortfolioStateEngine`.
 
@@ -48,6 +49,12 @@ BEE_BITE_GRID_MODE=baseline
 3. Для CLI-значения действует runtime-валидация `validate_bee_bite_runtime()` по диапазонам профиля (`top_n_min..top_n_max`) и доп. ограничению для `expanded` (`>= 20`).
 
 Итог: в portfolio mode источник `top_n` — сначала CLI/конфиг запуска, иначе профильный дефолт.
+
+## Приоритет порога стабильности range
+
+- В `_freeze_range` всегда используется `params.bite_max_retest_depth` как главный порог стабильности (`max(p10_last6)-min(p10_last6) <= bite_max_retest_depth * atr_bg`).
+- Профиль A/B/C задаёт только дефолт этого параметра в `BEE_BITE_PROFILE_BASELINES` (`A=0.20`, `B=0.25`, `C=0.30`).
+- Таким образом, `bite_max_retest_depth` — реальный рабочий параметр (не псевдо-поле в выводе).
 
 Основные модули реализации:
 - `strategy/bee_bite/bee_bite_strategy.py`
