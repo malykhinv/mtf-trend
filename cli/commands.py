@@ -206,6 +206,8 @@ def _build_bee_bite_params_from_row(
 ) -> BeeBiteParams:
     bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
     bite_t_max_in_trade = None if pd.isna(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
+    if bite_t_max_in_trade is not None and bite_t_max_in_trade < 1:
+        raise ValueError("параметр bite_t_max_in_trade должен быть >= 1 или None")
     bite_reclaim_limit_raw = row.get("bite_reclaim_limit_bars")
     if pd.isna(bite_reclaim_limit_raw):
         bite_reclaim_limit_raw = row.get("bite_reclaim_limit")
