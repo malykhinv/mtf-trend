@@ -223,8 +223,8 @@ def _build_bee_bite_params_from_row(
         bite_reclaim_limit=int(row["bite_reclaim_limit"]),
         bite_max_age_range=int(row["bite_max_age_range"]),
         bite_cooldown_bars=int(row.get("bite_cooldown_bars", 8)),
-        bite_reclaim_mode=str(row.get("bite_reclaim_mode", "strict")),
-        bite_retest_mode=str(row.get("bite_retest_mode", "confirmation")),
+        bite_reclaim_mode=parse_bee_bite_reclaim_mode(str(row.get("bite_reclaim_mode", "strict")), default="strict"),
+        bite_retest_mode=parse_bee_bite_retest_mode(str(row.get("bite_retest_mode", "confirmation")), default="confirmation"),
         symbol=symbol,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
@@ -232,8 +232,8 @@ def _build_bee_bite_params_from_row(
         bite_portfolio_risk_limit=float(row["bite_portfolio_risk_limit"]),
         bite_min_stop_atr_ratio=float(row["bite_min_stop_atr_ratio"]),
         bite_t_max_in_trade=bite_t_max_in_trade,
-        bite_profile_id=str(row["bite_profile_id"]),
-        bite_grid_mode=str(row["bite_grid_mode"]),
+        bite_profile_id=parse_bee_bite_profile_id(str(row["bite_profile_id"]), default="A"),
+        bite_grid_mode=parse_bee_bite_grid_mode(str(row["bite_grid_mode"]), default="baseline"),
     )
 
 
@@ -518,7 +518,7 @@ def _load_plot_params_row_from_results(
             if column not in frame.columns:
                 continue
             numeric_column = pd.to_numeric(frame[column], errors="coerce")
-            matches = frame[numeric_column == selected_id]
+            matches: pd.DataFrame = frame[numeric_column == selected_id]
             if not matches.empty:
                 matched_by_column = matches
                 logger.info(
@@ -685,8 +685,8 @@ def _resolve_symbols(
                         "liquidity_score": float(item.get("liquidity_score", 0.0) or 0.0),
                         "quote_volume": float(item.get("quote_volume", 0.0) or 0.0),
                         "trade_count_24h": int(item.get("trade_count_24h", 0) or 0),
-                        "quality_flags": list(item.get("quality_flags", [])),
-                        "quality_metadata": dict(item.get("quality_metadata", {})),
+                        "quality_flags": list(cast(list[object], item.get("quality_flags", []))),
+                        "quality_metadata": dict(cast(dict[str, object], item.get("quality_metadata", {}))),
                     }
                     for item in ranked_metrics
                 })

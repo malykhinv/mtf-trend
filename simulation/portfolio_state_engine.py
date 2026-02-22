@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -553,7 +554,7 @@ class PortfolioStateEngine:
             score_trace["reclaim_speed"] = 2.0
         elif reclaim_bars <= 2:
             score_trace["reclaim_speed"] = 1.0
-        score += float(score_trace["reclaim_speed"])
+        score += cast(float, score_trace["reclaim_speed"])
 
         if close_position >= 0.75:
             reclaim_candle_score = 1.0
@@ -571,7 +572,7 @@ class PortfolioStateEngine:
             reclaim_to_avg = volume / max(avg_volume_range_raw, 1e-12)
             if reclaim_to_avg > 1.5:
                 score_trace["reclaim_volume_ratio"] = 1.0
-        score += float(score_trace["reclaim_volume_ratio"])
+        score += cast(float, score_trace["reclaim_volume_ratio"])
 
         taker_buy_ratio = _first_valid_float(score_row, "taker_buy_ratio", "taker_ratio")
         if taker_buy_ratio is None:
@@ -582,7 +583,7 @@ class PortfolioStateEngine:
             score_trace["taker_ratio"] = 1.0
         elif side == PositionSide.SHORT and taker_buy_ratio < 0.45:
             score_trace["taker_ratio"] = 1.0
-        score += float(score_trace["taker_ratio"])
+        score += cast(float, score_trace["taker_ratio"])
 
         oi_reclaim = _first_valid_float(score_row, "oi_reclaim", "OI_reclaim")
         oi_break_avg = _first_valid_float(score_row, "oi_break_avg", "OI_break_avg")
@@ -592,7 +593,7 @@ class PortfolioStateEngine:
             quality_notes.append("oi_relation: низкое качество (<=0) -> 0 баллов")
         elif oi_reclaim < oi_break_avg:
             score_trace["oi_relation"] = 1.0
-        score += float(score_trace["oi_relation"])
+        score += cast(float, score_trace["oi_relation"])
 
         depth = 0.0
         if range_high is not None and range_low is not None:
@@ -603,7 +604,7 @@ class PortfolioStateEngine:
         atr_ref = float(atr_bg) if atr_bg is not None and atr_bg > 0 else None
         if atr_ref is not None and depth > 0.2 * atr_ref:
             score_trace["depth_vs_atr"] = 1.0
-        score += float(score_trace["depth_vs_atr"])
+        score += cast(float, score_trace["depth_vs_atr"])
 
         zscore_range_volume = _first_valid_float(score_row, "range_volume_zscore", "volume_range_zscore", "zscore_range_volume")
         if zscore_range_volume is None:
@@ -612,19 +613,19 @@ class PortfolioStateEngine:
             quality_notes.append("range_volume_zscore: низкое качество (нечисловое) -> 0 баллов")
         elif zscore_range_volume > 0.5:
             score_trace["range_volume_zscore"] = 1.0
-        score += float(score_trace["range_volume_zscore"])
+        score += cast(float, score_trace["range_volume_zscore"])
 
         if profile_id in {"B", "C"} and 6 <= reclaim_bars <= 8:
             score_trace["penalty_reclaim_delay_6_8"] = -1.0
-        score += float(score_trace["penalty_reclaim_delay_6_8"])
+        score += cast(float, score_trace["penalty_reclaim_delay_6_8"])
 
         if core_width is not None and core_width > 0.0 and depth > 0.4 * core_width:
             score_trace["penalty_depth_vs_core_width"] = -1.0
-        score += float(score_trace["penalty_depth_vs_core_width"])
+        score += cast(float, score_trace["penalty_depth_vs_core_width"])
 
         if spread is not None and spread > 0.001:
             score_trace["penalty_spread_gt_0_001"] = -1.0
-        score += float(score_trace["penalty_spread_gt_0_001"])
+        score += cast(float, score_trace["penalty_spread_gt_0_001"])
 
         score_trace["total"] = score
         self._build_score_trace = score_trace
