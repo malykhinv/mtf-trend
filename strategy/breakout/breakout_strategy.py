@@ -279,7 +279,9 @@ class BreakoutStrategy(BaseStrategy[BreakoutParams]):
         row: CandleRow,
         breakout: PendingBreakout,
         params: BreakoutParams,
+        risk_manager: RiskManager | None = None,
     ) -> dict[str, float | bool]:
+        _ = risk_manager
         natr = max(float(row.get("natr", 0.0)), STRATEGY_NATR_EPSILON)
         if breakout.side == PositionSide.LONG:
             move = (float(row["close"]) - float(row["low"])) / max(float(row["close"]), STRATEGY_PRICE_EPSILON)
