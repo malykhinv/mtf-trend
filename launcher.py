@@ -90,7 +90,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--strategy",
-        choices=["breakout", "bee_bite"],
+        choices=["retest", "breakout", "bee_bite"],
         default=None,
         help="Идентификатор стратегии. Приоритетнее STRATEGY_ID из env",
     )
@@ -137,9 +137,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plot", default=None, help="Строить графики сделок (true/false)")
     parser.add_argument(
         "--strategy",
-        choices=("breakout", "bee_bite", "retest"),
+        choices=("retest", "breakout", "bee_bite"),
         default=None,
-        help="Идентификатор стратегии (retest = alias для breakout)",
+        help="Идентификатор стратегии (breakout = alias для retest)",
     )
     parser.add_argument("--id", type=int, default=None, help="ID комбинации для режима plot-from-results")
     parser.add_argument(

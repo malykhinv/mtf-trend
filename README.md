@@ -7,7 +7,7 @@ CLI-проект для загрузки данных, бектеста и от�
 В проекте используется 3 README-файла:
 
 1. `README.md` (этот файл) — общий запуск, инфраструктура, launcher/CLI.
-2. `strategy/breakout/README.md` — стратегия `breakout` (включая alias `retest`).
+2. `strategy/breakout/README.md` — стратегия `retest` (включая alias `breakout`).
 3. `strategy/bee_bite/README.md` — стратегия `bee_bite`.
 
 Если нужна стратегия-специфика, в первую очередь смотри README внутри соответствующей папки стратегии.
@@ -207,7 +207,7 @@ python launcher.py --mode analyze-cache --top-n 50
 python launcher.py --mode analyze-cache --top-n 50 --plot true
 python launcher.py --mode analyze-cache --symbols BTC/USDT ETH/USDT --plot-from-results --results-input ./cache/results/backtest_results.csv
 python launcher.py --mode analyze-cache --plot-from-results --results-input ./cache/results/strategy/retest/results.csv --id 1156 --strategy retest
-python launcher.py --mode analyze-cache --top-n 50 --strategy breakout
+python launcher.py --mode analyze-cache --top-n 50 --strategy retest
 python launcher.py --mode analyze-cache --top-n 50 --strategy bee_bite
 python launcher.py --mode analyze-cache --symbols BTC/USDT --strategy bee_bite --plot-from-results --results-input ./cache/results/backtest_results.csv
 python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
@@ -259,9 +259,9 @@ python launcher.py --config run_config.json
 
 
 
-### Выбор стратегии (`breakout` / `bee_bite`)
+### Выбор стратегии (`retest` / `bee_bite`)
 
-По умолчанию используется `breakout`. Можно задать через `.env`:
+По умолчанию используется `retest`. Можно задать через `.env`:
 
 ```env
 STRATEGY_ID=bee_bite
@@ -270,19 +270,19 @@ STRATEGY_ID=bee_bite
 Или переопределить на конкретный запуск через CLI (имеет приоритет над `.env`):
 
 ```bash
-python main.py run-backtest --strategy breakout
+python main.py run-backtest --strategy retest
 python main.py run-backtest --strategy bee_bite
 ```
 
 `--plot-from-results` автоматически читает нужные колонки под выбранную стратегию:
-- `breakout` — поля `lookback`, `volume_mult`, ...
+- `retest` — поля `lookback`, `volume_mult`, ...
 - `bee_bite` — поля `bite_lookback`, `bite_volume_mult`, ...
 
 Опционально можно выбрать конкретную комбинацию через `--id`:
 - сначала ищется точное совпадение в колонках `id` / `combination_id` / `rank`;
 - если таких колонок нет — `--id` трактуется как 1-based номер строки в CSV.
 
-`--strategy retest` поддерживается как alias для `breakout`.
+`--strategy breakout` поддерживается как alias для `retest`.
 
 Для `bee_bite` доступны профиль и режим сетки:
 - `--bee-bite-profile {A,B,C}` — фиксированный baseline-профиль;
@@ -340,7 +340,7 @@ python main.py check-quality
 python main.py clear-cache
 ```
 
-## Параметры breakout-стратегии
+## Параметры retest-стратегии
 
 По умолчанию грид `retest_window_hours` для перебора параметров: `12, 24, 36, 48` (в часах).
 

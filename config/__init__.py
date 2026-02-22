@@ -44,7 +44,7 @@ __all__ = [
     "load_config",
 ]
 
-SUPPORTED_STRATEGY_IDS = {"breakout", "bee_bite"}
+SUPPORTED_STRATEGY_IDS = {"retest", "breakout", "bee_bite"}
 
 
 # region Приватные
@@ -84,8 +84,10 @@ def _parse_bool(value: str | None, *, default: bool = False) -> bool:
     raise ValueError(f"Invalid boolean value: {value}")
 
 
-def _parse_strategy_id(value: str | None, *, default: str = "breakout") -> str:
+def _parse_strategy_id(value: str | None, *, default: str = "retest") -> str:
     strategy_id = (value or default).strip().lower()
+    if strategy_id == "breakout":
+        strategy_id = "retest"
     if strategy_id not in SUPPORTED_STRATEGY_IDS:
         supported = ", ".join(sorted(SUPPORTED_STRATEGY_IDS))
         raise ValueError(f"Invalid STRATEGY_ID: {strategy_id}. Supported values: {supported}")

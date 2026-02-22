@@ -139,14 +139,15 @@ def _resolve_strategy_id(config: AppConfig, args: argparse.Namespace) -> str:
     strategy_override = getattr(args, "strategy", None)
     if strategy_override is not None:
         normalized = str(strategy_override).strip().lower()
-        if normalized == "retest":
-            return "breakout"
+        if normalized == "breakout":
+            return "retest"
         return normalized
     return config.strategy.strategy_id
 
 
 def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) -> Path:
     strategy_folder_by_id = {
+        "retest": "retest",
         "breakout": "retest",
         "bee_bite": "bee_bite",
     }
@@ -164,7 +165,7 @@ def _build_breakout_params_from_row(
     entry_timeframe: Timeframe,
     strategy_id: str,
 ) -> BreakoutParams:
-    if strategy_id == "breakout":
+    if strategy_id in {"retest", "breakout"}:
         prefix = ""
     elif strategy_id == "bee_bite":
         prefix = "bite_"
@@ -367,7 +368,7 @@ def _plot_for_strategy(
     entry_timeframe: Timeframe,
     log_prefix: str,
 ) -> bool:
-    if strategy_id == "breakout":
+    if strategy_id in {"retest", "breakout"}:
         _plot_trade_setups_for_symbols(
             config=config,
             args=args,
@@ -424,6 +425,22 @@ def _load_plot_params_row_from_results(
         return None
 
     required_columns_by_strategy = {
+        "retest": [
+
+            "lookback",
+            "volume_mult",
+            "retest_window_hours",
+            "retest_zone",
+            "min_rr",
+            "sl_mode",
+            "tp2_mult",
+            "min_body_ratio",
+            "min_move_atr",
+            "max_retest_depth",
+            "confirmation_bars",
+            "entry_trigger",
+            "retest_zone_atr",
+        ],
         "breakout": [
             "lookback",
             "volume_mult",
@@ -437,6 +454,7 @@ def _load_plot_params_row_from_results(
             "max_retest_depth",
             "confirmation_bars",
             "entry_trigger",
+            "retest_zone_atr",
         ],
         "bee_bite": [
             "bite_profile_id",
@@ -1320,13 +1338,13 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         entry_timeframe=entry_timeframe,
     )
     summary = runner.build_summary(results)
-    if strategy_id == "breakout" and PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
+    if strategy_id in {"retest", "breakout"} and PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
         logger.warning(
             "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
             PARAMETER_GRID_SIZE,
             TARGET_PARAMETER_COMBINATIONS,
         )
-    if strategy_id == "breakout" and len(results) != TARGET_PARAMETER_COMBINATIONS:
+    if strategy_id in {"retest", "breakout"} and len(results) != TARGET_PARAMETER_COMBINATIONS:
         logger.warning(
             "запуск-бэктеста: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
             len(results),
@@ -1771,7 +1789,7 @@ def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int
 
     strategy = build_strategy(config, logger)
     if not isinstance(strategy, BreakoutStrategy):
-        logger.error("plot-daily-levels поддерживает только breakout")
+        logger.error("plot-daily-levels поддерживает только retest")
         return 1
     base_params = strategy.build_parameter_grid()[0]
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
@@ -1923,7 +1941,7 @@ def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     strategy = build_strategy(config, logger)
     if not isinstance(strategy, BreakoutStrategy):
-        logger.error("plot-retests поддерживает только breakout")
+        logger.error("plot-retests поддерживает только retest")
         return 1
     base_params = strategy.build_parameter_grid()[0]
     plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
