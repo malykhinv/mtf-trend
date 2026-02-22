@@ -61,6 +61,9 @@ class SymbolState:
     break_side: PositionSide | None = None
     break_start_timeline_idx: int | None = None
     break_start_timestamp_ms: int | None = None
+    reclaim_bar_timeline_idx: int | None = None
+    retest_deadline_timeline_idx: int | None = None
+    touched_retest_zone: bool = False
     break_price: float | None = None
     pump_anchor_close: float | None = None
     high_pump: float | None = None
@@ -337,6 +340,9 @@ class PortfolioStateEngine:
                 state.lowest_break = float(row["low"] or close)
                 state.break_start_timeline_idx = timeline_idx
                 state.break_start_timestamp_ms = int(row["timestamp"])
+                state.reclaim_bar_timeline_idx = None
+                state.retest_deadline_timeline_idx = None
+                state.touched_retest_zone = False
                 state.age = 0
             elif state.age > self.config.max_age_range_bars:
                 self._reset_state(state)
@@ -345,7 +351,8 @@ class PortfolioStateEngine:
         if state.state == PortfolioState.BREAK_ACTIVE:
             assert state.break_side is not None and state.break_price is not None
             break_start_idx = state.break_start_timeline_idx if state.break_start_timeline_idx is not None else timeline_idx
-            reclaim_bars = max(timeline_idx - break_start_idx + 1, 1)
+            reclaim_anchor_idx = state.reclaim_bar_timeline_idx if state.reclaim_bar_timeline_idx is not None else break_start_idx
+            reclaim_bars = max(timeline_idx - reclaim_anchor_idx + 1, 1)
             if (timeline_idx - break_start_idx) > self._resolve_reclaim_limit_bars():
                 self._reset_state(state)
                 return None
@@ -362,6 +369,29 @@ class PortfolioStateEngine:
                 return None
 
             reclaim_confirmed = state.support is not None and close > state.support and depth >= min_depth
+
+            profile = (self.config.bee_bite_profile_id or "").upper()
+            if profile == "A" and reclaim_confirmed and state.reclaim_bar_timeline_idx is None:
+                state.reclaim_bar_timeline_idx = timeline_idx
+                state.retest_deadline_timeline_idx = timeline_idx + 6
+                state.touched_retest_zone = False
+
+            if profile == "A" and state.reclaim_bar_timeline_idx is not None:
+                if state.retest_deadline_timeline_idx is not None and timeline_idx > state.retest_deadline_timeline_idx:
+                    self._reset_state(state)
+                    self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
+                    return None
+
+                support = float(state.support if state.support is not None else close)
+                atr_ref = float(state.atr_bg if state.atr_bg is not None else 0.0)
+                zone_upper = support + (0.05 * atr_ref)
+                trigger_close = support + (0.10 * atr_ref)
+                low = float(row["low"] or close)
+                high = float(row["high"] or close)
+                touched_zone_now = high >= support and low <= zone_upper
+                if touched_zone_now:
+                    state.touched_retest_zone = True
+                reclaim_confirmed = state.touched_retest_zone and close > trigger_close
 
             if reclaim_confirmed:
                 signal = self._build_signal(symbol=symbol, row=row, side=state.break_side, state=state)
@@ -827,6 +857,9 @@ class PortfolioStateEngine:
         state.break_price = None
         state.break_start_timeline_idx = None
         state.break_start_timestamp_ms = None
+        state.reclaim_bar_timeline_idx = None
+        state.retest_deadline_timeline_idx = None
+        state.touched_retest_zone = False
         state.signal = None
         state.pump_anchor_close = None
         state.high_pump = None
