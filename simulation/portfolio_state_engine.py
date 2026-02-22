@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+import numpy as np
 import pandas as pd
 
 from domain.enums.position_side import PositionSide
@@ -68,6 +69,13 @@ class SymbolState:
     lowest_break: float | None = None
     atr_bg: float | None = None
     signal: TradeSignal | None = None
+    atr_pre: float | None = None
+    pump_height: float | None = None
+    low_before_pump: float | None = None
+    t_pump_end_idx: int | None = None
+    range_window_end_idx: int | None = None
+    core_width: float | None = None
+    recent_rows: list[dict[str, float | None]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -116,6 +124,11 @@ class PortfolioStateEngine:
             "C": 6,
         }
     )
+    IMPULSE_THRESHOLDS: dict[str, float] = field(default_factory=lambda: {"A": 2.5, "B": 2.2, "C": 2.0})
+    PROFILE_RANGE_WINDOW: dict[str, int] = field(default_factory=lambda: {"A": 48, "B": 40, "C": 32})
+    FIXED_RANGE_WINDOW: int | None = None
+    PROFILE_STABILITY_THRESHOLD: dict[str, float] = field(default_factory=lambda: {"A": 0.20, "B": 0.25, "C": 0.30})
+    PROFILE_RECLAIM_TIMEOUT: dict[str, int] = field(default_factory=lambda: {"A": 5, "B": 6, "C": 8})
 
     def run(self, symbol_frames: dict[str, pd.DataFrame]) -> list[TradeResult]:
         self._last_run_diagnostics = {
@@ -262,6 +275,9 @@ class PortfolioStateEngine:
     ) -> EntryCandidate | None:
         close = float(row["close"] or 0.0)
         state.age += 1
+        state.recent_rows.append(row.copy())
+        if len(state.recent_rows) > 256:
+            state.recent_rows = state.recent_rows[-256:]
 
         if state.state == PortfolioState.IN_TRADE:
             return None
@@ -276,33 +292,36 @@ class PortfolioStateEngine:
             return None
 
         if state.state == PortfolioState.SEEK_PUMP:
-            assert state.pump_anchor_close is not None
-            state.high_pump = max(state.high_pump or close, float(row["high"] or close))
-            if (close - state.pump_anchor_close) / max(state.pump_anchor_close, 1e-12) >= self.config.min_pump_pct:
+            pump_signal = self._resolve_pump_signal(recent_rows=state.recent_rows, timeline_idx=timeline_idx)
+            if pump_signal is not None:
+                high_pump, pump_height, atr_pre, atr_bg, low_before_pump, t_pump_end_idx = pump_signal
                 state.state = PortfolioState.SEEK_RANGE
-                state.range_high = float(row["high"] or close)
-                state.range_low = float(row["low"] or close)
-                state.support = state.range_low
-                state.resistance = state.range_high
-                row_atr = row.get("atr_bg")
-                state.atr_bg = float(row_atr) if row_atr is not None and row_atr > 0 else state.range_high - state.range_low
+                state.high_pump = high_pump
+                state.pump_height = pump_height
+                state.atr_pre = atr_pre
+                state.atr_bg = atr_bg
+                state.low_before_pump = low_before_pump
+                state.t_pump_end_idx = t_pump_end_idx
+                state.range_window_end_idx = None
+                state.range_high = None
+                state.range_low = None
+                state.support = None
+                state.resistance = None
                 state.age = 0
             elif state.age > self.config.max_age_range_bars:
                 self._reset_state(state)
             return None
 
         if state.state == PortfolioState.SEEK_RANGE:
-            high = float(row["high"] or close)
-            low = float(row["low"] or close)
-            state.range_high = max(state.range_high or high, high)
-            state.range_low = min(state.range_low or low, low)
-            assert state.range_high is not None and state.range_low is not None
-            state.support = state.range_low
-            state.resistance = state.range_high
-            candle_range = max(high - low, 1e-12)
-            state.atr_bg = candle_range if state.atr_bg is None else (state.atr_bg * 0.7 + candle_range * 0.3)
-            width_pct = (state.range_high - state.range_low) / max(close, 1e-12)
-            if width_pct <= self.config.max_range_width_pct and state.age >= 2:
+            frozen_range = self._try_freeze_range(state=state, timeline_idx=timeline_idx)
+            if frozen_range is not None:
+                support, resistance, core_width, window_end_idx = frozen_range
+                state.support = support
+                state.resistance = resistance
+                state.range_low = support
+                state.range_high = resistance
+                state.core_width = core_width
+                state.range_window_end_idx = window_end_idx
                 state.state = PortfolioState.RANGE_LOCKED
                 state.age = 0
             elif state.age > self.config.max_age_range_bars:
@@ -310,20 +329,12 @@ class PortfolioStateEngine:
             return None
 
         if state.state == PortfolioState.RANGE_LOCKED:
-            assert state.range_high is not None and state.range_low is not None
-            if close > state.range_high * (1 + self.config.min_break_pct):
+            assert state.support is not None and state.resistance is not None
+            if float(row["low"] or close) < state.support:
                 state.state = PortfolioState.BREAK_ACTIVE
                 state.break_side = PositionSide.LONG
                 state.break_price = close
                 state.lowest_break = float(row["low"] or close)
-                state.break_start_timeline_idx = timeline_idx
-                state.break_start_timestamp_ms = int(row["timestamp"])
-                state.age = 0
-            elif close < state.range_low * (1 - self.config.min_break_pct):
-                state.state = PortfolioState.BREAK_ACTIVE
-                state.break_side = PositionSide.SHORT
-                state.break_price = close
-                state.lowest_break = float(row["high"] or close)
                 state.break_start_timeline_idx = timeline_idx
                 state.break_start_timestamp_ms = int(row["timestamp"])
                 state.age = 0
@@ -335,29 +346,22 @@ class PortfolioStateEngine:
             assert state.break_side is not None and state.break_price is not None
             break_start_idx = state.break_start_timeline_idx if state.break_start_timeline_idx is not None else timeline_idx
             reclaim_bars = max(timeline_idx - break_start_idx + 1, 1)
-            if (timeline_idx - break_start_idx) > self.config.reclaim_limit_bars:
+            if (timeline_idx - break_start_idx) > self._resolve_reclaim_limit_bars():
                 self._reset_state(state)
                 return None
 
-            if state.break_side == PositionSide.LONG:
-                state.lowest_break = min(state.lowest_break or float(row["low"] or close), float(row["low"] or close))
-            else:
-                state.lowest_break = max(state.lowest_break or float(row["high"] or close), float(row["high"] or close))
-
-            core_width = abs(float((state.resistance or close) - (state.support or close)))
-            if (
-                state.break_side == PositionSide.LONG
-                and state.support is not None
-                and close < (state.support - 0.7 * core_width)
-            ):
+            state.lowest_break = min(state.lowest_break or float(row["low"] or close), float(row["low"] or close))
+            core_width = float(state.core_width if state.core_width is not None else abs(float((state.resistance or close) - (state.support or close))))
+            depth = max((state.support or close) - (state.lowest_break or close), 0.0)
+            atr_bg = float(state.atr_bg or 0.0)
+            min_depth = self._resolve_min_depth_threshold() * atr_bg
+            max_depth = 0.5 * core_width
+            if depth > max_depth:
                 self._reset_state(state)
                 self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
                 return None
 
-            reclaim_confirmed = (
-                (state.break_side == PositionSide.LONG and state.support is not None and close > state.support)
-                or (state.break_side == PositionSide.SHORT and state.resistance is not None and close < state.resistance)
-            )
+            reclaim_confirmed = state.support is not None and close > state.support and depth >= min_depth
 
             if reclaim_confirmed:
                 signal = self._build_signal(symbol=symbol, row=row, side=state.break_side, state=state)
@@ -369,7 +373,7 @@ class PortfolioStateEngine:
                 state.age = 0
                 score, reclaim_candle_score = self._score_candidate(
                     row=row,
-                    side=state.break_side,
+                    side=PositionSide.LONG,
                     range_high=state.range_high,
                     range_low=state.range_low,
                     reclaim_bars=reclaim_bars,
@@ -380,7 +384,7 @@ class PortfolioStateEngine:
                     symbol=symbol,
                     score=score,
                     signal=signal,
-                    side=state.break_side,
+                    side=PositionSide.LONG,
                     reclaim_bars=reclaim_bars,
                     liquidity=float(row["volume"] or 0.0),
                     reclaim_candle_score=reclaim_candle_score,
@@ -622,6 +626,104 @@ class PortfolioStateEngine:
             return self._hours_to_15m_bars(self.PROFILE_TIME_EXIT_HOURS_NO_TP1[profile])
         return self.config.t_max_in_trade
 
+    def _resolve_reclaim_limit_bars(self) -> int:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        if profile in self.PROFILE_RECLAIM_TIMEOUT:
+            return int(self.PROFILE_RECLAIM_TIMEOUT[profile])
+        return self.config.reclaim_limit_bars
+
+    def _resolve_range_window_len(self) -> int:
+        if self.FIXED_RANGE_WINDOW is not None:
+            return max(6, int(self.FIXED_RANGE_WINDOW))
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        return max(6, int(self.PROFILE_RANGE_WINDOW.get(profile, 40)))
+
+    def _resolve_stability_threshold(self) -> float:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        return float(self.PROFILE_STABILITY_THRESHOLD.get(profile, 0.25))
+
+    def _resolve_min_depth_threshold(self) -> float:
+        profile = (self.config.bee_bite_profile_id or "").upper()
+        mapping = {"A": 0.15, "B": 0.12, "C": 0.10}
+        return float(mapping.get(profile, 0.12))
+
+    def _resolve_pump_signal(
+        self,
+        *,
+        recent_rows: list[dict[str, float | None]],
+        timeline_idx: int,
+    ) -> tuple[float, float, float, float, float, int] | None:
+        pump_window = 6
+        pre_pump_len = 14
+        atr_bg_window_len = 96
+        if len(recent_rows) < (pump_window + pre_pump_len + atr_bg_window_len + 1):
+            return None
+        recent = recent_rows[-pump_window:]
+        before_pump = recent_rows[-pump_window - 1]
+        atr_window = recent_rows[-pump_window - 1 - pre_pump_len : -pump_window - 1]
+        atr_bg_window = recent_rows[-pump_window - atr_bg_window_len : -pump_window]
+
+        tr_values: list[float] = []
+        for idx, item in enumerate(atr_window):
+            prev_close = float(atr_window[idx - 1]["close"] if idx > 0 else recent_rows[-pump_window - 2]["close"] or 0.0)
+            high = float(item["high"] or 0.0)
+            low = float(item["low"] or 0.0)
+            tr_values.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+        atr_pre = float(np.mean(tr_values)) if tr_values else 0.0
+        if atr_pre <= 0:
+            return None
+
+        atr_bg_values = [float(item["atr_bg"]) for item in atr_bg_window if item.get("atr_bg") is not None and float(item["atr_bg"] or 0.0) > 0]
+        atr_bg = float(np.median(atr_bg_values)) if atr_bg_values else atr_pre
+        if atr_bg <= 0:
+            return None
+
+        high_pump = max(float(item["high"] or 0.0) for item in recent)
+        low_before_pump = float(before_pump["low"] or 0.0)
+        pump_height = high_pump - low_before_pump
+        impulse_threshold = self.IMPULSE_THRESHOLDS.get((self.config.bee_bite_profile_id or "").upper(), 2.2) * atr_pre
+        if pump_height < impulse_threshold:
+            return None
+        return high_pump, pump_height, atr_pre, atr_bg, low_before_pump, timeline_idx
+
+    def _try_freeze_range(self, *, state: SymbolState, timeline_idx: int) -> tuple[float, float, float, int] | None:
+        if state.t_pump_end_idx is None or state.pump_height is None or state.atr_bg is None:
+            return None
+        window_len = self._resolve_range_window_len()
+        start_idx = state.t_pump_end_idx + 1
+        if timeline_idx - start_idx + 1 < window_len:
+            return None
+        local_end = len(state.recent_rows) - 1
+        local_start = local_end - window_len + 1
+        if local_start < 0:
+            return None
+        window = state.recent_rows[local_start : local_end + 1]
+        lows = np.array([float(item["low"] or 0.0) for item in window])
+        highs = np.array([float(item["high"] or 0.0) for item in window])
+        p10 = float(np.quantile(lows, 0.10))
+        p85 = float(np.quantile(highs, 0.85))
+        p90 = float(np.quantile(highs, 0.90))
+        core_width = max(p90 - p10, 0.0)
+        width_limit = min(0.45 * state.pump_height, 7.0 * state.atr_bg)
+        if core_width > width_limit:
+            return None
+        p10_last6: list[float] = []
+        for shift in range(6):
+            rolling_end = local_end - (5 - shift)
+            rolling_start = rolling_end - window_len + 1
+            if rolling_start < 0:
+                return None
+            rolling = state.recent_rows[rolling_start : rolling_end + 1]
+            rolling_lows = np.array([float(item["low"] or 0.0) for item in rolling])
+            p10_last6.append(float(np.quantile(rolling_lows, 0.10)))
+        if (max(p10_last6) - min(p10_last6)) > (self._resolve_stability_threshold() * state.atr_bg):
+            return None
+        support_band_high = p10 + (0.2 * state.atr_bg)
+        support_cluster = lows[(lows >= p10) & (lows <= support_band_high)]
+        support = float(np.median(support_cluster)) if support_cluster.size >= 2 else p10
+        resistance = p85
+        return support, resistance, core_width, timeline_idx
+
     @staticmethod
     def _hours_to_15m_bars(hours: int) -> int:
         return max(1, int((hours * 60) / 15))
@@ -732,6 +834,12 @@ class PortfolioStateEngine:
         state.resistance = None
         state.lowest_break = None
         state.atr_bg = None
+        state.atr_pre = None
+        state.pump_height = None
+        state.low_before_pump = None
+        state.t_pump_end_idx = None
+        state.range_window_end_idx = None
+        state.core_width = None
 
 
 
