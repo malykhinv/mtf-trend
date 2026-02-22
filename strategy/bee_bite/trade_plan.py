@@ -41,6 +41,15 @@ def build_bee_bite_trade_plan(
     high_pump: float | None,
     low_before_pump: float | None,
 ) -> BeeBiteTradePlan | None:
+    """Собирает план сделки bee_bite c выбором fixed/trailing TP2 по стороне.
+
+    Критерий fixed TP2:
+    - LONG: доступен, если ``high_pump - entry_price >= atr_bg``.
+    - SHORT: доступен, если ``low_before_pump`` задан и
+      ``entry_price - low_before_pump >= atr_bg``.
+
+    Если fixed TP2 недоступен, используется fallback на trailing TP2.
+    """
     if atr_bg <= 0:
         return None
 
@@ -51,17 +60,19 @@ def build_bee_bite_trade_plan(
     if stop_distance <= 0:
         return None
 
-    use_fixed_tp2 = high_pump is not None and (high_pump - entry_price) >= atr_bg
-
     mid = (support + resistance) / 2.0
     if side == PositionSide.LONG:
+        use_fixed_tp2 = high_pump is not None and (high_pump - entry_price) >= atr_bg
         tp1 = mid if mid > entry_price else resistance
         fixed_tp2 = high_pump if use_fixed_tp2 else None
         trailing_tp2 = entry_price + atr_bg
         be_stop = entry_price * (1.0 + BE_OFFSET_RATIO)
     else:
+        use_fixed_tp2 = (
+            low_before_pump is not None and (entry_price - low_before_pump) >= atr_bg
+        )
         tp1 = mid if mid < entry_price else support
-        fixed_tp2 = low_before_pump if use_fixed_tp2 and low_before_pump is not None else None
+        fixed_tp2 = low_before_pump if use_fixed_tp2 else None
         trailing_tp2 = entry_price - atr_bg
         be_stop = entry_price * (1.0 - BE_OFFSET_RATIO)
 
