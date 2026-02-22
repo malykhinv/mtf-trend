@@ -202,7 +202,6 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
             if "plot_from_results" in task
             else cli_args.plot_from_results
         ),
-        strategy=task.get("strategy", cli_args.strategy),
         id=(
             int(task["id"])
             if "id" in task and task.get("id") is not None
