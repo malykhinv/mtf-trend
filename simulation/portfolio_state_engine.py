@@ -517,12 +517,8 @@ class PortfolioStateEngine:
             score_trace["range_volume_zscore"] = 1.0
         score += score_trace["range_volume_zscore"]
 
-        # 8) Profile penalties (6–8 bars).
-        if profile == "A" and reclaim_bars >= 6:
-            score_trace["profile_penalty"] = -1.0
-        elif profile == "B" and reclaim_bars >= 7:
-            score_trace["profile_penalty"] = -1.0
-        elif profile == "C" and reclaim_bars >= 8:
+        # 8) Profile penalties: only for B/C when reclaim window is 6..8 bars.
+        if profile in {"B", "C"} and 6 <= reclaim_bars <= 8:
             score_trace["profile_penalty"] = -1.0
         score += score_trace["profile_penalty"]
 
