@@ -13,10 +13,11 @@ from strategy.bee_bite.config import (
     BeeBiteGridMode,
     BeeBiteParams,
     BeeBiteProfileId,
+    BeeBiteReclaimMode,
+    BeeBiteRetestMode,
     build_bee_bite_grid,
     get_bee_bite_score_threshold,
     get_bee_bite_top_n,
-    get_bee_bite_runtime,
     validate_bee_bite_params,
 )
 from strategy.bee_bite.engine import BeeBiteEngine
@@ -24,9 +25,22 @@ from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
-    def __init__(self, *, profile_id: BeeBiteProfileId, grid_mode: BeeBiteGridMode) -> None:
+    def __init__(
+        self,
+        *,
+        profile_id: BeeBiteProfileId,
+        grid_mode: BeeBiteGridMode,
+        reclaim_mode: BeeBiteReclaimMode,
+        retest_mode: BeeBiteRetestMode,
+        cooldown_bars: int,
+        max_age_range: int,
+    ) -> None:
         self._profile_id = profile_id
         self._grid_mode = grid_mode
+        self._reclaim_mode = reclaim_mode
+        self._retest_mode = retest_mode
+        self._cooldown_bars = cooldown_bars
+        self._max_age_range = max_age_range
         self._engine = BeeBiteEngine()
         self._last_generation_diagnostics: dict[str, object] = {}
 
@@ -103,7 +117,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
                 portfolio_risk_limit=params.bite_portfolio_risk_limit,
                 min_stop_atr_ratio=params.bite_min_stop_atr_ratio,
                 t_max_in_trade=params.bite_t_max_in_trade,
-                cooldown_bars=self._hours_to_15m_bars(get_bee_bite_runtime(profile_id).cooldown_hours),
+                cooldown_bars=self._hours_to_15m_bars(params.bite_cooldown_bars),
                 max_age_range_bars=self._hours_to_15m_bars(params.bite_max_age_range),
                 reclaim_limit_bars=self._hours_to_15m_bars(params.bite_reclaim_limit),
                 bee_bite_profile_id=profile_id,
@@ -127,7 +141,14 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         return max(1, hours * 4)
 
     def build_parameter_grid(self) -> list[BeeBiteParams]:
-        return build_bee_bite_grid(profile_id=self._profile_id, grid_mode=self._grid_mode)
+        return build_bee_bite_grid(
+            profile_id=self._profile_id,
+            grid_mode=self._grid_mode,
+            reclaim_mode=self._reclaim_mode,
+            retest_mode=self._retest_mode,
+            cooldown_bars=self._cooldown_bars,
+            max_age_range=self._max_age_range,
+        )
 
     def params_to_row(self, params: BeeBiteParams) -> dict[str, int | float | str | None]:
         return {
@@ -145,7 +166,10 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             "bite_min_depth_threshold": params.bite_min_depth_threshold,
             "bite_micro_offset": params.bite_micro_offset,
             "bite_reclaim_limit": params.bite_reclaim_limit,
+            "bite_reclaim_mode": params.bite_reclaim_mode,
+            "bite_retest_mode": params.bite_retest_mode,
             "bite_max_age_range": params.bite_max_age_range,
+            "bite_cooldown_bars": params.bite_cooldown_bars,
             "bite_r_trade": params.bite_r_trade,
             "bite_portfolio_risk_limit": params.bite_portfolio_risk_limit,
             "bite_min_stop_atr_ratio": params.bite_min_stop_atr_ratio,

@@ -284,9 +284,12 @@ python main.py run-backtest --strategy bee_bite
 
 `--strategy breakout` поддерживается как alias для `retest`.
 
-Для `bee_bite` доступны профиль и режим сетки:
+Для `bee_bite` доступны профиль, сетка и runtime-режимы:
 - `--bee-bite-profile {A,B,C}` — фиксированный baseline-профиль;
-- `--bee-bite-grid {baseline,expanded}` — baseline (узкий) или controlled-grid (широкий) вокруг baseline.
+- `--bee-bite-grid {baseline,expanded}` — baseline (узкий) или controlled-grid (широкий) вокруг baseline;
+- `--bee-bite-reclaim-mode {strict,balanced,aggressive}` — меняет reclaim-offset и лимит ожидания reclaim внутри движка;
+- `--bee-bite-retest-mode {confirmation,immediate}` — выбирает механику входа (подтверждение или мгновенный вход после reclaim);
+- `--bee-bite-cooldown-bars` и `--bee-bite-max-age-range` передаются в runtime-параметры стратегии и видны в `backtest_results.csv`.
 
 Переменные окружения для `bee_bite`:
 
