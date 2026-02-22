@@ -136,6 +136,15 @@ class PortfolioStateEngine:
     FIXED_RANGE_WINDOW: int | None = None
     PROFILE_STABILITY_THRESHOLD: dict[str, float] = field(default_factory=lambda: {"A": 0.20, "B": 0.25, "C": 0.30})
     PROFILE_RECLAIM_TIMEOUT: dict[str, int] = field(default_factory=lambda: {"A": 5, "B": 6, "C": 8})
+    RESET_REASONS: tuple[str, ...] = (
+        "max_age_range",
+        "reclaim_timeout",
+        "micro_filter_fail",
+        "stop_distance_fail",
+        "score_fail",
+        "topn_fail",
+        "break_emergency",
+    )
 
     def run(self, symbol_frames: dict[str, pd.DataFrame]) -> list[TradeResult]:
         self._last_run_diagnostics = {
@@ -143,6 +152,7 @@ class PortfolioStateEngine:
             "profile": (self.config.bee_bite_profile_id or "").upper() or None,
             "candidates": [],
             "selected_symbols": [],
+            "reset_counters": {reason: 0 for reason in self.RESET_REASONS},
         }
         timeline = self._build_timeline(symbol_frames)
         if not timeline:
@@ -176,14 +186,15 @@ class PortfolioStateEngine:
                 if candidate is not None:
                     candidates.append(candidate)
 
-            winners = self._pick_top_candidates(candidates)
+            winners, score_failed_symbols = self._pick_top_candidates(candidates)
             winners_symbols = {candidate.symbol for candidate in winners}
             self._record_candidates_diagnostics(candidates=candidates, winners_symbols=winners_symbols)
             for candidate in winners:
                 self._activate_candidate(candidate)
             for candidate in candidates:
                 if candidate.symbol not in winners_symbols:
-                    self._reject_candidate(candidate.symbol)
+                    reject_reason = "score_fail" if candidate.symbol in score_failed_symbols else "topn_fail"
+                    self._reject_candidate(candidate.symbol, reason=reject_reason)
 
         trades.extend(self._close_open_positions(symbol_frames=symbol_frames, timeline=timeline))
         return sorted(trades, key=lambda trade: (trade.exit_timestamp_ms, trade.entry_timestamp_ms))
@@ -316,7 +327,7 @@ class PortfolioStateEngine:
                 state.resistance = None
                 state.age = 0
             elif state.age > self.config.max_age_range_bars:
-                self._reset_state(state)
+                self._reset_symbol(symbol=symbol, state=state, reason="max_age_range", timeline_idx=timeline_idx)
             return None
 
         if state.state == PortfolioState.SEEK_RANGE:
@@ -332,7 +343,7 @@ class PortfolioStateEngine:
                 state.state = PortfolioState.RANGE_LOCKED
                 state.age = 0
             elif state.age > self.config.max_age_range_bars:
-                self._reset_state(state)
+                self._reset_symbol(symbol=symbol, state=state, reason="max_age_range", timeline_idx=timeline_idx)
             return None
 
         if state.state == PortfolioState.RANGE_LOCKED:
@@ -349,7 +360,7 @@ class PortfolioStateEngine:
                 state.touched_retest_zone = False
                 state.age = 0
             elif state.age > self.config.max_age_range_bars:
-                self._reset_state(state)
+                self._reset_symbol(symbol=symbol, state=state, reason="max_age_range", timeline_idx=timeline_idx)
             return None
 
         if state.state == PortfolioState.BREAK_ACTIVE:
@@ -358,7 +369,7 @@ class PortfolioStateEngine:
             reclaim_anchor_idx = state.reclaim_bar_timeline_idx if state.reclaim_bar_timeline_idx is not None else break_start_idx
             reclaim_bars = max(timeline_idx - reclaim_anchor_idx + 1, 1)
             if (timeline_idx - break_start_idx) > self._resolve_reclaim_limit_bars():
-                self._reset_state(state)
+                self._reset_symbol(symbol=symbol, state=state, reason="reclaim_timeout", timeline_idx=timeline_idx)
                 return None
 
             state.lowest_break = min(state.lowest_break or float(row["low"] or close), float(row["low"] or close))
@@ -368,8 +379,7 @@ class PortfolioStateEngine:
             min_depth = self._resolve_min_depth_threshold() * atr_bg
             max_depth = 0.5 * core_width
             if depth > max_depth:
-                self._reset_state(state)
-                self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
+                self._reset_symbol(symbol=symbol, state=state, reason="break_emergency", timeline_idx=timeline_idx)
                 return None
 
             reclaim_confirmed = state.support is not None and close > state.support and depth >= min_depth
@@ -382,8 +392,7 @@ class PortfolioStateEngine:
 
             if profile == "A" and state.reclaim_bar_timeline_idx is not None:
                 if state.retest_deadline_timeline_idx is not None and timeline_idx > state.retest_deadline_timeline_idx:
-                    self._reset_state(state)
-                    self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
+                    self._reset_symbol(symbol=symbol, state=state, reason="reclaim_timeout", timeline_idx=timeline_idx)
                     return None
 
                 support = float(state.support if state.support is not None else close)
@@ -400,7 +409,7 @@ class PortfolioStateEngine:
             if reclaim_confirmed:
                 signal = self._build_signal(symbol=symbol, row=row, side=state.break_side, state=state)
                 if signal is None:
-                    self._reset_state(state)
+                    self._reset_symbol(symbol=symbol, state=state, reason="micro_filter_fail", timeline_idx=timeline_idx)
                     return None
                 state.signal = signal
                 state.state = PortfolioState.ENTRY_SIGNAL
@@ -590,18 +599,19 @@ class PortfolioStateEngine:
         if isinstance(selected_symbols, list):
             selected_symbols.extend(sorted(winners_symbols))
 
-    def _pick_top_candidates(self, candidates: list[EntryCandidate]) -> list[EntryCandidate]:
+    def _pick_top_candidates(self, candidates: list[EntryCandidate]) -> tuple[list[EntryCandidate], set[str]]:
         if not candidates:
-            return []
+            return [], set()
         score_threshold = self._resolve_score_threshold()
         filtered = [candidate for candidate in candidates if candidate.score >= score_threshold]
+        score_failed_symbols = {candidate.symbol for candidate in candidates if candidate.score < score_threshold}
         if not filtered:
-            return []
+            return [], score_failed_symbols
         ordered = sorted(
             filtered,
             key=lambda c: (-c.score, c.reclaim_bars, -c.reclaim_candle_score, -c.liquidity, c.symbol),
         )
-        return ordered[: self.config.top_n]
+        return ordered[: self.config.top_n], score_failed_symbols
 
     def _activate_candidate(self, candidate: EntryCandidate) -> None:
         state = self._states[candidate.symbol]
@@ -614,10 +624,10 @@ class PortfolioStateEngine:
             if other_sim.position is not None
         ]
         if not self._risk_manager.can_open_with_portfolio_limit(active_positions=active_positions, signal=candidate.signal):
-            self._reject_candidate(candidate.symbol)
+            self._reject_candidate(candidate.symbol, reason="topn_fail")
             return
         if not self._risk_manager.check_stop_distance_by_atr(signal=candidate.signal, atr_bg=float(candidate.signal.atr_bg or 0.0)):
-            self._reject_candidate(candidate.symbol)
+            self._reject_candidate(candidate.symbol, reason="stop_distance_fail")
             return
         size = self._risk_manager.calc_position_size(signal=candidate.signal)
         sim.max_bars_in_trade = self._resolve_time_exit_bars()
@@ -625,10 +635,20 @@ class PortfolioStateEngine:
         state.state = PortfolioState.IN_TRADE
         state.age = 0
 
-    def _reject_candidate(self, symbol: str) -> None:
+    def _reject_candidate(self, symbol: str, *, reason: str) -> None:
         state = self._states[symbol]
+        self._reset_symbol(symbol=symbol, state=state, reason=reason)
+
+    def _reset_symbol(self, *, symbol: str, state: SymbolState, reason: str, timeline_idx: int | None = None) -> None:
+        self._record_reset_reason(reason)
         self._reset_state(state)
-        self._set_cooldown(symbol=symbol)
+        self._set_cooldown(symbol=symbol, timeline_idx=timeline_idx)
+
+    def _record_reset_reason(self, reason: str) -> None:
+        reset_counters = self._last_run_diagnostics.get("reset_counters")
+        if not isinstance(reset_counters, dict):
+            return
+        reset_counters[reason] = int(reset_counters.get(reason, 0)) + 1
 
     def _is_on_cooldown(self, *, symbol: str, timeline_idx: int) -> bool:
         until_idx = self._cooldown_until_idx.get(symbol)
