@@ -40,8 +40,8 @@ class PortfolioEngineConfig:
     min_stop_atr_ratio: float = 0.3
     t_max_in_trade: int | None = None
     cooldown_bars: int = 8
-    max_age_range: int = 24
-    reclaim_limit: int = 3
+    max_age_range_bars: int = 24
+    reclaim_limit_bars: int = 3
     break_fail_threshold: int = 2
     min_pump_pct: float = 0.02
     max_range_width_pct: float = 0.03
@@ -287,7 +287,7 @@ class PortfolioStateEngine:
                 row_atr = row.get("atr_bg")
                 state.atr_bg = float(row_atr) if row_atr is not None and row_atr > 0 else state.range_high - state.range_low
                 state.age = 0
-            elif state.age > self.config.max_age_range:
+            elif state.age > self.config.max_age_range_bars:
                 self._reset_state(state)
             return None
 
@@ -305,7 +305,7 @@ class PortfolioStateEngine:
             if width_pct <= self.config.max_range_width_pct and state.age >= 2:
                 state.state = PortfolioState.RANGE_LOCKED
                 state.age = 0
-            elif state.age > self.config.max_age_range:
+            elif state.age > self.config.max_age_range_bars:
                 self._reset_state(state)
             return None
 
@@ -327,7 +327,7 @@ class PortfolioStateEngine:
                 state.break_start_timeline_idx = timeline_idx
                 state.break_start_timestamp_ms = int(row["timestamp"])
                 state.age = 0
-            elif state.age > self.config.max_age_range:
+            elif state.age > self.config.max_age_range_bars:
                 self._reset_state(state)
             return None
 
@@ -335,7 +335,7 @@ class PortfolioStateEngine:
             assert state.break_side is not None and state.break_price is not None
             break_start_idx = state.break_start_timeline_idx if state.break_start_timeline_idx is not None else timeline_idx
             reclaim_bars = max(timeline_idx - break_start_idx + 1, 1)
-            if (timeline_idx - break_start_idx) > self.config.reclaim_limit:
+            if (timeline_idx - break_start_idx) > self.config.reclaim_limit_bars:
                 self._reset_state(state)
                 return None
 
