@@ -204,6 +204,9 @@ def _build_bee_bite_params_from_row(
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
 ) -> BeeBiteParams:
+    def _normalize_enum_raw(value: object) -> str | None:
+        return None if pd.isna(value) else str(value)
+
     bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
     bite_t_max_in_trade = None if pd.isna(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
     if bite_t_max_in_trade is not None and bite_t_max_in_trade < 1:
@@ -217,6 +220,10 @@ def _build_bee_bite_params_from_row(
     bite_cooldown_raw = row.get("bite_cooldown_hours")
     if pd.isna(bite_cooldown_raw):
         bite_cooldown_raw = row.get("bite_cooldown_bars", 8)
+    bite_reclaim_mode_raw = row.get("bite_reclaim_mode")
+    bite_retest_mode_raw = row.get("bite_retest_mode")
+    bite_profile_id_raw = row.get("bite_profile_id")
+    bite_grid_mode_raw = row.get("bite_grid_mode")
 
     return BeeBiteParams(
         bite_lookback=int(row["bite_lookback"]),
@@ -233,8 +240,8 @@ def _build_bee_bite_params_from_row(
         bite_reclaim_limit_bars=int(bite_reclaim_limit_raw),
         bite_max_age_range_hours=int(bite_max_age_range_raw),
         bite_cooldown_hours=int(bite_cooldown_raw),
-        bite_reclaim_mode=parse_bee_bite_reclaim_mode(str(row.get("bite_reclaim_mode", "strict")), default="strict"),
-        bite_retest_mode=parse_bee_bite_retest_mode(str(row.get("bite_retest_mode", "confirmation")), default="confirmation"),
+        bite_reclaim_mode=parse_bee_bite_reclaim_mode(_normalize_enum_raw(bite_reclaim_mode_raw), default="strict"),
+        bite_retest_mode=parse_bee_bite_retest_mode(_normalize_enum_raw(bite_retest_mode_raw), default="confirmation"),
         symbol=symbol,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
@@ -242,8 +249,8 @@ def _build_bee_bite_params_from_row(
         bite_portfolio_risk_limit=float(row["bite_portfolio_risk_limit"]),
         bite_min_stop_atr_ratio=float(row["bite_min_stop_atr_ratio"]),
         bite_t_max_in_trade=bite_t_max_in_trade,
-        bite_profile_id=parse_bee_bite_profile_id(str(row["bite_profile_id"]), default="A"),
-        bite_grid_mode=parse_bee_bite_grid_mode(str(row["bite_grid_mode"]), default="baseline"),
+        bite_profile_id=parse_bee_bite_profile_id(_normalize_enum_raw(bite_profile_id_raw), default="A"),
+        bite_grid_mode=parse_bee_bite_grid_mode(_normalize_enum_raw(bite_grid_mode_raw), default="baseline"),
     )
 
 
