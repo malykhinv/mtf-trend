@@ -349,11 +349,28 @@ class PortfolioStateEngine:
 
         if state.state == PortfolioState.RANGE_LOCKED:
             assert state.support is not None and state.resistance is not None
-            if float(row["low"] or close) < state.support:
+            low = float(row["low"] or close)
+            support = float(state.support)
+            core_width = float(
+                state.core_width if state.core_width is not None else abs(float((state.resistance or close) - support))
+            )
+            emergency_break_level = support - (0.7 * core_width)
+            if low < emergency_break_level:
+                self._reset_symbol(symbol=symbol, state=state, reason="break_emergency", timeline_idx=timeline_idx)
+                return None
+
+            if low < support:
+                depth = max(support - low, 0.0)
+                atr_bg = float(state.atr_bg or 0.0)
+                min_depth = self._resolve_min_depth_threshold() * atr_bg
+                max_depth = 0.5 * core_width
+                if depth < min_depth or depth > max_depth:
+                    return None
+
                 state.state = PortfolioState.BREAK_ACTIVE
                 state.break_side = PositionSide.LONG
                 state.break_price = close
-                state.lowest_break = float(row["low"] or close)
+                state.lowest_break = low
                 state.break_start_timeline_idx = timeline_idx
                 state.break_start_timestamp_ms = int(row["timestamp"])
                 state.reclaim_bar_timeline_idx = None
@@ -373,8 +390,14 @@ class PortfolioStateEngine:
                 self._reset_symbol(symbol=symbol, state=state, reason="reclaim_timeout", timeline_idx=timeline_idx)
                 return None
 
-            state.lowest_break = min(state.lowest_break or float(row["low"] or close), float(row["low"] or close))
+            low = float(row["low"] or close)
+            state.lowest_break = min(state.lowest_break or low, low)
             core_width = float(state.core_width if state.core_width is not None else abs(float((state.resistance or close) - (state.support or close))))
+            support_ref = float(state.support if state.support is not None else close)
+            if low < support_ref - (0.7 * core_width):
+                self._reset_symbol(symbol=symbol, state=state, reason="break_emergency", timeline_idx=timeline_idx)
+                return None
+
             depth = max((state.support or close) - (state.lowest_break or close), 0.0)
             atr_bg = float(state.atr_bg or 0.0)
             min_depth = self._resolve_min_depth_threshold() * atr_bg
