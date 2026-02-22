@@ -550,7 +550,8 @@ class BeeBiteEngine:
         )
         if trade_plan is None:
             return None, entry_idx, False
-        if trade_plan.stop_distance < (0.3 * setup.atr_bg):
+        min_stop_ratio = params.bite_min_stop_atr_ratio
+        if trade_plan.stop_distance < (min_stop_ratio * setup.atr_bg):
             return None, entry_idx, True
 
         rr_to_tp2 = self._resolve_reward_risk(
