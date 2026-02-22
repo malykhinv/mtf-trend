@@ -682,76 +682,81 @@ def _resolve_symbols(
             if symbol in avg_daily_volumes_normalized
         ]
 
-        min_cache_ready_symbols = min(top_n, len(exchange_symbols_normalized))
-        is_cold_start = len(symbols_with_volume) < min_cache_ready_symbols
-        if is_cold_start:
-            try:
-                ranked_metrics = exchange_client.get_futures_symbols_with_liquidity_metrics()
-                ranked_filtered = [
-                    item
-                    for item in ranked_metrics
-                    if float(item.get("quote_volume", 0.0) or 0.0) >= 10_000_000.0
-                ]
-                bootstrap_symbols = [
-                    normalize_symbol(str(item["symbol"]))
-                    for item in ranked_filtered[:top_n]
-                    if normalize_symbol(str(item["symbol"])) in futures_symbol_map
-                ]
-                liquidity_quality_by_symbol.update({
-                    str(item["symbol"]): {
-                        "liquidity_score": float(item.get("liquidity_score", 0.0) or 0.0),
-                        "quote_volume": float(item.get("quote_volume", 0.0) or 0.0),
-                        "trade_count_24h": int(item.get("trade_count_24h", 0) or 0),
-                        "quality_flags": list(cast(list[object], item.get("quality_flags", []))),
-                        "quality_metadata": dict(cast(dict[str, object], item.get("quality_metadata", {}))),
-                    }
-                    for item in ranked_metrics
-                })
-                bootstrap_mode = "bootstrap-exchange-volume"
-            except Exception as exc:
-                logger.warning(
-                    "подбор-символов: bootstrap по объёму биржи недоступен (%s), fallback на алфавит",
-                    exc,
-                )
-                bootstrap_symbols = exchange_symbols_normalized[:top_n]
-                bootstrap_mode = "bootstrap-alphabetical-fallback"
-
-            logger.info(
-                "подбор-символов: кэш пуст, выполняется bootstrap без фильтра ликвидности (режим=%s)",
-                bootstrap_mode,
-            )
-            logger.info(
-                "подбор-символов: CoinGecko отключен, всего на бирже=%s → в кэше с объёмом=%s (порог готовности=%s) → после bootstrap top_n=%s",
-                len(exchange_symbols_normalized),
-                len(symbols_with_volume),
-                min_cache_ready_symbols,
-                len(bootstrap_symbols),
-            )
-            return [futures_symbol_map[symbol] for symbol in bootstrap_symbols], liquidity_quality_by_symbol
-
         liquid_symbols = [
             symbol
             for symbol in symbols_with_volume
             if avg_daily_volumes_normalized.get(symbol, 0.0) >= min_volume_usd
         ]
-        ranked_liquid_symbols = sorted(
-            liquid_symbols,
-            key=lambda symbol: (avg_daily_volumes_normalized[symbol], symbol),
+        combined_volume_score_by_symbol = {
+            symbol: avg_daily_volumes_normalized[symbol]
+            for symbol in liquid_symbols
+        }
+        liquidity_score_by_symbol: dict[str, float] = {}
+        newly_admitted_symbols: set[str] = set()
+
+        try:
+            ranked_metrics = exchange_client.get_futures_symbols_with_liquidity_metrics()
+            for item in ranked_metrics:
+                symbol_raw = str(item.get("symbol", ""))
+                symbol = normalize_symbol(symbol_raw)
+                if symbol not in futures_symbol_map:
+                    continue
+
+                quote_volume = float(item.get("quote_volume", 0.0) or 0.0)
+                liquidity_score = float(item.get("liquidity_score", 0.0) or 0.0)
+                liquidity_score_by_symbol[symbol] = liquidity_score
+                liquidity_quality_by_symbol[symbol_raw] = {
+                    "liquidity_score": liquidity_score,
+                    "quote_volume": quote_volume,
+                    "trade_count_24h": int(item.get("trade_count_24h", 0) or 0),
+                    "quality_flags": list(cast(list[object], item.get("quality_flags", []))),
+                    "quality_metadata": dict(cast(dict[str, object], item.get("quality_metadata", {}))),
+                }
+
+                if symbol not in avg_daily_volumes_normalized and quote_volume >= min_volume_usd:
+                    newly_admitted_symbols.add(symbol)
+                    combined_volume_score_by_symbol[symbol] = quote_volume
+        except Exception as exc:
+            logger.warning(
+                "подбор-символов: добор по метрикам ликвидности биржи недоступен (%s)",
+                exc,
+            )
+
+        combined_symbols = set(liquid_symbols) | newly_admitted_symbols
+        if not combined_symbols:
+            fallback_symbols = exchange_symbols_normalized[:top_n]
+            logger.info(
+                "подбор-символов: CoinGecko отключен, пул ликвидности пуст → fallback на алфавитный top_n=%s",
+                len(fallback_symbols),
+            )
+            return [futures_symbol_map[symbol] for symbol in fallback_symbols], liquidity_quality_by_symbol
+
+        ranked_top_symbols = sorted(
+            combined_symbols,
+            key=lambda symbol: (
+                combined_volume_score_by_symbol.get(symbol, 0.0),
+                liquidity_score_by_symbol.get(symbol, 0.0),
+                symbol,
+            ),
             reverse=True,
-        )
-        ranked_top_symbols = ranked_liquid_symbols[:top_n]
+        )[:top_n]
 
         logger.info(
-            "подбор-символов: CoinGecko отключен (режим=cache-liquidity mode), всего на бирже=%s → прошли расчёт объёма=%s → после фильтра ликвидности=%s → после top_n=%s",
+            "подбор-символов: CoinGecko отключен (режим=cache+exchange-liquidity), всего на бирже=%s → в кэше с объёмом=%s → кэш прошёл фильтр ликвидности=%s → итоговый объединённый пул=%s → после top_n=%s",
             len(exchange_symbols_normalized),
             len(symbols_with_volume),
             len(liquid_symbols),
+            len(combined_symbols),
             len(ranked_top_symbols),
         )
         logger.info(
             "подбор-символов: фильтр ликвидности по среднедневному объёму (мин_avg_daily_volume_usd=%.2f) исключено=%s",
             min_volume_usd,
             len(symbols_with_volume) - len(liquid_symbols),
+        )
+        logger.info(
+            "подбор-символов: newly admitted symbols из биржевых метрик=%s",
+            len(newly_admitted_symbols),
         )
         return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
 
