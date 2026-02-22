@@ -763,11 +763,15 @@ class BeeBiteEngine:
         atr_window = rows[atr_start_idx:before_pump_idx]
 
         tr_values: list[float] = []
-        for n, item in enumerate(atr_window):
-            prev_close = float(rows[atr_start_idx + n - 1].close)
+        prev_close: float | None = None
+        # Защита от look-ahead и отрицательных индексов: TR считаем только по данным внутри ATR-окна,
+        # для первой свечи окна берём её же close в качестве prev_close.
+        for item in atr_window:
+            prev_close = float(item.close) if prev_close is None else prev_close
             high = float(item.high)
             low = float(item.low)
             tr_values.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+            prev_close = float(item.close)
         atr_pre = float(np.mean(tr_values)) if tr_values else 0.0
         if atr_pre <= 0:
             return None
