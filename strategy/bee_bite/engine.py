@@ -626,19 +626,24 @@ class BeeBiteEngine:
                     realized_pnl += (tp1 - entry_price) * tp1_share * position_size
                     trailing_reference = max(trailing_reference, close)
                 if tp1_hit:
+                    # Консервативная политика для одной свечи после TP1:
+                    # если одновременно задеты TP2 и защитный стоп, считаем,
+                    # что сначала отработал защитный стоп.
+                    # Для LONG/SHORT порядок проверок зеркален и одинаков по смыслу.
                     trailing_reference = max(trailing_reference, close)
                     trailing_stop = trailing_reference - setup.atr_bg
-                    active_protective_stop = max(stop_after_tp1, trailing_stop) if trailing_mode else stop_after_tp1
-                    if high >= tp2_target:
-                        exit_price = tp2_target
-                        realized_pnl += (tp2_target - entry_price) * remainder_share * position_size
-                        result_type = TradeResultType.TP2
+                    protective_stop_level = max(stop_after_tp1, trailing_stop) if trailing_mode else stop_after_tp1
+                    take_profit_level = tp2_target
+                    if low <= protective_stop_level:
+                        exit_price = protective_stop_level
+                        realized_pnl += (protective_stop_level - entry_price) * remainder_share * position_size
+                        result_type = TradeResultType.TP1_BE
                         exit_idx = idx
                         break
-                    if low <= active_protective_stop:
-                        exit_price = active_protective_stop
-                        realized_pnl += (active_protective_stop - entry_price) * remainder_share * position_size
-                        result_type = TradeResultType.TP1_BE
+                    if high >= take_profit_level:
+                        exit_price = take_profit_level
+                        realized_pnl += (take_profit_level - entry_price) * remainder_share * position_size
+                        result_type = TradeResultType.TP2
                         exit_idx = idx
                         break
             else:
@@ -658,19 +663,24 @@ class BeeBiteEngine:
                     realized_pnl += (entry_price - tp1) * tp1_share * position_size
                     trailing_reference = min(trailing_reference, close)
                 if tp1_hit:
+                    # Консервативная политика для одной свечи после TP1:
+                    # если одновременно задеты TP2 и защитный стоп, считаем,
+                    # что сначала отработал защитный стоп.
+                    # Для LONG/SHORT порядок проверок зеркален и одинаков по смыслу.
                     trailing_reference = min(trailing_reference, close)
                     trailing_stop = trailing_reference + setup.atr_bg
-                    active_protective_stop = min(stop_after_tp1, trailing_stop) if trailing_mode else stop_after_tp1
-                    if low <= tp2_target:
-                        exit_price = tp2_target
-                        realized_pnl += (entry_price - tp2_target) * remainder_share * position_size
-                        result_type = TradeResultType.TP2
+                    protective_stop_level = min(stop_after_tp1, trailing_stop) if trailing_mode else stop_after_tp1
+                    take_profit_level = tp2_target
+                    if high >= protective_stop_level:
+                        exit_price = protective_stop_level
+                        realized_pnl += (entry_price - protective_stop_level) * remainder_share * position_size
+                        result_type = TradeResultType.TP1_BE
                         exit_idx = idx
                         break
-                    if high >= active_protective_stop:
-                        exit_price = active_protective_stop
-                        realized_pnl += (entry_price - active_protective_stop) * remainder_share * position_size
-                        result_type = TradeResultType.TP1_BE
+                    if low <= take_profit_level:
+                        exit_price = take_profit_level
+                        realized_pnl += (entry_price - take_profit_level) * remainder_share * position_size
+                        result_type = TradeResultType.TP2
                         exit_idx = idx
                         break
 
