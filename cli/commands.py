@@ -60,6 +60,8 @@ from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from strategy.bee_bite import (
+    BeeBiteParams,
+    BeeBiteStrategy,
     get_bee_bite_runtime,
     parse_bee_bite_grid_mode,
     parse_bee_bite_profile_id,
@@ -179,6 +181,42 @@ def _build_breakout_params_from_row(
     )
 
 
+def _build_bee_bite_params_from_row(
+    row: pd.Series,
+    *,
+    symbol: str,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+) -> BeeBiteParams:
+    bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
+    bite_t_max_in_trade = None if pd.isna(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
+
+    return BeeBiteParams(
+        bite_lookback=int(row["bite_lookback"]),
+        bite_volume_mult=float(row["bite_volume_mult"]),
+        bite_retest_window_hours=int(row["bite_retest_window_hours"]),
+        bite_min_rr=float(row["bite_min_rr"]),
+        bite_tp2_mult=float(row["bite_tp2_mult"]),
+        bite_min_move_atr=float(row["bite_min_move_atr"]),
+        bite_max_retest_depth=float(row["bite_max_retest_depth"]),
+        bite_confirmation_bars=int(row["bite_confirmation_bars"]),
+        bite_entry_trigger=EntryTrigger(str(row["bite_entry_trigger"])),
+        bite_min_depth_threshold=float(row["bite_min_depth_threshold"]),
+        bite_micro_offset=float(row["bite_micro_offset"]),
+        bite_reclaim_limit=int(row["bite_reclaim_limit"]),
+        bite_max_age_range=int(row["bite_max_age_range"]),
+        symbol=symbol,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        bite_r_trade=float(row["bite_r_trade"]),
+        bite_portfolio_risk_limit=float(row["bite_portfolio_risk_limit"]),
+        bite_min_stop_atr_ratio=float(row["bite_min_stop_atr_ratio"]),
+        bite_t_max_in_trade=bite_t_max_in_trade,
+        bite_profile_id=str(row["bite_profile_id"]),
+        bite_grid_mode=str(row["bite_grid_mode"]),
+    )
+
+
 def _plot_trade_setups_for_symbols(
     *,
     config: AppConfig,
@@ -244,6 +282,114 @@ def _plot_trade_setups_for_symbols(
         logger.warning("%s: не найдено сделок для визуализации", log_prefix)
 
 
+def _plot_bee_bite_diagnostics_for_symbols(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: BeeBiteStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> None:
+    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+    diagnostics_dir = output_dir / "bee_bite_diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+
+    symbols_with_states = 0
+    total_trades_generated = 0
+
+    for symbol, mtf_frames in symbol_frames.items():
+        params = _build_bee_bite_params_from_row(
+            params_row,
+            symbol=symbol,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
+        strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+        diagnostics = strategy.consume_last_generation_diagnostics()
+        states_obj = diagnostics.get("states", [])
+        states = [str(state) for state in states_obj] if isinstance(states_obj, list) else []
+        trades_generated = int(diagnostics.get("trades_generated", 0) or 0)
+        total_trades_generated += trades_generated
+        if states:
+            symbols_with_states += 1
+
+        payload = {
+            "symbol": symbol,
+            "states": states,
+            "states_count": dict(Counter(states)),
+            "trades_generated": trades_generated,
+            "diagnostics": diagnostics,
+        }
+        output_path = diagnostics_dir / f"{symbol.replace('/', '_')}_diagnostics.json"
+        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    logger.info(
+        "%s: сохранена диагностическая визуализация bee_bite symbols=%s trades_generated=%s output_dir=%s",
+        log_prefix,
+        symbols_with_states,
+        total_trades_generated,
+        diagnostics_dir,
+    )
+    if symbols_with_states == 0:
+        logger.warning("%s: не найдено диагностических данных bee_bite для визуализации", log_prefix)
+
+
+def _plot_for_strategy(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy_id: str,
+    breakout_strategy: BreakoutStrategy,
+    strategy: object,
+    preparer: DataPreparer,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> bool:
+    if strategy_id == "breakout":
+        _plot_trade_setups_for_symbols(
+            config=config,
+            args=args,
+            logger=logger,
+            strategy=breakout_strategy,
+            preparer=preparer,
+            symbol_frames=symbol_frames,
+            params_row=params_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix=log_prefix,
+            strategy_id=strategy_id,
+        )
+        return True
+
+    if strategy_id == "bee_bite":
+        if not isinstance(strategy, BeeBiteStrategy):
+            logger.error("%s: неподдерживаемый тип визуализации для стратегии bee_bite", log_prefix)
+            return False
+        _plot_bee_bite_diagnostics_for_symbols(
+            config=config,
+            args=args,
+            logger=logger,
+            strategy=strategy,
+            symbol_frames=symbol_frames,
+            params_row=params_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix=log_prefix,
+        )
+        return True
+
+    logger.error("%s: визуализация не поддерживается для стратегии %s", log_prefix, strategy_id)
+    return False
+
+
 def _load_plot_params_row_from_results(
     config: AppConfig,
     args: argparse.Namespace,
@@ -279,6 +425,8 @@ def _load_plot_params_row_from_results(
             "entry_trigger",
         ],
         "bee_bite": [
+            "bite_profile_id",
+            "bite_grid_mode",
             "bite_lookback",
             "bite_volume_mult",
             "bite_retest_window_hours",
@@ -288,6 +436,14 @@ def _load_plot_params_row_from_results(
             "bite_max_retest_depth",
             "bite_confirmation_bars",
             "bite_entry_trigger",
+            "bite_min_depth_threshold",
+            "bite_micro_offset",
+            "bite_reclaim_limit",
+            "bite_max_age_range",
+            "bite_r_trade",
+            "bite_portfolio_risk_limit",
+            "bite_min_stop_atr_ratio",
+            "bite_t_max_in_trade",
         ],
     }
     required_columns = required_columns_by_strategy.get(strategy_id)
@@ -1084,19 +1240,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         best_row = _load_plot_params_row_from_results(config, args, logger=logger, strategy_id=strategy_id)
         if best_row is None:
             return 1
-        _plot_trade_setups_for_symbols(
+        if not _plot_for_strategy(
             config=config,
             args=args,
             logger=logger,
-            strategy=breakout_strategy,
+            strategy_id=strategy_id,
+            breakout_strategy=breakout_strategy,
+            strategy=strategy,
             preparer=preparer,
             symbol_frames=symbol_frames,
             params_row=best_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
             log_prefix="plot-from-results",
-            strategy_id=strategy_id,
-        )
+        ):
+            return 1
         return 0
 
     results = runner.run(
@@ -1151,19 +1309,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             return 0
 
         best_row = results.iloc[0]
-        _plot_trade_setups_for_symbols(
+        if not _plot_for_strategy(
             config=config,
             args=args,
             logger=logger,
-            strategy=breakout_strategy,
+            strategy_id=strategy_id,
+            breakout_strategy=breakout_strategy,
+            strategy=strategy,
             preparer=preparer,
             symbol_frames=symbol_frames,
             params_row=best_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
             log_prefix="запуск-бэктеста: plot=true",
-            strategy_id=strategy_id,
-        )
+        ):
+            return 1
     return 0
 
 
