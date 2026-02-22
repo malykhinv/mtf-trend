@@ -55,6 +55,26 @@ BEE_BITE_GRID_MODE=baseline
 - `strategy/bee_bite/trade_plan.py`
 - `strategy/bee_bite/config.py`
 
+
+## Влияние HTF-уровней на входы
+
+В `BeeBiteEngine._run_fsm` HTF-уровни (`level_high/level_low`) теперь участвуют в FSM явно:
+
+- **SEEK_PUMP**: направление сетапа фильтруется текущим HTF-контекстом.
+  - `LONG` допускается только если цена пробоя `<= current level_low`.
+  - `SHORT` допускается только если цена пробоя `>= current level_high`.
+  - Если HTF-уровней нет (режим `generate_events()`), фильтр отключается.
+- **SEEK_RANGE**: после фиксации диапазона проверяется привязка к HTF-якорю.
+  - Для `LONG` внутри диапазона должен находиться `level_low`.
+  - Для `SHORT` внутри диапазона должен находиться `level_high`.
+  - При несоответствии диапазон отбрасывается, FSM возвращается в `IDLE`.
+- **RANGE_LOCKED / BREAK_ACTIVE**: прокол и reclaim считаются относительно объединённой границы `reclaim_reference`:
+  - `LONG`: `max(range_low, level_low)` (или `range_low`, если HTF отсутствует).
+  - `SHORT`: `min(range_high, level_high)` (или `range_high`, если HTF отсутствует).
+  - Для входа требуется прокол за диапазон и за `reclaim_reference`, затем закрытие/reclaim обратно через `reclaim_reference` с микро-офсетом.
+
+Это делает логику мультитаймфрейма строгой, а single-TF режим (без `higher_levels`) оставляет в прежнем рабочем виде без обязательных HTF-фильтров.
+
 ## Классификация исходов сделок
 
 - При срабатывании `time-exit` **до достижения TP1** (`PROFILE_TIME_EXIT_HOURS_NO_TP1`) итоговый `result_type`
