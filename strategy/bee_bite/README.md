@@ -55,6 +55,15 @@ BEE_BITE_GRID_MODE=baseline
 - `strategy/bee_bite/trade_plan.py`
 - `strategy/bee_bite/config.py`
 
+## Классификация исходов сделок
+
+- При срабатывании `time-exit` **до достижения TP1** (`PROFILE_TIME_EXIT_HOURS_NO_TP1`) итоговый `result_type`
+  определяется по знаку `pnl`:
+  - отрицательный `pnl` → `SL`;
+  - около нуля → `BE`;
+  - положительный `pnl` → `TIME_EXIT_PROFIT`.
+- Сделки после достижения TP1 продолжают использовать существующие исходы (`TP1_BE` / `TP2`) по правилам trade-plan.
+
 ## Входные признаки (portfolio mode)
 
 Единый источник `oi_break_avg` закреплён как **upstream feature pipeline**:

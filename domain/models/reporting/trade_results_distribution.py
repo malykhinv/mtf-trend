@@ -9,5 +9,6 @@ from dataclasses import dataclass
 class TradeResultsDistribution:
     SL: int
     BE: int
+    TIME_EXIT_PROFIT: int
     TP1_BE: int
     TP2: int
