@@ -289,7 +289,7 @@ python main.py run-backtest --strategy bee_bite
 - `--bee-bite-grid {baseline,expanded}` — baseline (узкий) или controlled-grid (широкий) вокруг baseline;
 - `--bee-bite-reclaim-mode {strict,balanced,aggressive}` — меняет reclaim-offset и лимит ожидания reclaim внутри движка;
 - `--bee-bite-retest-mode {confirmation,immediate}` — выбирает механику входа (подтверждение или мгновенный вход после reclaim);
-- `--bee-bite-cooldown-bars` и `--bee-bite-max-age-range` передаются в runtime-параметры стратегии и видны в `backtest_results.csv`.
+- `--bee-bite-cooldown-hours` и `--bee-bite-max-age-range-hours` передаются в runtime-параметры стратегии и видны в `backtest_results.csv` (`--*-bars`/`--bee-bite-max-age-range` сохранены как совместимые алиасы).
 
 Переменные окружения для `bee_bite`:
 

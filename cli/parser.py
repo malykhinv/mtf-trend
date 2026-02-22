@@ -112,16 +112,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Режим retest в bee_bite: immediate=мгновенный вход, confirmation=вход после подтверждения (валидируется профилем).",
     )
     run_bt.add_argument(
+        "--bee-bite-cooldown-hours",
         "--bee-bite-cooldown-bars",
-        type=_positive_int_for("--bee-bite-cooldown-bars"),
+        dest="bee_bite_cooldown_hours",
+        type=_positive_int_for("--bee-bite-cooldown-hours"),
         default=None,
-        help="Cooldown (в барах) для bee_bite: применяется в движке после неудачного reclaim/отклонённого входа.",
+        help="Cooldown (в часах) для bee_bite: применяется в движке после неудачного reclaim/отклонённого входа.",
     )
     run_bt.add_argument(
+        "--bee-bite-max-age-range-hours",
         "--bee-bite-max-age-range",
-        type=_positive_int_for("--bee-bite-max-age-range"),
+        dest="bee_bite_max_age_range_hours",
+        type=_positive_int_for("--bee-bite-max-age-range-hours"),
         default=None,
-        help="Максимальный возраст range (в барах) для bee_bite: после этого setup сбрасывается.",
+        help="Максимальный возраст range (в часах) для bee_bite: после этого setup сбрасывается.",
     )
     run_bt.add_argument("--plot", default=False, help="Строить графики сделок (true/false)")
     run_bt.add_argument(

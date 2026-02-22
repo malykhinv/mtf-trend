@@ -1118,13 +1118,13 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             default=profile_runtime.retest_mode,
         )
         config.strategy.bee_bite_cooldown_bars = (
-            int(getattr(args, "bee_bite_cooldown_bars", None))
-            if getattr(args, "bee_bite_cooldown_bars", None) is not None
+            int(getattr(args, "bee_bite_cooldown_hours", None))
+            if getattr(args, "bee_bite_cooldown_hours", None) is not None
             else profile_runtime.cooldown_hours
         )
         config.strategy.bee_bite_max_age_range = (
-            int(getattr(args, "bee_bite_max_age_range", None))
-            if getattr(args, "bee_bite_max_age_range", None) is not None
+            int(getattr(args, "bee_bite_max_age_range_hours", None))
+            if getattr(args, "bee_bite_max_age_range_hours", None) is not None
             else profile_runtime.max_age_range_hours
         )
         validate_bee_bite_runtime(
@@ -1133,8 +1133,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             top_n=getattr(args, "top_n", None),
             reclaim_mode=config.strategy.bee_bite_reclaim_mode,
             retest_mode=config.strategy.bee_bite_retest_mode,
-            cooldown_bars=config.strategy.bee_bite_cooldown_bars,
-            max_age_range=config.strategy.bee_bite_max_age_range,
+            cooldown_hours=config.strategy.bee_bite_cooldown_bars,
+            max_age_range_hours=config.strategy.bee_bite_max_age_range,
         )
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),

@@ -32,15 +32,15 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         grid_mode: BeeBiteGridMode,
         reclaim_mode: BeeBiteReclaimMode,
         retest_mode: BeeBiteRetestMode,
-        cooldown_bars: int,
-        max_age_range: int,
+        cooldown_hours: int,
+        max_age_range_hours: int,
     ) -> None:
         self._profile_id = profile_id
         self._grid_mode = grid_mode
         self._reclaim_mode = reclaim_mode
         self._retest_mode = retest_mode
-        self._cooldown_bars = cooldown_bars
-        self._max_age_range = max_age_range
+        self._cooldown_hours = cooldown_hours
+        self._max_age_range_hours = max_age_range_hours
         self._engine = BeeBiteEngine()
         self._last_generation_diagnostics: dict[str, object] = {}
 
@@ -146,8 +146,8 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             grid_mode=self._grid_mode,
             reclaim_mode=self._reclaim_mode,
             retest_mode=self._retest_mode,
-            cooldown_bars=self._cooldown_bars,
-            max_age_range=self._max_age_range,
+            cooldown_hours=self._cooldown_hours,
+            max_age_range_hours=self._max_age_range_hours,
         )
 
     def params_to_row(self, params: BeeBiteParams) -> dict[str, int | float | str | None]:

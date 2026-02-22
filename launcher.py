@@ -119,16 +119,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Режим retest в bee_bite: immediate=мгновенный вход, confirmation=вход после подтверждения (валидируется профилем).",
     )
     parser.add_argument(
+        "--bee-bite-cooldown-hours",
         "--bee-bite-cooldown-bars",
+        dest="bee_bite_cooldown_hours",
         type=int,
         default=None,
-        help="Cooldown (в барах) для bee_bite: применяется в движке после неудачного reclaim/отклонённого входа.",
+        help="Cooldown (в часах) для bee_bite: применяется в движке после неудачного reclaim/отклонённого входа.",
     )
     parser.add_argument(
+        "--bee-bite-max-age-range-hours",
         "--bee-bite-max-age-range",
+        dest="bee_bite_max_age_range_hours",
         type=int,
         default=None,
-        help="Максимальный возраст range (в барах) для bee_bite: после этого setup сбрасывается.",
+        help="Максимальный возраст range (в часах) для bee_bite: после этого setup сбрасывается.",
     )
     parser.add_argument("--output-dir", default=None, help="Директория сохранения изображений для plot-режимов")
     parser.add_argument("--limit", type=int, default=None, help="Ограничение числа свечей/событий для plot-режимов")
@@ -167,15 +171,23 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         bee_bite_grid=task.get("bee_bite_grid", cli_args.bee_bite_grid),
         bee_bite_reclaim_mode=task.get("bee_bite_reclaim_mode", cli_args.bee_bite_reclaim_mode),
         bee_bite_retest_mode=task.get("bee_bite_retest_mode", cli_args.bee_bite_retest_mode),
-        bee_bite_cooldown_bars=(
-            int(task["bee_bite_cooldown_bars"])
-            if "bee_bite_cooldown_bars" in task and task.get("bee_bite_cooldown_bars") is not None
-            else cli_args.bee_bite_cooldown_bars
+        bee_bite_cooldown_hours=(
+            int(task["bee_bite_cooldown_hours"])
+            if "bee_bite_cooldown_hours" in task and task.get("bee_bite_cooldown_hours") is not None
+            else (
+                int(task["bee_bite_cooldown_bars"])
+                if "bee_bite_cooldown_bars" in task and task.get("bee_bite_cooldown_bars") is not None
+                else cli_args.bee_bite_cooldown_hours
+            )
         ),
-        bee_bite_max_age_range=(
-            int(task["bee_bite_max_age_range"])
-            if "bee_bite_max_age_range" in task and task.get("bee_bite_max_age_range") is not None
-            else cli_args.bee_bite_max_age_range
+        bee_bite_max_age_range_hours=(
+            int(task["bee_bite_max_age_range_hours"])
+            if "bee_bite_max_age_range_hours" in task and task.get("bee_bite_max_age_range_hours") is not None
+            else (
+                int(task["bee_bite_max_age_range"])
+                if "bee_bite_max_age_range" in task and task.get("bee_bite_max_age_range") is not None
+                else cli_args.bee_bite_max_age_range_hours
+            )
         ),
         output_dir=task.get("output_dir", cli_args.output_dir),
         limit=(
