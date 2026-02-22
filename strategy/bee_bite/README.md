@@ -45,3 +45,29 @@ BEE_BITE_GRID_MODE=baseline
 - `strategy/bee_bite/engine.py`
 - `strategy/bee_bite/trade_plan.py`
 - `strategy/bee_bite/config.py`
+
+## Входные признаки (portfolio mode)
+
+Единый источник `oi_break_avg` закреплён как **upstream feature pipeline**:
+- `PortfolioStateEngine` не пересчитывает `oi_break_avg` внутри FSM;
+- поле должно быть заранее подготовлено в входном `entry_frame` для каждого символа.
+
+### Обязательные поля
+
+- Базовые OHLCV: `timestamp`, `open`, `high`, `low`, `close`, `volume`.
+- Для score-компонента OI: `oi_break_avg`.
+
+Для `oi_break_avg` действует строгая валидация качества на уровне `PortfolioStateEngine`:
+- колонка должна присутствовать;
+- не менее `32` валидных значений (`finite && > 0`);
+- покрытие валидными значениями не ниже `0.90` по фрейму.
+
+Если критерии не выполнены, символ пропускается до начала FSM. Причина попадает в diagnostics-флаг
+`portfolio_score.oi_break_avg_validation.skipped_symbols`.
+
+### Опциональные поля и fallback
+
+- `oi_reclaim`, `taker_buy_ratio|taker_ratio`, `avg_volume_range|avg_range_volume|range_volume_avg`,
+  `range_volume_zscore|volume_range_zscore|zscore_range_volume`, `spread|bid_ask_spread|effective_spread`.
+- При отсутствии или плохом качестве этих полей стратегия не падает: соответствующий компонент score даёт `0` баллов,
+  а причина фиксируется в `score_trace.data_quality_notes`.
