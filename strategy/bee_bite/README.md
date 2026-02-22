@@ -34,6 +34,15 @@ python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-
   - `bite_reclaim_limit_bars` — лимит ожидания reclaim в барах entry-TF (для портфельного режима это бары 15m);
   - `bite_cooldown_hours` и `bite_max_age_range_hours` — runtime-параметры в часах с конвертацией в бары 15m внутри `PortfolioStateEngine`.
 
+## Параметры, которые влияют на вход и TP
+
+- `bite_min_move_atr`: в `SEEK_PUMP` сетап допускается только если импульс `up_impulse/down_impulse >= bite_min_move_atr * atr_bg` (дополнительный фильтр поверх профильного `IMPULSE_THRESHOLDS`).
+- `bite_tp2_mult`: участвует в расчёте TP2-дистанции в trade-plan как `tp2_distance = max(bite_tp2_mult * atr_bg, bite_tp2_mult * stop_distance)`.
+  - fixed-TP2 доступен только если экстремум пампа покрывает эту дистанцию;
+  - иначе используется fallback на trailing-цель с тем же `tp2_distance`.
+- `bite_min_rr`: перед входом применяется жёсткий фильтр RR до TP2: `RR = reward_to_tp2 / stop_distance`, сделка допускается только при `RR >= bite_min_rr`.
+
+
 Переменные окружения:
 
 ```env
