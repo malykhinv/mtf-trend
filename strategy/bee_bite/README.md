@@ -2,6 +2,8 @@
 
 Документация по стратегии `bee_bite`.
 
+> Важно: `bee_bite` работает только с LONG-входами. SHORT-направление в стратегии не поддерживается.
+
 ## Как запустить
 
 Через `launcher.py`:
@@ -42,12 +44,14 @@ python main.py run-backtest --strategy bee_bite --bee-bite-profile A --bee-bite-
 
 ## Параметры, которые влияют на вход и TP
 
-- `bite_min_move_atr`: в `SEEK_PUMP` сетап допускается только если импульс `up_impulse/down_impulse >= bite_min_move_atr * atr_bg` (дополнительный фильтр поверх профильного `IMPULSE_THRESHOLDS`).
+- `bite_min_move_atr`: в `SEEK_PUMP` LONG-сетап допускается только если импульс `up_impulse >= bite_min_move_atr * atr_bg` (дополнительный фильтр поверх профильного `IMPULSE_THRESHOLDS`).
 - `bite_volume_mult`: в `SEEK_PUMP` используется фильтр аномального объёма: средний объём последних `pump_window=6` свечей должен быть не меньше `bite_volume_mult * median(volume)` по rolling-базе `atr_bg_window_len=96` свечей до пампа.
 - `bite_tp2_mult`: участвует в расчёте TP2-дистанции в trade-plan как `tp2_distance = max(bite_tp2_mult * atr_bg, bite_tp2_mult * stop_distance)`.
   - fixed-TP2 доступен только если экстремум пампа покрывает эту дистанцию;
   - иначе используется fallback на trailing-цель с тем же `tp2_distance`.
 - `bite_min_rr`: перед входом применяется жёсткий фильтр RR до TP2: `RR = reward_to_tp2 / stop_distance`, сделка допускается только при `RR >= bite_min_rr`.
+
+Примечание: параметры входа и TP в `bee_bite` применяются только к LONG-сценариям; short-направление не используется.
 
 
 Переменные окружения:
@@ -81,19 +85,16 @@ BEE_BITE_GRID_MODE=baseline
 
 ## Влияние HTF-уровней на входы
 
-В `BeeBiteEngine._run_fsm` HTF-уровни (`level_high/level_low`) теперь участвуют в FSM явно:
+В `BeeBiteEngine._run_fsm` HTF-уровни (`level_low`) участвуют в LONG-логике FSM явно:
 
 - **SEEK_PUMP**: направление сетапа фильтруется текущим HTF-контекстом.
-  - `LONG` допускается только если цена пробоя `<= current level_low`.
-  - `SHORT` допускается только если цена пробоя `>= current level_high`.
+  - LONG допускается только если цена пробоя `<= current level_low`.
   - Если HTF-уровней нет (режим `generate_events()`), фильтр отключается.
 - **SEEK_RANGE**: после фиксации диапазона проверяется привязка к HTF-якорю.
-  - Для `LONG` внутри диапазона должен находиться `level_low`.
-  - Для `SHORT` внутри диапазона должен находиться `level_high`.
+  - Для LONG внутри диапазона должен находиться `level_low`.
   - При несоответствии диапазон отбрасывается, FSM возвращается в `IDLE`.
 - **RANGE_LOCKED / BREAK_ACTIVE**: прокол и reclaim считаются относительно объединённой границы `reclaim_reference`:
-  - `LONG`: `max(range_low, level_low)` (или `range_low`, если HTF отсутствует).
-  - `SHORT`: `min(range_high, level_high)` (или `range_high`, если HTF отсутствует).
+  - LONG: `max(range_low, level_low)` (или `range_low`, если HTF отсутствует).
   - Для входа требуется прокол за диапазон и за `reclaim_reference`, затем закрытие/reclaim обратно через `reclaim_reference` с микро-офсетом.
 
 Это делает логику мультитаймфрейма строгой, а single-TF режим (без `higher_levels`) оставляет в прежнем рабочем виде без обязательных HTF-фильтров.
