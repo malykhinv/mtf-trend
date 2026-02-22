@@ -95,6 +95,10 @@ class BeeBiteEngine:
         "C": 32,
     }
     FIXED_RANGE_WINDOW: int | None = None
+    # Тайм-аут для сделок без TP1: закрываем только на точном индексе
+    # `entry_idx + candles` после проверки SL/TP на этой же свече.
+    # Если действует `limit` и дедлайн за его пределами, срабатывает
+    # естественный выход на `limit` без `time_exit_triggered`.
     PROFILE_TIME_EXIT_HOURS_NO_TP1: dict[str, int] = {
         "A": 12,
         "B": 8,
@@ -582,6 +586,7 @@ class BeeBiteEngine:
 
         time_exit_hours = self.PROFILE_TIME_EXIT_HOURS_NO_TP1.get(params.bite_profile_id, 8)
         time_exit_candles = max(1, self._hours_to_candles(time_exit_hours, params.entry_timeframe))
+        time_exit_idx = entry_idx + time_exit_candles
 
         limit = len(rows) - 1
         if params.bite_t_max_in_trade is not None:
@@ -665,7 +670,7 @@ class BeeBiteEngine:
                         exit_idx = idx
                         break
 
-            if not tp1_hit and (idx - entry_idx) >= time_exit_candles:
+            if not tp1_hit and idx == time_exit_idx:
                 exit_price = close
                 exit_idx = idx
                 time_exit_triggered = True
