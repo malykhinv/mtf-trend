@@ -458,6 +458,9 @@ class PortfolioStateEngine:
                     atr_bg=state.atr_bg,
                     score_reclaim_timeline_idx=state.score_reclaim_timeline_idx,
                     score_entry_timeline_idx=state.score_entry_timeline_idx,
+                    core_width=state.core_width,
+                    profile_id=(self.config.bee_bite_profile_id or "").upper() or None,
+                    spread=_first_valid_float(state.score_reclaim_row, "spread", "bid_ask_spread", "effective_spread"),
                 )
                 score_trace = self._build_score_trace.copy()
                 return EntryCandidate(
@@ -484,6 +487,9 @@ class PortfolioStateEngine:
                 atr_bg=state.atr_bg,
                 score_reclaim_timeline_idx=state.score_reclaim_timeline_idx,
                 score_entry_timeline_idx=state.score_entry_timeline_idx,
+                core_width=state.core_width,
+                profile_id=(self.config.bee_bite_profile_id or "").upper() or None,
+                spread=_first_valid_float(score_row, "spread", "bid_ask_spread", "effective_spread"),
             )
             score_trace = self._build_score_trace.copy()
             return EntryCandidate(
@@ -510,6 +516,9 @@ class PortfolioStateEngine:
         atr_bg: float | None,
         score_reclaim_timeline_idx: int | None,
         score_entry_timeline_idx: int | None,
+        core_width: float | None,
+        profile_id: str | None,
+        spread: float | None,
     ) -> tuple[float, float]:
         close = float(score_row["close"] or 0.0)
         high = float(score_row["high"] or 0.0)
@@ -532,6 +541,9 @@ class PortfolioStateEngine:
             "oi_relation": 0.0,
             "depth_vs_atr": 0.0,
             "range_volume_zscore": 0.0,
+            "penalty_reclaim_delay_6_8": 0.0,
+            "penalty_depth_vs_core_width": 0.0,
+            "penalty_spread_gt_0_001": 0.0,
             "data_quality_notes": [],
         }
         quality_notes: list[str] = []
@@ -601,6 +613,18 @@ class PortfolioStateEngine:
         elif zscore_range_volume > 0.5:
             score_trace["range_volume_zscore"] = 1.0
         score += float(score_trace["range_volume_zscore"])
+
+        if profile_id in {"B", "C"} and 6 <= reclaim_bars <= 8:
+            score_trace["penalty_reclaim_delay_6_8"] = -1.0
+        score += float(score_trace["penalty_reclaim_delay_6_8"])
+
+        if core_width is not None and core_width > 0.0 and depth > 0.4 * core_width:
+            score_trace["penalty_depth_vs_core_width"] = -1.0
+        score += float(score_trace["penalty_depth_vs_core_width"])
+
+        if spread is not None and spread > 0.001:
+            score_trace["penalty_spread_gt_0_001"] = -1.0
+        score += float(score_trace["penalty_spread_gt_0_001"])
 
         score_trace["total"] = score
         self._build_score_trace = score_trace
