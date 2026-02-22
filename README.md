@@ -287,15 +287,17 @@ python main.py run-backtest --strategy bee_bite
 Для `bee_bite` доступны профиль, сетка и runtime-режимы:
 - `--bee-bite-profile {A,B,C}` — фиксированный baseline-профиль;
 - `--bee-bite-grid {baseline,expanded}` — baseline (узкий) или controlled-grid (широкий) вокруг baseline;
-- `--bee-bite-reclaim-mode {strict,balanced,aggressive}` — меняет reclaim-offset и лимит ожидания reclaim внутри движка;
+- `--bee-bite-reclaim-mode {strict,balanced,aggressive}` — меняет reclaim-offset и лимит ожидания reclaim в **барах 15m** внутри движка;
 - `--bee-bite-retest-mode {confirmation,immediate}` — выбирает механику входа (подтверждение или мгновенный вход после reclaim);
-- `--bee-bite-cooldown-hours` и `--bee-bite-max-age-range-hours` передаются в runtime-параметры стратегии и видны в `backtest_results.csv` (`--*-bars`/`--bee-bite-max-age-range` сохранены как совместимые алиасы).
+- `--bee-bite-cooldown-hours` и `--bee-bite-max-age-range-hours` задаются в **часах**, затем внутри портфельного движка переводятся в бары 15m; в `backtest_results.csv` сохраняются как `bite_cooldown_hours`/`bite_max_age_range_hours` (старые алиасы CLI сохранены для совместимости).
 
 Переменные окружения для `bee_bite`:
 
 ```env
 BEE_BITE_PROFILE=A
 BEE_BITE_GRID_MODE=baseline
+BEE_BITE_COOLDOWN_HOURS=8
+BEE_BITE_MAX_AGE_RANGE_HOURS=12
 ```
 
 ### Фиксация конца периода загрузки (повторяемые прогоны)

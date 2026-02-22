@@ -259,7 +259,7 @@ class BeeBiteEngine:
             if state == BeeBiteState.RANGE_LOCKED and setup is not None:
                 range_started_idx = setup.retest_idx if setup.retest_idx is not None else i
                 elapsed_in_range = i - range_started_idx
-                max_age_range_candles = self._hours_to_candles(params.bite_max_age_range, params.entry_timeframe)
+                max_age_range_candles = self._hours_to_candles(params.bite_max_age_range_hours, params.entry_timeframe)
                 if elapsed_in_range > max_age_range_candles:
                     setup = None
                     state = BeeBiteState.IDLE
@@ -302,7 +302,7 @@ class BeeBiteEngine:
                     setup.lowest_break = min(setup.lowest_break, break_price)
                 else:
                     setup.lowest_break = max(setup.lowest_break, break_price)
-                reclaim_limit = params.bite_reclaim_limit
+                reclaim_limit = params.bite_reclaim_limit_bars
                 elapsed_since_break = i - setup.break_idx
                 emergency_level = 0.7 * setup.core_width
                 emergency_break = (
@@ -323,7 +323,7 @@ class BeeBiteEngine:
                         else price_close < (boundary - reclaim_offset_threshold)
                     )
                     if reclaim_ok and not micro_ok:
-                        cooldown_bars = self._hours_to_candles(params.bite_cooldown_bars, params.entry_timeframe)
+                        cooldown_bars = self._hours_to_candles(params.bite_cooldown_hours, params.entry_timeframe)
                         cooldown_until_idx = i + cooldown_bars
                         setup = None
                         state = BeeBiteState.IDLE
@@ -384,7 +384,7 @@ class BeeBiteEngine:
                     trades.append(trade)
                     diagnostics["trades_generated"] = cast(int, diagnostics["trades_generated"]) + 1
                 elif rejected:
-                    cooldown_bars = self._hours_to_candles(params.bite_cooldown_bars, params.entry_timeframe)
+                    cooldown_bars = self._hours_to_candles(params.bite_cooldown_hours, params.entry_timeframe)
                     cooldown_until_idx = i + cooldown_bars
                 i = max(i, exit_idx)
                 state = BeeBiteState.IN_TRADE

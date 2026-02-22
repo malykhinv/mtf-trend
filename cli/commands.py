@@ -206,6 +206,15 @@ def _build_bee_bite_params_from_row(
 ) -> BeeBiteParams:
     bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
     bite_t_max_in_trade = None if pd.isna(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
+    bite_reclaim_limit_raw = row.get("bite_reclaim_limit_bars")
+    if pd.isna(bite_reclaim_limit_raw):
+        bite_reclaim_limit_raw = row.get("bite_reclaim_limit")
+    bite_max_age_range_raw = row.get("bite_max_age_range_hours")
+    if pd.isna(bite_max_age_range_raw):
+        bite_max_age_range_raw = row.get("bite_max_age_range")
+    bite_cooldown_raw = row.get("bite_cooldown_hours")
+    if pd.isna(bite_cooldown_raw):
+        bite_cooldown_raw = row.get("bite_cooldown_bars", 8)
 
     return BeeBiteParams(
         bite_lookback=int(row["bite_lookback"]),
@@ -219,9 +228,9 @@ def _build_bee_bite_params_from_row(
         bite_entry_trigger=EntryTrigger(str(row["bite_entry_trigger"])),
         bite_min_depth_threshold=float(row["bite_min_depth_threshold"]),
         bite_micro_offset=float(row["bite_micro_offset"]),
-        bite_reclaim_limit=int(row["bite_reclaim_limit"]),
-        bite_max_age_range=int(row["bite_max_age_range"]),
-        bite_cooldown_bars=int(row.get("bite_cooldown_bars", 8)),
+        bite_reclaim_limit_bars=int(bite_reclaim_limit_raw),
+        bite_max_age_range_hours=int(bite_max_age_range_raw),
+        bite_cooldown_hours=int(bite_cooldown_raw),
         bite_reclaim_mode=parse_bee_bite_reclaim_mode(str(row.get("bite_reclaim_mode", "strict")), default="strict"),
         bite_retest_mode=parse_bee_bite_retest_mode(str(row.get("bite_retest_mode", "confirmation")), default="confirmation"),
         symbol=symbol,
@@ -487,11 +496,11 @@ def _load_plot_params_row_from_results(
             "bite_entry_trigger",
             "bite_min_depth_threshold",
             "bite_micro_offset",
-            "bite_reclaim_limit",
+            "bite_reclaim_limit_bars",
             "bite_reclaim_mode",
             "bite_retest_mode",
-            "bite_max_age_range",
-            "bite_cooldown_bars",
+            "bite_max_age_range_hours",
+            "bite_cooldown_hours",
             "bite_r_trade",
             "bite_portfolio_risk_limit",
             "bite_min_stop_atr_ratio",
@@ -1131,12 +1140,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             getattr(args, "bee_bite_retest_mode", None),
             default=profile_runtime.retest_mode,
         )
-        config.strategy.bee_bite_cooldown_bars = (
+        config.strategy.bee_bite_cooldown_hours = (
             int(getattr(args, "bee_bite_cooldown_hours", None))
             if getattr(args, "bee_bite_cooldown_hours", None) is not None
             else profile_runtime.cooldown_hours
         )
-        config.strategy.bee_bite_max_age_range = (
+        config.strategy.bee_bite_max_age_range_hours = (
             int(getattr(args, "bee_bite_max_age_range_hours", None))
             if getattr(args, "bee_bite_max_age_range_hours", None) is not None
             else profile_runtime.max_age_range_hours
@@ -1147,8 +1156,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             top_n=getattr(args, "top_n", None),
             reclaim_mode=config.strategy.bee_bite_reclaim_mode,
             retest_mode=config.strategy.bee_bite_retest_mode,
-            cooldown_hours=config.strategy.bee_bite_cooldown_bars,
-            max_age_range_hours=config.strategy.bee_bite_max_age_range,
+            cooldown_hours=config.strategy.bee_bite_cooldown_hours,
+            max_age_range_hours=config.strategy.bee_bite_max_age_range_hours,
         )
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),

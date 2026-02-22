@@ -27,7 +27,7 @@ def build_strategy(config: AppConfig, logger: Logger) -> BaseStrategy[object]:
             grid_mode=config.strategy.bee_bite_grid_mode,
             reclaim_mode=config.strategy.bee_bite_reclaim_mode,
             retest_mode=config.strategy.bee_bite_retest_mode,
-            cooldown_hours=config.strategy.bee_bite_cooldown_bars,
-            max_age_range_hours=config.strategy.bee_bite_max_age_range,
+            cooldown_hours=config.strategy.bee_bite_cooldown_hours,
+            max_age_range_hours=config.strategy.bee_bite_max_age_range_hours,
         )
     raise ValueError(f"Неподдерживаемый strategy_id: {config.strategy.strategy_id}")
