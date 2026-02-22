@@ -670,9 +670,16 @@ class PortfolioStateEngine:
 
     def _resolve_time_exit_bars(self) -> int | None:
         profile = (self.config.bee_bite_profile_id or "").upper()
+        profile_bars: int | None = None
         if profile in self.PROFILE_TIME_EXIT_HOURS_NO_TP1:
-            return self._hours_to_15m_bars(self.PROFILE_TIME_EXIT_HOURS_NO_TP1[profile])
-        return self.config.t_max_in_trade
+            profile_bars = self._hours_to_15m_bars(self.PROFILE_TIME_EXIT_HOURS_NO_TP1[profile])
+        config_bars = self.config.t_max_in_trade
+
+        if profile_bars is None:
+            return config_bars
+        if config_bars is None:
+            return profile_bars
+        return min(profile_bars, config_bars)
 
     def _resolve_reclaim_limit_bars(self) -> int:
         profile = (self.config.bee_bite_profile_id or "").upper()
@@ -815,7 +822,7 @@ class PortfolioStateEngine:
         else:
             lowest_break = float(state.lowest_break if state.lowest_break is not None else resistance)
             stop = lowest_break + buffer
-            low_before_pump = high_pump if high_pump < entry else entry - atr_bg
+            low_before_pump = float(state.low_before_pump if state.low_before_pump is not None else entry - atr_bg)
 
         plan = build_bee_bite_trade_plan(
             side=side,
