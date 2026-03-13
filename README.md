@@ -91,3 +91,4 @@ python main.py run-backtest --strategy bee_bite --bee-bite-grid research --top-n
 
 - стратегия: [strategy/bee_bite/README.md](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/bee_bite/README.md)
 - контрольные кейсы: [examples/bee_bite_checkpoints.csv](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/examples/bee_bite_checkpoints.csv)
+- стадии стратегии: [bee_bite_stages.md](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/bee_bite_stages.md)
