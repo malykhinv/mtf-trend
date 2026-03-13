@@ -143,6 +143,18 @@ def _format_stage1_reason_sample(result: BeeBiteStage1Result, frame: pd.DataFram
     )
 
 
+def _select_primary_stage1_event(events: list[BeeBiteStage1Result]) -> BeeBiteStage1Result:
+    return max(
+        events,
+        key=lambda item: (
+            float(item.pump_peak_price or 0.0),
+            float(item.pump_percent or 0.0),
+            float(item.post_pump_volume_ratio or 0.0),
+            -int(item.stage1_confirmed_timestamp or 0),
+        ),
+    )
+
+
 
 def _build_bee_bite_params_from_row(
     row: pd.Series,
@@ -1411,13 +1423,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
         events = selector.detect_events(symbol=symbol, frame=frame)
         if events:
             all_events.extend(events)
-            latest_event_by_symbol[symbol] = max(
-                events,
-                key=lambda item: (
-                    int(item.stage1_confirmed_timestamp or 0),
-                    int(item.pump_peak_timestamp or 0),
-                ),
-            )
+            latest_event_by_symbol[symbol] = _select_primary_stage1_event(events)
         else:
             evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
             reason_key = evaluation.reason if not evaluation.passed else "passed_now_but_no_historical_event"
