@@ -226,31 +226,24 @@ class LevelDetector:
                 is_resistance=False,
             )
 
-            merged_touch_count = float(high_touch_count + low_touch_count)
-            merged_reaction = (high_reaction + low_reaction) / 2.0
-            merged_score = (high_score + low_score) / 2.0
+            resistance_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in high_touch_indices])
+            support_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in low_touch_indices])
 
-            if merged_score < self._config.min_level_score:
-                frame.at[idx, "level_high"] = np.nan
-                frame.at[idx, "level_low"] = np.nan
-
-            touch_counts.append(merged_touch_count)
-            reaction_strengths.append(merged_reaction)
-            level_scores.append(merged_score)
+            touch_counts.append(float(max(high_touch_count, low_touch_count)))
+            reaction_strengths.append(float(max(high_reaction, low_reaction)))
+            level_scores.append(float(max(high_score, low_score)))
             resistance_reaction_strengths.append(float(high_reaction))
             resistance_level_scores.append(float(high_score))
             resistance_touch_counts.append(float(high_touch_count))
             resistance_min_bars_between_touches_values.append(float(high_min_bars_between_touches))
             resistance_max_penetration_atr_values.append(float(high_max_penetration_atr))
             resistance_max_penetration_pct_values.append(float(high_max_penetration_pct))
-            resistance_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in high_touch_indices])
             support_touch_counts.append(float(low_touch_count))
             support_reaction_strengths.append(float(low_reaction))
             support_level_scores.append(float(low_score))
             support_min_bars_between_touches_values.append(float(low_min_bars_between_touches))
             support_max_penetration_atr_values.append(float(low_max_penetration_atr))
             support_max_penetration_pct_values.append(float(low_max_penetration_pct))
-            support_touch_timestamps_values.append([int(window_timestamps[touch_idx]) for touch_idx in low_touch_indices])
 
         frame["level_start_time"] = level_start_times
         frame["touch_count"] = touch_counts
@@ -270,30 +263,10 @@ class LevelDetector:
         frame["support_max_penetration_atr"] = support_max_penetration_atr_values
         frame["support_max_penetration_pct"] = support_max_penetration_pct_values
         frame["support_touch_timestamps_ms"] = support_touch_timestamps_values
-        frame["level_start_time"] = frame["level_start_time"].astype("Int64")
 
-        frame = frame.dropna(
-            subset=[
-                "level_high",
-                "level_low",
-                "level_start_time",
-                "touch_count",
-                "reaction_strength",
-                "level_score",
-                "resistance_reaction_strength",
-                "resistance_level_score",
-                "resistance_touch_count",
-                "resistance_min_bars_between_touches",
-                "resistance_max_penetration_atr",
-                "resistance_max_penetration_pct",
-                "support_touch_count",
-                "support_reaction_strength",
-                "support_level_score",
-                "support_min_bars_between_touches",
-                "support_max_penetration_atr",
-                "support_max_penetration_pct",
-            ]
-        )
-        result = frame[result_columns].reset_index(drop=True)
-        result["level_start_time"] = result["level_start_time"].astype("int64")
-        return result
+        filtered = frame[
+            (frame["resistance_level_score"] >= self._config.min_level_score)
+            | (frame["support_level_score"] >= self._config.min_level_score)
+        ].copy()
+        filtered["level_start_time"] = filtered["level_start_time"].astype("int64")
+        return filtered[result_columns]

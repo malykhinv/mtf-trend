@@ -8,13 +8,16 @@ from dataclasses import dataclass
 @dataclass(frozen=True, slots=True)
 class ProfitableVariant:
     rank: int
-    lookback: int
-    volume_mult: float
-    retest_window: int
-    retest_zone: float
-    min_rr: float
-    sl_mode: str
-    tp2_mult: float
+    bite_profile_id: str
+    bite_grid_mode: str
+    bite_lookback: int
+    bite_volume_mult: float
+    bite_retest_window_hours: int
+    bite_min_rr: float
+    bite_tp2_mult: float
+    bite_confirmation_bars: int
+    bite_reclaim_mode: str
+    bite_retest_mode: str
     profit_factor: float
     pnl_percent: float
     win_rate: float

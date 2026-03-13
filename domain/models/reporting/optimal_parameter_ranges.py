@@ -7,5 +7,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class OptimalParameterRanges:
-    lookback: list[int]
-    volume_multiplier: list[float]
+    bite_lookback: list[int]
+    bite_volume_mult: list[float]
+    bite_min_rr: list[float]
+    bite_tp2_mult: list[float]

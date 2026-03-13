@@ -17,7 +17,7 @@ from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from strategy.bee_bite.config import BeeBiteParams, get_bee_bite_reclaim_settings, get_bee_bite_score_threshold
 from strategy.bee_bite.trade_plan import BeeBiteTradePlan, build_bee_bite_trade_plan, resolve_profile_tp1_share
-from strategy.breakout.indicators.level_detector import LevelDetector
+from strategy.common.level_detector import LevelDetector
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 

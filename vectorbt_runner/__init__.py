@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from vectorbt_runner.backtest_summary import BacktestSummary
     from vectorbt_runner.data_preparer import DataPreparer
     from vectorbt_runner.mtf_frames import SymbolMtfFrames
-    from vectorbt_runner.strategy_plotter import StrategyPlotter
     from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 __all__ = [
@@ -19,7 +18,6 @@ __all__ = [
     "DataPreparer",
     "SymbolMtfFrames",
     "VectorbtInputs",
-    "StrategyPlotter",
 ]
 
 _MODULE_BY_NAME = {
@@ -28,7 +26,6 @@ _MODULE_BY_NAME = {
     "DataPreparer": "vectorbt_runner.data_preparer",
     "SymbolMtfFrames": "vectorbt_runner.mtf_frames",
     "VectorbtInputs": "vectorbt_runner.vectorbt_inputs",
-    "StrategyPlotter": "vectorbt_runner.strategy_plotter",
 }
 
 
@@ -36,6 +33,5 @@ def __getattr__(name: str) -> Any:
     module_name = _MODULE_BY_NAME.get(name)
     if module_name is None:
         raise AttributeError(f"module 'vectorbt_runner' has no attribute {name!r}")
-
     module = import_module(module_name)
     return getattr(module, name)

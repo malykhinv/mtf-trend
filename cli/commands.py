@@ -41,14 +41,12 @@ from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
+from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result, BeeBiteStage1Selector
 from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
-from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.exchange import Exchange
-from domain.enums.position_side import PositionSide
-from domain.enums.sl_mode import SLMode
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.backtest_report import BacktestReport
 from domain.models.reporting.backtest_summary import BacktestSummary
@@ -59,8 +57,6 @@ from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
-from domain.models.retest_plot_span import RetestPlotSpan
-from domain.models.trade_plot_span import TradePlotSpan
 from strategy.bee_bite import (
     BeeBiteParams,
     BeeBiteStrategy,
@@ -71,13 +67,11 @@ from strategy.bee_bite import (
     parse_bee_bite_retest_mode,
     validate_bee_bite_runtime,
 )
-from strategy.breakout.breakout_strategy import BreakoutStrategy
-from strategy.breakout.config import PARAMETER_GRID_SIZE, TARGET_PARAMETER_COMBINATIONS, BreakoutParams
-from strategy.factory import build_breakout_strategy, build_strategy
+from strategy.factory import build_strategy
 from utils.logger import get_logger
 from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
-from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames, StrategyPlotter
+from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
 # region Приватные
 
@@ -99,102 +93,21 @@ def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     return default
 
 
-def _coerce_trade_plot_span(value: object) -> TradePlotSpan | None:
-    if isinstance(value, TradePlotSpan):
-        return value
-    if not isinstance(value, dict):
-        return None
-    try:
-        return TradePlotSpan(
-            symbol=str(value["symbol"]),
-            side=PositionSide(str(value["side"])),
-            level_start_timestamp_ms=int(value["level_start_timestamp_ms"]),
-            entry_timestamp_ms=int(value["entry_timestamp_ms"]),
-            exit_timestamp_ms=int(value["exit_timestamp_ms"]),
-            entry_price=float(value["entry_price"]),
-            exit_price=float(value["exit_price"]),
-            stop_loss=float(value["stop_loss"]),
-            take_profit_1=float(value["take_profit_1"]),
-            take_profit_2=float(value["take_profit_2"]),
-            result_type=str(value["result_type"]),
-            level_high=float(value["level_high"]),
-            level_low=float(value["level_low"]),
-            resistance_touch_timestamps_ms=tuple(int(ts) for ts in value.get("resistance_touch_timestamps_ms", ())),
-            support_touch_timestamps_ms=tuple(int(ts) for ts in value.get("support_touch_timestamps_ms", ())),
-            breakout_timestamp_ms=(
-                int(value["breakout_timestamp_ms"])
-                if value.get("breakout_timestamp_ms") is not None
-                else None
-            ),
-            retest_timestamp_ms=(
-                int(value["retest_timestamp_ms"])
-                if value.get("retest_timestamp_ms") is not None
-                else None
-            ),
-        )
-    except (TypeError, ValueError, KeyError):
-        return None
-
-
 def _resolve_strategy_id(config: AppConfig, args: argparse.Namespace) -> str:
     strategy_override = getattr(args, "strategy", None)
     if strategy_override is not None:
         normalized = str(strategy_override).strip().lower()
-        if normalized == "breakout":
-            return "retest"
+        if normalized != "bee_bite":
+            raise ValueError(f"Неподдерживаемый strategy_id: {normalized}")
         return normalized
-    return config.strategy.strategy_id
+    return "bee_bite"
 
 
 def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) -> Path:
-    strategy_folder_by_id = {
-        "retest": "retest",
-        "breakout": "retest",
-        "bee_bite": "bee_bite",
-    }
-    strategy_folder = strategy_folder_by_id.get(strategy_id)
-    if strategy_folder is None:
-        return base_results_dir
-    return base_results_dir / "strategy" / strategy_folder
-
-
-def _build_breakout_params_from_row(
-    row: pd.Series,
-    *,
-    symbol: str,
-    levels_timeframe: Timeframe,
-    entry_timeframe: Timeframe,
-    strategy_id: str,
-) -> BreakoutParams:
-    if strategy_id in {"retest", "breakout"}:
-        prefix = ""
-    elif strategy_id == "bee_bite":
-        prefix = "bite_"
-    else:
+    if strategy_id != "bee_bite":
         raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
+    return base_results_dir / "strategy" / "bee_bite"
 
-    return BreakoutParams(
-        lookback=int(row[f"{prefix}lookback"]),
-        volume_mult=float(row[f"{prefix}volume_mult"]),
-        retest_window_hours=int(row[f"{prefix}retest_window_hours"]),
-        retest_zone=float(row[f"{prefix}retest_zone"]),
-        min_rr=float(row[f"{prefix}min_rr"]),
-        sl_mode=SLMode(str(row[f"{prefix}sl_mode"])),
-        tp2_mult=float(row[f"{prefix}tp2_mult"]),
-        min_body_ratio=float(row[f"{prefix}min_body_ratio"]),
-        min_move_atr=float(row[f"{prefix}min_move_atr"]),
-        max_retest_depth=float(row[f"{prefix}max_retest_depth"]),
-        confirmation_bars=int(row[f"{prefix}confirmation_bars"]),
-        entry_trigger=EntryTrigger(str(row[f"{prefix}entry_trigger"])),
-        symbol=symbol,
-        retest_zone_atr=(
-            None
-            if pd.isna(row.get(f"{prefix}retest_zone_atr"))
-            else float(row[f"{prefix}retest_zone_atr"])
-        ),
-        levels_timeframe=levels_timeframe,
-        entry_timeframe=entry_timeframe,
-    )
 
 
 def _build_bee_bite_params_from_row(
@@ -253,70 +166,6 @@ def _build_bee_bite_params_from_row(
         bite_grid_mode=parse_bee_bite_grid_mode(_normalize_enum_raw(bite_grid_mode_raw), default="baseline"),
     )
 
-
-def _plot_trade_setups_for_symbols(
-    *,
-    config: AppConfig,
-    args: argparse.Namespace,
-    logger: Logger,
-    strategy: BreakoutStrategy,
-    preparer: DataPreparer,
-    symbol_frames: dict[str, SymbolMtfFrames],
-    params_row: pd.Series,
-    levels_timeframe: Timeframe,
-    entry_timeframe: Timeframe,
-    log_prefix: str,
-    strategy_id: str,
-) -> None:
-    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
-    plotted_images = 0
-    symbols_with_plots = 0
-
-    for symbol, mtf_frames in symbol_frames.items():
-        cfg = _build_breakout_params_from_row(
-            params_row,
-            symbol=symbol,
-            levels_timeframe=levels_timeframe,
-            entry_timeframe=entry_timeframe,
-            strategy_id=strategy_id,
-        )
-        strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=cfg)
-        diagnostics = strategy.consume_last_generation_diagnostics()
-        raw_spans_obj = diagnostics.get("trade_plot_spans", [])
-        raw_spans = raw_spans_obj if isinstance(raw_spans_obj, list) else []
-        trade_spans: list[TradePlotSpan] = [
-            span
-            for span in (_coerce_trade_plot_span(raw_span) for raw_span in raw_spans)
-            if span is not None
-        ]
-        raw_retest_spans_obj = diagnostics.get("retest_plot_spans", [])
-        raw_retest_spans = raw_retest_spans_obj if isinstance(raw_retest_spans_obj, list) else []
-        retest_spans: list[RetestPlotSpan] = [
-            span for span in raw_retest_spans if isinstance(span, RetestPlotSpan)
-        ]
-        saved_paths = plotter.plot_trade_setups(
-            symbol=symbol,
-            params=cfg,
-            output_dir=output_dir,
-            trade_spans=trade_spans,
-            retest_spans=retest_spans,
-        )
-        if saved_paths:
-            symbols_with_plots += 1
-            plotted_images += len(saved_paths)
-
-    logger.info(
-        "%s: построены графики сделок symbols=%s images=%s output_dir=%s",
-        log_prefix,
-        symbols_with_plots,
-        plotted_images,
-        output_dir,
-    )
-    if plotted_images == 0:
-        logger.warning("%s: не найдено сделок для визуализации", log_prefix)
 
 
 def _plot_bee_bite_diagnostics_for_symbols(
@@ -381,31 +230,13 @@ def _plot_for_strategy(
     args: argparse.Namespace,
     logger: Logger,
     strategy_id: str,
-    breakout_strategy: BreakoutStrategy,
     strategy: object,
-    preparer: DataPreparer,
     symbol_frames: dict[str, SymbolMtfFrames],
     params_row: pd.Series,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
     log_prefix: str,
 ) -> bool:
-    if strategy_id in {"retest", "breakout"}:
-        _plot_trade_setups_for_symbols(
-            config=config,
-            args=args,
-            logger=logger,
-            strategy=breakout_strategy,
-            preparer=preparer,
-            symbol_frames=symbol_frames,
-            params_row=params_row,
-            levels_timeframe=levels_timeframe,
-            entry_timeframe=entry_timeframe,
-            log_prefix=log_prefix,
-            strategy_id=strategy_id,
-        )
-        return True
-
     if strategy_id == "bee_bite":
         if not isinstance(strategy, BeeBiteStrategy):
             logger.error("%s: неподдерживаемый тип визуализации для стратегии bee_bite", log_prefix)
@@ -1195,11 +1026,61 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     symbols_before_ranking = len(symbols)
     top_n = getattr(args, "top_n", None)
     pre_rank_enabled = top_n is not None and top_n > 0
+    pre_filter_active = strategy_id == "bee_bite" or pre_rank_enabled
     ranked_symbols: list[tuple[str, float]] = []
     invalid_volume_symbols = 0
     preloaded_levels_frames: dict[str, pd.DataFrame] = {}
+    preloaded_entry_frames: dict[str, pd.DataFrame] = {}
     pre_rank_started_at = time.perf_counter()
-    if pre_rank_enabled:
+    if strategy_id == "bee_bite":
+        stage1_selector = BeeBiteStage1Selector()
+        stage1_results: list[BeeBiteStage1Result] = []
+        stage1_reason_counts: Counter[str] = Counter()
+        for symbol in symbols:
+            entry_15m_frame = preparer.load_symbol_data(symbol, Timeframe.M15)
+            preloaded_entry_frames[symbol] = entry_15m_frame
+            if levels_timeframe == Timeframe.M15:
+                preloaded_levels_frames[symbol] = entry_15m_frame
+
+            stage1_result = stage1_selector.evaluate_symbol(symbol=symbol, frame=entry_15m_frame)
+            stage1_reason_counts[stage1_result.reason] += 1
+            if stage1_result.passed:
+                stage1_results.append(stage1_result)
+
+        stage1_results.sort(
+            key=lambda item: (
+                float(item.rolling_volume_usdt or 0.0),
+                float(item.pump_percent or 0.0),
+                float(item.retain_ratio or 0.0),
+                item.symbol,
+            ),
+            reverse=True,
+        )
+        selected_stage1_results = stage1_results[:top_n] if pre_rank_enabled else stage1_results
+        symbols = [item.symbol for item in selected_stage1_results]
+        ranked_symbols_count = len(stage1_results)
+        invalid_volume_symbols = symbols_before_ranking - ranked_symbols_count
+        top_n_applied = top_n if pre_rank_enabled else "не применялся"
+        preview = selected_stage1_results[:10]
+        top_preview_text = ", ".join(
+            (
+                f"{item.symbol} vol24h={float(item.rolling_volume_usdt or 0.0):.2f} "
+                f"pump={float(item.pump_percent or 0.0) * 100:.2f}% "
+                f"retain={float(item.retain_ratio or 0.0) * 100:.2f}%"
+            )
+            for item in preview
+        )
+        if not top_preview_text:
+            top_preview_text = "пусто"
+        logger.info(
+            "запуск-бэктеста: bee_bite stage1 symbols_total=%s passed=%s top_n=%s selected=%s reasons=%s",
+            symbols_before_ranking,
+            ranked_symbols_count,
+            top_n_applied,
+            len(symbols),
+            dict(stage1_reason_counts),
+        )
+    elif pre_rank_enabled:
         for symbol in symbols:
             levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
             preloaded_levels_frames[symbol] = levels_frame
@@ -1257,25 +1138,42 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger.info(
         "запуск-бэктеста: pre-rank время=%.3fs enabled=%s",
         pre_rank_elapsed_seconds,
-        pre_rank_enabled,
+        pre_filter_active,
     )
-    logger.info(
-        "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s невалидный_volume=%s top_n=%s выбрано_после_отсечения=%s",
-        symbols_before_ranking,
-        ranked_symbols_count,
-        invalid_volume_symbols,
-        top_n_applied,
-        len(symbols),
-    )
-    if not pre_rank_enabled:
+    if strategy_id == "bee_bite":
         logger.info(
-            "запуск-бэктеста: pre-rank top_n не задан или <= 0, используется исходный список символов (%s)",
+            "запуск-бэктеста: bee_bite stage1 total=%s passed=%s rejected=%s top_n=%s selected=%s",
+            symbols_before_ranking,
+            ranked_symbols_count,
+            invalid_volume_symbols,
+            top_n_applied,
             len(symbols),
         )
+        if not pre_rank_enabled:
+            logger.info(
+                "запуск-бэктеста: bee_bite stage1 top_n не задан, используется весь stage1-отбор (%s)",
+                len(symbols),
+            )
+    else:
+        logger.info(
+            "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s невалидный_volume=%s top_n=%s выбрано_после_отсечения=%s",
+            symbols_before_ranking,
+            ranked_symbols_count,
+            invalid_volume_symbols,
+            top_n_applied,
+            len(symbols),
+        )
+        if not pre_rank_enabled:
+            logger.info(
+                "запуск-бэктеста: pre-rank top_n не задан или <= 0, используется исходный список символов (%s)",
+                len(symbols),
+            )
     logger.info("запуск-бэктеста: pre-rank top-list: %s", top_preview_text)
 
     if not symbols:
-        if ranked_symbols_count == 0:
+        if strategy_id == "bee_bite":
+            logger.info("запуск-бэктеста: ранний выход, после bee_bite stage1 список символов пуст")
+        elif ranked_symbols_count == 0:
             logger.info(
                 "запуск-бэктеста: ранний выход, нет символов с валидным объёмом на levels_tf=%s",
                 levels_timeframe.value,
@@ -1294,10 +1192,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         levels_frame = preloaded_levels_frames.get(symbol)
         if levels_frame is None:
             levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
+        entry_frame = preloaded_entry_frames.get(symbol) if entry_timeframe == Timeframe.M15 else None
         if levels_timeframe == entry_timeframe:
-            entry_frame = levels_frame
+            entry_frame = levels_frame if entry_frame is None else entry_frame
         else:
-            entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
+            if entry_frame is None:
+                entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
         if levels_frame.empty:
             symbols_missing_levels_tf += 1
         if entry_frame.empty:
@@ -1328,7 +1228,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     strategy = build_strategy(config, logger)
-    breakout_strategy = build_breakout_strategy(config, logger)
     runner = BacktestRunner(
         config.backtest.results_dir,
         config.backtest.results_file_name,
@@ -1359,9 +1258,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             args=args,
             logger=logger,
             strategy_id=strategy_id,
-            breakout_strategy=breakout_strategy,
             strategy=strategy,
-            preparer=preparer,
             symbol_frames=symbol_frames,
             params_row=best_row,
             levels_timeframe=levels_timeframe,
@@ -1378,18 +1275,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         entry_timeframe=entry_timeframe,
     )
     summary = runner.build_summary(results)
-    if strategy_id in {"retest", "breakout"} and PARAMETER_GRID_SIZE != TARGET_PARAMETER_COMBINATIONS:
-        logger.warning(
-            "запуск-бэктеста: расчетная мощность сетки=%s отличается от целевой=%s (ожидается 5832)",
-            PARAMETER_GRID_SIZE,
-            TARGET_PARAMETER_COMBINATIONS,
-        )
-    if strategy_id in {"retest", "breakout"} and len(results) != TARGET_PARAMETER_COMBINATIONS:
-        logger.warning(
-            "запуск-бэктеста: фактическое число комбинаций=%s отличается от целевого=%s (ожидается 5832)",
-            len(results),
-            TARGET_PARAMETER_COMBINATIONS,
-        )
     combinations_with_trades = int((results["trades_count"] > 0).sum()) if not results.empty else 0
     total_trades = int(results["trades_count"].sum()) if not results.empty else 0
     average_trades_per_combination = (
@@ -1428,9 +1313,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             args=args,
             logger=logger,
             strategy_id=strategy_id,
-            breakout_strategy=breakout_strategy,
             strategy=strategy,
-            preparer=preparer,
             symbol_frames=symbol_frames,
             params_row=best_row,
             levels_timeframe=levels_timeframe,
@@ -1445,18 +1328,21 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
     if not csv_path.exists():
-        logger.info(f"подготовка-отчета: файл не найден: {csv_path}")
+        logger.info(f"make-report: file not found: {csv_path}")
         return 1
 
     frame = pd.read_csv(csv_path)
     required_columns = [
-        "lookback",
-        "volume_mult",
-        "retest_window_hours",
-        "retest_zone",
-        "min_rr",
-        "sl_mode",
-        "tp2_mult",
+        "bite_profile_id",
+        "bite_grid_mode",
+        "bite_lookback",
+        "bite_volume_mult",
+        "bite_retest_window_hours",
+        "bite_min_rr",
+        "bite_tp2_mult",
+        "bite_confirmation_bars",
+        "bite_reclaim_mode",
+        "bite_retest_mode",
         "profit_factor",
         "pnl_percent",
         "win_rate",
@@ -1470,28 +1356,18 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     ]
     missing_columns = [column for column in required_columns if column not in frame.columns]
     if missing_columns:
-        if missing_columns == ["time_exit_profit_count"]:
-            frame = frame.copy()
-            frame["time_exit_profit_count"] = 0
-            missing_columns = []
-    if missing_columns:
-        logger.error("подготовка-отчета: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
+        logger.error("make-report: missing required columns: %s", ", ".join(missing_columns))
         return 1
 
     if frame.empty:
-        logger.info("подготовка-отчета: пустой файл результатов")
+        logger.info("make-report: results file is empty")
         return 1
 
-    filtered = frame[(frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER) & (
-                frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)].copy()
+    filtered = frame[
+        (frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER)
+        & (frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)
+    ].copy()
     filtered = filtered.sort_values("profit_factor", ascending=False)
-
-    if len(frame) != TARGET_PARAMETER_COMBINATIONS:
-        logger.warning(
-            "подготовка-отчета: фактическое число комбинаций=%s отличается от целевого=%s",
-            len(frame),
-            TARGET_PARAMETER_COMBINATIONS,
-        )
 
     summary = BacktestSummary(
         total_combinations=int(len(frame)),
@@ -1500,10 +1376,11 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
 
     source = filtered if not filtered.empty else frame
-
     optimal_ranges = OptimalParameterRanges(
-        lookback=[int(source["lookback"].min()), int(source["lookback"].max())],
-        volume_multiplier=[round(float(source["volume_mult"].min()), 4), round(float(source["volume_mult"].max()), 4)],
+        bite_lookback=[int(source["bite_lookback"].min()), int(source["bite_lookback"].max())],
+        bite_volume_mult=[round(float(source["bite_volume_mult"].min()), 4), round(float(source["bite_volume_mult"].max()), 4)],
+        bite_min_rr=[round(float(source["bite_min_rr"].min()), 4), round(float(source["bite_min_rr"].max()), 4)],
+        bite_tp2_mult=[round(float(source["bite_tp2_mult"].min()), 4), round(float(source["bite_tp2_mult"].max()), 4)],
     )
 
     distribution = TradeResultsDistribution(
@@ -1516,7 +1393,6 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     profitable_variants = _build_profitable_variants(frame)
     ai_analysis_report = _build_ai_analysis_report(summary, profitable_variants)
-
     report = BacktestReport(
         summary=summary,
         optimal_ranges=optimal_ranges,
@@ -1528,7 +1404,7 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info(f"подготовка-отчета: сохранено {output_path}")
+    logger.info(f"make-report: saved {output_path}")
     return 0
 
 
@@ -1545,13 +1421,16 @@ def _build_profitable_variants(frame: pd.DataFrame) -> list[ProfitableVariant]:
         variants.append(
             ProfitableVariant(
                 rank=index,
-                lookback=int(row["lookback"]),
-                volume_mult=round(float(row["volume_mult"]), 4),
-                retest_window=int(row["retest_window_hours"]),
-                retest_zone=round(float(row["retest_zone"]), 4),
-                min_rr=round(float(row["min_rr"]), 4),
-                sl_mode=str(row["sl_mode"]),
-                tp2_mult=round(float(row["tp2_mult"]), 4),
+                bite_profile_id=str(row["bite_profile_id"]),
+                bite_grid_mode=str(row["bite_grid_mode"]),
+                bite_lookback=int(row["bite_lookback"]),
+                bite_volume_mult=round(float(row["bite_volume_mult"]), 4),
+                bite_retest_window_hours=int(row["bite_retest_window_hours"]),
+                bite_min_rr=round(float(row["bite_min_rr"]), 4),
+                bite_tp2_mult=round(float(row["bite_tp2_mult"]), 4),
+                bite_confirmation_bars=int(row["bite_confirmation_bars"]),
+                bite_reclaim_mode=str(row["bite_reclaim_mode"]),
+                bite_retest_mode=str(row["bite_retest_mode"]),
                 profit_factor=round(float(row["profit_factor"]), 4),
                 pnl_percent=round(float(row["pnl_percent"]), 4),
                 win_rate=round(float(row["win_rate"]), 4),
@@ -1566,28 +1445,31 @@ def _build_profitable_variants(frame: pd.DataFrame) -> list[ProfitableVariant]:
     return variants
 
 
+
 def _build_ai_analysis_report(summary: BacktestSummary, variants: list[ProfitableVariant]) -> str:
     if not variants:
         return (
-            "Сценарии с profit_factor > 1.0 не найдены. "
-            "Рекомендуется расширить период данных или ослабить фильтры стратегии."
+            "No setups with profit_factor > 1.0 were found. "
+            "Increase history depth or relax bee_bite filters."
         )
 
     lines = [
-        "# Сравнительный отчет по прибыльным комбинациям",
-        f"Всего комбинаций: {summary.total_combinations}",
-        f"Прибыльных комбинаций (PF>1.0): {summary.profitable_combinations}",
-        f"Лучший Profit Factor: {summary.best_pf}",
+        "# Bee Bite profitable combinations",
+        f"Total combinations: {summary.total_combinations}",
+        f"Profitable combinations (PF>1.0): {summary.profitable_combinations}",
+        f"Best Profit Factor: {summary.best_pf}",
         "",
-        "## Все прибыльные варианты (для сравнения)",
-        "Формат строки: rank | PF | PnL% | WinRate% | Trades | MaxDD% | params",
+        "## Variants",
+        "Format: rank | PF | PnL% | WinRate% | Trades | MaxDD% | params",
     ]
 
     for variant in variants:
         params = (
-            f"lookback={variant.lookback}, volume_mult={variant.volume_mult}, "
-            f"retest_window={variant.retest_window}, retest_zone={variant.retest_zone}, "
-            f"min_rr={variant.min_rr}, sl_mode={variant.sl_mode}, tp2_mult={variant.tp2_mult}"
+            f"profile={variant.bite_profile_id}, grid={variant.bite_grid_mode}, "
+            f"lookback={variant.bite_lookback}, volume_mult={variant.bite_volume_mult}, "
+            f"retest_window_h={variant.bite_retest_window_hours}, min_rr={variant.bite_min_rr}, "
+            f"tp2_mult={variant.bite_tp2_mult}, confirmation_bars={variant.bite_confirmation_bars}, "
+            f"reclaim_mode={variant.bite_reclaim_mode}, retest_mode={variant.bite_retest_mode}"
         )
         lines.append(
             f"{variant.rank} | {variant.profit_factor} | {variant.pnl_percent} | {variant.win_rate} | "
@@ -1804,290 +1686,6 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-def _plot_daily_levels_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("plot-daily-levels", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-
-    levels_timeframe = _resolve_timeframe(
-        getattr(args, "levels_tf", None),
-        fallback=config.strategy.levels_timeframe,
-        argument_name="--levels-tf",
-    )
-    entry_timeframe = _resolve_timeframe(
-        getattr(args, "entry_tf", None),
-        fallback=config.strategy.entry_timeframe,
-        argument_name="--entry-tf",
-    )
-    if levels_timeframe == entry_timeframe:
-        raise ValueError("--levels-tf и --entry-tf должны отличаться")
-
-    limit = getattr(args, "limit", None)
-    if limit is not None and limit <= 0:
-        raise ValueError("--limit должен быть положительным числом")
-
-    output_dir_raw = str(getattr(args, "output_dir", "") or "").strip()
-    output_dir = Path(output_dir_raw) if output_dir_raw else config.backtest.results_dir / "charts"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    preparer = DataPreparer(config.backtest.cache_dir)
-    symbols = list(dict.fromkeys(args.symbols or preparer.list_symbols(entry_timeframe)))
-    if not symbols:
-        logger.info("plot-daily-levels: нет символов для построения")
-        return 0
-
-    strategy = build_strategy(config, logger)
-    if not isinstance(strategy, BreakoutStrategy):
-        logger.error("plot-daily-levels поддерживает только retest")
-        return 1
-    base_params = strategy.build_parameter_grid()[0]
-    plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
-
-    built = 0
-    failed = 0
-    skipped_empty = 0
-    for symbol in symbols:
-        params = BreakoutParams(
-            lookback=base_params.lookback,
-            volume_mult=base_params.volume_mult,
-            retest_window_hours=base_params.retest_window_hours,
-            retest_zone=base_params.retest_zone,
-            min_rr=base_params.min_rr,
-            sl_mode=base_params.sl_mode,
-            tp2_mult=base_params.tp2_mult,
-            min_body_ratio=base_params.min_body_ratio,
-            min_move_atr=base_params.min_move_atr,
-            max_retest_depth=base_params.max_retest_depth,
-            confirmation_bars=base_params.confirmation_bars,
-            entry_trigger=base_params.entry_trigger,
-            symbol=symbol,
-            retest_zone_atr=base_params.retest_zone_atr,
-            levels_timeframe=levels_timeframe,
-            entry_timeframe=entry_timeframe,
-        )
-        try:
-            output_path = plotter.plot_daily_levels(symbol=symbol, params=params, output_dir=output_dir)
-            if output_path is None:
-                skipped_empty += 1
-                logger.warning("plot-daily-levels: %s пропущен — пустые данные", symbol)
-                continue
-            built += 1
-            logger.info("plot-daily-levels: сохранен график %s", output_path)
-        except Exception as exc:
-            failed += 1
-            logger.warning("plot-daily-levels: ошибка по символу %s: %s", symbol, exc)
-
-    logger.info(
-        "plot-daily-levels: итог symbols=%s saved=%s skipped_empty=%s failed=%s output_dir=%s limit=%s",
-        len(symbols),
-        built,
-        skipped_empty,
-        failed,
-        output_dir,
-        limit,
-    )
-    if built == 0 and failed > 0:
-        logger.error("plot-daily-levels: не удалось построить ни одного графика")
-        return 1
-    return 0
-
-
-def _load_retest_spans_artifact(path: Path, logger: Logger) -> list[RetestPlotSpan]:
-    if not path.exists():
-        return []
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logger.warning("plot-retests: не удалось прочитать артефакт ретестов %s: %s", path, exc)
-        return []
-
-    if not isinstance(raw, list):
-        logger.warning("plot-retests: артефакт ретестов %s имеет некорректный формат", path)
-        return []
-
-    spans: list[RetestPlotSpan] = []
-    for item in raw:
-        try:
-            if not isinstance(item, dict):
-                continue
-            spans.append(
-                RetestPlotSpan(
-                    symbol=str(item["symbol"]),
-                    side=PositionSide(str(item["side"])),
-                    level_start_timestamp_ms=int(item.get("level_start_timestamp_ms", item.get("level_start_time", item.get("retest_start_timestamp_ms", item["retest_start_time"])))),
-                    level_price=float(item["level_price"]),
-                    retest_low=float(item["retest_low"]),
-                    retest_high=float(item["retest_high"]),
-                    retest_start_timestamp_ms=int(item.get("retest_start_timestamp_ms", item["retest_start_time"])),
-                    retest_end_timestamp_ms=int(item.get("retest_end_timestamp_ms", item["retest_end_time"])),
-                    status=str(item["status"]),
-                    breakout_timestamp_ms=(
-                        int(item["breakout_timestamp_ms"])
-                        if item.get("breakout_timestamp_ms") is not None
-                        else None
-                    ),
-                    breakout_price=(
-                        float(item["breakout_price"])
-                        if item.get("breakout_price") is not None
-                        else None
-                    ),
-                    confirmation_timestamp_ms=(
-                        int(item["confirmation_timestamp_ms"])
-                        if item.get("confirmation_timestamp_ms") is not None
-                        else None
-                    ),
-                    confirmation_price=(
-                        float(item["confirmation_price"])
-                        if item.get("confirmation_price") is not None
-                        else None
-                    ),
-                    confirmation_candle_low=(
-                        float(item["confirmation_candle_low"])
-                        if item.get("confirmation_candle_low") is not None
-                        else None
-                    ),
-                    confirmation_candle_high=(
-                        float(item["confirmation_candle_high"])
-                        if item.get("confirmation_candle_high") is not None
-                        else None
-                    ),
-                )
-            )
-        except Exception:
-            continue
-    return spans
-
-
-def _plot_retests_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("plot-retests", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-
-    levels_timeframe = _resolve_timeframe(
-        getattr(args, "levels_tf", None),
-        fallback=config.strategy.levels_timeframe,
-        argument_name="--levels-tf",
-    )
-    entry_timeframe = _resolve_timeframe(
-        getattr(args, "entry_tf", None),
-        fallback=config.strategy.entry_timeframe,
-        argument_name="--entry-tf",
-    )
-    if levels_timeframe == entry_timeframe:
-        raise ValueError("--levels-tf и --entry-tf должны отличаться")
-
-    limit = getattr(args, "limit", None)
-    if limit is not None and limit <= 0:
-        raise ValueError("--limit должен быть положительным числом")
-
-    output_dir_raw = str(getattr(args, "output_dir", "") or "").strip()
-    output_dir = Path(output_dir_raw) if output_dir_raw else config.backtest.results_dir / "charts"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    preparer = DataPreparer(config.backtest.cache_dir)
-    symbols = list(dict.fromkeys(args.symbols or preparer.list_symbols(entry_timeframe)))
-    if not symbols:
-        logger.info("plot-retests: нет символов для построения")
-        return 0
-
-    strategy = build_strategy(config, logger)
-    if not isinstance(strategy, BreakoutStrategy):
-        logger.error("plot-retests поддерживает только retest")
-        return 1
-    base_params = strategy.build_parameter_grid()[0]
-    plotter = StrategyPlotter(data_preparer=preparer, strategy=strategy)
-
-    retest_artifact_path = config.backtest.results_dir / "retest_plot_spans.json"
-    artifact_spans = _load_retest_spans_artifact(retest_artifact_path, logger)
-    artifact_spans_by_symbol: dict[str, list[RetestPlotSpan]] = {}
-    for span in artifact_spans:
-        artifact_spans_by_symbol.setdefault(span.symbol, []).append(span)
-
-    saved = 0
-    failed = 0
-    skipped_empty = 0
-    skipped_no_spans = 0
-
-    for symbol in symbols:
-        params = BreakoutParams(
-            lookback=base_params.lookback,
-            volume_mult=base_params.volume_mult,
-            retest_window_hours=base_params.retest_window_hours,
-            retest_zone=base_params.retest_zone,
-            min_rr=base_params.min_rr,
-            sl_mode=base_params.sl_mode,
-            tp2_mult=base_params.tp2_mult,
-            min_body_ratio=base_params.min_body_ratio,
-            min_move_atr=base_params.min_move_atr,
-            max_retest_depth=base_params.max_retest_depth,
-            confirmation_bars=base_params.confirmation_bars,
-            entry_trigger=base_params.entry_trigger,
-            symbol=symbol,
-            retest_zone_atr=base_params.retest_zone_atr,
-            levels_timeframe=levels_timeframe,
-            entry_timeframe=entry_timeframe,
-        )
-        try:
-            mtf_frames = SymbolMtfFrames(
-                levels_timeframe=levels_timeframe,
-                entry_timeframe=entry_timeframe,
-                levels_frame=preparer.load_symbol_data(symbol, levels_timeframe),
-                entry_frame=preparer.load_symbol_data(symbol, entry_timeframe),
-            )
-            diagnostics_spans: list[RetestPlotSpan] = []
-            if not mtf_frames.levels_frame.empty and not mtf_frames.entry_frame.empty:
-                strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
-                diagnostics = strategy.consume_last_generation_diagnostics()
-                raw_spans_obj = diagnostics.get("retest_plot_spans", [])
-                raw_spans = raw_spans_obj if isinstance(raw_spans_obj, list) else []
-                diagnostics_spans = [
-                    span for span in raw_spans if isinstance(span, RetestPlotSpan)
-                ]
-
-            if diagnostics_spans:
-                retest_spans = diagnostics_spans
-            else:
-                retest_spans = artifact_spans_by_symbol.get(symbol, [])
-
-            if limit is not None and retest_spans:
-                retest_spans = retest_spans[:limit]
-
-            if not retest_spans:
-                if mtf_frames.levels_frame.empty or mtf_frames.entry_frame.empty:
-                    skipped_empty += 1
-                    logger.warning("plot-retests: %s пропущен — пустые данные", symbol)
-                else:
-                    skipped_no_spans += 1
-                    logger.info("plot-retests: %s пропущен — ретесты не найдены", symbol)
-                continue
-
-            saved_paths = plotter.plot_retests(
-                symbol=symbol,
-                params=params,
-                output_dir=output_dir,
-                retest_spans=retest_spans,
-            )
-            if not saved_paths:
-                skipped_empty += 1
-                logger.warning("plot-retests: %s пропущен — пустые данные для визуализации", symbol)
-                continue
-            saved += len(saved_paths)
-            logger.info("plot-retests: %s сохранено графиков=%s", symbol, len(saved_paths))
-        except Exception as exc:
-            failed += 1
-            logger.warning("plot-retests: ошибка по символу %s: %s", symbol, exc)
-
-    logger.info(
-        "plot-retests: итог symbols=%s saved=%s skipped_empty=%s skipped_no_spans=%s failed=%s output_dir=%s limit=%s",
-        len(symbols),
-        saved,
-        skipped_empty,
-        skipped_no_spans,
-        failed,
-        output_dir,
-        limit,
-    )
-    if saved == 0 and failed > 0:
-        logger.error("plot-retests: не удалось построить ни одного графика")
-        return 1
-    return 0
-
 
 # endregion Приватные
 
@@ -2123,11 +1721,4 @@ def clear_cache(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("clear-cache", config, lambda: _clear_cache_inner(config, args))
 
 
-def plot_daily_levels(config: AppConfig, args: argparse.Namespace) -> int:
-    """Строит графики с дневными уровнями."""
-    return _run_with_logging("plot-daily-levels", config, lambda: _plot_daily_levels_inner(config, args))
 
-
-def plot_retests(config: AppConfig, args: argparse.Namespace) -> int:
-    """Строит графики с ретестами уровней."""
-    return _run_with_logging("plot-retests", config, lambda: _plot_retests_inner(config, args))
