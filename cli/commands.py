@@ -1028,7 +1028,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     pre_rank_enabled = top_n is not None and top_n > 0
     pre_filter_active = strategy_id == "bee_bite" or pre_rank_enabled
     ranked_symbols: list[tuple[str, float]] = []
-    invalid_volume_symbols = 0
+    rejected_symbols_count = 0
     preloaded_levels_frames: dict[str, pd.DataFrame] = {}
     preloaded_entry_frames: dict[str, pd.DataFrame] = {}
     pre_rank_started_at = time.perf_counter()
@@ -1059,7 +1059,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         selected_stage1_results = stage1_results[:top_n] if pre_rank_enabled else stage1_results
         symbols = [item.symbol for item in selected_stage1_results]
         ranked_symbols_count = len(stage1_results)
-        invalid_volume_symbols = symbols_before_ranking - ranked_symbols_count
+        rejected_symbols_count = symbols_before_ranking - ranked_symbols_count
         top_n_applied = top_n if pre_rank_enabled else "не применялся"
         preview = selected_stage1_results[:10]
         top_preview_text = ", ".join(
@@ -1090,7 +1090,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     symbol,
                     levels_timeframe.value,
                 )
-                invalid_volume_symbols += 1
+                rejected_symbols_count += 1
                 continue
             if "volume" not in levels_frame.columns:
                 logger.info(
@@ -1098,7 +1098,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     symbol,
                     levels_timeframe.value,
                 )
-                invalid_volume_symbols += 1
+                rejected_symbols_count += 1
                 continue
 
             volume_numeric = pd.Series(pd.to_numeric(levels_frame["volume"], errors="coerce"), index=levels_frame.index)
@@ -1109,7 +1109,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     symbol,
                     levels_timeframe.value,
                 )
-                invalid_volume_symbols += 1
+                rejected_symbols_count += 1
                 continue
 
             ranked_symbols.append((symbol, float(volume_series.mean())))
@@ -1145,7 +1145,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             "запуск-бэктеста: bee_bite stage1 total=%s passed=%s rejected=%s top_n=%s selected=%s",
             symbols_before_ranking,
             ranked_symbols_count,
-            invalid_volume_symbols,
+            rejected_symbols_count,
             top_n_applied,
             len(symbols),
         )
@@ -1156,10 +1156,10 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             )
     else:
         logger.info(
-            "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s невалидный_volume=%s top_n=%s выбрано_после_отсечения=%s",
+            "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s rejected=%s top_n=%s выбрано_после_отсечения=%s",
             symbols_before_ranking,
             ranked_symbols_count,
-            invalid_volume_symbols,
+            rejected_symbols_count,
             top_n_applied,
             len(symbols),
         )
