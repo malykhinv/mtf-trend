@@ -18,6 +18,8 @@ import pandas as pd
 from config import AppConfig
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
+    DEFAULT_STAGE1_EVENTS_OUTPUT_FILE,
+    DEFAULT_STAGE1_PLOTS_DIR_NAME,
     DEFAULT_RESULTS_DIR,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     DEFAULT_REPORT_OUTPUT_FILE,
@@ -41,6 +43,7 @@ from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
+from data.liquidity.bee_bite_stage1_plotter import BeeBiteStage1Plotter
 from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result, BeeBiteStage1Selector
 from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
@@ -1293,6 +1296,114 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage1_event_to_row(event: BeeBiteStage1Result) -> dict[str, object]:
+    return {
+        "symbol": event.symbol,
+        "reason": event.reason,
+        "sleep_start_timestamp": event.sleep_start_timestamp,
+        "sleep_end_timestamp": event.sleep_end_timestamp,
+        "pump_start_timestamp": event.pump_start_timestamp,
+        "pump_peak_timestamp": event.pump_peak_timestamp,
+        "stage1_confirmed_timestamp": event.stage1_confirmed_timestamp,
+        "pump_base_price": event.pump_base_price,
+        "pump_peak_price": event.pump_peak_price,
+        "hold_price": event.hold_price,
+        "lowest_after_pump": event.lowest_after_pump,
+        "pump_percent": event.pump_percent,
+        "retain_ratio": event.retain_ratio,
+        "rolling_volume_usdt": event.rolling_volume_usdt,
+        "sleep_avg_volume_usdt": event.sleep_avg_volume_usdt,
+        "post_pump_avg_volume_usdt": event.post_pump_avg_volume_usdt,
+        "post_pump_volume_ratio": event.post_pump_volume_ratio,
+    }
+
+
+def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("review-stage1", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
+    output_dir = results_dir / "stage1_review"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE1_EVENTS_OUTPUT_FILE
+    plots_dir = output_dir / DEFAULT_STAGE1_PLOTS_DIR_NAME
+    plot_limit = int(getattr(args, "plot_limit", 20) or 20)
+
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols_raw = args.symbols or preparer.list_symbols(Timeframe.M15)
+    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
+    if not symbols:
+        logger.info("review-stage1: нет данных в кэше для entry_tf=15m")
+        return 0
+
+    selector = BeeBiteStage1Selector()
+    plotter = BeeBiteStage1Plotter()
+    all_events: list[BeeBiteStage1Result] = []
+    latest_event_by_symbol: dict[str, BeeBiteStage1Result] = {}
+    frames_by_symbol: dict[str, pd.DataFrame] = {}
+
+    for index, symbol in enumerate(symbols, start=1):
+        frame = preparer.load_symbol_data(symbol, Timeframe.M15)
+        frames_by_symbol[symbol] = frame
+        events = selector.detect_events(symbol=symbol, frame=frame)
+        if events:
+            all_events.extend(events)
+            latest_event_by_symbol[symbol] = max(
+                events,
+                key=lambda item: (
+                    int(item.stage1_confirmed_timestamp or 0),
+                    int(item.pump_peak_timestamp or 0),
+                ),
+            )
+
+        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
+            logger.info(
+                "review-stage1: progress=%s/%s symbols_with_events=%s events_total=%s",
+                index,
+                len(symbols),
+                len(latest_event_by_symbol),
+                len(all_events),
+            )
+
+    rows = [_stage1_event_to_row(event) for event in all_events]
+    events_frame = pd.DataFrame(rows)
+    if not events_frame.empty:
+        events_frame = events_frame.sort_values(
+            ["stage1_confirmed_timestamp", "pump_peak_timestamp", "symbol"],
+            ascending=[False, False, True],
+        ).reset_index(drop=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    events_frame.to_csv(output_path, index=False)
+
+    latest_events = sorted(
+        latest_event_by_symbol.values(),
+        key=lambda item: (
+            int(item.stage1_confirmed_timestamp or 0),
+            int(item.pump_peak_timestamp or 0),
+            item.symbol,
+        ),
+        reverse=True,
+    )
+    plots_built = 0
+    for event in latest_events[:plot_limit]:
+        frame = frames_by_symbol.get(event.symbol)
+        if frame is None or frame.empty:
+            continue
+        output_file = plots_dir / f"{event.symbol.replace('/', '_')}_stage1.png"
+        plotter.plot_event(frame=frame, event=event, output_path=output_file)
+        plots_built += 1
+
+    logger.info(
+        "review-stage1: symbols=%s symbols_with_events=%s events=%s csv=%s plots=%s plots_dir=%s",
+        len(symbols),
+        len(latest_event_by_symbol),
+        len(all_events),
+        output_path,
+        plots_built,
+        plots_dir,
+    )
+    return 0
+
+
 def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
@@ -1678,6 +1789,11 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
 def make_report(config: AppConfig, args: argparse.Namespace) -> int:
     """Формирует итоговый отчёт по результатам."""
     return _run_with_logging("make-report", config, lambda: _make_report_inner(config, args))
+
+
+def review_stage1(config: AppConfig, args: argparse.Namespace) -> int:
+    """Находит historical stage-1 события и сохраняет review-артефакты."""
+    return _run_with_logging("review-stage1", config, lambda: _review_stage1_inner(config, args))
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:

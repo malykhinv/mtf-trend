@@ -7,6 +7,7 @@
 - загрузка и обновление кэша
 - backtest стратегии `bee_bite`
 - stage-1 отбор монет для `bee_bite`
+- review historical `stage-1` событий с графиками
 - генерация отчета
 - проверка качества данных
 - `launcher.py` и `main.py` работают только с `bee_bite`
@@ -40,6 +41,7 @@ STRATEGY_ID=bee_bite
 python main.py fetch-data --top-n 100 --days 30
 python main.py update-cache --top-n 100 --days 7
 python main.py run-backtest --strategy bee_bite --top-n 50
+python main.py review-stage1 --plot-limit 20
 python main.py make-report --input ./results/backtest_results.csv --output ./results/report.json
 python main.py check-quality
 python main.py clear-cache
@@ -71,6 +73,7 @@ python launcher.py --mode clear-cache
 python main.py run-backtest --strategy bee_bite --bee-bite-grid baseline --top-n 50
 python main.py run-backtest --strategy bee_bite --bee-bite-grid expanded --top-n 100
 python main.py run-backtest --strategy bee_bite --bee-bite-grid research --top-n 120
+python main.py review-stage1 --symbols BTC/USDT ETH/USDT --plot-limit 10
 ```
 
 ## Stage 1 фильтр
@@ -88,6 +91,12 @@ python main.py run-backtest --strategy bee_bite --bee-bite-grid research --top-n
 ## Диагностика
 
 Для `bee_bite` доступен `--plot true` и `--plot-from-results`. Вместо старых trade-plot графиков сохраняются диагностические JSON-файлы по символам.
+
+Для проверки `stage-1` добавлена команда `review-stage1`:
+
+- ищет historical stage-1 события на `15m`
+- сохраняет CSV со всеми найденными событиями
+- сохраняет png по последнему stage-1 на символ
 
 ## Примеры
 

@@ -15,6 +15,7 @@ MODE_FETCH_CACHE = "fetch-cache"
 MODE_UPDATE_CACHE = "update-cache"
 MODE_BACKTEST = "analyze-cache"
 MODE_REPORT = "make-report"
+MODE_STAGE1_REVIEW = "review-stage1"
 MODE_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
@@ -23,6 +24,7 @@ MODE_LABELS: dict[str, str] = {
     MODE_UPDATE_CACHE: "Обновление кэша",
     MODE_BACKTEST: "Анализ кэша стратегией",
     MODE_REPORT: "Построение отчета",
+    MODE_STAGE1_REVIEW: "Проверка historical stage-1",
     MODE_QUALITY: "Проверка качества кэша",
     MODE_CLEAR_CACHE: "Очистка кэша",
 }
@@ -76,6 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=int, default=None, help="Cooldown для bee_bite в часах")
     parser.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=int, default=None, help="Максимальный возраст range для bee_bite в часах")
     parser.add_argument("--output-dir", default=None, help="Директория сохранения диагностических файлов")
+    parser.add_argument("--plot-limit", type=int, default=20, help="Максимум png-графиков по stage-1 review")
     parser.add_argument("--limit", type=int, default=None, help="Ограничение числа свечей/событий")
     parser.add_argument("--input", default=None, help="Входной CSV для отчета")
     parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
@@ -103,6 +106,7 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         bee_bite_cooldown_hours=int(task["bee_bite_cooldown_hours"]) if "bee_bite_cooldown_hours" in task and task.get("bee_bite_cooldown_hours") is not None else (int(task["bee_bite_cooldown_bars"]) if "bee_bite_cooldown_bars" in task and task.get("bee_bite_cooldown_bars") is not None else cli_args.bee_bite_cooldown_hours),
         bee_bite_max_age_range_hours=int(task["bee_bite_max_age_range_hours"]) if "bee_bite_max_age_range_hours" in task and task.get("bee_bite_max_age_range_hours") is not None else (int(task["bee_bite_max_age_range"]) if "bee_bite_max_age_range" in task and task.get("bee_bite_max_age_range") is not None else cli_args.bee_bite_max_age_range_hours),
         output_dir=task.get("output_dir", cli_args.output_dir),
+        plot_limit=int(task["plot_limit"]) if "plot_limit" in task and task.get("plot_limit") is not None else cli_args.plot_limit,
         limit=int(task["limit"]) if "limit" in task and task.get("limit") is not None else cli_args.limit,
         input=task.get("input", cli_args.input),
         output=task.get("output", cli_args.output),
@@ -120,6 +124,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_UPDATE_CACHE: commands.update_cache,
         MODE_BACKTEST: commands.run_backtest,
         MODE_REPORT: commands.make_report,
+        MODE_STAGE1_REVIEW: commands.review_stage1,
         MODE_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
     }

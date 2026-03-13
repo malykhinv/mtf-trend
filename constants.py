@@ -89,6 +89,8 @@ DEFAULT_RESULTS_DIR = "./.output/results"
 DEFAULT_BACKTEST_OUTPUT_FILE = "results.csv"
 DEFAULT_REPORT_OUTPUT_FILE = "report.json"
 DEFAULT_QUALITY_REPORT_OUTPUT_FILE = "quality_report.json"
+DEFAULT_STAGE1_EVENTS_OUTPUT_FILE = "stage1_events.csv"
+DEFAULT_STAGE1_PLOTS_DIR_NAME = "stage1_plots"
 
 # Значения по умолчанию для интерфейса командной строки
 DEFAULT_TOP_N = 50

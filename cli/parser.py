@@ -68,13 +68,18 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt.add_argument("--results-input", default=None, help="Путь к CSV с результатами для --plot-from-results")
     run_bt.add_argument("--id", type=_positive_int_for("--id"), default=None, help="ID комбинации в CSV")
 
-    report = subparsers.add_parser("make-report", help="Сформировать JSON-отчет по результатам бэктеста")
+    report = subparsers.add_parser("make-report", help="Сформировать JSON-отчёт по результатам бэктеста")
     report.add_argument("--input", default=None, help="Путь к CSV с результатами")
-    report.add_argument("--output", default=None, help="Путь к JSON отчету")
+    report.add_argument("--output", default=None, help="Путь к JSON отчёту")
+
+    stage1 = subparsers.add_parser("review-stage1", help="Найти historical stage-1 события bee_bite и сохранить png-графики")
+    stage1.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
+    stage1.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Максимум png-графиков по последним stage-1 событиям")
+    stage1.add_argument("--output", default=None, help="Путь к CSV с detected stage-1 событиями")
 
     quality = subparsers.add_parser("check-quality", help="Проверка качества кэша")
     quality.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
-    quality.add_argument("--output", default=None, help=f"Путь к отчету качества (.json или .csv). По умолчанию: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
+    quality.add_argument("--output", default=None, help=f"Путь к отчёту качества (.json или .csv). По умолчанию: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
 
     subparsers.add_parser("clear-cache", help="Полная очистка директории кэша")
     return parser
@@ -86,6 +91,7 @@ def resolve_handler(command_name: str) -> Handler:
         "update-cache": commands.update_cache,
         "run-backtest": commands.run_backtest,
         "make-report": commands.make_report,
+        "review-stage1": commands.review_stage1,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }
