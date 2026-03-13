@@ -23,6 +23,7 @@ from constants import (
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
+from utils.symbols import normalize_symbol
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
 
@@ -35,6 +36,24 @@ class DataPreparer:
     # region Приватные
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = Path(cache_dir)
+
+    def _resolve_symbol_dir_name(self, symbol: str) -> str | None:
+        exact_dir_name = ParquetStorage.encode_symbol_for_path(symbol)
+        exact_path = self._cache_dir / exact_dir_name
+        if exact_path.exists():
+            return exact_dir_name
+
+        normalized_requested = normalize_symbol(symbol)
+        if not self._cache_dir.exists():
+            return None
+
+        for symbol_dir in self._cache_dir.iterdir():
+            if not symbol_dir.is_dir():
+                continue
+            decoded_symbol = ParquetStorage.decode_symbol_from_path(symbol_dir.name)
+            if normalize_symbol(decoded_symbol) == normalized_requested:
+                return symbol_dir.name
+        return None
 
     # endregion Приватные
     def list_symbols(self, timeframe: Timeframe) -> list[str]:
@@ -55,8 +74,11 @@ class DataPreparer:
         Читает из parquet только колонки, используемые в downstream-подготовке:
         обязательные поля стратегии + числовые поля для нормализации типов.
         """
-        symbol_path = ParquetStorage.encode_symbol_for_path(symbol)
-        path = self._cache_dir / symbol_path / timeframe.value / SIMULATION_PARQUET_FILE_NAME
+        symbol_dir_name = self._resolve_symbol_dir_name(symbol)
+        if symbol_dir_name is None:
+            return pd.DataFrame()
+
+        path = self._cache_dir / symbol_dir_name / timeframe.value / SIMULATION_PARQUET_FILE_NAME
         if not path.exists():
             return pd.DataFrame()
 

@@ -1370,6 +1370,7 @@ def _stage1_event_to_row(event: BeeBiteStage1Result) -> dict[str, object]:
 
 def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage1", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    logger.info("review-stage1: cache_dir=%s", config.backtest.cache_dir)
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
     output_dir = results_dir / "stage1_review"
     output_dir.mkdir(parents=True, exist_ok=True)
