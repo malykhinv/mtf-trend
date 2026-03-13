@@ -80,6 +80,7 @@ from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 # region Приватные
 
 _PROGRESS_LOG_EVERY = 100
+_STAGE1_REASON_SAMPLE_LIMIT = 3
 
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
@@ -111,6 +112,35 @@ def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) 
     if strategy_id != "bee_bite":
         raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
     return base_results_dir / "strategy" / "bee_bite"
+
+
+def _format_timestamp_ms(timestamp_ms: int | None) -> str:
+    if timestamp_ms is None:
+        return "n/a"
+    return pd.to_datetime(timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
+
+
+def _format_stage1_reason_sample(result: BeeBiteStage1Result, frame: pd.DataFrame) -> str:
+    rows = int(len(frame))
+    if frame.empty or "timestamp" not in frame.columns:
+        frame_range = "n/a..n/a"
+    else:
+        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+        if timestamps.empty:
+            frame_range = "n/a..n/a"
+        else:
+            first_ts = int(timestamps.iloc[0])
+            last_ts = int(timestamps.iloc[-1])
+            frame_range = f"{_format_timestamp_ms(first_ts)}..{_format_timestamp_ms(last_ts)}"
+
+    pump_pct = f"{float(result.pump_percent or 0.0) * 100:.2f}%"
+    retain_pct = f"{float(result.retain_ratio or 0.0) * 100:.2f}%"
+    volume_ratio = f"{float(result.post_pump_volume_ratio or 0.0):.2f}x"
+    rolling_volume = f"{float(result.rolling_volume_usdt or 0.0):.0f}"
+    return (
+        f"symbol={result.symbol} rows={rows} range={frame_range} reason={result.reason} "
+        f"pump={pump_pct} retain={retain_pct} vol_ratio={volume_ratio} rolling_24h_usdt={rolling_volume}"
+    )
 
 
 
@@ -1360,10 +1390,23 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     all_events: list[BeeBiteStage1Result] = []
     latest_event_by_symbol: dict[str, BeeBiteStage1Result] = {}
     frames_by_symbol: dict[str, pd.DataFrame] = {}
+    reason_counts: Counter[str] = Counter()
+    reason_samples: dict[str, list[str]] = {}
+    empty_frame_symbols: list[str] = []
+    populated_frame_symbols = 0
+    min_rows: int | None = None
+    max_rows: int | None = None
 
     for index, symbol in enumerate(symbols, start=1):
         frame = preparer.load_symbol_data(symbol, Timeframe.M15)
         frames_by_symbol[symbol] = frame
+        rows_count = int(len(frame))
+        if frame.empty:
+            empty_frame_symbols.append(symbol)
+        else:
+            populated_frame_symbols += 1
+            min_rows = rows_count if min_rows is None else min(min_rows, rows_count)
+            max_rows = rows_count if max_rows is None else max(max_rows, rows_count)
         events = selector.detect_events(symbol=symbol, frame=frame)
         if events:
             all_events.extend(events)
@@ -1374,14 +1417,22 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     int(item.pump_peak_timestamp or 0),
                 ),
             )
+        else:
+            evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
+            reason_key = evaluation.reason if not evaluation.passed else "passed_now_but_no_historical_event"
+            reason_counts[reason_key] += 1
+            if len(reason_samples.get(reason_key, [])) < _STAGE1_REASON_SAMPLE_LIMIT:
+                reason_samples.setdefault(reason_key, []).append(_format_stage1_reason_sample(evaluation, frame))
 
         if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
             logger.info(
-                "review-stage1: progress=%s/%s symbols_with_events=%s events_total=%s",
+                "review-stage1: progress=%s/%s symbols_with_events=%s events_total=%s populated_frames=%s empty_frames=%s",
                 index,
                 len(symbols),
                 len(latest_event_by_symbol),
                 len(all_events),
+                populated_frame_symbols,
+                len(empty_frame_symbols),
             )
 
     rows = [_stage1_event_to_row(event) for event in all_events]
@@ -1411,6 +1462,24 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
         output_file = plots_dir / f"{event.symbol.replace('/', '_')}_stage1.png"
         plotter.plot_event(frame=frame, event=event, output_path=output_file)
         plots_built += 1
+
+    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
+    logger.info(
+        "review-stage1: frames populated=%s empty=%s min_rows=%s max_rows=%s",
+        populated_frame_symbols,
+        len(empty_frame_symbols),
+        min_rows or 0,
+        max_rows or 0,
+    )
+    if top_reasons:
+        logger.info("review-stage1: rejection_reasons %s", top_reasons)
+    if empty_frame_symbols:
+        logger.warning(
+            "review-stage1: empty_frames symbols=%s",
+            ", ".join(empty_frame_symbols[:10]),
+        )
+    for reason, samples in reason_samples.items():
+        logger.info("review-stage1: reason=%s samples=%s", reason, " | ".join(samples))
 
     logger.info(
         "review-stage1: symbols=%s symbols_with_events=%s events=%s csv=%s plots=%s plots_dir=%s",
