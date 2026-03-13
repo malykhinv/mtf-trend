@@ -291,37 +291,6 @@ def _load_plot_params_row_from_results(
         return None
 
     required_columns_by_strategy = {
-        "retest": [
-
-            "lookback",
-            "volume_mult",
-            "retest_window_hours",
-            "retest_zone",
-            "min_rr",
-            "sl_mode",
-            "tp2_mult",
-            "min_body_ratio",
-            "min_move_atr",
-            "max_retest_depth",
-            "confirmation_bars",
-            "entry_trigger",
-            "retest_zone_atr",
-        ],
-        "breakout": [
-            "lookback",
-            "volume_mult",
-            "retest_window_hours",
-            "retest_zone",
-            "min_rr",
-            "sl_mode",
-            "tp2_mult",
-            "min_body_ratio",
-            "min_move_atr",
-            "max_retest_depth",
-            "confirmation_bars",
-            "entry_trigger",
-            "retest_zone_atr",
-        ],
         "bee_bite": [
             "bite_profile_id",
             "bite_grid_mode",
