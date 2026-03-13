@@ -81,14 +81,28 @@ class BeeBiteStage1Plotter:
         self._draw_volume(volume_ax, window, x_positions)
 
         if event.hold_price is not None:
-            price_ax.axhline(event.hold_price, color=self._HOLD_COLOR, linestyle="--", linewidth=1.2, alpha=0.9)
+            price_ax.axhline(
+                event.hold_price,
+                color=self._HOLD_COLOR,
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.9,
+                label="0.5 hold",
+            )
         if event.pump_peak_price is not None:
-            price_ax.axhline(event.pump_peak_price, color=self._PEAK_COLOR, linestyle=":", linewidth=1.0, alpha=0.8)
+            price_ax.axhline(
+                event.pump_peak_price,
+                color=self._PEAK_COLOR,
+                linestyle=":",
+                linewidth=1.0,
+                alpha=0.8,
+                label="pump peak",
+            )
 
-        self._draw_marker(price_ax, pump_start_idx - index_shift, event.pump_base_price, self._START_COLOR)
-        self._draw_marker(price_ax, pump_peak_idx - index_shift, event.pump_peak_price, self._PEAK_COLOR)
+        self._draw_marker(price_ax, pump_start_idx - index_shift, event.pump_base_price, self._START_COLOR, "pump start")
+        self._draw_marker(price_ax, pump_peak_idx - index_shift, event.pump_peak_price, self._PEAK_COLOR, "pump peak marker")
         close_at_confirmed = float(window.iloc[confirmed_idx - index_shift]["close"])
-        self._draw_marker(price_ax, confirmed_idx - index_shift, close_at_confirmed, self._STAGE1_COLOR)
+        self._draw_marker(price_ax, confirmed_idx - index_shift, close_at_confirmed, self._STAGE1_COLOR, "stage1")
 
         if event.lowest_after_pump is not None:
             price_ax.scatter(
@@ -97,6 +111,7 @@ class BeeBiteStage1Plotter:
                 color=self._LOWEST_COLOR,
                 s=50,
                 marker="x",
+                label="lowest after pump",
                 zorder=5,
             )
 
@@ -127,6 +142,16 @@ class BeeBiteStage1Plotter:
                 "alpha": 0.95,
             },
         )
+        legend = price_ax.legend(
+            loc="upper left",
+            bbox_to_anchor=(0.015, 0.83),
+            frameon=True,
+            facecolor="#111827",
+            edgecolor=self._GRID_COLOR,
+            fontsize=10,
+        )
+        for text in legend.get_texts():
+            text.set_color(self._TEXT_COLOR)
 
         volume_ax.set_ylabel("Volume", color=self._TEXT_COLOR)
         volume_ax.grid(alpha=0.18, color=self._GRID_COLOR)
@@ -170,10 +195,10 @@ class BeeBiteStage1Plotter:
         axis.bar(x_positions, frame["volume"], color=colors, width=self._CANDLE_WIDTH, alpha=0.85)
 
     @staticmethod
-    def _draw_marker(axis, x_idx: int, price: float | None, color: str) -> None:
+    def _draw_marker(axis, x_idx: int, price: float | None, color: str, label: str) -> None:
         if price is None:
             return
-        axis.scatter(x_idx, price, color=color, s=55, zorder=6)
+        axis.scatter(x_idx, price, color=color, s=55, zorder=6, label=label)
         axis.axvline(x_idx, color=color, linewidth=0.9, alpha=0.35)
 
     @staticmethod
