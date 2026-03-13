@@ -144,8 +144,34 @@ def _format_stage1_reason_sample(result: BeeBiteStage1Result, frame: pd.DataFram
 
 
 def _select_primary_stage1_event(events: list[BeeBiteStage1Result]) -> BeeBiteStage1Result:
-    return max(
+    sorted_events = sorted(
         events,
+        key=lambda item: (
+            int(item.pump_start_timestamp or 0),
+            int(item.pump_peak_timestamp or 0),
+            int(item.stage1_confirmed_timestamp or 0),
+        ),
+    )
+    first_regime: list[BeeBiteStage1Result] = []
+    current_regime_peak_ms = 0
+
+    for event in sorted_events:
+        pump_start_ms = int(event.pump_start_timestamp or 0)
+        pump_peak_ms = int(event.pump_peak_timestamp or pump_start_ms)
+        if not first_regime:
+            first_regime.append(event)
+            current_regime_peak_ms = pump_peak_ms
+            continue
+
+        if pump_start_ms <= current_regime_peak_ms:
+            first_regime.append(event)
+            current_regime_peak_ms = max(current_regime_peak_ms, pump_peak_ms)
+            continue
+
+        break
+
+    return max(
+        first_regime,
         key=lambda item: (
             float(item.pump_peak_price or 0.0),
             float(item.pump_percent or 0.0),
