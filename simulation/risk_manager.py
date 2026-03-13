@@ -57,6 +57,7 @@ class RiskManager:
         )
 
     def can_open_with_portfolio_limit(self, *, active_positions: list[tuple[Position, PositionSide]], signal: TradeSignal) -> bool:
+        del signal
         current_risk = self.total_open_risk(active_positions)
         new_trade_risk = self.config.r_trade
         return (current_risk + new_trade_risk) <= self.config.portfolio_risk_limit

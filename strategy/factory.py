@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from logging import Logger
-
 from config import AppConfig
 from strategy.base_strategy import BaseStrategy
 from strategy.bee_bite import BeeBiteStrategy
 
 
-def build_strategy(config: AppConfig, logger: Logger) -> BaseStrategy[object]:
-    del logger
+def build_strategy(config: AppConfig, _logger: object = None) -> BaseStrategy[object]:
+    del _logger
     if config.strategy.strategy_id != "bee_bite":
         raise ValueError(f"Неподдерживаемый strategy_id: {config.strategy.strategy_id}")
     return BeeBiteStrategy(

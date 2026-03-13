@@ -106,7 +106,8 @@ class BacktestRunner:
         normalized_trades: list[TradeResult] = trades
         for trade in normalized_trades:
             pnl_value = trade.pnl
-            pnl_percent += float(trade.pnl_percent.value)
+            trade_pnl_percent = getattr(trade.pnl_percent, "value", trade.pnl_percent)
+            pnl_percent += float(trade_pnl_percent)
             if pnl_value > 0:
                 profits += pnl_value
                 wins += 1
@@ -136,13 +137,13 @@ class BacktestRunner:
 
         sorted_trades = sorted(
             normalized_trades,
-            key=lambda item: (item.exit_timestamp_ms, item.entry_timestamp_ms),
+            key=lambda trade_row: (trade_row.exit_timestamp_ms, trade_row.entry_timestamp_ms),
         )
         cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
         peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
         max_dd = BACKTEST_EMPTY_MAX_DD
-        for item in sorted_trades:
-            cumulative_pnl += item.pnl
+        for sorted_trade in sorted_trades:
+            cumulative_pnl += sorted_trade.pnl
             if cumulative_pnl > peak_pnl:
                 peak_pnl = cumulative_pnl
             drawdown = peak_pnl - cumulative_pnl

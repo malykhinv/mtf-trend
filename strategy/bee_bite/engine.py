@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import TypedDict, cast
+from typing import TypedDict
 
 import numpy as np
 import pandas as pd
@@ -427,7 +427,7 @@ class BeeBiteEngine:
                 trade, exit_idx, rejected = self._simulate_trade(rows=rows, entry_idx=i, setup=setup, params=params)
                 if trade is not None:
                     trades.append(trade)
-                    diagnostics["trades_generated"] = cast(int, diagnostics["trades_generated"]) + 1
+                    diagnostics["trades_generated"] += 1
                 elif rejected:
                     cooldown_bars = self._hours_to_candles(params.bite_cooldown_hours, params.entry_timeframe)
                     cooldown_until_idx = i + cooldown_bars

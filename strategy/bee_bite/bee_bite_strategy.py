@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import warnings
-from typing import cast
 
 import pandas as pd
 
@@ -223,4 +222,4 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             diagnostics = self._last_generation_diagnostics.copy()
             self._last_generation_diagnostics = {}
             return diagnostics
-        return cast(dict[str, object], self._engine.consume_last_generation_diagnostics())
+        return dict(self._engine.consume_last_generation_diagnostics())

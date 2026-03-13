@@ -124,12 +124,13 @@ def _build_bee_bite_params_from_row(
     def _is_missing_scalar(value: object) -> bool:
         if value is None:
             return True
+        if value is pd.NA:
+            return True
         if isinstance(value, (pd.Series, pd.DataFrame)):
             return False
-        try:
+        if isinstance(value, float):
             return bool(pd.isna(value))
-        except TypeError:
-            return False
+        return False
 
     def _normalize_enum_raw(value: object) -> str | None:
         return None if _is_missing_scalar(value) else str(value)
@@ -348,8 +349,9 @@ def _load_plot_params_row_from_results(
         for column in id_columns:
             if column not in frame.columns:
                 continue
-            numeric_column = pd.to_numeric(frame[column], errors="coerce")
-            matches = frame.loc[numeric_column == selected_id]
+            numeric_column = pd.Series(pd.to_numeric(frame[column], errors="coerce"), index=frame.index)
+            match_mask = numeric_column.eq(selected_id)
+            matches: pd.DataFrame = frame.loc[match_mask].copy()
             if not matches.empty:
                 matched_by_column = matches
                 logger.info(
@@ -1117,7 +1119,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             top_preview_text = "пусто"
     else:
         ranked_symbols_count = 0
-        selected_ranked_symbols = []
         symbols = list(symbols)
         top_n_applied = "не применялся"
         top_preview_text = "pre-rank отключён"
@@ -1180,12 +1181,15 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         levels_frame = preloaded_levels_frames.get(symbol)
         if levels_frame is None:
             levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
-        entry_frame = preloaded_entry_frames.get(symbol) if entry_timeframe == Timeframe.M15 else None
+        entry_frame: pd.DataFrame | None = (
+            preloaded_entry_frames.get(symbol)
+            if entry_timeframe == Timeframe.M15
+            else None
+        )
         if levels_timeframe == entry_timeframe:
             entry_frame = levels_frame if entry_frame is None else entry_frame
-        else:
-            if entry_frame is None:
-                entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
+        elif entry_frame is None:
+            entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
         if levels_frame.empty:
             symbols_missing_levels_tf += 1
         if entry_frame.empty:
