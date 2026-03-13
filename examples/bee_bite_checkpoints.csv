@@ -1,4 +1,2 @@
 case_id,symbol,levels_tf,entry_tf,datetime_utc,timestamp_ms,expected_decision,expected_reason,comment
-BB-001,BTC/USDT,1d,15m,2025-01-14T12:45:00Z,1736858700000,setup,entry_signal,"Позитивный кейс"
-BB-002,ETH/USDT,1d,15m,2025-01-16T09:30:00Z,1737019800000,skip,retest_timeout,"Ретест не подтвердился"
-BB-003,SOL/USDT,1d,15m,2025-01-18T18:15:00Z,1737224100000,skip,volume_filter_fail,"Нет аномального объёма"
+BB-001,AGLDUSDT,1d,5m,2026-02-22T15:25:00Z,,setup,entry_signal,"Позитивный кейс"
