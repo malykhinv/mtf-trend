@@ -117,10 +117,14 @@ class BeeBiteStage1Plotter:
 
     def _draw_candles(self, axis, frame: pd.DataFrame, x_positions: list[int]) -> None:
         for idx, row in zip(x_positions, frame.itertuples(index=False), strict=False):
-            color = "#2ecc71" if row.close >= row.open else "#e74c3c"
-            axis.vlines(idx, row.low, row.high, color=color, linewidth=1.0, alpha=0.9)
-            body_low = min(row.open, row.close)
-            body_height = abs(row.close - row.open)
+            open_price = float(row.open)
+            high_price = float(row.high)
+            low_price = float(row.low)
+            close_price = float(row.close)
+            color = "#2ecc71" if close_price >= open_price else "#e74c3c"
+            axis.vlines(idx, low_price, high_price, color=color, linewidth=1.0, alpha=0.9)
+            body_low = min(open_price, close_price)
+            body_height = abs(close_price - open_price)
             if body_height == 0:
                 axis.hlines(body_low, idx - self._CANDLE_WIDTH / 2, idx + self._CANDLE_WIDTH / 2, color=color, linewidth=1.2)
                 continue

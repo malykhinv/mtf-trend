@@ -127,7 +127,8 @@ class BeeBiteEngine:
         }
         return diagnostics
 
-    def validate_config(self, params: BeeBiteParams) -> None:
+    @staticmethod
+    def validate_config(params: BeeBiteParams) -> None:
         if params.bite_lookback < 5:
             raise ValueError("bite_lookback должен быть >= 5")
         if params.bite_confirmation_bars < 1:
@@ -609,12 +610,9 @@ class BeeBiteEngine:
                     exit_price = active_stop
                     if tp1_hit:
                         realized_pnl += (active_stop - entry_price) * remainder_share * position_size
-                        result_type = TradeResultType.TP1_BE
                     else:
                         realized_pnl += (active_stop - entry_price) * position_size
-                    result_type = TradeResultType.SL
-                    if tp1_hit:
-                        result_type = TradeResultType.TP1_BE
+                    result_type = TradeResultType.TP1_BE if tp1_hit else TradeResultType.SL
                     exit_idx = idx
                     break
                 if not tp1_hit and high >= tp1:
@@ -817,8 +815,8 @@ class BeeBiteEngine:
             low_before_pump,
         )
 
+    @staticmethod
     def _freeze_range(
-        self,
         *,
         rows: list[PriceRow],
         end_idx: int,

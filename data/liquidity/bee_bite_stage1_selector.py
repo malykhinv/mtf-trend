@@ -88,7 +88,7 @@ class BeeBiteStage1Selector:
         latest_match: BeeBiteStage1Result | None = None
         latest_rolling_volume_usdt = self._safe_float(prepared.rolling_volume[-1])
 
-        for candidate in self._iter_stage1_candidates(symbol=symbol, prepared=prepared):
+        for candidate in self._iter_stage1_candidates(prepared=prepared):
             evaluation = self._evaluate_candidate_at_index(
                 symbol=symbol,
                 prepared=prepared,
@@ -137,7 +137,7 @@ class BeeBiteStage1Selector:
 
         events: list[BeeBiteStage1Result] = []
         seen_keys: set[tuple[int, int]] = set()
-        for candidate in self._iter_stage1_candidates(symbol=symbol, prepared=prepared):
+        for candidate in self._iter_stage1_candidates(prepared=prepared):
             candidate_key = (
                 int(prepared.timestamps[candidate.pump_start_idx]),
                 int(prepared.timestamps[candidate.peak_idx]),
@@ -235,8 +235,7 @@ class BeeBiteStage1Selector:
             cumulative_quote_volume=cumulative_quote_volume,
         )
 
-    def _iter_stage1_candidates(self, *, symbol: str, prepared: _PreparedStage1Frame):
-        del symbol
+    def _iter_stage1_candidates(self, *, prepared: _PreparedStage1Frame):
         last_candidate_start = len(prepared.timestamps) - self._pump_window_bars - 1
         for start_idx in range(self._sleep_window_bars, last_candidate_start + 1):
             if not self._is_sleep_window_valid(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from typing import cast
 
 import pandas as pd
 
@@ -62,13 +63,14 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         )
         return self._engine.generate_events(data, params)
 
-    def generate_events_multi_tf(self, *, mtf_frames: SymbolMtfFrames, params: BeeBiteParams):
-        warnings.warn(
-            "BeeBiteStrategy.generate_events_multi_tf(...) deprecated: основной путь для bee_bite — "
-            "generate_events_portfolio(...).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+    def generate_events_multi_tf(
+        self,
+        *,
+        mtf_frames: SymbolMtfFrames,
+        params: BeeBiteParams,
+        **context: object,
+    ):
+        del context
         return self._engine.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
 
     def generate_events_portfolio(
@@ -221,4 +223,4 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             diagnostics = self._last_generation_diagnostics.copy()
             self._last_generation_diagnostics = {}
             return diagnostics
-        return self._engine.consume_last_generation_diagnostics()
+        return cast(dict[str, object], self._engine.consume_last_generation_diagnostics())

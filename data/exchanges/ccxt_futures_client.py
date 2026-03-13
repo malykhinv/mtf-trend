@@ -227,9 +227,9 @@ class CcxtFuturesClient(ExchangeClient):
                 return 0
             return parsed if parsed > 0 else 0
 
-        def _extract_trade_count_24h(ticker: dict[str, object]) -> int:
-            info = ticker.get("info")
-            candidates = [ticker.get("count"), ticker.get("trades")]
+        def _extract_trade_count_24h(ticker_payload: dict[str, object]) -> int:
+            info = ticker_payload.get("info")
+            candidates = [ticker_payload.get("count"), ticker_payload.get("trades")]
             if isinstance(info, dict):
                 candidates.extend([info.get("count"), info.get("tradeCount"), info.get("numberOfTrades")])
             for candidate in candidates:
@@ -238,9 +238,9 @@ class CcxtFuturesClient(ExchangeClient):
                     return parsed
             return 0
 
-        def _extract_open_interest(ticker: dict[str, object]) -> float:
-            info = ticker.get("info")
-            candidates = [ticker.get("openInterest")]
+        def _extract_open_interest(ticker_payload: dict[str, object]) -> float:
+            info = ticker_payload.get("info")
+            candidates = [ticker_payload.get("openInterest")]
             if isinstance(info, dict):
                 candidates.extend([info.get("openInterest"), info.get("openInterestValue")])
             for candidate in candidates:
@@ -249,8 +249,8 @@ class CcxtFuturesClient(ExchangeClient):
                     return parsed
             return 0.0
 
-        def _extract_taker_buy_volume(ticker: dict[str, object]) -> float:
-            info = ticker.get("info")
+        def _extract_taker_buy_volume(ticker_payload: dict[str, object]) -> float:
+            info = ticker_payload.get("info")
             if not isinstance(info, dict):
                 return 0.0
             candidates = [
@@ -268,14 +268,14 @@ class CcxtFuturesClient(ExchangeClient):
         def _resolve_quality_state(
             value: float,
             *,
-            quote_volume: float,
+            ticker_quote_volume: float,
             low_ratio_threshold: float,
         ) -> LiquidityQualityState:
             if value <= 0.0:
                 return LiquidityQualityState.MISSING
-            if quote_volume <= 0.0:
+            if ticker_quote_volume <= 0.0:
                 return LiquidityQualityState.LOW_QUALITY
-            if (value / quote_volume) < low_ratio_threshold:
+            if (value / ticker_quote_volume) < low_ratio_threshold:
                 return LiquidityQualityState.LOW_QUALITY
             return LiquidityQualityState.OK
 
@@ -310,12 +310,12 @@ class CcxtFuturesClient(ExchangeClient):
             taker_buy_volume_24h = _extract_taker_buy_volume(ticker)
             oi_quality_state = _resolve_quality_state(
                 open_interest_24h,
-                quote_volume=quote_volume,
+                ticker_quote_volume=quote_volume,
                 low_ratio_threshold=0.001,
             )
             taker_quality_state = _resolve_quality_state(
                 taker_buy_volume_24h,
-                quote_volume=quote_volume,
+                ticker_quote_volume=quote_volume,
                 low_ratio_threshold=0.005,
             )
 

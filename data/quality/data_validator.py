@@ -42,12 +42,12 @@ class DataValidator:
         normalized = data.reset_index(drop=True)
         issues: list[DataQualityIssue] = []
 
-        def add_dataset_issue(issue_type: str, severity: DataQualitySeverity, description: str) -> None:
+        def add_dataset_issue(issue_name: str, severity: DataQualitySeverity, description: str) -> None:
             issues.append(
                 DataQualityIssue(
                     symbol=symbol,
                     timeframe=timeframe,
-                    issue_type=issue_type,
+                    issue_type=issue_name,
                     severity=severity,
                     timestamp=0,
                     description=description,
@@ -87,13 +87,13 @@ class DataValidator:
             if col in normalized.columns
         }
 
-        def add_issue(pos: int, issue_type: str, severity: DataQualitySeverity, description: str) -> None:
-            tstamp = ts.iloc[pos]
+        def add_issue(row_pos: int, issue_name: str, severity: DataQualitySeverity, description: str) -> None:
+            tstamp = ts.iloc[row_pos]
             issues.append(
                 DataQualityIssue(
                     symbol=symbol,
                     timeframe=timeframe,
-                    issue_type=issue_type,
+                    issue_type=issue_name,
                     severity=severity,
                     timestamp=tstamp,
                     description=description,

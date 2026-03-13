@@ -238,7 +238,7 @@ class PortfolioStateEngine:
                 }
                 continue
 
-            numeric = pd.to_numeric(frame["oi_break_avg"], errors="coerce")
+            numeric = pd.Series(pd.to_numeric(frame["oi_break_avg"], errors="coerce"), index=frame.index)
             finite_positive = numeric.notna() & np.isfinite(numeric) & (numeric > 0.0)
             valid_count = int(finite_positive.sum())
             sample_count = int(len(frame.index))
@@ -277,7 +277,8 @@ class PortfolioStateEngine:
         self._last_run_diagnostics = {}
         return diagnostics
 
-    def _build_timeline(self, symbol_frames: dict[str, pd.DataFrame]) -> list[int]:
+    @staticmethod
+    def _build_timeline(symbol_frames: dict[str, pd.DataFrame]) -> list[int]:
         timeline: set[int] = set()
         for frame in symbol_frames.values():
             if "timestamp" not in frame.columns:

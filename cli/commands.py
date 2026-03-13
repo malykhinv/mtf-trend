@@ -49,6 +49,7 @@ from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
+from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.exchange import Exchange
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.backtest_report import BacktestReport
@@ -96,7 +97,7 @@ def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     return default
 
 
-def _resolve_strategy_id(config: AppConfig, args: argparse.Namespace) -> str:
+def _resolve_strategy_id(args: argparse.Namespace) -> str:
     strategy_override = getattr(args, "strategy", None)
     if strategy_override is not None:
         normalized = str(strategy_override).strip().lower()
@@ -120,21 +121,31 @@ def _build_bee_bite_params_from_row(
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
 ) -> BeeBiteParams:
+    def _is_missing_scalar(value: object) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, (pd.Series, pd.DataFrame)):
+            return False
+        try:
+            return bool(pd.isna(value))
+        except TypeError:
+            return False
+
     def _normalize_enum_raw(value: object) -> str | None:
-        return None if pd.isna(value) else str(value)
+        return None if _is_missing_scalar(value) else str(value)
 
     bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
-    bite_t_max_in_trade = None if pd.isna(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
+    bite_t_max_in_trade = None if _is_missing_scalar(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
     if bite_t_max_in_trade is not None and bite_t_max_in_trade < 1:
         raise ValueError("параметр bite_t_max_in_trade должен быть >= 1 или None")
     bite_reclaim_limit_raw = row.get("bite_reclaim_limit_bars")
-    if pd.isna(bite_reclaim_limit_raw):
+    if _is_missing_scalar(bite_reclaim_limit_raw):
         bite_reclaim_limit_raw = row.get("bite_reclaim_limit")
     bite_max_age_range_raw = row.get("bite_max_age_range_hours")
-    if pd.isna(bite_max_age_range_raw):
+    if _is_missing_scalar(bite_max_age_range_raw):
         bite_max_age_range_raw = row.get("bite_max_age_range")
     bite_cooldown_raw = row.get("bite_cooldown_hours")
-    if pd.isna(bite_cooldown_raw):
+    if _is_missing_scalar(bite_cooldown_raw):
         bite_cooldown_raw = row.get("bite_cooldown_bars", 8)
     bite_reclaim_mode_raw = row.get("bite_reclaim_mode")
     bite_retest_mode_raw = row.get("bite_retest_mode")
@@ -338,7 +349,7 @@ def _load_plot_params_row_from_results(
             if column not in frame.columns:
                 continue
             numeric_column = pd.to_numeric(frame[column], errors="coerce")
-            matches: pd.DataFrame = frame[numeric_column == selected_id]
+            matches = frame.loc[numeric_column == selected_id]
             if not matches.empty:
                 matched_by_column = matches
                 logger.info(
@@ -786,15 +797,20 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     failed_symbols: set[str] = set()
     fetch_summaries: dict[Timeframe, FetchSummary] = {}
 
-    def _fetch_for_timeframe(timeframe: Timeframe, symbols_to_fetch: list[str], *, emit_log: bool = True) -> None:
+    def _fetch_for_timeframe(
+        requested_timeframe: Timeframe,
+        symbols_to_fetch: list[str],
+        *,
+        emit_log: bool = True,
+    ) -> None:
         logger.info(
             "загрузка-данных: сбор кэша для TF=%s (символов=%s)",
-            timeframe.value,
+            requested_timeframe.value,
             len(symbols_to_fetch),
         )
         result = fetcher.fetch_all(
             symbols=symbols_to_fetch,
-            timeframe=timeframe,
+            timeframe=requested_timeframe,
             start_timestamp_ms=start_timestamp_ms,
             end_timestamp_ms=end_timestamp_ms,
         )
@@ -805,8 +821,8 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         result.open_interest.clear()
         result.open_interest.update(enriched_open_interest)
 
-        fetch_summaries[timeframe] = _log_fetch_summary(
-            f"fetch-data[{timeframe.value}]",
+        fetch_summaries[requested_timeframe] = _log_fetch_summary(
+            f"fetch-data[{requested_timeframe.value}]",
             logger,
             len(symbols_to_fetch),
             result.failed_symbols_count,
@@ -935,7 +951,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    strategy_id = _resolve_strategy_id(config, args)
+    strategy_id = _resolve_strategy_id(args)
     config.strategy.strategy_id = strategy_id
     config.backtest.results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, strategy_id)
 

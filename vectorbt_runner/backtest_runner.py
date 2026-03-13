@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
 import pandas as pd
 
@@ -136,13 +136,13 @@ class BacktestRunner:
 
         sorted_trades = sorted(
             normalized_trades,
-            key=lambda trade: (trade.exit_timestamp_ms, trade.entry_timestamp_ms),
+            key=lambda item: (item.exit_timestamp_ms, item.entry_timestamp_ms),
         )
         cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
         peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
         max_dd = BACKTEST_EMPTY_MAX_DD
-        for trade in sorted_trades:
-            cumulative_pnl += trade.pnl
+        for item in sorted_trades:
+            cumulative_pnl += item.pnl
             if cumulative_pnl > peak_pnl:
                 peak_pnl = cumulative_pnl
             drawdown = peak_pnl - cumulative_pnl
@@ -185,7 +185,8 @@ class BacktestRunner:
     ) -> object:
         if not is_dataclass(params):
             return params
-        field_names = {field.name for field in fields(params)}
+        dataclass_params = cast(Any, params)
+        field_names = {field.name for field in fields(dataclass_params)}
         updates: dict[str, object] = {}
         if "symbol" in field_names:
             updates["symbol"] = symbol
@@ -195,7 +196,7 @@ class BacktestRunner:
             updates["entry_timeframe"] = entry_timeframe
         if not updates:
             return params
-        return replace(params, **updates)
+        return replace(dataclass_params, **updates)
 
     @staticmethod
     def _extract_diagnostic_counter(diagnostics: dict[str, object]) -> Counter[str]:
@@ -421,7 +422,8 @@ class BacktestRunner:
         self._save_results(results)
         return results
 
-    def build_summary(self, results: pd.DataFrame) -> BacktestSummary:
+    @staticmethod
+    def build_summary(results: pd.DataFrame) -> BacktestSummary:
         """Собирает краткую сводку по результатам бэктеста."""
         profitable = int((results["profit_factor"] > BACKTEST_PROFITABLE_PF_THRESHOLD).sum()) if not results.empty else BACKTEST_ZERO_COUNT
         best_pf = float(results["profit_factor"].max()) if not results.empty else BACKTEST_EMPTY_PF

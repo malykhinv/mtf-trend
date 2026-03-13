@@ -1,8 +1,7 @@
-"""Модуль проекта."""
+"""Project-wide constants."""
 
 from __future__ import annotations
 
-from datetime import timedelta
 from typing import cast
 
 from domain.enums.timeframe import Timeframe
@@ -10,14 +9,13 @@ from domain.enums.timeframe import Timeframe
 SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = cast(tuple[Timeframe, ...], tuple(Timeframe))
 DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.D1, Timeframe.M15, Timeframe.M5)
 
-
-# Значения по умолчанию для торговли
+# Trading defaults
 DEFAULT_COMMISSION_RATE = 0.0004
 DEFAULT_SLIPPAGE = 0.0005
 DEFAULT_SPREAD = 0.0
 TP1_CLOSE_RATIO = 0.5
 
-# Константы домена стратегии
+# Strategy domain
 STRATEGY_REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
 STRATEGY_MIN_LOOKBACK = 5
 STRATEGY_MIN_LOOKBACK_BUFFER = 5
@@ -27,12 +25,10 @@ STRATEGY_MIN_TP2_MULT = 1.0
 STRATEGY_RISK_FLOOR = 0.002
 STRATEGY_POSITION_SIZE = 1.0
 STRATEGY_DEFAULT_OPEN_INTEREST = 0.0
-# Эпсилон нижней границы цены для расчетов отношений в геометрии свечи пробоя.
 STRATEGY_PRICE_EPSILON = 1e-12
-# Эпсилон нижней границы АТР/НАТР, чтобы избегать нулевых порогов в фильтрах ретеста.
 STRATEGY_NATR_EPSILON = 1e-12
 
-# Константы домена отчетности
+# Reporting / data quality
 REPORT_TRADES_COUNT_FILTER = 30
 REPORT_PROFIT_FACTOR_FILTER = 1.0
 REPORT_PROFITABLE_PF_THRESHOLD = 1.0
@@ -45,7 +41,7 @@ QUALITY_SEVERITY_WARNING = "WARNING"
 QUALITY_SEVERITY_CRITICAL = "CRITICAL"
 QUALITY_SEVERITY_INFO = "INFO"
 
-# Константы домена бектеста
+# Backtest metrics
 BACKTEST_EMPTY_PF = 0.0
 BACKTEST_EMPTY_PNL_PERCENT = 0.0
 BACKTEST_EMPTY_WIN_RATE = 0.0
@@ -58,7 +54,7 @@ BACKTEST_ROUND_MAX_DD = 6
 BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES = 99.0
 BACKTEST_PROFITABLE_PF_THRESHOLD = 1.0
 
-# Константы домена симуляции/векторбт
+# Simulation / vectorbt
 SIMULATION_VECTORBT_DIRECTION = "longonly"
 SIMULATION_INIT_CASH = 100.0
 SIMULATION_SIZE = 1.0
@@ -70,18 +66,20 @@ SIMULATION_PRICE_INIT = 100.0
 SIMULATION_PNL_PERCENT_DIVISOR = 100.0
 SIMULATION_DATETIME_UNIT_MS = "ms"
 SIMULATION_PARQUET_FILE_NAME = "data.parquet"
+SIMULATION_UNIT_INCREMENT = 1.0
+SIMULATION_ZERO_VALUE = 0.0
+SIMULATION_COIN_SUFFIX_SLASH_USDT = "/usdt"
+SIMULATION_COIN_SUFFIX_USDT = "usdt"
 
-# Пороги качества данных
+# Data quality thresholds
 SPREAD_TO_CLOSE_WARNING_THRESHOLD = 0.3
 OI_STALE_RATIO_THRESHOLD = 0.98
-# Минимальное число последовательных сравнений ОИ, при котором оценка доли застоя имеет смысл.
 OI_STALE_MIN_OBSERVATIONS = 3
 
-# Пороги симуляции
-# Абсолютная погрешность для классификации выходов безубыток/ТП2 по близости цены закрытия.
+# Simulation thresholds
 SIMULATION_PRICE_COMPARISON_EPSILON = 1e-8
 
-# Значения по умолчанию для рантайма
+# Runtime defaults
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_CACHE_DIR = "./.output/cache"
 DEFAULT_LOGS_DIR = "./.output/logs"
@@ -91,17 +89,101 @@ DEFAULT_REPORT_OUTPUT_FILE = "report.json"
 DEFAULT_QUALITY_REPORT_OUTPUT_FILE = "quality_report.json"
 DEFAULT_STAGE1_EVENTS_OUTPUT_FILE = "stage1_events.csv"
 DEFAULT_STAGE1_PLOTS_DIR_NAME = "stage1_plots"
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 1.0
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
 
-# Значения по умолчанию для интерфейса командной строки
+# CLI defaults
 DEFAULT_TOP_N = 50
 DEFAULT_FETCH_DAYS = 60
 DEFAULT_UPDATE_DAYS = 7
 DEFAULT_MIN_VOLUME_USD = 10_000_000.0
+DEFAULT_FETCH_BATCH_SIZE = 1000
 DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS = 2.1
 DEFAULT_COINGECKO_VOLUME_BATCH_SIZE = 40
 DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD = 0.5
 
-# Stage-1 filter bee_bite
+# Exchange / API constants
+EXCHANGE_TIMEOUT_SECONDS = 30
+MILLISECONDS_IN_SECOND = 1000
+CCXT_MARKET_TYPE_SWAP = "swap"
+FUTURES_SETTLEMENT_QUOTE_ASSET = "USDT"
+OHLCV_FRAME_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+OPEN_INTEREST_FRAME_COLUMNS = ("timestamp", "open_interest")
+
+# CoinGecko constants
+COINGECKO_BASE_URL = "https://api.coingecko.com/api/v3"
+COINGECKO_DEFAULT_PAGE = 1
+COINGECKO_TIMEOUT_SECONDS = 30
+COINGECKO_HEADER_ACCEPT_KEY = "accept"
+COINGECKO_HEADER_ACCEPT_JSON = "application/json"
+COINGECKO_HEADER_API_KEY = "x-cg-pro-api-key"
+COINGECKO_VS_CURRENCY_KEY = "vs_currency"
+COINGECKO_VS_CURRENCY_USD = "usd"
+COINGECKO_ORDER_KEY = "order"
+COINGECKO_ORDER_MARKET_CAP_DESC = "market_cap_desc"
+COINGECKO_PARAM_IDS = "ids"
+COINGECKO_PARAM_PAGE = "page"
+COINGECKO_PARAM_PER_PAGE = "per_page"
+COINGECKO_PARAM_SPARKLINE = "sparkline"
+COINGECKO_SPARKLINE_FALSE = "false"
+
+# Logger formatting
+LOGGER_COLOR_RESET = "\x1b[0m"
+LOGGER_COLOR_INFO = "\x1b[36m"
+LOGGER_COLOR_WARNING = "\x1b[33m"
+LOGGER_COLOR_ERROR = "\x1b[31m"
+LOGGER_DATE_FORMAT = "%H:%M:%S"
+LOGGER_MESSAGE_FORMAT = "%(asctime)s %(message)s"
+LOGGER_FILE_MAX_BYTES = 5_000_000
+LOGGER_FILE_BACKUP_COUNT = 3
+LOGGER_FILE_ENCODING = "utf-8"
+
+# Log message templates
+LOG_MSG_TASK_COMPLETED = "%s: completed"
+LOG_MSG_SKIP_UP_TO_DATE = "%s skip up-to-date: %s"
+LOG_MSG_LOAD_ERROR = "load error: path=%s error=%s"
+LOG_MSG_RETRY_EXHAUSTED = "retry exhausted: endpoint=%s symbol=%s attempts=%s"
+
+# Data preparer constants
+DATA_PREPARER_EMPTY_BOOL_DTYPE = "bool"
+DATA_PREPARER_EMPTY_FLOAT_DTYPE = "float64"
+DATA_PREPARER_NUMERIC_COLUMNS = (
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "open_interest",
+    "taker_buy_volume",
+    "taker_buy_ratio",
+    "taker_ratio",
+    "avg_volume_range",
+    "avg_range_volume",
+    "range_volume_avg",
+    "oi_reclaim",
+    "oi_break_avg",
+    "range_volume_zscore",
+    "volume_range_zscore",
+    "zscore_range_volume",
+    "atr_bg",
+    "spread",
+    "bid_ask_spread",
+    "effective_spread",
+    "high_pump",
+    "lowest_break",
+    "support",
+    "resistance",
+)
+DATA_PREPARER_TRADE_COLUMNS = (
+    "entry_timestamp_ms",
+    "exit_timestamp_ms",
+    "pnl",
+    "pnl_percent",
+    "result_type",
+)
+
+# Bee bite stage-1 filter
 BEE_BITE_STAGE1_MIN_VOLUME_USDT = 20_000_000.0
 BEE_BITE_STAGE1_MIN_PUMP_PCT = 0.15
 BEE_BITE_STAGE1_MIN_RETAIN_RATIO = 0.50
@@ -110,9 +192,7 @@ BEE_BITE_STAGE1_MIN_VOLUME_RATIO = 15.0
 BEE_BITE_STAGE1_PUMP_WINDOW_BARS = 6
 BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M = 96
 
-# Значения по умолчанию для сервиса
-
-# Коды ошибок
+# Error codes
 ERROR_CODE_INVALID_CONFIG = "E_CFG_001"
 ERROR_CODE_FETCH_FAILED = "E_FETCH_001"
 ERROR_CODE_SIMULATION_FAILED = "E_SIM_001"

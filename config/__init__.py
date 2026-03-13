@@ -121,7 +121,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     _load_env_file(env_file)
 
 
-    fetch_config = FetchConfig(
+    fetch_cfg = FetchConfig(
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
         coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
@@ -161,7 +161,7 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
 
     bee_bite_profile = parse_bee_bite_profile_id(os.getenv("BEE_BITE_PROFILE"))
     bee_bite_runtime = get_bee_bite_runtime(bee_bite_profile)
-    strategy_config = StrategyConfig(
+    strategy_cfg = StrategyConfig(
         strategy_id=_parse_strategy_id(os.getenv("STRATEGY_ID")),
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
@@ -184,13 +184,13 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         ),
     )
 
-    simulation_config = SimulationConfig(
+    simulation_cfg = SimulationConfig(
         commission_rate=float(os.getenv("COMMISSION_RATE", str(DEFAULT_COMMISSION_RATE))),
         slippage=float(os.getenv("SLIPPAGE", str(DEFAULT_SLIPPAGE))),
         spread=float(os.getenv("SPREAD", str(DEFAULT_SPREAD))),
     )
 
-    backtest_config = BacktestConfig(
+    backtest_cfg = BacktestConfig(
         log_level=os.getenv("LOG_LEVEL", DEFAULT_LOG_LEVEL),
         cache_dir=Path(os.getenv("CACHE_DIR", DEFAULT_CACHE_DIR)),
         logs_dir=Path(os.getenv("LOGS_DIR", DEFAULT_LOGS_DIR)),
@@ -203,15 +203,15 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     )
 
     for path in (
-            backtest_config.cache_dir,
-            backtest_config.logs_dir,
-            backtest_config.results_dir,
+            backtest_cfg.cache_dir,
+            backtest_cfg.logs_dir,
+            backtest_cfg.results_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)
 
     return AppConfig(
-        fetch=fetch_config,
-        strategy=strategy_config,
-        simulation=simulation_config,
-        backtest=backtest_config,
+        fetch=fetch_cfg,
+        strategy=strategy_cfg,
+        simulation=simulation_cfg,
+        backtest=backtest_cfg,
     )

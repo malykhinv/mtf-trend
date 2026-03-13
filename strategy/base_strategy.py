@@ -34,6 +34,7 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
         *,
         mtf_frames: SymbolMtfFrames,
         params: StrategyParamsT,
+        **context: Any,
     ) -> list[TradeResult]:
         """Метод."""
 
