@@ -12,6 +12,7 @@ from constants import (
     BEE_BITE_STAGE1_MIN_RETAIN_RATIO,
     BEE_BITE_STAGE1_MIN_VOLUME_RATIO,
     BEE_BITE_STAGE1_MIN_VOLUME_USDT,
+    BEE_BITE_STAGE1_PUMP_START_LOOKBACK_BARS,
     BEE_BITE_STAGE1_PUMP_WINDOW_BARS,
     BEE_BITE_STAGE1_SLEEP_WINDOW_BARS_15M,
     BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M,
@@ -66,6 +67,7 @@ class BeeBiteStage1Selector:
         min_volume_ratio: float = BEE_BITE_STAGE1_MIN_VOLUME_RATIO,
         sleep_window_bars: int = BEE_BITE_STAGE1_SLEEP_WINDOW_BARS_15M,
         pump_window_bars: int = BEE_BITE_STAGE1_PUMP_WINDOW_BARS,
+        pump_start_lookback_bars: int = BEE_BITE_STAGE1_PUMP_START_LOOKBACK_BARS,
         volume_window_bars: int = BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M,
     ) -> None:
         self._min_volume_usdt = float(min_volume_usdt)
@@ -74,6 +76,7 @@ class BeeBiteStage1Selector:
         self._min_volume_ratio = float(min_volume_ratio)
         self._sleep_window_bars = int(sleep_window_bars)
         self._pump_window_bars = int(pump_window_bars)
+        self._pump_start_lookback_bars = int(max(pump_start_lookback_bars, pump_window_bars))
         self._volume_window_bars = int(volume_window_bars)
 
     def evaluate_symbol(self, *, symbol: str, frame: pd.DataFrame) -> BeeBiteStage1Result:
@@ -238,23 +241,24 @@ class BeeBiteStage1Selector:
     def _iter_stage1_candidates(self, *, prepared: _PreparedStage1Frame):
         last_candidate_start = len(prepared.timestamps) - self._pump_window_bars - 1
         for start_idx in range(self._sleep_window_bars, last_candidate_start + 1):
-            if not self._is_sleep_window_valid(
-                start_idx=start_idx,
-                sleep_window_range_pct=prepared.sleep_window_range_pct,
-            ):
-                continue
-
-            sleep_avg_volume_usdt = self._safe_float(prepared.sleep_volume_mean[start_idx])
-            if sleep_avg_volume_usdt is None or sleep_avg_volume_usdt <= self._EPSILON:
-                continue
-
             window_end_idx = start_idx + self._pump_window_bars - 1
             pump_highs = prepared.highs[start_idx : window_end_idx + 1]
             peak_offset = int(np.argmax(pump_highs))
             peak_idx = start_idx + peak_offset
 
-            pump_base_offset = int(np.argmin(prepared.lows[start_idx : peak_idx + 1]))
-            pump_start_idx = start_idx + pump_base_offset
+            pump_start_idx = self._resolve_pump_start_idx(prepared=prepared, peak_idx=peak_idx)
+            if pump_start_idx < self._sleep_window_bars:
+                continue
+            if not self._is_sleep_window_valid(
+                start_idx=pump_start_idx,
+                sleep_window_range_pct=prepared.sleep_window_range_pct,
+            ):
+                continue
+
+            sleep_avg_volume_usdt = self._safe_float(prepared.sleep_volume_mean[pump_start_idx])
+            if sleep_avg_volume_usdt is None or sleep_avg_volume_usdt <= self._EPSILON:
+                continue
+
             pump_base_price = float(prepared.lows[pump_start_idx])
             pump_peak_price = float(prepared.highs[peak_idx])
             if pump_base_price <= self._EPSILON or pump_peak_price <= pump_base_price:
@@ -265,8 +269,8 @@ class BeeBiteStage1Selector:
                 continue
 
             yield _Stage1Candidate(
-                sleep_start_idx=start_idx - self._sleep_window_bars,
-                sleep_end_idx=start_idx - 1,
+                sleep_start_idx=pump_start_idx - self._sleep_window_bars,
+                sleep_end_idx=pump_start_idx - 1,
                 pump_start_idx=pump_start_idx,
                 peak_idx=peak_idx,
                 sleep_avg_volume_usdt=sleep_avg_volume_usdt,
@@ -280,19 +284,19 @@ class BeeBiteStage1Selector:
         saw_pump_candidate = False
         last_candidate_start = len(prepared.timestamps) - self._pump_window_bars - 1
         for start_idx in range(self._sleep_window_bars, last_candidate_start + 1):
-            if not self._is_sleep_window_valid(
-                start_idx=start_idx,
-                sleep_window_range_pct=prepared.sleep_window_range_pct,
-            ):
-                continue
-            saw_sleep_candidate = True
-
             window_end_idx = start_idx + self._pump_window_bars - 1
             pump_highs = prepared.highs[start_idx : window_end_idx + 1]
             peak_offset = int(np.argmax(pump_highs))
             peak_idx = start_idx + peak_offset
-            pump_base_offset = int(np.argmin(prepared.lows[start_idx : peak_idx + 1]))
-            pump_start_idx = start_idx + pump_base_offset
+            pump_start_idx = self._resolve_pump_start_idx(prepared=prepared, peak_idx=peak_idx)
+            if pump_start_idx < self._sleep_window_bars:
+                continue
+            if not self._is_sleep_window_valid(
+                start_idx=pump_start_idx,
+                sleep_window_range_pct=prepared.sleep_window_range_pct,
+            ):
+                continue
+            saw_sleep_candidate = True
             pump_base_price = float(prepared.lows[pump_start_idx])
             pump_peak_price = float(prepared.highs[peak_idx])
             if pump_base_price <= self._EPSILON or pump_peak_price <= pump_base_price:
@@ -301,6 +305,12 @@ class BeeBiteStage1Selector:
                 saw_pump_candidate = True
                 break
         return saw_sleep_candidate, saw_pump_candidate
+
+    def _resolve_pump_start_idx(self, *, prepared: _PreparedStage1Frame, peak_idx: int) -> int:
+        search_start_idx = max(self._sleep_window_bars, peak_idx - self._pump_start_lookback_bars + 1)
+        lows_window = prepared.lows[search_start_idx : peak_idx + 1]
+        start_offset = int(np.argmin(lows_window))
+        return search_start_idx + start_offset
 
     def _is_sleep_window_valid(
         self,
