@@ -55,6 +55,11 @@ class BeeBiteStage1Plotter:
         confirmed_idx = self._timestamp_to_index(prepared, event.stage1_confirmed_timestamp)
         pump_start_idx = self._timestamp_to_index(prepared, event.pump_start_timestamp)
         pump_peak_idx = self._timestamp_to_index(prepared, event.pump_peak_timestamp)
+        lowest_after_pump_idx = (
+            self._timestamp_to_index(prepared, event.lowest_after_pump_timestamp)
+            if event.lowest_after_pump_timestamp is not None
+            else None
+        )
 
         window_start = max(0, pump_start_idx - self._PRE_CONTEXT_BARS)
         window_end = min(len(prepared) - 1, confirmed_idx + self._POST_CONTEXT_BARS)
@@ -102,11 +107,11 @@ class BeeBiteStage1Plotter:
         self._draw_marker(price_ax, pump_start_idx - index_shift, event.pump_base_price, self._START_COLOR, "pump start")
         self._draw_marker(price_ax, pump_peak_idx - index_shift, event.pump_peak_price, self._PEAK_COLOR, "pump peak marker")
         close_at_confirmed = float(window.iloc[confirmed_idx - index_shift]["close"])
-        self._draw_marker(price_ax, confirmed_idx - index_shift, close_at_confirmed, self._STAGE1_COLOR, "stage1")
+        self._draw_marker(price_ax, confirmed_idx - index_shift, close_at_confirmed, self._STAGE1_COLOR, "stage1 confirmed")
 
-        if event.lowest_after_pump is not None:
+        if event.lowest_after_pump is not None and lowest_after_pump_idx is not None:
             price_ax.scatter(
-                confirmed_idx - index_shift,
+                lowest_after_pump_idx - index_shift,
                 event.lowest_after_pump,
                 color=self._LOWEST_COLOR,
                 s=50,

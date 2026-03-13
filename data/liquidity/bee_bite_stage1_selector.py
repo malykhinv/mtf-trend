@@ -39,6 +39,7 @@ class BeeBiteStage1Result:
     pump_peak_price: float | None = None
     hold_price: float | None = None
     lowest_after_pump: float | None = None
+    lowest_after_pump_timestamp: int | None = None
 
 
 @dataclass(slots=True)
@@ -345,7 +346,10 @@ class BeeBiteStage1Selector:
         if confirm_idx <= candidate.peak_idx or confirm_idx >= len(prepared.timestamps):
             return None
 
-        lowest_after_pump = float(np.min(prepared.lows[candidate.peak_idx + 1 : confirm_idx + 1]))
+        post_peak_lows = prepared.lows[candidate.peak_idx + 1 : confirm_idx + 1]
+        lowest_after_pump_offset = int(np.argmin(post_peak_lows))
+        lowest_after_pump_idx = candidate.peak_idx + 1 + lowest_after_pump_offset
+        lowest_after_pump = float(post_peak_lows[lowest_after_pump_offset])
         hold_price = candidate.pump_base_price + (
             (candidate.pump_peak_price - candidate.pump_base_price) * self._min_retain_ratio
         )
@@ -379,6 +383,7 @@ class BeeBiteStage1Selector:
             pump_peak_price=candidate.pump_peak_price,
             hold_price=hold_price,
             lowest_after_pump=lowest_after_pump,
+            lowest_after_pump_timestamp=int(prepared.timestamps[lowest_after_pump_idx]),
         )
 
         if lowest_after_pump < hold_price:

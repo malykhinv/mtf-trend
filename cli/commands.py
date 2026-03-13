@@ -1397,6 +1397,7 @@ def _stage1_event_to_row(event: BeeBiteStage1Result) -> dict[str, object]:
         "pump_peak_price": event.pump_peak_price,
         "hold_price": event.hold_price,
         "lowest_after_pump": event.lowest_after_pump,
+        "lowest_after_pump_timestamp": event.lowest_after_pump_timestamp,
         "pump_percent": event.pump_percent,
         "retain_ratio": event.retain_ratio,
         "rolling_volume_usdt": event.rolling_volume_usdt,
