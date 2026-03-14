@@ -314,13 +314,18 @@ class BeeBiteStage1Selector:
     def _iter_stage1_candidates(self, *, prepared: _PreparedStage1Frame):
         last_candidate_start = len(prepared.timestamps) - self._pump_window_bars - 1
         start_idx = self._sleep_window_bars
+        regime_floor_idx = self._sleep_window_bars
         while start_idx <= last_candidate_start:
             window_end_idx = start_idx + self._pump_window_bars - 1
             pump_highs = self._effective_highs(prepared)[start_idx : window_end_idx + 1]
             peak_offset = int(np.argmax(pump_highs))
             peak_idx = start_idx + peak_offset
 
-            raw_pump_start_idx = self._resolve_pump_start_idx(prepared=prepared, peak_idx=peak_idx)
+            raw_pump_start_idx = self._resolve_pump_start_idx(
+                prepared=prepared,
+                peak_idx=peak_idx,
+                min_start_idx=regime_floor_idx,
+            )
             pump_start_idx = self._refine_pump_start_idx(
                 prepared=prepared,
                 raw_pump_start_idx=raw_pump_start_idx,
@@ -374,6 +379,7 @@ class BeeBiteStage1Selector:
             candidate = self._finalize_candidate_regime(prepared=prepared, candidate=initial_candidate)
             yield candidate
 
+            regime_floor_idx = max(regime_floor_idx, candidate.regime_end_idx)
             start_idx = max(start_idx + 1, candidate.regime_end_idx)
 
     def _scan_stage1_setup_flags(self, prepared: _PreparedStage1Frame) -> tuple[bool, bool]:
@@ -381,8 +387,15 @@ class BeeBiteStage1Selector:
             return True, True
         return False, False
 
-    def _resolve_pump_start_idx(self, *, prepared: _PreparedStage1Frame, peak_idx: int) -> int:
-        search_start_idx = max(self._sleep_window_bars, peak_idx - self._pump_start_lookback_bars + 1)
+    def _resolve_pump_start_idx(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        peak_idx: int,
+        min_start_idx: int | None = None,
+    ) -> int:
+        floor_idx = self._sleep_window_bars if min_start_idx is None else int(max(self._sleep_window_bars, min_start_idx))
+        search_start_idx = max(floor_idx, peak_idx - self._pump_start_lookback_bars + 1)
         lows_window = prepared.lows[search_start_idx : peak_idx + 1]
         start_offset = int(np.argmin(lows_window))
         return search_start_idx + start_offset
