@@ -641,16 +641,19 @@ class BeeBiteStage2Detector:
             tolerance=tolerance,
             side="upper",
         )
-        lower_zone = self._resolve_liquidity_zone(
+        lower_zones = self._resolve_lower_liquidity_zones(
             prepared=prepared,
             segment_start_idx=segment_start_idx,
             segment_end_idx=segment_end_idx,
             box_low=float(active_box.low),
             box_high=float(active_box.high),
             tolerance=tolerance,
-            side="lower",
         )
-        return [zone for zone in (upper_zone, lower_zone) if zone is not None]
+        zones: list[BeeBiteStage2LiquidityZone] = []
+        if upper_zone is not None:
+            zones.append(upper_zone)
+        zones.extend(lower_zones)
+        return zones
 
     def _resolve_liquidity_zone(
         self,
@@ -679,7 +682,7 @@ class BeeBiteStage2Detector:
                 tolerance=tolerance,
                 side=side,
             )
-            start_idx = int(touches[self._LIQUIDITY_MIN_TOUCHES - 1])
+            start_idx = max(segment_start_idx, int(touches[self._LIQUIDITY_MIN_TOUCHES - 1]) - 1)
             sweep_idx = self._resolve_liquidity_zone_sweep_idx(
                 prepared=prepared,
                 segment_end_idx=segment_end_idx,
@@ -707,7 +710,7 @@ class BeeBiteStage2Detector:
                 touch_count=len(valid_touches),
             )
 
-        return self._resolve_lower_liquidity_zone(
+        lower_zones = self._resolve_lower_liquidity_zones(
             prepared=prepared,
             segment_start_idx=segment_start_idx,
             segment_end_idx=segment_end_idx,
@@ -715,8 +718,9 @@ class BeeBiteStage2Detector:
             box_high=box_high,
             tolerance=tolerance,
         )
+        return lower_zones[0] if lower_zones else None
 
-    def _resolve_lower_liquidity_zone(
+    def _resolve_lower_liquidity_zones(
         self,
         *,
         prepared: _PreparedStage2Frame,
@@ -725,7 +729,7 @@ class BeeBiteStage2Detector:
         box_low: float,
         box_high: float,
         tolerance: float,
-    ) -> BeeBiteStage2LiquidityZone | None:
+    ) -> list[BeeBiteStage2LiquidityZone]:
         range_height = max(box_high - box_low, self._EPSILON)
         threshold = box_low + (range_height * self._LIQUIDITY_ZONE_RELATIVE_MARGIN)
         swing_points = self._extract_swing_lows(
@@ -734,10 +738,9 @@ class BeeBiteStage2Detector:
         )
         filtered_points = [point for point in swing_points if point[1] <= threshold]
         if len(filtered_points) < self._LIQUIDITY_MIN_TOUCHES:
-            return None
+            return []
 
-        best_zone: BeeBiteStage2LiquidityZone | None = None
-        best_score: tuple[int, float, float, int] | None = None
+        candidates: list[tuple[tuple[int, float, float, int], BeeBiteStage2LiquidityZone]] = []
         for anchor_idx, anchor_price in filtered_points:
             cluster = [
                 (point_idx, point_price)
@@ -757,7 +760,7 @@ class BeeBiteStage2Detector:
                 side="lower",
             )
             ordered_touches = sorted(point_idx for point_idx, _ in cluster)
-            start_idx = int(ordered_touches[self._LIQUIDITY_MIN_TOUCHES - 1])
+            start_idx = max(segment_start_idx, int(ordered_touches[self._LIQUIDITY_MIN_TOUCHES - 1]) - 1)
             sweep_idx = self._resolve_liquidity_zone_sweep_idx(
                 prepared=prepared,
                 segment_end_idx=segment_end_idx,
@@ -777,24 +780,54 @@ class BeeBiteStage2Detector:
                 -float(cluster_high - cluster_low),
                 -start_idx,
             )
-            if best_score is not None and score <= best_score:
-                continue
 
             last_touch_idx = int(valid_touches[-1])
-            best_score = score
-            best_zone = BeeBiteStage2LiquidityZone(
-                side="lower",
-                start_idx=start_idx,
-                start_timestamp=int(prepared.timestamps[start_idx]),
-                end_idx=effective_end_idx,
-                end_timestamp=int(prepared.timestamps[effective_end_idx]),
-                last_touch_idx=last_touch_idx,
-                last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
-                low=zone_low,
-                high=zone_high,
-                touch_count=len(valid_touches),
+            candidates.append((
+                score,
+                BeeBiteStage2LiquidityZone(
+                    side="lower",
+                    start_idx=start_idx,
+                    start_timestamp=int(prepared.timestamps[start_idx]),
+                    end_idx=effective_end_idx,
+                    end_timestamp=int(prepared.timestamps[effective_end_idx]),
+                    last_touch_idx=last_touch_idx,
+                    last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
+                    low=zone_low,
+                    high=zone_high,
+                    touch_count=len(valid_touches),
+                ),
+            ))
+
+        if not candidates:
+            return []
+
+        selected: list[BeeBiteStage2LiquidityZone] = []
+        for _, candidate in sorted(candidates, key=lambda item: item[0], reverse=True):
+            overlaps_existing = any(
+                self._zones_overlap_enough(candidate=candidate, existing=existing)
+                for existing in selected
             )
-        return best_zone
+            if overlaps_existing:
+                continue
+            selected.append(candidate)
+            if len(selected) >= 3:
+                break
+
+        return sorted(selected, key=lambda item: (item.start_idx, item.low))
+
+    def _zones_overlap_enough(
+        self,
+        *,
+        candidate: BeeBiteStage2LiquidityZone,
+        existing: BeeBiteStage2LiquidityZone,
+    ) -> bool:
+        overlap = min(candidate.high, existing.high) - max(candidate.low, existing.low)
+        if overlap <= self._EPSILON:
+            return False
+        candidate_height = max(candidate.high - candidate.low, self._EPSILON)
+        existing_height = max(existing.high - existing.low, self._EPSILON)
+        overlap_ratio = overlap / min(candidate_height, existing_height)
+        return overlap_ratio >= self._RANGE_OVERLAP_THRESHOLD
 
     def _project_liquidity_zone_bounds(
         self,
