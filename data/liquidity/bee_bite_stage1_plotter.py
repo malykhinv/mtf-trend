@@ -21,7 +21,6 @@ class BeeBiteStage1Plotter:
 
     _CANDLE_WIDTH = 0.65
     _PRE_CONTEXT_BARS = 24
-    _POST_CONTEXT_BARS = 24
     _FIGURE_FACE = "#08111f"
     _AXIS_FACE = "#0f172a"
     _GRID_COLOR = "#334155"
