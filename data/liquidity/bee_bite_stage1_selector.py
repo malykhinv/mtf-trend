@@ -47,6 +47,7 @@ class BeeBiteStage1Result:
 @dataclass(slots=True)
 class _PreparedStage1Frame:
     timestamps: np.ndarray
+    opens: np.ndarray
     highs: np.ndarray
     lows: np.ndarray
     closes: np.ndarray
@@ -257,6 +258,7 @@ class BeeBiteStage1Selector:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="insufficient_history")
 
         timestamps = prepared["timestamp"].astype("int64").to_numpy()
+        opens = prepared["open"].astype("float64").to_numpy()
         highs = prepared["high"].astype("float64").to_numpy()
         lows = prepared["low"].astype("float64").to_numpy()
         closes = prepared["close"].astype("float64").to_numpy()
@@ -288,6 +290,7 @@ class BeeBiteStage1Selector:
 
         return _PreparedStage1Frame(
             timestamps=timestamps,
+            opens=opens,
             highs=highs,
             lows=lows,
             closes=closes,
@@ -303,7 +306,7 @@ class BeeBiteStage1Selector:
         start_idx = self._sleep_window_bars
         while start_idx <= last_candidate_start:
             window_end_idx = start_idx + self._pump_window_bars - 1
-            pump_highs = prepared.highs[start_idx : window_end_idx + 1]
+            pump_highs = self._effective_highs(prepared)[start_idx : window_end_idx + 1]
             peak_offset = int(np.argmax(pump_highs))
             peak_idx = start_idx + peak_offset
 
@@ -324,7 +327,7 @@ class BeeBiteStage1Selector:
                 continue
 
             pump_base_price = float(prepared.lows[pump_start_idx])
-            pump_peak_price = float(prepared.highs[peak_idx])
+            pump_peak_price = self._effective_high_at(prepared=prepared, idx=peak_idx)
             if pump_base_price <= self._EPSILON or pump_peak_price <= pump_base_price:
                 start_idx += 1
                 continue
@@ -361,6 +364,20 @@ class BeeBiteStage1Selector:
         start_offset = int(np.argmin(lows_window))
         return search_start_idx + start_offset
 
+    def _effective_highs(self, prepared: _PreparedStage1Frame) -> np.ndarray:
+        body_highs = np.maximum(prepared.opens, prepared.closes)
+        body_sizes = np.abs(prepared.closes - prepared.opens)
+        upper_wicks = prepared.highs - body_highs
+        return np.where(upper_wicks > body_sizes, body_highs, prepared.highs)
+
+    def _effective_high_at(self, *, prepared: _PreparedStage1Frame, idx: int) -> float:
+        body_high = max(float(prepared.opens[idx]), float(prepared.closes[idx]))
+        body_size = abs(float(prepared.closes[idx]) - float(prepared.opens[idx]))
+        upper_wick = float(prepared.highs[idx]) - body_high
+        if upper_wick > body_size:
+            return body_high
+        return float(prepared.highs[idx])
+
     def _finalize_candidate_regime(
         self,
         *,
@@ -380,7 +397,7 @@ class BeeBiteStage1Selector:
                 (current_peak_price - candidate.pump_base_price) * self._min_retain_ratio
             )
             current_low = float(prepared.lows[idx])
-            current_high = float(prepared.highs[idx])
+            current_high = self._effective_high_at(prepared=prepared, idx=idx)
 
             if current_low < hold_price:
                 regime_end_idx = idx
@@ -436,7 +453,7 @@ class BeeBiteStage1Selector:
 
         hold_start_idx = breakout_idx - self._min_confirm_delay_bars
         hold_lows = prepared.lows[hold_start_idx:breakout_idx]
-        hold_highs = prepared.highs[hold_start_idx:breakout_idx]
+        hold_highs = self._effective_highs(prepared)[hold_start_idx:breakout_idx]
         if hold_lows.size < self._min_confirm_delay_bars:
             return False
         if np.any(hold_lows < hold_price):
@@ -480,7 +497,7 @@ class BeeBiteStage1Selector:
 
         bars_since_peak = confirm_idx - candidate.peak_idx
         post_peak_lows = prepared.lows[candidate.peak_idx + 1 : confirm_idx + 1]
-        post_peak_highs = prepared.highs[candidate.peak_idx + 1 : confirm_idx + 1]
+        post_peak_highs = self._effective_highs(prepared)[candidate.peak_idx + 1 : confirm_idx + 1]
         lowest_after_pump_offset = int(np.argmin(post_peak_lows))
         lowest_after_pump_idx = candidate.peak_idx + 1 + lowest_after_pump_offset
         lowest_after_pump = float(post_peak_lows[lowest_after_pump_offset])
@@ -490,7 +507,7 @@ class BeeBiteStage1Selector:
         sleep_closes = prepared.closes[candidate.sleep_start_idx : candidate.sleep_end_idx + 1]
         sleep_closes_below_hold_ratio = float(np.mean(sleep_closes < hold_price))
         confirm_candle_low = float(prepared.lows[confirm_idx])
-        confirm_candle_high = float(prepared.highs[confirm_idx])
+        confirm_candle_high = self._effective_high_at(prepared=prepared, idx=confirm_idx)
         retain_ratio = (lowest_after_pump - candidate.pump_base_price) / max(
             candidate.pump_peak_price - candidate.pump_base_price,
             self._EPSILON,

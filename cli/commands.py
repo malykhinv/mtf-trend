@@ -13,6 +13,7 @@ from logging import Logger
 from pathlib import Path
 from typing import Callable, cast
 
+import numpy as np
 import pandas as pd
 
 from config import AppConfig
@@ -227,17 +228,23 @@ def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Reg
     if frame.empty or not regimes:
         return regimes
 
-    prepared = frame.loc[:, ["timestamp", "high", "low"]].copy()
+    prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close"]].copy()
     for column in prepared.columns:
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp", "high", "low"])
+    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"])
     prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
     if prepared.empty:
         return regimes
 
     timestamps = prepared["timestamp"].astype("int64").to_numpy()
+    opens = prepared["open"].astype("float64").to_numpy()
     highs = prepared["high"].astype("float64").to_numpy()
     lows = prepared["low"].astype("float64").to_numpy()
+    closes = prepared["close"].astype("float64").to_numpy()
+    body_highs = np.maximum(opens, closes)
+    body_sizes = np.abs(closes - opens)
+    upper_wicks = highs - body_highs
+    effective_highs = np.where(upper_wicks > body_sizes, body_highs, highs)
     timestamp_to_index = {int(timestamp): idx for idx, timestamp in enumerate(timestamps)}
 
     resolved_regimes: list[_Stage1Regime] = []
@@ -271,7 +278,7 @@ def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Reg
                 resolved_end_ts = timestamp_ms
                 resolved_reason = "dumped_below_hold"
                 break
-            if pump_peak_price > 0.0 and float(highs[scan_idx]) > pump_peak_price:
+            if pump_peak_price > 0.0 and float(effective_highs[scan_idx]) > pump_peak_price:
                 resolved_end_ts = timestamp_ms
                 resolved_reason = "new_high_after_regime"
                 break
