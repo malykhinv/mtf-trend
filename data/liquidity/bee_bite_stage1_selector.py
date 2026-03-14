@@ -47,6 +47,7 @@ class _PreparedStage1Frame:
     timestamps: np.ndarray
     highs: np.ndarray
     lows: np.ndarray
+    closes: np.ndarray
     quote_volume: np.ndarray
     rolling_volume: np.ndarray
     sleep_volume_mean: np.ndarray
@@ -87,6 +88,7 @@ class BeeBiteStage1Selector:
 
         saw_sleep_candidate, saw_pump_candidate = self._scan_stage1_setup_flags(prepared)
         saw_retain_candidate = False
+        saw_sleep_below_hold_failure = False
         saw_confirm_band_failure = False
         saw_volume_ratio_candidate = False
         saw_volume_24h_candidate = False
@@ -106,6 +108,8 @@ class BeeBiteStage1Selector:
 
             if evaluation.retain_ratio is not None and evaluation.retain_ratio >= self._min_retain_ratio:
                 saw_retain_candidate = True
+            if evaluation.reason == "sleep_closes_not_below_hold_majority":
+                saw_sleep_below_hold_failure = True
             if evaluation.reason == "confirm_candle_outside_pump_band":
                 saw_confirm_band_failure = True
             if evaluation.post_pump_volume_ratio is not None and evaluation.post_pump_volume_ratio >= self._min_volume_ratio:
@@ -131,6 +135,8 @@ class BeeBiteStage1Selector:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="pump_below_15pct")
         if not saw_retain_candidate:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="retain_below_half")
+        if saw_sleep_below_hold_failure:
+            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="sleep_closes_not_below_hold_majority")
         if saw_confirm_band_failure:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="confirm_candle_outside_pump_band")
         if not saw_volume_ratio_candidate:
@@ -237,6 +243,7 @@ class BeeBiteStage1Selector:
             timestamps=timestamps,
             highs=highs,
             lows=lows,
+            closes=closes,
             quote_volume=quote_volume,
             rolling_volume=rolling_volume,
             sleep_volume_mean=sleep_volume_mean,
@@ -358,6 +365,8 @@ class BeeBiteStage1Selector:
         hold_price = candidate.pump_base_price + (
             (candidate.pump_peak_price - candidate.pump_base_price) * self._min_retain_ratio
         )
+        sleep_closes = prepared.closes[candidate.sleep_start_idx : candidate.sleep_end_idx + 1]
+        sleep_closes_below_hold_ratio = float(np.mean(sleep_closes < hold_price))
         confirm_candle_low = float(prepared.lows[confirm_idx])
         confirm_candle_high = float(prepared.highs[confirm_idx])
         retain_ratio = (lowest_after_pump - candidate.pump_base_price) / max(
@@ -395,6 +404,9 @@ class BeeBiteStage1Selector:
 
         if lowest_after_pump < hold_price:
             result.reason = "retain_below_half"
+            return result
+        if sleep_closes_below_hold_ratio <= 0.5:
+            result.reason = "sleep_closes_not_below_hold_majority"
             return result
         if confirm_candle_low < hold_price or confirm_candle_high > candidate.pump_peak_price:
             result.reason = "confirm_candle_outside_pump_band"
