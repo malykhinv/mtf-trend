@@ -74,11 +74,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     stage1 = subparsers.add_parser("review-stage1", help="Find historical bee_bite stage-1 events and save review PNGs")
     stage1.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    stage1.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
     stage1.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-1 review plots")
     stage1.add_argument("--output", default=None, help="Path to CSV with detected stage-1 events")
 
     stage2 = subparsers.add_parser("review-stage2", help="Find bee_bite stage-2 structure and save PNGs with balance boxes")
     stage2.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    stage2.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
     stage2.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-2 review plots")
     stage2.add_argument("--output", default=None, help="Path to CSV with detected stage-2 structures")
 

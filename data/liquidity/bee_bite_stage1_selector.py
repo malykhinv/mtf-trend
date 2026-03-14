@@ -20,6 +20,7 @@ from constants import (
     BEE_BITE_STAGE1_SLEEP_WINDOW_BARS_15M,
     BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M,
 )
+from domain.enums.timeframe import Timeframe
 
 
 @dataclass(slots=True)
@@ -65,6 +66,7 @@ class BeeBiteStage1Selector:
     """Select assets that match sleep -> pump -> retain-above-half stage-1 logic."""
 
     _EPSILON = 1e-12
+    _REFERENCE_TIMEFRAME = Timeframe.M15
 
     def __init__(
         self,
@@ -92,6 +94,51 @@ class BeeBiteStage1Selector:
         self._max_initial_pump_duration_bars = int(max(max_initial_pump_duration_bars, 1))
         self._min_confirm_delay_bars = int(max(min_confirm_delay_bars, 1))
         self._max_confirm_delay_bars = int(max(max_confirm_delay_bars, self._min_confirm_delay_bars))
+
+    @classmethod
+    def for_timeframe(cls, timeframe: Timeframe) -> BeeBiteStage1Selector:
+        reference_step_ms = cls._REFERENCE_TIMEFRAME.to_milliseconds()
+        target_step_ms = timeframe.to_milliseconds()
+        return cls(
+            min_volume_usdt=BEE_BITE_STAGE1_MIN_VOLUME_USDT,
+            min_pump_pct=BEE_BITE_STAGE1_MIN_PUMP_PCT,
+            min_retain_ratio=BEE_BITE_STAGE1_MIN_RETAIN_RATIO,
+            min_volume_ratio=BEE_BITE_STAGE1_MIN_VOLUME_RATIO,
+            sleep_window_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_SLEEP_WINDOW_BARS_15M * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+            pump_window_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_PUMP_WINDOW_BARS * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+            pump_start_lookback_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_PUMP_START_LOOKBACK_BARS * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+            volume_window_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+            max_initial_pump_duration_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_MAX_INITIAL_PUMP_DURATION_BARS_15M * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+            min_confirm_delay_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_MIN_CONFIRM_DELAY_BARS_15M * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+            max_confirm_delay_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_MAX_CONFIRM_DELAY_BARS_15M * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+        )
+
+    @staticmethod
+    def _duration_to_bars(*, duration_ms: int, bar_duration_ms: int) -> int:
+        if duration_ms <= 0 or bar_duration_ms <= 0:
+            return 1
+        return max(int((duration_ms + bar_duration_ms - 1) // bar_duration_ms), 1)
 
     def evaluate_symbol(self, *, symbol: str, frame: pd.DataFrame) -> BeeBiteStage1Result:
         prepared = self._prepare_frame(symbol=symbol, frame=frame)

@@ -70,6 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
     parser.add_argument("--ignore-coingecko", action="store_true", default=None, help="Skip CoinGecko in fetch/update symbol selection")
     parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    parser.add_argument("--tf", default=None, help="Review timeframe for stage review modes")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
     parser.add_argument("--strategy", choices=["bee_bite"], default=None, help="Only bee_bite strategy is available")
@@ -98,6 +99,7 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         days=int(task.get("days", cli_args.days)),
         end_timestamp_ms=task.get("end_timestamp_ms", cli_args.end_timestamp_ms),
         symbols=task.get("symbols", cli_args.symbols),
+        tf=task.get("tf", cli_args.tf),
         levels_tf=task.get("levels_tf", cli_args.levels_tf),
         entry_tf=task.get("entry_tf", cli_args.entry_tf),
         strategy=task.get("strategy", cli_args.strategy),

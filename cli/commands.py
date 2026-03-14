@@ -999,6 +999,14 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
     raise ValueError(f"Некорректное значение {argument_name}: {value}. Поддерживаемые значения: {supported}")
 
 
+def _resolve_review_timeframe(args: argparse.Namespace) -> Timeframe:
+    return _resolve_timeframe(
+        getattr(args, "tf", None),
+        fallback=Timeframe.M15,
+        argument_name="--tf",
+    )
+
+
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
 
@@ -1267,16 +1275,16 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preloaded_entry_frames: dict[str, pd.DataFrame] = {}
     pre_rank_started_at = time.perf_counter()
     if strategy_id == "bee_bite":
-        stage1_selector = BeeBiteStage1Selector()
+        stage1_selector = BeeBiteStage1Selector.for_timeframe(entry_timeframe)
         stage1_results: list[BeeBiteStage1Result] = []
         stage1_reason_counts: Counter[str] = Counter()
         for symbol in symbols:
-            entry_15m_frame = preparer.load_symbol_data(symbol, Timeframe.M15)
-            preloaded_entry_frames[symbol] = entry_15m_frame
-            if levels_timeframe == Timeframe.M15:
-                preloaded_levels_frames[symbol] = entry_15m_frame
+            entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
+            preloaded_entry_frames[symbol] = entry_frame
+            if levels_timeframe == entry_timeframe:
+                preloaded_levels_frames[symbol] = entry_frame
 
-            stage1_result = stage1_selector.evaluate_symbol(symbol=symbol, frame=entry_15m_frame)
+            stage1_result = stage1_selector.evaluate_symbol(symbol=symbol, frame=entry_frame)
             stage1_reason_counts[stage1_result.reason] += 1
             if stage1_result.passed:
                 stage1_results.append(stage1_result)
@@ -1563,6 +1571,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
 def _stage1_event_to_row(
     event: BeeBiteStage1Result,
     *,
+    timeframe: Timeframe | None = None,
     regime_index: int | None = None,
     regime_role: str | None = None,
     regime_end_timestamp: int | None = None,
@@ -1571,6 +1580,7 @@ def _stage1_event_to_row(
 ) -> dict[str, object]:
     row = {
         "symbol": event.symbol,
+        "timeframe": timeframe.value if timeframe is not None else None,
         "regime_index": regime_index,
         "regime_role": regime_role,
         "regime_end_timestamp": regime_end_timestamp,
@@ -1674,8 +1684,9 @@ def _resolve_stage1_display_metrics(
 def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage1", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("review-stage1: cache_dir=%s", config.backtest.cache_dir)
+    review_timeframe = _resolve_review_timeframe(args)
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
-    output_dir = results_dir / "stage1_review"
+    output_dir = results_dir / "stage1_review" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE1_EVENTS_OUTPUT_FILE
@@ -1683,13 +1694,13 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
 
     preparer = DataPreparer(config.backtest.cache_dir)
-    symbols_raw = args.symbols or preparer.list_symbols(Timeframe.M15)
+    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
     symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
     if not symbols:
         logger.info("review-stage1: нет данных в кэше для entry_tf=15m")
         return 0
 
-    selector = BeeBiteStage1Selector()
+    selector = BeeBiteStage1Selector.for_timeframe(review_timeframe)
     plotter = BeeBiteStage1Plotter()
     all_events: list[BeeBiteStage1Result] = []
     regimes_by_symbol: dict[str, list[_Stage1Regime]] = {}
@@ -1702,7 +1713,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     max_rows: int | None = None
 
     for index, symbol in enumerate(symbols, start=1):
-        frame = preparer.load_symbol_data(symbol, Timeframe.M15)
+        frame = preparer.load_symbol_data(symbol, review_timeframe)
         frames_by_symbol[symbol] = frame
         rows_count = int(len(frame))
         if frame.empty:
@@ -1759,6 +1770,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 rows.append(
                     _stage1_event_to_row(
                         event,
+                        timeframe=review_timeframe,
                         regime_index=regime.regime_index,
                         regime_role=regime_role,
                         regime_end_timestamp=regime.regime_end_timestamp,
@@ -1797,7 +1809,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
             event=regime.first_event,
             output_path=first_output,
             window_end_timestamp=regime.first_event.stage1_confirmed_timestamp,
-            title_suffix=f"regime {regime.regime_index:02d} first",
+            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} first",
         )
         plots_built += 1
 
@@ -1807,7 +1819,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
             event=regime.last_event,
             output_path=last_output,
             window_end_timestamp=regime.regime_end_timestamp,
-            title_suffix=f"regime {regime.regime_index:02d} last ({regime.regime_end_reason})",
+            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} last ({regime.regime_end_reason})",
         )
         plots_built += 1
 
@@ -1845,6 +1857,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
 def _stage2_result_to_rows(
     *,
     symbol: str,
+    timeframe: Timeframe,
     regime: _Stage1Regime,
     stage1_event: BeeBiteStage1Result,
     stage2_result: BeeBiteStage2Result,
@@ -1852,6 +1865,7 @@ def _stage2_result_to_rows(
     rows: list[dict[str, object]] = [
         {
             "symbol": symbol,
+            "timeframe": timeframe.value,
             "regime_index": regime.regime_index,
             "row_type": "summary",
             "stage1_confirmed_timestamp": stage1_event.stage1_confirmed_timestamp,
@@ -1875,6 +1889,7 @@ def _stage2_result_to_rows(
         rows.append(
             {
                 "symbol": symbol,
+                "timeframe": timeframe.value,
                 "regime_index": regime.regime_index,
                 "row_type": "confirmed_high",
                 "row_order": order,
@@ -1888,6 +1903,7 @@ def _stage2_result_to_rows(
         rows.append(
             {
                 "symbol": symbol,
+                "timeframe": timeframe.value,
                 "regime_index": regime.regime_index,
                 "row_type": "local_range",
                 "row_order": order,
@@ -1905,6 +1921,7 @@ def _stage2_result_to_rows(
         rows.append(
             {
                 "symbol": symbol,
+                "timeframe": timeframe.value,
                 "regime_index": regime.regime_index,
                 "row_type": "merged_range",
                 "row_order": order,
@@ -1925,8 +1942,9 @@ def _stage2_result_to_rows(
 def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage2", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("review-stage2: cache_dir=%s", config.backtest.cache_dir)
+    review_timeframe = _resolve_review_timeframe(args)
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
-    output_dir = results_dir / "stage2_review"
+    output_dir = results_dir / "stage2_review" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE2_EVENTS_OUTPUT_FILE
@@ -1934,13 +1952,13 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
 
     preparer = DataPreparer(config.backtest.cache_dir)
-    symbols_raw = args.symbols or preparer.list_symbols(Timeframe.M15)
+    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
     symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
     if not symbols:
-        logger.info("review-stage2: no data in cache for entry_tf=15m")
+        logger.info("review-stage2: no data in cache for tf=%s", review_timeframe.value)
         return 0
 
-    selector = BeeBiteStage1Selector()
+    selector = BeeBiteStage1Selector.for_timeframe(review_timeframe)
     detector = BeeBiteStage2Detector()
     plotter = BeeBiteStage2Plotter()
     rows: list[dict[str, object]] = []
@@ -1950,7 +1968,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     populated_frame_symbols = 0
 
     for index, symbol in enumerate(symbols, start=1):
-        frame = preparer.load_symbol_data(symbol, Timeframe.M15)
+        frame = preparer.load_symbol_data(symbol, review_timeframe)
         if frame.empty:
             empty_frame_symbols.append(symbol)
             continue
@@ -1977,6 +1995,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
             rows.extend(
                 _stage2_result_to_rows(
                     symbol=symbol,
+                    timeframe=review_timeframe,
                     regime=regime,
                     stage1_event=stage1_event,
                     stage2_result=stage2_result,
@@ -2024,7 +2043,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
             stage2_result=stage2_result,
             output_path=plot_path,
             window_end_timestamp=regime.regime_end_timestamp,
-            title_suffix=f"regime {regime.regime_index:02d}",
+            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
         )
         plots_built += 1
 
