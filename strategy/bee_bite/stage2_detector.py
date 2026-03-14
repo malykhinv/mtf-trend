@@ -799,7 +799,7 @@ class BeeBiteStage2Detector:
         clipped: list[BeeBiteStage2LiquidityZone] = []
         for idx, zone in enumerate(ordered):
             effective_end_idx = zone.end_idx
-            if idx + 1 < len(ordered):
+            if side != "upper" and idx + 1 < len(ordered):
                 next_zone = ordered[idx + 1]
                 if next_zone.start_idx <= effective_end_idx:
                     effective_end_idx = next_zone.start_idx - 1
