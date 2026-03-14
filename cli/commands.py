@@ -1597,12 +1597,8 @@ def _resolve_stage1_display_metrics(
             prepared,
             window_end_timestamp if window_end_timestamp is not None else event.stage1_confirmed_timestamp,
         )
-        display_start_idx, display_pump_base_price = BeeBiteStage1Plotter._resolve_display_start(
-            prepared=prepared,
-            pump_start_timestamp=event.pump_start_timestamp,
-            fallback_pump_base_price=event.pump_base_price,
-            window_end_idx=explicit_window_end_idx,
-        )
+        display_start_idx = BeeBiteStage1Plotter._timestamp_to_index(prepared, event.pump_start_timestamp)
+        display_pump_base_price = float(event.pump_base_price or prepared.iloc[display_start_idx]["low"])
         display_peak_idx, display_peak_price = BeeBiteStage1Plotter._resolve_display_peak(
             prepared=prepared,
             pump_peak_timestamp=event.pump_peak_timestamp,
