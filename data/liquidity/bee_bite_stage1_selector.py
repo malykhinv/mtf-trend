@@ -391,6 +391,7 @@ class BeeBiteStage1Selector:
                 pump_percent=pump_percent,
             )
             candidate = self._finalize_candidate_regime(prepared=prepared, candidate=initial_candidate)
+            candidate = self._rebase_candidate_launch_start(prepared=prepared, candidate=candidate)
             yield candidate
 
             regime_floor_idx = max(regime_floor_idx, candidate.regime_end_idx)
@@ -454,37 +455,36 @@ class BeeBiteStage1Selector:
         if self._is_start_launch_bar(prepared=prepared, pump_start_idx=pump_start_idx):
             return pump_start_idx
 
-        search_end_idx = min(peak_idx, pump_start_idx + 12)
-        explosive_search_end_idx = min(search_end_idx, peak_idx - 2)
-        for idx in range(pump_start_idx + 1, explosive_search_end_idx + 1):
-            if self._is_explosive_launch_bar(
+        search_end_idx = min(peak_idx, pump_start_idx + 16)
+        first_meaningful_launch_idx: int | None = None
+        first_explosive_launch_idx: int | None = None
+        total_gain = max(float(prepared.highs[peak_idx] - prepared.lows[pump_start_idx]), self._EPSILON)
+
+        for idx in range(pump_start_idx + 1, search_end_idx + 1):
+            if first_meaningful_launch_idx is None and self._is_meaningful_launch_bar(
                 prepared=prepared,
                 pump_start_idx=pump_start_idx,
                 idx=idx,
             ):
-                return idx
+                first_meaningful_launch_idx = idx
 
-        if (
-            (peak_idx - pump_start_idx) <= self._pump_window_bars
-            and self._is_explosive_launch_bar(
+            if first_explosive_launch_idx is None and self._is_explosive_launch_bar(
                 prepared=prepared,
                 pump_start_idx=pump_start_idx,
-                idx=peak_idx,
-            )
-        ):
-            return peak_idx
-
-        if self._initial_move_directional_efficiency(prepared=prepared, pump_start_idx=pump_start_idx, peak_idx=peak_idx) >= 0.35:
-            return pump_start_idx
-
-        for idx in range(pump_start_idx + 1, search_end_idx + 1):
-            if self._is_launch_sequence_start(
-                prepared=prepared,
-                pump_start_idx=pump_start_idx,
-                candidate_idx=idx,
-                peak_idx=peak_idx,
+                idx=idx,
             ):
-                return idx
+                first_explosive_launch_idx = idx
+
+        if first_meaningful_launch_idx is not None:
+            return first_meaningful_launch_idx
+
+        if first_explosive_launch_idx is not None:
+            pre_launch_gain = max(
+                0.0,
+                float(prepared.highs[first_explosive_launch_idx - 1] - prepared.lows[pump_start_idx]),
+            )
+            if (pre_launch_gain / total_gain) <= 0.10:
+                return first_explosive_launch_idx
 
         return pump_start_idx
 
@@ -521,6 +521,40 @@ class BeeBiteStage1Selector:
             and current_body >= (current_range * 0.5)
         )
 
+    def _is_meaningful_launch_bar(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        pump_start_idx: int,
+        idx: int,
+    ) -> bool:
+        history_start_idx = max(pump_start_idx, idx - 6)
+        if history_start_idx >= idx:
+            return False
+
+        prev_ranges = prepared.highs[history_start_idx:idx] - prepared.lows[history_start_idx:idx]
+        prev_bodies = np.abs(prepared.closes[history_start_idx:idx] - prepared.opens[history_start_idx:idx])
+        prev_quote_volumes = prepared.quote_volume[history_start_idx:idx]
+        if prev_ranges.size == 0 or prev_bodies.size == 0 or prev_quote_volumes.size == 0:
+            return False
+
+        current_range = float(prepared.highs[idx] - prepared.lows[idx])
+        current_body = float(abs(prepared.closes[idx] - prepared.opens[idx]))
+        current_quote_volume = float(prepared.quote_volume[idx])
+        prev_range_median = float(np.median(prev_ranges))
+        prev_body_median = float(np.median(prev_bodies))
+        prev_quote_volume_median = float(np.median(prev_quote_volumes))
+        prior_high = float(np.max(prepared.highs[pump_start_idx:idx]))
+        current_close = float(prepared.closes[idx])
+
+        return (
+            current_range >= max(prev_range_median * 2.5, self._EPSILON)
+            and current_body >= max(prev_body_median * 4.0, self._EPSILON)
+            and current_quote_volume >= max(prev_quote_volume_median * 5.0, self._EPSILON)
+            and current_close > prior_high
+            and current_body >= (current_range * 0.4)
+        )
+
     def _initial_move_directional_efficiency(
         self,
         *,
@@ -538,49 +572,6 @@ class BeeBiteStage1Selector:
             return 1.0
         net = float(abs(closes[-1] - closes[0]))
         return net / path
-
-    def _is_launch_sequence_start(
-        self,
-        *,
-        prepared: _PreparedStage1Frame,
-        pump_start_idx: int,
-        candidate_idx: int,
-        peak_idx: int,
-    ) -> bool:
-        history_start_idx = max(pump_start_idx, candidate_idx - 4)
-        if history_start_idx >= candidate_idx:
-            return False
-
-        future_end_idx = min(peak_idx + 1, candidate_idx + 3)
-        if future_end_idx <= candidate_idx:
-            return False
-
-        prev_ranges = prepared.highs[history_start_idx:candidate_idx] - prepared.lows[history_start_idx:candidate_idx]
-        prev_quote_volumes = prepared.quote_volume[history_start_idx:candidate_idx]
-        if prev_ranges.size == 0 or prev_quote_volumes.size == 0:
-            return False
-
-        future_ranges = prepared.highs[candidate_idx:future_end_idx] - prepared.lows[candidate_idx:future_end_idx]
-        future_quote_volumes = prepared.quote_volume[candidate_idx:future_end_idx]
-        if future_ranges.size == 0 or future_quote_volumes.size == 0:
-            return False
-
-        prev_range_median = float(np.median(prev_ranges))
-        prev_quote_volume_median = float(np.median(prev_quote_volumes))
-        future_range_mean = float(np.mean(future_ranges))
-        future_quote_volume_mean = float(np.mean(future_quote_volumes))
-        prior_high = float(np.max(prepared.highs[pump_start_idx:candidate_idx]))
-        future_high = float(np.max(prepared.highs[candidate_idx:future_end_idx]))
-        start_close = float(prepared.closes[pump_start_idx])
-        max_prior_close = float(np.max(prepared.closes[pump_start_idx:candidate_idx]))
-        prior_close_drift = ((max_prior_close / start_close) - 1.0) if start_close > self._EPSILON else 0.0
-
-        return (
-            future_quote_volume_mean >= max(prev_quote_volume_median * 1.75, self._EPSILON)
-            and future_range_mean >= max(prev_range_median * 1.5, self._EPSILON)
-            and future_high > (prior_high + self._EPSILON)
-            and prior_close_drift < 0.02
-        )
 
     def _is_explosive_launch_bar(
         self,
@@ -731,6 +722,48 @@ class BeeBiteStage1Selector:
             hold_base_idx=current_hold_base_idx,
             hold_base_price=current_hold_base_price,
             pump_percent=(current_peak_price / candidate.pump_base_price) - 1.0,
+        )
+
+    def _rebase_candidate_launch_start(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        candidate: "_Stage1Candidate",
+    ) -> "_Stage1Candidate":
+        rebased_start_idx = self._resolve_launch_start_idx(
+            prepared=prepared,
+            pump_start_idx=candidate.pump_start_idx,
+            peak_idx=candidate.peak_idx,
+        )
+        if rebased_start_idx <= candidate.pump_start_idx:
+            return candidate
+
+        rebased_base_price = float(prepared.lows[rebased_start_idx])
+        if rebased_base_price <= self._EPSILON:
+            return candidate
+
+        rebased_pump_percent = (candidate.pump_peak_price / rebased_base_price) - 1.0
+        if rebased_pump_percent < self._min_pump_pct:
+            return candidate
+
+        hold_base_idx = candidate.hold_base_idx
+        hold_base_price = candidate.hold_base_price
+        if hold_base_idx == candidate.pump_start_idx:
+            hold_base_idx = rebased_start_idx
+            hold_base_price = rebased_base_price
+
+        return _Stage1Candidate(
+            sleep_start_idx=rebased_start_idx - self._sleep_window_bars,
+            sleep_end_idx=rebased_start_idx - 1,
+            pump_start_idx=rebased_start_idx,
+            peak_idx=candidate.peak_idx,
+            regime_end_idx=candidate.regime_end_idx,
+            sleep_avg_volume_usdt=candidate.sleep_avg_volume_usdt,
+            pump_base_price=rebased_base_price,
+            pump_peak_price=candidate.pump_peak_price,
+            hold_base_idx=hold_base_idx,
+            hold_base_price=hold_base_price,
+            pump_percent=rebased_pump_percent,
         )
 
     def _has_upper_hold_before_breakout(
