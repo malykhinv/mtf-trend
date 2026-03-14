@@ -9,6 +9,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from matplotlib.patches import Rectangle
 
@@ -57,15 +58,9 @@ class BeeBiteStage1Plotter:
 
         confirmed_idx = self._timestamp_to_index(prepared, event.stage1_confirmed_timestamp)
         pump_start_idx = self._timestamp_to_index(prepared, event.pump_start_timestamp)
-        pump_peak_idx = self._timestamp_to_index(prepared, event.pump_peak_timestamp)
         hold_base_idx = (
             self._timestamp_to_index(prepared, event.hold_base_timestamp)
             if event.hold_base_timestamp is not None
-            else None
-        )
-        lowest_after_pump_idx = (
-            self._timestamp_to_index(prepared, event.lowest_after_pump_timestamp)
-            if event.lowest_after_pump_timestamp is not None
             else None
         )
 
@@ -73,6 +68,23 @@ class BeeBiteStage1Plotter:
             self._timestamp_to_index(prepared, window_end_timestamp)
             if window_end_timestamp is not None
             else confirmed_idx
+        )
+        pump_peak_idx, pump_peak_price = self._resolve_display_peak(
+            prepared=prepared,
+            pump_peak_timestamp=event.pump_peak_timestamp,
+            fallback_peak_price=event.pump_peak_price,
+            window_end_idx=explicit_window_end_idx,
+        )
+        lowest_after_pump_idx, lowest_after_pump = self._resolve_display_low_after_peak(
+            prepared=prepared,
+            peak_idx=pump_peak_idx,
+            window_end_idx=explicit_window_end_idx,
+        )
+        hold_base_price = float(event.hold_base_price if event.hold_base_price is not None else (event.pump_base_price or 0.0))
+        hold_price = (
+            hold_base_price + ((pump_peak_price - hold_base_price) * 0.5)
+            if pump_peak_price is not None and hold_base_price > 0.0
+            else event.hold_price
         )
         window_start = max(0, pump_start_idx - self._PRE_CONTEXT_BARS)
         window_end = min(len(prepared) - 1, explicit_window_end_idx)
@@ -98,18 +110,18 @@ class BeeBiteStage1Plotter:
         self._draw_candles(price_ax, window, x_positions)
         self._draw_volume(volume_ax, window, x_positions)
 
-        if event.hold_price is not None:
+        if hold_price is not None:
             price_ax.axhline(
-                event.hold_price,
+                hold_price,
                 color=self._HOLD_COLOR,
                 linestyle="--",
                 linewidth=1.2,
                 alpha=0.9,
                 label="0.5 hold",
             )
-        if event.pump_peak_price is not None:
+        if pump_peak_price is not None:
             price_ax.axhline(
-                event.pump_peak_price,
+                pump_peak_price,
                 color=self._PEAK_COLOR,
                 linestyle=":",
                 linewidth=1.0,
@@ -118,7 +130,7 @@ class BeeBiteStage1Plotter:
             )
 
         self._draw_marker(price_ax, pump_start_idx - index_shift, event.pump_base_price, self._START_COLOR, "pump start")
-        self._draw_marker(price_ax, pump_peak_idx - index_shift, event.pump_peak_price, self._PEAK_COLOR, "pump peak marker")
+        self._draw_marker(price_ax, pump_peak_idx - index_shift, pump_peak_price, self._PEAK_COLOR, "pump peak marker")
         if (
             hold_base_idx is not None
             and event.hold_base_price is not None
@@ -134,10 +146,10 @@ class BeeBiteStage1Plotter:
         close_at_confirmed = float(window.iloc[confirmed_idx - index_shift]["close"])
         self._draw_marker(price_ax, confirmed_idx - index_shift, close_at_confirmed, self._STAGE1_COLOR, "stage1 confirmed")
 
-        if event.lowest_after_pump is not None and lowest_after_pump_idx is not None:
+        if lowest_after_pump is not None and lowest_after_pump_idx is not None:
             price_ax.scatter(
                 lowest_after_pump_idx - index_shift,
-                event.lowest_after_pump,
+                lowest_after_pump,
                 color=self._LOWEST_COLOR,
                 s=50,
                 marker="x",
@@ -146,8 +158,12 @@ class BeeBiteStage1Plotter:
             )
 
         stage1_confirmed_text = _format_ts_label(event.stage1_confirmed_timestamp)
-        pump_pct = float(event.pump_percent or 0.0) * 100.0
-        retrace_pct = max(0.0, (1.0 - float(event.retain_ratio or 0.0)) * 100.0)
+        pump_base_price = float(event.pump_base_price or 0.0)
+        pump_pct = (((pump_peak_price / pump_base_price) - 1.0) * 100.0) if pump_peak_price and pump_base_price > 0.0 else 0.0
+        retrace_pct = 0.0
+        if lowest_after_pump is not None and pump_peak_price is not None and hold_base_price > 0.0 and pump_peak_price > hold_base_price:
+            retain_ratio = (lowest_after_pump - hold_base_price) / max(pump_peak_price - hold_base_price, 1e-12)
+            retrace_pct = max(0.0, (1.0 - retain_ratio) * 100.0)
         volume_ratio = float(event.post_pump_volume_ratio or 0.0)
         title = f"{event.symbol} | stage1 confirmed {stage1_confirmed_text}"
         if title_suffix:
@@ -223,6 +239,52 @@ class BeeBiteStage1Plotter:
     def _draw_volume(self, axis, frame: pd.DataFrame, x_positions: list[int]) -> None:
         colors = [self._UP_COLOR if row.close >= row.open else self._DOWN_COLOR for row in frame.itertuples(index=False)]
         axis.bar(x_positions, frame["volume"], color=colors, width=self._CANDLE_WIDTH, alpha=0.85)
+
+    @staticmethod
+    def _resolve_display_peak(
+        *,
+        prepared: pd.DataFrame,
+        pump_peak_timestamp: int | None,
+        fallback_peak_price: float | None,
+        window_end_idx: int,
+    ) -> tuple[int, float | None]:
+        peak_idx = BeeBiteStage1Plotter._timestamp_to_index(prepared, pump_peak_timestamp)
+        opens = prepared["open"].astype("float64").to_numpy()
+        highs = prepared["high"].astype("float64").to_numpy()
+        closes = prepared["close"].astype("float64").to_numpy()
+        body_highs = np.maximum(opens, closes)
+        body_sizes = np.abs(closes - opens)
+        upper_wicks = highs - body_highs
+        effective_highs = np.where(upper_wicks > body_sizes, body_highs, highs)
+
+        display_peak_idx = peak_idx
+        display_peak_price = float(fallback_peak_price or effective_highs[peak_idx])
+        breakout_reference = float(highs[peak_idx])
+        for idx in range(peak_idx + 1, window_end_idx + 1):
+            breakout_high = float(highs[idx]) if (idx - display_peak_idx) <= 2 else float(effective_highs[idx])
+            if breakout_high <= (breakout_reference + 1e-12):
+                continue
+            display_peak_idx = idx
+            breakout_reference = breakout_high
+            display_peak_price = max(display_peak_price, float(effective_highs[idx]))
+        return display_peak_idx, display_peak_price
+
+    @staticmethod
+    def _resolve_display_low_after_peak(
+        *,
+        prepared: pd.DataFrame,
+        peak_idx: int,
+        window_end_idx: int,
+    ) -> tuple[int | None, float | None]:
+        if peak_idx >= window_end_idx:
+            return None, None
+        lows = prepared["low"].astype("float64").to_numpy()
+        post_peak_lows = lows[peak_idx + 1 : window_end_idx + 1]
+        if post_peak_lows.size == 0:
+            return None, None
+        low_offset = int(post_peak_lows.argmin())
+        low_idx = peak_idx + 1 + low_offset
+        return low_idx, float(post_peak_lows[low_offset])
 
     @staticmethod
     def _draw_marker(axis, x_idx: int, price: float | None, color: str, label: str) -> None:
