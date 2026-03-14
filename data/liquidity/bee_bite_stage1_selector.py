@@ -519,7 +519,7 @@ class BeeBiteStage1Selector:
         sleep_closes = prepared.closes[candidate.sleep_start_idx : candidate.sleep_end_idx + 1]
         sleep_closes_below_hold_ratio = float(np.mean(sleep_closes < hold_price))
         confirm_candle_low = float(prepared.lows[confirm_idx])
-        confirm_candle_high = self._effective_high_at(prepared=prepared, idx=confirm_idx)
+        confirm_candle_close = float(prepared.closes[confirm_idx])
         retain_ratio = (lowest_after_pump - candidate.pump_base_price) / max(
             candidate.pump_peak_price - candidate.pump_base_price,
             self._EPSILON,
@@ -571,7 +571,7 @@ class BeeBiteStage1Selector:
         if sleep_closes_below_hold_ratio <= 0.5:
             result.reason = "sleep_closes_not_below_hold_majority"
             return result
-        if confirm_candle_low < hold_price or confirm_candle_high > candidate.pump_peak_price:
+        if confirm_candle_low < hold_price or confirm_candle_close > candidate.pump_peak_price:
             result.reason = "confirm_candle_outside_pump_band"
             return result
         if post_pump_avg_volume_usdt < self._EPSILON or post_pump_volume_ratio < self._min_volume_ratio:
