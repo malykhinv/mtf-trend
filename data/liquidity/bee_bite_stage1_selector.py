@@ -87,6 +87,7 @@ class BeeBiteStage1Selector:
 
         saw_sleep_candidate, saw_pump_candidate = self._scan_stage1_setup_flags(prepared)
         saw_retain_candidate = False
+        saw_confirm_band_failure = False
         saw_volume_ratio_candidate = False
         saw_volume_24h_candidate = False
         latest_match: BeeBiteStage1Result | None = None
@@ -105,6 +106,8 @@ class BeeBiteStage1Selector:
 
             if evaluation.retain_ratio is not None and evaluation.retain_ratio >= self._min_retain_ratio:
                 saw_retain_candidate = True
+            if evaluation.reason == "confirm_candle_outside_pump_band":
+                saw_confirm_band_failure = True
             if evaluation.post_pump_volume_ratio is not None and evaluation.post_pump_volume_ratio >= self._min_volume_ratio:
                 saw_volume_ratio_candidate = True
             if evaluation.rolling_volume_usdt is not None and evaluation.rolling_volume_usdt >= self._min_volume_usdt:
@@ -128,6 +131,8 @@ class BeeBiteStage1Selector:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="pump_below_15pct")
         if not saw_retain_candidate:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="retain_below_half")
+        if saw_confirm_band_failure:
+            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="confirm_candle_outside_pump_band")
         if not saw_volume_ratio_candidate:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="volume_ratio_below_15x")
         if not saw_volume_24h_candidate:
@@ -353,6 +358,8 @@ class BeeBiteStage1Selector:
         hold_price = candidate.pump_base_price + (
             (candidate.pump_peak_price - candidate.pump_base_price) * self._min_retain_ratio
         )
+        confirm_candle_low = float(prepared.lows[confirm_idx])
+        confirm_candle_high = float(prepared.highs[confirm_idx])
         retain_ratio = (lowest_after_pump - candidate.pump_base_price) / max(
             candidate.pump_peak_price - candidate.pump_base_price,
             self._EPSILON,
@@ -388,6 +395,9 @@ class BeeBiteStage1Selector:
 
         if lowest_after_pump < hold_price:
             result.reason = "retain_below_half"
+            return result
+        if confirm_candle_low < hold_price or confirm_candle_high > candidate.pump_peak_price:
+            result.reason = "confirm_candle_outside_pump_band"
             return result
         if post_pump_avg_volume_usdt < self._EPSILON or post_pump_volume_ratio < self._min_volume_ratio:
             result.reason = "volume_ratio_below_15x"
