@@ -1541,8 +1541,9 @@ def _stage1_event_to_row(
     regime_role: str | None = None,
     regime_end_timestamp: int | None = None,
     regime_end_reason: str | None = None,
+    display_metrics: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    row = {
         "symbol": event.symbol,
         "regime_index": regime_index,
         "regime_role": regime_role,
@@ -1567,6 +1568,75 @@ def _stage1_event_to_row(
         "sleep_avg_volume_usdt": event.sleep_avg_volume_usdt,
         "post_pump_avg_volume_usdt": event.post_pump_avg_volume_usdt,
         "post_pump_volume_ratio": event.post_pump_volume_ratio,
+    }
+    if display_metrics:
+        row.update(display_metrics)
+    return row
+
+
+def _resolve_stage1_display_metrics(
+    *,
+    frame: pd.DataFrame,
+    event: BeeBiteStage1Result,
+    window_end_timestamp: int | None,
+) -> dict[str, object]:
+    required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
+    if frame.empty or not required_columns.issubset(frame.columns):
+        return {}
+
+    prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
+    for column in prepared.columns:
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    if prepared.empty:
+        return {}
+
+    try:
+        explicit_window_end_idx = BeeBiteStage1Plotter._timestamp_to_index(
+            prepared,
+            window_end_timestamp if window_end_timestamp is not None else event.stage1_confirmed_timestamp,
+        )
+        display_peak_idx, display_peak_price = BeeBiteStage1Plotter._resolve_display_peak(
+            prepared=prepared,
+            pump_peak_timestamp=event.pump_peak_timestamp,
+            fallback_peak_price=event.pump_peak_price,
+            window_end_idx=explicit_window_end_idx,
+        )
+    except ValueError:
+        return {}
+
+    lowest_after_pump_idx, lowest_after_pump = BeeBiteStage1Plotter._resolve_display_low_after_peak(
+        prepared=prepared,
+        peak_idx=display_peak_idx,
+        window_end_idx=explicit_window_end_idx,
+    )
+    hold_base_price = float(event.hold_base_price if event.hold_base_price is not None else (event.pump_base_price or 0.0))
+    display_hold_price = (
+        hold_base_price + ((display_peak_price - hold_base_price) * 0.5)
+        if display_peak_price is not None and hold_base_price > 0.0
+        else event.hold_price
+    )
+    pump_base_price = float(event.pump_base_price or 0.0)
+    display_pump_percent = (
+        (display_peak_price / pump_base_price) - 1.0
+        if display_peak_price is not None and pump_base_price > 0.0
+        else event.pump_percent
+    )
+    display_retain_ratio = None
+    if lowest_after_pump is not None and display_peak_price is not None and hold_base_price > 0.0 and display_peak_price > hold_base_price:
+        display_retain_ratio = (lowest_after_pump - hold_base_price) / max(display_peak_price - hold_base_price, 1e-12)
+
+    display_peak_timestamp = int(prepared.iloc[display_peak_idx]["timestamp"])
+    display_lowest_timestamp = int(prepared.iloc[lowest_after_pump_idx]["timestamp"]) if lowest_after_pump_idx is not None else None
+    return {
+        "display_pump_peak_timestamp": display_peak_timestamp,
+        "display_pump_peak_price": display_peak_price,
+        "display_hold_price": display_hold_price,
+        "display_lowest_after_pump": lowest_after_pump,
+        "display_lowest_after_pump_timestamp": display_lowest_timestamp,
+        "display_pump_percent": display_pump_percent,
+        "display_retain_ratio": display_retain_ratio,
     }
 
 
@@ -1637,7 +1707,8 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     rows: list[dict[str, object]] = []
     regimes_total = 0
-    for regimes in regimes_by_symbol.values():
+    for symbol, regimes in regimes_by_symbol.items():
+        frame = frames_by_symbol.get(symbol, pd.DataFrame())
         for regime in regimes:
             regimes_total += 1
             for event in regime.events:
@@ -1648,6 +1719,12 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     regime_role = "first"
                 elif event is regime.last_event:
                     regime_role = "last"
+                window_end_timestamp = regime.regime_end_timestamp if event is regime.last_event else event.stage1_confirmed_timestamp
+                display_metrics = _resolve_stage1_display_metrics(
+                    frame=frame,
+                    event=event,
+                    window_end_timestamp=window_end_timestamp,
+                )
                 rows.append(
                     _stage1_event_to_row(
                         event,
@@ -1655,6 +1732,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
                         regime_role=regime_role,
                         regime_end_timestamp=regime.regime_end_timestamp,
                         regime_end_reason=regime.regime_end_reason,
+                        display_metrics=display_metrics,
                     )
                 )
     events_frame = pd.DataFrame(rows)
