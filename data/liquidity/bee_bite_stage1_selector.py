@@ -363,6 +363,20 @@ class BeeBiteStage1Selector:
                 start_idx += 1
                 continue
 
+            launch_start_idx = self._resolve_launch_start_idx(
+                prepared=prepared,
+                pump_start_idx=pump_start_idx,
+                peak_idx=peak_idx,
+            )
+            if launch_start_idx > pump_start_idx:
+                launch_base_price = float(prepared.lows[launch_start_idx])
+                if launch_base_price > self._EPSILON:
+                    launch_pump_percent = (pump_peak_price / launch_base_price) - 1.0
+                    if launch_pump_percent >= self._min_pump_pct:
+                        pump_start_idx = launch_start_idx
+                        pump_base_price = launch_base_price
+                        pump_percent = launch_pump_percent
+
             initial_candidate = _Stage1Candidate(
                 sleep_start_idx=pump_start_idx - self._sleep_window_bars,
                 sleep_end_idx=pump_start_idx - 1,
@@ -427,6 +441,49 @@ class BeeBiteStage1Selector:
             latest_valid_start_idx = candidate_start_idx
 
         return latest_valid_start_idx
+
+    def _resolve_launch_start_idx(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        pump_start_idx: int,
+        peak_idx: int,
+    ) -> int:
+        launch_start_idx = pump_start_idx
+        search_end_idx = min(peak_idx, pump_start_idx + 10)
+        for idx in range(pump_start_idx + 1, search_end_idx + 1):
+            history_start_idx = max(pump_start_idx, idx - 6)
+            if history_start_idx >= idx:
+                continue
+
+            prev_ranges = prepared.highs[history_start_idx:idx] - prepared.lows[history_start_idx:idx]
+            prev_bodies = np.abs(prepared.closes[history_start_idx:idx] - prepared.opens[history_start_idx:idx])
+            prev_quote_volumes = prepared.quote_volume[history_start_idx:idx]
+            if prev_ranges.size == 0 or prev_bodies.size == 0 or prev_quote_volumes.size == 0:
+                continue
+
+            median_range = float(np.median(prev_ranges))
+            median_body = float(np.median(prev_bodies))
+            median_quote_volume = float(np.median(prev_quote_volumes))
+            current_range = float(prepared.highs[idx] - prepared.lows[idx])
+            current_body = float(abs(prepared.closes[idx] - prepared.opens[idx]))
+            current_quote_volume = float(prepared.quote_volume[idx])
+            prior_high = float(np.max(prepared.highs[pump_start_idx:idx]))
+            start_close = float(prepared.closes[pump_start_idx])
+            max_prior_close = float(np.max(prepared.closes[pump_start_idx:idx]))
+            prior_close_drift = ((max_prior_close / start_close) - 1.0) if start_close > self._EPSILON else 0.0
+
+            if (
+                current_range >= max(median_range * 6.0, self._EPSILON)
+                and current_body >= max(median_body * 6.0, self._EPSILON)
+                and current_quote_volume >= max(median_quote_volume * 10.0, self._EPSILON)
+                and float(prepared.closes[idx]) > prior_high
+                and prior_close_drift < 0.01
+            ):
+                launch_start_idx = idx
+                break
+
+        return launch_start_idx
 
     def _effective_highs(self, prepared: _PreparedStage1Frame) -> np.ndarray:
         body_highs = np.maximum(prepared.opens, prepared.closes)
