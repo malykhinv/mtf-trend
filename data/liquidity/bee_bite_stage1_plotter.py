@@ -39,6 +39,8 @@ class BeeBiteStage1Plotter:
         frame: pd.DataFrame,
         event: BeeBiteStage1Result,
         output_path: Path,
+        window_end_timestamp: int | None = None,
+        title_suffix: str | None = None,
     ) -> None:
         required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
         if frame.empty or not required_columns.issubset(frame.columns):
@@ -61,8 +63,13 @@ class BeeBiteStage1Plotter:
             else None
         )
 
+        explicit_window_end_idx = (
+            self._timestamp_to_index(prepared, window_end_timestamp)
+            if window_end_timestamp is not None
+            else confirmed_idx
+        )
         window_start = max(0, pump_start_idx - self._PRE_CONTEXT_BARS)
-        window_end = min(len(prepared) - 1, confirmed_idx + self._POST_CONTEXT_BARS)
+        window_end = min(len(prepared) - 1, explicit_window_end_idx)
         window = prepared.iloc[window_start : window_end + 1].reset_index(drop=True)
         x_positions = list(range(len(window)))
         index_shift = window_start
@@ -124,9 +131,9 @@ class BeeBiteStage1Plotter:
         pump_pct = float(event.pump_percent or 0.0) * 100.0
         retrace_pct = max(0.0, (1.0 - float(event.retain_ratio or 0.0)) * 100.0)
         volume_ratio = float(event.post_pump_volume_ratio or 0.0)
-        title = (
-            f"{event.symbol} | stage1 confirmed {stage1_confirmed_text}"
-        )
+        title = f"{event.symbol} | stage1 confirmed {stage1_confirmed_text}"
+        if title_suffix:
+            title = f"{title} | {title_suffix}"
         price_ax.set_title(title)
         price_ax.title.set_color(self._TEXT_COLOR)
         price_ax.set_ylabel("Price", color=self._TEXT_COLOR)

@@ -91,6 +91,8 @@ class _Stage1Regime:
     primary_event: BeeBiteStage1Result
     first_event: BeeBiteStage1Result
     last_event: BeeBiteStage1Result
+    regime_end_timestamp: int
+    regime_end_reason: str
 
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
@@ -214,9 +216,83 @@ def _group_stage1_events_into_regimes(events: list[BeeBiteStage1Result]) -> list
                 primary_event=first_event,
                 first_event=first_event,
                 last_event=last_event,
+                regime_end_timestamp=int(last_event.stage1_confirmed_timestamp or 0),
+                regime_end_reason="unresolved",
             )
         )
     return regimes
+
+
+def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Regime]) -> list[_Stage1Regime]:
+    if frame.empty or not regimes:
+        return regimes
+
+    prepared = frame.loc[:, ["timestamp", "high", "low"]].copy()
+    for column in prepared.columns:
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp", "high", "low"])
+    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    if prepared.empty:
+        return regimes
+
+    timestamps = prepared["timestamp"].astype("int64").to_numpy()
+    highs = prepared["high"].astype("float64").to_numpy()
+    lows = prepared["low"].astype("float64").to_numpy()
+    timestamp_to_index = {int(timestamp): idx for idx, timestamp in enumerate(timestamps)}
+
+    resolved_regimes: list[_Stage1Regime] = []
+    for idx, regime in enumerate(regimes):
+        default_end_ts = int(regime.last_event.stage1_confirmed_timestamp or timestamps[-1])
+        resolved_end_ts = default_end_ts
+        resolved_reason = "last_detected"
+
+        start_scan_idx = timestamp_to_index.get(default_end_ts)
+        if start_scan_idx is None:
+            resolved_regimes.append(regime)
+            continue
+
+        next_regime_start_ts: int | None = None
+        if idx + 1 < len(regimes):
+            next_regime_start_ts = int(regimes[idx + 1].first_event.pump_start_timestamp or 0)
+
+        hold_price = float(regime.last_event.hold_price or 0.0)
+        pump_peak_price = float(regime.last_event.pump_peak_price or 0.0)
+        scan_end_idx = len(timestamps) - 1
+        if next_regime_start_ts is not None and next_regime_start_ts in timestamp_to_index:
+            scan_end_idx = timestamp_to_index[next_regime_start_ts]
+
+        for scan_idx in range(start_scan_idx + 1, scan_end_idx + 1):
+            timestamp_ms = int(timestamps[scan_idx])
+            if next_regime_start_ts is not None and timestamp_ms >= next_regime_start_ts:
+                resolved_end_ts = timestamp_ms
+                resolved_reason = "next_regime_started"
+                break
+            if hold_price > 0.0 and float(lows[scan_idx]) < hold_price:
+                resolved_end_ts = timestamp_ms
+                resolved_reason = "dumped_below_hold"
+                break
+            if pump_peak_price > 0.0 and float(highs[scan_idx]) > pump_peak_price:
+                resolved_end_ts = timestamp_ms
+                resolved_reason = "new_high_after_regime"
+                break
+        else:
+            if next_regime_start_ts is not None:
+                resolved_end_ts = int(next_regime_start_ts)
+                resolved_reason = "next_regime_started"
+
+        resolved_regimes.append(
+            _Stage1Regime(
+                symbol=regime.symbol,
+                regime_index=regime.regime_index,
+                events=regime.events,
+                primary_event=regime.primary_event,
+                first_event=regime.first_event,
+                last_event=regime.last_event,
+                regime_end_timestamp=resolved_end_ts,
+                regime_end_reason=resolved_reason,
+            )
+        )
+    return resolved_regimes
 
 
 
@@ -1427,11 +1503,15 @@ def _stage1_event_to_row(
     *,
     regime_index: int | None = None,
     regime_role: str | None = None,
+    regime_end_timestamp: int | None = None,
+    regime_end_reason: str | None = None,
 ) -> dict[str, object]:
     return {
         "symbol": event.symbol,
         "regime_index": regime_index,
         "regime_role": regime_role,
+        "regime_end_timestamp": regime_end_timestamp,
+        "regime_end_reason": regime_end_reason,
         "reason": event.reason,
         "sleep_start_timestamp": event.sleep_start_timestamp,
         "sleep_end_timestamp": event.sleep_end_timestamp,
@@ -1495,7 +1575,10 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
         events = selector.detect_events(symbol=symbol, frame=frame)
         if events:
             all_events.extend(events)
-            regimes_by_symbol[symbol] = _group_stage1_events_into_regimes(events)
+            regimes_by_symbol[symbol] = _resolve_stage1_regime_ends(
+                frame=frame,
+                regimes=_group_stage1_events_into_regimes(events),
+            )
         else:
             evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
             reason_key = evaluation.reason if not evaluation.passed else "passed_now_but_no_historical_event"
@@ -1532,6 +1615,8 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
                         event,
                         regime_index=regime.regime_index,
                         regime_role=regime_role,
+                        regime_end_timestamp=regime.regime_end_timestamp,
+                        regime_end_reason=regime.regime_end_reason,
                     )
                 )
     events_frame = pd.DataFrame(rows)
@@ -1560,11 +1645,23 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
             continue
         symbol_slug = regime.symbol.replace("/", "_")
         first_output = plots_dir / f"{symbol_slug}_stage1_regime_{regime.regime_index:02d}_first.png"
-        plotter.plot_event(frame=frame, event=regime.first_event, output_path=first_output)
+        plotter.plot_event(
+            frame=frame,
+            event=regime.first_event,
+            output_path=first_output,
+            window_end_timestamp=regime.first_event.stage1_confirmed_timestamp,
+            title_suffix=f"regime {regime.regime_index:02d} first",
+        )
         plots_built += 1
 
         last_output = plots_dir / f"{symbol_slug}_stage1_regime_{regime.regime_index:02d}_last.png"
-        plotter.plot_event(frame=frame, event=regime.last_event, output_path=last_output)
+        plotter.plot_event(
+            frame=frame,
+            event=regime.last_event,
+            output_path=last_output,
+            window_end_timestamp=regime.regime_end_timestamp,
+            title_suffix=f"regime {regime.regime_index:02d} last ({regime.regime_end_reason})",
+        )
         plots_built += 1
 
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
