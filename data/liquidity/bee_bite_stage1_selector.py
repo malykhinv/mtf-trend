@@ -107,7 +107,7 @@ class BeeBiteStage1Selector:
 
         for candidate in self._iter_stage1_candidates(prepared=prepared):
             confirm_start_idx = candidate.peak_idx + self._min_confirm_delay_bars
-            confirm_end_idx = min(candidate.peak_idx + self._max_confirm_delay_bars, last_frame_idx)
+            confirm_end_idx = min(candidate.regime_end_idx, last_frame_idx)
             if confirm_start_idx > confirm_end_idx:
                 saw_confirm_too_late = True
                 continue
@@ -203,7 +203,7 @@ class BeeBiteStage1Selector:
                 continue
 
             confirm_start_idx = candidate.peak_idx + self._min_confirm_delay_bars
-            confirm_end_idx = min(candidate.peak_idx + self._max_confirm_delay_bars, len(prepared.timestamps) - 1)
+            confirm_end_idx = min(candidate.regime_end_idx, len(prepared.timestamps) - 1)
             if confirm_start_idx > confirm_end_idx:
                 continue
 
@@ -334,20 +334,21 @@ class BeeBiteStage1Selector:
                 start_idx += 1
                 continue
 
-            candidate = _Stage1Candidate(
+            initial_candidate = _Stage1Candidate(
                 sleep_start_idx=pump_start_idx - self._sleep_window_bars,
                 sleep_end_idx=pump_start_idx - 1,
                 pump_start_idx=pump_start_idx,
                 peak_idx=peak_idx,
+                regime_end_idx=peak_idx,
                 sleep_avg_volume_usdt=sleep_avg_volume_usdt,
                 pump_base_price=pump_base_price,
                 pump_peak_price=pump_peak_price,
                 pump_percent=pump_percent,
             )
+            candidate = self._finalize_candidate_regime(prepared=prepared, candidate=initial_candidate)
             yield candidate
 
-            regime_end_idx = self._resolve_candidate_regime_end_idx(prepared=prepared, candidate=candidate)
-            start_idx = max(start_idx + 1, regime_end_idx)
+            start_idx = max(start_idx + 1, candidate.regime_end_idx)
 
     def _scan_stage1_setup_flags(self, prepared: _PreparedStage1Frame) -> tuple[bool, bool]:
         for _candidate in self._iter_stage1_candidates(prepared=prepared):
@@ -360,21 +361,89 @@ class BeeBiteStage1Selector:
         start_offset = int(np.argmin(lows_window))
         return search_start_idx + start_offset
 
-    def _resolve_candidate_regime_end_idx(
+    def _finalize_candidate_regime(
         self,
         *,
         prepared: _PreparedStage1Frame,
         candidate: "_Stage1Candidate",
-    ) -> int:
-        hold_price = candidate.pump_base_price + (
-            (candidate.pump_peak_price - candidate.pump_base_price) * self._min_retain_ratio
+    ) -> "_Stage1Candidate":
+        current_peak_idx = int(candidate.peak_idx)
+        current_peak_price = float(candidate.pump_peak_price)
+        regime_end_idx = min(
+            len(prepared.timestamps) - 1,
+            current_peak_idx + self._max_confirm_delay_bars,
         )
-        for idx in range(candidate.peak_idx + 1, len(prepared.timestamps)):
-            if float(prepared.lows[idx]) < hold_price:
-                return idx
-            if float(prepared.highs[idx]) > (candidate.pump_peak_price + self._EPSILON):
-                return idx
-        return len(prepared.timestamps) - 1
+        idx = current_peak_idx + 1
+
+        while idx < len(prepared.timestamps):
+            hold_price = candidate.pump_base_price + (
+                (current_peak_price - candidate.pump_base_price) * self._min_retain_ratio
+            )
+            current_low = float(prepared.lows[idx])
+            current_high = float(prepared.highs[idx])
+
+            if current_low < hold_price:
+                regime_end_idx = idx
+                break
+            if current_high > (current_peak_price + self._EPSILON):
+                if self._has_upper_hold_before_breakout(
+                    prepared=prepared,
+                    peak_idx=current_peak_idx,
+                    breakout_idx=idx,
+                    hold_price=hold_price,
+                    peak_price=current_peak_price,
+                ):
+                    regime_end_idx = idx
+                    break
+                current_peak_idx = idx
+                current_peak_price = current_high
+                regime_end_idx = min(
+                    len(prepared.timestamps) - 1,
+                    current_peak_idx + self._max_confirm_delay_bars,
+                )
+                idx += 1
+                continue
+            if idx >= regime_end_idx:
+                break
+            idx += 1
+        else:
+            regime_end_idx = len(prepared.timestamps) - 1
+
+        return _Stage1Candidate(
+            sleep_start_idx=candidate.sleep_start_idx,
+            sleep_end_idx=candidate.sleep_end_idx,
+            pump_start_idx=candidate.pump_start_idx,
+            peak_idx=current_peak_idx,
+            regime_end_idx=regime_end_idx,
+            sleep_avg_volume_usdt=candidate.sleep_avg_volume_usdt,
+            pump_base_price=candidate.pump_base_price,
+            pump_peak_price=current_peak_price,
+            pump_percent=(current_peak_price / candidate.pump_base_price) - 1.0,
+        )
+
+    def _has_upper_hold_before_breakout(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        peak_idx: int,
+        breakout_idx: int,
+        hold_price: float,
+        peak_price: float,
+    ) -> bool:
+        bars_since_peak = breakout_idx - peak_idx
+        if bars_since_peak < self._min_confirm_delay_bars:
+            return False
+
+        hold_start_idx = breakout_idx - self._min_confirm_delay_bars
+        hold_lows = prepared.lows[hold_start_idx:breakout_idx]
+        hold_highs = prepared.highs[hold_start_idx:breakout_idx]
+        if hold_lows.size < self._min_confirm_delay_bars:
+            return False
+        if np.any(hold_lows < hold_price):
+            return False
+        if np.any(hold_highs > (peak_price + self._EPSILON)):
+            return False
+        return True
 
     def _is_sleep_window_valid(
         self,
@@ -504,6 +573,7 @@ class _Stage1Candidate:
     sleep_end_idx: int
     pump_start_idx: int
     peak_idx: int
+    regime_end_idx: int
     sleep_avg_volume_usdt: float
     pump_base_price: float
     pump_peak_price: float
