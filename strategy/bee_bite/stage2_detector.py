@@ -1,0 +1,372 @@
+"""Stage-2 detector for bee_bite: confirmed highs and upper balance ranges."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+
+from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result
+
+
+@dataclass(slots=True, frozen=True)
+class BeeBiteStage2ConfirmedHigh:
+    idx: int
+    timestamp: int
+    price: float
+
+
+@dataclass(slots=True, frozen=True)
+class BeeBiteStage2Range:
+    start_idx: int
+    start_timestamp: int
+    end_idx: int
+    end_timestamp: int
+    confirmed_high_idx: int
+    confirmed_high_timestamp: int
+    confirmed_high_price: float
+    high: float
+    low: float
+    bars: int
+
+
+@dataclass(slots=True, frozen=True)
+class BeeBiteStage2MergedRange:
+    start_idx: int
+    start_timestamp: int
+    end_idx: int
+    end_timestamp: int
+    high: float
+    low: float
+    bars: int
+    source_ranges: int
+    confirmed_high_timestamps: tuple[int, ...]
+    confirmed_high_prices: tuple[float, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class BeeBiteStage2Result:
+    symbol: str
+    passed: bool
+    reason: str
+    analysis_start_timestamp: int | None = None
+    analysis_end_timestamp: int | None = None
+    confirmed_highs: tuple[BeeBiteStage2ConfirmedHigh, ...] = ()
+    local_ranges: tuple[BeeBiteStage2Range, ...] = ()
+    merged_ranges: tuple[BeeBiteStage2MergedRange, ...] = ()
+    box_start_timestamp: int | None = None
+    box_end_timestamp: int | None = None
+    box_high: float | None = None
+    box_low: float | None = None
+
+
+@dataclass(slots=True)
+class _PreparedStage2Frame:
+    timestamps: np.ndarray
+    opens: np.ndarray
+    highs: np.ndarray
+    lows: np.ndarray
+    closes: np.ndarray
+
+
+class BeeBiteStage2Detector:
+    """Detect confirmed highs and merged upper ranges after a valid stage-1 event."""
+
+    _EPSILON = 1e-12
+    _ADJACENT_BREAKOUT_MULTIPLIER = 0.25
+    _DEFAULT_BREAKOUT_MULTIPLIER = 1.0
+    _RANGE_OVERLAP_THRESHOLD = 0.5
+    _MIN_BODY_RATIO_FOR_BREAKOUT = 0.35
+
+    def detect(
+        self,
+        *,
+        symbol: str,
+        frame: pd.DataFrame,
+        stage1: BeeBiteStage1Result,
+    ) -> BeeBiteStage2Result:
+        if not stage1.passed:
+            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="stage1_not_passed")
+        if stage1.pump_peak_timestamp is None or stage1.pump_peak_price is None:
+            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="stage1_peak_missing")
+
+        prepared = self._prepare_frame(symbol=symbol, frame=frame)
+        if isinstance(prepared, BeeBiteStage2Result):
+            return prepared
+
+        peak_idx = self._resolve_index_by_timestamp(
+            timestamps=prepared.timestamps,
+            timestamp=int(stage1.pump_peak_timestamp),
+        )
+        if peak_idx is None:
+            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="stage1_peak_not_in_frame")
+        if peak_idx >= (len(prepared.timestamps) - 1):
+            return BeeBiteStage2Result(
+                symbol=symbol,
+                passed=False,
+                reason="no_data_after_peak",
+                analysis_start_timestamp=int(prepared.timestamps[peak_idx]),
+                analysis_end_timestamp=int(prepared.timestamps[peak_idx]),
+            )
+
+        initial_peak_price = max(
+            float(stage1.pump_peak_price),
+            self._effective_high_at(prepared=prepared, idx=peak_idx),
+        )
+        confirmed_highs: list[BeeBiteStage2ConfirmedHigh] = [
+            BeeBiteStage2ConfirmedHigh(
+                idx=peak_idx,
+                timestamp=int(prepared.timestamps[peak_idx]),
+                price=initial_peak_price,
+            )
+        ]
+        local_ranges: list[BeeBiteStage2Range] = []
+
+        current_high_idx = peak_idx
+        current_high_price = initial_peak_price
+        current_range_start_idx = peak_idx + 1
+
+        for idx in range(peak_idx + 1, len(prepared.timestamps)):
+            if not self._is_new_confirmed_high(
+                prepared=prepared,
+                current_high_idx=current_high_idx,
+                current_high_price=current_high_price,
+                breakout_idx=idx,
+            ):
+                continue
+
+            local_range = self._build_local_range(
+                prepared=prepared,
+                current_range_start_idx=current_range_start_idx,
+                current_range_end_idx=idx - 1,
+                confirmed_high=confirmed_highs[-1],
+            )
+            if local_range is not None:
+                local_ranges.append(local_range)
+
+            breakout_price = self._effective_high_at(prepared=prepared, idx=idx)
+            confirmed_highs.append(
+                BeeBiteStage2ConfirmedHigh(
+                    idx=idx,
+                    timestamp=int(prepared.timestamps[idx]),
+                    price=breakout_price,
+                )
+            )
+            current_high_idx = idx
+            current_high_price = breakout_price
+            current_range_start_idx = idx + 1
+
+        trailing_range = self._build_local_range(
+            prepared=prepared,
+            current_range_start_idx=current_range_start_idx,
+            current_range_end_idx=len(prepared.timestamps) - 1,
+            confirmed_high=confirmed_highs[-1],
+        )
+        if trailing_range is not None:
+            local_ranges.append(trailing_range)
+
+        if not local_ranges:
+            return BeeBiteStage2Result(
+                symbol=symbol,
+                passed=False,
+                reason="no_ranges_after_peak",
+                analysis_start_timestamp=int(prepared.timestamps[peak_idx]),
+                analysis_end_timestamp=int(prepared.timestamps[-1]),
+                confirmed_highs=tuple(confirmed_highs),
+            )
+
+        merged_ranges = self._merge_ranges(local_ranges)
+        active_box = merged_ranges[-1]
+
+        return BeeBiteStage2Result(
+            symbol=symbol,
+            passed=True,
+            reason="passed",
+            analysis_start_timestamp=int(prepared.timestamps[peak_idx]),
+            analysis_end_timestamp=int(prepared.timestamps[-1]),
+            confirmed_highs=tuple(confirmed_highs),
+            local_ranges=tuple(local_ranges),
+            merged_ranges=tuple(merged_ranges),
+            box_start_timestamp=active_box.start_timestamp,
+            box_end_timestamp=active_box.end_timestamp,
+            box_high=active_box.high,
+            box_low=active_box.low,
+        )
+
+    def _prepare_frame(
+        self,
+        *,
+        symbol: str,
+        frame: pd.DataFrame,
+    ) -> _PreparedStage2Frame | BeeBiteStage2Result:
+        required_columns = {"timestamp", "open", "high", "low", "close"}
+        if frame.empty:
+            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="empty_frame")
+        if not required_columns.issubset(frame.columns):
+            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="missing_columns")
+
+        prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close"]].copy()
+        for column in ("timestamp", "open", "high", "low", "close"):
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"])
+        prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
+        prepared = prepared.reset_index(drop=True)
+        if len(prepared) < 3:
+            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="insufficient_history")
+
+        return _PreparedStage2Frame(
+            timestamps=prepared["timestamp"].astype("int64").to_numpy(),
+            opens=prepared["open"].astype("float64").to_numpy(),
+            highs=prepared["high"].astype("float64").to_numpy(),
+            lows=prepared["low"].astype("float64").to_numpy(),
+            closes=prepared["close"].astype("float64").to_numpy(),
+        )
+
+    @staticmethod
+    def _resolve_index_by_timestamp(*, timestamps: np.ndarray, timestamp: int) -> int | None:
+        matches = np.where(timestamps == timestamp)[0]
+        if matches.size == 0:
+            return None
+        return int(matches[-1])
+
+    def _build_local_range(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        current_range_start_idx: int,
+        current_range_end_idx: int,
+        confirmed_high: BeeBiteStage2ConfirmedHigh,
+    ) -> BeeBiteStage2Range | None:
+        if current_range_start_idx > current_range_end_idx:
+            return None
+
+        effective_lows = self._effective_lows(prepared)[current_range_start_idx : current_range_end_idx + 1]
+        range_low = float(np.min(effective_lows))
+        return BeeBiteStage2Range(
+            start_idx=current_range_start_idx,
+            start_timestamp=int(prepared.timestamps[current_range_start_idx]),
+            end_idx=current_range_end_idx,
+            end_timestamp=int(prepared.timestamps[current_range_end_idx]),
+            confirmed_high_idx=confirmed_high.idx,
+            confirmed_high_timestamp=confirmed_high.timestamp,
+            confirmed_high_price=confirmed_high.price,
+            high=confirmed_high.price,
+            low=range_low,
+            bars=(current_range_end_idx - current_range_start_idx) + 1,
+        )
+
+    def _merge_ranges(self, ranges: list[BeeBiteStage2Range]) -> list[BeeBiteStage2MergedRange]:
+        merged: list[BeeBiteStage2MergedRange] = []
+        for current in ranges:
+            if not merged:
+                merged.append(
+                    BeeBiteStage2MergedRange(
+                        start_idx=current.start_idx,
+                        start_timestamp=current.start_timestamp,
+                        end_idx=current.end_idx,
+                        end_timestamp=current.end_timestamp,
+                        high=current.high,
+                        low=current.low,
+                        bars=current.bars,
+                        source_ranges=1,
+                        confirmed_high_timestamps=(current.confirmed_high_timestamp,),
+                        confirmed_high_prices=(current.confirmed_high_price,),
+                    )
+                )
+                continue
+
+            previous = merged[-1]
+            if self._ranges_overlap_enough(previous=previous, current=current):
+                merged[-1] = BeeBiteStage2MergedRange(
+                    start_idx=previous.start_idx,
+                    start_timestamp=previous.start_timestamp,
+                    end_idx=current.end_idx,
+                    end_timestamp=current.end_timestamp,
+                    high=max(previous.high, current.high),
+                    low=min(previous.low, current.low),
+                    bars=previous.bars + current.bars,
+                    source_ranges=previous.source_ranges + 1,
+                    confirmed_high_timestamps=previous.confirmed_high_timestamps + (current.confirmed_high_timestamp,),
+                    confirmed_high_prices=previous.confirmed_high_prices + (current.confirmed_high_price,),
+                )
+                continue
+
+            merged.append(
+                BeeBiteStage2MergedRange(
+                    start_idx=current.start_idx,
+                    start_timestamp=current.start_timestamp,
+                    end_idx=current.end_idx,
+                    end_timestamp=current.end_timestamp,
+                    high=current.high,
+                    low=current.low,
+                    bars=current.bars,
+                    source_ranges=1,
+                    confirmed_high_timestamps=(current.confirmed_high_timestamp,),
+                    confirmed_high_prices=(current.confirmed_high_price,),
+                )
+            )
+        return merged
+
+    def _ranges_overlap_enough(
+        self,
+        *,
+        previous: BeeBiteStage2MergedRange,
+        current: BeeBiteStage2Range,
+    ) -> bool:
+        overlap = min(previous.high, current.high) - max(previous.low, current.low)
+        if overlap <= self._EPSILON:
+            return False
+        previous_height = max(previous.high - previous.low, self._EPSILON)
+        current_height = max(current.high - current.low, self._EPSILON)
+        overlap_ratio = overlap / min(previous_height, current_height)
+        return overlap_ratio >= self._RANGE_OVERLAP_THRESHOLD
+
+    def _is_new_confirmed_high(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        current_high_idx: int,
+        current_high_price: float,
+        breakout_idx: int,
+    ) -> bool:
+        breakout_price = self._effective_high_at(prepared=prepared, idx=breakout_idx)
+        breakout_excess = breakout_price - current_high_price
+        if breakout_excess <= self._EPSILON:
+            return False
+
+        bars_since_high = breakout_idx - current_high_idx
+        candle_sizes = prepared.highs[current_high_idx : breakout_idx + 1] - prepared.lows[current_high_idx : breakout_idx + 1]
+        mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+        threshold_multiplier = (
+            self._ADJACENT_BREAKOUT_MULTIPLIER if bars_since_high <= 2 else self._DEFAULT_BREAKOUT_MULTIPLIER
+        )
+        threshold = max(mean_candle_size * threshold_multiplier, self._EPSILON)
+        if breakout_excess < threshold:
+            return False
+
+        breakout_close = float(prepared.closes[breakout_idx])
+        breakout_open = float(prepared.opens[breakout_idx])
+        breakout_high = float(prepared.highs[breakout_idx])
+        breakout_low = float(prepared.lows[breakout_idx])
+        body_high = max(breakout_open, breakout_close)
+        spread = max(breakout_high - breakout_low, self._EPSILON)
+        body_ratio = abs(breakout_close - breakout_open) / spread
+
+        if breakout_close > (current_high_price + self._EPSILON):
+            return True
+        return body_high > (current_high_price + self._EPSILON) and body_ratio >= self._MIN_BODY_RATIO_FOR_BREAKOUT
+
+    def _effective_high_at(self, *, prepared: _PreparedStage2Frame, idx: int) -> float:
+        body_high = max(float(prepared.opens[idx]), float(prepared.closes[idx]))
+        body_size = abs(float(prepared.closes[idx]) - float(prepared.opens[idx]))
+        upper_wick = float(prepared.highs[idx]) - body_high
+        if upper_wick > body_size:
+            return body_high
+        return float(prepared.highs[idx])
+
+    def _effective_lows(self, prepared: _PreparedStage2Frame) -> np.ndarray:
+        body_lows = np.minimum(prepared.opens, prepared.closes)
+        body_sizes = np.abs(prepared.closes - prepared.opens)
+        lower_wicks = body_lows - prepared.lows
+        return np.where(lower_wicks > body_sizes, body_lows, prepared.lows)

@@ -15,6 +15,13 @@ from strategy.bee_bite.config import (
     parse_bee_bite_retest_mode,
     validate_bee_bite_runtime,
 )
+from strategy.bee_bite.stage2_detector import (
+    BeeBiteStage2ConfirmedHigh,
+    BeeBiteStage2Detector,
+    BeeBiteStage2MergedRange,
+    BeeBiteStage2Range,
+    BeeBiteStage2Result,
+)
 
 __all__ = [
     "BeeBiteStrategy",
@@ -32,4 +39,9 @@ __all__ = [
     "get_bee_bite_score_threshold",
     "get_bee_bite_top_n",
     "get_bee_bite_runtime",
+    "BeeBiteStage2Detector",
+    "BeeBiteStage2Result",
+    "BeeBiteStage2ConfirmedHigh",
+    "BeeBiteStage2Range",
+    "BeeBiteStage2MergedRange",
 ]
