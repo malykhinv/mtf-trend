@@ -101,7 +101,7 @@ class BeeBiteStage2Detector:
     _LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER = 0.15
     _LIQUIDITY_ZONE_WIDTH_MULTIPLIER = 1.0
     _LIQUIDITY_ZONE_OFFSET_MULTIPLIER = 0.1
-    _LIQUIDITY_UPPER_ZONE_OFFSET_MULTIPLIER = 1.0
+    _LIQUIDITY_UPPER_ZONE_OFFSET_MULTIPLIER = 0.1
     _LIQUIDITY_MIN_BARS = 4
     _LIQUIDITY_UPPER_PRESTART_BARS = 2
     _LIQUIDITY_LOWER_PRESTART_BARS = 1
@@ -651,6 +651,7 @@ class BeeBiteStage2Detector:
                 prepared=prepared,
                 segment_start_idx=segment_start_idx,
                 segment_end_idx=segment_end_idx,
+                confirmed_high_timestamps=active_box.confirmed_high_timestamps,
                 box_high=float(active_box.high),
                 tolerance=tolerance,
             )
@@ -897,15 +898,24 @@ class BeeBiteStage2Detector:
         prepared: _PreparedStage2Frame,
         segment_start_idx: int,
         segment_end_idx: int,
+        confirmed_high_timestamps: tuple[int, ...],
         box_high: float,
         tolerance: float,
     ) -> BeeBiteStage2LiquidityZone | None:
         if segment_end_idx <= segment_start_idx:
             return None
 
+        anchor_idx = None
+        if confirmed_high_timestamps:
+            anchor_timestamp = int(confirmed_high_timestamps[-1])
+            anchor_idx = self._resolve_index_by_timestamp(timestamps=prepared.timestamps, timestamp=anchor_timestamp)
+
         peak_local_idx = int(np.argmax(prepared.highs[segment_start_idx : segment_end_idx + 1]))
         peak_idx = segment_start_idx + peak_local_idx
-        start_idx = max(segment_start_idx, peak_idx - self._LIQUIDITY_UPPER_PRESTART_BARS)
+        if anchor_idx is None:
+            anchor_idx = peak_idx
+
+        start_idx = max(0, anchor_idx - self._LIQUIDITY_UPPER_PRESTART_BARS)
         zone_low, zone_high = self._project_liquidity_zone_bounds(
             level_low=box_high,
             level_high=box_high,
@@ -915,7 +925,7 @@ class BeeBiteStage2Detector:
         sweep_idx = self._resolve_liquidity_zone_sweep_idx(
             prepared=prepared,
             segment_end_idx=segment_end_idx,
-            last_touch_idx=peak_idx,
+            last_touch_idx=max(anchor_idx, peak_idx),
             zone_low=zone_low,
             zone_high=zone_high,
             side="upper",
@@ -932,8 +942,8 @@ class BeeBiteStage2Detector:
             start_timestamp=int(prepared.timestamps[start_idx]),
             end_idx=effective_end_idx,
             end_timestamp=int(prepared.timestamps[effective_end_idx]),
-            last_touch_idx=peak_idx,
-            last_touch_timestamp=int(prepared.timestamps[peak_idx]),
+            last_touch_idx=max(anchor_idx, peak_idx),
+            last_touch_timestamp=int(prepared.timestamps[max(anchor_idx, peak_idx)]),
             low=zone_low,
             high=zone_high,
             touch_count=1,
