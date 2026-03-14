@@ -746,8 +746,11 @@ class BeeBiteStage2Detector:
         current_cluster: list[tuple[int, float]] = [filtered_points[0]]
         for point_idx, point_price in filtered_points[1:]:
             cluster_prices = [price for _, price in current_cluster]
-            cluster_mid = float(np.median(cluster_prices))
-            if abs(point_price - cluster_mid) <= side_tolerance:
+            if side == "lower":
+                cluster_anchor = float(min(cluster_prices))
+            else:
+                cluster_anchor = float(np.median(cluster_prices))
+            if abs(point_price - cluster_anchor) <= side_tolerance:
                 current_cluster.append((point_idx, point_price))
                 continue
             candidate = self._build_liquidity_zone_from_cluster(
@@ -844,15 +847,15 @@ class BeeBiteStage2Detector:
         cluster_prices = [price for _, price in cluster]
         cluster_low = float(min(cluster_prices))
         cluster_high = float(max(cluster_prices))
-        if side == "lower":
-            expanded_touch_set = set(ordered_touches)
-            for idx in range(segment_start_idx, segment_end_idx + 1):
-                current_low = float(prepared.lows[idx])
-                if (cluster_low - tolerance) <= current_low <= (cluster_high + tolerance):
-                    expanded_touch_set.add(idx)
-            ordered_touches = sorted(expanded_touch_set)
+        prestart_bars = self._LIQUIDITY_UPPER_PRESTART_BARS if side == "upper" else self._LIQUIDITY_LOWER_PRESTART_BARS
+        start_idx = max(segment_start_idx, int(ordered_touches[0]) - prestart_bars)
+        last_touch_idx = int(ordered_touches[-1])
 
-        if ((ordered_touches[-1] - ordered_touches[0]) + 1) < self._LIQUIDITY_MIN_BARS:
+        if side == "lower":
+            support_window_low = float(np.min(prepared.lows[start_idx : last_touch_idx + 1]))
+            cluster_low = min(cluster_low, support_window_low)
+
+        if ((last_touch_idx - ordered_touches[0]) + 1) < self._LIQUIDITY_MIN_BARS:
             return None
         zone_low, zone_high = self._project_liquidity_zone_bounds(
             level_low=cluster_low,
@@ -860,10 +863,6 @@ class BeeBiteStage2Detector:
             tolerance=tolerance,
             side=side,
         )
-
-        prestart_bars = self._LIQUIDITY_UPPER_PRESTART_BARS if side == "upper" else self._LIQUIDITY_LOWER_PRESTART_BARS
-        start_idx = max(segment_start_idx, int(ordered_touches[0]) - prestart_bars)
-        last_touch_idx = int(ordered_touches[-1])
         sweep_idx = self._resolve_liquidity_zone_sweep_idx(
             prepared=prepared,
             segment_end_idx=segment_end_idx,
