@@ -100,6 +100,7 @@ class BeeBiteStage2Detector:
     _LIQUIDITY_MIN_TOUCHES = 2
     _LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER = 0.15
     _LIQUIDITY_ZONE_WIDTH_MULTIPLIER = 1.0
+    _LIQUIDITY_ZONE_OFFSET_MULTIPLIER = 0.1
 
     def detect(
         self,
@@ -662,79 +663,56 @@ class BeeBiteStage2Detector:
         tolerance: float,
         side: str,
     ) -> BeeBiteStage2LiquidityZone | None:
-        range_height = max(box_high - box_low, self._EPSILON)
+        level_price = float(box_high if side == "upper" else box_low)
         if side == "upper":
-            threshold = box_high - (range_height * self._LIQUIDITY_ZONE_RELATIVE_MARGIN)
-            swing_points = self._extract_swing_highs(
-                highs=prepared.highs[segment_start_idx : segment_end_idx + 1],
-                segment_start_idx=segment_start_idx,
-            )
-            filtered_points = [point for point in swing_points if point[1] >= threshold]
+            touches = [
+                idx
+                for idx in range(segment_start_idx, segment_end_idx + 1)
+                if float(prepared.highs[idx]) >= (level_price - tolerance)
+            ]
         else:
-            threshold = box_low + (range_height * self._LIQUIDITY_ZONE_RELATIVE_MARGIN)
-            swing_points = self._extract_swing_lows(
-                effective_lows=prepared.lows[segment_start_idx : segment_end_idx + 1],
-                segment_start_idx=segment_start_idx,
-            )
-            filtered_points = [point for point in swing_points if point[1] <= threshold]
+            touches = [
+                idx
+                for idx in range(segment_start_idx, segment_end_idx + 1)
+                if float(prepared.lows[idx]) <= (level_price + tolerance)
+            ]
 
-        if len(filtered_points) < self._LIQUIDITY_MIN_TOUCHES:
+        if len(touches) < self._LIQUIDITY_MIN_TOUCHES:
             return None
 
-        best_zone: BeeBiteStage2LiquidityZone | None = None
-        best_score: tuple[int, int, float] | None = None
-        for anchor_idx, anchor_price in filtered_points:
-            cluster = [
-                (point_idx, point_price)
-                for point_idx, point_price in filtered_points
-                if abs(point_price - anchor_price) <= tolerance
-            ]
-            if len(cluster) < self._LIQUIDITY_MIN_TOUCHES:
-                continue
+        zone_low, zone_high = self._project_liquidity_zone_bounds(
+            level_low=level_price,
+            level_high=level_price,
+            tolerance=tolerance,
+            side=side,
+        )
+        start_idx = int(touches[self._LIQUIDITY_MIN_TOUCHES - 1])
+        sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+            prepared=prepared,
+            segment_end_idx=segment_end_idx,
+            last_touch_idx=start_idx,
+            zone_low=zone_low,
+            zone_high=zone_high,
+            side=side,
+        )
+        effective_end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
+        valid_touches = [idx for idx in touches if start_idx <= idx <= effective_end_idx]
+        if len(valid_touches) < self._LIQUIDITY_MIN_TOUCHES:
+            return None
 
-            cluster_prices = [price for _, price in cluster]
-            cluster_low = float(min(cluster_prices))
-            cluster_high = float(max(cluster_prices))
-            last_touch_idx = max(point_idx for point_idx, _ in cluster)
-            zone_low, zone_high = self._project_liquidity_zone_bounds(
-                level_low=cluster_low,
-                level_high=cluster_high,
-                tolerance=tolerance,
-                side=side,
-            )
-            sweep_idx = self._resolve_liquidity_zone_sweep_idx(
-                prepared=prepared,
-                segment_end_idx=segment_end_idx,
-                last_touch_idx=last_touch_idx,
-                zone_low=zone_low,
-                zone_high=zone_high,
-                side=side,
-            )
-
-            score = (
-                len(cluster),
-                last_touch_idx,
-                -float(cluster_high - cluster_low),
-            )
-            if best_score is not None and score <= best_score:
-                continue
-
-            start_idx = min(point_idx for point_idx, _ in cluster)
-            end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
-            best_score = score
-            best_zone = BeeBiteStage2LiquidityZone(
-                side=side,
-                start_idx=start_idx,
-                start_timestamp=int(prepared.timestamps[start_idx]),
-                end_idx=end_idx,
-                end_timestamp=int(prepared.timestamps[end_idx]),
-                last_touch_idx=last_touch_idx,
-                last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
-                low=zone_low,
-                high=zone_high,
-                touch_count=len(cluster),
-            )
-        return best_zone
+        last_touch_idx = int(valid_touches[-1])
+        return BeeBiteStage2LiquidityZone(
+            side=side,
+            start_idx=start_idx,
+            start_timestamp=int(prepared.timestamps[start_idx]),
+            end_idx=effective_end_idx,
+            end_timestamp=int(prepared.timestamps[effective_end_idx]),
+            last_touch_idx=last_touch_idx,
+            last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
+            low=zone_low,
+            high=zone_high,
+            touch_count=len(valid_touches),
+        )
 
     def _project_liquidity_zone_bounds(
         self,
@@ -745,9 +723,12 @@ class BeeBiteStage2Detector:
         side: str,
     ) -> tuple[float, float]:
         zone_width = max((level_high - level_low) * self._LIQUIDITY_ZONE_WIDTH_MULTIPLIER, tolerance, self._EPSILON)
+        zone_offset = max(tolerance * self._LIQUIDITY_ZONE_OFFSET_MULTIPLIER, self._EPSILON)
         if side == "upper":
-            return float(level_high), float(level_high + zone_width)
-        return float(level_low - zone_width), float(level_low)
+            zone_low = float(level_high + zone_offset)
+            return zone_low, float(zone_low + zone_width)
+        zone_high = float(level_low - zone_offset)
+        return float(zone_high - zone_width), zone_high
 
     def _resolve_liquidity_zone_sweep_idx(
         self,
