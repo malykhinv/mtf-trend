@@ -1017,10 +1017,11 @@ class BeeBiteStage2Detector:
         side: str,
     ) -> tuple[float, float]:
         zone_width = max((level_high - level_low) * self._LIQUIDITY_ZONE_WIDTH_MULTIPLIER, tolerance, self._EPSILON)
+        zone_offset = max(tolerance * self._LIQUIDITY_ZONE_OFFSET_MULTIPLIER, self._EPSILON)
         if side == "upper":
-            zone_low = float(level_high)
+            zone_low = float(level_high + zone_offset)
             return zone_low, float(zone_low + zone_width)
-        zone_high = float(level_low)
+        zone_high = float(level_low - zone_offset)
         return float(zone_high - zone_width), zone_high
 
     def _resolve_liquidity_zone_sweep_idx(
