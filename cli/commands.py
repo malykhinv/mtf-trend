@@ -319,11 +319,15 @@ def _is_significant_regime_breakout(
     peak_idx: int,
     breakout_idx: int,
 ) -> bool:
-    breakout_excess = float(effective_highs[breakout_idx]) - peak_price
+    bars_since_peak = breakout_idx - peak_idx
+    breakout_high = float(highs[breakout_idx]) if bars_since_peak <= 2 else float(effective_highs[breakout_idx])
+    breakout_excess = breakout_high - peak_price
     if breakout_excess <= 0.0:
         return False
     candle_sizes = highs[peak_idx : breakout_idx + 1] - lows[peak_idx : breakout_idx + 1]
     mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+    if bars_since_peak <= 2:
+        return breakout_excess >= max(mean_candle_size * 0.1, 1e-12)
     return breakout_excess >= max(mean_candle_size, 1e-12)
 
 

@@ -425,6 +425,11 @@ class BeeBiteStage1Selector:
             return body_high
         return float(prepared.highs[idx])
 
+    def _breakout_high_at(self, *, prepared: _PreparedStage1Frame, peak_idx: int, breakout_idx: int) -> float:
+        if (breakout_idx - peak_idx) <= 2:
+            return float(prepared.highs[breakout_idx])
+        return self._effective_high_at(prepared=prepared, idx=breakout_idx)
+
     def _has_stepped_initial_volume(self, *, prepared: _PreparedStage1Frame, pump_start_idx: int) -> bool:
         window_end_idx = min(len(prepared.quote_volume) - 1, pump_start_idx + self._pump_window_bars - 1)
         initial_quote_volume = prepared.quote_volume[pump_start_idx : window_end_idx + 1]
@@ -460,7 +465,11 @@ class BeeBiteStage1Selector:
                 (current_peak_price - candidate.pump_base_price) * self._min_retain_ratio
             )
             current_low = float(prepared.lows[idx])
-            current_high = self._effective_high_at(prepared=prepared, idx=idx)
+            current_high = self._breakout_high_at(
+                prepared=prepared,
+                peak_idx=current_peak_idx,
+                breakout_idx=idx,
+            )
 
             if current_low < hold_price:
                 regime_end_idx = idx
@@ -542,11 +551,18 @@ class BeeBiteStage1Selector:
         breakout_idx: int,
         main_high_price: float,
     ) -> bool:
-        breakout_excess = self._effective_high_at(prepared=prepared, idx=breakout_idx) - main_high_price
+        breakout_excess = self._breakout_high_at(
+            prepared=prepared,
+            peak_idx=peak_idx,
+            breakout_idx=breakout_idx,
+        ) - main_high_price
         if breakout_excess <= self._EPSILON:
             return False
         candle_sizes = prepared.highs[peak_idx : breakout_idx + 1] - prepared.lows[peak_idx : breakout_idx + 1]
         mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+        bars_since_peak = breakout_idx - peak_idx
+        if bars_since_peak <= 2:
+            return breakout_excess >= max(mean_candle_size * 0.1, self._EPSILON)
         return breakout_excess >= max(mean_candle_size, self._EPSILON)
 
     def _is_sleep_window_valid(
