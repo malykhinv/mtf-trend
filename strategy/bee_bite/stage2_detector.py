@@ -99,6 +99,7 @@ class BeeBiteStage2Detector:
     _LIQUIDITY_ZONE_RELATIVE_MARGIN = 0.35
     _LIQUIDITY_MIN_TOUCHES = 2
     _LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER = 0.15
+
     def detect(
         self,
         *,
@@ -209,6 +210,11 @@ class BeeBiteStage2Detector:
                 confirmed_highs=tuple(confirmed_highs),
             )
 
+        confirmed_highs, local_ranges = self._refine_confirmed_highs_and_ranges(
+            prepared=prepared,
+            confirmed_highs=confirmed_highs,
+            local_ranges=local_ranges,
+        )
         merged_ranges = self._merge_ranges(local_ranges)
         active_box = merged_ranges[-1]
         liquidity_zones = self._resolve_active_liquidity_zones(
@@ -298,6 +304,117 @@ class BeeBiteStage2Detector:
             high=confirmed_high.price,
             low=range_low,
             bars=(current_range_end_idx - current_range_start_idx) + 1,
+        )
+
+    def _refine_confirmed_highs_and_ranges(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        confirmed_highs: list[BeeBiteStage2ConfirmedHigh],
+        local_ranges: list[BeeBiteStage2Range],
+    ) -> tuple[list[BeeBiteStage2ConfirmedHigh], list[BeeBiteStage2Range]]:
+        refined_highs: list[BeeBiteStage2ConfirmedHigh] = []
+        refined_ranges: list[BeeBiteStage2Range] = []
+
+        for confirmed_high, local_range in zip(confirmed_highs, local_ranges, strict=True):
+            resolved_high = self._resolve_balance_high(
+                prepared=prepared,
+                anchor_high=confirmed_high,
+                segment_end_idx=local_range.end_idx,
+            )
+            refined_high = BeeBiteStage2ConfirmedHigh(
+                idx=resolved_high.idx,
+                timestamp=resolved_high.timestamp,
+                price=resolved_high.price,
+            )
+            refined_range = BeeBiteStage2Range(
+                start_idx=local_range.start_idx,
+                start_timestamp=local_range.start_timestamp,
+                end_idx=local_range.end_idx,
+                end_timestamp=local_range.end_timestamp,
+                confirmed_high_idx=refined_high.idx,
+                confirmed_high_timestamp=refined_high.timestamp,
+                confirmed_high_price=refined_high.price,
+                high=refined_high.price,
+                low=local_range.low,
+                bars=local_range.bars,
+            )
+            refined_highs.append(refined_high)
+            refined_ranges.append(refined_range)
+
+        return refined_highs, refined_ranges
+
+    def _resolve_balance_high(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        anchor_high: BeeBiteStage2ConfirmedHigh,
+        segment_end_idx: int,
+    ) -> BeeBiteStage2ConfirmedHigh:
+        if segment_end_idx <= anchor_high.idx:
+            return anchor_high
+
+        segment_highs = prepared.highs[anchor_high.idx : segment_end_idx + 1]
+        if segment_highs.size == 0:
+            return anchor_high
+
+        segment_lows = prepared.lows[anchor_high.idx : segment_end_idx + 1]
+        candle_sizes = segment_highs - segment_lows
+        mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+        segment_high = float(np.max(segment_highs))
+        segment_low = float(np.min(segment_lows))
+        range_height = max(segment_high - segment_low, self._EPSILON)
+        tolerance = max(
+            mean_candle_size * self._LIQUIDITY_CLUSTER_TOLERANCE_TO_CANDLE,
+            range_height * self._LIQUIDITY_CLUSTER_TOLERANCE_TO_RANGE,
+            self._EPSILON,
+        )
+        threshold = segment_high - (range_height * self._LIQUIDITY_ZONE_RELATIVE_MARGIN)
+        swing_highs = self._extract_swing_highs(
+            highs=segment_highs,
+            segment_start_idx=anchor_high.idx,
+        )
+        filtered_points = [point for point in swing_highs if point[1] >= threshold]
+        if not filtered_points:
+            return anchor_high
+
+        best_cluster: list[tuple[int, float]] | None = None
+        best_score: tuple[int, int, float, float] | None = None
+        for anchor_idx, anchor_price in filtered_points:
+            cluster = [
+                (point_idx, point_price)
+                for point_idx, point_price in filtered_points
+                if abs(point_price - anchor_price) <= tolerance
+            ]
+            if len(cluster) < self._LIQUIDITY_MIN_TOUCHES:
+                continue
+
+            cluster_prices = [price for _, price in cluster]
+            cluster_min = float(min(cluster_prices))
+            cluster_max = float(max(cluster_prices))
+            last_touch_idx = max(point_idx for point_idx, _ in cluster)
+            score = (
+                len(cluster),
+                last_touch_idx,
+                -float(cluster_max - cluster_min),
+                cluster_max,
+            )
+            if best_score is not None and score <= best_score:
+                continue
+            best_score = score
+            best_cluster = cluster
+
+        if best_cluster is None:
+            return anchor_high
+
+        top_idx, top_price = max(best_cluster, key=lambda item: (item[1], item[0]))
+        if top_price <= (anchor_high.price + self._EPSILON):
+            return anchor_high
+
+        return BeeBiteStage2ConfirmedHigh(
+            idx=int(top_idx),
+            timestamp=int(prepared.timestamps[top_idx]),
+            price=float(top_price),
         )
 
     def _merge_ranges(self, ranges: list[BeeBiteStage2Range]) -> list[BeeBiteStage2MergedRange]:
