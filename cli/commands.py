@@ -83,6 +83,16 @@ _PROGRESS_LOG_EVERY = 100
 _STAGE1_REASON_SAMPLE_LIMIT = 3
 
 
+@dataclass(slots=True)
+class _Stage1Regime:
+    symbol: str
+    regime_index: int
+    events: list[BeeBiteStage1Result]
+    primary_event: BeeBiteStage1Result
+    first_event: BeeBiteStage1Result
+    last_event: BeeBiteStage1Result
+
+
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -144,6 +154,13 @@ def _format_stage1_reason_sample(result: BeeBiteStage1Result, frame: pd.DataFram
 
 
 def _select_primary_stage1_event(events: list[BeeBiteStage1Result]) -> BeeBiteStage1Result:
+    regimes = _group_stage1_events_into_regimes(events)
+    if not regimes:
+        raise ValueError("stage-1 primary event selection requires at least one event")
+    return regimes[0].primary_event
+
+
+def _group_stage1_events_into_regimes(events: list[BeeBiteStage1Result]) -> list[_Stage1Regime]:
     sorted_events = sorted(
         events,
         key=lambda item: (
@@ -152,33 +169,54 @@ def _select_primary_stage1_event(events: list[BeeBiteStage1Result]) -> BeeBiteSt
             int(item.stage1_confirmed_timestamp or 0),
         ),
     )
-    first_regime: list[BeeBiteStage1Result] = []
-    current_regime_peak_ms = 0
+    if not sorted_events:
+        return []
 
+    grouped_events: list[list[BeeBiteStage1Result]] = []
+    current_group: list[BeeBiteStage1Result] = []
+    current_regime_peak_ms = 0
     for event in sorted_events:
         pump_start_ms = int(event.pump_start_timestamp or 0)
         pump_peak_ms = int(event.pump_peak_timestamp or pump_start_ms)
-        if not first_regime:
-            first_regime.append(event)
+        if not current_group:
+            current_group = [event]
             current_regime_peak_ms = pump_peak_ms
             continue
 
         if pump_start_ms <= current_regime_peak_ms:
-            first_regime.append(event)
+            current_group.append(event)
             current_regime_peak_ms = max(current_regime_peak_ms, pump_peak_ms)
             continue
 
-        break
+        grouped_events.append(current_group)
+        current_group = [event]
+        current_regime_peak_ms = pump_peak_ms
+    if current_group:
+        grouped_events.append(current_group)
 
-    return max(
-        first_regime,
-        key=lambda item: (
-            float(item.pump_peak_price or 0.0),
-            float(item.pump_percent or 0.0),
-            float(item.post_pump_volume_ratio or 0.0),
-            -int(item.stage1_confirmed_timestamp or 0),
-        ),
-    )
+    regimes: list[_Stage1Regime] = []
+    for regime_index, regime_events in enumerate(grouped_events, start=1):
+        ordered_by_detection = sorted(
+            regime_events,
+            key=lambda item: (
+                int(item.stage1_confirmed_timestamp or 0),
+                int(item.pump_peak_timestamp or 0),
+                int(item.pump_start_timestamp or 0),
+            ),
+        )
+        first_event = ordered_by_detection[0]
+        last_event = ordered_by_detection[-1]
+        regimes.append(
+            _Stage1Regime(
+                symbol=first_event.symbol,
+                regime_index=regime_index,
+                events=regime_events,
+                primary_event=first_event,
+                first_event=first_event,
+                last_event=last_event,
+            )
+        )
+    return regimes
 
 
 
@@ -1384,9 +1422,16 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-def _stage1_event_to_row(event: BeeBiteStage1Result) -> dict[str, object]:
+def _stage1_event_to_row(
+    event: BeeBiteStage1Result,
+    *,
+    regime_index: int | None = None,
+    regime_role: str | None = None,
+) -> dict[str, object]:
     return {
         "symbol": event.symbol,
+        "regime_index": regime_index,
+        "regime_role": regime_role,
         "reason": event.reason,
         "sleep_start_timestamp": event.sleep_start_timestamp,
         "sleep_end_timestamp": event.sleep_end_timestamp,
@@ -1428,7 +1473,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     selector = BeeBiteStage1Selector()
     plotter = BeeBiteStage1Plotter()
     all_events: list[BeeBiteStage1Result] = []
-    latest_event_by_symbol: dict[str, BeeBiteStage1Result] = {}
+    regimes_by_symbol: dict[str, list[_Stage1Regime]] = {}
     frames_by_symbol: dict[str, pd.DataFrame] = {}
     reason_counts: Counter[str] = Counter()
     reason_samples: dict[str, list[str]] = {}
@@ -1450,7 +1495,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
         events = selector.detect_events(symbol=symbol, frame=frame)
         if events:
             all_events.extend(events)
-            latest_event_by_symbol[symbol] = _select_primary_stage1_event(events)
+            regimes_by_symbol[symbol] = _group_stage1_events_into_regimes(events)
         else:
             evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
             reason_key = evaluation.reason if not evaluation.passed else "passed_now_but_no_historical_event"
@@ -1463,38 +1508,63 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 "review-stage1: progress=%s/%s symbols_with_events=%s events_total=%s populated_frames=%s empty_frames=%s",
                 index,
                 len(symbols),
-                len(latest_event_by_symbol),
+                len(regimes_by_symbol),
                 len(all_events),
                 populated_frame_symbols,
                 len(empty_frame_symbols),
             )
 
-    rows = [_stage1_event_to_row(event) for event in all_events]
+    rows: list[dict[str, object]] = []
+    regimes_total = 0
+    for regimes in regimes_by_symbol.values():
+        for regime in regimes:
+            regimes_total += 1
+            for event in regime.events:
+                regime_role: str | None = None
+                if event is regime.first_event and event is regime.last_event:
+                    regime_role = "first_last"
+                elif event is regime.first_event:
+                    regime_role = "first"
+                elif event is regime.last_event:
+                    regime_role = "last"
+                rows.append(
+                    _stage1_event_to_row(
+                        event,
+                        regime_index=regime.regime_index,
+                        regime_role=regime_role,
+                    )
+                )
     events_frame = pd.DataFrame(rows)
     if not events_frame.empty:
         events_frame = events_frame.sort_values(
-            ["stage1_confirmed_timestamp", "pump_peak_timestamp", "symbol"],
-            ascending=[False, False, True],
+            ["symbol", "regime_index", "stage1_confirmed_timestamp", "pump_peak_timestamp"],
+            ascending=[True, True, True, True],
         ).reset_index(drop=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     events_frame.to_csv(output_path, index=False)
 
-    latest_events = sorted(
-        latest_event_by_symbol.values(),
+    regimes_for_plots = sorted(
+        [regime for regimes in regimes_by_symbol.values() for regime in regimes],
         key=lambda item: (
-            int(item.stage1_confirmed_timestamp or 0),
-            int(item.pump_peak_timestamp or 0),
+            int(item.last_event.stage1_confirmed_timestamp or 0),
+            int(item.last_event.pump_peak_timestamp or 0),
             item.symbol,
+            item.regime_index,
         ),
         reverse=True,
     )
     plots_built = 0
-    for event in latest_events[:plot_limit]:
-        frame = frames_by_symbol.get(event.symbol)
+    for regime in regimes_for_plots[:plot_limit]:
+        frame = frames_by_symbol.get(regime.symbol)
         if frame is None or frame.empty:
             continue
-        output_file = plots_dir / f"{event.symbol.replace('/', '_')}_stage1.png"
-        plotter.plot_event(frame=frame, event=event, output_path=output_file)
+        symbol_slug = regime.symbol.replace("/", "_")
+        first_output = plots_dir / f"{symbol_slug}_stage1_regime_{regime.regime_index:02d}_first.png"
+        plotter.plot_event(frame=frame, event=regime.first_event, output_path=first_output)
+        plots_built += 1
+
+        last_output = plots_dir / f"{symbol_slug}_stage1_regime_{regime.regime_index:02d}_last.png"
+        plotter.plot_event(frame=frame, event=regime.last_event, output_path=last_output)
         plots_built += 1
 
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
@@ -1516,9 +1586,10 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("review-stage1: reason=%s samples=%s", reason, " | ".join(samples))
 
     logger.info(
-        "review-stage1: symbols=%s symbols_with_events=%s events=%s csv=%s plots=%s plots_dir=%s",
+        "review-stage1: symbols=%s symbols_with_events=%s regimes=%s events=%s csv=%s plots=%s plots_dir=%s",
         len(symbols),
-        len(latest_event_by_symbol),
+        len(regimes_by_symbol),
+        regimes_total,
         len(all_events),
         output_path,
         plots_built,
