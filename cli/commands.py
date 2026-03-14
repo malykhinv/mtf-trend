@@ -9,6 +9,7 @@ import shutil
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from logging import Logger
 from pathlib import Path
 from typing import Callable, cast
@@ -130,6 +131,13 @@ def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) 
     if strategy_id != "bee_bite":
         raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
     return base_results_dir / "strategy" / "bee_bite"
+
+
+def _build_review_run_plots_dir(base_dir: Path) -> Path:
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = base_dir / run_stamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 def _format_timestamp_ms(timestamp_ms: int | None) -> str:
@@ -1690,7 +1698,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE1_EVENTS_OUTPUT_FILE
-    plots_dir = output_dir / DEFAULT_STAGE1_PLOTS_DIR_NAME
+    plots_dir = _build_review_run_plots_dir(output_dir / DEFAULT_STAGE1_PLOTS_DIR_NAME)
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
 
     preparer = DataPreparer(config.backtest.cache_dir)
@@ -1968,7 +1976,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE2_EVENTS_OUTPUT_FILE
-    plots_dir = output_dir / DEFAULT_STAGE2_PLOTS_DIR_NAME
+    plots_dir = _build_review_run_plots_dir(output_dir / DEFAULT_STAGE2_PLOTS_DIR_NAME)
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
 
     preparer = DataPreparer(config.backtest.cache_dir)

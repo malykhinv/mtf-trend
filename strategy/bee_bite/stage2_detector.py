@@ -101,6 +101,7 @@ class BeeBiteStage2Detector:
     _LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER = 0.15
     _LIQUIDITY_ZONE_WIDTH_MULTIPLIER = 1.0
     _LIQUIDITY_ZONE_OFFSET_MULTIPLIER = 0.1
+    _LIQUIDITY_UPPER_ZONE_OFFSET_MULTIPLIER = 1.0
     _LIQUIDITY_MIN_BARS = 4
     _LIQUIDITY_UPPER_PRESTART_BARS = 2
     _LIQUIDITY_LOWER_PRESTART_BARS = 1
@@ -950,7 +951,7 @@ class BeeBiteStage2Detector:
         touch_indices = [
             idx
             for idx in range(segment_start_idx, segment_end_idx + 1)
-            if float(prepared.lows[idx]) <= (box_low + tolerance)
+            if (box_low - tolerance) <= float(prepared.lows[idx]) <= (box_low + tolerance)
         ]
         if len(touch_indices) < 2:
             return None
@@ -1016,10 +1017,11 @@ class BeeBiteStage2Detector:
         side: str,
     ) -> tuple[float, float]:
         zone_width = max((level_high - level_low) * self._LIQUIDITY_ZONE_WIDTH_MULTIPLIER, tolerance, self._EPSILON)
-        zone_offset = max(tolerance * self._LIQUIDITY_ZONE_OFFSET_MULTIPLIER, self._EPSILON)
         if side == "upper":
+            zone_offset = max(tolerance * self._LIQUIDITY_UPPER_ZONE_OFFSET_MULTIPLIER, self._EPSILON)
             zone_low = float(level_high + zone_offset)
             return zone_low, float(zone_low + zone_width)
+        zone_offset = max(tolerance * self._LIQUIDITY_ZONE_OFFSET_MULTIPLIER, self._EPSILON)
         zone_high = float(level_low - zone_offset)
         return float(zone_high - zone_width), zone_high
 
@@ -1038,12 +1040,12 @@ class BeeBiteStage2Detector:
 
         if side == "upper":
             for idx in range(last_touch_idx + 1, segment_end_idx + 1):
-                if float(prepared.highs[idx]) >= (zone_low - self._EPSILON):
+                if float(prepared.highs[idx]) >= (zone_high - self._EPSILON):
                     return idx
             return None
 
         for idx in range(last_touch_idx + 1, segment_end_idx + 1):
-            if float(prepared.lows[idx]) <= (zone_high + self._EPSILON):
+            if float(prepared.lows[idx]) <= (zone_low + self._EPSILON):
                 return idx
         return None
 
