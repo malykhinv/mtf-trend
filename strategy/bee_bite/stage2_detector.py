@@ -872,7 +872,9 @@ class BeeBiteStage2Detector:
             zone_high=zone_high,
             side=side,
         )
-        effective_end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
+        effective_end_idx = (sweep_idx - 1) if sweep_idx is not None else segment_end_idx
+        if effective_end_idx < start_idx:
+            return None
         if ((effective_end_idx - start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
             return None
 
@@ -910,7 +912,17 @@ class BeeBiteStage2Detector:
             tolerance=tolerance,
             side="upper",
         )
-        effective_end_idx = segment_end_idx
+        sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+            prepared=prepared,
+            segment_end_idx=segment_end_idx,
+            last_touch_idx=peak_idx,
+            zone_low=zone_low,
+            zone_high=zone_high,
+            side="upper",
+        )
+        effective_end_idx = (sweep_idx - 1) if sweep_idx is not None else segment_end_idx
+        if effective_end_idx < start_idx:
+            return None
         if ((effective_end_idx - start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
             return None
 
@@ -963,7 +975,9 @@ class BeeBiteStage2Detector:
             zone_high=zone_high,
             side="lower",
         )
-        effective_end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
+        effective_end_idx = (sweep_idx - 1) if sweep_idx is not None else segment_end_idx
+        if effective_end_idx < start_idx:
+            return None
         if ((effective_end_idx - start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
             return None
 
