@@ -300,7 +300,8 @@ class BeeBiteStage1Selector:
 
     def _iter_stage1_candidates(self, *, prepared: _PreparedStage1Frame):
         last_candidate_start = len(prepared.timestamps) - self._pump_window_bars - 1
-        for start_idx in range(self._sleep_window_bars, last_candidate_start + 1):
+        start_idx = self._sleep_window_bars
+        while start_idx <= last_candidate_start:
             window_end_idx = start_idx + self._pump_window_bars - 1
             pump_highs = prepared.highs[start_idx : window_end_idx + 1]
             peak_offset = int(np.argmax(pump_highs))
@@ -308,27 +309,32 @@ class BeeBiteStage1Selector:
 
             pump_start_idx = self._resolve_pump_start_idx(prepared=prepared, peak_idx=peak_idx)
             if pump_start_idx < self._sleep_window_bars:
+                start_idx += 1
                 continue
             if not self._is_sleep_window_valid(
                 start_idx=pump_start_idx,
                 sleep_window_range_pct=prepared.sleep_window_range_pct,
             ):
+                start_idx += 1
                 continue
 
             sleep_avg_volume_usdt = self._safe_float(prepared.sleep_volume_mean[pump_start_idx])
             if sleep_avg_volume_usdt is None or sleep_avg_volume_usdt <= self._EPSILON:
+                start_idx += 1
                 continue
 
             pump_base_price = float(prepared.lows[pump_start_idx])
             pump_peak_price = float(prepared.highs[peak_idx])
             if pump_base_price <= self._EPSILON or pump_peak_price <= pump_base_price:
+                start_idx += 1
                 continue
 
             pump_percent = (pump_peak_price / pump_base_price) - 1.0
             if pump_percent < self._min_pump_pct:
+                start_idx += 1
                 continue
 
-            yield _Stage1Candidate(
+            candidate = _Stage1Candidate(
                 sleep_start_idx=pump_start_idx - self._sleep_window_bars,
                 sleep_end_idx=pump_start_idx - 1,
                 pump_start_idx=pump_start_idx,
@@ -338,39 +344,37 @@ class BeeBiteStage1Selector:
                 pump_peak_price=pump_peak_price,
                 pump_percent=pump_percent,
             )
+            yield candidate
+
+            regime_end_idx = self._resolve_candidate_regime_end_idx(prepared=prepared, candidate=candidate)
+            start_idx = max(start_idx + 1, regime_end_idx)
 
     def _scan_stage1_setup_flags(self, prepared: _PreparedStage1Frame) -> tuple[bool, bool]:
-        saw_sleep_candidate = False
-        saw_pump_candidate = False
-        last_candidate_start = len(prepared.timestamps) - self._pump_window_bars - 1
-        for start_idx in range(self._sleep_window_bars, last_candidate_start + 1):
-            window_end_idx = start_idx + self._pump_window_bars - 1
-            pump_highs = prepared.highs[start_idx : window_end_idx + 1]
-            peak_offset = int(np.argmax(pump_highs))
-            peak_idx = start_idx + peak_offset
-            pump_start_idx = self._resolve_pump_start_idx(prepared=prepared, peak_idx=peak_idx)
-            if pump_start_idx < self._sleep_window_bars:
-                continue
-            if not self._is_sleep_window_valid(
-                start_idx=pump_start_idx,
-                sleep_window_range_pct=prepared.sleep_window_range_pct,
-            ):
-                continue
-            saw_sleep_candidate = True
-            pump_base_price = float(prepared.lows[pump_start_idx])
-            pump_peak_price = float(prepared.highs[peak_idx])
-            if pump_base_price <= self._EPSILON or pump_peak_price <= pump_base_price:
-                continue
-            if ((pump_peak_price / pump_base_price) - 1.0) >= self._min_pump_pct:
-                saw_pump_candidate = True
-                break
-        return saw_sleep_candidate, saw_pump_candidate
+        for _candidate in self._iter_stage1_candidates(prepared=prepared):
+            return True, True
+        return False, False
 
     def _resolve_pump_start_idx(self, *, prepared: _PreparedStage1Frame, peak_idx: int) -> int:
         search_start_idx = max(self._sleep_window_bars, peak_idx - self._pump_start_lookback_bars + 1)
         lows_window = prepared.lows[search_start_idx : peak_idx + 1]
         start_offset = int(np.argmin(lows_window))
         return search_start_idx + start_offset
+
+    def _resolve_candidate_regime_end_idx(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        candidate: "_Stage1Candidate",
+    ) -> int:
+        hold_price = candidate.pump_base_price + (
+            (candidate.pump_peak_price - candidate.pump_base_price) * self._min_retain_ratio
+        )
+        for idx in range(candidate.peak_idx + 1, len(prepared.timestamps)):
+            if float(prepared.lows[idx]) < hold_price:
+                return idx
+            if float(prepared.highs[idx]) > (candidate.pump_peak_price + self._EPSILON):
+                return idx
+        return len(prepared.timestamps) - 1
 
     def _is_sleep_window_valid(
         self,
