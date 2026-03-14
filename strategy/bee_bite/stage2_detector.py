@@ -644,18 +644,28 @@ class BeeBiteStage2Detector:
             box_high=float(active_box.high),
             tolerance=tolerance,
             side="upper",
-            max_zones=1,
+            max_zones=2,
         )
-        if not upper_zones:
-            fallback_upper_zone = self._resolve_peak_backed_upper_liquidity_zone(
-                prepared=prepared,
-                segment_start_idx=segment_start_idx,
-                segment_end_idx=segment_end_idx,
-                confirmed_high_timestamps=active_box.confirmed_high_timestamps,
-                box_high=float(active_box.high),
-                tolerance=tolerance,
+        fallback_upper_zone = self._resolve_peak_backed_upper_liquidity_zone(
+            prepared=prepared,
+            segment_start_idx=segment_start_idx,
+            segment_end_idx=segment_end_idx,
+            confirmed_high_timestamps=active_box.confirmed_high_timestamps,
+            box_high=float(active_box.high),
+            tolerance=tolerance,
+        )
+        if fallback_upper_zone is not None:
+            overlaps_existing = any(
+                self._zones_overlap_enough(candidate=fallback_upper_zone, existing=existing)
+                for existing in upper_zones
             )
-            upper_zones = [fallback_upper_zone] if fallback_upper_zone is not None else []
+            if not overlaps_existing:
+                upper_zones = sorted(
+                    [*upper_zones, fallback_upper_zone],
+                    key=lambda zone: (zone.start_idx, zone.low),
+                )
+        elif not upper_zones:
+            upper_zones = []
 
         lower_zones = self._resolve_sequential_liquidity_zones(
             prepared=prepared,
