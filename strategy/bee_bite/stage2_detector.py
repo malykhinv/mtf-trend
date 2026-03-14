@@ -78,6 +78,9 @@ class BeeBiteStage2Detector:
     _DEFAULT_BREAKOUT_MULTIPLIER = 1.0
     _RANGE_OVERLAP_THRESHOLD = 0.5
     _MIN_BODY_RATIO_FOR_BREAKOUT = 0.35
+    _LOW_CLUSTER_TOLERANCE_TO_CANDLE = 0.25
+    _LOW_CLUSTER_TOLERANCE_TO_RANGE = 0.03
+    _LOW_CLUSTER_MAX_RELATIVE_LEVEL = 0.65
 
     def detect(
         self,
@@ -251,7 +254,13 @@ class BeeBiteStage2Detector:
             return None
 
         effective_lows = self._effective_lows(prepared)[current_range_start_idx : current_range_end_idx + 1]
-        range_low = float(np.min(effective_lows))
+        range_low = self._resolve_balance_low(
+            prepared=prepared,
+            segment_start_idx=current_range_start_idx,
+            segment_end_idx=current_range_end_idx,
+            range_high=confirmed_high.price,
+            effective_lows=effective_lows,
+        )
         return BeeBiteStage2Range(
             start_idx=current_range_start_idx,
             start_timestamp=int(prepared.timestamps[current_range_start_idx]),
@@ -379,3 +388,68 @@ class BeeBiteStage2Detector:
         body_sizes = np.abs(prepared.closes - prepared.opens)
         lower_wicks = body_lows - prepared.lows
         return np.where(lower_wicks > body_sizes, body_lows, prepared.lows)
+
+    def _resolve_balance_low(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        segment_start_idx: int,
+        segment_end_idx: int,
+        range_high: float,
+        effective_lows: np.ndarray,
+    ) -> float:
+        if effective_lows.size == 0:
+            return float(range_high)
+
+        raw_min_low = float(np.min(effective_lows))
+        if effective_lows.size <= 2:
+            return raw_min_low
+
+        candle_sizes = prepared.highs[segment_start_idx : segment_end_idx + 1] - prepared.lows[segment_start_idx : segment_end_idx + 1]
+        mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+        full_range_height = max(range_high - raw_min_low, self._EPSILON)
+        tolerance = max(
+            mean_candle_size * self._LOW_CLUSTER_TOLERANCE_TO_CANDLE,
+            full_range_height * self._LOW_CLUSTER_TOLERANCE_TO_RANGE,
+            self._EPSILON,
+        )
+
+        max_candidate_low = raw_min_low + (full_range_height * self._LOW_CLUSTER_MAX_RELATIVE_LEVEL)
+        candidate_lows = effective_lows[effective_lows <= max_candidate_low]
+        if candidate_lows.size == 0:
+            candidate_lows = effective_lows
+
+        best_cluster_count = 0
+        best_cluster_median = raw_min_low
+        best_cluster_spread = float("inf")
+        best_cluster_mean = raw_min_low
+
+        for candidate_low in candidate_lows:
+            cluster = effective_lows[np.abs(effective_lows - candidate_low) <= tolerance]
+            if cluster.size == 0:
+                continue
+            cluster_count = int(cluster.size)
+            cluster_median = float(np.median(cluster))
+            cluster_spread = float(np.std(cluster)) if cluster.size > 1 else 0.0
+            cluster_mean = float(np.mean(cluster))
+
+            if cluster_count > best_cluster_count:
+                best_cluster_count = cluster_count
+                best_cluster_median = cluster_median
+                best_cluster_spread = cluster_spread
+                best_cluster_mean = cluster_mean
+                continue
+            if cluster_count == best_cluster_count and cluster_spread < best_cluster_spread:
+                best_cluster_median = cluster_median
+                best_cluster_spread = cluster_spread
+                best_cluster_mean = cluster_mean
+                continue
+            if (
+                cluster_count == best_cluster_count
+                and abs(cluster_spread - best_cluster_spread) <= self._EPSILON
+                and cluster_mean < best_cluster_mean
+            ):
+                best_cluster_median = cluster_median
+                best_cluster_mean = cluster_mean
+
+        return float(best_cluster_median)

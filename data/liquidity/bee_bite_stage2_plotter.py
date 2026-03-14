@@ -32,6 +32,7 @@ class BeeBiteStage2Plotter:
     _PEAK_COLOR = "#fb7185"
     _STAGE1_COLOR = "#a3e635"
     _CONFIRMED_HIGH_COLOR = "#f43f5e"
+    _HOLD_COLOR = "#f59e0b"
     _LOCAL_RANGE_EDGE = "#60a5fa"
     _LOCAL_RANGE_FACE = "#1d4ed8"
     _MERGED_RANGE_EDGE = "#34d399"
@@ -83,6 +84,16 @@ class BeeBiteStage2Plotter:
 
         self._draw_candles(price_ax, window, x_positions)
         self._draw_volume(volume_ax, window, x_positions)
+
+        if stage1_event.hold_price is not None:
+            price_ax.axhline(
+                float(stage1_event.hold_price),
+                color=self._HOLD_COLOR,
+                linestyle="--",
+                linewidth=1.2,
+                alpha=0.9,
+                label="0.5 hold",
+            )
 
         for local_range in stage2_result.local_ranges:
             self._draw_range_rectangle(
