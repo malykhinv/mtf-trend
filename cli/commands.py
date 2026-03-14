@@ -257,6 +257,7 @@ def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Reg
         if start_scan_idx is None:
             resolved_regimes.append(regime)
             continue
+        peak_scan_idx = timestamp_to_index.get(int(regime.last_event.pump_peak_timestamp or 0), start_scan_idx)
 
         next_regime_start_ts: int | None = None
         if idx + 1 < len(regimes):
@@ -278,7 +279,14 @@ def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Reg
                 resolved_end_ts = timestamp_ms
                 resolved_reason = "dumped_below_hold"
                 break
-            if pump_peak_price > 0.0 and float(effective_highs[scan_idx]) > pump_peak_price:
+            if pump_peak_price > 0.0 and _is_significant_regime_breakout(
+                effective_highs=effective_highs,
+                highs=highs,
+                lows=lows,
+                peak_price=pump_peak_price,
+                peak_idx=peak_scan_idx,
+                breakout_idx=scan_idx,
+            ):
                 resolved_end_ts = timestamp_ms
                 resolved_reason = "new_high_after_regime"
                 break
@@ -300,6 +308,23 @@ def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Reg
             )
         )
     return resolved_regimes
+
+
+def _is_significant_regime_breakout(
+    *,
+    effective_highs: np.ndarray,
+    highs: np.ndarray,
+    lows: np.ndarray,
+    peak_price: float,
+    peak_idx: int,
+    breakout_idx: int,
+) -> bool:
+    breakout_excess = float(effective_highs[breakout_idx]) - peak_price
+    if breakout_excess <= 0.0:
+        return False
+    candle_sizes = highs[peak_idx : breakout_idx + 1] - lows[peak_idx : breakout_idx + 1]
+    mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+    return breakout_excess >= max(mean_candle_size, 1e-12)
 
 
 

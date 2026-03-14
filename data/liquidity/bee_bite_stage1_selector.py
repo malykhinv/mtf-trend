@@ -414,7 +414,13 @@ class BeeBiteStage1Selector:
                 regime_end_idx = idx
                 break
             if current_high > (current_peak_price + self._EPSILON):
-                if self._has_upper_hold_before_breakout(
+                breakout_is_significant = self._is_significant_breakout_above_main_high(
+                    prepared=prepared,
+                    peak_idx=current_peak_idx,
+                    breakout_idx=idx,
+                    main_high_price=current_peak_price,
+                )
+                if breakout_is_significant and self._has_upper_hold_before_breakout(
                     prepared=prepared,
                     peak_idx=current_peak_idx,
                     breakout_idx=idx,
@@ -423,6 +429,9 @@ class BeeBiteStage1Selector:
                 ):
                     regime_end_idx = idx
                     break
+                if not breakout_is_significant:
+                    idx += 1
+                    continue
                 current_peak_idx = idx
                 current_peak_price = current_high
                 regime_end_idx = min(
@@ -473,6 +482,21 @@ class BeeBiteStage1Selector:
             return False
         return True
 
+    def _is_significant_breakout_above_main_high(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        peak_idx: int,
+        breakout_idx: int,
+        main_high_price: float,
+    ) -> bool:
+        breakout_excess = self._effective_high_at(prepared=prepared, idx=breakout_idx) - main_high_price
+        if breakout_excess <= self._EPSILON:
+            return False
+        candle_sizes = prepared.highs[peak_idx : breakout_idx + 1] - prepared.lows[peak_idx : breakout_idx + 1]
+        mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+        return breakout_excess >= max(mean_candle_size, self._EPSILON)
+
     def _is_sleep_window_valid(
         self,
         *,
@@ -509,7 +533,6 @@ class BeeBiteStage1Selector:
         bars_since_peak = confirm_idx - candidate.peak_idx
         initial_pump_duration_bars = candidate.peak_idx - candidate.pump_start_idx
         post_peak_lows = prepared.lows[candidate.peak_idx + 1 : confirm_idx + 1]
-        post_peak_highs = self._effective_highs(prepared)[candidate.peak_idx + 1 : confirm_idx + 1]
         lowest_after_pump_offset = int(np.argmin(post_peak_lows))
         lowest_after_pump_idx = candidate.peak_idx + 1 + lowest_after_pump_offset
         lowest_after_pump = float(post_peak_lows[lowest_after_pump_offset])
@@ -558,9 +581,6 @@ class BeeBiteStage1Selector:
             return result
         if initial_pump_duration_bars > self._max_initial_pump_duration_bars:
             result.reason = "initial_pump_too_long"
-            return result
-        if np.any(post_peak_highs > (candidate.pump_peak_price + self._EPSILON)):
-            result.reason = "peak_invalidated_by_new_high"
             return result
         if bars_since_peak < self._min_confirm_delay_bars:
             result.reason = "confirm_before_min_hold"
