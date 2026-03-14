@@ -99,6 +99,7 @@ class BeeBiteStage2Detector:
     _LIQUIDITY_ZONE_RELATIVE_MARGIN = 0.35
     _LIQUIDITY_MIN_TOUCHES = 2
     _LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER = 0.15
+    _LIQUIDITY_ZONE_WIDTH_MULTIPLIER = 1.0
 
     def detect(
         self,
@@ -695,16 +696,20 @@ class BeeBiteStage2Detector:
             cluster_low = float(min(cluster_prices))
             cluster_high = float(max(cluster_prices))
             last_touch_idx = max(point_idx for point_idx, _ in cluster)
-            if self._is_liquidity_zone_swept(
+            zone_low, zone_high = self._project_liquidity_zone_bounds(
+                level_low=cluster_low,
+                level_high=cluster_high,
+                tolerance=tolerance,
+                side=side,
+            )
+            sweep_idx = self._resolve_liquidity_zone_sweep_idx(
                 prepared=prepared,
                 segment_end_idx=segment_end_idx,
                 last_touch_idx=last_touch_idx,
-                zone_low=cluster_low,
-                zone_high=cluster_high,
-                tolerance=tolerance,
+                zone_low=zone_low,
+                zone_high=zone_high,
                 side=side,
-            ):
-                continue
+            )
 
             score = (
                 len(cluster),
@@ -715,22 +720,36 @@ class BeeBiteStage2Detector:
                 continue
 
             start_idx = min(point_idx for point_idx, _ in cluster)
+            end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
             best_score = score
             best_zone = BeeBiteStage2LiquidityZone(
                 side=side,
                 start_idx=start_idx,
                 start_timestamp=int(prepared.timestamps[start_idx]),
-                end_idx=segment_end_idx,
-                end_timestamp=int(prepared.timestamps[segment_end_idx]),
+                end_idx=end_idx,
+                end_timestamp=int(prepared.timestamps[end_idx]),
                 last_touch_idx=last_touch_idx,
                 last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
-                low=cluster_low,
-                high=cluster_high,
+                low=zone_low,
+                high=zone_high,
                 touch_count=len(cluster),
             )
         return best_zone
 
-    def _is_liquidity_zone_swept(
+    def _project_liquidity_zone_bounds(
+        self,
+        *,
+        level_low: float,
+        level_high: float,
+        tolerance: float,
+        side: str,
+    ) -> tuple[float, float]:
+        zone_width = max((level_high - level_low) * self._LIQUIDITY_ZONE_WIDTH_MULTIPLIER, tolerance, self._EPSILON)
+        if side == "upper":
+            return float(level_high), float(level_high + zone_width)
+        return float(level_low - zone_width), float(level_low)
+
+    def _resolve_liquidity_zone_sweep_idx(
         self,
         *,
         prepared: _PreparedStage2Frame,
@@ -738,19 +757,21 @@ class BeeBiteStage2Detector:
         last_touch_idx: int,
         zone_low: float,
         zone_high: float,
-        tolerance: float,
         side: str,
-    ) -> bool:
+    ) -> int | None:
         if last_touch_idx >= segment_end_idx:
-            return False
+            return None
 
-        sweep_tolerance = max(tolerance * self._LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER, self._EPSILON)
         if side == "upper":
-            later_highs = prepared.highs[last_touch_idx + 1 : segment_end_idx + 1]
-            return bool(later_highs.size > 0 and float(np.max(later_highs)) > (zone_high + sweep_tolerance))
+            for idx in range(last_touch_idx + 1, segment_end_idx + 1):
+                if float(prepared.highs[idx]) >= (zone_low - self._EPSILON):
+                    return idx
+            return None
 
-        later_lows = prepared.lows[last_touch_idx + 1 : segment_end_idx + 1]
-        return bool(later_lows.size > 0 and float(np.min(later_lows)) < (zone_low - sweep_tolerance))
+        for idx in range(last_touch_idx + 1, segment_end_idx + 1):
+            if float(prepared.lows[idx]) <= (zone_high + self._EPSILON):
+                return idx
+        return None
 
     def _extract_swing_highs(
         self,
