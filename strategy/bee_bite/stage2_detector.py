@@ -78,10 +78,6 @@ class BeeBiteStage2Detector:
     _DEFAULT_BREAKOUT_MULTIPLIER = 1.0
     _RANGE_OVERLAP_THRESHOLD = 0.5
     _MIN_BODY_RATIO_FOR_BREAKOUT = 0.35
-    _LOW_CLUSTER_TOLERANCE_TO_CANDLE = 0.25
-    _LOW_CLUSTER_TOLERANCE_TO_RANGE = 0.03
-    _LOW_CLUSTER_MAX_RELATIVE_LEVEL = 0.65
-
     def detect(
         self,
         *,
@@ -384,10 +380,10 @@ class BeeBiteStage2Detector:
         return float(prepared.highs[idx])
 
     def _effective_lows(self, prepared: _PreparedStage2Frame) -> np.ndarray:
-        body_lows = np.minimum(prepared.opens, prepared.closes)
-        body_sizes = np.abs(prepared.closes - prepared.opens)
-        lower_wicks = body_lows - prepared.lows
-        return np.where(lower_wicks > body_sizes, body_lows, prepared.lows)
+        # Stage-2 box lows should reflect the obvious swing low that traders place
+        # stops behind, so we preserve wick lows instead of smoothing them to body
+        # lows as we do for some peak-related logic.
+        return prepared.lows.copy()
 
     def _resolve_balance_low(
         self,
@@ -405,51 +401,36 @@ class BeeBiteStage2Detector:
         if effective_lows.size <= 2:
             return raw_min_low
 
-        candle_sizes = prepared.highs[segment_start_idx : segment_end_idx + 1] - prepared.lows[segment_start_idx : segment_end_idx + 1]
-        mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
-        full_range_height = max(range_high - raw_min_low, self._EPSILON)
-        tolerance = max(
-            mean_candle_size * self._LOW_CLUSTER_TOLERANCE_TO_CANDLE,
-            full_range_height * self._LOW_CLUSTER_TOLERANCE_TO_RANGE,
-            self._EPSILON,
+        swing_lows = self._extract_swing_lows(
+            effective_lows=effective_lows,
+            segment_start_idx=segment_start_idx,
         )
+        if swing_lows:
+            return float(min(item[1] for item in swing_lows))
+        return raw_min_low
 
-        max_candidate_low = raw_min_low + (full_range_height * self._LOW_CLUSTER_MAX_RELATIVE_LEVEL)
-        candidate_lows = effective_lows[effective_lows <= max_candidate_low]
-        if candidate_lows.size == 0:
-            candidate_lows = effective_lows
+    def _extract_swing_lows(
+        self,
+        *,
+        effective_lows: np.ndarray,
+        segment_start_idx: int,
+    ) -> list[tuple[int, float]]:
+        segment_length = int(effective_lows.size)
+        if segment_length == 0:
+            return []
+        if segment_length < 3:
+            return [(segment_start_idx + idx, float(price)) for idx, price in enumerate(effective_lows)]
 
-        best_cluster_count = 0
-        best_cluster_median = raw_min_low
-        best_cluster_spread = float("inf")
-        best_cluster_mean = raw_min_low
+        swing_lows: list[tuple[int, float]] = []
+        for local_idx in range(1, segment_length - 1):
+            current_low = float(effective_lows[local_idx])
+            prev_low = float(effective_lows[local_idx - 1])
+            next_low = float(effective_lows[local_idx + 1])
+            if current_low <= prev_low and current_low <= next_low and (current_low < prev_low or current_low < next_low):
+                swing_lows.append((segment_start_idx + local_idx, current_low))
 
-        for candidate_low in candidate_lows:
-            cluster = effective_lows[np.abs(effective_lows - candidate_low) <= tolerance]
-            if cluster.size == 0:
-                continue
-            cluster_count = int(cluster.size)
-            cluster_median = float(np.median(cluster))
-            cluster_spread = float(np.std(cluster)) if cluster.size > 1 else 0.0
-            cluster_mean = float(np.mean(cluster))
+        if swing_lows:
+            return swing_lows
 
-            if cluster_count > best_cluster_count:
-                best_cluster_count = cluster_count
-                best_cluster_median = cluster_median
-                best_cluster_spread = cluster_spread
-                best_cluster_mean = cluster_mean
-                continue
-            if cluster_count == best_cluster_count and cluster_spread < best_cluster_spread:
-                best_cluster_median = cluster_median
-                best_cluster_spread = cluster_spread
-                best_cluster_mean = cluster_mean
-                continue
-            if (
-                cluster_count == best_cluster_count
-                and abs(cluster_spread - best_cluster_spread) <= self._EPSILON
-                and cluster_mean < best_cluster_mean
-            ):
-                best_cluster_median = cluster_median
-                best_cluster_mean = cluster_mean
-
-        return float(best_cluster_median)
+        lowest_idx = int(np.argmin(effective_lows))
+        return [(segment_start_idx + lowest_idx, float(effective_lows[lowest_idx]))]

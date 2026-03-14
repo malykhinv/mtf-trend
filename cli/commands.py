@@ -315,6 +315,27 @@ def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Reg
     return resolved_regimes
 
 
+def _resolve_stage2_analysis_end_timestamp(*, frame: pd.DataFrame, regime: _Stage1Regime) -> int:
+    if frame.empty or regime.regime_end_reason == "last_detected":
+        return int(regime.regime_end_timestamp)
+
+    prepared = frame.loc[:, ["timestamp"]].copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp"])
+    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    if prepared.empty:
+        return int(regime.regime_end_timestamp)
+
+    timestamps = prepared["timestamp"].astype("int64").to_numpy()
+    matches = np.where(timestamps == int(regime.regime_end_timestamp))[0]
+    if matches.size == 0:
+        return int(regime.regime_end_timestamp)
+    end_idx = int(matches[-1])
+    if end_idx <= 0:
+        return int(regime.regime_end_timestamp)
+    return int(timestamps[end_idx - 1])
+
+
 def _is_significant_regime_breakout(
     *,
     effective_highs: np.ndarray,
@@ -1951,7 +1972,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 symbol=symbol,
                 frame=frame,
                 stage1=stage1_event,
-                analysis_end_timestamp=regime.regime_end_timestamp,
+                analysis_end_timestamp=_resolve_stage2_analysis_end_timestamp(frame=frame, regime=regime),
             )
             rows.extend(
                 _stage2_result_to_rows(
