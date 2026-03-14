@@ -57,7 +57,6 @@ class BeeBiteStage1Plotter:
             raise ValueError("Stage-1 plot received an empty frame after normalization.")
 
         confirmed_idx = self._timestamp_to_index(prepared, event.stage1_confirmed_timestamp)
-        pump_start_idx = self._timestamp_to_index(prepared, event.pump_start_timestamp)
         hold_base_idx = (
             self._timestamp_to_index(prepared, event.hold_base_timestamp)
             if event.hold_base_timestamp is not None
@@ -68,6 +67,12 @@ class BeeBiteStage1Plotter:
             self._timestamp_to_index(prepared, window_end_timestamp)
             if window_end_timestamp is not None
             else confirmed_idx
+        )
+        pump_start_idx, pump_base_price = self._resolve_display_start(
+            prepared=prepared,
+            pump_start_timestamp=event.pump_start_timestamp,
+            fallback_pump_base_price=event.pump_base_price,
+            window_end_idx=explicit_window_end_idx,
         )
         pump_peak_idx, pump_peak_price = self._resolve_display_peak(
             prepared=prepared,
@@ -129,7 +134,7 @@ class BeeBiteStage1Plotter:
                 label="pump peak",
             )
 
-        self._draw_marker(price_ax, pump_start_idx - index_shift, event.pump_base_price, self._START_COLOR, "pump start")
+        self._draw_marker(price_ax, pump_start_idx - index_shift, pump_base_price, self._START_COLOR, "pump start")
         self._draw_marker(price_ax, pump_peak_idx - index_shift, pump_peak_price, self._PEAK_COLOR, "pump peak marker")
         if (
             hold_base_idx is not None
@@ -158,7 +163,6 @@ class BeeBiteStage1Plotter:
             )
 
         stage1_confirmed_text = _format_ts_label(event.stage1_confirmed_timestamp)
-        pump_base_price = float(event.pump_base_price or 0.0)
         pump_pct = (((pump_peak_price / pump_base_price) - 1.0) * 100.0) if pump_peak_price and pump_base_price > 0.0 else 0.0
         retrace_pct = 0.0
         if lowest_after_pump is not None and pump_peak_price is not None and hold_base_price > 0.0 and pump_peak_price > hold_base_price:
@@ -239,6 +243,59 @@ class BeeBiteStage1Plotter:
     def _draw_volume(self, axis, frame: pd.DataFrame, x_positions: list[int]) -> None:
         colors = [self._UP_COLOR if row.close >= row.open else self._DOWN_COLOR for row in frame.itertuples(index=False)]
         axis.bar(x_positions, frame["volume"], color=colors, width=self._CANDLE_WIDTH, alpha=0.85)
+
+    @staticmethod
+    def _resolve_display_start(
+        *,
+        prepared: pd.DataFrame,
+        pump_start_timestamp: int | None,
+        fallback_pump_base_price: float | None,
+        window_end_idx: int,
+    ) -> tuple[int, float]:
+        start_idx = BeeBiteStage1Plotter._timestamp_to_index(prepared, pump_start_timestamp)
+        opens = prepared["open"].astype("float64").to_numpy()
+        highs = prepared["high"].astype("float64").to_numpy()
+        lows = prepared["low"].astype("float64").to_numpy()
+        closes = prepared["close"].astype("float64").to_numpy()
+        volumes = prepared["volume"].astype("float64").to_numpy()
+        quote_volumes = closes * volumes
+
+        display_start_idx = start_idx
+        display_base_price = float(fallback_pump_base_price or lows[start_idx])
+        search_end_idx = min(window_end_idx, start_idx + 10)
+        for idx in range(start_idx + 1, search_end_idx + 1):
+            history_start_idx = max(start_idx, idx - 6)
+            if history_start_idx >= idx:
+                continue
+            prev_ranges = highs[history_start_idx:idx] - lows[history_start_idx:idx]
+            prev_bodies = np.abs(closes[history_start_idx:idx] - opens[history_start_idx:idx])
+            prev_quote_volumes = quote_volumes[history_start_idx:idx]
+            if prev_ranges.size == 0 or prev_bodies.size == 0 or prev_quote_volumes.size == 0:
+                continue
+
+            median_range = float(np.median(prev_ranges))
+            median_body = float(np.median(prev_bodies))
+            median_quote_volume = float(np.median(prev_quote_volumes))
+            current_range = float(highs[idx] - lows[idx])
+            current_body = float(abs(closes[idx] - opens[idx]))
+            current_quote_volume = float(quote_volumes[idx])
+            prior_high = float(np.max(highs[start_idx:idx]))
+            start_close = float(closes[start_idx])
+            max_prior_close = float(np.max(closes[start_idx:idx]))
+            prior_close_drift = ((max_prior_close / start_close) - 1.0) if start_close > 0.0 else 0.0
+
+            if (
+                current_range >= max(median_range * 6.0, 1e-12)
+                and current_body >= max(median_body * 6.0, 1e-12)
+                and current_quote_volume >= max(median_quote_volume * 10.0, 1e-12)
+                and float(closes[idx]) > prior_high
+                and prior_close_drift < 0.01
+            ):
+                display_start_idx = idx
+                display_base_price = float(lows[idx])
+                break
+
+        return display_start_idx, display_base_price
 
     @staticmethod
     def _resolve_display_peak(

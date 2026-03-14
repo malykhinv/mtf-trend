@@ -1597,6 +1597,12 @@ def _resolve_stage1_display_metrics(
             prepared,
             window_end_timestamp if window_end_timestamp is not None else event.stage1_confirmed_timestamp,
         )
+        display_start_idx, display_pump_base_price = BeeBiteStage1Plotter._resolve_display_start(
+            prepared=prepared,
+            pump_start_timestamp=event.pump_start_timestamp,
+            fallback_pump_base_price=event.pump_base_price,
+            window_end_idx=explicit_window_end_idx,
+        )
         display_peak_idx, display_peak_price = BeeBiteStage1Plotter._resolve_display_peak(
             prepared=prepared,
             pump_peak_timestamp=event.pump_peak_timestamp,
@@ -1617,7 +1623,7 @@ def _resolve_stage1_display_metrics(
         if display_peak_price is not None and hold_base_price > 0.0
         else event.hold_price
     )
-    pump_base_price = float(event.pump_base_price or 0.0)
+    pump_base_price = float(display_pump_base_price or 0.0)
     display_pump_percent = (
         (display_peak_price / pump_base_price) - 1.0
         if display_peak_price is not None and pump_base_price > 0.0
@@ -1627,9 +1633,12 @@ def _resolve_stage1_display_metrics(
     if lowest_after_pump is not None and display_peak_price is not None and hold_base_price > 0.0 and display_peak_price > hold_base_price:
         display_retain_ratio = (lowest_after_pump - hold_base_price) / max(display_peak_price - hold_base_price, 1e-12)
 
+    display_pump_start_timestamp = int(prepared.iloc[display_start_idx]["timestamp"])
     display_peak_timestamp = int(prepared.iloc[display_peak_idx]["timestamp"])
     display_lowest_timestamp = int(prepared.iloc[lowest_after_pump_idx]["timestamp"]) if lowest_after_pump_idx is not None else None
     return {
+        "display_pump_start_timestamp": display_pump_start_timestamp,
+        "display_pump_base_price": display_pump_base_price,
         "display_pump_peak_timestamp": display_peak_timestamp,
         "display_pump_peak_price": display_peak_price,
         "display_hold_price": display_hold_price,
