@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 
 from constants import (
+    BEE_BITE_STAGE1_MAX_CONFIRM_DELAY_BARS_15M,
+    BEE_BITE_STAGE1_MIN_CONFIRM_DELAY_BARS_15M,
     BEE_BITE_STAGE1_MIN_PUMP_PCT,
     BEE_BITE_STAGE1_MIN_RETAIN_RATIO,
     BEE_BITE_STAGE1_MIN_VOLUME_RATIO,
@@ -71,6 +73,8 @@ class BeeBiteStage1Selector:
         pump_window_bars: int = BEE_BITE_STAGE1_PUMP_WINDOW_BARS,
         pump_start_lookback_bars: int = BEE_BITE_STAGE1_PUMP_START_LOOKBACK_BARS,
         volume_window_bars: int = BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M,
+        min_confirm_delay_bars: int = BEE_BITE_STAGE1_MIN_CONFIRM_DELAY_BARS_15M,
+        max_confirm_delay_bars: int = BEE_BITE_STAGE1_MAX_CONFIRM_DELAY_BARS_15M,
     ) -> None:
         self._min_volume_usdt = float(min_volume_usdt)
         self._min_pump_pct = float(min_pump_pct)
@@ -80,6 +84,8 @@ class BeeBiteStage1Selector:
         self._pump_window_bars = int(pump_window_bars)
         self._pump_start_lookback_bars = int(max(pump_start_lookback_bars, pump_window_bars))
         self._volume_window_bars = int(volume_window_bars)
+        self._min_confirm_delay_bars = int(max(min_confirm_delay_bars, 1))
+        self._max_confirm_delay_bars = int(max(max_confirm_delay_bars, self._min_confirm_delay_bars))
 
     def evaluate_symbol(self, *, symbol: str, frame: pd.DataFrame) -> BeeBiteStage1Result:
         prepared = self._prepare_frame(symbol=symbol, frame=frame)
@@ -90,42 +96,72 @@ class BeeBiteStage1Selector:
         saw_retain_candidate = False
         saw_sleep_below_hold_failure = False
         saw_confirm_band_failure = False
+        saw_confirm_too_early = False
+        saw_confirm_too_late = False
+        saw_peak_invalidated = False
         saw_volume_ratio_candidate = False
         saw_volume_24h_candidate = False
         latest_match: BeeBiteStage1Result | None = None
         latest_rolling_volume_usdt = self._safe_float(prepared.rolling_volume[-1])
+        last_frame_idx = len(prepared.timestamps) - 1
 
         for candidate in self._iter_stage1_candidates(prepared=prepared):
-            evaluation = self._evaluate_candidate_at_index(
-                symbol=symbol,
-                prepared=prepared,
-                candidate=candidate,
-                confirm_idx=len(prepared.timestamps) - 1,
-                rolling_volume_usdt=latest_rolling_volume_usdt,
-            )
-            if evaluation is None:
+            confirm_start_idx = candidate.peak_idx + self._min_confirm_delay_bars
+            confirm_end_idx = min(candidate.peak_idx + self._max_confirm_delay_bars, last_frame_idx)
+            if confirm_start_idx > confirm_end_idx:
+                saw_confirm_too_late = True
                 continue
 
-            if evaluation.retain_ratio is not None and evaluation.retain_ratio >= self._min_retain_ratio:
-                saw_retain_candidate = True
-            if evaluation.reason == "sleep_closes_not_below_hold_majority":
-                saw_sleep_below_hold_failure = True
-            if evaluation.reason == "confirm_candle_outside_pump_band":
-                saw_confirm_band_failure = True
-            if evaluation.post_pump_volume_ratio is not None and evaluation.post_pump_volume_ratio >= self._min_volume_ratio:
-                saw_volume_ratio_candidate = True
-            if evaluation.rolling_volume_usdt is not None and evaluation.rolling_volume_usdt >= self._min_volume_usdt:
-                saw_volume_24h_candidate = True
+            candidate_passed = False
+            for confirm_idx in range(confirm_start_idx, confirm_end_idx + 1):
+                rolling_volume_usdt = self._safe_float(prepared.rolling_volume[min(confirm_idx, last_frame_idx)])
+                if confirm_idx == last_frame_idx:
+                    rolling_volume_usdt = latest_rolling_volume_usdt
+                evaluation = self._evaluate_candidate_at_index(
+                    symbol=symbol,
+                    prepared=prepared,
+                    candidate=candidate,
+                    confirm_idx=confirm_idx,
+                    rolling_volume_usdt=rolling_volume_usdt,
+                )
+                if evaluation is None:
+                    continue
 
-            if evaluation.passed:
+                if evaluation.retain_ratio is not None and evaluation.retain_ratio >= self._min_retain_ratio:
+                    saw_retain_candidate = True
+                if evaluation.reason == "sleep_closes_not_below_hold_majority":
+                    saw_sleep_below_hold_failure = True
+                if evaluation.reason == "confirm_candle_outside_pump_band":
+                    saw_confirm_band_failure = True
+                if evaluation.reason == "confirm_before_min_hold":
+                    saw_confirm_too_early = True
+                if evaluation.reason == "confirm_after_max_hold":
+                    saw_confirm_too_late = True
+                if evaluation.reason == "peak_invalidated_by_new_high":
+                    saw_peak_invalidated = True
+                if evaluation.post_pump_volume_ratio is not None and evaluation.post_pump_volume_ratio >= self._min_volume_ratio:
+                    saw_volume_ratio_candidate = True
+                if evaluation.rolling_volume_usdt is not None and evaluation.rolling_volume_usdt >= self._min_volume_usdt:
+                    saw_volume_24h_candidate = True
+
+                if evaluation.reason in {"retain_below_half", "peak_invalidated_by_new_high"}:
+                    break
+                if not evaluation.passed:
+                    continue
+
+                candidate_passed = True
                 if latest_match is None:
                     latest_match = evaluation
                 elif (
-                    evaluation.pump_peak_timestamp is not None
-                    and latest_match.pump_peak_timestamp is not None
-                    and evaluation.pump_peak_timestamp >= latest_match.pump_peak_timestamp
+                    evaluation.stage1_confirmed_timestamp is not None
+                    and latest_match.stage1_confirmed_timestamp is not None
+                    and evaluation.stage1_confirmed_timestamp >= latest_match.stage1_confirmed_timestamp
                 ):
                     latest_match = evaluation
+                break
+
+            if not candidate_passed and confirm_end_idx < last_frame_idx:
+                saw_confirm_too_late = True
 
         if latest_match is not None:
             return latest_match
@@ -137,6 +173,12 @@ class BeeBiteStage1Selector:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="retain_below_half")
         if saw_sleep_below_hold_failure:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="sleep_closes_not_below_hold_majority")
+        if saw_peak_invalidated:
+            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="peak_invalidated_by_new_high")
+        if saw_confirm_too_early:
+            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="confirm_before_min_hold")
+        if saw_confirm_too_late:
+            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="confirm_after_max_hold")
         if saw_confirm_band_failure:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="confirm_candle_outside_pump_band")
         if not saw_volume_ratio_candidate:
@@ -160,7 +202,12 @@ class BeeBiteStage1Selector:
             if candidate_key in seen_keys:
                 continue
 
-            for confirm_idx in range(candidate.peak_idx + 1, len(prepared.timestamps)):
+            confirm_start_idx = candidate.peak_idx + self._min_confirm_delay_bars
+            confirm_end_idx = min(candidate.peak_idx + self._max_confirm_delay_bars, len(prepared.timestamps) - 1)
+            if confirm_start_idx > confirm_end_idx:
+                continue
+
+            for confirm_idx in range(confirm_start_idx, confirm_end_idx + 1):
                 rolling_volume_usdt = self._safe_float(prepared.rolling_volume[confirm_idx])
                 evaluation = self._evaluate_candidate_at_index(
                     symbol=symbol,
@@ -171,7 +218,7 @@ class BeeBiteStage1Selector:
                 )
                 if evaluation is None:
                     continue
-                if evaluation.reason == "retain_below_half":
+                if evaluation.reason in {"retain_below_half", "peak_invalidated_by_new_high"}:
                     break
                 if not evaluation.passed:
                     continue
@@ -358,7 +405,9 @@ class BeeBiteStage1Selector:
         if confirm_idx <= candidate.peak_idx or confirm_idx >= len(prepared.timestamps):
             return None
 
+        bars_since_peak = confirm_idx - candidate.peak_idx
         post_peak_lows = prepared.lows[candidate.peak_idx + 1 : confirm_idx + 1]
+        post_peak_highs = prepared.highs[candidate.peak_idx + 1 : confirm_idx + 1]
         lowest_after_pump_offset = int(np.argmin(post_peak_lows))
         lowest_after_pump_idx = candidate.peak_idx + 1 + lowest_after_pump_offset
         lowest_after_pump = float(post_peak_lows[lowest_after_pump_offset])
@@ -404,6 +453,15 @@ class BeeBiteStage1Selector:
 
         if lowest_after_pump < hold_price:
             result.reason = "retain_below_half"
+            return result
+        if np.any(post_peak_highs > (candidate.pump_peak_price + self._EPSILON)):
+            result.reason = "peak_invalidated_by_new_high"
+            return result
+        if bars_since_peak < self._min_confirm_delay_bars:
+            result.reason = "confirm_before_min_hold"
+            return result
+        if bars_since_peak > self._max_confirm_delay_bars:
+            result.reason = "confirm_after_max_hold"
             return result
         if sleep_closes_below_hold_ratio <= 0.5:
             result.reason = "sleep_closes_not_below_hold_majority"
