@@ -9,6 +9,7 @@ import pandas as pd
 
 from constants import (
     BEE_BITE_STAGE1_MAX_CONFIRM_DELAY_BARS_15M,
+    BEE_BITE_STAGE1_MAX_INITIAL_PUMP_DURATION_BARS_15M,
     BEE_BITE_STAGE1_MIN_CONFIRM_DELAY_BARS_15M,
     BEE_BITE_STAGE1_MIN_PUMP_PCT,
     BEE_BITE_STAGE1_MIN_RETAIN_RATIO,
@@ -74,6 +75,7 @@ class BeeBiteStage1Selector:
         pump_window_bars: int = BEE_BITE_STAGE1_PUMP_WINDOW_BARS,
         pump_start_lookback_bars: int = BEE_BITE_STAGE1_PUMP_START_LOOKBACK_BARS,
         volume_window_bars: int = BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M,
+        max_initial_pump_duration_bars: int = BEE_BITE_STAGE1_MAX_INITIAL_PUMP_DURATION_BARS_15M,
         min_confirm_delay_bars: int = BEE_BITE_STAGE1_MIN_CONFIRM_DELAY_BARS_15M,
         max_confirm_delay_bars: int = BEE_BITE_STAGE1_MAX_CONFIRM_DELAY_BARS_15M,
     ) -> None:
@@ -85,6 +87,7 @@ class BeeBiteStage1Selector:
         self._pump_window_bars = int(pump_window_bars)
         self._pump_start_lookback_bars = int(max(pump_start_lookback_bars, pump_window_bars))
         self._volume_window_bars = int(volume_window_bars)
+        self._max_initial_pump_duration_bars = int(max(max_initial_pump_duration_bars, 1))
         self._min_confirm_delay_bars = int(max(min_confirm_delay_bars, 1))
         self._max_confirm_delay_bars = int(max(max_confirm_delay_bars, self._min_confirm_delay_bars))
 
@@ -99,6 +102,7 @@ class BeeBiteStage1Selector:
         saw_confirm_band_failure = False
         saw_confirm_too_early = False
         saw_confirm_too_late = False
+        saw_initial_pump_too_long = False
         saw_peak_invalidated = False
         saw_volume_ratio_candidate = False
         saw_volume_24h_candidate = False
@@ -138,6 +142,8 @@ class BeeBiteStage1Selector:
                     saw_confirm_too_early = True
                 if evaluation.reason == "confirm_after_max_hold":
                     saw_confirm_too_late = True
+                if evaluation.reason == "initial_pump_too_long":
+                    saw_initial_pump_too_long = True
                 if evaluation.reason == "peak_invalidated_by_new_high":
                     saw_peak_invalidated = True
                 if evaluation.post_pump_volume_ratio is not None and evaluation.post_pump_volume_ratio >= self._min_volume_ratio:
@@ -174,6 +180,8 @@ class BeeBiteStage1Selector:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="retain_below_half")
         if saw_sleep_below_hold_failure:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="sleep_closes_not_below_hold_majority")
+        if saw_initial_pump_too_long:
+            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="initial_pump_too_long")
         if saw_peak_invalidated:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="peak_invalidated_by_new_high")
         if saw_confirm_too_early:
@@ -336,6 +344,9 @@ class BeeBiteStage1Selector:
             if pump_percent < self._min_pump_pct:
                 start_idx += 1
                 continue
+            if (peak_idx - pump_start_idx) > self._max_initial_pump_duration_bars:
+                start_idx += 1
+                continue
 
             initial_candidate = _Stage1Candidate(
                 sleep_start_idx=pump_start_idx - self._sleep_window_bars,
@@ -496,6 +507,7 @@ class BeeBiteStage1Selector:
             return None
 
         bars_since_peak = confirm_idx - candidate.peak_idx
+        initial_pump_duration_bars = candidate.peak_idx - candidate.pump_start_idx
         post_peak_lows = prepared.lows[candidate.peak_idx + 1 : confirm_idx + 1]
         post_peak_highs = self._effective_highs(prepared)[candidate.peak_idx + 1 : confirm_idx + 1]
         lowest_after_pump_offset = int(np.argmin(post_peak_lows))
@@ -543,6 +555,9 @@ class BeeBiteStage1Selector:
 
         if lowest_after_pump < hold_price:
             result.reason = "retain_below_half"
+            return result
+        if initial_pump_duration_bars > self._max_initial_pump_duration_bars:
+            result.reason = "initial_pump_too_long"
             return result
         if np.any(post_peak_highs > (candidate.pump_peak_price + self._EPSILON)):
             result.reason = "peak_invalidated_by_new_high"
