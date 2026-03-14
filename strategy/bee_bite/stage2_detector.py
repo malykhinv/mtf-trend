@@ -46,6 +46,20 @@ class BeeBiteStage2MergedRange:
 
 
 @dataclass(slots=True, frozen=True)
+class BeeBiteStage2LiquidityZone:
+    side: str
+    start_idx: int
+    start_timestamp: int
+    end_idx: int
+    end_timestamp: int
+    last_touch_idx: int
+    last_touch_timestamp: int
+    low: float
+    high: float
+    touch_count: int
+
+
+@dataclass(slots=True, frozen=True)
 class BeeBiteStage2Result:
     symbol: str
     passed: bool
@@ -55,6 +69,7 @@ class BeeBiteStage2Result:
     confirmed_highs: tuple[BeeBiteStage2ConfirmedHigh, ...] = ()
     local_ranges: tuple[BeeBiteStage2Range, ...] = ()
     merged_ranges: tuple[BeeBiteStage2MergedRange, ...] = ()
+    liquidity_zones: tuple[BeeBiteStage2LiquidityZone, ...] = ()
     box_start_timestamp: int | None = None
     box_end_timestamp: int | None = None
     box_high: float | None = None
@@ -79,6 +94,11 @@ class BeeBiteStage2Detector:
     _DEFAULT_BREAKOUT_MULTIPLIER = 1.0
     _RANGE_OVERLAP_THRESHOLD = 0.5
     _MIN_BODY_RATIO_FOR_BREAKOUT = 0.35
+    _LIQUIDITY_CLUSTER_TOLERANCE_TO_CANDLE = 0.35
+    _LIQUIDITY_CLUSTER_TOLERANCE_TO_RANGE = 0.015
+    _LIQUIDITY_ZONE_RELATIVE_MARGIN = 0.35
+    _LIQUIDITY_MIN_TOUCHES = 2
+    _LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER = 0.15
     def detect(
         self,
         *,
@@ -191,6 +211,10 @@ class BeeBiteStage2Detector:
 
         merged_ranges = self._merge_ranges(local_ranges)
         active_box = merged_ranges[-1]
+        liquidity_zones = self._resolve_active_liquidity_zones(
+            prepared=prepared,
+            active_box=active_box,
+        )
 
         return BeeBiteStage2Result(
             symbol=symbol,
@@ -201,6 +225,7 @@ class BeeBiteStage2Detector:
             confirmed_highs=tuple(confirmed_highs),
             local_ranges=tuple(local_ranges),
             merged_ranges=tuple(merged_ranges),
+            liquidity_zones=tuple(liquidity_zones),
             box_start_timestamp=active_box.start_timestamp,
             box_end_timestamp=active_box.end_timestamp,
             box_high=active_box.high,
@@ -465,3 +490,173 @@ class BeeBiteStage2Detector:
 
         lowest_idx = int(np.argmin(effective_lows))
         return [(segment_start_idx + lowest_idx, float(effective_lows[lowest_idx]))]
+
+    def _resolve_active_liquidity_zones(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        active_box: BeeBiteStage2MergedRange,
+    ) -> list[BeeBiteStage2LiquidityZone]:
+        segment_start_idx = int(active_box.start_idx)
+        segment_end_idx = int(active_box.end_idx)
+        if segment_end_idx <= segment_start_idx:
+            return []
+
+        segment_highs = prepared.highs[segment_start_idx : segment_end_idx + 1]
+        segment_lows = prepared.lows[segment_start_idx : segment_end_idx + 1]
+        candle_sizes = segment_highs - segment_lows
+        mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
+        range_height = max(float(active_box.high - active_box.low), self._EPSILON)
+        tolerance = max(
+            mean_candle_size * self._LIQUIDITY_CLUSTER_TOLERANCE_TO_CANDLE,
+            range_height * self._LIQUIDITY_CLUSTER_TOLERANCE_TO_RANGE,
+            self._EPSILON,
+        )
+
+        upper_zone = self._resolve_liquidity_zone(
+            prepared=prepared,
+            segment_start_idx=segment_start_idx,
+            segment_end_idx=segment_end_idx,
+            box_low=float(active_box.low),
+            box_high=float(active_box.high),
+            tolerance=tolerance,
+            side="upper",
+        )
+        lower_zone = self._resolve_liquidity_zone(
+            prepared=prepared,
+            segment_start_idx=segment_start_idx,
+            segment_end_idx=segment_end_idx,
+            box_low=float(active_box.low),
+            box_high=float(active_box.high),
+            tolerance=tolerance,
+            side="lower",
+        )
+        return [zone for zone in (upper_zone, lower_zone) if zone is not None]
+
+    def _resolve_liquidity_zone(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        segment_start_idx: int,
+        segment_end_idx: int,
+        box_low: float,
+        box_high: float,
+        tolerance: float,
+        side: str,
+    ) -> BeeBiteStage2LiquidityZone | None:
+        range_height = max(box_high - box_low, self._EPSILON)
+        if side == "upper":
+            threshold = box_high - (range_height * self._LIQUIDITY_ZONE_RELATIVE_MARGIN)
+            swing_points = self._extract_swing_highs(
+                highs=prepared.highs[segment_start_idx : segment_end_idx + 1],
+                segment_start_idx=segment_start_idx,
+            )
+            filtered_points = [point for point in swing_points if point[1] >= threshold]
+        else:
+            threshold = box_low + (range_height * self._LIQUIDITY_ZONE_RELATIVE_MARGIN)
+            swing_points = self._extract_swing_lows(
+                effective_lows=prepared.lows[segment_start_idx : segment_end_idx + 1],
+                segment_start_idx=segment_start_idx,
+            )
+            filtered_points = [point for point in swing_points if point[1] <= threshold]
+
+        if len(filtered_points) < self._LIQUIDITY_MIN_TOUCHES:
+            return None
+
+        best_zone: BeeBiteStage2LiquidityZone | None = None
+        best_score: tuple[int, int, float] | None = None
+        for anchor_idx, anchor_price in filtered_points:
+            cluster = [
+                (point_idx, point_price)
+                for point_idx, point_price in filtered_points
+                if abs(point_price - anchor_price) <= tolerance
+            ]
+            if len(cluster) < self._LIQUIDITY_MIN_TOUCHES:
+                continue
+
+            cluster_prices = [price for _, price in cluster]
+            cluster_low = float(min(cluster_prices))
+            cluster_high = float(max(cluster_prices))
+            last_touch_idx = max(point_idx for point_idx, _ in cluster)
+            if self._is_liquidity_zone_swept(
+                prepared=prepared,
+                segment_end_idx=segment_end_idx,
+                last_touch_idx=last_touch_idx,
+                zone_low=cluster_low,
+                zone_high=cluster_high,
+                tolerance=tolerance,
+                side=side,
+            ):
+                continue
+
+            score = (
+                len(cluster),
+                last_touch_idx,
+                -float(cluster_high - cluster_low),
+            )
+            if best_score is not None and score <= best_score:
+                continue
+
+            start_idx = min(point_idx for point_idx, _ in cluster)
+            best_score = score
+            best_zone = BeeBiteStage2LiquidityZone(
+                side=side,
+                start_idx=start_idx,
+                start_timestamp=int(prepared.timestamps[start_idx]),
+                end_idx=segment_end_idx,
+                end_timestamp=int(prepared.timestamps[segment_end_idx]),
+                last_touch_idx=last_touch_idx,
+                last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
+                low=cluster_low,
+                high=cluster_high,
+                touch_count=len(cluster),
+            )
+        return best_zone
+
+    def _is_liquidity_zone_swept(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        segment_end_idx: int,
+        last_touch_idx: int,
+        zone_low: float,
+        zone_high: float,
+        tolerance: float,
+        side: str,
+    ) -> bool:
+        if last_touch_idx >= segment_end_idx:
+            return False
+
+        sweep_tolerance = max(tolerance * self._LIQUIDITY_SWEEP_TOLERANCE_MULTIPLIER, self._EPSILON)
+        if side == "upper":
+            later_highs = prepared.highs[last_touch_idx + 1 : segment_end_idx + 1]
+            return bool(later_highs.size > 0 and float(np.max(later_highs)) > (zone_high + sweep_tolerance))
+
+        later_lows = prepared.lows[last_touch_idx + 1 : segment_end_idx + 1]
+        return bool(later_lows.size > 0 and float(np.min(later_lows)) < (zone_low - sweep_tolerance))
+
+    def _extract_swing_highs(
+        self,
+        *,
+        highs: np.ndarray,
+        segment_start_idx: int,
+    ) -> list[tuple[int, float]]:
+        segment_length = int(highs.size)
+        if segment_length == 0:
+            return []
+        if segment_length < 3:
+            return [(segment_start_idx + idx, float(price)) for idx, price in enumerate(highs)]
+
+        swing_highs: list[tuple[int, float]] = []
+        for local_idx in range(1, segment_length - 1):
+            current_high = float(highs[local_idx])
+            prev_high = float(highs[local_idx - 1])
+            next_high = float(highs[local_idx + 1])
+            if current_high >= prev_high and current_high >= next_high and (current_high > prev_high or current_high > next_high):
+                swing_highs.append((segment_start_idx + local_idx, current_high))
+
+        if swing_highs:
+            return swing_highs
+
+        highest_idx = int(np.argmax(highs))
+        return [(segment_start_idx + highest_idx, float(highs[highest_idx]))]

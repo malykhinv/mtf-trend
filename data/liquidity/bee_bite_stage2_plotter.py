@@ -13,7 +13,7 @@ import pandas as pd
 from matplotlib.patches import Rectangle
 
 from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result
-from strategy.bee_bite.stage2_detector import BeeBiteStage2Result
+from strategy.bee_bite.stage2_detector import BeeBiteStage2LiquidityZone, BeeBiteStage2Result
 
 
 class BeeBiteStage2Plotter:
@@ -35,6 +35,10 @@ class BeeBiteStage2Plotter:
     _LOCAL_RANGE_EDGE = "#60a5fa"
     _LOCAL_RANGE_FACE = "#1d4ed8"
     _MERGED_RANGE_EDGE = "#34d399"
+    _UPPER_ZONE_EDGE = "#fca5a5"
+    _UPPER_ZONE_FACE = "#7f1d1d"
+    _LOWER_ZONE_EDGE = "#c4b5fd"
+    _LOWER_ZONE_FACE = "#4c1d95"
 
     def plot_result(
         self,
@@ -122,6 +126,23 @@ class BeeBiteStage2Plotter:
                 line_width=1.8,
             )
 
+        for index, liquidity_zone in enumerate(stage2_result.liquidity_zones):
+            is_upper = liquidity_zone.side == "upper"
+            self._draw_range_rectangle(
+                axis=price_ax,
+                range_start_idx=liquidity_zone.start_idx,
+                range_end_idx=liquidity_zone.end_idx,
+                range_low=liquidity_zone.low,
+                range_high=liquidity_zone.high,
+                index_shift=window_start,
+                edge_color=self._UPPER_ZONE_EDGE if is_upper else self._LOWER_ZONE_EDGE,
+                face_color=self._UPPER_ZONE_FACE if is_upper else self._LOWER_ZONE_FACE,
+                alpha=0.16,
+                line_width=1.0,
+                label=("upper stop zone" if is_upper else "lower stop zone") if index < 2 else None,
+                line_style="--",
+            )
+
         self._draw_marker(
             price_ax,
             pump_start_idx - window_start,
@@ -173,6 +194,9 @@ class BeeBiteStage2Plotter:
             f"Local ranges: {len(stage2_result.local_ranges)}",
             f"Merged ranges: {len(stage2_result.merged_ranges)}",
         ]
+        upper_zones = sum(1 for zone in stage2_result.liquidity_zones if zone.side == "upper")
+        lower_zones = sum(1 for zone in stage2_result.liquidity_zones if zone.side == "lower")
+        info_lines.append(f"Stop zones: U{upper_zones} / L{lower_zones}")
         if stage2_result.box_high is not None and stage2_result.box_low is not None:
             info_lines.append(f"Box: {stage2_result.box_low:.5f} .. {stage2_result.box_high:.5f}")
         price_ax.text(
@@ -227,6 +251,8 @@ class BeeBiteStage2Plotter:
         face_color: str,
         alpha: float,
         line_width: float,
+        label: str | None = None,
+        line_style: str = "-",
     ) -> None:
         x0 = range_start_idx - index_shift - 0.5
         width = (range_end_idx - range_start_idx) + 1.0
@@ -239,6 +265,8 @@ class BeeBiteStage2Plotter:
                 edgecolor=edge_color,
                 linewidth=line_width,
                 alpha=alpha,
+                linestyle=line_style,
+                label=label,
                 zorder=1,
             )
         )

@@ -1878,6 +1878,7 @@ def _stage2_result_to_rows(
             "confirmed_highs_count": len(stage2_result.confirmed_highs),
             "local_ranges_count": len(stage2_result.local_ranges),
             "merged_ranges_count": len(stage2_result.merged_ranges),
+            "liquidity_zones_count": len(stage2_result.liquidity_zones),
             "box_start_timestamp": stage2_result.box_start_timestamp,
             "box_end_timestamp": stage2_result.box_end_timestamp,
             "box_high": stage2_result.box_high,
@@ -1933,6 +1934,25 @@ def _stage2_result_to_rows(
                 "source_ranges": merged_range.source_ranges,
                 "confirmed_high_timestamps": ",".join(str(item) for item in merged_range.confirmed_high_timestamps),
                 "confirmed_high_prices": ",".join(f"{item:.10f}" for item in merged_range.confirmed_high_prices),
+            }
+        )
+
+    for order, liquidity_zone in enumerate(stage2_result.liquidity_zones, start=1):
+        rows.append(
+            {
+                "symbol": symbol,
+                "timeframe": timeframe.value,
+                "regime_index": regime.regime_index,
+                "row_type": "liquidity_zone",
+                "row_order": order,
+                "side": liquidity_zone.side,
+                "start_timestamp": liquidity_zone.start_timestamp,
+                "end_timestamp": liquidity_zone.end_timestamp,
+                "last_touch_timestamp": liquidity_zone.last_touch_timestamp,
+                "high": liquidity_zone.high,
+                "low": liquidity_zone.low,
+                "touch_count": liquidity_zone.touch_count,
+                "bars": (liquidity_zone.end_idx - liquidity_zone.start_idx) + 1,
             }
         )
 
