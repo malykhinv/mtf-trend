@@ -663,56 +663,138 @@ class BeeBiteStage2Detector:
         tolerance: float,
         side: str,
     ) -> BeeBiteStage2LiquidityZone | None:
-        level_price = float(box_high if side == "upper" else box_low)
         if side == "upper":
+            level_price = float(box_high)
             touches = [
                 idx
                 for idx in range(segment_start_idx, segment_end_idx + 1)
                 if float(prepared.highs[idx]) >= (level_price - tolerance)
             ]
-        else:
-            touches = [
-                idx
-                for idx in range(segment_start_idx, segment_end_idx + 1)
-                if float(prepared.lows[idx]) <= (level_price + tolerance)
-            ]
+            if len(touches) < self._LIQUIDITY_MIN_TOUCHES:
+                return None
 
-        if len(touches) < self._LIQUIDITY_MIN_TOUCHES:
-            return None
+            zone_low, zone_high = self._project_liquidity_zone_bounds(
+                level_low=level_price,
+                level_high=level_price,
+                tolerance=tolerance,
+                side=side,
+            )
+            start_idx = int(touches[self._LIQUIDITY_MIN_TOUCHES - 1])
+            sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+                prepared=prepared,
+                segment_end_idx=segment_end_idx,
+                last_touch_idx=start_idx,
+                zone_low=zone_low,
+                zone_high=zone_high,
+                side=side,
+            )
+            effective_end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
+            valid_touches = [idx for idx in touches if idx <= effective_end_idx]
+            if len(valid_touches) < self._LIQUIDITY_MIN_TOUCHES:
+                return None
 
-        zone_low, zone_high = self._project_liquidity_zone_bounds(
-            level_low=level_price,
-            level_high=level_price,
-            tolerance=tolerance,
-            side=side,
-        )
-        start_idx = int(touches[self._LIQUIDITY_MIN_TOUCHES - 1])
-        sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+            last_touch_idx = int(valid_touches[-1])
+            return BeeBiteStage2LiquidityZone(
+                side=side,
+                start_idx=start_idx,
+                start_timestamp=int(prepared.timestamps[start_idx]),
+                end_idx=effective_end_idx,
+                end_timestamp=int(prepared.timestamps[effective_end_idx]),
+                last_touch_idx=last_touch_idx,
+                last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
+                low=zone_low,
+                high=zone_high,
+                touch_count=len(valid_touches),
+            )
+
+        return self._resolve_lower_liquidity_zone(
             prepared=prepared,
+            segment_start_idx=segment_start_idx,
             segment_end_idx=segment_end_idx,
-            last_touch_idx=start_idx,
-            zone_low=zone_low,
-            zone_high=zone_high,
-            side=side,
+            box_low=box_low,
+            box_high=box_high,
+            tolerance=tolerance,
         )
-        effective_end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
-        valid_touches = [idx for idx in touches if start_idx <= idx <= effective_end_idx]
-        if len(valid_touches) < self._LIQUIDITY_MIN_TOUCHES:
+
+    def _resolve_lower_liquidity_zone(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        segment_start_idx: int,
+        segment_end_idx: int,
+        box_low: float,
+        box_high: float,
+        tolerance: float,
+    ) -> BeeBiteStage2LiquidityZone | None:
+        range_height = max(box_high - box_low, self._EPSILON)
+        threshold = box_low + (range_height * self._LIQUIDITY_ZONE_RELATIVE_MARGIN)
+        swing_points = self._extract_swing_lows(
+            effective_lows=prepared.lows[segment_start_idx : segment_end_idx + 1],
+            segment_start_idx=segment_start_idx,
+        )
+        filtered_points = [point for point in swing_points if point[1] <= threshold]
+        if len(filtered_points) < self._LIQUIDITY_MIN_TOUCHES:
             return None
 
-        last_touch_idx = int(valid_touches[-1])
-        return BeeBiteStage2LiquidityZone(
-            side=side,
-            start_idx=start_idx,
-            start_timestamp=int(prepared.timestamps[start_idx]),
-            end_idx=effective_end_idx,
-            end_timestamp=int(prepared.timestamps[effective_end_idx]),
-            last_touch_idx=last_touch_idx,
-            last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
-            low=zone_low,
-            high=zone_high,
-            touch_count=len(valid_touches),
-        )
+        best_zone: BeeBiteStage2LiquidityZone | None = None
+        best_score: tuple[int, float, float, int] | None = None
+        for anchor_idx, anchor_price in filtered_points:
+            cluster = [
+                (point_idx, point_price)
+                for point_idx, point_price in filtered_points
+                if abs(point_price - anchor_price) <= tolerance
+            ]
+            if len(cluster) < self._LIQUIDITY_MIN_TOUCHES:
+                continue
+
+            cluster_prices = [price for _, price in cluster]
+            cluster_low = float(min(cluster_prices))
+            cluster_high = float(max(cluster_prices))
+            zone_low, zone_high = self._project_liquidity_zone_bounds(
+                level_low=cluster_low,
+                level_high=cluster_high,
+                tolerance=tolerance,
+                side="lower",
+            )
+            ordered_touches = sorted(point_idx for point_idx, _ in cluster)
+            start_idx = int(ordered_touches[self._LIQUIDITY_MIN_TOUCHES - 1])
+            sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+                prepared=prepared,
+                segment_end_idx=segment_end_idx,
+                last_touch_idx=start_idx,
+                zone_low=zone_low,
+                zone_high=zone_high,
+                side="lower",
+            )
+            effective_end_idx = sweep_idx if sweep_idx is not None else segment_end_idx
+            valid_touches = [idx for idx in ordered_touches if idx <= effective_end_idx]
+            if len(valid_touches) < self._LIQUIDITY_MIN_TOUCHES:
+                continue
+
+            score = (
+                len(valid_touches),
+                -cluster_low,
+                -float(cluster_high - cluster_low),
+                -start_idx,
+            )
+            if best_score is not None and score <= best_score:
+                continue
+
+            last_touch_idx = int(valid_touches[-1])
+            best_score = score
+            best_zone = BeeBiteStage2LiquidityZone(
+                side="lower",
+                start_idx=start_idx,
+                start_timestamp=int(prepared.timestamps[start_idx]),
+                end_idx=effective_end_idx,
+                end_timestamp=int(prepared.timestamps[effective_end_idx]),
+                last_touch_idx=last_touch_idx,
+                last_touch_timestamp=int(prepared.timestamps[last_touch_idx]),
+                low=zone_low,
+                high=zone_high,
+                touch_count=len(valid_touches),
+            )
+        return best_zone
 
     def _project_liquidity_zone_bounds(
         self,
