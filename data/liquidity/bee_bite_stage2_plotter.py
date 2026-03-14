@@ -39,6 +39,10 @@ class BeeBiteStage2Plotter:
     _UPPER_ZONE_FACE = "#7f1d1d"
     _LOWER_ZONE_EDGE = "#c4b5fd"
     _LOWER_ZONE_FACE = "#4c1d95"
+    _LOCAL_RANGE_ALPHA = 0.05
+    _MERGED_RANGE_ALPHA = 0.28
+    _CROSSED_ZONE_ALPHA = 0.16
+    _ACTIVE_ZONE_ALPHA = 0.3
 
     def plot_result(
         self,
@@ -108,8 +112,8 @@ class BeeBiteStage2Plotter:
                 index_shift=window_start,
                 edge_color=self._LOCAL_RANGE_EDGE,
                 face_color=self._LOCAL_RANGE_FACE,
-                alpha=0.12,
-                line_width=1.1,
+                alpha=self._LOCAL_RANGE_ALPHA,
+                line_width=0.8,
             )
 
         for merged_range in stage2_result.merged_ranges:
@@ -122,12 +126,16 @@ class BeeBiteStage2Plotter:
                 index_shift=window_start,
                 edge_color=self._MERGED_RANGE_EDGE,
                 face_color="none",
-                alpha=1.0,
-                line_width=1.8,
+                alpha=self._MERGED_RANGE_ALPHA,
+                line_width=1.0,
             )
 
         for index, liquidity_zone in enumerate(stage2_result.liquidity_zones):
             is_upper = liquidity_zone.side == "upper"
+            is_active = (
+                stage2_result.box_end_timestamp is not None
+                and liquidity_zone.end_timestamp >= int(stage2_result.box_end_timestamp)
+            )
             self._draw_range_rectangle(
                 axis=price_ax,
                 range_start_idx=liquidity_zone.start_idx,
@@ -137,7 +145,7 @@ class BeeBiteStage2Plotter:
                 index_shift=window_start,
                 edge_color=self._UPPER_ZONE_EDGE if is_upper else self._LOWER_ZONE_EDGE,
                 face_color=self._UPPER_ZONE_FACE if is_upper else self._LOWER_ZONE_FACE,
-                alpha=0.16,
+                alpha=self._ACTIVE_ZONE_ALPHA if is_active else self._CROSSED_ZONE_ALPHA,
                 line_width=1.0,
                 label=("upper stop zone" if is_upper else "lower stop zone") if index < 2 else None,
                 line_style="--",
