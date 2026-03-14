@@ -260,12 +260,28 @@ class BeeBiteStage1Plotter:
         display_peak_idx = peak_idx
         display_peak_price = float(fallback_peak_price or effective_highs[peak_idx])
         breakout_reference = float(highs[peak_idx])
+        body_reclaim_lock = False
         for idx in range(peak_idx + 1, window_end_idx + 1):
+            candle_close = float(closes[idx])
+            candle_body = abs(float(closes[idx]) - float(opens[idx]))
+            upper_wick = float(highs[idx]) - float(body_highs[idx])
+            if candle_close > (display_peak_price + 1e-12) and candle_body >= upper_wick:
+                display_peak_idx = idx
+                breakout_reference = float(highs[idx])
+                display_peak_price = float(highs[idx])
+                body_reclaim_lock = True
+                continue
+            if body_reclaim_lock and candle_close <= (display_peak_price + 1e-12):
+                continue
             breakout_high = float(highs[idx]) if (idx - display_peak_idx) <= 2 else float(effective_highs[idx])
             if breakout_high <= (breakout_reference + 1e-12):
                 continue
             display_peak_idx = idx
             breakout_reference = breakout_high
+            body_reclaim_lock = False
+            if candle_close > (display_peak_price + 1e-12) and candle_body >= upper_wick:
+                display_peak_price = max(display_peak_price, float(highs[idx]))
+                continue
             display_peak_price = max(display_peak_price, float(effective_highs[idx]))
         return display_peak_idx, display_peak_price
 
