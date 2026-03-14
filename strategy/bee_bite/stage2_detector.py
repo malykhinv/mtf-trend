@@ -85,6 +85,7 @@ class BeeBiteStage2Detector:
         symbol: str,
         frame: pd.DataFrame,
         stage1: BeeBiteStage1Result,
+        analysis_end_timestamp: int | None = None,
     ) -> BeeBiteStage2Result:
         if not stage1.passed:
             return BeeBiteStage2Result(symbol=symbol, passed=False, reason="stage1_not_passed")
@@ -101,13 +102,21 @@ class BeeBiteStage2Detector:
         )
         if peak_idx is None:
             return BeeBiteStage2Result(symbol=symbol, passed=False, reason="stage1_peak_not_in_frame")
-        if peak_idx >= (len(prepared.timestamps) - 1):
+        analysis_end_idx = len(prepared.timestamps) - 1
+        if analysis_end_timestamp is not None:
+            resolved_end_idx = self._resolve_index_by_timestamp(
+                timestamps=prepared.timestamps,
+                timestamp=int(analysis_end_timestamp),
+            )
+            if resolved_end_idx is not None:
+                analysis_end_idx = resolved_end_idx
+        if analysis_end_idx <= peak_idx:
             return BeeBiteStage2Result(
                 symbol=symbol,
                 passed=False,
                 reason="no_data_after_peak",
                 analysis_start_timestamp=int(prepared.timestamps[peak_idx]),
-                analysis_end_timestamp=int(prepared.timestamps[peak_idx]),
+                analysis_end_timestamp=int(prepared.timestamps[min(peak_idx, analysis_end_idx)]),
             )
 
         initial_peak_price = max(
@@ -127,7 +136,7 @@ class BeeBiteStage2Detector:
         current_high_price = initial_peak_price
         current_range_start_idx = peak_idx + 1
 
-        for idx in range(peak_idx + 1, len(prepared.timestamps)):
+        for idx in range(peak_idx + 1, analysis_end_idx + 1):
             if not self._is_new_confirmed_high(
                 prepared=prepared,
                 current_high_idx=current_high_idx,
@@ -160,7 +169,7 @@ class BeeBiteStage2Detector:
         trailing_range = self._build_local_range(
             prepared=prepared,
             current_range_start_idx=current_range_start_idx,
-            current_range_end_idx=len(prepared.timestamps) - 1,
+            current_range_end_idx=analysis_end_idx,
             confirmed_high=confirmed_highs[-1],
         )
         if trailing_range is not None:
@@ -172,7 +181,7 @@ class BeeBiteStage2Detector:
                 passed=False,
                 reason="no_ranges_after_peak",
                 analysis_start_timestamp=int(prepared.timestamps[peak_idx]),
-                analysis_end_timestamp=int(prepared.timestamps[-1]),
+                analysis_end_timestamp=int(prepared.timestamps[analysis_end_idx]),
                 confirmed_highs=tuple(confirmed_highs),
             )
 
@@ -184,7 +193,7 @@ class BeeBiteStage2Detector:
             passed=True,
             reason="passed",
             analysis_start_timestamp=int(prepared.timestamps[peak_idx]),
-            analysis_end_timestamp=int(prepared.timestamps[-1]),
+            analysis_end_timestamp=int(prepared.timestamps[analysis_end_idx]),
             confirmed_highs=tuple(confirmed_highs),
             local_ranges=tuple(local_ranges),
             merged_ranges=tuple(merged_ranges),

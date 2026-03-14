@@ -1,4 +1,4 @@
-"""Запуск режимов без прямого ввода CLI-команд."""
+"""Run predefined modes without typing the raw CLI command."""
 
 from __future__ import annotations
 
@@ -16,17 +16,19 @@ MODE_UPDATE_CACHE = "update-cache"
 MODE_BACKTEST = "analyze-cache"
 MODE_REPORT = "make-report"
 MODE_STAGE1_REVIEW = "review-stage1"
+MODE_STAGE2_REVIEW = "review-stage2"
 MODE_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
 MODE_LABELS: dict[str, str] = {
-    MODE_FETCH_CACHE: "Сбор кэша",
-    MODE_UPDATE_CACHE: "Обновление кэша",
-    MODE_BACKTEST: "Анализ кэша стратегией",
-    MODE_REPORT: "Построение отчета",
-    MODE_STAGE1_REVIEW: "Проверка historical stage-1",
-    MODE_QUALITY: "Проверка качества кэша",
-    MODE_CLEAR_CACHE: "Очистка кэша",
+    MODE_FETCH_CACHE: "Cache fetch",
+    MODE_UPDATE_CACHE: "Cache update",
+    MODE_BACKTEST: "Analyze cache with strategy",
+    MODE_REPORT: "Build report",
+    MODE_STAGE1_REVIEW: "Review historical stage-1",
+    MODE_STAGE2_REVIEW: "Review stage-2 balances",
+    MODE_QUALITY: "Check cache quality",
+    MODE_CLEAR_CACHE: "Clear cache",
 }
 
 
@@ -42,7 +44,7 @@ def _to_bool(value: Any, *, fallback: bool | None = False) -> bool | None:
         return True
     if normalized in {"0", "false", "no", "n", "off"}:
         return False
-    raise ValueError(f"Некорректное булево значение: {value}")
+    raise ValueError(f"Invalid boolean value: {value}")
 
 
 def _force_single_thread_mode() -> None:
@@ -58,34 +60,34 @@ def _force_single_thread_mode() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="launcher", description="Запуск режимов без прямого ввода CLI-команд")
-    parser.add_argument("--env", default=".env", help="Путь к env-файлу")
-    parser.add_argument("--mode", choices=tuple(MODE_LABELS.keys()), default=None, help="Одиночный режим запуска")
-    parser.add_argument("--config", default=None, help="JSON-файл с пачкой задач")
-    parser.add_argument("--top-n", type=int, default=None, help="Количество топ монет для fetch/update или лимит после stage-1 фильтра")
-    parser.add_argument("--min-volume-usd", type=float, default=None, help="Минимальный суточный объем в USD")
-    parser.add_argument("--days", type=int, default=30, help="Число дней для fetch/update")
-    parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Якорный timestamp окончания периода (unix ms)")
-    parser.add_argument("--ignore-coingecko", action="store_true", default=None, help="Не использовать CoinGecko при подборе символов для fetch/update")
-    parser.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
-    parser.add_argument("--levels-tf", default=None, help="Таймфрейм уровней")
-    parser.add_argument("--entry-tf", default=None, help="Таймфрейм входов")
-    parser.add_argument("--strategy", choices=["bee_bite"], default=None, help="В проекте оставлена только стратегия bee_bite")
-    parser.add_argument("--bee-bite-profile", choices=["A", "B", "C"], default=None, help="Профиль bee_bite (A/B/C)")
-    parser.add_argument("--bee-bite-grid", choices=["baseline", "expanded", "research"], default=None, help="Режим сетки bee_bite")
-    parser.add_argument("--bee-bite-reclaim-mode", choices=["strict", "balanced", "aggressive"], default=None, help="Режим reclaim в bee_bite")
-    parser.add_argument("--bee-bite-retest-mode", choices=["confirmation", "immediate"], default=None, help="Режим входа в bee_bite")
-    parser.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=int, default=None, help="Cooldown для bee_bite в часах")
-    parser.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=int, default=None, help="Максимальный возраст range для bee_bite в часах")
-    parser.add_argument("--output-dir", default=None, help="Директория сохранения диагностических файлов")
-    parser.add_argument("--plot-limit", type=int, default=20, help="Максимум png-графиков по stage-1 review")
-    parser.add_argument("--limit", type=int, default=None, help="Ограничение числа свечей/событий")
-    parser.add_argument("--input", default=None, help="Входной CSV для отчета")
-    parser.add_argument("--output", default=None, help="Выходной путь JSON/CSV")
-    parser.add_argument("--plot", default=None, help="Сохранять диагностические файлы по лучшей комбинации (true/false)")
-    parser.add_argument("--id", type=int, default=None, help="ID комбинации для режима plot-from-results")
-    parser.add_argument("--plot-from-results", action="store_true", help="Построить диагностику по параметрам из results.csv без полного бэктеста")
-    parser.add_argument("--results-input", default=None, help="Путь к CSV с результатами для --plot-from-results")
+    parser = argparse.ArgumentParser(prog="launcher", description="Run project modes without typing raw CLI commands")
+    parser.add_argument("--env", default=".env", help="Path to env file")
+    parser.add_argument("--mode", choices=tuple(MODE_LABELS.keys()), default=None, help="Single run mode")
+    parser.add_argument("--config", default=None, help="JSON file with a batch of tasks")
+    parser.add_argument("--top-n", type=int, default=None, help="Top symbols for fetch/update or limit after stage-1 filter")
+    parser.add_argument("--min-volume-usd", type=float, default=None, help="Minimum 24h volume in USD")
+    parser.add_argument("--days", type=int, default=30, help="Number of days for fetch/update")
+    parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
+    parser.add_argument("--ignore-coingecko", action="store_true", default=None, help="Skip CoinGecko in fetch/update symbol selection")
+    parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
+    parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
+    parser.add_argument("--strategy", choices=["bee_bite"], default=None, help="Only bee_bite strategy is available")
+    parser.add_argument("--bee-bite-profile", choices=["A", "B", "C"], default=None, help="Bee bite profile")
+    parser.add_argument("--bee-bite-grid", choices=["baseline", "expanded", "research"], default=None, help="Bee bite grid mode")
+    parser.add_argument("--bee-bite-reclaim-mode", choices=["strict", "balanced", "aggressive"], default=None, help="Bee bite reclaim mode")
+    parser.add_argument("--bee-bite-retest-mode", choices=["confirmation", "immediate"], default=None, help="Bee bite entry mode")
+    parser.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=int, default=None, help="Cooldown for bee_bite in hours")
+    parser.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=int, default=None, help="Max range age for bee_bite in hours")
+    parser.add_argument("--output-dir", default=None, help="Directory for diagnostic files")
+    parser.add_argument("--plot-limit", type=int, default=20, help="Maximum number of review plots")
+    parser.add_argument("--limit", type=int, default=None, help="Limit number of candles/events")
+    parser.add_argument("--input", default=None, help="Input CSV for report")
+    parser.add_argument("--output", default=None, help="Output JSON/CSV path")
+    parser.add_argument("--plot", default=None, help="Save diagnostic files for the best combination (true/false)")
+    parser.add_argument("--id", type=int, default=None, help="Combination ID for plot-from-results mode")
+    parser.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
+    parser.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")
     return parser
 
 
@@ -125,6 +127,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_BACKTEST: commands.run_backtest,
         MODE_REPORT: commands.make_report,
         MODE_STAGE1_REVIEW: commands.review_stage1,
+        MODE_STAGE2_REVIEW: commands.review_stage2,
         MODE_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
     }
@@ -132,15 +135,15 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
 
 
 def _prompt_menu() -> str:
-    print("Выберите режим запуска:")
+    print("Select run mode:")
     modes = list(MODE_LABELS.items())
     for index, (_, label) in enumerate(modes, start=1):
         print(f"  {index}. {label}")
     while True:
-        raw = input("Введите номер режима: ").strip()
+        raw = input("Enter mode number: ").strip()
         if raw.isdigit() and 1 <= int(raw) <= len(modes):
             return modes[int(raw) - 1][0]
-        print("Некорректный номер. Попробуйте снова.")
+        print("Invalid number. Try again.")
 
 
 def _load_tasks(config_path: Path) -> dict[str, Any]:
@@ -150,20 +153,20 @@ def _load_tasks(config_path: Path) -> dict[str, Any]:
 def _run_batch(config: AppConfig, cli_args: argparse.Namespace, payload: dict[str, Any]) -> int:
     tasks = payload.get("tasks", [])
     if not tasks:
-        print("В config-файле нет задач: ключ tasks пуст.")
+        print("Config file has no tasks: key 'tasks' is empty.")
         return 1
     continue_on_error = bool(payload.get("continue_on_error", False))
     for index, task in enumerate(tasks, start=1):
         mode = str(task.get("mode", "")).strip()
         if mode not in MODE_LABELS:
-            print(f"[{index}] Неизвестный режим '{mode}'")
+            print(f"[{index}] Unknown mode '{mode}'")
             if continue_on_error:
                 continue
             return 1
-        print(f"[{index}] {MODE_LABELS[mode]}: старт")
+        print(f"[{index}] {MODE_LABELS[mode]}: start")
         task_args = _task_namespace(task, cli_args)
         code = _run_mode(config, mode, task_args)
-        print(f"[{index}] {MODE_LABELS[mode]}: завершено с code={code}")
+        print(f"[{index}] {MODE_LABELS[mode]}: completed with code={code}")
         if code != 0 and not continue_on_error:
             return code
     return 0

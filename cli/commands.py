@@ -21,6 +21,8 @@ from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
     DEFAULT_STAGE1_EVENTS_OUTPUT_FILE,
     DEFAULT_STAGE1_PLOTS_DIR_NAME,
+    DEFAULT_STAGE2_EVENTS_OUTPUT_FILE,
+    DEFAULT_STAGE2_PLOTS_DIR_NAME,
     DEFAULT_RESULTS_DIR,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     DEFAULT_REPORT_OUTPUT_FILE,
@@ -45,6 +47,7 @@ from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
 from data.liquidity.bee_bite_stage1_plotter import BeeBiteStage1Plotter
+from data.liquidity.bee_bite_stage2_plotter import BeeBiteStage2Plotter
 from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result, BeeBiteStage1Selector
 from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
@@ -65,6 +68,8 @@ from domain.models.reporting.trade_results_distribution import TradeResultsDistr
 from strategy.bee_bite import (
     BeeBiteParams,
     BeeBiteStrategy,
+    BeeBiteStage2Detector,
+    BeeBiteStage2Result,
     get_bee_bite_runtime,
     parse_bee_bite_grid_mode,
     parse_bee_bite_profile_id,
@@ -1816,6 +1821,208 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _stage2_result_to_rows(
+    *,
+    symbol: str,
+    regime: _Stage1Regime,
+    stage1_event: BeeBiteStage1Result,
+    stage2_result: BeeBiteStage2Result,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = [
+        {
+            "symbol": symbol,
+            "regime_index": regime.regime_index,
+            "row_type": "summary",
+            "stage1_confirmed_timestamp": stage1_event.stage1_confirmed_timestamp,
+            "regime_end_timestamp": regime.regime_end_timestamp,
+            "regime_end_reason": regime.regime_end_reason,
+            "stage2_passed": stage2_result.passed,
+            "stage2_reason": stage2_result.reason,
+            "analysis_start_timestamp": stage2_result.analysis_start_timestamp,
+            "analysis_end_timestamp": stage2_result.analysis_end_timestamp,
+            "confirmed_highs_count": len(stage2_result.confirmed_highs),
+            "local_ranges_count": len(stage2_result.local_ranges),
+            "merged_ranges_count": len(stage2_result.merged_ranges),
+            "box_start_timestamp": stage2_result.box_start_timestamp,
+            "box_end_timestamp": stage2_result.box_end_timestamp,
+            "box_high": stage2_result.box_high,
+            "box_low": stage2_result.box_low,
+        }
+    ]
+
+    for order, confirmed_high in enumerate(stage2_result.confirmed_highs, start=1):
+        rows.append(
+            {
+                "symbol": symbol,
+                "regime_index": regime.regime_index,
+                "row_type": "confirmed_high",
+                "row_order": order,
+                "timestamp": confirmed_high.timestamp,
+                "price": confirmed_high.price,
+                "idx": confirmed_high.idx,
+            }
+        )
+
+    for order, local_range in enumerate(stage2_result.local_ranges, start=1):
+        rows.append(
+            {
+                "symbol": symbol,
+                "regime_index": regime.regime_index,
+                "row_type": "local_range",
+                "row_order": order,
+                "start_timestamp": local_range.start_timestamp,
+                "end_timestamp": local_range.end_timestamp,
+                "confirmed_high_timestamp": local_range.confirmed_high_timestamp,
+                "confirmed_high_price": local_range.confirmed_high_price,
+                "high": local_range.high,
+                "low": local_range.low,
+                "bars": local_range.bars,
+            }
+        )
+
+    for order, merged_range in enumerate(stage2_result.merged_ranges, start=1):
+        rows.append(
+            {
+                "symbol": symbol,
+                "regime_index": regime.regime_index,
+                "row_type": "merged_range",
+                "row_order": order,
+                "start_timestamp": merged_range.start_timestamp,
+                "end_timestamp": merged_range.end_timestamp,
+                "high": merged_range.high,
+                "low": merged_range.low,
+                "bars": merged_range.bars,
+                "source_ranges": merged_range.source_ranges,
+                "confirmed_high_timestamps": ",".join(str(item) for item in merged_range.confirmed_high_timestamps),
+                "confirmed_high_prices": ",".join(f"{item:.10f}" for item in merged_range.confirmed_high_prices),
+            }
+        )
+
+    return rows
+
+
+def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("review-stage2", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    logger.info("review-stage2: cache_dir=%s", config.backtest.cache_dir)
+    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
+    output_dir = results_dir / "stage2_review"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE2_EVENTS_OUTPUT_FILE
+    plots_dir = output_dir / DEFAULT_STAGE2_PLOTS_DIR_NAME
+    plot_limit = int(getattr(args, "plot_limit", 20) or 20)
+
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols_raw = args.symbols or preparer.list_symbols(Timeframe.M15)
+    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
+    if not symbols:
+        logger.info("review-stage2: no data in cache for entry_tf=15m")
+        return 0
+
+    selector = BeeBiteStage1Selector()
+    detector = BeeBiteStage2Detector()
+    plotter = BeeBiteStage2Plotter()
+    rows: list[dict[str, object]] = []
+    stage2_results: list[tuple[str, _Stage1Regime, BeeBiteStage1Result, BeeBiteStage2Result, pd.DataFrame]] = []
+    reason_counts: Counter[str] = Counter()
+    empty_frame_symbols: list[str] = []
+    populated_frame_symbols = 0
+
+    for index, symbol in enumerate(symbols, start=1):
+        frame = preparer.load_symbol_data(symbol, Timeframe.M15)
+        if frame.empty:
+            empty_frame_symbols.append(symbol)
+            continue
+        populated_frame_symbols += 1
+
+        stage1_events = selector.detect_events(symbol=symbol, frame=frame)
+        if not stage1_events:
+            stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
+            reason_counts[f"stage1:{stage1_evaluation.reason}"] += 1
+            continue
+
+        regimes = _resolve_stage1_regime_ends(
+            frame=frame,
+            regimes=_group_stage1_events_into_regimes(stage1_events),
+        )
+        for regime in regimes:
+            stage1_event = regime.last_event
+            stage2_result = detector.detect(
+                symbol=symbol,
+                frame=frame,
+                stage1=stage1_event,
+                analysis_end_timestamp=regime.regime_end_timestamp,
+            )
+            rows.extend(
+                _stage2_result_to_rows(
+                    symbol=symbol,
+                    regime=regime,
+                    stage1_event=stage1_event,
+                    stage2_result=stage2_result,
+                )
+            )
+            if stage2_result.passed:
+                stage2_results.append((symbol, regime, stage1_event, stage2_result, frame))
+            else:
+                reason_counts[stage2_result.reason] += 1
+
+        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
+            logger.info(
+                "review-stage2: progress=%s/%s symbols_with_stage2=%s rows=%s populated_frames=%s empty_frames=%s",
+                index,
+                len(symbols),
+                len({item[0] for item in stage2_results}),
+                len(rows),
+                populated_frame_symbols,
+                len(empty_frame_symbols),
+            )
+
+    results_frame = pd.DataFrame(rows)
+    if not results_frame.empty:
+        sort_columns = [column for column in ("symbol", "regime_index", "row_type", "row_order") if column in results_frame.columns]
+        results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    results_frame.to_csv(output_path, index=False)
+
+    plots_built = 0
+    plots_payload = sorted(
+        stage2_results,
+        key=lambda item: (
+            int(item[3].analysis_end_timestamp or 0),
+            item[0],
+            item[1].regime_index,
+        ),
+        reverse=True,
+    )
+    for symbol, regime, stage1_event, stage2_result, frame in plots_payload[:plot_limit]:
+        symbol_slug = symbol.replace("/", "_")
+        plot_path = plots_dir / f"{symbol_slug}_stage2_regime_{regime.regime_index:02d}.png"
+        plotter.plot_result(
+            frame=frame,
+            stage1_event=stage1_event,
+            stage2_result=stage2_result,
+            output_path=plot_path,
+            window_end_timestamp=regime.regime_end_timestamp,
+            title_suffix=f"regime {regime.regime_index:02d}",
+        )
+        plots_built += 1
+
+    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
+    if top_reasons:
+        logger.info("review-stage2: rejection_reasons %s", top_reasons)
+    if empty_frame_symbols:
+        logger.warning("review-stage2: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
+    logger.info(
+        "review-stage2: symbols=%s symbols_with_stage2=%s csv=%s plots=%s plots_dir=%s",
+        len(symbols),
+        len({item[0] for item in stage2_results}),
+        output_path,
+        plots_built,
+        plots_dir,
+    )
+    return 0
+
+
 def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
@@ -2206,6 +2413,11 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
 def review_stage1(config: AppConfig, args: argparse.Namespace) -> int:
     """Находит historical stage-1 события и сохраняет review-артефакты."""
     return _run_with_logging("review-stage1", config, lambda: _review_stage1_inner(config, args))
+
+
+def review_stage2(config: AppConfig, args: argparse.Namespace) -> int:
+    """Находит stage-2 структуру и сохраняет review-артефакты."""
+    return _run_with_logging("review-stage2", config, lambda: _review_stage2_inner(config, args))
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:

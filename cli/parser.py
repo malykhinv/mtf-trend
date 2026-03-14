@@ -38,50 +38,55 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mtf-trend")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    fetch = subparsers.add_parser("fetch-data", help="Загрузка данных с бирж и CoinGecko")
+    fetch = subparsers.add_parser("fetch-data", help="Load market data from exchanges and CoinGecko")
     fetch.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
     fetch.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_FETCH_DAYS)
     fetch.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
-    fetch.add_argument("--end-timestamp-ms", type=int, default=None, help="Якорный timestamp окончания периода (unix ms)")
-    fetch.add_argument("--ignore-coingecko", action="store_true", default=None, help="Не использовать CoinGecko при подборе символов")
+    fetch.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
+    fetch.add_argument("--ignore-coingecko", action="store_true", default=None, help="Skip CoinGecko symbol selection")
 
-    update = subparsers.add_parser("update-cache", help="Инкрементальное обновление кэша")
+    update = subparsers.add_parser("update-cache", help="Incrementally update the local cache")
     update.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
     update.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_UPDATE_DAYS)
     update.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
-    update.add_argument("--end-timestamp-ms", type=int, default=None, help="Якорный timestamp окончания периода (unix ms)")
-    update.add_argument("--ignore-coingecko", action="store_true", default=None, help="Не использовать CoinGecko при подборе символов")
+    update.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
+    update.add_argument("--ignore-coingecko", action="store_true", default=None, help="Skip CoinGecko symbol selection")
 
-    run_bt = subparsers.add_parser("run-backtest", help="Запуск бэктеста по данным в кэше")
-    run_bt.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
-    run_bt.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None, help="Количество символов после stage-1 фильтра bee_bite")
-    run_bt.add_argument("--levels-tf", default=None, help="Таймфрейм уровней (например 1d). Приоритетнее LEVELS_TIMEFRAME из env")
-    run_bt.add_argument("--entry-tf", default=None, help="Таймфрейм входов (например 15m). Приоритетнее ENTRY_TIMEFRAME из env")
-    run_bt.add_argument("--strategy", choices=["bee_bite"], default=None, help="В проекте оставлена только стратегия bee_bite")
-    run_bt.add_argument("--bee-bite-grid", choices=["baseline", "expanded", "research"], default=None, help="Режим сетки bee_bite")
-    run_bt.add_argument("--bee-bite-reclaim-mode", choices=["strict", "balanced", "aggressive"], default=None, help="Режим reclaim в bee_bite")
-    run_bt.add_argument("--bee-bite-retest-mode", choices=["confirmation", "immediate"], default=None, help="Режим входа в bee_bite")
-    run_bt.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=_positive_int_for("--bee-bite-cooldown-hours"), default=None, help="Cooldown для bee_bite в часах")
-    run_bt.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=_positive_int_for("--bee-bite-max-age-range-hours"), default=None, help="Максимальный возраст range для bee_bite в часах")
-    run_bt.add_argument("--plot", default=False, help="Сохранять диагностические файлы по лучшей комбинации (true/false)")
-    run_bt.add_argument("--plot-from-results", action="store_true", help="Построить диагностику по параметрам из results.csv без полного бэктеста")
-    run_bt.add_argument("--results-input", default=None, help="Путь к CSV с результатами для --plot-from-results")
-    run_bt.add_argument("--id", type=_positive_int_for("--id"), default=None, help="ID комбинации в CSV")
+    run_bt = subparsers.add_parser("run-backtest", help="Run a backtest on cached data")
+    run_bt.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    run_bt.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None, help="Number of symbols after bee_bite stage-1 filtering")
+    run_bt.add_argument("--levels-tf", default=None, help="Levels timeframe, e.g. 1d")
+    run_bt.add_argument("--entry-tf", default=None, help="Entry timeframe, e.g. 15m")
+    run_bt.add_argument("--strategy", choices=["bee_bite"], default=None, help="Only bee_bite strategy is available")
+    run_bt.add_argument("--bee-bite-grid", choices=["baseline", "expanded", "research"], default=None, help="Bee bite grid mode")
+    run_bt.add_argument("--bee-bite-reclaim-mode", choices=["strict", "balanced", "aggressive"], default=None, help="Bee bite reclaim mode")
+    run_bt.add_argument("--bee-bite-retest-mode", choices=["confirmation", "immediate"], default=None, help="Bee bite entry mode")
+    run_bt.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=_positive_int_for("--bee-bite-cooldown-hours"), default=None, help="Cooldown for bee_bite in hours")
+    run_bt.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=_positive_int_for("--bee-bite-max-age-range-hours"), default=None, help="Max range age for bee_bite in hours")
+    run_bt.add_argument("--plot", default=False, help="Save diagnostic files for the best combination (true/false)")
+    run_bt.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
+    run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")
+    run_bt.add_argument("--id", type=_positive_int_for("--id"), default=None, help="Combination ID in the CSV")
 
-    report = subparsers.add_parser("make-report", help="Сформировать JSON-отчёт по результатам бэктеста")
-    report.add_argument("--input", default=None, help="Путь к CSV с результатами")
-    report.add_argument("--output", default=None, help="Путь к JSON отчёту")
+    report = subparsers.add_parser("make-report", help="Build a JSON report from backtest results")
+    report.add_argument("--input", default=None, help="Path to input CSV with results")
+    report.add_argument("--output", default=None, help="Path to output JSON report")
 
-    stage1 = subparsers.add_parser("review-stage1", help="Найти historical stage-1 события bee_bite и сохранить png-графики")
-    stage1.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
-    stage1.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Максимум png-графиков по последним stage-1 событиям")
-    stage1.add_argument("--output", default=None, help="Путь к CSV с detected stage-1 событиями")
+    stage1 = subparsers.add_parser("review-stage1", help="Find historical bee_bite stage-1 events and save review PNGs")
+    stage1.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    stage1.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-1 review plots")
+    stage1.add_argument("--output", default=None, help="Path to CSV with detected stage-1 events")
 
-    quality = subparsers.add_parser("check-quality", help="Проверка качества кэша")
-    quality.add_argument("--symbols", nargs="*", default=None, help="Список символов, например BTC/USDT ETH/USDT")
-    quality.add_argument("--output", default=None, help=f"Путь к отчёту качества (.json или .csv). По умолчанию: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
+    stage2 = subparsers.add_parser("review-stage2", help="Find bee_bite stage-2 structure and save PNGs with balance boxes")
+    stage2.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    stage2.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-2 review plots")
+    stage2.add_argument("--output", default=None, help="Path to CSV with detected stage-2 structures")
 
-    subparsers.add_parser("clear-cache", help="Полная очистка директории кэша")
+    quality = subparsers.add_parser("check-quality", help="Validate cache quality")
+    quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
+
+    subparsers.add_parser("clear-cache", help="Fully clear the cache directory")
     return parser
 
 
@@ -92,6 +97,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-backtest": commands.run_backtest,
         "make-report": commands.make_report,
         "review-stage1": commands.review_stage1,
+        "review-stage2": commands.review_stage2,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }
