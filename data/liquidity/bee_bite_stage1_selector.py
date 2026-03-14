@@ -318,7 +318,12 @@ class BeeBiteStage1Selector:
             peak_offset = int(np.argmax(pump_highs))
             peak_idx = start_idx + peak_offset
 
-            pump_start_idx = self._resolve_pump_start_idx(prepared=prepared, peak_idx=peak_idx)
+            raw_pump_start_idx = self._resolve_pump_start_idx(prepared=prepared, peak_idx=peak_idx)
+            pump_start_idx = self._refine_pump_start_idx(
+                prepared=prepared,
+                raw_pump_start_idx=raw_pump_start_idx,
+                peak_idx=peak_idx,
+            )
             if pump_start_idx < self._sleep_window_bars:
                 start_idx += 1
                 continue
@@ -345,6 +350,9 @@ class BeeBiteStage1Selector:
                 start_idx += 1
                 continue
             if (peak_idx - pump_start_idx) > self._max_initial_pump_duration_bars:
+                start_idx += 1
+                continue
+            if not self._has_stepped_initial_volume(prepared=prepared, pump_start_idx=pump_start_idx):
                 start_idx += 1
                 continue
 
@@ -375,6 +383,34 @@ class BeeBiteStage1Selector:
         start_offset = int(np.argmin(lows_window))
         return search_start_idx + start_offset
 
+    def _refine_pump_start_idx(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        raw_pump_start_idx: int,
+        peak_idx: int,
+    ) -> int:
+        latest_valid_start_idx = raw_pump_start_idx
+        latest_effective_high = self._effective_high_at(prepared=prepared, idx=peak_idx)
+        latest_candidate_idx = peak_idx - self._pump_window_bars + 1
+        if latest_candidate_idx < raw_pump_start_idx:
+            return raw_pump_start_idx
+
+        for candidate_start_idx in range(raw_pump_start_idx, latest_candidate_idx + 1):
+            pump_base_price = float(prepared.lows[candidate_start_idx])
+            if pump_base_price <= self._EPSILON:
+                continue
+
+            pump_percent = (latest_effective_high / pump_base_price) - 1.0
+            if pump_percent < self._min_pump_pct:
+                continue
+            if not self._has_stepped_initial_volume(prepared=prepared, pump_start_idx=candidate_start_idx):
+                continue
+
+            latest_valid_start_idx = candidate_start_idx
+
+        return latest_valid_start_idx
+
     def _effective_highs(self, prepared: _PreparedStage1Frame) -> np.ndarray:
         body_highs = np.maximum(prepared.opens, prepared.closes)
         body_sizes = np.abs(prepared.closes - prepared.opens)
@@ -388,6 +424,22 @@ class BeeBiteStage1Selector:
         if upper_wick > body_size:
             return body_high
         return float(prepared.highs[idx])
+
+    def _has_stepped_initial_volume(self, *, prepared: _PreparedStage1Frame, pump_start_idx: int) -> bool:
+        window_end_idx = min(len(prepared.quote_volume) - 1, pump_start_idx + self._pump_window_bars - 1)
+        initial_quote_volume = prepared.quote_volume[pump_start_idx : window_end_idx + 1]
+        if initial_quote_volume.size < 3:
+            return False
+
+        segments = [segment for segment in np.array_split(initial_quote_volume, 3) if segment.size > 0]
+        if len(segments) < 3:
+            return False
+
+        segment_means = [float(np.mean(segment)) for segment in segments]
+        return (
+            segment_means[0] < segment_means[1] < segment_means[2]
+            and segment_means[2] >= (segment_means[0] * 1.2)
+        )
 
     def _finalize_candidate_regime(
         self,
