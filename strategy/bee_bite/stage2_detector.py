@@ -75,6 +75,7 @@ class BeeBiteStage2Detector:
 
     _EPSILON = 1e-12
     _ADJACENT_BREAKOUT_MULTIPLIER = 0.25
+    _BODY_CLOSE_BREAKOUT_MULTIPLIER = 0.35
     _DEFAULT_BREAKOUT_MULTIPLIER = 1.0
     _RANGE_OVERLAP_THRESHOLD = 0.5
     _MIN_BODY_RATIO_FOR_BREAKOUT = 0.35
@@ -153,7 +154,11 @@ class BeeBiteStage2Detector:
             if local_range is not None:
                 local_ranges.append(local_range)
 
-            breakout_price = self._effective_high_at(prepared=prepared, idx=idx)
+            breakout_price = self._confirmed_high_price_at(
+                prepared=prepared,
+                idx=idx,
+                previous_high_price=current_high_price,
+            )
             confirmed_highs.append(
                 BeeBiteStage2ConfirmedHigh(
                     idx=idx,
@@ -344,20 +349,9 @@ class BeeBiteStage2Detector:
         current_high_price: float,
         breakout_idx: int,
     ) -> bool:
-        breakout_price = self._effective_high_at(prepared=prepared, idx=breakout_idx)
-        breakout_excess = breakout_price - current_high_price
-        if breakout_excess <= self._EPSILON:
-            return False
-
         bars_since_high = breakout_idx - current_high_idx
         candle_sizes = prepared.highs[current_high_idx : breakout_idx + 1] - prepared.lows[current_high_idx : breakout_idx + 1]
         mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
-        threshold_multiplier = (
-            self._ADJACENT_BREAKOUT_MULTIPLIER if bars_since_high <= 2 else self._DEFAULT_BREAKOUT_MULTIPLIER
-        )
-        threshold = max(mean_candle_size * threshold_multiplier, self._EPSILON)
-        if breakout_excess < threshold:
-            return False
 
         breakout_close = float(prepared.closes[breakout_idx])
         breakout_open = float(prepared.opens[breakout_idx])
@@ -367,9 +361,46 @@ class BeeBiteStage2Detector:
         spread = max(breakout_high - breakout_low, self._EPSILON)
         body_ratio = abs(breakout_close - breakout_open) / spread
 
-        if breakout_close > (current_high_price + self._EPSILON):
-            return True
+        if breakout_close > (current_high_price + self._EPSILON) and body_ratio >= self._MIN_BODY_RATIO_FOR_BREAKOUT:
+            breakout_excess = breakout_high - current_high_price
+            if breakout_excess <= self._EPSILON:
+                return False
+            close_threshold_multiplier = (
+                self._ADJACENT_BREAKOUT_MULTIPLIER if bars_since_high <= 2 else self._BODY_CLOSE_BREAKOUT_MULTIPLIER
+            )
+            close_threshold = max(mean_candle_size * close_threshold_multiplier, self._EPSILON)
+            return breakout_excess >= close_threshold
+
+        breakout_price = self._effective_high_at(prepared=prepared, idx=breakout_idx)
+        breakout_excess = breakout_price - current_high_price
+        if breakout_excess <= self._EPSILON:
+            return False
+
+        threshold_multiplier = (
+            self._ADJACENT_BREAKOUT_MULTIPLIER if bars_since_high <= 2 else self._DEFAULT_BREAKOUT_MULTIPLIER
+        )
+        threshold = max(mean_candle_size * threshold_multiplier, self._EPSILON)
+        if breakout_excess < threshold:
+            return False
+
         return body_high > (current_high_price + self._EPSILON) and body_ratio >= self._MIN_BODY_RATIO_FOR_BREAKOUT
+
+    def _confirmed_high_price_at(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        idx: int,
+        previous_high_price: float,
+    ) -> float:
+        breakout_close = float(prepared.closes[idx])
+        breakout_open = float(prepared.opens[idx])
+        breakout_high = float(prepared.highs[idx])
+        breakout_low = float(prepared.lows[idx])
+        spread = max(breakout_high - breakout_low, self._EPSILON)
+        body_ratio = abs(breakout_close - breakout_open) / spread
+        if breakout_close > (previous_high_price + self._EPSILON) and body_ratio >= self._MIN_BODY_RATIO_FOR_BREAKOUT:
+            return breakout_high
+        return self._effective_high_at(prepared=prepared, idx=idx)
 
     def _effective_high_at(self, *, prepared: _PreparedStage2Frame, idx: int) -> float:
         body_high = max(float(prepared.opens[idx]), float(prepared.closes[idx]))
