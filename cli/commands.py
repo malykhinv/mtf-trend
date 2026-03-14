@@ -1556,6 +1556,8 @@ def _stage1_event_to_row(
         "stage1_confirmed_timestamp": event.stage1_confirmed_timestamp,
         "pump_base_price": event.pump_base_price,
         "pump_peak_price": event.pump_peak_price,
+        "hold_base_price": event.hold_base_price,
+        "hold_base_timestamp": event.hold_base_timestamp,
         "hold_price": event.hold_price,
         "lowest_after_pump": event.lowest_after_pump,
         "lowest_after_pump_timestamp": event.lowest_after_pump_timestamp,

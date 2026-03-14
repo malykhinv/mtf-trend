@@ -40,6 +40,8 @@ class BeeBiteStage1Result:
     stage1_confirmed_timestamp: int | None = None
     pump_base_price: float | None = None
     pump_peak_price: float | None = None
+    hold_base_price: float | None = None
+    hold_base_timestamp: int | None = None
     hold_price: float | None = None
     lowest_after_pump: float | None = None
     lowest_after_pump_timestamp: int | None = None
@@ -365,6 +367,8 @@ class BeeBiteStage1Selector:
                 sleep_avg_volume_usdt=sleep_avg_volume_usdt,
                 pump_base_price=pump_base_price,
                 pump_peak_price=pump_peak_price,
+                hold_base_idx=pump_start_idx,
+                hold_base_price=pump_base_price,
                 pump_percent=pump_percent,
             )
             candidate = self._finalize_candidate_regime(prepared=prepared, candidate=initial_candidate)
@@ -454,6 +458,8 @@ class BeeBiteStage1Selector:
     ) -> "_Stage1Candidate":
         current_peak_idx = int(candidate.peak_idx)
         current_peak_price = float(candidate.pump_peak_price)
+        current_hold_base_idx = int(candidate.hold_base_idx)
+        current_hold_base_price = float(candidate.hold_base_price)
         regime_end_idx = min(
             len(prepared.timestamps) - 1,
             current_peak_idx + self._max_confirm_delay_bars,
@@ -461,8 +467,8 @@ class BeeBiteStage1Selector:
         idx = current_peak_idx + 1
 
         while idx < len(prepared.timestamps):
-            hold_price = candidate.pump_base_price + (
-                (current_peak_price - candidate.pump_base_price) * self._min_retain_ratio
+            hold_price = current_hold_base_price + (
+                (current_peak_price - current_hold_base_price) * self._min_retain_ratio
             )
             current_low = float(prepared.lows[idx])
             current_high = self._breakout_high_at(
@@ -481,18 +487,21 @@ class BeeBiteStage1Selector:
                     breakout_idx=idx,
                     main_high_price=current_peak_price,
                 )
-                if breakout_is_significant and self._has_upper_hold_before_breakout(
-                    prepared=prepared,
-                    peak_idx=current_peak_idx,
-                    breakout_idx=idx,
-                    hold_price=hold_price,
-                    peak_price=current_peak_price,
-                ):
-                    regime_end_idx = idx
-                    break
+                had_long_balance_before_breakout = breakout_is_significant and (
+                    (idx - current_peak_idx) >= self._min_confirm_delay_bars
+                )
                 if not breakout_is_significant:
                     idx += 1
                     continue
+                if had_long_balance_before_breakout and current_hold_base_idx == candidate.pump_start_idx:
+                    first_hold_low_idx = self._resolve_hold_base_idx_before_breakout(
+                        prepared=prepared,
+                        peak_idx=current_peak_idx,
+                        breakout_idx=idx,
+                    )
+                    if first_hold_low_idx is not None:
+                        current_hold_base_idx = first_hold_low_idx
+                        current_hold_base_price = float(prepared.lows[first_hold_low_idx])
                 current_peak_idx = idx
                 current_peak_price = current_high
                 regime_end_idx = min(
@@ -516,6 +525,8 @@ class BeeBiteStage1Selector:
             sleep_avg_volume_usdt=candidate.sleep_avg_volume_usdt,
             pump_base_price=candidate.pump_base_price,
             pump_peak_price=current_peak_price,
+            hold_base_idx=current_hold_base_idx,
+            hold_base_price=current_hold_base_price,
             pump_percent=(current_peak_price / candidate.pump_base_price) - 1.0,
         )
 
@@ -542,6 +553,21 @@ class BeeBiteStage1Selector:
         if np.any(hold_highs > (peak_price + self._EPSILON)):
             return False
         return True
+
+    def _resolve_hold_base_idx_before_breakout(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        peak_idx: int,
+        breakout_idx: int,
+    ) -> int | None:
+        if breakout_idx <= (peak_idx + 1):
+            return None
+        hold_lows = prepared.lows[peak_idx + 1 : breakout_idx]
+        if hold_lows.size == 0:
+            return None
+        hold_low_offset = int(np.argmin(hold_lows))
+        return peak_idx + 1 + hold_low_offset
 
     def _is_significant_breakout_above_main_high(
         self,
@@ -604,15 +630,15 @@ class BeeBiteStage1Selector:
         lowest_after_pump_offset = int(np.argmin(post_peak_lows))
         lowest_after_pump_idx = candidate.peak_idx + 1 + lowest_after_pump_offset
         lowest_after_pump = float(post_peak_lows[lowest_after_pump_offset])
-        hold_price = candidate.pump_base_price + (
-            (candidate.pump_peak_price - candidate.pump_base_price) * self._min_retain_ratio
+        hold_price = candidate.hold_base_price + (
+            (candidate.pump_peak_price - candidate.hold_base_price) * self._min_retain_ratio
         )
         sleep_closes = prepared.closes[candidate.sleep_start_idx : candidate.sleep_end_idx + 1]
         sleep_closes_below_hold_ratio = float(np.mean(sleep_closes < hold_price))
         confirm_candle_low = float(prepared.lows[confirm_idx])
         confirm_candle_close = float(prepared.closes[confirm_idx])
-        retain_ratio = (lowest_after_pump - candidate.pump_base_price) / max(
-            candidate.pump_peak_price - candidate.pump_base_price,
+        retain_ratio = (lowest_after_pump - candidate.hold_base_price) / max(
+            candidate.pump_peak_price - candidate.hold_base_price,
             self._EPSILON,
         )
         post_pump_avg_volume_usdt = self._mean_range(
@@ -639,6 +665,8 @@ class BeeBiteStage1Selector:
             stage1_confirmed_timestamp=int(prepared.timestamps[confirm_idx]),
             pump_base_price=candidate.pump_base_price,
             pump_peak_price=candidate.pump_peak_price,
+            hold_base_price=candidate.hold_base_price,
+            hold_base_timestamp=int(prepared.timestamps[candidate.hold_base_idx]),
             hold_price=hold_price,
             lowest_after_pump=lowest_after_pump,
             lowest_after_pump_timestamp=int(prepared.timestamps[lowest_after_pump_idx]),
@@ -697,4 +725,6 @@ class _Stage1Candidate:
     sleep_avg_volume_usdt: float
     pump_base_price: float
     pump_peak_price: float
+    hold_base_idx: int
+    hold_base_price: float
     pump_percent: float

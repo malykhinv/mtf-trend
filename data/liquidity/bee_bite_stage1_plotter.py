@@ -30,6 +30,7 @@ class BeeBiteStage1Plotter:
     _HOLD_COLOR = "#f59e0b"
     _PEAK_COLOR = "#fb7185"
     _START_COLOR = "#38bdf8"
+    _HOLD_BASE_COLOR = "#f8fafc"
     _STAGE1_COLOR = "#a3e635"
     _LOWEST_COLOR = "#c084fc"
 
@@ -57,6 +58,11 @@ class BeeBiteStage1Plotter:
         confirmed_idx = self._timestamp_to_index(prepared, event.stage1_confirmed_timestamp)
         pump_start_idx = self._timestamp_to_index(prepared, event.pump_start_timestamp)
         pump_peak_idx = self._timestamp_to_index(prepared, event.pump_peak_timestamp)
+        hold_base_idx = (
+            self._timestamp_to_index(prepared, event.hold_base_timestamp)
+            if event.hold_base_timestamp is not None
+            else None
+        )
         lowest_after_pump_idx = (
             self._timestamp_to_index(prepared, event.lowest_after_pump_timestamp)
             if event.lowest_after_pump_timestamp is not None
@@ -113,6 +119,18 @@ class BeeBiteStage1Plotter:
 
         self._draw_marker(price_ax, pump_start_idx - index_shift, event.pump_base_price, self._START_COLOR, "pump start")
         self._draw_marker(price_ax, pump_peak_idx - index_shift, event.pump_peak_price, self._PEAK_COLOR, "pump peak marker")
+        if (
+            hold_base_idx is not None
+            and event.hold_base_price is not None
+            and event.hold_base_timestamp != event.pump_start_timestamp
+        ):
+            self._draw_marker(
+                price_ax,
+                hold_base_idx - index_shift,
+                event.hold_base_price,
+                self._HOLD_BASE_COLOR,
+                "hold base",
+            )
         close_at_confirmed = float(window.iloc[confirmed_idx - index_shift]["close"])
         self._draw_marker(price_ax, confirmed_idx - index_shift, close_at_confirmed, self._STAGE1_COLOR, "stage1 confirmed")
 
