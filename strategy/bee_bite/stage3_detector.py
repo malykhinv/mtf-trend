@@ -37,6 +37,8 @@ class BeeBiteStage3Result:
     box_low: float | None = None
     box_high: float | None = None
     hold_price: float | None = None
+    reference_box_start_timestamp: int | None = None
+    reference_box_end_timestamp: int | None = None
 
 
 @dataclass(slots=True)
@@ -69,6 +71,8 @@ class BeeBiteStage3Detector:
             return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage2_not_passed")
         if stage2.box_low is None or stage2.box_high is None or stage2.box_end_timestamp is None:
             return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage2_box_missing")
+        reference_box_start_timestamp = int(stage2.box_start_timestamp) if stage2.box_start_timestamp is not None else None
+        reference_box_end_timestamp = int(stage2.box_end_timestamp)
 
         prepared = self._prepare_frame(frame=frame)
         if prepared is None:
@@ -86,6 +90,8 @@ class BeeBiteStage3Detector:
                 analysis_end_timestamp=int(prepared.timestamps[box_end_idx]),
                 box_low=float(stage2.box_low),
                 box_high=float(stage2.box_high),
+                reference_box_start_timestamp=reference_box_start_timestamp,
+                reference_box_end_timestamp=reference_box_end_timestamp,
             )
         scan_start_idx = box_end_idx + 1
         scan_end_idx = len(prepared.timestamps) - 1
@@ -102,6 +108,8 @@ class BeeBiteStage3Detector:
                 analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
                 box_low=float(stage2.box_low),
                 box_high=float(stage2.box_high),
+                reference_box_start_timestamp=reference_box_start_timestamp,
+                reference_box_end_timestamp=reference_box_end_timestamp,
             )
 
         lower_zone = self._resolve_active_lower_liquidity_zone(stage2=stage2)
@@ -114,6 +122,8 @@ class BeeBiteStage3Detector:
                 analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
                 box_low=float(stage2.box_low),
                 box_high=float(stage2.box_high),
+                reference_box_start_timestamp=reference_box_start_timestamp,
+                reference_box_end_timestamp=reference_box_end_timestamp,
             )
 
         boundary = float(stage2.box_low)
@@ -161,6 +171,8 @@ class BeeBiteStage3Detector:
                         box_high=range_high,
                         hold_price=hold_price,
                         range_size_pct=range_size_pct,
+                        reference_box_start_timestamp=reference_box_start_timestamp,
+                        reference_box_end_timestamp=reference_box_end_timestamp,
                     )
                 break_idx = idx
                 lowest_break = low
@@ -188,6 +200,8 @@ class BeeBiteStage3Detector:
                     box_high=range_high,
                     hold_price=hold_price,
                     range_size_pct=range_size_pct,
+                    reference_box_start_timestamp=reference_box_start_timestamp,
+                    reference_box_end_timestamp=reference_box_end_timestamp,
                 )
 
             under_range_span = resolve_below_range_span(
@@ -217,6 +231,8 @@ class BeeBiteStage3Detector:
                     box_low=boundary,
                     box_high=range_high,
                     hold_price=hold_price,
+                    reference_box_start_timestamp=reference_box_start_timestamp,
+                    reference_box_end_timestamp=reference_box_end_timestamp,
                 )
 
             if close > boundary:
@@ -242,6 +258,8 @@ class BeeBiteStage3Detector:
                     box_low=boundary,
                     box_high=range_high,
                     hold_price=hold_price,
+                    reference_box_start_timestamp=reference_box_start_timestamp,
+                    reference_box_end_timestamp=reference_box_end_timestamp,
                 )
 
         return BeeBiteStage3Result(
@@ -260,6 +278,8 @@ class BeeBiteStage3Detector:
             box_high=range_high,
             hold_price=hold_price,
             range_size_pct=range_size_pct,
+            reference_box_start_timestamp=reference_box_start_timestamp,
+            reference_box_end_timestamp=reference_box_end_timestamp,
         )
 
     @staticmethod

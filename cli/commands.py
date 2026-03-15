@@ -117,6 +117,15 @@ class _Stage23ReviewCandidate:
     frame: pd.DataFrame
 
 
+@dataclass(slots=True)
+class _Stage23EvolutionSnapshot:
+    order: int
+    timestamp: int
+    dynamic_stage2_result: BeeBiteStage2Result
+    reference_stage2_result: BeeBiteStage2Result | None
+    stage3_result: BeeBiteStage3Result
+
+
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -1016,6 +1025,74 @@ def _resolve_snapshot_timestamps(
     if end_idx < start_idx:
         return []
     return [int(timestamp) for timestamp in timestamps[start_idx : end_idx + 1]]
+
+
+def _stage2_has_reference_box(stage2_result: BeeBiteStage2Result) -> bool:
+    if not stage2_result.passed:
+        return False
+    if stage2_result.box_low is None or stage2_result.box_high is None or stage2_result.box_end_timestamp is None:
+        return False
+    return any(zone.side == "lower" for zone in stage2_result.liquidity_zones)
+
+
+def _build_stage23_evolution_snapshots(
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    frame: pd.DataFrame,
+    stage1_event: BeeBiteStage1Result,
+    regime: _Stage1Regime,
+    stage2_detector: BeeBiteStage2Detector,
+    stage3_detector: BeeBiteStage3Detector,
+) -> list[_Stage23EvolutionSnapshot]:
+    if stage1_event.pump_peak_timestamp is None:
+        return []
+
+    snapshot_timestamps = _resolve_snapshot_timestamps(
+        frame=frame,
+        start_timestamp=int(stage1_event.pump_peak_timestamp) + timeframe.to_milliseconds(),
+        end_timestamp=int(regime.regime_end_timestamp),
+    )
+    snapshots: list[_Stage23EvolutionSnapshot] = []
+    reference_stage2_result: BeeBiteStage2Result | None = None
+
+    for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
+        dynamic_stage2_result = stage2_detector.detect(
+            symbol=symbol,
+            frame=frame,
+            stage1=stage1_event,
+            analysis_end_timestamp=snapshot_timestamp,
+        )
+        if reference_stage2_result is None and _stage2_has_reference_box(dynamic_stage2_result):
+            reference_stage2_result = dynamic_stage2_result
+
+        if reference_stage2_result is None:
+            stage3_result = BeeBiteStage3Result(
+                symbol=symbol,
+                passed=False,
+                reason="stage2_reference_not_locked",
+                analysis_end_timestamp=snapshot_timestamp,
+            )
+        else:
+            stage3_result = stage3_detector.detect(
+                symbol=symbol,
+                frame=frame,
+                stage1=stage1_event,
+                stage2=reference_stage2_result,
+                analysis_end_timestamp=snapshot_timestamp,
+            )
+
+        snapshots.append(
+            _Stage23EvolutionSnapshot(
+                order=snapshot_order,
+                timestamp=snapshot_timestamp,
+                dynamic_stage2_result=dynamic_stage2_result,
+                reference_stage2_result=reference_stage2_result,
+                stage3_result=stage3_result,
+            )
+        )
+
+    return snapshots
 
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
@@ -1981,8 +2058,14 @@ def _stage3_result_to_rows(
             "stage3_reason": stage3_result.reason,
             "analysis_start_timestamp": stage3_result.analysis_start_timestamp,
             "analysis_end_timestamp": stage3_result.analysis_end_timestamp,
-            "box_start_timestamp": stage2_result.box_start_timestamp,
-            "box_end_timestamp": stage2_result.box_end_timestamp,
+            "stage2_box_start_timestamp": stage2_result.box_start_timestamp,
+            "stage2_box_end_timestamp": stage2_result.box_end_timestamp,
+            "stage2_box_low": stage2_result.box_low,
+            "stage2_box_high": stage2_result.box_high,
+            "reference_box_start_timestamp": stage3_result.reference_box_start_timestamp,
+            "reference_box_end_timestamp": stage3_result.reference_box_end_timestamp,
+            "box_start_timestamp": stage3_result.reference_box_start_timestamp,
+            "box_end_timestamp": stage3_result.reference_box_end_timestamp,
             "box_low": stage3_result.box_low,
             "box_high": stage3_result.box_high,
             "hold_price": stage3_result.hold_price,
@@ -2050,10 +2133,16 @@ def _stage23_backtest_row(
         "local_ranges_count": len(stage2_result.local_ranges),
         "merged_ranges_count": len(stage2_result.merged_ranges),
         "liquidity_zones_count": len(stage2_result.liquidity_zones),
-        "box_start_timestamp": stage2_result.box_start_timestamp,
-        "box_end_timestamp": stage2_result.box_end_timestamp,
-        "box_low": stage2_result.box_low,
-        "box_high": stage2_result.box_high,
+        "stage2_box_start_timestamp": stage2_result.box_start_timestamp,
+        "stage2_box_end_timestamp": stage2_result.box_end_timestamp,
+        "stage2_box_low": stage2_result.box_low,
+        "stage2_box_high": stage2_result.box_high,
+        "reference_box_start_timestamp": stage3_result.reference_box_start_timestamp,
+        "reference_box_end_timestamp": stage3_result.reference_box_end_timestamp,
+        "box_start_timestamp": stage3_result.reference_box_start_timestamp,
+        "box_end_timestamp": stage3_result.reference_box_end_timestamp,
+        "box_low": stage3_result.box_low,
+        "box_high": stage3_result.box_high,
         "stage3_passed": stage3_result.passed,
         "stage3_reason": stage3_result.reason,
         "stage3_analysis_end_timestamp": stage3_result.analysis_end_timestamp,
@@ -2264,21 +2353,20 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
         for regime in regimes:
             stage1_event = regime.first_event
-            stage2_analysis_end_timestamp = _resolve_stage2_analysis_end_timestamp(frame=frame, regime=regime)
-            stage2_result = stage2_detector.detect(
+            dynamic_stage2_result = stage2_detector.detect(
                 symbol=symbol,
                 frame=frame,
                 stage1=stage1_event,
-                analysis_end_timestamp=stage2_analysis_end_timestamp,
+                analysis_end_timestamp=int(regime.regime_end_timestamp),
             )
-            if not stage2_result.passed:
+            if not dynamic_stage2_result.passed:
                 rows.extend(
                     _stage3_result_to_rows(
                         symbol=symbol,
                         timeframe=review_timeframe,
                         regime=regime,
                         stage1_event=stage1_event,
-                        stage2_result=stage2_result,
+                        stage2_result=dynamic_stage2_result,
                         stage3_result=BeeBiteStage3Result(
                             symbol=symbol,
                             passed=False,
@@ -2289,12 +2377,19 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 reason_counts["stage2_not_passed"] += 1
                 continue
 
-            stage3_result = stage3_detector.detect(
+            snapshots = _build_stage23_evolution_snapshots(
                 symbol=symbol,
+                timeframe=review_timeframe,
                 frame=frame,
-                stage1=stage1_event,
-                stage2=stage2_result,
-                analysis_end_timestamp=int(regime.regime_end_timestamp),
+                stage1_event=stage1_event,
+                regime=regime,
+                stage2_detector=stage2_detector,
+                stage3_detector=stage3_detector,
+            )
+            stage3_result = snapshots[-1].stage3_result if snapshots else BeeBiteStage3Result(
+                symbol=symbol,
+                passed=False,
+                reason="stage2_reference_not_locked",
             )
             rows.extend(
                 _stage3_result_to_rows(
@@ -2302,7 +2397,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     timeframe=review_timeframe,
                     regime=regime,
                     stage1_event=stage1_event,
-                    stage2_result=stage2_result,
+                    stage2_result=dynamic_stage2_result,
                     stage3_result=stage3_result,
                 )
             )
@@ -2311,53 +2406,27 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     symbol=symbol,
                     regime=regime,
                     stage1_event=stage1_event,
-                    final_stage2_result=stage2_result,
+                    final_stage2_result=dynamic_stage2_result,
                     final_stage3_result=stage3_result,
                     frame=frame,
                 )
             )
             if stage3_result.passed:
-                stage3_results.append((symbol, regime, stage1_event, stage2_result, stage3_result, frame))
+                stage3_results.append((symbol, regime, stage1_event, dynamic_stage2_result, stage3_result, frame))
             else:
                 reason_counts[stage3_result.reason] += 1
-            if review_mode == "evolution" and stage1_event.pump_peak_timestamp is not None:
-                snapshot_timestamps = _resolve_snapshot_timestamps(
-                    frame=frame,
-                    start_timestamp=int(stage1_event.pump_peak_timestamp) + review_timeframe.to_milliseconds(),
-                    end_timestamp=int(stage2_analysis_end_timestamp),
-                )
-                for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
-                    snapshot_stage2 = stage2_detector.detect(
-                        symbol=symbol,
-                        frame=frame,
-                        stage1=stage1_event,
-                        analysis_end_timestamp=snapshot_timestamp,
-                    )
-                    if snapshot_stage2.passed:
-                        snapshot_stage3 = stage3_detector.detect(
-                            symbol=symbol,
-                            frame=frame,
-                            stage1=stage1_event,
-                            stage2=snapshot_stage2,
-                            analysis_end_timestamp=snapshot_timestamp,
-                        )
-                    else:
-                        snapshot_stage3 = BeeBiteStage3Result(
-                            symbol=symbol,
-                            passed=False,
-                            reason="stage2_not_passed",
-                            analysis_end_timestamp=snapshot_timestamp,
-                        )
+            if review_mode == "evolution":
+                for snapshot in snapshots:
                     rows.append(
                         _stage23_backtest_row(
                             symbol=symbol,
                             timeframe=review_timeframe,
                             regime=regime,
                             stage1_event=stage1_event,
-                            snapshot_order=snapshot_order,
-                            snapshot_timestamp=snapshot_timestamp,
-                            stage2_result=snapshot_stage2,
-                            stage3_result=snapshot_stage3,
+                            snapshot_order=snapshot.order,
+                            snapshot_timestamp=snapshot.timestamp,
+                            stage2_result=snapshot.dynamic_stage2_result,
+                            stage3_result=snapshot.stage3_result,
                         )
                     )
 
@@ -2428,53 +2497,42 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
             plot_limit=plot_limit,
         ):
             symbol_slug = candidate.symbol.replace("/", "_")
-            if candidate.stage1_event.pump_peak_timestamp is None:
-                continue
-            snapshot_timestamps = _resolve_snapshot_timestamps(
+            snapshots = _build_stage23_evolution_snapshots(
+                symbol=candidate.symbol,
+                timeframe=review_timeframe,
                 frame=candidate.frame,
-                start_timestamp=int(candidate.stage1_event.pump_peak_timestamp) + review_timeframe.to_milliseconds(),
-                end_timestamp=int(candidate.final_stage2_result.analysis_end_timestamp or candidate.regime.regime_end_timestamp),
+                stage1_event=candidate.stage1_event,
+                regime=candidate.regime,
+                stage2_detector=stage2_detector,
+                stage3_detector=stage3_detector,
             )
-            for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
-                snapshot_stage2 = stage2_detector.detect(
-                    symbol=candidate.symbol,
-                    frame=candidate.frame,
-                    stage1=candidate.stage1_event,
-                    analysis_end_timestamp=snapshot_timestamp,
-                )
+            for snapshot in snapshots:
                 plot_path = plots_dir / (
-                    f"{symbol_slug}_stage23_regime_{candidate.regime.regime_index:02d}_step_{snapshot_order:04d}.png"
+                    f"{symbol_slug}_stage23_regime_{candidate.regime.regime_index:02d}_step_{snapshot.order:04d}.png"
                 )
-                if snapshot_stage2.passed:
-                    snapshot_stage3 = stage3_detector.detect(
-                        symbol=candidate.symbol,
-                        frame=candidate.frame,
-                        stage1=candidate.stage1_event,
-                        stage2=snapshot_stage2,
-                        analysis_end_timestamp=snapshot_timestamp,
-                    )
+                if snapshot.reference_stage2_result is not None:
                     stage3_plotter.plot_result(
                         frame=candidate.frame,
                         stage1_event=candidate.stage1_event,
-                        stage2_result=snapshot_stage2,
-                        stage3_result=snapshot_stage3,
+                        stage2_result=snapshot.dynamic_stage2_result,
+                        stage3_result=snapshot.stage3_result,
                         output_path=plot_path,
-                        window_end_timestamp=snapshot_timestamp,
+                        window_end_timestamp=snapshot.timestamp,
                         title_suffix=(
                             f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
-                            f"| step {snapshot_order:04d} | {snapshot_stage3.reason}"
+                            f"| step {snapshot.order:04d} | {snapshot.stage3_result.reason}"
                         ),
                     )
                 else:
                     stage2_plotter.plot_result(
                         frame=candidate.frame,
                         stage1_event=candidate.stage1_event,
-                        stage2_result=snapshot_stage2,
+                        stage2_result=snapshot.dynamic_stage2_result,
                         output_path=plot_path,
-                        window_end_timestamp=snapshot_timestamp,
+                        window_end_timestamp=snapshot.timestamp,
                         title_suffix=(
                             f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
-                            f"| step {snapshot_order:04d} | {snapshot_stage2.reason}"
+                            f"| step {snapshot.order:04d} | {snapshot.dynamic_stage2_result.reason}"
                         ),
                     )
                 plots_built += 1

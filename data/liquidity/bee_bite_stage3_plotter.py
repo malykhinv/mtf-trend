@@ -29,6 +29,7 @@ class BeeBiteStage3Plotter:
     _DOWN_COLOR = "#f97316"
     _BOX_EDGE = "#34d399"
     _BOX_FACE = "#064e3b"
+    _CURRENT_BOX_EDGE = "#22d3ee"
     _LOWER_ZONE_EDGE = "#c4b5fd"
     _LOWER_ZONE_FACE = "#4c1d95"
     _BREAK_COLOR = "#ef4444"
@@ -71,7 +72,8 @@ class BeeBiteStage3Plotter:
         pump_start_idx = self._timestamp_to_index(prepared, stage1_event.pump_start_timestamp)
         end_idx = self._timestamp_to_index(prepared, end_anchor)
         window_start = max(0, pump_start_idx - self._PRE_PUMP_CONTEXT_BARS)
-        window_end = min(len(prepared) - 1, end_idx + self._POST_CONTEXT_BARS)
+        post_context_bars = 0 if window_end_timestamp is not None else self._POST_CONTEXT_BARS
+        window_end = min(len(prepared) - 1, end_idx + post_context_bars)
         window = prepared.iloc[window_start : window_end + 1].reset_index(drop=True)
         x_positions = list(range(len(window)))
 
@@ -129,20 +131,60 @@ class BeeBiteStage3Plotter:
                 label="0.4 hold",
             )
 
-        if stage2_result.box_start_timestamp is not None and stage2_result.box_end_timestamp is not None:
+        reference_box_start_timestamp = (
+            stage3_result.reference_box_start_timestamp
+            if stage3_result.reference_box_start_timestamp is not None
+            else stage2_result.box_start_timestamp
+        )
+        reference_box_low = (
+            float(stage3_result.box_low)
+            if stage3_result.box_low is not None
+            else float(stage2_result.box_low or 0.0)
+        )
+        reference_box_high = (
+            float(stage3_result.box_high)
+            if stage3_result.box_high is not None
+            else float(stage2_result.box_high or 0.0)
+        )
+        if reference_box_start_timestamp is not None and reference_box_high > reference_box_low:
             self._draw_rectangle(
                 axis=price_ax,
-                start_idx=self._timestamp_to_index(prepared, int(stage2_result.box_start_timestamp)),
-                end_idx=self._timestamp_to_index(prepared, int(stage2_result.box_end_timestamp)),
+                start_idx=self._timestamp_to_index(prepared, int(reference_box_start_timestamp)),
+                end_idx=window_end,
                 visible_start_idx=window_start,
                 visible_end_idx=window_end,
-                low=float(stage2_result.box_low or 0.0),
-                high=float(stage2_result.box_high or 0.0),
+                low=reference_box_low,
+                high=reference_box_high,
                 index_shift=window_start,
                 edge_color=self._BOX_EDGE,
                 face_color=self._BOX_FACE,
                 alpha=0.16,
                 label="stage2 box",
+            )
+        if (
+            stage2_result.box_start_timestamp is not None
+            and stage2_result.box_low is not None
+            and stage2_result.box_high is not None
+            and (
+                stage2_result.box_start_timestamp != reference_box_start_timestamp
+                or abs(float(stage2_result.box_low) - reference_box_low) > 1e-12
+                or abs(float(stage2_result.box_high) - reference_box_high) > 1e-12
+            )
+        ):
+            self._draw_rectangle(
+                axis=price_ax,
+                start_idx=self._timestamp_to_index(prepared, int(stage2_result.box_start_timestamp)),
+                end_idx=window_end,
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
+                low=float(stage2_result.box_low),
+                high=float(stage2_result.box_high),
+                index_shift=window_start,
+                edge_color=self._CURRENT_BOX_EDGE,
+                face_color="none",
+                alpha=0.45,
+                label="current stage2 box",
+                line_style="--",
             )
 
         lower_zone = stage3_result.active_lower_liquidity_zone
@@ -170,11 +212,11 @@ class BeeBiteStage3Plotter:
                 self._BREAK_COLOR,
                 "sweep low",
             )
-        if stage3_result.reclaim_idx is not None and stage2_result.box_low is not None:
+        if stage3_result.reclaim_idx is not None and stage3_result.box_low is not None:
             self._draw_marker(
                 price_ax,
                 stage3_result.reclaim_idx - window_start,
-                float(stage2_result.box_low),
+                float(stage3_result.box_low),
                 self._RECLAIM_COLOR,
                 "reclaim close",
             )
@@ -195,6 +237,16 @@ class BeeBiteStage3Plotter:
             info_lines.append(f"Under-range span: {stage3_result.under_range_span_pct * 100:.2f}%")
         if stage3_result.range_size_pct is not None:
             info_lines.append(f"Box size: {stage3_result.range_size_pct * 100:.2f}%")
+        if (
+            stage2_result.box_low is not None
+            and stage2_result.box_high is not None
+            and (
+                abs(float(stage2_result.box_low) - reference_box_low) > 1e-12
+                or abs(float(stage2_result.box_high) - reference_box_high) > 1e-12
+            )
+        ):
+            info_lines.append(f"Current stage2: {float(stage2_result.box_low):.5f} .. {float(stage2_result.box_high):.5f}")
+            info_lines.append(f"Anchor box: {reference_box_low:.5f} .. {reference_box_high:.5f}")
         price_ax.text(
             0.015,
             0.985,
@@ -250,6 +302,7 @@ class BeeBiteStage3Plotter:
         face_color: str,
         alpha: float,
         label: str,
+        line_style: str = "-",
     ) -> None:
         clipped_start_idx = max(start_idx, visible_start_idx)
         clipped_end_idx = min(end_idx, visible_end_idx)
@@ -267,6 +320,7 @@ class BeeBiteStage3Plotter:
                 linewidth=1.0,
                 alpha=alpha,
                 label=label,
+                linestyle=line_style,
                 zorder=1,
             )
         )
