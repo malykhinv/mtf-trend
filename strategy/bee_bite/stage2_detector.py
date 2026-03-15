@@ -797,12 +797,8 @@ class BeeBiteStage2Detector:
 
         ordered = sorted((zone for _, zone in raw_zones), key=lambda zone: (zone.start_idx, zone.low))
         clipped: list[BeeBiteStage2LiquidityZone] = []
-        for idx, zone in enumerate(ordered):
+        for zone in ordered:
             effective_end_idx = zone.end_idx
-            if side != "upper" and idx + 1 < len(ordered):
-                next_zone = ordered[idx + 1]
-                if next_zone.start_idx <= effective_end_idx:
-                    effective_end_idx = next_zone.start_idx - 1
             if effective_end_idx < zone.start_idx:
                 continue
             if ((effective_end_idx - zone.start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
