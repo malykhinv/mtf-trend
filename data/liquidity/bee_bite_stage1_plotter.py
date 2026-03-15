@@ -82,7 +82,7 @@ class BeeBiteStage1Plotter:
         )
         hold_base_price = float(event.hold_base_price if event.hold_base_price is not None else (event.pump_base_price or 0.0))
         hold_price = (
-            hold_base_price + ((pump_peak_price - hold_base_price) * 0.5)
+            hold_base_price + ((pump_peak_price - hold_base_price) * 0.4)
             if pump_peak_price is not None and hold_base_price > 0.0
             else event.hold_price
         )
@@ -117,7 +117,7 @@ class BeeBiteStage1Plotter:
                 linestyle="--",
                 linewidth=1.2,
                 alpha=0.9,
-                label="0.5 hold",
+                label="0.4 hold",
             )
         if pump_peak_price is not None:
             price_ax.axhline(

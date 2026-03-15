@@ -124,7 +124,7 @@ class BeeBiteStage3Plotter:
                 linestyle="--",
                 linewidth=1.2,
                 alpha=0.9,
-                label="0.5 hold",
+                label="0.4 hold",
             )
 
         if stage2_result.box_start_timestamp is not None and stage2_result.box_end_timestamp is not None:

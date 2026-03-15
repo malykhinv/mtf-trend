@@ -101,7 +101,7 @@ class BeeBiteStage2Plotter:
                 linestyle="--",
                 linewidth=1.2,
                 alpha=0.9,
-                label="0.5 hold",
+                label="0.4 hold",
             )
 
         for local_range in stage2_result.local_ranges:

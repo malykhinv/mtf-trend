@@ -15,8 +15,8 @@ resolve_half_hold_price = _MODULE.resolve_half_hold_price
 
 
 class BeeBiteStage3RulesTest(unittest.TestCase):
-    def test_resolve_half_hold_price_returns_midpoint(self) -> None:
-        self.assertEqual(resolve_half_hold_price(high_pump=140.0, low_before_pump=100.0), 120.0)
+    def test_resolve_half_hold_price_returns_40pct_hold(self) -> None:
+        self.assertEqual(resolve_half_hold_price(high_pump=140.0, low_before_pump=100.0), 116.0)
         self.assertIsNone(resolve_half_hold_price(high_pump=100.0, low_before_pump=100.0))
 
     def test_move_pct_must_be_smaller_than_range_pct(self) -> None:

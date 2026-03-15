@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 _EPSILON = 1e-12
+_HOLD_RATIO = 0.4
 
 
 def resolve_half_hold_price(*, high_pump: float | None, low_before_pump: float | None) -> float | None:
@@ -12,7 +13,7 @@ def resolve_half_hold_price(*, high_pump: float | None, low_before_pump: float |
     base = float(low_before_pump)
     if peak <= base:
         return None
-    return base + ((peak - base) * 0.5)
+    return base + ((peak - base) * _HOLD_RATIO)
 
 
 def is_move_pct_smaller_than_range_pct(

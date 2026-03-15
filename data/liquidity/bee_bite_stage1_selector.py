@@ -718,7 +718,8 @@ class BeeBiteStage1Selector:
                 breakout_idx=idx,
             )
 
-            if current_low < hold_price:
+            current_close = float(prepared.closes[idx])
+            if current_close < hold_price:
                 regime_end_idx = idx
                 break
             if current_high > (current_peak_price + self._EPSILON):
@@ -742,7 +743,7 @@ class BeeBiteStage1Selector:
                     )
                     if first_hold_low_idx is not None:
                         current_hold_base_idx = first_hold_low_idx
-                        current_hold_base_price = float(prepared.lows[first_hold_low_idx])
+                        current_hold_base_price = float(prepared.closes[first_hold_low_idx])
                 current_peak_idx = idx
                 current_peak_price = current_high
                 regime_end_idx = min(
@@ -827,11 +828,11 @@ class BeeBiteStage1Selector:
             return False
 
         hold_start_idx = breakout_idx - self._min_confirm_delay_bars
-        hold_lows = prepared.lows[hold_start_idx:breakout_idx]
+        hold_closes = prepared.closes[hold_start_idx:breakout_idx]
         hold_highs = self._effective_highs(prepared)[hold_start_idx:breakout_idx]
-        if hold_lows.size < self._min_confirm_delay_bars:
+        if hold_closes.size < self._min_confirm_delay_bars:
             return False
-        if np.any(hold_lows < hold_price):
+        if np.any(hold_closes < hold_price):
             return False
         if np.any(hold_highs > (peak_price + self._EPSILON)):
             return False
@@ -846,10 +847,10 @@ class BeeBiteStage1Selector:
     ) -> int | None:
         if breakout_idx <= (peak_idx + 1):
             return None
-        hold_lows = prepared.lows[peak_idx + 1 : breakout_idx]
-        if hold_lows.size == 0:
+        hold_closes = prepared.closes[peak_idx + 1 : breakout_idx]
+        if hold_closes.size == 0:
             return None
-        hold_low_offset = int(np.argmin(hold_lows))
+        hold_low_offset = int(np.argmin(hold_closes))
         return peak_idx + 1 + hold_low_offset
 
     def _is_significant_breakout_above_main_high(
@@ -909,16 +910,15 @@ class BeeBiteStage1Selector:
 
         bars_since_peak = confirm_idx - candidate.peak_idx
         initial_pump_duration_bars = candidate.peak_idx - candidate.pump_start_idx
-        post_peak_lows = prepared.lows[candidate.peak_idx + 1 : confirm_idx + 1]
-        lowest_after_pump_offset = int(np.argmin(post_peak_lows))
+        post_peak_closes = prepared.closes[candidate.peak_idx + 1 : confirm_idx + 1]
+        lowest_after_pump_offset = int(np.argmin(post_peak_closes))
         lowest_after_pump_idx = candidate.peak_idx + 1 + lowest_after_pump_offset
-        lowest_after_pump = float(post_peak_lows[lowest_after_pump_offset])
+        lowest_after_pump = float(post_peak_closes[lowest_after_pump_offset])
         hold_price = candidate.hold_base_price + (
             (candidate.pump_peak_price - candidate.hold_base_price) * self._min_retain_ratio
         )
         sleep_closes = prepared.closes[candidate.sleep_start_idx : candidate.sleep_end_idx + 1]
         sleep_closes_below_hold_ratio = float(np.mean(sleep_closes < hold_price))
-        confirm_candle_low = float(prepared.lows[confirm_idx])
         confirm_candle_close = float(prepared.closes[confirm_idx])
         retain_ratio = (lowest_after_pump - candidate.hold_base_price) / max(
             candidate.pump_peak_price - candidate.hold_base_price,
@@ -970,7 +970,7 @@ class BeeBiteStage1Selector:
         if sleep_closes_below_hold_ratio <= 0.5:
             result.reason = "sleep_closes_not_below_hold_majority"
             return result
-        if confirm_candle_low < hold_price or confirm_candle_close > candidate.pump_peak_price:
+        if confirm_candle_close < hold_price or confirm_candle_close > candidate.pump_peak_price:
             result.reason = "confirm_candle_outside_pump_band"
             return result
         if post_pump_avg_volume_usdt < self._EPSILON or post_pump_volume_ratio < self._min_volume_ratio:
