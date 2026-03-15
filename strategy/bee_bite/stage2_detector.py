@@ -685,11 +685,37 @@ class BeeBiteStage2Detector:
             tolerance=tolerance,
         )
         if fallback_lower_zone is not None:
-            overlaps_existing = any(
-                self._zones_overlap_enough(candidate=fallback_lower_zone, existing=existing)
-                for existing in lower_zones
-            )
-            if not overlaps_existing:
+            overlapping_indices = [
+                idx
+                for idx, existing in enumerate(lower_zones)
+                if self._zones_overlap_enough(candidate=fallback_lower_zone, existing=existing)
+            ]
+            if overlapping_indices:
+                merged_lowers: list[BeeBiteStage2LiquidityZone] = []
+                for idx, zone in enumerate(lower_zones):
+                    if idx not in overlapping_indices:
+                        merged_lowers.append(zone)
+                        continue
+                    effective_start_idx = min(zone.start_idx, fallback_lower_zone.start_idx)
+                    effective_end_idx = max(zone.end_idx, fallback_lower_zone.end_idx)
+                    merged_lowers.append(
+                        BeeBiteStage2LiquidityZone(
+                            side=zone.side,
+                            start_idx=effective_start_idx,
+                            start_timestamp=int(prepared.timestamps[effective_start_idx]),
+                            end_idx=effective_end_idx,
+                            end_timestamp=int(prepared.timestamps[effective_end_idx]),
+                            last_touch_idx=max(zone.last_touch_idx, fallback_lower_zone.last_touch_idx),
+                            last_touch_timestamp=int(
+                                prepared.timestamps[max(zone.last_touch_idx, fallback_lower_zone.last_touch_idx)]
+                            ),
+                            low=min(zone.low, fallback_lower_zone.low),
+                            high=max(zone.high, fallback_lower_zone.high),
+                            touch_count=max(zone.touch_count, fallback_lower_zone.touch_count),
+                        )
+                    )
+                lower_zones = sorted(merged_lowers, key=lambda zone: (zone.start_idx, zone.low))
+            else:
                 clipped_lowers: list[BeeBiteStage2LiquidityZone] = []
                 for zone in lower_zones:
                     effective_end_idx = zone.end_idx
