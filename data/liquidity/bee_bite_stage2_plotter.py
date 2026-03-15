@@ -21,7 +21,7 @@ class BeeBiteStage2Plotter:
     """Render a stage-2 review chart with detected local and merged balances."""
 
     _CANDLE_WIDTH = 0.65
-    _PRE_CONTEXT_BARS = 24
+    _PRE_PUMP_CONTEXT_BARS = 12
     _FIGURE_FACE = "#08111f"
     _AXIS_FACE = "#0f172a"
     _GRID_COLOR = "#334155"
@@ -71,7 +71,7 @@ class BeeBiteStage2Plotter:
         pump_start_idx = self._timestamp_to_index(prepared, stage1_event.pump_start_timestamp)
         default_end_ts = window_end_timestamp if window_end_timestamp is not None else stage2_result.analysis_end_timestamp
         window_end_idx = self._timestamp_to_index(prepared, default_end_ts)
-        window_start = max(0, pump_start_idx - self._PRE_CONTEXT_BARS)
+        window_start = max(0, pump_start_idx - self._PRE_PUMP_CONTEXT_BARS)
         window_end = min(len(prepared) - 1, window_end_idx)
         window = prepared.iloc[window_start : window_end + 1].reset_index(drop=True)
         x_positions = list(range(len(window)))

@@ -20,7 +20,7 @@ class BeeBiteStage1Plotter:
     """Render a compact stage-1 review chart with OHLC candles and annotations."""
 
     _CANDLE_WIDTH = 0.65
-    _PRE_CONTEXT_BARS = 24
+    _PRE_PUMP_CONTEXT_BARS = 12
     _FIGURE_FACE = "#08111f"
     _AXIS_FACE = "#0f172a"
     _GRID_COLOR = "#334155"
@@ -86,7 +86,7 @@ class BeeBiteStage1Plotter:
             if pump_peak_price is not None and hold_base_price > 0.0
             else event.hold_price
         )
-        window_start = max(0, pump_start_idx - self._PRE_CONTEXT_BARS)
+        window_start = max(0, pump_start_idx - self._PRE_PUMP_CONTEXT_BARS)
         window_end = min(len(prepared) - 1, explicit_window_end_idx)
         window = prepared.iloc[window_start : window_end + 1].reset_index(drop=True)
         x_positions = list(range(len(window)))
