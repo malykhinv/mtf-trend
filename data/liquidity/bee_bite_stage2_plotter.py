@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -41,8 +42,9 @@ class BeeBiteStage2Plotter:
     _LOWER_ZONE_FACE = "#4c1d95"
     _LOCAL_RANGE_ALPHA = 0.05
     _MERGED_RANGE_ALPHA = 0.28
-    _CROSSED_ZONE_ALPHA = 0.16
-    _ACTIVE_ZONE_ALPHA = 0.3
+    _CROSSED_ZONE_ALPHA = 0.3
+    _ACTIVE_ZONE_MIN_ALPHA = 0.3
+    _ACTIVE_ZONE_MAX_ALPHA = 0.9
 
     def plot_result(
         self,
@@ -136,6 +138,12 @@ class BeeBiteStage2Plotter:
                 stage2_result.box_end_timestamp is not None
                 and liquidity_zone.end_timestamp >= int(stage2_result.box_end_timestamp)
             )
+            zone_alpha = self._resolve_zone_alpha(
+                window=prepared,
+                stage2_result=stage2_result,
+                liquidity_zone=liquidity_zone,
+                is_active=is_active,
+            )
             self._draw_range_rectangle(
                 axis=price_ax,
                 range_start_idx=liquidity_zone.start_idx,
@@ -145,7 +153,7 @@ class BeeBiteStage2Plotter:
                 index_shift=window_start,
                 edge_color=self._UPPER_ZONE_EDGE if is_upper else self._LOWER_ZONE_EDGE,
                 face_color=self._UPPER_ZONE_FACE if is_upper else self._LOWER_ZONE_FACE,
-                alpha=self._ACTIVE_ZONE_ALPHA if is_active else self._CROSSED_ZONE_ALPHA,
+                alpha=zone_alpha,
                 line_width=1.0,
                 label=("upper stop zone" if is_upper else "lower stop zone") if index < 2 else None,
                 line_style="--",
@@ -336,3 +344,42 @@ class BeeBiteStage2Plotter:
     def _build_tick_labels(frame: pd.DataFrame, positions: list[int]) -> list[str]:
         timestamps = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
         return [timestamps.iloc[idx].strftime("%m-%d %H:%M") for idx in positions]
+
+    def _resolve_zone_alpha(
+        self,
+        *,
+        window: pd.DataFrame,
+        stage2_result: BeeBiteStage2Result,
+        liquidity_zone: BeeBiteStage2LiquidityZone,
+        is_active: bool,
+    ) -> float:
+        if not is_active:
+            return self._CROSSED_ZONE_ALPHA
+
+        parent_range = self._resolve_parent_range(stage2_result=stage2_result, liquidity_zone=liquidity_zone)
+        if parent_range is None:
+            return self._ACTIVE_ZONE_MIN_ALPHA
+
+        range_volume = float(window.iloc[parent_range.start_idx : parent_range.end_idx + 1]["volume"].sum())
+        zone_volume = float(window.iloc[liquidity_zone.start_idx : liquidity_zone.end_idx + 1]["volume"].sum())
+        if range_volume <= 0:
+            return self._ACTIVE_ZONE_MIN_ALPHA
+
+        ratio = max(0.0, min(1.0, zone_volume / range_volume))
+        return self._ACTIVE_ZONE_MIN_ALPHA + (
+            (self._ACTIVE_ZONE_MAX_ALPHA - self._ACTIVE_ZONE_MIN_ALPHA) * ratio
+        )
+
+    @staticmethod
+    def _resolve_parent_range(
+        *,
+        stage2_result: BeeBiteStage2Result,
+        liquidity_zone: BeeBiteStage2LiquidityZone,
+    ) -> Any | None:
+        for merged_range in stage2_result.merged_ranges:
+            if merged_range.start_idx <= liquidity_zone.start_idx and liquidity_zone.end_idx <= merged_range.end_idx:
+                return merged_range
+        for local_range in stage2_result.local_ranges:
+            if local_range.start_idx <= liquidity_zone.start_idx and liquidity_zone.end_idx <= local_range.end_idx:
+                return local_range
+        return None
