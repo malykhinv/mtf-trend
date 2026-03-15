@@ -38,20 +38,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mtf-trend")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    fetch = subparsers.add_parser("fetch-data", help="Load market data from exchanges and CoinGecko")
+    fetch = subparsers.add_parser("fetch-data", help="Load market data from exchange sources")
     fetch.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
     fetch.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_FETCH_DAYS)
     fetch.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
     fetch.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
-    fetch.add_argument("--ignore-coingecko", action="store_true", default=None, help="Skip CoinGecko symbol selection")
-
     update = subparsers.add_parser("update-cache", help="Incrementally update the local cache")
     update.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
     update.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_UPDATE_DAYS)
     update.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
     update.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
-    update.add_argument("--ignore-coingecko", action="store_true", default=None, help="Skip CoinGecko symbol selection")
-
     run_bt = subparsers.add_parser("run-backtest", help="Run a backtest on cached data")
     run_bt.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     run_bt.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None, help="Number of symbols after bee_bite stage-1 filtering")

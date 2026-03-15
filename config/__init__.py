@@ -22,8 +22,6 @@ from constants import (
     DEFAULT_SPREAD,
     DEFAULT_LOGS_DIR,
     DEFAULT_MIN_VOLUME_USD,
-    DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS,
-    DEFAULT_COINGECKO_VOLUME_BATCH_SIZE,
     DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
 )
 from domain.enums.timeframe import Timeframe
@@ -72,18 +70,6 @@ def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
     raise ValueError(f"Invalid {env_name}: {value}. Supported values: {supported}")
 
 
-def _parse_bool(value: str | None, *, default: bool = False) -> bool:
-    if value is None:
-        return default
-
-    normalized = value.strip().lower()
-    if normalized in {"1", "true", "yes", "y", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "n", "off"}:
-        return False
-    raise ValueError(f"Invalid boolean value: {value}")
-
-
 def _parse_strategy_id(value: str | None, *, default: str = "bee_bite") -> str:
     strategy_id = (value or default).strip().lower()
     if strategy_id not in SUPPORTED_STRATEGY_IDS:
@@ -124,26 +110,14 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     fetch_cfg = FetchConfig(
         binance_api_key=os.getenv("BINANCE_API_KEY", ""),
         binance_secret_key=os.getenv("BINANCE_SECRET_KEY", ""),
-        coingecko_api_key=os.getenv("COINGECKO_API_KEY", ""),
         min_volume_usd=float(
             os.getenv("MIN_VOLUME_USD", os.getenv("FETCH_MIN_VOLUME_USD", str(DEFAULT_MIN_VOLUME_USD)))),
-        coingecko_min_request_interval_seconds=float(
-            os.getenv(
-                "COINGECKO_MIN_REQUEST_INTERVAL_SECONDS",
-                str(DEFAULT_COINGECKO_MIN_REQUEST_INTERVAL_SECONDS),
-            )
-        ),
-        coingecko_volume_batch_size=max(
-            1,
-            int(os.getenv("COINGECKO_VOLUME_BATCH_SIZE", str(DEFAULT_COINGECKO_VOLUME_BATCH_SIZE))),
-        ),
         liquidity_skip_error_ratio_threshold=float(
             os.getenv(
                 "LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD",
                 str(DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD),
             )
         ),
-        ignore_coingecko=_parse_bool(os.getenv("IGNORE_COINGECKO"), default=False),
         anchor_timestamp_ms=_parse_anchor_timestamp_ms(
             os.getenv("FETCH_ANCHOR_TIMESTAMP_MS"),
             env_name="FETCH_ANCHOR_TIMESTAMP_MS",

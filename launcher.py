@@ -70,7 +70,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-volume-usd", type=float, default=None, help="Minimum 24h volume in USD")
     parser.add_argument("--days", type=int, default=30, help="Number of days for fetch/update")
     parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
-    parser.add_argument("--ignore-coingecko", action="store_true", default=None, help="Skip CoinGecko in fetch/update symbol selection")
     parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     parser.add_argument("--tf", default=None, help="Review timeframe for stage review modes")
     parser.add_argument("--tf-all", action="store_true", default=False, help="Run review for both 15m and 5m")
@@ -122,7 +121,6 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         plot=_to_bool(task.get("plot"), fallback=cli_args.plot) if "plot" in task else _to_bool(cli_args.plot, fallback=False),
         plot_from_results=_to_bool(task.get("plot_from_results"), fallback=cli_args.plot_from_results) if "plot_from_results" in task else cli_args.plot_from_results,
         id=int(task["id"]) if "id" in task and task.get("id") is not None else cli_args.id,
-        ignore_coingecko=_to_bool(task.get("ignore_coingecko"), fallback=cli_args.ignore_coingecko) if "ignore_coingecko" in task else cli_args.ignore_coingecko,
     )
 
 

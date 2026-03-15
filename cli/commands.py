@@ -41,7 +41,7 @@ from constants import (
     REPORT_TRADES_COUNT_FILTER,
     LOG_MSG_TASK_COMPLETED,
 )
-from data.clients.coingecko_client import CoinGeckoClient
+from data.clients.noop_market_data_client import NoOpMarketDataClient
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
@@ -82,7 +82,6 @@ from strategy.bee_bite import (
 )
 from strategy.factory import build_strategy
 from utils.logger import get_logger
-from utils.retry import RetryExhaustedError
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
@@ -657,8 +656,7 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         return 1
 
 
-def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuturesClient, CoinGeckoClient]:
-    market_caps_cache_path = config.backtest.cache_dir / "market_caps.parquet"
+def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuturesClient]:
     exchange_client = CcxtFuturesClient(
         exchange=Exchange.BINANCE,
         api_key=config.fetch.binance_api_key,
@@ -687,36 +685,25 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
         log_level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
-    market_client = CoinGeckoClient(
-        api_key=config.fetch.coingecko_api_key,
-        cache_path=market_caps_cache_path,
-        retry_attempts=config.backtest.retry_attempts,
-        retry_backoff_seconds=config.backtest.retry_backoff_seconds,
-        min_request_interval_seconds=config.fetch.coingecko_min_request_interval_seconds,
-    )
     return (
         MarketDataFetcher(
             ohlcv_fetcher=ohlcv_fetcher,
             oi_fetcher=oi_fetcher,
-            market_data_client=market_client,
+            market_data_client=NoOpMarketDataClient(),
             retry_attempts=config.backtest.retry_attempts,
             retry_backoff_seconds=config.backtest.retry_backoff_seconds,
             log_level=config.backtest.log_level,
             logs_dir=config.backtest.logs_dir,
         ),
         exchange_client,
-        market_client,
     )
 
 
 def _resolve_symbols(
         exchange_client: CcxtFuturesClient,
-        market_client: CoinGeckoClient,
         top_n: int,
         min_volume_usd: float,
         logger: Logger,
-        coingecko_volume_batch_size: int,
-        ignore_coingecko: bool,
         cache_dir: Path,
         liquidity_timeframe: Timeframe,
         futures_symbols_raw: list[str] | None = None,
@@ -729,166 +716,100 @@ def _resolve_symbols(
     }
     exchange_symbols_normalized = sorted(futures_symbol_map)
 
-    if ignore_coingecko:
-        ranker = DailyVolumeRanker(cache_dir=cache_dir)
-        symbols_raw = [futures_symbol_map[symbol] for symbol in exchange_symbols_normalized]
-        avg_daily_volumes = ranker.calculate_avg_daily_volume_usd(
-            symbols=symbols_raw,
-            timeframe=liquidity_timeframe,
-            logger=logger,
-        )
-        avg_daily_volumes_normalized = {
-            normalize_symbol(raw_symbol): volume
-            for raw_symbol, volume in avg_daily_volumes.items()
-        }
-        symbols_with_volume = [
-            symbol
-            for symbol in exchange_symbols_normalized
-            if symbol in avg_daily_volumes_normalized
-        ]
-
-        liquid_symbols = [
-            symbol
-            for symbol in symbols_with_volume
-            if avg_daily_volumes_normalized.get(symbol, 0.0) >= min_volume_usd
-        ]
-        combined_volume_score_by_symbol = {
-            symbol: avg_daily_volumes_normalized[symbol]
-            for symbol in liquid_symbols
-        }
-        liquidity_score_by_symbol: dict[str, float] = {}
-        newly_admitted_symbols: set[str] = set()
-
-        try:
-            ranked_metrics = exchange_client.get_futures_symbols_with_liquidity_metrics()
-            for item in ranked_metrics:
-                symbol_raw = str(item.get("symbol", ""))
-                symbol = normalize_symbol(symbol_raw)
-                if symbol not in futures_symbol_map:
-                    continue
-
-                quote_volume = float(item.get("quote_volume", 0.0) or 0.0)
-                liquidity_score = float(item.get("liquidity_score", 0.0) or 0.0)
-                liquidity_score_by_symbol[symbol] = liquidity_score
-                liquidity_quality_by_symbol[symbol_raw] = {
-                    "liquidity_score": liquidity_score,
-                    "quote_volume": quote_volume,
-                    "trade_count_24h": int(item.get("trade_count_24h", 0) or 0),
-                    "quality_flags": list(cast(list[object], item.get("quality_flags", []))),
-                    "quality_metadata": dict(cast(dict[str, object], item.get("quality_metadata", {}))),
-                }
-
-                if symbol not in avg_daily_volumes_normalized and quote_volume >= min_volume_usd:
-                    newly_admitted_symbols.add(symbol)
-                    combined_volume_score_by_symbol[symbol] = quote_volume
-        except Exception as exc:
-            logger.warning(
-                "подбор-символов: добор по метрикам ликвидности биржи недоступен (%s)",
-                exc,
-            )
-
-        combined_symbols = set(liquid_symbols) | newly_admitted_symbols
-        if not combined_symbols:
-            fallback_symbols = exchange_symbols_normalized[:top_n]
-            logger.info(
-                "подбор-символов: CoinGecko отключен, пул ликвидности пуст → fallback на алфавитный top_n=%s",
-                len(fallback_symbols),
-            )
-            return [futures_symbol_map[symbol] for symbol in fallback_symbols], liquidity_quality_by_symbol
-
-        ranked_top_symbols = sorted(
-            combined_symbols,
-            key=lambda symbol: (
-                combined_volume_score_by_symbol.get(symbol, 0.0),
-                liquidity_score_by_symbol.get(symbol, 0.0),
-                symbol,
-            ),
-            reverse=True,
-        )[:top_n]
-
-        logger.info(
-            "подбор-символов: CoinGecko отключен (режим=cache+exchange-liquidity), всего на бирже=%s → в кэше с объёмом=%s → кэш прошёл фильтр ликвидности=%s → итоговый объединённый пул=%s → после top_n=%s",
-            len(exchange_symbols_normalized),
-            len(symbols_with_volume),
-            len(liquid_symbols),
-            len(combined_symbols),
-            len(ranked_top_symbols),
-        )
-        logger.info(
-            "подбор-символов: фильтр ликвидности по среднедневному объёму (мин_avg_daily_volume_usd=%.2f) исключено=%s",
-            min_volume_usd,
-            len(symbols_with_volume) - len(liquid_symbols),
-        )
-        logger.info(
-            "подбор-символов: newly admitted symbols из биржевых метрик=%s",
-            len(newly_admitted_symbols),
-        )
-        return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
-
-    market_caps_by_symbol = market_client.get_market_caps(exchange_symbols_normalized)
-    ranked_symbols = sorted(
-        exchange_symbols_normalized,
-        key=lambda symbol: (market_caps_by_symbol.get(symbol, 0.0), symbol),
-        reverse=True,
+    ranker = DailyVolumeRanker(cache_dir=cache_dir)
+    symbols_raw = [futures_symbol_map[symbol] for symbol in exchange_symbols_normalized]
+    avg_daily_volumes = ranker.calculate_avg_daily_volume_usd(
+        symbols=symbols_raw,
+        timeframe=liquidity_timeframe,
+        logger=logger,
     )
-    ranked_top_symbols = ranked_symbols[:top_n]
+    avg_daily_volumes_normalized = {
+        normalize_symbol(raw_symbol): volume
+        for raw_symbol, volume in avg_daily_volumes.items()
+    }
+    symbols_with_volume = [
+        symbol
+        for symbol in exchange_symbols_normalized
+        if symbol in avg_daily_volumes_normalized
+    ]
 
-    volumes_by_symbol: dict[str, float] = {}
-    symbols_skipped_by_api_errors = 0
+    liquid_symbols = [
+        symbol
+        for symbol in symbols_with_volume
+        if avg_daily_volumes_normalized.get(symbol, 0.0) >= min_volume_usd
+    ]
+    combined_volume_score_by_symbol = {
+        symbol: avg_daily_volumes_normalized[symbol]
+        for symbol in liquid_symbols
+    }
+    liquidity_score_by_symbol: dict[str, float] = {}
+    newly_admitted_symbols: set[str] = set()
 
-    for start in range(0, len(ranked_top_symbols), coingecko_volume_batch_size):
-        batch = ranked_top_symbols[start:start + coingecko_volume_batch_size]
-        try:
-            volumes_by_symbol.update(market_client.get_total_volumes(batch))
-        except (RuntimeError, RetryExhaustedError) as exc:
-            symbols_skipped_by_api_errors += len(batch)
-            logger.warning(
-                "подбор-символов: ошибка внешнего API при получении объёма батча (%s символов, first=%s): %s; символы будут исключены",
-                len(batch),
-                batch[0] if batch else "n/a",
-                exc,
-            )
-            continue
-        except Exception as exc:
-            root_cause = exc.__cause__
-            if isinstance(root_cause, RetryExhaustedError):
-                symbols_skipped_by_api_errors += len(batch)
-                logger.warning(
-                    "подбор-символов: ошибка внешнего API при получении объёма батча (%s символов, first=%s): %s; символы будут исключены",
-                    len(batch),
-                    batch[0] if batch else "n/a",
-                    exc,
-                )
+    try:
+        ranked_metrics = exchange_client.get_futures_symbols_with_liquidity_metrics()
+        for item in ranked_metrics:
+            symbol_raw = str(item.get('symbol', ''))
+            symbol = normalize_symbol(symbol_raw)
+            if symbol not in futures_symbol_map:
                 continue
-            raise
 
-    symbols_with_volume = [symbol for symbol in ranked_top_symbols if symbol in volumes_by_symbol]
+            quote_volume = float(item.get('quote_volume', 0.0) or 0.0)
+            liquidity_score = float(item.get('liquidity_score', 0.0) or 0.0)
+            liquidity_score_by_symbol[symbol] = liquidity_score
+            liquidity_quality_by_symbol[symbol_raw] = {
+                'liquidity_score': liquidity_score,
+                'quote_volume': quote_volume,
+                'trade_count_24h': int(item.get('trade_count_24h', 0) or 0),
+                'quality_flags': list(cast(list[object], item.get('quality_flags', []))),
+                'quality_metadata': dict(cast(dict[str, object], item.get('quality_metadata', {}))),
+            }
 
-    liquid_symbols: list[str] = []
-    for symbol in symbols_with_volume:
-        total_volume = volumes_by_symbol.get(symbol, 0.0)
-        if total_volume >= min_volume_usd:
-            liquid_symbols.append(symbol)
+            if symbol not in avg_daily_volumes_normalized and quote_volume >= min_volume_usd:
+                newly_admitted_symbols.add(symbol)
+                combined_volume_score_by_symbol[symbol] = quote_volume
+    except Exception as exc:
+        logger.warning(
+            '??????-????????: ????? ?? ???????? ??????????? ????? ?????????? (%s)',
+            exc,
+        )
 
-    excluded_by_liquidity = len(symbols_with_volume) - len(liquid_symbols)
+    combined_symbols = set(liquid_symbols) | newly_admitted_symbols
+    if not combined_symbols:
+        fallback_symbols = exchange_symbols_normalized[:top_n]
+        logger.info(
+            '??????-????????: ??? ??????????? ???? -> fallback ?? ?????????? top_n=%s',
+            len(fallback_symbols),
+        )
+        return [futures_symbol_map[symbol] for symbol in fallback_symbols], liquidity_quality_by_symbol
+
+    ranked_top_symbols = sorted(
+        combined_symbols,
+        key=lambda symbol: (
+            combined_volume_score_by_symbol.get(symbol, 0.0),
+            liquidity_score_by_symbol.get(symbol, 0.0),
+            symbol,
+        ),
+        reverse=True,
+    )[:top_n]
+
     logger.info(
-        "подбор-символов: всего на бирже=%s → после ранжирования top_n=%s → после фильтра ликвидности=%s",
+        '??????-????????: ?????=cache+exchange-liquidity, ????? ?? ?????=%s -> ? ???? ? ???????=%s -> ??? ?????? ?????? ???????????=%s -> ???????? ???????????? ???=%s -> ????? top_n=%s',
         len(exchange_symbols_normalized),
+        len(symbols_with_volume),
+        len(liquid_symbols),
+        len(combined_symbols),
         len(ranked_top_symbols),
-        len(liquid_symbols),
     )
     logger.info(
-        "подбор-символов: пропущено символов из-за ошибок внешнего API=%s",
-        symbols_skipped_by_api_errors,
-    )
-    logger.info(
-        "подбор-символов: фильтр ликвидности (мин_объем_usd=%.2f) исключено=%s итоговых_символов=%s",
+        '??????-????????: ?????? ??????????? ?? ?????????????? ?????? (???_avg_daily_volume_usd=%.2f) ?????????=%s',
         min_volume_usd,
-        excluded_by_liquidity,
-        len(liquid_symbols),
+        len(symbols_with_volume) - len(liquid_symbols),
     )
-    return [futures_symbol_map[symbol] for symbol in liquid_symbols], liquidity_quality_by_symbol
-
+    logger.info(
+        '??????-????????: newly admitted symbols ?? ???????? ??????=%s',
+        len(newly_admitted_symbols),
+    )
+    return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
 
 def _resolve_fetch_anchor_timestamp_ms(config: AppConfig, end_timestamp_ms_raw: int | None) -> int:
     if end_timestamp_ms_raw is not None:
@@ -1041,21 +962,16 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.error("fetch-data: --days must be > 0")
         return 1
 
-    fetcher, exchange_client, market_client = _build_fetch_stack(config)
+    fetcher, exchange_client = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
-    ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
-    market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
     symbols, liquidity_quality_by_symbol = _resolve_symbols(
         exchange_client,
-        market_client,
         top_n=top_n,
         min_volume_usd=min_volume_usd,
         logger=logger,
-        coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
-        ignore_coingecko=ignore_coingecko,
         cache_dir=config.backtest.cache_dir,
         liquidity_timeframe=config.fetch.timeframe,
         futures_symbols_raw=futures_symbols,
@@ -1064,7 +980,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         "загрузка-данных: найдено фьючерсов=%s выбрано_символов=%s (режим_подбора=%s)",
         all_futures_count,
         len(symbols),
-        "coingecko-disabled" if ignore_coingecko else "coingecko-enabled",
+        "cache+exchange-liquidity",
     )
     if not symbols:
         liquidity_quality_by_symbol = {}
@@ -1119,36 +1035,32 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     root_stage_status = "ok"
     followup_symbols = symbols
-    if ignore_coingecko:
-        liquidity_summary = fetch_summaries.get(primary_timeframe)
-        skip_reason = _resolve_liquidity_skip_reason(
-            liquidity_summary,
-            config.fetch.liquidity_skip_error_ratio_threshold,
+    liquidity_summary = fetch_summaries.get(primary_timeframe)
+    skip_reason = _resolve_liquidity_skip_reason(
+        liquidity_summary,
+        config.fetch.liquidity_skip_error_ratio_threshold,
+    )
+    if skip_reason is None:
+        followup_symbols, liquidity_quality_by_symbol = _resolve_symbols(
+            exchange_client,
+            top_n=top_n,
+            min_volume_usd=min_volume_usd,
+            logger=logger,
+            cache_dir=config.backtest.cache_dir,
+            liquidity_timeframe=config.fetch.timeframe,
+            futures_symbols_raw=futures_symbols,
         )
-        if skip_reason is None:
-            followup_symbols, liquidity_quality_by_symbol = _resolve_symbols(
-                exchange_client,
-                market_client,
-                top_n=top_n,
-                min_volume_usd=min_volume_usd,
-                logger=logger,
-                coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
-                ignore_coingecko=True,
-                cache_dir=config.backtest.cache_dir,
-                liquidity_timeframe=config.fetch.timeframe,
-                futures_symbols_raw=futures_symbols,
-            )
-            logger.info(
-                "загрузка-данных: применён пересчитанный список ликвидных символов после первичной загрузки (символов=%s)",
-                len(followup_symbols),
-            )
-        else:
-            root_stage_status = "ohlcv_cache_failed"
-            logger.warning(
-                "liquidity-skip: reason=%s timeframe=%s",
-                skip_reason,
-                primary_timeframe.value,
-            )
+        logger.info(
+            "fetch-data: recomputed liquid symbol list after primary timeframe load (symbols=%s)",
+            len(followup_symbols),
+        )
+    else:
+        root_stage_status = "ohlcv_cache_failed"
+        logger.warning(
+            "liquidity-skip: reason=%s timeframe=%s",
+            skip_reason,
+            primary_timeframe.value,
+        )
 
     for timeframe in config.fetch.timeframes:
         if timeframe == primary_timeframe:
@@ -1174,21 +1086,16 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.error("update-cache: --days must be > 0")
         return 1
 
-    fetcher, exchange_client, market_client = _build_fetch_stack(config)
+    fetcher, exchange_client = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
-    ignore_coingecko = args.ignore_coingecko if args.ignore_coingecko is not None else config.fetch.ignore_coingecko
-    market_client.set_skip_invalid_coin_id_filter(ignore_coingecko)
     top_n = args.top_n if args.top_n is not None else all_futures_count
     symbols, liquidity_quality_by_symbol = _resolve_symbols(
         exchange_client,
-        market_client,
         top_n=top_n,
         min_volume_usd=min_volume_usd,
         logger=logger,
-        coingecko_volume_batch_size=config.fetch.coingecko_volume_batch_size,
-        ignore_coingecko=ignore_coingecko,
         cache_dir=config.backtest.cache_dir,
         liquidity_timeframe=config.fetch.timeframe,
         futures_symbols_raw=futures_symbols,
