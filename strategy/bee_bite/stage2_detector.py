@@ -942,10 +942,9 @@ class BeeBiteStage2Detector:
             anchor_timestamp = int(confirmed_high_timestamps[-1])
             anchor_idx = self._resolve_index_by_timestamp(timestamps=prepared.timestamps, timestamp=anchor_timestamp)
 
-        peak_local_idx = int(np.argmax(prepared.highs[segment_start_idx : segment_end_idx + 1]))
-        peak_idx = segment_start_idx + peak_local_idx
         if anchor_idx is None:
-            anchor_idx = peak_idx
+            peak_local_idx = int(np.argmax(prepared.highs[segment_start_idx : segment_end_idx + 1]))
+            anchor_idx = segment_start_idx + peak_local_idx
 
         start_idx = max(0, anchor_idx - self._LIQUIDITY_UPPER_PRESTART_BARS)
         zone_low, zone_high = self._project_liquidity_zone_bounds(
@@ -957,7 +956,7 @@ class BeeBiteStage2Detector:
         sweep_idx = self._resolve_liquidity_zone_sweep_idx(
             prepared=prepared,
             segment_end_idx=segment_end_idx,
-            last_touch_idx=max(anchor_idx, peak_idx),
+            last_touch_idx=anchor_idx,
             zone_low=zone_low,
             zone_high=zone_high,
             side="upper",
@@ -974,8 +973,8 @@ class BeeBiteStage2Detector:
             start_timestamp=int(prepared.timestamps[start_idx]),
             end_idx=effective_end_idx,
             end_timestamp=int(prepared.timestamps[effective_end_idx]),
-            last_touch_idx=max(anchor_idx, peak_idx),
-            last_touch_timestamp=int(prepared.timestamps[max(anchor_idx, peak_idx)]),
+            last_touch_idx=anchor_idx,
+            last_touch_timestamp=int(prepared.timestamps[anchor_idx]),
             low=zone_low,
             high=zone_high,
             touch_count=1,
