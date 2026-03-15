@@ -16,6 +16,11 @@ from domain.models.trade_result import TradeResult
 from domain.models.trade_signal import TradeSignal
 from domain.value_objects.price import Price
 from strategy.bee_bite.config import BeeBiteReclaimMode, get_bee_bite_reclaim_settings
+from strategy.bee_bite.stage3_rules import (
+    is_move_pct_smaller_than_range_pct,
+    resolve_below_range_span,
+    resolve_half_hold_price,
+)
 from strategy.bee_bite.trade_plan import build_bee_bite_trade_plan, resolve_profile_tp1_share
 from simulation.exit_manager import ExitManager, ExitManagerConfig
 from simulation.order_processor import OrderProcessor
@@ -77,6 +82,7 @@ class SymbolState:
     support: float | None = None
     resistance: float | None = None
     lowest_break: float | None = None
+    break_below_range_high: float | None = None
     atr_bg: float | None = None
     signal: TradeSignal | None = None
     atr_pre: float | None = None
@@ -350,6 +356,7 @@ class PortfolioStateEngine:
             state.support = None
             state.resistance = None
             state.lowest_break = None
+            state.break_below_range_high = None
             state.atr_bg = None
             state.age = 0
             if result.result_type == TradeResultType.SL:
@@ -424,6 +431,7 @@ class PortfolioStateEngine:
             assert state.support is not None and state.resistance is not None
             low = float(row["low"] or close)
             support = float(state.support)
+            break_activated = False
             core_width = float(
                 state.core_width if state.core_width is not None else abs(float((state.resistance or close) - support))
             )
@@ -437,29 +445,37 @@ class PortfolioStateEngine:
                 depth = max(support - low, 0.0)
                 atr_bg = float(state.atr_bg or 0.0)
                 min_depth = self._resolve_min_depth_threshold() * atr_bg
-                max_depth = 0.5 * core_width
-                if depth < min_depth or depth > max_depth:
+                depth_ok = is_move_pct_smaller_than_range_pct(
+                    move_size=depth,
+                    reclaim_boundary=support,
+                    range_high=state.resistance,
+                )
+                if depth < min_depth or not depth_ok:
                     return None
 
                 state.state = PortfolioState.BREAK_ACTIVE
                 state.break_side = PositionSide.LONG
                 state.break_price = close
                 state.lowest_break = low
+                state.break_below_range_high = None
                 state.break_start_timeline_idx = timeline_idx
                 state.break_start_timestamp_ms = int(row["timestamp"])
                 state.reclaim_bar_timeline_idx = None
                 state.retest_deadline_timeline_idx = None
                 state.touched_retest_zone = False
                 state.age = 0
+                break_activated = True
             elif state.age > self.config.max_age_range_bars:
                 self._reset_symbol(symbol=symbol, state=state, reason="max_age_range", timeline_idx=timeline_idx)
-            return None
+                return None
+            if not break_activated:
+                return None
 
         if state.state == PortfolioState.BREAK_ACTIVE:
             assert state.break_side is not None and state.break_price is not None
             break_start_idx = state.break_start_timeline_idx if state.break_start_timeline_idx is not None else timeline_idx
-            reclaim_anchor_idx = state.reclaim_bar_timeline_idx if state.reclaim_bar_timeline_idx is not None else break_start_idx
-            reclaim_bars = max(timeline_idx - reclaim_anchor_idx + 1, 1)
+            reclaim_idx_for_metrics = state.reclaim_bar_timeline_idx if state.reclaim_bar_timeline_idx is not None else timeline_idx
+            reclaim_bars = max(reclaim_idx_for_metrics - break_start_idx + 1, 1)
 
             reclaim_settings = self._resolve_reclaim_settings()
             strict_retest_flow = reclaim_settings.retest_limit_bars > 0 and state.reclaim_bar_timeline_idx is not None
@@ -467,7 +483,14 @@ class PortfolioStateEngine:
                 if state.retest_deadline_timeline_idx is not None and timeline_idx > state.retest_deadline_timeline_idx:
                     self._reset_symbol(symbol=symbol, state=state, reason="retest_timeout", timeline_idx=timeline_idx)
                     return None
-            elif (timeline_idx - break_start_idx) > self._resolve_reclaim_limit_bars():
+            elif state.reclaim_bar_timeline_idx is None and (timeline_idx - break_start_idx) > self._resolve_reclaim_limit_bars():
+                self._reset_symbol(symbol=symbol, state=state, reason="reclaim_timeout", timeline_idx=timeline_idx)
+                return None
+            elif (
+                state.reclaim_bar_timeline_idx is not None
+                and state.retest_deadline_timeline_idx is not None
+                and timeline_idx > state.retest_deadline_timeline_idx
+            ):
                 self._reset_symbol(symbol=symbol, state=state, reason="reclaim_timeout", timeline_idx=timeline_idx)
                 return None
 
@@ -475,39 +498,75 @@ class PortfolioStateEngine:
             state.lowest_break = min(state.lowest_break or low, low)
             core_width = float(state.core_width if state.core_width is not None else abs(float((state.resistance or close) - (state.support or close))))
             support_ref = float(state.support if state.support is not None else close)
+            range_high = float(state.resistance if state.resistance is not None else close)
             emergency_ratio = self._resolve_reclaim_settings().emergency_reset_ratio
             if low < support_ref - (emergency_ratio * core_width):
                 self._reset_symbol(symbol=symbol, state=state, reason="break_emergency", timeline_idx=timeline_idx)
                 return None
 
-            depth = max((state.support or close) - (state.lowest_break or close), 0.0)
+            if state.reclaim_bar_timeline_idx is None:
+                hold_price = resolve_half_hold_price(
+                    high_pump=state.high_pump,
+                    low_before_pump=state.low_before_pump,
+                )
+                if hold_price is not None and close < hold_price:
+                    self._reset_symbol(symbol=symbol, state=state, reason="break_emergency", timeline_idx=timeline_idx)
+                    return None
+                below_range_high = min(float(row["high"] or close), support_ref)
+                if state.break_below_range_high is None:
+                    state.break_below_range_high = below_range_high
+                else:
+                    state.break_below_range_high = max(state.break_below_range_high, below_range_high)
+
+            depth = max(support_ref - (state.lowest_break or close), 0.0)
             atr_bg = float(state.atr_bg or 0.0)
             min_depth = self._resolve_min_depth_threshold() * atr_bg
-            max_depth = 0.5 * core_width
-            if depth > max_depth:
+            depth_ok = is_move_pct_smaller_than_range_pct(
+                move_size=depth,
+                reclaim_boundary=support_ref,
+                range_high=range_high,
+            )
+            below_range_span = resolve_below_range_span(
+                lowest_break=state.lowest_break,
+                below_range_high=state.break_below_range_high,
+            )
+            below_range_span_ok = below_range_span is not None and is_move_pct_smaller_than_range_pct(
+                move_size=below_range_span,
+                reclaim_boundary=support_ref,
+                range_high=range_high,
+            )
+            if not depth_ok or not below_range_span_ok:
                 self._reset_symbol(symbol=symbol, state=state, reason="break_emergency", timeline_idx=timeline_idx)
                 return None
 
-            reclaim_confirmed = state.support is not None and close > state.support and depth >= min_depth
+            stage3_reclaim_confirmed = state.support is not None and close > state.support and depth >= min_depth
 
-            if reclaim_settings.retest_limit_bars > 0 and reclaim_confirmed and state.reclaim_bar_timeline_idx is None:
+            if stage3_reclaim_confirmed and state.reclaim_bar_timeline_idx is None:
                 state.reclaim_bar_timeline_idx = timeline_idx
-                state.retest_deadline_timeline_idx = timeline_idx + self._resolve_retest_limit_bars()
-                state.touched_retest_zone = False
+                if reclaim_settings.retest_limit_bars > 0:
+                    state.retest_deadline_timeline_idx = timeline_idx + self._resolve_retest_limit_bars()
+                    state.touched_retest_zone = False
+                else:
+                    state.retest_deadline_timeline_idx = timeline_idx + self._resolve_reclaim_limit_bars()
 
+            entry_confirmed = False
             if reclaim_settings.retest_limit_bars > 0 and state.reclaim_bar_timeline_idx is not None:
                 support = float(state.support if state.support is not None else close)
                 atr_ref = float(state.atr_bg if state.atr_bg is not None else 0.0)
                 zone_upper = support + (0.05 * atr_ref)
-                trigger_close = support + (0.10 * atr_ref)
+                trigger_close = support + (max(0.10, self._resolve_micro_offset()) * atr_ref)
                 low = float(row["low"] or close)
                 high = float(row["high"] or close)
                 touched_zone_now = high >= support and low <= zone_upper
                 if touched_zone_now:
                     state.touched_retest_zone = True
-                reclaim_confirmed = state.touched_retest_zone and close > trigger_close
+                entry_confirmed = state.touched_retest_zone and close > trigger_close
+            elif state.reclaim_bar_timeline_idx is not None:
+                support = float(state.support if state.support is not None else close)
+                atr_ref = float(state.atr_bg if state.atr_bg is not None else 0.0)
+                entry_confirmed = close > (support + self._resolve_micro_offset() * atr_ref)
 
-            if reclaim_confirmed:
+            if entry_confirmed:
                 support = float(state.support if state.support is not None else close)
                 atr_ref = float(state.atr_bg if state.atr_bg is not None else 0.0)
                 micro_offset = self._resolve_micro_offset()
@@ -975,6 +1034,7 @@ class PortfolioStateEngine:
             state.support = None
             state.resistance = None
             state.lowest_break = None
+            state.break_below_range_high = None
             state.atr_bg = None
         return trades
 
@@ -1063,6 +1123,7 @@ class PortfolioStateEngine:
         state.support = None
         state.resistance = None
         state.lowest_break = None
+        state.break_below_range_high = None
         state.atr_bg = None
         state.atr_pre = None
         state.pump_height = None

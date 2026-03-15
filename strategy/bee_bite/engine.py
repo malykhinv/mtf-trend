@@ -16,6 +16,11 @@ from domain.models.trade_result import TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from strategy.bee_bite.config import BeeBiteParams, get_bee_bite_reclaim_settings, get_bee_bite_score_threshold
+from strategy.bee_bite.stage3_rules import (
+    is_move_pct_smaller_than_range_pct,
+    resolve_below_range_span,
+    resolve_half_hold_price,
+)
 from strategy.bee_bite.trade_plan import BeeBiteTradePlan, build_bee_bite_trade_plan, resolve_profile_tp1_share
 from strategy.common.level_detector import LevelDetector
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -48,6 +53,7 @@ class SetupContext:
     break_idx: int | None = None
     reclaim_idx: int | None = None
     lowest_break: float | None = None
+    break_below_range_high: float | None = None
     retest_touch_idx: int | None = None
     retest_deadline_idx: int | None = None
     t_pump_start: int | None = None
@@ -276,6 +282,7 @@ class BeeBiteEngine:
                             setup.break_idx = None
                             setup.reclaim_idx = None
                             setup.lowest_break = None
+                            setup.break_below_range_high = None
                             setup.retest_touch_idx = None
                             state = BeeBiteState.RANGE_LOCKED
                             diagnostics["states"].append(state.value)
@@ -316,13 +323,26 @@ class BeeBiteEngine:
                 puncture_price = float(row.low)
                 puncture_detected = puncture_price < boundary and puncture_price < reclaim_reference
                 if puncture_detected and setup.atr_bg > 0 and setup.core_width > 0:
-                    depth = abs(puncture_price - boundary)
+                    range_high = setup.range_high
+                    if range_high is None:
+                        setup = None
+                        state = BeeBiteState.IDLE
+                        diagnostics["states"].append(state.value)
+                        i += 1
+                        continue
+                    depth = abs(puncture_price - reclaim_reference)
                     min_depth = params.bite_min_depth_threshold * setup.atr_bg
-                    max_depth = 0.5 * setup.core_width
-                    if min_depth <= depth <= max_depth:
+                    depth_ok = is_move_pct_smaller_than_range_pct(
+                        move_size=depth,
+                        reclaim_boundary=reclaim_reference,
+                        range_high=range_high,
+                    )
+                    if min_depth <= depth and depth_ok:
                         setup.break_idx = i
                         setup.lowest_break = puncture_price
+                        setup.break_below_range_high = None
                         setup.reclaim_idx = None
+                        setup.retest_deadline_idx = None
                         setup.retest_touch_idx = None
                         state = BeeBiteState.BREAK_ACTIVE
                         diagnostics["states"].append(state.value)
@@ -353,11 +373,55 @@ class BeeBiteEngine:
                     setup.lowest_break = break_price
                 else:
                     setup.lowest_break = min(setup.lowest_break, break_price)
+                range_high = setup.range_high
+                if range_high is None:
+                    setup = None
+                    state = BeeBiteState.IDLE
+                    diagnostics["states"].append(state.value)
+                    i += 1
+                    continue
                 reclaim_limit = params.bite_reclaim_limit_bars
                 elapsed_since_break = i - setup.break_idx
                 emergency_level = reclaim_settings.emergency_reset_ratio * setup.core_width
                 emergency_break = float(row.low) < (boundary - emergency_level)
-                if emergency_break or elapsed_since_break > reclaim_limit:
+                reclaim_timeout = setup.reclaim_idx is None and elapsed_since_break > reclaim_limit
+                post_reclaim_timeout = (
+                    setup.reclaim_idx is not None
+                    and setup.retest_deadline_idx is not None
+                    and i > setup.retest_deadline_idx
+                )
+                if setup.reclaim_idx is None:
+                    hold_price = resolve_half_hold_price(
+                        high_pump=setup.high_pump,
+                        low_before_pump=setup.low_before_pump,
+                    )
+                    if hold_price is not None and price_close < hold_price:
+                        setup = None
+                        state = BeeBiteState.IDLE
+                        diagnostics["states"].append(f"{BeeBiteState.IDLE.value}:CLOSE_BELOW_HOLD")
+                        i += 1
+                        continue
+                    below_range_high = min(float(row.high), reclaim_reference)
+                    if setup.break_below_range_high is None:
+                        setup.break_below_range_high = below_range_high
+                    else:
+                        setup.break_below_range_high = max(setup.break_below_range_high, below_range_high)
+                sweep_depth = max(reclaim_reference - float(setup.lowest_break or reclaim_reference), 0.0)
+                sweep_depth_ok = is_move_pct_smaller_than_range_pct(
+                    move_size=sweep_depth,
+                    reclaim_boundary=reclaim_reference,
+                    range_high=range_high,
+                )
+                below_range_span = resolve_below_range_span(
+                    lowest_break=setup.lowest_break,
+                    below_range_high=setup.break_below_range_high,
+                )
+                below_range_span_ok = below_range_span is not None and is_move_pct_smaller_than_range_pct(
+                    move_size=below_range_span,
+                    reclaim_boundary=reclaim_reference,
+                    range_high=range_high,
+                )
+                if emergency_break or reclaim_timeout or post_reclaim_timeout or not sweep_depth_ok or not below_range_span_ok:
                     setup = None
                     state = BeeBiteState.IDLE
                     diagnostics["states"].append(state.value)
@@ -365,15 +429,7 @@ class BeeBiteEngine:
                     reclaim_offset_threshold = params.bite_micro_offset * setup.atr_bg
                     reclaim_ok = price_close > reclaim_reference
                     micro_ok = price_close > (reclaim_reference + reclaim_offset_threshold)
-                    if reclaim_ok and not micro_ok:
-                        cooldown_bars = self._hours_to_candles(params.bite_cooldown_hours, params.entry_timeframe)
-                        cooldown_until_idx = i + cooldown_bars
-                        setup = None
-                        state = BeeBiteState.IDLE
-                        diagnostics["states"].append(state.value)
-                        i += 1
-                        continue
-                    if setup.reclaim_idx is None and reclaim_ok and micro_ok:
+                    if setup.reclaim_idx is None and reclaim_ok:
                         setup.reclaim_idx = i
                         if (
                             params.bite_retest_mode == "confirmation"
@@ -382,6 +438,8 @@ class BeeBiteEngine:
                         ):
                             setup.retest_deadline_idx = i + reclaim_settings.retest_limit_bars
                             setup.retest_touch_idx = None
+                        else:
+                            setup.retest_deadline_idx = i + reclaim_limit
 
                     if setup.reclaim_idx is not None:
                         if (
@@ -398,7 +456,8 @@ class BeeBiteEngine:
                             touch_zone = float(row.low) <= (reclaim_reference + retest_touch_offset)
                             if setup.retest_touch_idx is None and touch_zone:
                                 setup.retest_touch_idx = i
-                            confirm_close = price_close > (reclaim_reference + retest_confirm_offset)
+                            confirm_threshold = max(retest_confirm_offset, reclaim_offset_threshold)
+                            confirm_close = price_close > (reclaim_reference + confirm_threshold)
                             if setup.retest_touch_idx is not None and i > setup.retest_touch_idx and confirm_close:
                                 state = BeeBiteState.ENTRY_SIGNAL
                                 diagnostics["states"].append(state.value)
@@ -407,8 +466,9 @@ class BeeBiteEngine:
                                 state = BeeBiteState.IDLE
                                 diagnostics["states"].append(state.value)
                         elif params.bite_retest_mode == "immediate" or params.bite_entry_trigger == EntryTrigger.IMMEDIATE:
-                            state = BeeBiteState.ENTRY_SIGNAL
-                            diagnostics["states"].append(state.value)
+                            if micro_ok:
+                                state = BeeBiteState.ENTRY_SIGNAL
+                                diagnostics["states"].append(state.value)
                         else:
                             confirm_idx = setup.reclaim_idx + params.bite_confirmation_bars
                             if i >= confirm_idx:
