@@ -223,7 +223,7 @@ class BeeBiteStage3Plotter:
 
         volume_ax.set_ylabel("Volume", color=self._TEXT_COLOR)
         volume_ax.grid(alpha=0.18, color=self._GRID_COLOR)
-        tick_positions = self._build_tick_positions(len(window))
+        tick_positions = self._build_tick_positions(window)
         tick_labels = self._build_tick_labels(window, tick_positions)
         volume_ax.set_xticks(tick_positions)
         volume_ax.set_xticklabels(tick_labels, rotation=0, ha="center", color=self._TEXT_COLOR)
@@ -311,13 +311,18 @@ class BeeBiteStage3Plotter:
         return int(matches[0])
 
     @staticmethod
-    def _build_tick_positions(size: int) -> list[int]:
-        if size <= 8:
-            return list(range(size))
-        step = max(1, size // 8)
-        positions = list(range(0, size, step))
-        if positions[-1] != size - 1:
-            positions.append(size - 1)
+    def _build_tick_positions(frame: pd.DataFrame) -> list[int]:
+        timestamps = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
+        positions = [idx for idx, ts in enumerate(timestamps) if ts.minute == 0]
+        if len(positions) < 2:
+            positions = [idx for idx, ts in enumerate(timestamps) if ts.minute in {0, 30}]
+        if not positions:
+            return [0, len(frame) - 1] if len(frame) > 1 else [0]
+        if len(positions) > 8:
+            step = max(1, len(positions) // 8)
+            positions = positions[::step]
+            if positions[-1] != len(frame) - 1 and timestamps.iloc[-1].minute == 0:
+                positions.append(len(frame) - 1)
         return positions
 
     @staticmethod
