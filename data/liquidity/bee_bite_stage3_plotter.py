@@ -34,6 +34,9 @@ class BeeBiteStage3Plotter:
     _BREAK_COLOR = "#ef4444"
     _RECLAIM_COLOR = "#38bdf8"
     _HOLD_COLOR = "#f59e0b"
+    _START_COLOR = "#38bdf8"
+    _PEAK_COLOR = "#fb7185"
+    _STAGE1_COLOR = "#a3e635"
 
     def plot_result(
         self,
@@ -57,7 +60,17 @@ class BeeBiteStage3Plotter:
         if prepared.empty:
             raise ValueError("Stage-3 plot received an empty frame after normalization.")
 
-        start_anchor = int(stage2_result.box_start_timestamp or stage1_event.pump_start_timestamp or prepared.iloc[0]["timestamp"])
+        start_anchor = int(
+            min(
+                timestamp
+                for timestamp in (
+                    stage1_event.pump_start_timestamp,
+                    stage2_result.box_start_timestamp,
+                    prepared.iloc[0]["timestamp"],
+                )
+                if timestamp is not None
+            )
+        )
         end_anchor = int(
             stage3_result.reclaim_timestamp
             or stage3_result.analysis_end_timestamp
@@ -88,6 +101,33 @@ class BeeBiteStage3Plotter:
 
         self._draw_candles(price_ax, window, x_positions)
         self._draw_volume(volume_ax, window, x_positions)
+
+        pump_start_idx = self._timestamp_to_index(prepared, stage1_event.pump_start_timestamp)
+        self._draw_marker(
+            price_ax,
+            pump_start_idx - window_start,
+            float(stage1_event.pump_base_price or prepared.iloc[pump_start_idx]["low"]),
+            self._START_COLOR,
+            "pump start",
+        )
+        if stage1_event.pump_peak_timestamp is not None and stage1_event.pump_peak_price is not None:
+            pump_peak_idx = self._timestamp_to_index(prepared, stage1_event.pump_peak_timestamp)
+            self._draw_marker(
+                price_ax,
+                pump_peak_idx - window_start,
+                float(stage1_event.pump_peak_price),
+                self._PEAK_COLOR,
+                "stage1 peak",
+            )
+        if stage1_event.stage1_confirmed_timestamp is not None:
+            stage1_confirmed_idx = self._timestamp_to_index(prepared, stage1_event.stage1_confirmed_timestamp)
+            self._draw_marker(
+                price_ax,
+                stage1_confirmed_idx - window_start,
+                float(prepared.iloc[stage1_confirmed_idx]["close"]),
+                self._STAGE1_COLOR,
+                "stage1 confirmed",
+            )
 
         if stage3_result.hold_price is not None:
             price_ax.axhline(
