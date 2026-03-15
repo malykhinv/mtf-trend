@@ -1692,7 +1692,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     regime_role = "first"
                 elif event is regime.last_event:
                     regime_role = "last"
-                window_end_timestamp = regime.regime_end_timestamp if event is regime.last_event else event.stage1_confirmed_timestamp
+                window_end_timestamp = event.stage1_confirmed_timestamp
                 display_metrics = _resolve_stage1_display_metrics(
                     frame=frame,
                     event=event,
@@ -1749,7 +1749,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
             frame=frame,
             event=regime.last_event,
             output_path=last_output,
-            window_end_timestamp=regime.regime_end_timestamp,
+            window_end_timestamp=regime.last_event.stage1_confirmed_timestamp,
             title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} last ({regime.regime_end_reason})",
         )
         plots_built += 1
@@ -2058,7 +2058,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
             stage1_event=stage1_event,
             stage2_result=stage2_result,
             output_path=plot_path,
-            window_end_timestamp=regime.regime_end_timestamp,
+            window_end_timestamp=stage2_result.box_end_timestamp or stage2_result.analysis_end_timestamp,
             title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
         )
         plots_built += 1
@@ -2098,7 +2098,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("review-stage3: no data in cache for tf=%s", review_timeframe.value)
         return 0
 
-    selector = BeeBiteStage1Selector.for_timeframe(review_timeframe)
+    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
+    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
     stage2_detector = BeeBiteStage2Detector()
     stage3_detector = BeeBiteStage3Detector()
     plotter = BeeBiteStage3Plotter()
@@ -2115,14 +2116,19 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
             continue
         populated_frame_symbols += 1
 
-        stage1_events = selector.detect_events(symbol=symbol, frame=frame)
+        stage1_frame = frame if stage1_timeframe == review_timeframe else preparer.load_symbol_data(symbol, stage1_timeframe)
+        if stage1_frame.empty:
+            reason_counts["stage1:empty_reference_frame"] += 1
+            continue
+
+        stage1_events = selector.detect_events(symbol=symbol, frame=stage1_frame)
         if not stage1_events:
-            stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
+            stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=stage1_frame)
             reason_counts[f"stage1:{stage1_evaluation.reason}"] += 1
             continue
 
         regimes = _resolve_stage1_regime_ends(
-            frame=frame,
+            frame=stage1_frame,
             regimes=_group_stage1_events_into_regimes(stage1_events),
         )
         for regime in regimes:

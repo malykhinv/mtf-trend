@@ -109,6 +109,8 @@ class BeeBiteStage2Plotter:
                 axis=price_ax,
                 range_start_idx=local_range.start_idx,
                 range_end_idx=local_range.end_idx,
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
                 range_low=local_range.low,
                 range_high=local_range.high,
                 index_shift=window_start,
@@ -123,6 +125,8 @@ class BeeBiteStage2Plotter:
                 axis=price_ax,
                 range_start_idx=merged_range.start_idx,
                 range_end_idx=merged_range.end_idx,
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
                 range_low=merged_range.low,
                 range_high=merged_range.high,
                 index_shift=window_start,
@@ -148,6 +152,8 @@ class BeeBiteStage2Plotter:
                 axis=price_ax,
                 range_start_idx=liquidity_zone.start_idx,
                 range_end_idx=liquidity_zone.end_idx,
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
                 range_low=liquidity_zone.low,
                 range_high=liquidity_zone.high,
                 index_shift=window_start,
@@ -260,6 +266,8 @@ class BeeBiteStage2Plotter:
         axis,
         range_start_idx: int,
         range_end_idx: int,
+        visible_start_idx: int,
+        visible_end_idx: int,
         range_low: float,
         range_high: float,
         index_shift: int,
@@ -270,8 +278,12 @@ class BeeBiteStage2Plotter:
         label: str | None = None,
         line_style: str = "-",
     ) -> None:
-        x0 = range_start_idx - index_shift - 0.5
-        width = (range_end_idx - range_start_idx) + 1.0
+        clipped_start_idx = max(range_start_idx, visible_start_idx)
+        clipped_end_idx = min(range_end_idx, visible_end_idx)
+        if clipped_end_idx < clipped_start_idx:
+            return
+        x0 = clipped_start_idx - index_shift - 0.5
+        width = (clipped_end_idx - clipped_start_idx) + 1.0
         axis.add_patch(
             Rectangle(
                 (x0, range_low),

@@ -132,6 +132,8 @@ class BeeBiteStage3Plotter:
                 axis=price_ax,
                 start_idx=self._timestamp_to_index(prepared, int(stage2_result.box_start_timestamp)),
                 end_idx=self._timestamp_to_index(prepared, int(stage2_result.box_end_timestamp)),
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
                 low=float(stage2_result.box_low or 0.0),
                 high=float(stage2_result.box_high or 0.0),
                 index_shift=window_start,
@@ -147,6 +149,8 @@ class BeeBiteStage3Plotter:
                 axis=price_ax,
                 start_idx=lower_zone.start_idx,
                 end_idx=lower_zone.end_idx,
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
                 low=lower_zone.low,
                 high=lower_zone.high,
                 index_shift=window_start,
@@ -235,6 +239,8 @@ class BeeBiteStage3Plotter:
         axis,
         start_idx: int,
         end_idx: int,
+        visible_start_idx: int,
+        visible_end_idx: int,
         low: float,
         high: float,
         index_shift: int,
@@ -243,8 +249,12 @@ class BeeBiteStage3Plotter:
         alpha: float,
         label: str,
     ) -> None:
-        x0 = start_idx - index_shift - 0.5
-        width = (end_idx - start_idx) + 1.0
+        clipped_start_idx = max(start_idx, visible_start_idx)
+        clipped_end_idx = min(end_idx, visible_end_idx)
+        if clipped_end_idx < clipped_start_idx:
+            return
+        x0 = clipped_start_idx - index_shift - 0.5
+        width = (clipped_end_idx - clipped_start_idx) + 1.0
         axis.add_patch(
             Rectangle(
                 (x0, low),
