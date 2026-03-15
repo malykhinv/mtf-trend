@@ -19,7 +19,7 @@ from strategy.bee_bite.stage3_detector import BeeBiteStage3Result
 
 class BeeBiteStage3Plotter:
     _CANDLE_WIDTH = 0.65
-    _PRE_CONTEXT_BARS = 24
+    _PRE_PUMP_CONTEXT_BARS = 12
     _POST_CONTEXT_BARS = 20
     _FIGURE_FACE = "#08111f"
     _AXIS_FACE = "#0f172a"
@@ -60,26 +60,15 @@ class BeeBiteStage3Plotter:
         if prepared.empty:
             raise ValueError("Stage-3 plot received an empty frame after normalization.")
 
-        start_anchor = int(
-            min(
-                timestamp
-                for timestamp in (
-                    stage1_event.pump_start_timestamp,
-                    stage2_result.box_start_timestamp,
-                    prepared.iloc[0]["timestamp"],
-                )
-                if timestamp is not None
-            )
-        )
         end_anchor = int(
             stage3_result.reclaim_timestamp
             or stage3_result.analysis_end_timestamp
             or stage2_result.analysis_end_timestamp
             or prepared.iloc[-1]["timestamp"]
         )
-        start_idx = self._timestamp_to_index(prepared, start_anchor)
+        pump_start_idx = self._timestamp_to_index(prepared, stage1_event.pump_start_timestamp)
         end_idx = self._timestamp_to_index(prepared, end_anchor)
-        window_start = max(0, start_idx - self._PRE_CONTEXT_BARS)
+        window_start = max(0, pump_start_idx - self._PRE_PUMP_CONTEXT_BARS)
         window_end = min(len(prepared) - 1, end_idx + self._POST_CONTEXT_BARS)
         window = prepared.iloc[window_start : window_end + 1].reset_index(drop=True)
         x_positions = list(range(len(window)))
@@ -102,7 +91,6 @@ class BeeBiteStage3Plotter:
         self._draw_candles(price_ax, window, x_positions)
         self._draw_volume(volume_ax, window, x_positions)
 
-        pump_start_idx = self._timestamp_to_index(prepared, stage1_event.pump_start_timestamp)
         self._draw_marker(
             price_ax,
             pump_start_idx - window_start,
