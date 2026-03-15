@@ -17,6 +17,7 @@ MODE_BACKTEST = "analyze-cache"
 MODE_REPORT = "make-report"
 MODE_STAGE1_REVIEW = "review-stage1"
 MODE_STAGE2_REVIEW = "review-stage2"
+MODE_STAGE3_REVIEW = "review-stage3"
 MODE_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
@@ -27,6 +28,7 @@ MODE_LABELS: dict[str, str] = {
     MODE_REPORT: "Build report",
     MODE_STAGE1_REVIEW: "Review historical stage-1",
     MODE_STAGE2_REVIEW: "Review stage-2 balances",
+    MODE_STAGE3_REVIEW: "Review stage-3 sweeps",
     MODE_QUALITY: "Check cache quality",
     MODE_CLEAR_CACHE: "Clear cache",
 }
@@ -132,6 +134,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_REPORT: commands.make_report,
         MODE_STAGE1_REVIEW: commands.review_stage1,
         MODE_STAGE2_REVIEW: commands.review_stage2,
+        MODE_STAGE3_REVIEW: commands.review_stage3,
         MODE_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
     }
