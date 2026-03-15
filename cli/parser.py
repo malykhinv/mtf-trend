@@ -80,13 +80,16 @@ def build_parser() -> argparse.ArgumentParser:
     stage2.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
     stage2.add_argument("--tf-all", action="store_true", help="Run review for both 15m and 5m")
     stage2.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-2 review plots")
+    stage2.add_argument("--plot-scope", choices=["latest", "all"], default="latest", help="Plot only the latest setup or all found setups")
     stage2.add_argument("--output", default=None, help="Path to CSV with detected stage-2 structures")
 
     stage3 = subparsers.add_parser("review-stage3", help="Find bee_bite stage-3 sweeps and save PNGs with reclaim review")
     stage3.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     stage3.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
     stage3.add_argument("--tf-all", action="store_true", help="Run review for both 15m and 5m")
+    stage3.add_argument("--review-mode", choices=["snapshot", "evolution"], default="snapshot", help="Snapshot plots or candle-by-candle stage-2/stage-3 backtest")
     stage3.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-3 review plots")
+    stage3.add_argument("--plot-scope", choices=["latest", "all"], default="latest", help="Plot only the latest setup or all found setups")
     stage3.add_argument("--output", default=None, help="Path to CSV with detected stage-3 sweeps")
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")

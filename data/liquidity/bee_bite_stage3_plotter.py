@@ -46,6 +46,7 @@ class BeeBiteStage3Plotter:
         stage2_result: BeeBiteStage2Result,
         stage3_result: BeeBiteStage3Result,
         output_path: Path,
+        window_end_timestamp: int | None = None,
         title_suffix: str | None = None,
     ) -> None:
         required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
@@ -61,8 +62,9 @@ class BeeBiteStage3Plotter:
             raise ValueError("Stage-3 plot received an empty frame after normalization.")
 
         end_anchor = int(
-            stage3_result.reclaim_timestamp
+            window_end_timestamp
             or stage3_result.analysis_end_timestamp
+            or stage3_result.reclaim_timestamp
             or stage2_result.analysis_end_timestamp
             or prepared.iloc[-1]["timestamp"]
         )

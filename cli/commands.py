@@ -92,6 +92,7 @@ _PROGRESS_LOG_EVERY = 100
 _STAGE1_REASON_SAMPLE_LIMIT = 3
 _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE = "stage3_events.csv"
 _DEFAULT_STAGE3_PLOTS_DIR_NAME = "stage3_plots"
+_DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
 
 
 @dataclass(slots=True)
@@ -104,6 +105,16 @@ class _Stage1Regime:
     last_event: BeeBiteStage1Result
     regime_end_timestamp: int
     regime_end_reason: str
+
+
+@dataclass(slots=True)
+class _Stage23ReviewCandidate:
+    symbol: str
+    regime: _Stage1Regime
+    stage1_event: BeeBiteStage1Result
+    final_stage2_result: BeeBiteStage2Result
+    final_stage3_result: BeeBiteStage3Result
+    frame: pd.DataFrame
 
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
@@ -961,6 +972,50 @@ def _with_review_timeframe(args: argparse.Namespace, timeframe: Timeframe, *, ou
 
 def _append_timeframe_suffix(path: Path, timeframe: Timeframe) -> Path:
     return path.with_name(f"{path.stem}_{timeframe.value}{path.suffix}")
+
+
+def _resolve_plot_scope(args: argparse.Namespace) -> str:
+    return "all" if str(getattr(args, "plot_scope", "latest")).strip().lower() == "all" else "latest"
+
+
+def _resolve_stage3_review_mode(args: argparse.Namespace) -> str:
+    return "evolution" if str(getattr(args, "review_mode", "snapshot")).strip().lower() == "evolution" else "snapshot"
+
+
+def _select_plot_payload(items: list[object], *, plot_scope: str, plot_limit: int) -> list[object]:
+    if not items:
+        return []
+    if plot_scope != "all":
+        return items[:1]
+    return items[: max(1, plot_limit)]
+
+
+def _resolve_snapshot_timestamps(
+    *,
+    frame: pd.DataFrame,
+    start_timestamp: int,
+    end_timestamp: int,
+) -> list[int]:
+    prepared = frame.loc[:, ["timestamp"]].copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp"])
+    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    if prepared.empty:
+        return []
+
+    timestamps = prepared["timestamp"].astype("int64").to_numpy()
+    start_matches = np.where(timestamps == int(start_timestamp))[0]
+    if start_matches.size == 0:
+        return []
+    end_matches = np.where(timestamps == int(end_timestamp))[0]
+    if end_matches.size == 0:
+        return []
+
+    start_idx = int(start_matches[0])
+    end_idx = int(end_matches[-1])
+    if end_idx < start_idx:
+        return []
+    return [int(timestamp) for timestamp in timestamps[start_idx : end_idx + 1]]
 
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
@@ -1966,6 +2021,60 @@ def _stage3_result_to_rows(
     return rows
 
 
+def _stage23_backtest_row(
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    regime: _Stage1Regime,
+    stage1_event: BeeBiteStage1Result,
+    snapshot_order: int,
+    snapshot_timestamp: int,
+    stage2_result: BeeBiteStage2Result,
+    stage3_result: BeeBiteStage3Result,
+) -> dict[str, object]:
+    lower_zone = stage3_result.active_lower_liquidity_zone
+    return {
+        "symbol": symbol,
+        "timeframe": timeframe.value,
+        "regime_index": regime.regime_index,
+        "row_type": "evolution",
+        "row_order": snapshot_order,
+        "snapshot_timestamp": snapshot_timestamp,
+        "stage1_confirmed_timestamp": stage1_event.stage1_confirmed_timestamp,
+        "regime_end_timestamp": regime.regime_end_timestamp,
+        "regime_end_reason": regime.regime_end_reason,
+        "stage2_passed": stage2_result.passed,
+        "stage2_reason": stage2_result.reason,
+        "stage2_analysis_end_timestamp": stage2_result.analysis_end_timestamp,
+        "confirmed_highs_count": len(stage2_result.confirmed_highs),
+        "local_ranges_count": len(stage2_result.local_ranges),
+        "merged_ranges_count": len(stage2_result.merged_ranges),
+        "liquidity_zones_count": len(stage2_result.liquidity_zones),
+        "box_start_timestamp": stage2_result.box_start_timestamp,
+        "box_end_timestamp": stage2_result.box_end_timestamp,
+        "box_low": stage2_result.box_low,
+        "box_high": stage2_result.box_high,
+        "stage3_passed": stage3_result.passed,
+        "stage3_reason": stage3_result.reason,
+        "stage3_analysis_end_timestamp": stage3_result.analysis_end_timestamp,
+        "hold_price": stage3_result.hold_price,
+        "break_timestamp": stage3_result.break_timestamp,
+        "reclaim_timestamp": stage3_result.reclaim_timestamp,
+        "lowest_break_price": stage3_result.lowest_break_price,
+        "below_range_high_price": stage3_result.below_range_high_price,
+        "under_range_span": stage3_result.under_range_span,
+        "under_range_span_pct": stage3_result.under_range_span_pct,
+        "range_size_pct": stage3_result.range_size_pct,
+        "bars_under_range": stage3_result.bars_under_range,
+        "active_lower_zone_start_timestamp": (lower_zone.start_timestamp if lower_zone is not None else None),
+        "active_lower_zone_end_timestamp": (lower_zone.end_timestamp if lower_zone is not None else None),
+        "active_lower_zone_last_touch_timestamp": (lower_zone.last_touch_timestamp if lower_zone is not None else None),
+        "active_lower_zone_low": (lower_zone.low if lower_zone is not None else None),
+        "active_lower_zone_high": (lower_zone.high if lower_zone is not None else None),
+        "active_lower_zone_touch_count": (lower_zone.touch_count if lower_zone is not None else None),
+    }
+
+
 def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage2", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("review-stage2: cache_dir=%s", config.backtest.cache_dir)
@@ -1977,6 +2086,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE2_EVENTS_OUTPUT_FILE
     plots_dir = output_dir / DEFAULT_STAGE2_PLOTS_DIR_NAME
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
+    plot_scope = _resolve_plot_scope(args)
 
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
@@ -2061,7 +2171,11 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         reverse=True,
     )
-    for symbol, regime, stage1_event, stage2_result, frame in plots_payload[:plot_limit]:
+    for symbol, regime, stage1_event, stage2_result, frame in _select_plot_payload(
+        cast(list[object], plots_payload),
+        plot_scope=plot_scope,
+        plot_limit=plot_limit,
+    ):
         symbol_slug = symbol.replace("/", "_")
         plot_path = plots_dir / f"{symbol_slug}_stage2_regime_{regime.regime_index:02d}.png"
         plotter.plot_result(
@@ -2080,12 +2194,13 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     if empty_frame_symbols:
         logger.warning("review-stage2: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
     logger.info(
-        "review-stage2: symbols=%s symbols_with_stage2=%s csv=%s plots=%s plots_dir=%s",
+        "review-stage2: symbols=%s symbols_with_stage2=%s csv=%s plots=%s plots_dir=%s plot_scope=%s",
         len(symbols),
         len({item[0] for item in stage2_results}),
         output_path,
         plots_built,
         plots_dir,
+        plot_scope,
     )
     return 0
 
@@ -2094,11 +2209,14 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage3", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("review-stage3: cache_dir=%s", config.backtest.cache_dir)
     review_timeframe = _resolve_review_timeframe(args)
+    review_mode = _resolve_stage3_review_mode(args)
+    plot_scope = _resolve_plot_scope(args)
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
     output_dir = results_dir / "stage3_review" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE
+    default_output_name = _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE if review_mode == "evolution" else _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE
+    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / default_output_name
     plots_dir = output_dir / _DEFAULT_STAGE3_PLOTS_DIR_NAME
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
 
@@ -2113,9 +2231,11 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
     stage2_detector = BeeBiteStage2Detector()
     stage3_detector = BeeBiteStage3Detector()
-    plotter = BeeBiteStage3Plotter()
+    stage2_plotter = BeeBiteStage2Plotter()
+    stage3_plotter = BeeBiteStage3Plotter()
     rows: list[dict[str, object]] = []
     stage3_results: list[tuple[str, _Stage1Regime, BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result, pd.DataFrame]] = []
+    review_candidates: list[_Stage23ReviewCandidate] = []
     reason_counts: Counter[str] = Counter()
     empty_frame_symbols: list[str] = []
     populated_frame_symbols = 0
@@ -2144,11 +2264,12 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
         for regime in regimes:
             stage1_event = regime.first_event
+            stage2_analysis_end_timestamp = _resolve_stage2_analysis_end_timestamp(frame=frame, regime=regime)
             stage2_result = stage2_detector.detect(
                 symbol=symbol,
                 frame=frame,
                 stage1=stage1_event,
-                analysis_end_timestamp=_resolve_stage2_analysis_end_timestamp(frame=frame, regime=regime),
+                analysis_end_timestamp=stage2_analysis_end_timestamp,
             )
             if not stage2_result.passed:
                 rows.extend(
@@ -2185,10 +2306,60 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     stage3_result=stage3_result,
                 )
             )
+            review_candidates.append(
+                _Stage23ReviewCandidate(
+                    symbol=symbol,
+                    regime=regime,
+                    stage1_event=stage1_event,
+                    final_stage2_result=stage2_result,
+                    final_stage3_result=stage3_result,
+                    frame=frame,
+                )
+            )
             if stage3_result.passed:
                 stage3_results.append((symbol, regime, stage1_event, stage2_result, stage3_result, frame))
             else:
                 reason_counts[stage3_result.reason] += 1
+            if review_mode == "evolution" and stage1_event.pump_peak_timestamp is not None:
+                snapshot_timestamps = _resolve_snapshot_timestamps(
+                    frame=frame,
+                    start_timestamp=int(stage1_event.pump_peak_timestamp) + review_timeframe.to_milliseconds(),
+                    end_timestamp=int(stage2_analysis_end_timestamp),
+                )
+                for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
+                    snapshot_stage2 = stage2_detector.detect(
+                        symbol=symbol,
+                        frame=frame,
+                        stage1=stage1_event,
+                        analysis_end_timestamp=snapshot_timestamp,
+                    )
+                    if snapshot_stage2.passed:
+                        snapshot_stage3 = stage3_detector.detect(
+                            symbol=symbol,
+                            frame=frame,
+                            stage1=stage1_event,
+                            stage2=snapshot_stage2,
+                            analysis_end_timestamp=snapshot_timestamp,
+                        )
+                    else:
+                        snapshot_stage3 = BeeBiteStage3Result(
+                            symbol=symbol,
+                            passed=False,
+                            reason="stage2_not_passed",
+                            analysis_end_timestamp=snapshot_timestamp,
+                        )
+                    rows.append(
+                        _stage23_backtest_row(
+                            symbol=symbol,
+                            timeframe=review_timeframe,
+                            regime=regime,
+                            stage1_event=stage1_event,
+                            snapshot_order=snapshot_order,
+                            snapshot_timestamp=snapshot_timestamp,
+                            stage2_result=snapshot_stage2,
+                            stage3_result=snapshot_stage3,
+                        )
+                    )
 
         if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
             logger.info(
@@ -2218,18 +2389,95 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         reverse=True,
     )
-    for symbol, regime, stage1_event, stage2_result, stage3_result, frame in plots_payload[:plot_limit]:
-        symbol_slug = symbol.replace("/", "_")
-        plot_path = plots_dir / f"{symbol_slug}_stage3_regime_{regime.regime_index:02d}.png"
-        plotter.plot_result(
-            frame=frame,
-            stage1_event=stage1_event,
-            stage2_result=stage2_result,
-            stage3_result=stage3_result,
-            output_path=plot_path,
-            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
+    selected_snapshot_payload = _select_plot_payload(
+        cast(list[object], plots_payload),
+        plot_scope=plot_scope,
+        plot_limit=plot_limit,
+    )
+    if review_mode == "snapshot":
+        for symbol, regime, stage1_event, stage2_result, stage3_result, frame in selected_snapshot_payload:
+            symbol_slug = symbol.replace("/", "_")
+            plot_path = plots_dir / f"{symbol_slug}_stage3_regime_{regime.regime_index:02d}.png"
+            stage3_plotter.plot_result(
+                frame=frame,
+                stage1_event=stage1_event,
+                stage2_result=stage2_result,
+                stage3_result=stage3_result,
+                output_path=plot_path,
+                title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
+            )
+            plots_built += 1
+    else:
+        evolution_payload = sorted(
+            review_candidates,
+            key=lambda item: (
+                int(
+                    item.final_stage3_result.reclaim_timestamp
+                    or item.final_stage3_result.break_timestamp
+                    or item.final_stage2_result.analysis_end_timestamp
+                    or 0
+                ),
+                item.symbol,
+                item.regime.regime_index,
+            ),
+            reverse=True,
         )
-        plots_built += 1
+        for candidate in _select_plot_payload(
+            cast(list[object], evolution_payload),
+            plot_scope=plot_scope,
+            plot_limit=plot_limit,
+        ):
+            symbol_slug = candidate.symbol.replace("/", "_")
+            if candidate.stage1_event.pump_peak_timestamp is None:
+                continue
+            snapshot_timestamps = _resolve_snapshot_timestamps(
+                frame=candidate.frame,
+                start_timestamp=int(candidate.stage1_event.pump_peak_timestamp) + review_timeframe.to_milliseconds(),
+                end_timestamp=int(candidate.final_stage2_result.analysis_end_timestamp or candidate.regime.regime_end_timestamp),
+            )
+            for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
+                snapshot_stage2 = stage2_detector.detect(
+                    symbol=candidate.symbol,
+                    frame=candidate.frame,
+                    stage1=candidate.stage1_event,
+                    analysis_end_timestamp=snapshot_timestamp,
+                )
+                plot_path = plots_dir / (
+                    f"{symbol_slug}_stage23_regime_{candidate.regime.regime_index:02d}_step_{snapshot_order:04d}.png"
+                )
+                if snapshot_stage2.passed:
+                    snapshot_stage3 = stage3_detector.detect(
+                        symbol=candidate.symbol,
+                        frame=candidate.frame,
+                        stage1=candidate.stage1_event,
+                        stage2=snapshot_stage2,
+                        analysis_end_timestamp=snapshot_timestamp,
+                    )
+                    stage3_plotter.plot_result(
+                        frame=candidate.frame,
+                        stage1_event=candidate.stage1_event,
+                        stage2_result=snapshot_stage2,
+                        stage3_result=snapshot_stage3,
+                        output_path=plot_path,
+                        window_end_timestamp=snapshot_timestamp,
+                        title_suffix=(
+                            f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
+                            f"| step {snapshot_order:04d} | {snapshot_stage3.reason}"
+                        ),
+                    )
+                else:
+                    stage2_plotter.plot_result(
+                        frame=candidate.frame,
+                        stage1_event=candidate.stage1_event,
+                        stage2_result=snapshot_stage2,
+                        output_path=plot_path,
+                        window_end_timestamp=snapshot_timestamp,
+                        title_suffix=(
+                            f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
+                            f"| step {snapshot_order:04d} | {snapshot_stage2.reason}"
+                        ),
+                    )
+                plots_built += 1
 
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
     if top_reasons:
@@ -2237,12 +2485,14 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     if empty_frame_symbols:
         logger.warning("review-stage3: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
     logger.info(
-        "review-stage3: symbols=%s symbols_with_stage3=%s csv=%s plots=%s plots_dir=%s",
+        "review-stage3: symbols=%s symbols_with_stage3=%s csv=%s plots=%s plots_dir=%s review_mode=%s plot_scope=%s",
         len(symbols),
         len({item[0] for item in stage3_results}),
         output_path,
         plots_built,
         plots_dir,
+        review_mode,
+        plot_scope,
     )
     return 0
 
