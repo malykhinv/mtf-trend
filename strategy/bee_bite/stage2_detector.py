@@ -216,6 +216,9 @@ class BeeBiteStage2Detector:
                 confirmed_highs=tuple(confirmed_highs),
             )
 
+        if len(confirmed_highs) > len(local_ranges):
+            confirmed_highs = confirmed_highs[: len(local_ranges)]
+
         confirmed_highs, local_ranges = self._refine_confirmed_highs_and_ranges(
             prepared=prepared,
             confirmed_highs=confirmed_highs,
@@ -322,7 +325,8 @@ class BeeBiteStage2Detector:
         refined_highs: list[BeeBiteStage2ConfirmedHigh] = []
         refined_ranges: list[BeeBiteStage2Range] = []
 
-        for confirmed_high, local_range in zip(confirmed_highs, local_ranges, strict=True):
+        pair_count = min(len(confirmed_highs), len(local_ranges))
+        for confirmed_high, local_range in zip(confirmed_highs[:pair_count], local_ranges[:pair_count], strict=False):
             resolved_high = self._resolve_balance_high(
                 prepared=prepared,
                 anchor_high=confirmed_high,
