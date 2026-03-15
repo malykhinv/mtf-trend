@@ -48,6 +48,7 @@ from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
 from data.liquidity.bee_bite_stage1_plotter import BeeBiteStage1Plotter
 from data.liquidity.bee_bite_stage2_plotter import BeeBiteStage2Plotter
+from data.liquidity.bee_bite_stage3_plotter import BeeBiteStage3Plotter
 from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result, BeeBiteStage1Selector
 from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
@@ -70,6 +71,8 @@ from strategy.bee_bite import (
     BeeBiteStrategy,
     BeeBiteStage2Detector,
     BeeBiteStage2Result,
+    BeeBiteStage3Detector,
+    BeeBiteStage3Result,
     get_bee_bite_runtime,
     parse_bee_bite_grid_mode,
     parse_bee_bite_profile_id,
@@ -87,6 +90,8 @@ from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
 _PROGRESS_LOG_EVERY = 100
 _STAGE1_REASON_SAMPLE_LIMIT = 3
+_DEFAULT_STAGE3_EVENTS_OUTPUT_FILE = "stage3_events.csv"
+_DEFAULT_STAGE3_PLOTS_DIR_NAME = "stage3_plots"
 
 
 @dataclass(slots=True)
@@ -1978,6 +1983,71 @@ def _stage2_result_to_rows(
     return rows
 
 
+def _stage3_result_to_rows(
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    regime: _Stage1Regime,
+    stage1_event: BeeBiteStage1Result,
+    stage2_result: BeeBiteStage2Result,
+    stage3_result: BeeBiteStage3Result,
+) -> list[dict[str, object]]:
+    lower_zone = stage3_result.active_lower_liquidity_zone
+    rows: list[dict[str, object]] = [
+        {
+            "symbol": symbol,
+            "timeframe": timeframe.value,
+            "regime_index": regime.regime_index,
+            "row_type": "summary",
+            "stage1_confirmed_timestamp": stage1_event.stage1_confirmed_timestamp,
+            "regime_end_timestamp": regime.regime_end_timestamp,
+            "regime_end_reason": regime.regime_end_reason,
+            "stage2_passed": stage2_result.passed,
+            "stage2_reason": stage2_result.reason,
+            "stage3_passed": stage3_result.passed,
+            "stage3_reason": stage3_result.reason,
+            "analysis_start_timestamp": stage3_result.analysis_start_timestamp,
+            "analysis_end_timestamp": stage3_result.analysis_end_timestamp,
+            "box_start_timestamp": stage2_result.box_start_timestamp,
+            "box_end_timestamp": stage2_result.box_end_timestamp,
+            "box_low": stage3_result.box_low,
+            "box_high": stage3_result.box_high,
+            "hold_price": stage3_result.hold_price,
+            "break_timestamp": stage3_result.break_timestamp,
+            "reclaim_timestamp": stage3_result.reclaim_timestamp,
+            "lowest_break_price": stage3_result.lowest_break_price,
+            "below_range_high_price": stage3_result.below_range_high_price,
+            "under_range_span": stage3_result.under_range_span,
+            "under_range_span_pct": stage3_result.under_range_span_pct,
+            "range_size_pct": stage3_result.range_size_pct,
+            "bars_under_range": stage3_result.bars_under_range,
+            "active_lower_zone_start_timestamp": (lower_zone.start_timestamp if lower_zone is not None else None),
+            "active_lower_zone_end_timestamp": (lower_zone.end_timestamp if lower_zone is not None else None),
+            "active_lower_zone_low": (lower_zone.low if lower_zone is not None else None),
+            "active_lower_zone_high": (lower_zone.high if lower_zone is not None else None),
+            "active_lower_zone_touch_count": (lower_zone.touch_count if lower_zone is not None else None),
+        }
+    ]
+    if lower_zone is not None:
+        rows.append(
+            {
+                "symbol": symbol,
+                "timeframe": timeframe.value,
+                "regime_index": regime.regime_index,
+                "row_type": "active_lower_liquidity_zone",
+                "row_order": 1,
+                "start_timestamp": lower_zone.start_timestamp,
+                "end_timestamp": lower_zone.end_timestamp,
+                "last_touch_timestamp": lower_zone.last_touch_timestamp,
+                "low": lower_zone.low,
+                "high": lower_zone.high,
+                "touch_count": lower_zone.touch_count,
+                "bars": (lower_zone.end_idx - lower_zone.start_idx) + 1,
+            }
+        )
+    return rows
+
+
 def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage2", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("review-stage2: cache_dir=%s", config.backtest.cache_dir)
@@ -2095,6 +2165,157 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
         "review-stage2: symbols=%s symbols_with_stage2=%s csv=%s plots=%s plots_dir=%s",
         len(symbols),
         len({item[0] for item in stage2_results}),
+        output_path,
+        plots_built,
+        plots_dir,
+    )
+    return 0
+
+
+def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("review-stage3", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    logger.info("review-stage3: cache_dir=%s", config.backtest.cache_dir)
+    review_timeframe = _resolve_review_timeframe(args)
+    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
+    output_dir = results_dir / "stage3_review" / review_timeframe.value
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE
+    plots_dir = output_dir / _DEFAULT_STAGE3_PLOTS_DIR_NAME
+    plot_limit = int(getattr(args, "plot_limit", 20) or 20)
+
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
+    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
+    if not symbols:
+        logger.info("review-stage3: no data in cache for tf=%s", review_timeframe.value)
+        return 0
+
+    selector = BeeBiteStage1Selector.for_timeframe(review_timeframe)
+    stage2_detector = BeeBiteStage2Detector()
+    stage3_detector = BeeBiteStage3Detector()
+    plotter = BeeBiteStage3Plotter()
+    rows: list[dict[str, object]] = []
+    stage3_results: list[tuple[str, _Stage1Regime, BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result, pd.DataFrame]] = []
+    reason_counts: Counter[str] = Counter()
+    empty_frame_symbols: list[str] = []
+    populated_frame_symbols = 0
+
+    for index, symbol in enumerate(symbols, start=1):
+        frame = preparer.load_symbol_data(symbol, review_timeframe)
+        if frame.empty:
+            empty_frame_symbols.append(symbol)
+            continue
+        populated_frame_symbols += 1
+
+        stage1_events = selector.detect_events(symbol=symbol, frame=frame)
+        if not stage1_events:
+            stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
+            reason_counts[f"stage1:{stage1_evaluation.reason}"] += 1
+            continue
+
+        regimes = _resolve_stage1_regime_ends(
+            frame=frame,
+            regimes=_group_stage1_events_into_regimes(stage1_events),
+        )
+        for regime in regimes:
+            stage1_event = regime.first_event
+            stage2_result = stage2_detector.detect(
+                symbol=symbol,
+                frame=frame,
+                stage1=stage1_event,
+                analysis_end_timestamp=_resolve_stage2_analysis_end_timestamp(frame=frame, regime=regime),
+            )
+            if not stage2_result.passed:
+                rows.extend(
+                    _stage3_result_to_rows(
+                        symbol=symbol,
+                        timeframe=review_timeframe,
+                        regime=regime,
+                        stage1_event=stage1_event,
+                        stage2_result=stage2_result,
+                        stage3_result=BeeBiteStage3Result(
+                            symbol=symbol,
+                            passed=False,
+                            reason="stage2_not_passed",
+                        ),
+                    )
+                )
+                reason_counts["stage2_not_passed"] += 1
+                continue
+
+            stage3_result = stage3_detector.detect(
+                symbol=symbol,
+                frame=frame,
+                stage1=stage1_event,
+                stage2=stage2_result,
+                analysis_end_timestamp=int(regime.regime_end_timestamp),
+            )
+            rows.extend(
+                _stage3_result_to_rows(
+                    symbol=symbol,
+                    timeframe=review_timeframe,
+                    regime=regime,
+                    stage1_event=stage1_event,
+                    stage2_result=stage2_result,
+                    stage3_result=stage3_result,
+                )
+            )
+            if stage3_result.passed:
+                stage3_results.append((symbol, regime, stage1_event, stage2_result, stage3_result, frame))
+            else:
+                reason_counts[stage3_result.reason] += 1
+
+        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
+            logger.info(
+                "review-stage3: progress=%s/%s symbols_with_stage3=%s rows=%s populated_frames=%s empty_frames=%s",
+                index,
+                len(symbols),
+                len({item[0] for item in stage3_results}),
+                len(rows),
+                populated_frame_symbols,
+                len(empty_frame_symbols),
+            )
+
+    results_frame = pd.DataFrame(rows)
+    if not results_frame.empty:
+        sort_columns = [column for column in ("symbol", "regime_index", "row_type", "row_order") if column in results_frame.columns]
+        results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    results_frame.to_csv(output_path, index=False)
+
+    plots_built = 0
+    plots_payload = sorted(
+        stage3_results,
+        key=lambda item: (
+            int(item[4].reclaim_timestamp or item[4].break_timestamp or 0),
+            item[0],
+            item[1].regime_index,
+        ),
+        reverse=True,
+    )
+    for symbol, regime, stage1_event, stage2_result, stage3_result, frame in plots_payload[:plot_limit]:
+        symbol_slug = symbol.replace("/", "_")
+        plot_path = plots_dir / f"{symbol_slug}_stage3_regime_{regime.regime_index:02d}.png"
+        plotter.plot_result(
+            frame=frame,
+            stage1_event=stage1_event,
+            stage2_result=stage2_result,
+            stage3_result=stage3_result,
+            output_path=plot_path,
+            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
+        )
+        plots_built += 1
+
+    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
+    if top_reasons:
+        logger.info("review-stage3: rejection_reasons %s", top_reasons)
+    if empty_frame_symbols:
+        logger.warning("review-stage3: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
+    logger.info(
+        "review-stage3: symbols=%s symbols_with_stage3=%s csv=%s plots=%s plots_dir=%s",
+        len(symbols),
+        len({item[0] for item in stage3_results}),
         output_path,
         plots_built,
         plots_dir,
@@ -2532,6 +2753,30 @@ def review_stage2(config: AppConfig, args: argparse.Namespace) -> int:
                 f"review-stage2[{timeframe.value}]",
                 config,
                 lambda scoped_args=scoped_args: _review_stage2_inner(config, scoped_args),
+            )
+        )
+    return max(exit_codes, default=0)
+
+
+def review_stage3(config: AppConfig, args: argparse.Namespace) -> int:
+    """Находит stage-3 sweep+reclaim и сохраняет review-артефакты."""
+    timeframes = _resolve_review_timeframes(args)
+    if len(timeframes) == 1:
+        return _run_with_logging("review-stage3", config, lambda: _review_stage3_inner(config, args))
+
+    exit_codes: list[int] = []
+    base_output = Path(args.output) if getattr(args, "output", None) else None
+    for timeframe in timeframes:
+        scoped_args = _with_review_timeframe(
+            args,
+            timeframe,
+            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
+        )
+        exit_codes.append(
+            _run_with_logging(
+                f"review-stage3[{timeframe.value}]",
+                config,
+                lambda scoped_args=scoped_args: _review_stage3_inner(config, scoped_args),
             )
         )
     return max(exit_codes, default=0)

@@ -86,6 +86,13 @@ def build_parser() -> argparse.ArgumentParser:
     stage2.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-2 review plots")
     stage2.add_argument("--output", default=None, help="Path to CSV with detected stage-2 structures")
 
+    stage3 = subparsers.add_parser("review-stage3", help="Find bee_bite stage-3 sweeps and save PNGs with reclaim review")
+    stage3.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    stage3.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
+    stage3.add_argument("--tf-all", action="store_true", help="Run review for both 15m and 5m")
+    stage3.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-3 review plots")
+    stage3.add_argument("--output", default=None, help="Path to CSV with detected stage-3 sweeps")
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -102,6 +109,7 @@ def resolve_handler(command_name: str) -> Handler:
         "make-report": commands.make_report,
         "review-stage1": commands.review_stage1,
         "review-stage2": commands.review_stage2,
+        "review-stage3": commands.review_stage3,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }

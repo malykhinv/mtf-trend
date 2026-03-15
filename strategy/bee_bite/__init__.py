@@ -22,6 +22,7 @@ from strategy.bee_bite.stage2_detector import (
     BeeBiteStage2Range,
     BeeBiteStage2Result,
 )
+from strategy.bee_bite.stage3_detector import BeeBiteStage3Detector, BeeBiteStage3Result
 
 __all__ = [
     "BeeBiteStrategy",
@@ -44,4 +45,6 @@ __all__ = [
     "BeeBiteStage2ConfirmedHigh",
     "BeeBiteStage2Range",
     "BeeBiteStage2MergedRange",
+    "BeeBiteStage3Detector",
+    "BeeBiteStage3Result",
 ]
