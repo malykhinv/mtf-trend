@@ -1007,6 +1007,25 @@ def _resolve_review_timeframe(args: argparse.Namespace) -> Timeframe:
     )
 
 
+def _resolve_review_timeframes(args: argparse.Namespace) -> list[Timeframe]:
+    if bool(getattr(args, "tf_all", False)):
+        return [Timeframe.M15, Timeframe.M5]
+    return [_resolve_review_timeframe(args)]
+
+
+def _with_review_timeframe(args: argparse.Namespace, timeframe: Timeframe, *, output_path: Path | None = None) -> argparse.Namespace:
+    cloned = argparse.Namespace(**vars(args))
+    cloned.tf = timeframe.value
+    cloned.tf_all = False
+    if output_path is not None:
+        cloned.output = str(output_path)
+    return cloned
+
+
+def _append_timeframe_suffix(path: Path, timeframe: Timeframe) -> Path:
+    return path.with_name(f"{path.stem}_{timeframe.value}{path.suffix}")
+
+
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
 
@@ -2005,7 +2024,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
             regimes=_group_stage1_events_into_regimes(stage1_events),
         )
         for regime in regimes:
-            stage1_event = regime.last_event
+            stage1_event = regime.first_event
             stage2_result = detector.detect(
                 symbol=symbol,
                 frame=frame,
@@ -2472,12 +2491,50 @@ def make_report(config: AppConfig, args: argparse.Namespace) -> int:
 
 def review_stage1(config: AppConfig, args: argparse.Namespace) -> int:
     """Находит historical stage-1 события и сохраняет review-артефакты."""
-    return _run_with_logging("review-stage1", config, lambda: _review_stage1_inner(config, args))
+    timeframes = _resolve_review_timeframes(args)
+    if len(timeframes) == 1:
+        return _run_with_logging("review-stage1", config, lambda: _review_stage1_inner(config, args))
+
+    exit_codes: list[int] = []
+    base_output = Path(args.output) if getattr(args, "output", None) else None
+    for timeframe in timeframes:
+        scoped_args = _with_review_timeframe(
+            args,
+            timeframe,
+            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
+        )
+        exit_codes.append(
+            _run_with_logging(
+                f"review-stage1[{timeframe.value}]",
+                config,
+                lambda scoped_args=scoped_args: _review_stage1_inner(config, scoped_args),
+            )
+        )
+    return max(exit_codes, default=0)
 
 
 def review_stage2(config: AppConfig, args: argparse.Namespace) -> int:
     """Находит stage-2 структуру и сохраняет review-артефакты."""
-    return _run_with_logging("review-stage2", config, lambda: _review_stage2_inner(config, args))
+    timeframes = _resolve_review_timeframes(args)
+    if len(timeframes) == 1:
+        return _run_with_logging("review-stage2", config, lambda: _review_stage2_inner(config, args))
+
+    exit_codes: list[int] = []
+    base_output = Path(args.output) if getattr(args, "output", None) else None
+    for timeframe in timeframes:
+        scoped_args = _with_review_timeframe(
+            args,
+            timeframe,
+            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
+        )
+        exit_codes.append(
+            _run_with_logging(
+                f"review-stage2[{timeframe.value}]",
+                config,
+                lambda scoped_args=scoped_args: _review_stage2_inner(config, scoped_args),
+            )
+        )
+    return max(exit_codes, default=0)
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
