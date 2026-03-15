@@ -424,6 +424,22 @@ class BeeBiteStage1Selector:
                         pump_base_price = launch_base_price
                         pump_percent = launch_pump_percent
 
+            volume_expanded_start_idx = self._expand_pump_start_idx_left_by_volume(
+                prepared=prepared,
+                pump_start_idx=pump_start_idx,
+            )
+            if volume_expanded_start_idx < pump_start_idx and self._is_sleep_window_valid(
+                start_idx=volume_expanded_start_idx,
+                sleep_window_range_pct=prepared.sleep_window_range_pct,
+            ):
+                expanded_base_price = float(prepared.lows[volume_expanded_start_idx])
+                if expanded_base_price > self._EPSILON:
+                    expanded_pump_percent = (pump_peak_price / expanded_base_price) - 1.0
+                    if expanded_pump_percent >= self._min_pump_pct:
+                        pump_start_idx = volume_expanded_start_idx
+                        pump_base_price = expanded_base_price
+                        pump_percent = expanded_pump_percent
+
             initial_candidate = _Stage1Candidate(
                 sleep_start_idx=pump_start_idx - self._sleep_window_bars,
                 sleep_end_idx=pump_start_idx - 1,
@@ -534,6 +550,29 @@ class BeeBiteStage1Selector:
                 return first_explosive_launch_idx
 
         return pump_start_idx
+
+    def _expand_pump_start_idx_left_by_volume(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        pump_start_idx: int,
+    ) -> int:
+        expanded_start_idx = int(pump_start_idx)
+        floor_idx = int(self._sleep_window_bars)
+        while expanded_start_idx > floor_idx:
+            previous_idx = expanded_start_idx - 1
+            previous_open = float(prepared.opens[previous_idx])
+            previous_close = float(prepared.closes[previous_idx])
+            if previous_close < previous_open:
+                break
+
+            previous_volume = float(prepared.quote_volume[previous_idx])
+            current_volume = float(prepared.quote_volume[expanded_start_idx])
+            if previous_volume >= current_volume:
+                break
+
+            expanded_start_idx = previous_idx
+        return expanded_start_idx
 
     def _is_start_launch_bar(
         self,
@@ -783,6 +822,15 @@ class BeeBiteStage1Selector:
             pump_start_idx=candidate.pump_start_idx,
             peak_idx=candidate.peak_idx,
         )
+        rebased_start_idx = self._expand_pump_start_idx_left_by_volume(
+            prepared=prepared,
+            pump_start_idx=rebased_start_idx,
+        )
+        if not self._is_sleep_window_valid(
+            start_idx=rebased_start_idx,
+            sleep_window_range_pct=prepared.sleep_window_range_pct,
+        ):
+            return candidate
         if rebased_start_idx <= candidate.pump_start_idx:
             return candidate
 
