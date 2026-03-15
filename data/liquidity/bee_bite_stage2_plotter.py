@@ -360,8 +360,13 @@ class BeeBiteStage2Plotter:
         if parent_range is None:
             return self._ACTIVE_ZONE_MIN_ALPHA
 
+        overlap_start_idx = max(parent_range.start_idx, liquidity_zone.start_idx)
+        overlap_end_idx = min(parent_range.end_idx, liquidity_zone.end_idx)
+        if overlap_end_idx < overlap_start_idx:
+            return self._ACTIVE_ZONE_MIN_ALPHA
+
         range_volume = float(window.iloc[parent_range.start_idx : parent_range.end_idx + 1]["volume"].sum())
-        zone_volume = float(window.iloc[liquidity_zone.start_idx : liquidity_zone.end_idx + 1]["volume"].sum())
+        zone_volume = float(window.iloc[overlap_start_idx : overlap_end_idx + 1]["volume"].sum())
         if range_volume <= 0:
             return self._ACTIVE_ZONE_MIN_ALPHA
 
@@ -377,9 +382,9 @@ class BeeBiteStage2Plotter:
         liquidity_zone: BeeBiteStage2LiquidityZone,
     ) -> Any | None:
         for merged_range in stage2_result.merged_ranges:
-            if merged_range.start_idx <= liquidity_zone.start_idx and liquidity_zone.end_idx <= merged_range.end_idx:
+            if merged_range.end_idx >= liquidity_zone.start_idx and liquidity_zone.end_idx >= merged_range.start_idx:
                 return merged_range
         for local_range in stage2_result.local_ranges:
-            if local_range.start_idx <= liquidity_zone.start_idx and liquidity_zone.end_idx <= local_range.end_idx:
+            if local_range.end_idx >= liquidity_zone.start_idx and liquidity_zone.end_idx >= local_range.start_idx:
                 return local_range
         return None
