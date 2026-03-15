@@ -121,7 +121,7 @@ class BeeBiteStage3Detector:
         hold_price = (
             resolve_half_hold_price(
                 high_pump=stage1.pump_peak_price,
-                low_before_pump=stage1.pump_base_price if stage1.pump_base_price is not None else stage1.hold_base_price,
+                low_before_pump=stage1.hold_base_price if stage1.hold_base_price is not None else stage1.pump_base_price,
             )
         )
         range_size_pct = ((range_high - boundary) / max(boundary, self._EPSILON)) if range_high > boundary else None

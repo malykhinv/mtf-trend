@@ -14,6 +14,7 @@ import pandas as pd
 from matplotlib.patches import Rectangle
 
 from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result
+from strategy.bee_bite.stage3_rules import resolve_stage2_hold_price
 from strategy.bee_bite.stage2_detector import BeeBiteStage2LiquidityZone, BeeBiteStage2Result
 
 
@@ -94,14 +95,18 @@ class BeeBiteStage2Plotter:
         self._draw_candles(price_ax, window, x_positions)
         self._draw_volume(volume_ax, window, x_positions)
 
-        if stage1_event.hold_price is not None:
+        stage2_hold_price = resolve_stage2_hold_price(
+            high_pump=stage1_event.pump_peak_price,
+            low_before_pump=stage1_event.hold_base_price if stage1_event.hold_base_price is not None else stage1_event.pump_base_price,
+        )
+        if stage2_hold_price is not None:
             price_ax.axhline(
-                float(stage1_event.hold_price),
+                float(stage2_hold_price),
                 color=self._HOLD_COLOR,
                 linestyle="--",
                 linewidth=1.2,
                 alpha=0.9,
-                label="0.4 hold",
+                label="0.5 hold",
             )
 
         for local_range in stage2_result.local_ranges:

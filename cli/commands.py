@@ -80,6 +80,7 @@ from strategy.bee_bite import (
     parse_bee_bite_retest_mode,
     validate_bee_bite_runtime,
 )
+from strategy.bee_bite.stage3_rules import resolve_stage2_hold_price
 from strategy.factory import build_strategy
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
@@ -272,7 +273,17 @@ def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Reg
         if idx + 1 < len(regimes):
             next_regime_start_ts = int(regimes[idx + 1].first_event.pump_start_timestamp or 0)
 
-        hold_price = float(regime.last_event.hold_price or 0.0)
+        hold_price = float(
+            resolve_stage2_hold_price(
+                high_pump=regime.last_event.pump_peak_price,
+                low_before_pump=(
+                    regime.last_event.hold_base_price
+                    if regime.last_event.hold_base_price is not None
+                    else regime.last_event.pump_base_price
+                ),
+            )
+            or 0.0
+        )
         pump_peak_price = float(regime.last_event.pump_peak_price or 0.0)
         scan_end_idx = len(timestamps) - 1
         if next_regime_start_ts is not None and next_regime_start_ts in timestamp_to_index:
