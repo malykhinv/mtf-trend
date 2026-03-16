@@ -26,8 +26,10 @@ class BeeBiteStage3Result:
     active_lower_liquidity_zone: BeeBiteStage2LiquidityZone | None = None
     break_timestamp: int | None = None
     reclaim_timestamp: int | None = None
+    invalidation_timestamp: int | None = None
     break_idx: int | None = None
     reclaim_idx: int | None = None
+    invalidation_idx: int | None = None
     lowest_break_price: float | None = None
     below_range_high_price: float | None = None
     under_range_span: float | None = None
@@ -198,7 +200,9 @@ class BeeBiteStage3Detector:
                     analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
                     active_lower_liquidity_zone=lower_zone,
                     break_timestamp=int(prepared.timestamps[break_idx]),
+                    invalidation_timestamp=timestamp,
                     break_idx=break_idx,
+                    invalidation_idx=idx,
                     lowest_break_price=lowest_break,
                     below_range_high_price=below_range_high,
                     box_low=boundary,
@@ -227,7 +231,9 @@ class BeeBiteStage3Detector:
                     analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
                     active_lower_liquidity_zone=lower_zone,
                     break_timestamp=int(prepared.timestamps[break_idx]),
+                    invalidation_timestamp=timestamp,
                     break_idx=break_idx,
+                    invalidation_idx=idx,
                     lowest_break_price=lowest_break,
                     below_range_high_price=below_range_high,
                     under_range_span=under_range_span,

@@ -65,6 +65,7 @@ class BeeBiteStage3Plotter:
         end_anchor = int(
             window_end_timestamp
             or stage3_result.reclaim_timestamp
+            or stage3_result.invalidation_timestamp
             or stage3_result.analysis_end_timestamp
             or stage2_result.analysis_end_timestamp
             or prepared.iloc[-1]["timestamp"]
@@ -219,6 +220,14 @@ class BeeBiteStage3Plotter:
                 float(stage3_result.box_low),
                 self._RECLAIM_COLOR,
                 "reclaim close",
+            )
+        if stage3_result.invalidation_idx is not None and stage3_result.hold_price is not None:
+            self._draw_marker(
+                price_ax,
+                stage3_result.invalidation_idx - window_start,
+                float(stage3_result.hold_price),
+                self._BREAK_COLOR,
+                "hold invalidation",
             )
 
         title = f"{stage1_event.symbol} | stage3"

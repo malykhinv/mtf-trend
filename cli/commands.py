@@ -1138,6 +1138,7 @@ def _select_terminal_stage23_snapshot(snapshots: list[_Stage23EvolutionSnapshot]
         for snapshot in snapshots
         if snapshot.stage3_result.break_timestamp is not None
         or snapshot.stage3_result.reclaim_timestamp is not None
+        or snapshot.stage3_result.invalidation_timestamp is not None
     ]
     if actionable_failures:
         return actionable_failures[-1]
@@ -2135,6 +2136,7 @@ def _stage3_result_to_rows(
             "hold_price": stage3_result.hold_price,
             "break_timestamp": stage3_result.break_timestamp,
             "reclaim_timestamp": stage3_result.reclaim_timestamp,
+            "invalidation_timestamp": stage3_result.invalidation_timestamp,
             "lowest_break_price": stage3_result.lowest_break_price,
             "below_range_high_price": stage3_result.below_range_high_price,
             "under_range_span": stage3_result.under_range_span,
@@ -2213,6 +2215,7 @@ def _stage23_backtest_row(
         "hold_price": stage3_result.hold_price,
         "break_timestamp": stage3_result.break_timestamp,
         "reclaim_timestamp": stage3_result.reclaim_timestamp,
+        "invalidation_timestamp": stage3_result.invalidation_timestamp,
         "lowest_break_price": stage3_result.lowest_break_price,
         "below_range_high_price": stage3_result.below_range_high_price,
         "under_range_span": stage3_result.under_range_span,
@@ -2582,7 +2585,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     failed_plots_payload = sorted(
         failed_stage3_results,
         key=lambda item: (
-            int(item[4].break_timestamp or item[4].analysis_end_timestamp or 0),
+            int(item[4].invalidation_timestamp or item[4].break_timestamp or item[4].analysis_end_timestamp or 0),
             item[0],
             item[1].regime_index,
         ),
@@ -2618,6 +2621,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
             reason_slug = _slugify_reason(stage3_result.reason)
             plot_end_timestamp = (
                 stage3_result.reclaim_timestamp
+                or stage3_result.invalidation_timestamp
                 or stage3_result.break_timestamp
                 or stage3_result.analysis_end_timestamp
             )
@@ -2652,6 +2656,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
             key=lambda item: (
                 int(
                     item.final_stage3_result.break_timestamp
+                    or item.final_stage3_result.invalidation_timestamp
                     or item.final_stage3_result.analysis_end_timestamp
                     or item.final_stage2_result.analysis_end_timestamp
                     or 0
