@@ -1067,10 +1067,21 @@ def _build_stage23_evolution_snapshots(
     if stage1_event.pump_peak_timestamp is None:
         return []
 
+    required_columns = {"timestamp"}
+    if frame.empty or not required_columns.issubset(frame.columns):
+        return []
+    prepared = frame.loc[:, ["timestamp"]].copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp"])
+    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    if prepared.empty:
+        return []
+    frame_end_timestamp = int(prepared["timestamp"].astype("int64").iloc[-1])
+
     snapshot_timestamps = _resolve_snapshot_timestamps(
         frame=frame,
         start_timestamp=int(stage1_event.pump_peak_timestamp) + timeframe.to_milliseconds(),
-        end_timestamp=int(regime.regime_end_timestamp),
+        end_timestamp=frame_end_timestamp,
     )
     snapshots: list[_Stage23EvolutionSnapshot] = []
     reference_stage2_result: BeeBiteStage2Result | None = None
@@ -1112,6 +1123,34 @@ def _build_stage23_evolution_snapshots(
         )
 
     return snapshots
+
+
+def _select_terminal_stage23_snapshot(snapshots: list[_Stage23EvolutionSnapshot]) -> _Stage23EvolutionSnapshot | None:
+    if not snapshots:
+        return None
+
+    passed_snapshots = [snapshot for snapshot in snapshots if snapshot.stage3_result.passed]
+    if passed_snapshots:
+        return passed_snapshots[0]
+
+    actionable_failures = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.stage3_result.break_timestamp is not None
+        or snapshot.stage3_result.reclaim_timestamp is not None
+    ]
+    if actionable_failures:
+        return actionable_failures[-1]
+
+    reference_locked = [
+        snapshot
+        for snapshot in snapshots
+        if snapshot.reference_stage2_result is not None
+    ]
+    if reference_locked:
+        return reference_locked[-1]
+
+    return snapshots[-1]
 
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
@@ -2455,7 +2494,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 stage2_detector=stage2_detector,
                 stage3_detector=stage3_detector,
             )
-            stage3_result = snapshots[-1].stage3_result if snapshots else BeeBiteStage3Result(
+            terminal_snapshot = _select_terminal_stage23_snapshot(snapshots)
+            stage3_result = terminal_snapshot.stage3_result if terminal_snapshot is not None else BeeBiteStage3Result(
                 symbol=symbol,
                 passed=False,
                 reason="stage2_reference_not_locked",
