@@ -160,7 +160,13 @@ class BeeBiteStage1Plotter:
         stage1_confirmed_text = _format_ts_label(event.stage1_confirmed_timestamp)
         pump_pct = (((pump_peak_price / pump_base_price) - 1.0) * 100.0) if pump_peak_price and pump_base_price > 0.0 else 0.0
         retrace_pct = 0.0
-        if lowest_after_pump is not None and pump_peak_price is not None and hold_base_price > 0.0 and pump_peak_price > hold_base_price:
+        has_retrace_reference = (
+            lowest_after_pump is not None
+            and pump_peak_price is not None
+            and hold_base_price > 0.0
+            and pump_peak_price > hold_base_price
+        )
+        if has_retrace_reference:
             retain_ratio = (lowest_after_pump - hold_base_price) / max(pump_peak_price - hold_base_price, 1e-12)
             retrace_pct = max(0.0, (1.0 - retain_ratio) * 100.0)
         volume_ratio = float(event.post_pump_volume_ratio or 0.0)

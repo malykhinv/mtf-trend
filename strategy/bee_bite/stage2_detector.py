@@ -247,8 +247,8 @@ class BeeBiteStage2Detector:
             box_low=active_box.low,
         )
 
+    @staticmethod
     def _prepare_frame(
-        self,
         *,
         symbol: str,
         frame: pd.DataFrame,
@@ -403,7 +403,7 @@ class BeeBiteStage2Detector:
             cluster_min = float(min(cluster_prices))
             cluster_max = float(max(cluster_prices))
             last_touch_idx = max(point_idx for point_idx, _ in cluster)
-            score = (
+            score: tuple[int, int, float, float] = (
                 len(cluster),
                 last_touch_idx,
                 -float(cluster_max - cluster_min),
@@ -554,7 +554,8 @@ class BeeBiteStage2Detector:
             return breakout_high
         return self._effective_high_at(prepared=prepared, idx=idx)
 
-    def _effective_high_at(self, *, prepared: _PreparedStage2Frame, idx: int) -> float:
+    @staticmethod
+    def _effective_high_at(*, prepared: _PreparedStage2Frame, idx: int) -> float:
         body_high = max(float(prepared.opens[idx]), float(prepared.closes[idx]))
         body_size = abs(float(prepared.closes[idx]) - float(prepared.opens[idx]))
         upper_wick = float(prepared.highs[idx]) - body_high
@@ -562,7 +563,8 @@ class BeeBiteStage2Detector:
             return body_high
         return float(prepared.highs[idx])
 
-    def _effective_lows(self, prepared: _PreparedStage2Frame) -> np.ndarray:
+    @staticmethod
+    def _effective_lows(prepared: _PreparedStage2Frame) -> np.ndarray:
         # Stage-2 box lows should reflect the obvious swing low that traders place
         # stops behind, so we preserve wick lows instead of smoothing them to body
         # lows as we do for some peak-related logic.
@@ -577,6 +579,7 @@ class BeeBiteStage2Detector:
         range_high: float,
         effective_lows: np.ndarray,
     ) -> float:
+        del prepared, segment_end_idx
         if effective_lows.size == 0:
             return float(range_high)
 
@@ -592,8 +595,8 @@ class BeeBiteStage2Detector:
             return float(min(item[1] for item in swing_lows))
         return raw_min_low
 
+    @staticmethod
     def _extract_swing_lows(
-        self,
         *,
         effective_lows: np.ndarray,
         segment_start_idx: int,
@@ -696,55 +699,55 @@ class BeeBiteStage2Detector:
             ]
             if overlapping_indices:
                 merged_lowers: list[BeeBiteStage2LiquidityZone] = []
-                for idx, zone in enumerate(lower_zones):
+                for idx, existing_zone in enumerate(lower_zones):
                     if idx not in overlapping_indices:
-                        merged_lowers.append(zone)
+                        merged_lowers.append(existing_zone)
                         continue
-                    effective_start_idx = min(zone.start_idx, fallback_lower_zone.start_idx)
-                    effective_end_idx = max(zone.end_idx, fallback_lower_zone.end_idx)
+                    effective_start_idx = min(existing_zone.start_idx, fallback_lower_zone.start_idx)
+                    effective_end_idx = max(existing_zone.end_idx, fallback_lower_zone.end_idx)
                     merged_lowers.append(
                         BeeBiteStage2LiquidityZone(
-                            side=zone.side,
+                            side=existing_zone.side,
                             start_idx=effective_start_idx,
                             start_timestamp=int(prepared.timestamps[effective_start_idx]),
                             end_idx=effective_end_idx,
                             end_timestamp=int(prepared.timestamps[effective_end_idx]),
-                            last_touch_idx=max(zone.last_touch_idx, fallback_lower_zone.last_touch_idx),
+                            last_touch_idx=max(existing_zone.last_touch_idx, fallback_lower_zone.last_touch_idx),
                             last_touch_timestamp=int(
-                                prepared.timestamps[max(zone.last_touch_idx, fallback_lower_zone.last_touch_idx)]
+                                prepared.timestamps[max(existing_zone.last_touch_idx, fallback_lower_zone.last_touch_idx)]
                             ),
-                            low=min(zone.low, fallback_lower_zone.low),
-                            high=max(zone.high, fallback_lower_zone.high),
-                            touch_count=max(zone.touch_count, fallback_lower_zone.touch_count),
+                            low=min(existing_zone.low, fallback_lower_zone.low),
+                            high=max(existing_zone.high, fallback_lower_zone.high),
+                            touch_count=max(existing_zone.touch_count, fallback_lower_zone.touch_count),
                         )
                     )
-                lower_zones = sorted(merged_lowers, key=lambda zone: (zone.start_idx, zone.low))
+                lower_zones = sorted(merged_lowers, key=lambda item: (item.start_idx, item.low))
             else:
                 clipped_lowers: list[BeeBiteStage2LiquidityZone] = []
-                for zone in lower_zones:
-                    effective_end_idx = zone.end_idx
-                    if zone.start_idx < fallback_lower_zone.start_idx <= zone.end_idx:
+                for existing_zone in lower_zones:
+                    effective_end_idx = existing_zone.end_idx
+                    if existing_zone.start_idx < fallback_lower_zone.start_idx <= existing_zone.end_idx:
                         effective_end_idx = fallback_lower_zone.start_idx - 1
-                    if effective_end_idx < zone.start_idx:
+                    if effective_end_idx < existing_zone.start_idx:
                         continue
-                    if ((effective_end_idx - zone.start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
+                    if ((effective_end_idx - existing_zone.start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
                         continue
                     clipped_lowers.append(
                         BeeBiteStage2LiquidityZone(
-                            side=zone.side,
-                            start_idx=zone.start_idx,
-                            start_timestamp=zone.start_timestamp,
+                            side=existing_zone.side,
+                            start_idx=existing_zone.start_idx,
+                            start_timestamp=existing_zone.start_timestamp,
                             end_idx=effective_end_idx,
                             end_timestamp=int(prepared.timestamps[effective_end_idx]),
-                            last_touch_idx=zone.last_touch_idx,
-                            last_touch_timestamp=zone.last_touch_timestamp,
-                            low=zone.low,
-                            high=zone.high,
-                            touch_count=zone.touch_count,
+                            last_touch_idx=existing_zone.last_touch_idx,
+                            last_touch_timestamp=existing_zone.last_touch_timestamp,
+                            low=existing_zone.low,
+                            high=existing_zone.high,
+                            touch_count=existing_zone.touch_count,
                         )
                     )
                 clipped_lowers.append(fallback_lower_zone)
-                lower_zones = sorted(clipped_lowers, key=lambda zone: (zone.start_idx, zone.low))
+                lower_zones = sorted(clipped_lowers, key=lambda item: (item.start_idx, item.low))
         zones: list[BeeBiteStage2LiquidityZone] = []
         zones.extend(upper_zones)
         zones.extend(lower_zones)
@@ -1094,8 +1097,8 @@ class BeeBiteStage2Detector:
                 return idx
         return None
 
+    @staticmethod
     def _extract_swing_highs(
-        self,
         *,
         highs: np.ndarray,
         segment_start_idx: int,

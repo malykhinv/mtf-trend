@@ -138,7 +138,6 @@ class BeeBiteStage3Detector:
         break_threshold = min(boundary, float(lower_zone.low))
 
         break_idx: int | None = None
-        reclaim_idx: int | None = None
         lowest_break: float | None = None
         below_range_high: float | None = None
 
@@ -236,8 +235,7 @@ class BeeBiteStage3Detector:
                 )
 
             if close > boundary:
-                reclaim_idx = idx
-                bars_under_range = max(reclaim_idx - break_idx + 1, 1)
+                bars_under_range = max(idx - break_idx + 1, 1)
                 return BeeBiteStage3Result(
                     symbol=symbol,
                     passed=True,
@@ -248,7 +246,7 @@ class BeeBiteStage3Detector:
                     break_timestamp=int(prepared.timestamps[break_idx]),
                     reclaim_timestamp=timestamp,
                     break_idx=break_idx,
-                    reclaim_idx=reclaim_idx,
+                    reclaim_idx=idx,
                     lowest_break_price=lowest_break,
                     below_range_high_price=below_range_high,
                     under_range_span=under_range_span,

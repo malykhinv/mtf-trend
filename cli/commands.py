@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import asdict, dataclass
 from logging import Logger
 from pathlib import Path
-from typing import Callable, cast
+from typing import Callable, TypeVar, cast
 
 import numpy as np
 import pandas as pd
@@ -93,6 +93,7 @@ _STAGE1_REASON_SAMPLE_LIMIT = 3
 _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE = "stage3_events.csv"
 _DEFAULT_STAGE3_PLOTS_DIR_NAME = "stage3_plots"
 _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
+_TItem = TypeVar("_TItem")
 
 
 @dataclass(slots=True)
@@ -168,7 +169,7 @@ def _format_stage1_reason_sample(result: BeeBiteStage1Result, frame: pd.DataFram
     if frame.empty or "timestamp" not in frame.columns:
         frame_range = "n/a..n/a"
     else:
-        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+        timestamps = pd.Series(pd.to_numeric(frame["timestamp"], errors="coerce")).dropna()
         if timestamps.empty:
             frame_range = "n/a..n/a"
         else:
@@ -991,7 +992,7 @@ def _resolve_stage3_review_mode(args: argparse.Namespace) -> str:
     return "evolution" if str(getattr(args, "review_mode", "snapshot")).strip().lower() == "evolution" else "snapshot"
 
 
-def _select_plot_payload(items: list[object], *, plot_scope: str, plot_limit: int) -> list[object]:
+def _select_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: int) -> list[_TItem]:
     if not items:
         return []
     if plot_scope != "all":
@@ -1736,7 +1737,13 @@ def _resolve_stage1_display_metrics(
         else event.pump_percent
     )
     display_retain_ratio = None
-    if lowest_after_pump is not None and display_peak_price is not None and hold_base_price > 0.0 and display_peak_price > hold_base_price:
+    has_display_retrace_reference = (
+        lowest_after_pump is not None
+        and display_peak_price is not None
+        and hold_base_price > 0.0
+        and display_peak_price > hold_base_price
+    )
+    if has_display_retrace_reference:
         display_retain_ratio = (lowest_after_pump - hold_base_price) / max(display_peak_price - hold_base_price, 1e-12)
 
     display_pump_start_timestamp = int(prepared.iloc[display_start_idx]["timestamp"])
@@ -2261,7 +2268,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
         reverse=True,
     )
     for symbol, regime, stage1_event, stage2_result, frame in _select_plot_payload(
-        cast(list[object], plots_payload),
+        plots_payload,
         plot_scope=plot_scope,
         plot_limit=plot_limit,
     ):
@@ -2459,7 +2466,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
         reverse=True,
     )
     selected_snapshot_payload = _select_plot_payload(
-        cast(list[object], plots_payload),
+        plots_payload,
         plot_scope=plot_scope,
         plot_limit=plot_limit,
     )
@@ -2492,7 +2499,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
             reverse=True,
         )
         for candidate in _select_plot_payload(
-            cast(list[object], evolution_payload),
+            evolution_payload,
             plot_scope=plot_scope,
             plot_limit=plot_limit,
         ):
@@ -2960,7 +2967,7 @@ def review_stage1(config: AppConfig, args: argparse.Namespace) -> int:
             _run_with_logging(
                 f"review-stage1[{timeframe.value}]",
                 config,
-                lambda scoped_args=scoped_args: _review_stage1_inner(config, scoped_args),
+                lambda stage_args=scoped_args: _review_stage1_inner(config, stage_args),
             )
         )
     return max(exit_codes, default=0)
@@ -2984,7 +2991,7 @@ def review_stage2(config: AppConfig, args: argparse.Namespace) -> int:
             _run_with_logging(
                 f"review-stage2[{timeframe.value}]",
                 config,
-                lambda scoped_args=scoped_args: _review_stage2_inner(config, scoped_args),
+                lambda stage_args=scoped_args: _review_stage2_inner(config, stage_args),
             )
         )
     return max(exit_codes, default=0)
@@ -3008,7 +3015,7 @@ def review_stage3(config: AppConfig, args: argparse.Namespace) -> int:
             _run_with_logging(
                 f"review-stage3[{timeframe.value}]",
                 config,
-                lambda scoped_args=scoped_args: _review_stage3_inner(config, scoped_args),
+                lambda stage_args=scoped_args: _review_stage3_inner(config, stage_args),
             )
         )
     return max(exit_codes, default=0)

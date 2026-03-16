@@ -695,13 +695,15 @@ class BeeBiteStage1Selector:
             and prior_close_drift < 0.02
         )
 
-    def _effective_highs(self, prepared: _PreparedStage1Frame) -> np.ndarray:
+    @staticmethod
+    def _effective_highs(prepared: _PreparedStage1Frame) -> np.ndarray:
         body_highs = np.maximum(prepared.opens, prepared.closes)
         body_sizes = np.abs(prepared.closes - prepared.opens)
         upper_wicks = prepared.highs - body_highs
         return np.where(upper_wicks > body_sizes, body_highs, prepared.highs)
 
-    def _effective_high_at(self, *, prepared: _PreparedStage1Frame, idx: int) -> float:
+    @staticmethod
+    def _effective_high_at(*, prepared: _PreparedStage1Frame, idx: int) -> float:
         body_high = max(float(prepared.opens[idx]), float(prepared.closes[idx]))
         body_size = abs(float(prepared.closes[idx]) - float(prepared.opens[idx]))
         upper_wick = float(prepared.highs[idx]) - body_high
@@ -750,7 +752,6 @@ class BeeBiteStage1Selector:
             hold_price = current_hold_base_price + (
                 (current_peak_price - current_hold_base_price) * self._min_retain_ratio
             )
-            current_low = float(prepared.lows[idx])
             current_high = self._breakout_high_at(
                 prepared=prepared,
                 peak_idx=current_peak_idx,
@@ -886,8 +887,8 @@ class BeeBiteStage1Selector:
             return False
         return True
 
+    @staticmethod
     def _resolve_hold_base_idx_before_breakout(
-        self,
         *,
         prepared: _PreparedStage1Frame,
         peak_idx: int,

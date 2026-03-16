@@ -287,8 +287,8 @@ class BeeBiteStage3Plotter:
         fig.savefig(output_path, dpi=160)
         plt.close(fig)
 
+    @staticmethod
     def _draw_rectangle(
-        self,
         *,
         axis,
         start_idx: int,
@@ -355,7 +355,8 @@ class BeeBiteStage3Plotter:
         colors = [self._UP_COLOR if row.close >= row.open else self._DOWN_COLOR for row in frame.itertuples(index=False)]
         axis.bar(x_positions, frame["volume"], color=colors, width=self._CANDLE_WIDTH, alpha=0.85)
 
-    def _draw_marker(self, axis, x_idx: int, price: float, color: str, label: str) -> None:
+    @staticmethod
+    def _draw_marker(axis, x_idx: int, price: float, color: str, label: str) -> None:
         axis.scatter(x_idx, price, color=color, s=55, zorder=6, label=label)
         axis.axvline(x_idx, color=color, linewidth=0.9, alpha=0.25)
 
