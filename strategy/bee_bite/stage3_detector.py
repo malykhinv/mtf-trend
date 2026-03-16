@@ -30,7 +30,9 @@ class BeeBiteStage3Result:
     break_idx: int | None = None
     reclaim_idx: int | None = None
     invalidation_idx: int | None = None
+    lowest_break_idx: int | None = None
     lowest_break_price: float | None = None
+    lowest_break_timestamp: int | None = None
     below_range_high_price: float | None = None
     under_range_span: float | None = None
     under_range_span_pct: float | None = None
@@ -147,6 +149,7 @@ class BeeBiteStage3Detector:
 
         break_idx: int | None = None
         lowest_break: float | None = None
+        lowest_break_idx: int | None = None
         below_range_high: float | None = None
 
         for idx in range(scan_start_idx, scan_end_idx + 1):
@@ -183,12 +186,15 @@ class BeeBiteStage3Detector:
                     )
                 break_idx = idx
                 lowest_break = low
+                lowest_break_idx = idx
                 below_range_high = min(high, boundary)
 
             if break_idx is None:
                 continue
 
-            lowest_break = min(float(lowest_break if lowest_break is not None else low), low)
+            if lowest_break is None or low < lowest_break:
+                lowest_break = low
+                lowest_break_idx = idx
             below_range_high = max(float(below_range_high if below_range_high is not None else min(high, boundary)), min(high, boundary))
 
             if hold_price is not None and close < hold_price:
@@ -203,7 +209,9 @@ class BeeBiteStage3Detector:
                     invalidation_timestamp=timestamp,
                     break_idx=break_idx,
                     invalidation_idx=idx,
+                    lowest_break_idx=lowest_break_idx,
                     lowest_break_price=lowest_break,
+                    lowest_break_timestamp=int(prepared.timestamps[lowest_break_idx]) if lowest_break_idx is not None else None,
                     below_range_high_price=below_range_high,
                     box_low=boundary,
                     box_high=range_high,
@@ -234,7 +242,9 @@ class BeeBiteStage3Detector:
                     invalidation_timestamp=timestamp,
                     break_idx=break_idx,
                     invalidation_idx=idx,
+                    lowest_break_idx=lowest_break_idx,
                     lowest_break_price=lowest_break,
+                    lowest_break_timestamp=int(prepared.timestamps[lowest_break_idx]) if lowest_break_idx is not None else None,
                     below_range_high_price=below_range_high,
                     under_range_span=under_range_span,
                     under_range_span_pct=under_range_span / max(boundary, self._EPSILON),
@@ -259,7 +269,9 @@ class BeeBiteStage3Detector:
                     reclaim_timestamp=timestamp,
                     break_idx=break_idx,
                     reclaim_idx=idx,
+                    lowest_break_idx=lowest_break_idx,
                     lowest_break_price=lowest_break,
+                    lowest_break_timestamp=int(prepared.timestamps[lowest_break_idx]) if lowest_break_idx is not None else None,
                     below_range_high_price=below_range_high,
                     under_range_span=under_range_span,
                     under_range_span_pct=(under_range_span / max(boundary, self._EPSILON)) if under_range_span is not None else None,
@@ -281,7 +293,9 @@ class BeeBiteStage3Detector:
             active_lower_liquidity_zone=lower_zone,
             break_timestamp=int(prepared.timestamps[break_idx]) if break_idx is not None else None,
             break_idx=break_idx,
+            lowest_break_idx=lowest_break_idx,
             lowest_break_price=lowest_break,
+            lowest_break_timestamp=int(prepared.timestamps[lowest_break_idx]) if lowest_break_idx is not None else None,
             below_range_high_price=below_range_high,
             under_range_span=resolve_below_range_span(lowest_break=lowest_break, below_range_high=below_range_high),
             box_low=boundary,

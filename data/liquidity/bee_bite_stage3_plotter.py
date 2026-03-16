@@ -205,10 +205,10 @@ class BeeBiteStage3Plotter:
                 label="active lower liquidity",
             )
 
-        if stage3_result.break_idx is not None and stage3_result.lowest_break_price is not None:
+        if stage3_result.lowest_break_idx is not None and stage3_result.lowest_break_price is not None:
             self._draw_marker(
                 price_ax,
-                stage3_result.break_idx - window_start,
+                stage3_result.lowest_break_idx - window_start,
                 float(stage3_result.lowest_break_price),
                 self._BREAK_COLOR,
                 "sweep low",
