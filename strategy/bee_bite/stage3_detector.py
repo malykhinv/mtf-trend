@@ -291,10 +291,19 @@ class BeeBiteStage3Detector:
         lower_zones = [zone for zone in stage2.liquidity_zones if zone.side == "lower"]
         if not lower_zones:
             return None
-        box_end_timestamp = int(stage2.box_end_timestamp or 0)
-        active_zones = [zone for zone in lower_zones if zone.end_timestamp >= box_end_timestamp]
-        candidates = active_zones if active_zones else lower_zones
-        return max(candidates, key=lambda zone: (zone.end_timestamp, zone.touch_count, -zone.low))
+        box_low = float(stage2.box_low or 0.0)
+        candidates = [zone for zone in lower_zones if zone.high <= (box_low + 1e-12)]
+        if not candidates:
+            candidates = lower_zones
+        return max(
+            candidates,
+            key=lambda zone: (
+                zone.high,
+                zone.last_touch_timestamp,
+                zone.touch_count,
+                zone.end_timestamp,
+            ),
+        )
 
     @staticmethod
     def _prepare_frame(*, frame: pd.DataFrame) -> _PreparedStage3Frame | None:

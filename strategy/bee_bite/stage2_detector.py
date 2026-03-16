@@ -1009,9 +1009,12 @@ class BeeBiteStage2Detector:
         if ((last_touch_idx - start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
             return None
 
+        touch_prices = [float(prepared.lows[idx]) for idx in touch_indices]
+        touch_low = float(min(touch_prices))
+        touch_high = float(max(touch_prices))
         zone_low, zone_high = self._project_liquidity_zone_bounds(
-            level_low=box_low,
-            level_high=box_low,
+            level_low=touch_low,
+            level_high=touch_high,
             tolerance=tolerance,
             side="lower",
         )
@@ -1070,8 +1073,11 @@ class BeeBiteStage2Detector:
             zone_low = float(level_high + zone_offset)
             return zone_low, float(zone_low + zone_width)
         zone_offset = max(tolerance * self._LIQUIDITY_ZONE_OFFSET_MULTIPLIER, self._EPSILON)
-        zone_high = float(level_low - zone_offset)
-        return float(zone_high - zone_width), zone_high
+        zone_low = float(level_low - zone_offset)
+        zone_high = float(level_high + zone_offset)
+        if zone_high <= zone_low:
+            zone_high = float(zone_low + max(zone_width, self._EPSILON))
+        return zone_low, zone_high
 
     def _resolve_liquidity_zone_sweep_idx(
         self,
