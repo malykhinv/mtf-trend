@@ -1073,11 +1073,8 @@ class BeeBiteStage2Detector:
             zone_low = float(level_high + zone_offset)
             return zone_low, float(zone_low + zone_width)
         zone_offset = max(tolerance * self._LIQUIDITY_ZONE_OFFSET_MULTIPLIER, self._EPSILON)
-        zone_low = float(level_low - zone_offset)
-        zone_high = float(level_high + zone_offset)
-        if zone_high <= zone_low:
-            zone_high = float(zone_low + max(zone_width, self._EPSILON))
-        return zone_low, zone_high
+        zone_high = float(level_low - zone_offset)
+        return float(zone_high - zone_width), zone_high
 
     def _resolve_liquidity_zone_sweep_idx(
         self,

@@ -141,7 +141,7 @@ class BeeBiteStage3Detector:
             )
         )
         range_size_pct = ((range_high - boundary) / max(boundary, self._EPSILON)) if range_high > boundary else None
-        break_threshold = min(boundary, float(lower_zone.low))
+        break_threshold = min(boundary, float(lower_zone.high))
 
         break_idx: int | None = None
         lowest_break: float | None = None
