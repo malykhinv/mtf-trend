@@ -777,6 +777,15 @@ class BeeBiteStage1Selector:
                 if not breakout_is_significant:
                     idx += 1
                     continue
+                if had_long_balance_before_breakout and self._has_upper_hold_before_breakout(
+                    prepared=prepared,
+                    peak_idx=current_peak_idx,
+                    breakout_idx=idx,
+                    hold_price=hold_price,
+                    peak_price=current_peak_price,
+                ):
+                    regime_end_idx = idx - 1
+                    break
                 if had_long_balance_before_breakout and current_hold_base_idx == candidate.pump_start_idx:
                     first_hold_low_idx = self._resolve_hold_base_idx_before_breakout(
                         prepared=prepared,
