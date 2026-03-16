@@ -99,13 +99,19 @@ class BeeBiteStage3Detector:
             resolved_end_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(analysis_end_timestamp))
             if resolved_end_idx is not None:
                 scan_end_idx = min(scan_end_idx, resolved_end_idx)
+        if stage1.stage1_confirmed_timestamp is not None:
+            confirmed_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(stage1.stage1_confirmed_timestamp))
+            if confirmed_idx is not None:
+                scan_start_idx = max(scan_start_idx, confirmed_idx + 1)
         if scan_end_idx < scan_start_idx:
+            safe_start_idx = min(scan_start_idx, len(prepared.timestamps) - 1)
+            safe_end_idx = max(0, min(scan_end_idx, len(prepared.timestamps) - 1))
             return BeeBiteStage3Result(
                 symbol=symbol,
                 passed=False,
-                reason="no_data_after_box",
-                analysis_start_timestamp=int(prepared.timestamps[scan_start_idx]),
-                analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
+                reason="no_data_after_stage1_confirmed",
+                analysis_start_timestamp=int(prepared.timestamps[safe_start_idx]),
+                analysis_end_timestamp=int(prepared.timestamps[safe_end_idx]),
                 box_low=float(stage2.box_low),
                 box_high=float(stage2.box_high),
                 reference_box_start_timestamp=reference_box_start_timestamp,

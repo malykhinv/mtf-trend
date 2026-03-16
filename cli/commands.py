@@ -2480,6 +2480,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 stage2_result=stage2_result,
                 stage3_result=stage3_result,
                 output_path=plot_path,
+                window_end_timestamp=stage3_result.reclaim_timestamp or stage3_result.analysis_end_timestamp,
                 title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
             )
             plots_built += 1
