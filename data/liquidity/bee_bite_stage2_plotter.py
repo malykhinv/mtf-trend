@@ -217,6 +217,7 @@ class BeeBiteStage2Plotter:
         price_ax.grid(alpha=0.18, color=self._GRID_COLOR)
 
         info_lines = [
+            f"Stage-2: {'pass' if stage2_result.passed else 'fail'} ({stage2_result.reason})",
             f"Confirmed highs: {len(stage2_result.confirmed_highs)}",
             f"Local ranges: {len(stage2_result.local_ranges)}",
             f"Merged ranges: {len(stage2_result.merged_ranges)}",
