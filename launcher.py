@@ -74,7 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tf", default=None, help="Review timeframe for stage review modes")
     parser.add_argument("--tf-all", action="store_true", default=False, help="Run review for both 15m and 5m")
     parser.add_argument("--review-mode", choices=["snapshot", "evolution"], default="snapshot", help="Review mode for review-stage3")
-    parser.add_argument("--plot-scope", choices=["latest", "all"], default="latest", help="Plot only the latest setup or all found setups")
+    parser.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
     parser.add_argument("--strategy", choices=["bee_bite"], default=None, help="Only bee_bite strategy is available")

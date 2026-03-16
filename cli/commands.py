@@ -985,8 +985,11 @@ def _append_timeframe_suffix(path: Path, timeframe: Timeframe) -> Path:
     return path.with_name(f"{path.stem}_{timeframe.value}{path.suffix}")
 
 
-def _resolve_plot_scope(args: argparse.Namespace) -> str:
-    return "all" if str(getattr(args, "plot_scope", "latest")).strip().lower() == "all" else "latest"
+def _resolve_plot_scope(args: argparse.Namespace, *, default_scope: str = "latest") -> str:
+    raw_value = getattr(args, "plot_scope", None)
+    if raw_value is None:
+        return "all" if default_scope == "all" else "latest"
+    return "all" if str(raw_value).strip().lower() == "all" else "latest"
 
 
 def _resolve_stage3_review_mode(args: argparse.Namespace) -> str:
@@ -2192,7 +2195,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     plots_dir.mkdir(parents=True, exist_ok=True)
     failed_plots_dir.mkdir(parents=True, exist_ok=True)
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
-    plot_scope = _resolve_plot_scope(args)
+    plot_scope = _resolve_plot_scope(args, default_scope="all")
 
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
@@ -2351,7 +2354,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger.info("review-stage3: cache_dir=%s", config.backtest.cache_dir)
     review_timeframe = _resolve_review_timeframe(args)
     review_mode = _resolve_stage3_review_mode(args)
-    plot_scope = _resolve_plot_scope(args)
+    plot_scope = _resolve_plot_scope(args, default_scope="latest")
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
     output_dir = results_dir / "stage3_review" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)
