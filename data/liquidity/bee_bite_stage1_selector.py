@@ -225,6 +225,8 @@ class BeeBiteStage1Selector:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="sleep_not_dormant")
         if not saw_pump_candidate:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="pump_below_15pct")
+        if saw_confirm_too_late and not saw_retain_candidate:
+            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="confirm_after_max_hold")
         if not saw_retain_candidate:
             return BeeBiteStage1Result(symbol=symbol, passed=False, reason="retain_below_half")
         if saw_sleep_below_hold_failure:
