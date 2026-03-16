@@ -1004,6 +1004,14 @@ def _select_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: in
     return items[: max(1, plot_limit)]
 
 
+def _select_failed_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: int) -> list[_TItem]:
+    if not items:
+        return []
+    if plot_scope == "latest":
+        return items[:1]
+    return items[: max(1, plot_limit)]
+
+
 def _slugify_reason(value: str) -> str:
     normalized = "".join(character.lower() if character.isalnum() else "_" for character in value.strip())
     compact = "_".join(part for part in normalized.split("_") if part)
@@ -2292,6 +2300,7 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         reverse=True,
     )
+    failed_plot_scope = "all" if getattr(args, "plot_scope", None) is None else plot_scope
     for symbol, regime, stage1_event, stage2_result, frame in _select_plot_payload(
         passed_plots_payload,
         plot_scope=plot_scope,
@@ -2308,9 +2317,9 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
             title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
         )
         passed_plots_built += 1
-    for symbol, regime, stage1_event, stage2_result, frame in _select_plot_payload(
+    for symbol, regime, stage1_event, stage2_result, frame in _select_failed_plot_payload(
         failed_plots_payload,
-        plot_scope=plot_scope,
+        plot_scope=failed_plot_scope,
         plot_limit=plot_limit,
     ):
         symbol_slug = symbol.replace("/", "_")
@@ -2544,9 +2553,10 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
         plot_scope=plot_scope,
         plot_limit=plot_limit,
     )
-    selected_failed_snapshot_payload = _select_plot_payload(
+    failed_plot_scope = "all" if getattr(args, "plot_scope", None) is None else plot_scope
+    selected_failed_snapshot_payload = _select_failed_plot_payload(
         failed_plots_payload,
-        plot_scope=plot_scope,
+        plot_scope=failed_plot_scope,
         plot_limit=plot_limit,
     )
     if review_mode == "snapshot":
@@ -2656,9 +2666,9 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                         ),
                     )
                 passed_plots_built += 1
-        for candidate in _select_plot_payload(
+        for candidate in _select_failed_plot_payload(
             failed_evolution_payload,
-            plot_scope=plot_scope,
+            plot_scope=failed_plot_scope,
             plot_limit=plot_limit,
         ):
             symbol_slug = candidate.symbol.replace("/", "_")
