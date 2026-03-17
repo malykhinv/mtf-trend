@@ -1125,6 +1125,80 @@ def _build_stage23_evolution_snapshots(
     return snapshots
 
 
+def _resolve_stage23_terminal_result(
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    frame: pd.DataFrame,
+    stage1_event: BeeBiteStage1Result,
+    regime: _Stage1Regime,
+    stage2_detector: BeeBiteStage2Detector,
+    stage3_detector: BeeBiteStage3Detector,
+) -> BeeBiteStage3Result:
+    if stage1_event.pump_peak_timestamp is None:
+        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage1_peak_missing")
+
+    required_columns = {"timestamp"}
+    if frame.empty or not required_columns.issubset(frame.columns):
+        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="frame_invalid")
+
+    prepared = frame.loc[:, ["timestamp"]].copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp"])
+    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    if prepared.empty:
+        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="frame_invalid")
+
+    frame_end_timestamp = int(prepared["timestamp"].astype("int64").iloc[-1])
+    snapshot_timestamps = _resolve_snapshot_timestamps(
+        frame=frame,
+        start_timestamp=int(stage1_event.pump_peak_timestamp) + timeframe.to_milliseconds(),
+        end_timestamp=frame_end_timestamp,
+    )
+    if not snapshot_timestamps:
+        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage2_reference_not_locked")
+
+    reference_stage2_result: BeeBiteStage2Result | None = None
+    last_actionable_stage3_result: BeeBiteStage3Result | None = None
+    last_reference_locked_stage3_result: BeeBiteStage3Result | None = None
+
+    for snapshot_timestamp in snapshot_timestamps:
+        if reference_stage2_result is None:
+            dynamic_stage2_result = stage2_detector.detect(
+                symbol=symbol,
+                frame=frame,
+                stage1=stage1_event,
+                analysis_end_timestamp=snapshot_timestamp,
+            )
+            if _stage2_has_reference_box(dynamic_stage2_result):
+                reference_stage2_result = dynamic_stage2_result
+            else:
+                continue
+
+        stage3_result = stage3_detector.detect(
+            symbol=symbol,
+            frame=frame,
+            stage1=stage1_event,
+            stage2=reference_stage2_result,
+            analysis_end_timestamp=snapshot_timestamp,
+        )
+        last_reference_locked_stage3_result = stage3_result
+        if (
+            stage3_result.break_timestamp is not None
+            or stage3_result.reclaim_timestamp is not None
+            or stage3_result.invalidation_timestamp is not None
+        ):
+            last_actionable_stage3_result = stage3_result
+        if stage3_result.passed:
+            return stage3_result
+
+    if last_actionable_stage3_result is not None:
+        return last_actionable_stage3_result
+    if last_reference_locked_stage3_result is not None:
+        return last_reference_locked_stage3_result
+    return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage2_reference_not_locked")
+
+
 def _select_terminal_stage23_snapshot(snapshots: list[_Stage23EvolutionSnapshot]) -> _Stage23EvolutionSnapshot | None:
     if not snapshots:
         return None
@@ -2490,21 +2564,33 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 reason_counts["stage2_not_passed"] += 1
                 continue
 
-            snapshots = _build_stage23_evolution_snapshots(
-                symbol=symbol,
-                timeframe=review_timeframe,
-                frame=frame,
-                stage1_event=stage1_event,
-                regime=regime,
-                stage2_detector=stage2_detector,
-                stage3_detector=stage3_detector,
-            )
-            terminal_snapshot = _select_terminal_stage23_snapshot(snapshots)
-            stage3_result = terminal_snapshot.stage3_result if terminal_snapshot is not None else BeeBiteStage3Result(
-                symbol=symbol,
-                passed=False,
-                reason="stage2_reference_not_locked",
-            )
+            snapshots: list[_Stage23EvolutionSnapshot] = []
+            if review_mode == "evolution":
+                snapshots = _build_stage23_evolution_snapshots(
+                    symbol=symbol,
+                    timeframe=review_timeframe,
+                    frame=frame,
+                    stage1_event=stage1_event,
+                    regime=regime,
+                    stage2_detector=stage2_detector,
+                    stage3_detector=stage3_detector,
+                )
+                terminal_snapshot = _select_terminal_stage23_snapshot(snapshots)
+                stage3_result = terminal_snapshot.stage3_result if terminal_snapshot is not None else BeeBiteStage3Result(
+                    symbol=symbol,
+                    passed=False,
+                    reason="stage2_reference_not_locked",
+                )
+            else:
+                stage3_result = _resolve_stage23_terminal_result(
+                    symbol=symbol,
+                    timeframe=review_timeframe,
+                    frame=frame,
+                    stage1_event=stage1_event,
+                    regime=regime,
+                    stage2_detector=stage2_detector,
+                    stage3_detector=stage3_detector,
+                )
             rows.extend(
                 _stage3_result_to_rows(
                     symbol=symbol,
