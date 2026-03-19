@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import numpy as np
 import pandas as pd
@@ -59,6 +60,7 @@ class BeeBiteStage3Detector:
     """Detect a valid stage-3 lower sweep followed by reclaim into the stage-2 box."""
 
     _EPSILON = 1e-12
+    _MIN_LOWER_ZONE_TO_BOX_RATIO = 0.5
 
     def detect(
         self,
@@ -85,42 +87,6 @@ class BeeBiteStage3Detector:
         box_end_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(stage2.box_end_timestamp))
         if box_end_idx is None:
             return BeeBiteStage3Result(symbol=symbol, passed=False, reason="box_end_not_in_frame")
-        if box_end_idx >= (len(prepared.timestamps) - 1):
-            return BeeBiteStage3Result(
-                symbol=symbol,
-                passed=False,
-                reason="no_data_after_box",
-                analysis_start_timestamp=int(prepared.timestamps[box_end_idx]),
-                analysis_end_timestamp=int(prepared.timestamps[box_end_idx]),
-                box_low=float(stage2.box_low),
-                box_high=float(stage2.box_high),
-                reference_box_start_timestamp=reference_box_start_timestamp,
-                reference_box_end_timestamp=reference_box_end_timestamp,
-            )
-        scan_start_idx = box_end_idx + 1
-        scan_end_idx = len(prepared.timestamps) - 1
-        if analysis_end_timestamp is not None:
-            resolved_end_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(analysis_end_timestamp))
-            if resolved_end_idx is not None:
-                scan_end_idx = min(scan_end_idx, resolved_end_idx)
-        if stage1.stage1_confirmed_timestamp is not None:
-            confirmed_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(stage1.stage1_confirmed_timestamp))
-            if confirmed_idx is not None:
-                scan_start_idx = max(scan_start_idx, confirmed_idx + 1)
-        if scan_end_idx < scan_start_idx:
-            safe_start_idx = min(scan_start_idx, len(prepared.timestamps) - 1)
-            safe_end_idx = max(0, min(scan_end_idx, len(prepared.timestamps) - 1))
-            return BeeBiteStage3Result(
-                symbol=symbol,
-                passed=False,
-                reason="no_data_after_stage1_confirmed",
-                analysis_start_timestamp=int(prepared.timestamps[safe_start_idx]),
-                analysis_end_timestamp=int(prepared.timestamps[safe_end_idx]),
-                box_low=float(stage2.box_low),
-                box_high=float(stage2.box_high),
-                reference_box_start_timestamp=reference_box_start_timestamp,
-                reference_box_end_timestamp=reference_box_end_timestamp,
-            )
 
         lower_zone = self._resolve_active_lower_liquidity_zone(stage2=stage2)
         if lower_zone is None:
@@ -130,6 +96,47 @@ class BeeBiteStage3Detector:
                 reason="no_active_lower_liquidity_zone",
                 analysis_start_timestamp=int(prepared.timestamps[scan_start_idx]),
                 analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
+                box_low=float(stage2.box_low),
+                box_high=float(stage2.box_high),
+                reference_box_start_timestamp=reference_box_start_timestamp,
+                reference_box_end_timestamp=reference_box_end_timestamp,
+            )
+
+        scan_start_idx = self._resolve_stage3_ready_idx(
+            prepared=prepared,
+            stage1=stage1,
+            stage2=stage2,
+            lower_zone=lower_zone,
+        )
+        if scan_start_idx is None:
+            return BeeBiteStage3Result(
+                symbol=symbol,
+                passed=False,
+                reason="lower_zone_too_short_for_box",
+                analysis_start_timestamp=int(prepared.timestamps[box_end_idx]),
+                analysis_end_timestamp=int(prepared.timestamps[box_end_idx]),
+                active_lower_liquidity_zone=lower_zone,
+                box_low=float(stage2.box_low),
+                box_high=float(stage2.box_high),
+                reference_box_start_timestamp=reference_box_start_timestamp,
+                reference_box_end_timestamp=reference_box_end_timestamp,
+            )
+
+        scan_end_idx = len(prepared.timestamps) - 1
+        if analysis_end_timestamp is not None:
+            resolved_end_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(analysis_end_timestamp))
+            if resolved_end_idx is not None:
+                scan_end_idx = min(scan_end_idx, resolved_end_idx)
+        if scan_end_idx < scan_start_idx:
+            safe_start_idx = min(scan_start_idx, len(prepared.timestamps) - 1)
+            safe_end_idx = max(0, min(scan_end_idx, len(prepared.timestamps) - 1))
+            return BeeBiteStage3Result(
+                symbol=symbol,
+                passed=False,
+                reason="no_data_after_stage3_ready",
+                analysis_start_timestamp=int(prepared.timestamps[safe_start_idx]),
+                analysis_end_timestamp=int(prepared.timestamps[safe_end_idx]),
+                active_lower_liquidity_zone=lower_zone,
                 box_low=float(stage2.box_low),
                 box_high=float(stage2.box_high),
                 reference_box_start_timestamp=reference_box_start_timestamp,
@@ -324,6 +331,34 @@ class BeeBiteStage3Detector:
                 zone.end_timestamp,
             ),
         )
+
+    def _resolve_stage3_ready_idx(
+        self,
+        *,
+        prepared: _PreparedStage3Frame,
+        stage1: BeeBiteStage1Result,
+        stage2: BeeBiteStage2Result,
+        lower_zone: BeeBiteStage2LiquidityZone,
+    ) -> int | None:
+        if stage2.box_start_timestamp is None or stage2.box_end_timestamp is None:
+            return None
+        box_start_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(stage2.box_start_timestamp))
+        box_end_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(stage2.box_end_timestamp))
+        if box_start_idx is None or box_end_idx is None or box_end_idx < box_start_idx:
+            return None
+
+        box_bars = box_end_idx - box_start_idx + 1
+        zone_bars = lower_zone.end_idx - lower_zone.start_idx + 1
+        required_zone_bars = max(1, int(math.ceil(box_bars * self._MIN_LOWER_ZONE_TO_BOX_RATIO)))
+        if zone_bars < required_zone_bars:
+            return None
+
+        ready_idx = lower_zone.start_idx + required_zone_bars
+        if stage1.stage1_confirmed_timestamp is not None:
+            confirmed_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(stage1.stage1_confirmed_timestamp))
+            if confirmed_idx is not None:
+                ready_idx = max(ready_idx, confirmed_idx + 1)
+        return min(ready_idx, len(prepared.timestamps) - 1)
 
     @staticmethod
     def _prepare_frame(*, frame: pd.DataFrame) -> _PreparedStage3Frame | None:

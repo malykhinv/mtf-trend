@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import shutil
 import time
 from collections import Counter
@@ -1054,6 +1055,42 @@ def _stage2_has_reference_box(stage2_result: BeeBiteStage2Result) -> bool:
     return any(zone.side == "lower" for zone in stage2_result.liquidity_zones)
 
 
+def _stage23_can_lock_reference_box(
+    *,
+    snapshot_timestamp: int,
+    stage1_event: BeeBiteStage1Result,
+    stage2_result: BeeBiteStage2Result,
+) -> bool:
+    if not _stage2_has_reference_box(stage2_result):
+        return False
+    confirmed_timestamp = stage1_event.stage1_confirmed_timestamp
+    if confirmed_timestamp is None:
+        return False
+    if int(snapshot_timestamp) < int(confirmed_timestamp):
+        return False
+    if stage2_result.box_start_timestamp is None or stage2_result.box_end_timestamp is None:
+        return False
+
+    lower_zones = [zone for zone in stage2_result.liquidity_zones if zone.side == "lower"]
+    if not lower_zones:
+        return False
+    lower_zone = max(
+        lower_zones,
+        key=lambda zone: (
+            zone.high <= float(stage2_result.box_low or 0.0),
+            zone.high,
+            zone.last_touch_timestamp,
+            zone.touch_count,
+            zone.end_timestamp,
+        ),
+    )
+    zone_duration_ms = max(int(lower_zone.end_timestamp - lower_zone.start_timestamp), 0)
+    box_duration_ms = max(int(stage2_result.box_end_timestamp - stage2_result.box_start_timestamp), 0)
+    if box_duration_ms <= 0:
+        return False
+    return zone_duration_ms >= int(math.ceil(box_duration_ms * 0.5))
+
+
 def _build_stage23_evolution_snapshots(
     *,
     symbol: str,
@@ -1093,7 +1130,11 @@ def _build_stage23_evolution_snapshots(
             stage1=stage1_event,
             analysis_end_timestamp=snapshot_timestamp,
         )
-        if reference_stage2_result is None and _stage2_has_reference_box(dynamic_stage2_result):
+        if reference_stage2_result is None and _stage23_can_lock_reference_box(
+            snapshot_timestamp=snapshot_timestamp,
+            stage1_event=stage1_event,
+            stage2_result=dynamic_stage2_result,
+        ):
             reference_stage2_result = dynamic_stage2_result
 
         if reference_stage2_result is None:
@@ -1170,7 +1211,11 @@ def _resolve_stage23_terminal_result(
                 stage1=stage1_event,
                 analysis_end_timestamp=snapshot_timestamp,
             )
-            if _stage2_has_reference_box(dynamic_stage2_result):
+            if _stage23_can_lock_reference_box(
+                snapshot_timestamp=snapshot_timestamp,
+                stage1_event=stage1_event,
+                stage2_result=dynamic_stage2_result,
+            ):
                 reference_stage2_result = dynamic_stage2_result
             else:
                 continue
