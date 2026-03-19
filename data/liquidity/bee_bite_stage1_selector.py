@@ -761,6 +761,15 @@ class BeeBiteStage1Selector:
             )
 
             current_close = float(prepared.closes[idx])
+            if self._is_downside_balance_sweep_after_peak(
+                prepared=prepared,
+                peak_idx=current_peak_idx,
+                current_idx=idx,
+                hold_price=hold_price,
+                peak_price=current_peak_price,
+            ):
+                regime_end_idx = idx - 1
+                break
             if current_close < hold_price:
                 regime_end_idx = idx
                 break
@@ -894,9 +903,42 @@ class BeeBiteStage1Selector:
             return False
         if np.any(hold_closes < hold_price):
             return False
-        if np.any(hold_highs > (peak_price + self._EPSILON)):
+        close_breakout_tolerance = max(peak_price * 0.01, self._EPSILON)
+        if np.any(hold_closes > (peak_price + close_breakout_tolerance)):
+            return False
+        wick_breakout_tolerance = max(peak_price * 0.02, self._EPSILON)
+        if np.any(hold_highs > (peak_price + wick_breakout_tolerance)):
             return False
         return True
+
+    def _is_downside_balance_sweep_after_peak(
+        self,
+        *,
+        prepared: _PreparedStage1Frame,
+        peak_idx: int,
+        current_idx: int,
+        hold_price: float,
+        peak_price: float,
+    ) -> bool:
+        bars_since_peak = current_idx - peak_idx
+        if bars_since_peak < self._min_confirm_delay_bars:
+            return False
+
+        balance_lows = prepared.lows[peak_idx + 1 : current_idx]
+        balance_closes = prepared.closes[peak_idx + 1 : current_idx]
+        if balance_lows.size < self._min_confirm_delay_bars or balance_closes.size < self._min_confirm_delay_bars:
+            return False
+        if float(np.mean(balance_closes >= hold_price)) < 0.8:
+            return False
+
+        prior_balance_low = float(np.min(balance_lows))
+        balance_ranges = prepared.highs[peak_idx + 1 : current_idx] - prepared.lows[peak_idx + 1 : current_idx]
+        sweep_tolerance = max(float(np.median(balance_ranges)) * 0.25, peak_price * 0.01, self._EPSILON)
+        current_low = float(prepared.lows[current_idx])
+        current_close = float(prepared.closes[current_idx])
+        if current_close < hold_price:
+            return False
+        return current_low < (prior_balance_low - sweep_tolerance)
 
     @staticmethod
     def _resolve_hold_base_idx_before_breakout(
