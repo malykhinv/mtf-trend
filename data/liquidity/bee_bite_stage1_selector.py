@@ -954,7 +954,18 @@ class BeeBiteStage1Selector:
         valid_ranges = sleep_ranges[np.isfinite(sleep_ranges)]
         if valid_ranges.size == 0:
             return False
-        return bool(np.nanmax(valid_ranges) < self._min_pump_pct)
+
+        # A single old volatility shock inside the long sleep lookback should not
+        # permanently invalidate an otherwise re-compressed market.
+        overall_below_threshold_ratio = float(np.mean(valid_ranges < self._min_pump_pct))
+        recent_window_size = max(self._pump_window_bars * 2, min(valid_ranges.size, self._sleep_window_bars // 4))
+        recent_ranges = valid_ranges[-recent_window_size:]
+        recent_below_threshold_ratio = float(np.mean(recent_ranges < self._min_pump_pct))
+
+        return bool(
+            overall_below_threshold_ratio >= 0.70
+            and recent_below_threshold_ratio >= 0.80
+        )
 
     def _evaluate_candidate_at_index(
         self,
