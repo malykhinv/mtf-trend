@@ -62,6 +62,7 @@ class BeeBiteStage3Detector:
     _EPSILON = 1e-12
     _MIN_LOWER_ZONE_TO_BOX_RATIO = 0.5
     _MAX_ABOVE_CLOSE_RATIO = 0.5
+    _MAX_POST_PEAK_EXPANSION_RATIO = 0.2
 
     def __init__(self) -> None:
         self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage3Frame | None] = {}
@@ -328,8 +329,6 @@ class BeeBiteStage3Detector:
     ) -> str | None:
         if stage2.box_low is None or stage2.box_high is None or stage2.box_end_timestamp is None:
             return None
-        if self._is_box_above_stage1_peak(stage1=stage1, stage2=stage2):
-            return "box_above_stage1_peak"
         prepared = self._prepare_frame(frame=frame)
         if prepared is None:
             return None
@@ -347,6 +346,16 @@ class BeeBiteStage3Detector:
         box_low = float(stage2.box_low)
         box_high = float(stage2.box_high)
         box_height = max(box_high - box_low, self._EPSILON)
+        if self._is_regime_exhausted_above_stage1_peak(
+            prepared=prepared,
+            stage1=stage1,
+            stage2=stage2,
+            analysis_end_idx=monitor_end_idx,
+            box_height=box_height,
+        ):
+            return "post_peak_expansion_exhausted"
+        if self._is_box_above_stage1_peak(stage1=stage1, stage2=stage2):
+            return "box_above_stage1_peak"
         highs_slice = prepared.highs[monitor_start_idx : monitor_end_idx + 1]
         closes_slice = prepared.closes[monitor_start_idx : monitor_end_idx + 1]
         if highs_slice.size == 0 or closes_slice.size == 0:
@@ -375,6 +384,40 @@ class BeeBiteStage3Detector:
         )
         tolerance = max((peak_price - base_price) * 0.1, peak_price * 0.0025, self._EPSILON)
         return float(stage2.box_low) > (peak_price + tolerance)
+
+    def _is_regime_exhausted_above_stage1_peak(
+        self,
+        *,
+        prepared: _PreparedStage3Frame,
+        stage1: BeeBiteStage1Result,
+        stage2: BeeBiteStage2Result,
+        analysis_end_idx: int,
+        box_height: float,
+    ) -> bool:
+        if stage1.pump_peak_price is None:
+            return False
+        start_timestamp = stage1.stage1_confirmed_timestamp or stage1.pump_peak_timestamp
+        if start_timestamp is None:
+            return False
+        start_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(start_timestamp))
+        if start_idx is None or analysis_end_idx < start_idx:
+            return False
+
+        peak_price = float(stage1.pump_peak_price)
+        base_price = float(
+            stage1.hold_base_price if stage1.hold_base_price is not None else stage1.pump_base_price or peak_price
+        )
+        pump_height = max(peak_price - base_price, self._EPSILON)
+        tolerance = max(
+            pump_height * self._MAX_POST_PEAK_EXPANSION_RATIO,
+            box_height * 0.25,
+            peak_price * 0.01,
+            self._EPSILON,
+        )
+        highs_slice = prepared.highs[start_idx : analysis_end_idx + 1]
+        if highs_slice.size == 0:
+            return False
+        return float(np.max(highs_slice)) > (peak_price + tolerance)
 
     @staticmethod
     def _resolve_active_lower_liquidity_zone(*, stage2: BeeBiteStage2Result) -> BeeBiteStage2LiquidityZone | None:
