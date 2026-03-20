@@ -1109,7 +1109,7 @@ def _resolve_stage3_lower_zone_end_timestamp(stage3_result: BeeBiteStage3Result)
     if lower_zone is None:
         return None
     if stage3_result.break_timestamp is not None:
-        return max(int(lower_zone.end_timestamp), int(stage3_result.break_timestamp))
+        return min(int(lower_zone.end_timestamp), int(stage3_result.break_timestamp))
     return int(lower_zone.end_timestamp)
 
 
