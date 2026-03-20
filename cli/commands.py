@@ -95,6 +95,7 @@ _STAGE1_REASON_SAMPLE_LIMIT = 3
 _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE = "stage3_events.csv"
 _DEFAULT_STAGE3_PLOTS_DIR_NAME = "stage3_plots"
 _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
+_DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
 _TItem = TypeVar("_TItem")
 
 
@@ -996,6 +997,24 @@ def _resolve_plot_scope(args: argparse.Namespace, *, default_scope: str = "lates
 
 def _resolve_stage3_review_mode(args: argparse.Namespace) -> str:
     return "evolution" if str(getattr(args, "review_mode", "snapshot")).strip().lower() == "evolution" else "snapshot"
+
+
+def _resolve_stage4_min_rr_grid(args: argparse.Namespace) -> list[float]:
+    raw_value = getattr(args, "min_rr_grid", None)
+    if raw_value is None:
+        raw_value = "0.5,0.75,1.0,1.25,1.5,2.0"
+    tokens = [part.strip() for part in str(raw_value).split(",")]
+    parsed_values: list[float] = []
+    for token in tokens:
+        if not token:
+            continue
+        parsed = float(token)
+        if parsed <= 0.0:
+            raise ValueError("min_rr_grid values must be > 0")
+        parsed_values.append(parsed)
+    if not parsed_values:
+        raise ValueError("min_rr_grid must contain at least one positive value")
+    return sorted(set(round(value, 6) for value in parsed_values))
 
 
 def _select_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: int) -> list[_TItem]:
@@ -2568,6 +2587,175 @@ def _stage23_backtest_row(
     }
 
 
+def _resolve_stage4_trade_outcome(
+    *,
+    frame: pd.DataFrame,
+    entry_idx: int,
+    stop_price: float,
+    target_price: float,
+) -> tuple[str, int | None, float | None]:
+    required_columns = {"high", "low", "close"}
+    if frame.empty or not required_columns.issubset(frame.columns):
+        return "frame_invalid", None, None
+
+    prepared = frame.loc[:, ["high", "low", "close"]].copy()
+    for column in prepared.columns:
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.dropna(subset=["high", "low", "close"]).reset_index(drop=True)
+    if prepared.empty or entry_idx >= (len(prepared) - 1):
+        final_close = float(prepared.iloc[-1]["close"]) if not prepared.empty else None
+        return "no_future_data", None, final_close
+
+    for idx in range(entry_idx + 1, len(prepared)):
+        candle_high = float(prepared.iloc[idx]["high"])
+        candle_low = float(prepared.iloc[idx]["low"])
+        hit_stop = candle_low <= stop_price
+        hit_target = candle_high >= target_price
+        if hit_stop and hit_target:
+            return "stop_same_candle", idx, stop_price
+        if hit_stop:
+            return "stop_hit", idx, stop_price
+        if hit_target:
+            return "target_hit", idx, target_price
+
+    return "open", None, float(prepared.iloc[-1]["close"])
+
+
+def _build_stage4_postmortem_rows(
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    regime: _Stage1Regime,
+    stage1_event: BeeBiteStage1Result,
+    stage3_result: BeeBiteStage3Result,
+    frame: pd.DataFrame,
+    min_rr_grid: list[float],
+) -> list[dict[str, object]]:
+    if (
+        not stage3_result.passed
+        or stage3_result.reclaim_idx is None
+        or stage3_result.lowest_break_price is None
+        or stage1_event.pump_peak_price is None
+        or stage3_result.box_high is None
+        or stage3_result.box_low is None
+    ):
+        return []
+
+    required_columns = {"timestamp", "close"}
+    if frame.empty or not required_columns.issubset(frame.columns):
+        return []
+    prepared = frame.loc[:, ["timestamp", "close"]].copy()
+    for column in prepared.columns:
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp", "close"]).reset_index(drop=True)
+    if prepared.empty or stage3_result.reclaim_idx >= len(prepared):
+        return []
+
+    entry_idx = int(stage3_result.reclaim_idx)
+    entry_timestamp = int(prepared.iloc[entry_idx]["timestamp"])
+    entry_price = float(prepared.iloc[entry_idx]["close"])
+    stop_price = float(stage3_result.lowest_break_price)
+    peak_price = float(stage1_event.pump_peak_price)
+    box_height = max(float(stage3_result.box_high) - float(stage3_result.box_low), 0.0)
+    tp1_price = peak_price
+    tp2_price = peak_price + box_height
+    target_price = (tp1_price * 0.75) + (tp2_price * 0.25)
+    risk = entry_price - stop_price
+    reward = target_price - entry_price
+    rr_value = (reward / risk) if risk > 0.0 else None
+
+    rows: list[dict[str, object]] = []
+    for row_order, min_rr in enumerate(min_rr_grid, start=1):
+        eligible = rr_value is not None and rr_value >= min_rr
+        outcome = "rr_below_threshold"
+        exit_idx: int | None = None
+        exit_price: float | None = None
+        realized_rr: float | None = None
+        exit_timestamp: int | None = None
+        if eligible:
+            outcome, exit_idx, exit_price = _resolve_stage4_trade_outcome(
+                frame=frame,
+                entry_idx=entry_idx,
+                stop_price=stop_price,
+                target_price=target_price,
+            )
+            if exit_idx is not None and exit_idx < len(prepared):
+                exit_timestamp = int(prepared.iloc[exit_idx]["timestamp"])
+            if risk > 0.0 and exit_price is not None:
+                realized_rr = (float(exit_price) - entry_price) / risk
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "timeframe": timeframe.value,
+                "regime_index": regime.regime_index,
+                "row_type": "trade",
+                "row_order": row_order,
+                "stage3_reclaim_timestamp": stage3_result.reclaim_timestamp,
+                "entry_timestamp": entry_timestamp,
+                "entry_price": entry_price,
+                "stop_price": stop_price,
+                "tp1_price": tp1_price,
+                "tp2_price": tp2_price,
+                "target_price": target_price,
+                "box_height": box_height,
+                "minimal_rr": min_rr,
+                "rr": rr_value,
+                "eligible": eligible,
+                "outcome": outcome,
+                "exit_timestamp": exit_timestamp,
+                "exit_price": exit_price,
+                "realized_rr": realized_rr,
+            }
+        )
+    return rows
+
+
+def _build_stage4_postmortem_summary_rows(
+    *,
+    timeframe: Timeframe,
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    trade_rows = [row for row in rows if row.get("row_type") == "trade"]
+    if not trade_rows:
+        return []
+
+    summary_rows: list[dict[str, object]] = []
+    min_rr_values = sorted({float(row["minimal_rr"]) for row in trade_rows})
+    stage3_candidates = len({(str(row["symbol"]), int(row["regime_index"])) for row in trade_rows})
+    for row_order, min_rr in enumerate(min_rr_values, start=1):
+        threshold_rows = [row for row in trade_rows if float(row["minimal_rr"]) == min_rr]
+        eligible_rows = [row for row in threshold_rows if bool(row["eligible"])]
+        target_hits = sum(1 for row in eligible_rows if row["outcome"] == "target_hit")
+        stop_hits = sum(1 for row in eligible_rows if row["outcome"] in {"stop_hit", "stop_same_candle"})
+        open_trades = sum(1 for row in eligible_rows if row["outcome"] in {"open", "no_future_data"})
+        realized_rr_values = [
+            float(row["realized_rr"])
+            for row in eligible_rows
+            if row.get("realized_rr") is not None
+        ]
+        summary_rows.append(
+            {
+                "symbol": "__summary__",
+                "timeframe": timeframe.value,
+                "regime_index": 0,
+                "row_type": "summary",
+                "row_order": row_order,
+                "minimal_rr": min_rr,
+                "stage3_candidates": stage3_candidates,
+                "eligible_trades": len(eligible_rows),
+                "rr_filtered_out": sum(1 for row in threshold_rows if not bool(row["eligible"])),
+                "target_hits": target_hits,
+                "stop_hits": stop_hits,
+                "open_trades": open_trades,
+                "win_rate": (target_hits / len(eligible_rows)) if eligible_rows else 0.0,
+                "avg_realized_rr": (sum(realized_rr_values) / len(realized_rr_values)) if realized_rr_values else 0.0,
+                "total_realized_rr": sum(realized_rr_values) if realized_rr_values else 0.0,
+            }
+        )
+    return summary_rows
+
+
 def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage2", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("review-stage2: cache_dir=%s", config.backtest.cache_dir)
@@ -3178,6 +3366,145 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
+def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("postmortem-stage4", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    logger.info("postmortem-stage4: cache_dir=%s", config.backtest.cache_dir)
+    review_timeframe = _resolve_review_timeframe(args)
+    min_rr_grid = _resolve_stage4_min_rr_grid(args)
+    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
+    output_dir = results_dir / "stage4_postmortem" / review_timeframe.value
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE
+
+    preparer = DataPreparer(config.backtest.cache_dir)
+    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
+    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
+    if not symbols:
+        logger.info("postmortem-stage4: no data in cache for tf=%s", review_timeframe.value)
+        return 0
+
+    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
+    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
+    stage2_detector = BeeBiteStage2Detector()
+    stage3_detector = BeeBiteStage3Detector()
+    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
+    stage1_review_cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]] = {}
+    rows: list[dict[str, object]] = []
+    stage3_passed_count = 0
+    empty_frame_symbols: list[str] = []
+    reason_counts: Counter[str] = Counter()
+
+    for index, symbol in enumerate(symbols, start=1):
+        frame = _get_cached_review_frame(
+            cache=frame_cache,
+            preparer=preparer,
+            symbol=symbol,
+            timeframe=review_timeframe,
+        )
+        if frame.empty:
+            empty_frame_symbols.append(symbol)
+            continue
+
+        stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
+            cache=frame_cache,
+            preparer=preparer,
+            symbol=symbol,
+            timeframe=stage1_timeframe,
+        )
+        if stage1_frame.empty:
+            reason_counts["stage1:empty_reference_frame"] += 1
+            continue
+
+        stage1_events, stage1_evaluation = _get_cached_stage1_review(
+            cache=stage1_review_cache,
+            selector=selector,
+            symbol=symbol,
+            timeframe=stage1_timeframe,
+            frame=stage1_frame,
+        )
+        if not stage1_events:
+            reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
+            continue
+
+        regimes = _resolve_stage1_regime_ends(
+            frame=stage1_frame,
+            regimes=_group_stage1_events_into_regimes(stage1_events),
+        )
+        for regime in regimes:
+            stage1_event = regime.first_event
+            dynamic_stage2_result = stage2_detector.detect(
+                symbol=symbol,
+                frame=frame,
+                stage1=stage1_event,
+                analysis_end_timestamp=int(regime.regime_end_timestamp),
+            )
+            if not dynamic_stage2_result.passed:
+                reason_counts["stage2_not_passed"] += 1
+                continue
+
+            stage3_result = _resolve_stage23_terminal_result(
+                symbol=symbol,
+                timeframe=review_timeframe,
+                frame=frame,
+                stage1_event=stage1_event,
+                regime=regime,
+                stage2_detector=stage2_detector,
+                stage3_detector=stage3_detector,
+                initial_stage2_result=dynamic_stage2_result,
+            )
+            if not stage3_result.passed:
+                reason_counts[stage3_result.reason] += 1
+                continue
+
+            stage3_passed_count += 1
+            rows.extend(
+                _build_stage4_postmortem_rows(
+                    symbol=symbol,
+                    timeframe=review_timeframe,
+                    regime=regime,
+                    stage1_event=stage1_event,
+                    stage3_result=stage3_result,
+                    frame=frame,
+                    min_rr_grid=min_rr_grid,
+                )
+            )
+
+        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
+            logger.info(
+                "postmortem-stage4: progress=%s/%s stage3_passed=%s rows=%s",
+                index,
+                len(symbols),
+                stage3_passed_count,
+                len(rows),
+            )
+
+    summary_rows = _build_stage4_postmortem_summary_rows(
+        timeframe=review_timeframe,
+        rows=rows,
+    )
+    results_frame = pd.DataFrame([*summary_rows, *rows])
+    if not results_frame.empty:
+        sort_columns = [column for column in ("row_type", "row_order", "symbol", "regime_index") if column in results_frame.columns]
+        results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    results_frame.to_csv(output_path, index=False)
+
+    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
+    if top_reasons:
+        logger.info("postmortem-stage4: rejection_reasons %s", top_reasons)
+    if empty_frame_symbols:
+        logger.warning("postmortem-stage4: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
+    logger.info(
+        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s grid=%s csv=%s",
+        len(symbols),
+        stage3_passed_count,
+        len(rows),
+        ",".join(f"{value:g}" for value in min_rr_grid),
+        output_path,
+    )
+    return 0
+
+
 def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
@@ -3632,6 +3959,30 @@ def review_stage3(config: AppConfig, args: argparse.Namespace) -> int:
                 f"review-stage3[{timeframe.value}]",
                 config,
                 lambda stage_args=scoped_args: _review_stage3_inner(config, stage_args),
+            )
+        )
+    return max(exit_codes, default=0)
+
+
+def postmortem_stage4(config: AppConfig, args: argparse.Namespace) -> int:
+    """Собирает stage-4 postmortem по валидным stage-3 setups и сетке minimal_rr."""
+    timeframes = _resolve_review_timeframes(args)
+    if len(timeframes) == 1:
+        return _run_with_logging("postmortem-stage4", config, lambda: _postmortem_stage4_inner(config, args))
+
+    exit_codes: list[int] = []
+    base_output = Path(args.output) if getattr(args, "output", None) else None
+    for timeframe in timeframes:
+        scoped_args = _with_review_timeframe(
+            args,
+            timeframe,
+            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
+        )
+        exit_codes.append(
+            _run_with_logging(
+                f"postmortem-stage4[{timeframe.value}]",
+                config,
+                lambda stage_args=scoped_args: _postmortem_stage4_inner(config, stage_args),
             )
         )
     return max(exit_codes, default=0)

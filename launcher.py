@@ -18,6 +18,7 @@ MODE_REPORT = "make-report"
 MODE_STAGE1_REVIEW = "review-stage1"
 MODE_STAGE2_REVIEW = "review-stage2"
 MODE_STAGE3_REVIEW = "review-stage3"
+MODE_STAGE4_POSTMORTEM = "postmortem-stage4"
 MODE_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
@@ -29,6 +30,7 @@ MODE_LABELS: dict[str, str] = {
     MODE_STAGE1_REVIEW: "Review historical stage-1",
     MODE_STAGE2_REVIEW: "Review stage-2 balances",
     MODE_STAGE3_REVIEW: "Review stage-3 sweeps",
+    MODE_STAGE4_POSTMORTEM: "Postmortem stage-4",
     MODE_QUALITY: "Check cache quality",
     MODE_CLEAR_CACHE: "Clear cache",
 }
@@ -75,6 +77,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tf-all", action="store_true", default=False, help="Run review for both 15m and 5m")
     parser.add_argument("--review-mode", choices=["snapshot", "evolution"], default="snapshot", help="Review mode for review-stage3")
     parser.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
+    parser.add_argument("--min-rr-grid", default="0.5,0.75,1.0,1.25,1.5,2.0", help="Comma-separated minimal RR grid for postmortem-stage4")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
     parser.add_argument("--strategy", choices=["bee_bite"], default=None, help="Only bee_bite strategy is available")
@@ -107,6 +110,7 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         tf_all=bool(task.get("tf_all", cli_args.tf_all)),
         review_mode=task.get("review_mode", cli_args.review_mode),
         plot_scope=task.get("plot_scope", cli_args.plot_scope),
+        min_rr_grid=task.get("min_rr_grid", cli_args.min_rr_grid),
         levels_tf=task.get("levels_tf", cli_args.levels_tf),
         entry_tf=task.get("entry_tf", cli_args.entry_tf),
         strategy=task.get("strategy", cli_args.strategy),
@@ -137,6 +141,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_STAGE1_REVIEW: commands.review_stage1,
         MODE_STAGE2_REVIEW: commands.review_stage2,
         MODE_STAGE3_REVIEW: commands.review_stage3,
+        MODE_STAGE4_POSTMORTEM: commands.postmortem_stage4,
         MODE_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
     }
