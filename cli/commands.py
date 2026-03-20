@@ -1110,6 +1110,28 @@ def _is_stage3_terminal_failure(stage3_result: BeeBiteStage3Result) -> bool:
     }
 
 
+def _get_cached_stage2_result(
+    *,
+    cache: dict[int, BeeBiteStage2Result],
+    symbol: str,
+    frame: pd.DataFrame,
+    stage1_event: BeeBiteStage1Result,
+    stage2_detector: BeeBiteStage2Detector,
+    analysis_end_timestamp: int,
+) -> BeeBiteStage2Result:
+    cached = cache.get(int(analysis_end_timestamp))
+    if cached is not None:
+        return cached
+    result = stage2_detector.detect(
+        symbol=symbol,
+        frame=frame,
+        stage1=stage1_event,
+        analysis_end_timestamp=int(analysis_end_timestamp),
+    )
+    cache[int(analysis_end_timestamp)] = result
+    return result
+
+
 def _build_stage23_evolution_snapshots(
     *,
     symbol: str,
@@ -1119,6 +1141,7 @@ def _build_stage23_evolution_snapshots(
     regime: _Stage1Regime,
     stage2_detector: BeeBiteStage2Detector,
     stage3_detector: BeeBiteStage3Detector,
+    initial_stage2_result: BeeBiteStage2Result | None = None,
 ) -> list[_Stage23EvolutionSnapshot]:
     if stage1_event.pump_peak_timestamp is None:
         return []
@@ -1141,13 +1164,18 @@ def _build_stage23_evolution_snapshots(
     )
     snapshots: list[_Stage23EvolutionSnapshot] = []
     reference_stage2_result: BeeBiteStage2Result | None = None
+    stage2_results_by_timestamp: dict[int, BeeBiteStage2Result] = {}
+    if initial_stage2_result is not None and initial_stage2_result.analysis_end_timestamp is not None:
+        stage2_results_by_timestamp[int(initial_stage2_result.analysis_end_timestamp)] = initial_stage2_result
 
     for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
-        dynamic_stage2_result = stage2_detector.detect(
+        dynamic_stage2_result = _get_cached_stage2_result(
+            cache=stage2_results_by_timestamp,
             symbol=symbol,
             frame=frame,
-            stage1=stage1_event,
-            analysis_end_timestamp=snapshot_timestamp,
+            stage1_event=stage1_event,
+            stage2_detector=stage2_detector,
+            analysis_end_timestamp=int(snapshot_timestamp),
         )
         if reference_stage2_result is None and _stage23_can_lock_reference_box(
             snapshot_timestamp=snapshot_timestamp,
@@ -1194,6 +1222,7 @@ def _resolve_stage23_terminal_result(
     regime: _Stage1Regime,
     stage2_detector: BeeBiteStage2Detector,
     stage3_detector: BeeBiteStage3Detector,
+    initial_stage2_result: BeeBiteStage2Result | None = None,
 ) -> BeeBiteStage3Result:
     if stage1_event.pump_peak_timestamp is None:
         return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage1_peak_missing")
@@ -1221,14 +1250,19 @@ def _resolve_stage23_terminal_result(
     reference_stage2_result: BeeBiteStage2Result | None = None
     last_actionable_stage3_result: BeeBiteStage3Result | None = None
     last_reference_locked_stage3_result: BeeBiteStage3Result | None = None
+    stage2_results_by_timestamp: dict[int, BeeBiteStage2Result] = {}
+    if initial_stage2_result is not None and initial_stage2_result.analysis_end_timestamp is not None:
+        stage2_results_by_timestamp[int(initial_stage2_result.analysis_end_timestamp)] = initial_stage2_result
 
     for snapshot_timestamp in snapshot_timestamps:
         if reference_stage2_result is None:
-            dynamic_stage2_result = stage2_detector.detect(
+            dynamic_stage2_result = _get_cached_stage2_result(
+                cache=stage2_results_by_timestamp,
                 symbol=symbol,
                 frame=frame,
-                stage1=stage1_event,
-                analysis_end_timestamp=snapshot_timestamp,
+                stage1_event=stage1_event,
+                stage2_detector=stage2_detector,
+                analysis_end_timestamp=int(snapshot_timestamp),
             )
             if _stage23_can_lock_reference_box(
                 snapshot_timestamp=snapshot_timestamp,
@@ -2649,6 +2683,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     regime=regime,
                     stage2_detector=stage2_detector,
                     stage3_detector=stage3_detector,
+                    initial_stage2_result=dynamic_stage2_result,
                 )
                 terminal_snapshot = _select_terminal_stage23_snapshot(snapshots)
                 stage3_result = terminal_snapshot.stage3_result if terminal_snapshot is not None else BeeBiteStage3Result(
@@ -2665,6 +2700,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     regime=regime,
                     stage2_detector=stage2_detector,
                     stage3_detector=stage3_detector,
+                    initial_stage2_result=dynamic_stage2_result,
                 )
             rows.extend(
                 _stage3_result_to_rows(
@@ -2843,6 +2879,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 regime=candidate.regime,
                 stage2_detector=stage2_detector,
                 stage3_detector=stage3_detector,
+                initial_stage2_result=candidate.final_stage2_result,
             )
             for snapshot in snapshots:
                 plot_path = plots_dir / (
@@ -2889,6 +2926,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 regime=candidate.regime,
                 stage2_detector=stage2_detector,
                 stage3_detector=stage3_detector,
+                initial_stage2_result=candidate.final_stage2_result,
             )
             for snapshot in snapshots:
                 plot_path = failed_plots_dir / (
