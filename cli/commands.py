@@ -1075,13 +1075,25 @@ def _stage23_can_lock_reference_box(
     lower_zones = [zone for zone in stage2_result.liquidity_zones if zone.side == "lower"]
     if not lower_zones:
         return False
+    box_low = float(stage2_result.box_low or 0.0)
+    box_high = float(stage2_result.box_high or box_low)
+    range_height = max(box_high - box_low, 1e-12)
+    boundary_tolerance = max(range_height * 0.15, 1e-12)
+
+    def _zone_distance_to_boundary(zone: BeeBiteStage2LiquidityZone) -> float:
+        if zone.low <= box_low <= zone.high:
+            return 0.0
+        if zone.high < box_low:
+            return box_low - zone.high
+        return zone.low - box_low
+
     lower_zone = max(
         lower_zones,
         key=lambda zone: (
-            zone.high <= float(stage2_result.box_low or 0.0),
-            zone.high,
-            zone.last_touch_timestamp,
+            zone.low <= (box_low + boundary_tolerance) and zone.high >= (box_low - boundary_tolerance),
+            -_zone_distance_to_boundary(zone),
             zone.touch_count,
+            zone.end_timestamp - zone.start_timestamp,
             zone.end_timestamp,
         ),
     )

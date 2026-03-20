@@ -61,7 +61,7 @@ class BeeBiteStage3Detector:
 
     _EPSILON = 1e-12
     _MIN_LOWER_ZONE_TO_BOX_RATIO = 0.5
-    _MAX_OUTSIDE_CLOSE_RATIO = 0.5
+    _MAX_ABOVE_CLOSE_RATIO = 0.5
 
     def __init__(self) -> None:
         self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage3Frame | None] = {}
@@ -355,10 +355,10 @@ class BeeBiteStage3Detector:
         if float(np.max(highs_slice)) > (box_high + box_height + self._EPSILON):
             return "box_extended_above_range"
 
-        inside_mask = (closes_slice >= (box_low - self._EPSILON)) & (closes_slice <= (box_high + self._EPSILON))
-        outside_close_ratio = 1.0 - (float(np.count_nonzero(inside_mask)) / float(closes_slice.size))
-        if outside_close_ratio > self._MAX_OUTSIDE_CLOSE_RATIO:
-            return "box_mostly_outside"
+        above_box_mask = closes_slice > (box_high + self._EPSILON)
+        above_close_ratio = float(np.count_nonzero(above_box_mask)) / float(closes_slice.size)
+        if above_close_ratio > self._MAX_ABOVE_CLOSE_RATIO:
+            return "box_mostly_above_range"
         return None
 
     def _is_box_above_stage1_peak(
@@ -382,15 +382,25 @@ class BeeBiteStage3Detector:
         if not lower_zones:
             return None
         box_low = float(stage2.box_low or 0.0)
-        candidates = [zone for zone in lower_zones if zone.high <= (box_low + 1e-12)]
-        if not candidates:
-            candidates = lower_zones
+        box_high = float(stage2.box_high or box_low)
+        range_height = max(box_high - box_low, 1e-12)
+        boundary_tolerance = max(range_height * 0.15, 1e-12)
+
+        def zone_distance_to_boundary(zone: BeeBiteStage2LiquidityZone) -> float:
+            if zone.low <= box_low <= zone.high:
+                return 0.0
+            if zone.high < box_low:
+                return box_low - zone.high
+            return zone.low - box_low
+
         return max(
-            candidates,
+            lower_zones,
             key=lambda zone: (
-                zone.high,
-                zone.last_touch_timestamp,
+                zone.low <= (box_low + boundary_tolerance) and zone.high >= (box_low - boundary_tolerance),
+                -zone_distance_to_boundary(zone),
                 zone.touch_count,
+                zone.end_timestamp - zone.start_timestamp,
+                zone.last_touch_timestamp,
                 zone.end_timestamp,
             ),
         )

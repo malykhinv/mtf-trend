@@ -724,6 +724,7 @@ class BeeBiteStage2Detector:
             segment_start_idx=segment_start_idx,
             segment_end_idx=segment_end_idx,
             box_low=float(active_box.low),
+            box_high=float(active_box.high),
             tolerance=tolerance,
         )
         if fallback_lower_zone is not None:
@@ -1029,12 +1030,15 @@ class BeeBiteStage2Detector:
         segment_start_idx: int,
         segment_end_idx: int,
         box_low: float,
+        box_high: float,
         tolerance: float,
     ) -> BeeBiteStage2LiquidityZone | None:
+        range_height = max(box_high - box_low, self._EPSILON)
+        boundary_band_high = box_low + max(range_height * 0.2, tolerance * 2.0, self._EPSILON)
         touch_indices = [
             idx
             for idx in range(segment_start_idx, segment_end_idx + 1)
-            if (box_low - tolerance) <= float(prepared.lows[idx]) <= (box_low + tolerance)
+            if (box_low - tolerance) <= float(prepared.lows[idx]) <= boundary_band_high
         ]
         if len(touch_indices) < 2:
             return None
