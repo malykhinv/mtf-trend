@@ -106,6 +106,9 @@ class BeeBiteStage2Detector:
     _LIQUIDITY_UPPER_PRESTART_BARS = 2
     _LIQUIDITY_LOWER_PRESTART_BARS = 1
 
+    def __init__(self) -> None:
+        self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage2Frame | BeeBiteStage2Result] = {}
+
     def detect(
         self,
         *,
@@ -247,17 +250,25 @@ class BeeBiteStage2Detector:
             box_low=active_box.low,
         )
 
-    @staticmethod
     def _prepare_frame(
+        self,
         *,
         symbol: str,
         frame: pd.DataFrame,
     ) -> _PreparedStage2Frame | BeeBiteStage2Result:
+        cache_key = self._build_frame_cache_key(frame)
+        cached = self._prepared_frame_cache.get(cache_key)
+        if cached is not None:
+            return cached
         required_columns = {"timestamp", "open", "high", "low", "close"}
         if frame.empty:
-            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="empty_frame")
+            result = BeeBiteStage2Result(symbol=symbol, passed=False, reason="empty_frame")
+            self._remember_prepared_frame(cache_key, result)
+            return result
         if not required_columns.issubset(frame.columns):
-            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="missing_columns")
+            result = BeeBiteStage2Result(symbol=symbol, passed=False, reason="missing_columns")
+            self._remember_prepared_frame(cache_key, result)
+            return result
 
         prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close"]].copy()
         for column in ("timestamp", "open", "high", "low", "close"):
@@ -266,15 +277,39 @@ class BeeBiteStage2Detector:
         prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
         prepared = prepared.reset_index(drop=True)
         if len(prepared) < 3:
-            return BeeBiteStage2Result(symbol=symbol, passed=False, reason="insufficient_history")
+            result = BeeBiteStage2Result(symbol=symbol, passed=False, reason="insufficient_history")
+            self._remember_prepared_frame(cache_key, result)
+            return result
 
-        return _PreparedStage2Frame(
+        prepared_frame = _PreparedStage2Frame(
             timestamps=prepared["timestamp"].astype("int64").to_numpy(),
             opens=prepared["open"].astype("float64").to_numpy(),
             highs=prepared["high"].astype("float64").to_numpy(),
             lows=prepared["low"].astype("float64").to_numpy(),
             closes=prepared["close"].astype("float64").to_numpy(),
         )
+        self._remember_prepared_frame(cache_key, prepared_frame)
+        return prepared_frame
+
+    @staticmethod
+    def _build_frame_cache_key(frame: pd.DataFrame) -> tuple[object, ...]:
+        if frame.empty or "timestamp" not in frame.columns:
+            return (id(frame), len(frame), None, None)
+        return (
+            id(frame),
+            len(frame),
+            frame["timestamp"].iloc[0],
+            frame["timestamp"].iloc[-1],
+        )
+
+    def _remember_prepared_frame(
+        self,
+        cache_key: tuple[object, ...],
+        prepared_frame: _PreparedStage2Frame | BeeBiteStage2Result,
+    ) -> None:
+        if len(self._prepared_frame_cache) >= 64:
+            self._prepared_frame_cache.clear()
+        self._prepared_frame_cache[cache_key] = prepared_frame
 
     @staticmethod
     def _resolve_index_by_timestamp(*, timestamps: np.ndarray, timestamp: int) -> int | None:

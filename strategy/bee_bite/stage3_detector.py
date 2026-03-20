@@ -62,6 +62,9 @@ class BeeBiteStage3Detector:
     _EPSILON = 1e-12
     _MIN_LOWER_ZONE_TO_BOX_RATIO = 0.5
 
+    def __init__(self) -> None:
+        self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage3Frame | None] = {}
+
     def detect(
         self,
         *,
@@ -361,10 +364,13 @@ class BeeBiteStage3Detector:
                 ready_idx = max(ready_idx, confirmed_idx + 1)
         return min(ready_idx, len(prepared.timestamps) - 1)
 
-    @staticmethod
-    def _prepare_frame(*, frame: pd.DataFrame) -> _PreparedStage3Frame | None:
+    def _prepare_frame(self, *, frame: pd.DataFrame) -> _PreparedStage3Frame | None:
+        cache_key = self._build_frame_cache_key(frame)
+        if cache_key in self._prepared_frame_cache:
+            return self._prepared_frame_cache[cache_key]
         required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
         if frame.empty or not required_columns.issubset(frame.columns):
+            self._remember_prepared_frame(cache_key, None)
             return None
         prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
         for column in prepared.columns:
@@ -372,8 +378,9 @@ class BeeBiteStage3Detector:
         prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
         prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
         if prepared.empty:
+            self._remember_prepared_frame(cache_key, None)
             return None
-        return _PreparedStage3Frame(
+        prepared_frame = _PreparedStage3Frame(
             timestamps=prepared["timestamp"].astype("int64").to_numpy(),
             opens=prepared["open"].astype("float64").to_numpy(),
             highs=prepared["high"].astype("float64").to_numpy(),
@@ -381,6 +388,28 @@ class BeeBiteStage3Detector:
             closes=prepared["close"].astype("float64").to_numpy(),
             volumes=prepared["volume"].astype("float64").to_numpy(),
         )
+        self._remember_prepared_frame(cache_key, prepared_frame)
+        return prepared_frame
+
+    @staticmethod
+    def _build_frame_cache_key(frame: pd.DataFrame) -> tuple[object, ...]:
+        if frame.empty or "timestamp" not in frame.columns:
+            return (id(frame), len(frame), None, None)
+        return (
+            id(frame),
+            len(frame),
+            frame["timestamp"].iloc[0],
+            frame["timestamp"].iloc[-1],
+        )
+
+    def _remember_prepared_frame(
+        self,
+        cache_key: tuple[object, ...],
+        prepared_frame: _PreparedStage3Frame | None,
+    ) -> None:
+        if len(self._prepared_frame_cache) >= 64:
+            self._prepared_frame_cache.clear()
+        self._prepared_frame_cache[cache_key] = prepared_frame
 
     @staticmethod
     def _resolve_index_by_timestamp(timestamps: np.ndarray, timestamp: int) -> int | None:

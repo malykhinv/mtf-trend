@@ -94,6 +94,7 @@ class BeeBiteStage1Selector:
         self._max_initial_pump_duration_bars = int(max(max_initial_pump_duration_bars, 1))
         self._min_confirm_delay_bars = int(max(min_confirm_delay_bars, 1))
         self._max_confirm_delay_bars = int(max(max_confirm_delay_bars, self._min_confirm_delay_bars))
+        self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage1Frame | BeeBiteStage1Result] = {}
 
     @classmethod
     def for_timeframe(cls, timeframe: Timeframe) -> BeeBiteStage1Selector:
@@ -296,11 +297,19 @@ class BeeBiteStage1Selector:
         return events
 
     def _prepare_frame(self, *, symbol: str, frame: pd.DataFrame) -> _PreparedStage1Frame | BeeBiteStage1Result:
+        cache_key = self._build_frame_cache_key(frame)
+        cached = self._prepared_frame_cache.get(cache_key)
+        if cached is not None:
+            return cached
         required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
         if frame.empty:
-            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="empty_frame")
+            result = BeeBiteStage1Result(symbol=symbol, passed=False, reason="empty_frame")
+            self._remember_prepared_frame(cache_key, result)
+            return result
         if not required_columns.issubset(frame.columns):
-            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="missing_columns")
+            result = BeeBiteStage1Result(symbol=symbol, passed=False, reason="missing_columns")
+            self._remember_prepared_frame(cache_key, result)
+            return result
 
         prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
         for column in ("timestamp", "open", "high", "low", "close", "volume"):
@@ -314,7 +323,9 @@ class BeeBiteStage1Selector:
             self._volume_window_bars,
         )
         if len(prepared) < min_required_rows:
-            return BeeBiteStage1Result(symbol=symbol, passed=False, reason="insufficient_history")
+            result = BeeBiteStage1Result(symbol=symbol, passed=False, reason="insufficient_history")
+            self._remember_prepared_frame(cache_key, result)
+            return result
 
         timestamps = prepared["timestamp"].astype("int64").to_numpy()
         opens = prepared["open"].astype("float64").to_numpy()
@@ -347,7 +358,7 @@ class BeeBiteStage1Selector:
             .to_numpy(dtype="float64")
         )
 
-        return _PreparedStage1Frame(
+        prepared_frame = _PreparedStage1Frame(
             timestamps=timestamps,
             opens=opens,
             highs=highs,
@@ -359,6 +370,28 @@ class BeeBiteStage1Selector:
             sleep_window_range_pct=sleep_window_range_pct,
             cumulative_quote_volume=cumulative_quote_volume,
         )
+        self._remember_prepared_frame(cache_key, prepared_frame)
+        return prepared_frame
+
+    @staticmethod
+    def _build_frame_cache_key(frame: pd.DataFrame) -> tuple[object, ...]:
+        if frame.empty or "timestamp" not in frame.columns:
+            return (id(frame), len(frame), None, None)
+        return (
+            id(frame),
+            len(frame),
+            frame["timestamp"].iloc[0],
+            frame["timestamp"].iloc[-1],
+        )
+
+    def _remember_prepared_frame(
+        self,
+        cache_key: tuple[object, ...],
+        prepared_frame: _PreparedStage1Frame | BeeBiteStage1Result,
+    ) -> None:
+        if len(self._prepared_frame_cache) >= 32:
+            self._prepared_frame_cache.clear()
+        self._prepared_frame_cache[cache_key] = prepared_frame
 
     def _iter_stage1_candidates(self, *, prepared: _PreparedStage1Frame):
         last_candidate_start = len(prepared.timestamps) - self._pump_window_bars - 1

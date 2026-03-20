@@ -1100,6 +1100,16 @@ def _resolve_stage3_lower_zone_end_timestamp(stage3_result: BeeBiteStage3Result)
     return int(lower_zone.end_timestamp)
 
 
+def _is_stage3_terminal_failure(stage3_result: BeeBiteStage3Result) -> bool:
+    if stage3_result.passed:
+        return False
+    return stage3_result.reason in {
+        "break_too_deep",
+        "close_below_hold",
+        "under_range_span_too_wide",
+    }
+
+
 def _build_stage23_evolution_snapshots(
     *,
     symbol: str,
@@ -1244,6 +1254,8 @@ def _resolve_stage23_terminal_result(
         ):
             last_actionable_stage3_result = stage3_result
         if stage3_result.passed:
+            return stage3_result
+        if _is_stage3_terminal_failure(stage3_result):
             return stage3_result
 
     if last_actionable_stage3_result is not None:
