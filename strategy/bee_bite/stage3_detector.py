@@ -584,7 +584,15 @@ class BeeBiteStage3Detector:
         high: float,
         lower_zone: BeeBiteStage2LiquidityZone,
     ) -> bool:
-        return high >= float(lower_zone.low) and low <= float(lower_zone.high)
+        zone_low = float(lower_zone.low)
+        zone_high = float(lower_zone.high)
+        zone_height = max(zone_high - zone_low, 0.0)
+        if zone_height <= 0.0:
+            return low <= zone_high
+        overlap = min(high, zone_high) - max(low, zone_low)
+        if overlap <= 0.0:
+            return False
+        return overlap >= (zone_height * 0.5)
 
     @staticmethod
     def _extend_active_lower_zone(
