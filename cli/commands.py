@@ -1169,6 +1169,12 @@ def _get_cached_stage1_review(
     return events, evaluation
 
 
+def _reset_review_plot_dir(path: Path) -> None:
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True, exist_ok=True)
+
+
 def _build_stage23_evolution_snapshots(
     *,
     symbol: str,
@@ -2041,6 +2047,7 @@ def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE1_EVENTS_OUTPUT_FILE
     plots_dir = output_dir / DEFAULT_STAGE1_PLOTS_DIR_NAME
+    _reset_review_plot_dir(plots_dir)
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
 
     preparer = DataPreparer(config.backtest.cache_dir)
@@ -2464,8 +2471,8 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE2_EVENTS_OUTPUT_FILE
     plots_dir = output_dir / DEFAULT_STAGE2_PLOTS_DIR_NAME
     failed_plots_dir = output_dir / DEFAULT_FAILED_PLOTS_DIR_NAME
-    plots_dir.mkdir(parents=True, exist_ok=True)
-    failed_plots_dir.mkdir(parents=True, exist_ok=True)
+    _reset_review_plot_dir(plots_dir)
+    _reset_review_plot_dir(failed_plots_dir)
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
     plot_scope = _resolve_plot_scope(args, default_scope="all")
 
@@ -2650,8 +2657,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / default_output_name
     plots_dir = output_dir / _DEFAULT_STAGE3_PLOTS_DIR_NAME
     failed_plots_dir = output_dir / DEFAULT_FAILED_PLOTS_DIR_NAME
-    plots_dir.mkdir(parents=True, exist_ok=True)
-    failed_plots_dir.mkdir(parents=True, exist_ok=True)
+    _reset_review_plot_dir(plots_dir)
+    _reset_review_plot_dir(failed_plots_dir)
     plot_limit = int(getattr(args, "plot_limit", 20) or 20)
 
     preparer = DataPreparer(config.backtest.cache_dir)
