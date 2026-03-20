@@ -118,6 +118,7 @@ class _Stage23ReviewCandidate:
     final_stage2_result: BeeBiteStage2Result
     final_stage3_result: BeeBiteStage3Result
     frame: pd.DataFrame
+    snapshots: list["_Stage23EvolutionSnapshot"] | None = None
 
 
 @dataclass(slots=True)
@@ -2722,6 +2723,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                         final_stage2_result=dynamic_stage2_result,
                         final_stage3_result=stage3_result,
                         frame=frame,
+                        snapshots=snapshots if review_mode == "evolution" else None,
                     )
                 )
             else:
@@ -2734,6 +2736,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                         final_stage2_result=dynamic_stage2_result,
                         final_stage3_result=stage3_result,
                         frame=frame,
+                        snapshots=snapshots if review_mode == "evolution" else None,
                     )
                 )
                 reason_counts[stage3_result.reason] += 1
@@ -2871,7 +2874,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
             plot_limit=plot_limit,
         ):
             symbol_slug = candidate.symbol.replace("/", "_")
-            snapshots = _build_stage23_evolution_snapshots(
+            snapshots = candidate.snapshots or _build_stage23_evolution_snapshots(
                 symbol=candidate.symbol,
                 timeframe=review_timeframe,
                 frame=candidate.frame,
@@ -2918,7 +2921,7 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ):
             symbol_slug = candidate.symbol.replace("/", "_")
             reason_slug = _slugify_reason(candidate.final_stage3_result.reason)
-            snapshots = _build_stage23_evolution_snapshots(
+            snapshots = candidate.snapshots or _build_stage23_evolution_snapshots(
                 symbol=candidate.symbol,
                 timeframe=review_timeframe,
                 frame=candidate.frame,
