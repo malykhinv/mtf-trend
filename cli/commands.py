@@ -1133,6 +1133,42 @@ def _get_cached_stage2_result(
     return result
 
 
+def _get_cached_review_frame(
+    *,
+    cache: dict[tuple[str, Timeframe], pd.DataFrame],
+    preparer: DataPreparer,
+    symbol: str,
+    timeframe: Timeframe,
+) -> pd.DataFrame:
+    cache_key = (symbol, timeframe)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    loaded = preparer.load_symbol_data(symbol, timeframe)
+    cache[cache_key] = loaded
+    return loaded
+
+
+def _get_cached_stage1_review(
+    *,
+    cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]],
+    selector: BeeBiteStage1Selector,
+    symbol: str,
+    timeframe: Timeframe,
+    frame: pd.DataFrame,
+) -> tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]:
+    cache_key = (symbol, timeframe)
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    events = selector.detect_events(symbol=symbol, frame=frame)
+    evaluation: BeeBiteStage1Result | None = None
+    if not events:
+        evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
+    cache[cache_key] = (events, evaluation)
+    return events, evaluation
+
+
 def _build_stage23_evolution_snapshots(
     *,
     symbol: str,
@@ -2449,18 +2485,30 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     reason_counts: Counter[str] = Counter()
     empty_frame_symbols: list[str] = []
     populated_frame_symbols = 0
+    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
+    stage1_review_cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]] = {}
 
     for index, symbol in enumerate(symbols, start=1):
-        frame = preparer.load_symbol_data(symbol, review_timeframe)
+        frame = _get_cached_review_frame(
+            cache=frame_cache,
+            preparer=preparer,
+            symbol=symbol,
+            timeframe=review_timeframe,
+        )
         if frame.empty:
             empty_frame_symbols.append(symbol)
             continue
         populated_frame_symbols += 1
 
-        stage1_events = selector.detect_events(symbol=symbol, frame=frame)
+        stage1_events, stage1_evaluation = _get_cached_stage1_review(
+            cache=stage1_review_cache,
+            selector=selector,
+            symbol=symbol,
+            timeframe=review_timeframe,
+            frame=frame,
+        )
         if not stage1_events:
-            stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
-            reason_counts[f"stage1:{stage1_evaluation.reason}"] += 1
+            reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
             continue
 
         regimes = _resolve_stage1_regime_ends(
@@ -2625,23 +2673,40 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     reason_counts: Counter[str] = Counter()
     empty_frame_symbols: list[str] = []
     populated_frame_symbols = 0
+    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
+    stage1_review_cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]] = {}
 
     for index, symbol in enumerate(symbols, start=1):
-        frame = preparer.load_symbol_data(symbol, review_timeframe)
+        frame = _get_cached_review_frame(
+            cache=frame_cache,
+            preparer=preparer,
+            symbol=symbol,
+            timeframe=review_timeframe,
+        )
         if frame.empty:
             empty_frame_symbols.append(symbol)
             continue
         populated_frame_symbols += 1
 
-        stage1_frame = frame if stage1_timeframe == review_timeframe else preparer.load_symbol_data(symbol, stage1_timeframe)
+        stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
+            cache=frame_cache,
+            preparer=preparer,
+            symbol=symbol,
+            timeframe=stage1_timeframe,
+        )
         if stage1_frame.empty:
             reason_counts["stage1:empty_reference_frame"] += 1
             continue
 
-        stage1_events = selector.detect_events(symbol=symbol, frame=stage1_frame)
+        stage1_events, stage1_evaluation = _get_cached_stage1_review(
+            cache=stage1_review_cache,
+            selector=selector,
+            symbol=symbol,
+            timeframe=stage1_timeframe,
+            frame=stage1_frame,
+        )
         if not stage1_events:
-            stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=stage1_frame)
-            reason_counts[f"stage1:{stage1_evaluation.reason}"] += 1
+            reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
             continue
 
         regimes = _resolve_stage1_regime_ends(
