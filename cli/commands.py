@@ -1243,6 +1243,7 @@ def _build_stage23_evolution_snapshots(
         if reference_stage2_result is not None:
             stale_reason = stage3_detector.resolve_reference_box_staleness(
                 frame=frame,
+                stage1=stage1_event,
                 stage2=reference_stage2_result,
                 analysis_end_timestamp=int(snapshot_timestamp),
             )
@@ -1270,6 +1271,7 @@ def _build_stage23_evolution_snapshots(
         ):
             dynamic_stale_reason = stage3_detector.resolve_reference_box_staleness(
                 frame=frame,
+                stage1=stage1_event,
                 stage2=dynamic_stage2_result,
                 analysis_end_timestamp=int(snapshot_timestamp),
             )
@@ -1358,6 +1360,7 @@ def _resolve_stage23_terminal_result(
         if reference_stage2_result is not None:
             stale_reason = stage3_detector.resolve_reference_box_staleness(
                 frame=frame,
+                stage1=stage1_event,
                 stage2=reference_stage2_result,
                 analysis_end_timestamp=int(snapshot_timestamp),
             )
@@ -1387,6 +1390,7 @@ def _resolve_stage23_terminal_result(
             ):
                 dynamic_stale_reason = stage3_detector.resolve_reference_box_staleness(
                     frame=frame,
+                    stage1=stage1_event,
                     stage2=dynamic_stage2_result,
                     analysis_end_timestamp=int(snapshot_timestamp),
                 )

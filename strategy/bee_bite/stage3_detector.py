@@ -322,11 +322,14 @@ class BeeBiteStage3Detector:
         self,
         *,
         frame: pd.DataFrame,
+        stage1: BeeBiteStage1Result,
         stage2: BeeBiteStage2Result,
         analysis_end_timestamp: int | None = None,
     ) -> str | None:
         if stage2.box_low is None or stage2.box_high is None or stage2.box_end_timestamp is None:
             return None
+        if self._is_box_above_stage1_peak(stage1=stage1, stage2=stage2):
+            return "box_above_stage1_peak"
         prepared = self._prepare_frame(frame=frame)
         if prepared is None:
             return None
@@ -357,6 +360,21 @@ class BeeBiteStage3Detector:
         if outside_close_ratio > self._MAX_OUTSIDE_CLOSE_RATIO:
             return "box_mostly_outside"
         return None
+
+    def _is_box_above_stage1_peak(
+        self,
+        *,
+        stage1: BeeBiteStage1Result,
+        stage2: BeeBiteStage2Result,
+    ) -> bool:
+        if stage1.pump_peak_price is None or stage2.box_low is None:
+            return False
+        peak_price = float(stage1.pump_peak_price)
+        base_price = float(
+            stage1.hold_base_price if stage1.hold_base_price is not None else stage1.pump_base_price or peak_price
+        )
+        tolerance = max((peak_price - base_price) * 0.1, peak_price * 0.0025, self._EPSILON)
+        return float(stage2.box_low) > (peak_price + tolerance)
 
     @staticmethod
     def _resolve_active_lower_liquidity_zone(*, stage2: BeeBiteStage2Result) -> BeeBiteStage2LiquidityZone | None:
