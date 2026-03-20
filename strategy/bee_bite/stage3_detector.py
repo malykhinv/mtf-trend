@@ -90,12 +90,13 @@ class BeeBiteStage3Detector:
 
         lower_zone = self._resolve_active_lower_liquidity_zone(stage2=stage2)
         if lower_zone is None:
+            fallback_timestamp = int(prepared.timestamps[min(box_end_idx, len(prepared.timestamps) - 1)])
             return BeeBiteStage3Result(
                 symbol=symbol,
                 passed=False,
                 reason="no_active_lower_liquidity_zone",
-                analysis_start_timestamp=int(prepared.timestamps[scan_start_idx]),
-                analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
+                analysis_start_timestamp=fallback_timestamp,
+                analysis_end_timestamp=fallback_timestamp,
                 box_low=float(stage2.box_low),
                 box_high=float(stage2.box_high),
                 reference_box_start_timestamp=reference_box_start_timestamp,
