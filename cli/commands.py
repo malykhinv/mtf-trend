@@ -2608,6 +2608,8 @@ def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
             output_path=plot_path,
             window_end_timestamp=stage2_result.analysis_end_timestamp,
             title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} | {stage2_result.reason}",
+            dpi=120,
+            include_volume=False,
         )
         failed_plots_built += 1
 
@@ -2901,6 +2903,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 output_path=plot_path,
                 window_end_timestamp=plot_end_timestamp,
                 title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} | {stage3_result.reason}",
+                dpi=120,
+                include_volume=False,
             )
             failed_plots_built += 1
     else:
@@ -2965,6 +2969,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                             f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
                             f"| step {snapshot.order:04d} | {snapshot.stage3_result.reason}"
                         ),
+                        dpi=100,
+                        include_volume=False,
                     )
                 else:
                     stage2_plotter.plot_result(
@@ -2977,6 +2983,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                             f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
                             f"| step {snapshot.order:04d} | {snapshot.dynamic_stage2_result.reason}"
                         ),
+                        dpi=100,
+                        include_volume=False,
                     )
                 passed_plots_built += 1
         for candidate in _select_failed_plot_payload(
@@ -3012,6 +3020,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                             f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
                             f"| step {snapshot.order:04d} | {snapshot.stage3_result.reason}"
                         ),
+                        dpi=100,
+                        include_volume=False,
                     )
                 else:
                     stage2_plotter.plot_result(
@@ -3024,6 +3034,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
                             f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
                             f"| step {snapshot.order:04d} | {snapshot.dynamic_stage2_result.reason}"
                         ),
+                        dpi=100,
+                        include_volume=False,
                     )
                 failed_plots_built += 1
 
