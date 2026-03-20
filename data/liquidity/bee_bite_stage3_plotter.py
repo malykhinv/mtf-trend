@@ -205,9 +205,9 @@ class BeeBiteStage3Plotter:
 
         lower_zone = stage3_result.active_lower_liquidity_zone
         if lower_zone is not None:
-            lower_zone_end_idx = lower_zone.end_idx
+            lower_zone_end_idx = window_end
             if stage3_result.break_idx is not None:
-                lower_zone_end_idx = min(lower_zone_end_idx, max(lower_zone.start_idx, stage3_result.break_idx - 1))
+                lower_zone_end_idx = max(lower_zone.start_idx, stage3_result.break_idx - 1)
             self._draw_rectangle(
                 axis=price_ax,
                 start_idx=lower_zone.start_idx,

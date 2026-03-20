@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 
 import numpy as np
@@ -149,6 +149,11 @@ class BeeBiteStage3Detector:
                 reference_box_start_timestamp=reference_box_start_timestamp,
                 reference_box_end_timestamp=reference_box_end_timestamp,
             )
+        lower_zone = self._extend_active_lower_zone(
+            prepared=prepared,
+            lower_zone=lower_zone,
+            active_end_idx=scan_end_idx,
+        )
 
         boundary = float(stage2.box_low)
         range_high = float(stage2.box_high)
@@ -580,3 +585,20 @@ class BeeBiteStage3Detector:
         lower_zone: BeeBiteStage2LiquidityZone,
     ) -> bool:
         return high >= float(lower_zone.low) and low <= float(lower_zone.high)
+
+    @staticmethod
+    def _extend_active_lower_zone(
+        *,
+        prepared: _PreparedStage3Frame,
+        lower_zone: BeeBiteStage2LiquidityZone,
+        active_end_idx: int,
+    ) -> BeeBiteStage2LiquidityZone:
+        effective_end_idx = max(int(lower_zone.end_idx), int(active_end_idx))
+        effective_end_idx = min(effective_end_idx, len(prepared.timestamps) - 1)
+        if effective_end_idx == lower_zone.end_idx:
+            return lower_zone
+        return replace(
+            lower_zone,
+            end_idx=effective_end_idx,
+            end_timestamp=int(prepared.timestamps[effective_end_idx]),
+        )

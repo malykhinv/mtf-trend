@@ -940,7 +940,7 @@ class BeeBiteStage2Detector:
             tolerance=tolerance,
             side=side,
         )
-        sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+        effective_end_idx = self._resolve_liquidity_zone_end_idx(
             prepared=prepared,
             segment_end_idx=segment_end_idx,
             last_touch_idx=last_touch_idx,
@@ -948,7 +948,6 @@ class BeeBiteStage2Detector:
             zone_high=zone_high,
             side=side,
         )
-        effective_end_idx = (sweep_idx - 1) if sweep_idx is not None else segment_end_idx
         if effective_end_idx < start_idx:
             return None
         if ((effective_end_idx - start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
@@ -996,7 +995,7 @@ class BeeBiteStage2Detector:
             tolerance=tolerance,
             side="upper",
         )
-        sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+        effective_end_idx = self._resolve_liquidity_zone_end_idx(
             prepared=prepared,
             segment_end_idx=segment_end_idx,
             last_touch_idx=anchor_idx,
@@ -1004,7 +1003,6 @@ class BeeBiteStage2Detector:
             zone_high=zone_high,
             side="upper",
         )
-        effective_end_idx = (sweep_idx - 1) if sweep_idx is not None else segment_end_idx
         if effective_end_idx < start_idx:
             return None
         if ((effective_end_idx - start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
@@ -1057,7 +1055,7 @@ class BeeBiteStage2Detector:
             tolerance=tolerance,
             side="lower",
         )
-        sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+        effective_end_idx = self._resolve_liquidity_zone_end_idx(
             prepared=prepared,
             segment_end_idx=segment_end_idx,
             last_touch_idx=last_touch_idx,
@@ -1065,7 +1063,6 @@ class BeeBiteStage2Detector:
             zone_high=zone_high,
             side="lower",
         )
-        effective_end_idx = (sweep_idx - 1) if sweep_idx is not None else segment_end_idx
         if effective_end_idx < start_idx:
             return None
         if ((effective_end_idx - start_idx) + 1) < self._LIQUIDITY_MIN_BARS:
@@ -1083,6 +1080,32 @@ class BeeBiteStage2Detector:
             high=zone_high,
             touch_count=len(touch_indices),
         )
+
+    def _resolve_liquidity_zone_end_idx(
+        self,
+        *,
+        prepared: _PreparedStage2Frame,
+        segment_end_idx: int,
+        last_touch_idx: int,
+        zone_low: float,
+        zone_high: float,
+        side: str,
+    ) -> int:
+        # For long stage-3 logic, traders keep a lower support zone "alive" until the
+        # balance itself changes. A minor probe under the projected zone floor should
+        # not deactivate that lower liquidity zone inside the same box.
+        if side == "lower":
+            return segment_end_idx
+
+        sweep_idx = self._resolve_liquidity_zone_sweep_idx(
+            prepared=prepared,
+            segment_end_idx=segment_end_idx,
+            last_touch_idx=last_touch_idx,
+            zone_low=zone_low,
+            zone_high=zone_high,
+            side=side,
+        )
+        return (sweep_idx - 1) if sweep_idx is not None else segment_end_idx
 
     def _zones_overlap_enough(
         self,
