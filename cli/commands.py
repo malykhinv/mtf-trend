@@ -1146,6 +1146,7 @@ def _is_stage3_terminal_failure(stage3_result: BeeBiteStage3Result) -> bool:
     return stage3_result.reason in {
         "break_too_deep",
         "close_below_hold",
+        "sweep_missed_lower_zone",
         "under_range_span_too_wide",
     }
 

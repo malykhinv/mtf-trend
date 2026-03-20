@@ -175,6 +175,28 @@ class BeeBiteStage3Detector:
             if break_idx is None:
                 if low >= boundary or low >= break_threshold:
                     continue
+                if not self._does_sweep_touch_lower_zone(
+                    low=low,
+                    high=high,
+                    lower_zone=lower_zone,
+                ):
+                    return BeeBiteStage3Result(
+                        symbol=symbol,
+                        passed=False,
+                        reason="sweep_missed_lower_zone",
+                        analysis_start_timestamp=int(prepared.timestamps[scan_start_idx]),
+                        analysis_end_timestamp=int(prepared.timestamps[scan_end_idx]),
+                        active_lower_liquidity_zone=lower_zone,
+                        break_timestamp=timestamp,
+                        break_idx=idx,
+                        lowest_break_price=low,
+                        box_low=boundary,
+                        box_high=range_high,
+                        hold_price=hold_price,
+                        range_size_pct=range_size_pct,
+                        reference_box_start_timestamp=reference_box_start_timestamp,
+                        reference_box_end_timestamp=reference_box_end_timestamp,
+                    )
                 move_size = max(boundary - low, 0.0)
                 if not is_move_pct_smaller_than_range_pct(
                     move_size=move_size,
@@ -549,3 +571,12 @@ class BeeBiteStage3Detector:
         if matches.size == 0:
             return None
         return int(matches[0])
+
+    @staticmethod
+    def _does_sweep_touch_lower_zone(
+        *,
+        low: float,
+        high: float,
+        lower_zone: BeeBiteStage2LiquidityZone,
+    ) -> bool:
+        return high >= float(lower_zone.low) and low <= float(lower_zone.high)
