@@ -1091,6 +1091,15 @@ def _stage23_can_lock_reference_box(
     return zone_duration_ms >= int(math.ceil(box_duration_ms * 0.5))
 
 
+def _resolve_stage3_lower_zone_end_timestamp(stage3_result: BeeBiteStage3Result) -> int | None:
+    lower_zone = stage3_result.active_lower_liquidity_zone
+    if lower_zone is None:
+        return None
+    if stage3_result.break_timestamp is not None:
+        return max(int(lower_zone.end_timestamp), int(stage3_result.break_timestamp))
+    return int(lower_zone.end_timestamp)
+
+
 def _build_stage23_evolution_snapshots(
     *,
     symbol: str,
@@ -2227,6 +2236,7 @@ def _stage3_result_to_rows(
     stage3_result: BeeBiteStage3Result,
 ) -> list[dict[str, object]]:
     lower_zone = stage3_result.active_lower_liquidity_zone
+    lower_zone_end_timestamp = _resolve_stage3_lower_zone_end_timestamp(stage3_result)
     rows: list[dict[str, object]] = [
         {
             "symbol": symbol,
@@ -2264,13 +2274,20 @@ def _stage3_result_to_rows(
             "range_size_pct": stage3_result.range_size_pct,
             "bars_under_range": stage3_result.bars_under_range,
             "active_lower_zone_start_timestamp": (lower_zone.start_timestamp if lower_zone is not None else None),
-            "active_lower_zone_end_timestamp": (lower_zone.end_timestamp if lower_zone is not None else None),
+            "active_lower_zone_end_timestamp": lower_zone_end_timestamp,
             "active_lower_zone_low": (lower_zone.low if lower_zone is not None else None),
             "active_lower_zone_high": (lower_zone.high if lower_zone is not None else None),
             "active_lower_zone_touch_count": (lower_zone.touch_count if lower_zone is not None else None),
         }
     ]
     if lower_zone is not None:
+        lower_zone_bars = None
+        if lower_zone_end_timestamp is not None:
+            timeframe_ms = timeframe.to_milliseconds()
+            lower_zone_bars = max(
+                int((int(lower_zone_end_timestamp) - int(lower_zone.start_timestamp)) // max(timeframe_ms, 1)) + 1,
+                1,
+            )
         rows.append(
             {
                 "symbol": symbol,
@@ -2279,12 +2296,12 @@ def _stage3_result_to_rows(
                 "row_type": "active_lower_liquidity_zone",
                 "row_order": 1,
                 "start_timestamp": lower_zone.start_timestamp,
-                "end_timestamp": lower_zone.end_timestamp,
+                "end_timestamp": lower_zone_end_timestamp,
                 "last_touch_timestamp": lower_zone.last_touch_timestamp,
                 "low": lower_zone.low,
                 "high": lower_zone.high,
                 "touch_count": lower_zone.touch_count,
-                "bars": (lower_zone.end_idx - lower_zone.start_idx) + 1,
+                "bars": lower_zone_bars,
             }
         )
     return rows
@@ -2302,6 +2319,7 @@ def _stage23_backtest_row(
     stage3_result: BeeBiteStage3Result,
 ) -> dict[str, object]:
     lower_zone = stage3_result.active_lower_liquidity_zone
+    lower_zone_end_timestamp = _resolve_stage3_lower_zone_end_timestamp(stage3_result)
     return {
         "symbol": symbol,
         "timeframe": timeframe.value,
@@ -2344,7 +2362,7 @@ def _stage23_backtest_row(
         "range_size_pct": stage3_result.range_size_pct,
         "bars_under_range": stage3_result.bars_under_range,
         "active_lower_zone_start_timestamp": (lower_zone.start_timestamp if lower_zone is not None else None),
-        "active_lower_zone_end_timestamp": (lower_zone.end_timestamp if lower_zone is not None else None),
+        "active_lower_zone_end_timestamp": lower_zone_end_timestamp,
         "active_lower_zone_last_touch_timestamp": (lower_zone.last_touch_timestamp if lower_zone is not None else None),
         "active_lower_zone_low": (lower_zone.low if lower_zone is not None else None),
         "active_lower_zone_high": (lower_zone.high if lower_zone is not None else None),
