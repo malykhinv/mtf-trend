@@ -63,6 +63,7 @@ class BeeBiteStage3Detector:
     _MIN_LOWER_ZONE_TO_BOX_RATIO = 0.5
     _MAX_ABOVE_CLOSE_RATIO = 0.5
     _MAX_POST_PEAK_EXPANSION_RATIO = 0.2
+    _MAX_BOX_ABOVE_STAGE1_PEAK_RATIO = 0.35
 
     def __init__(self) -> None:
         self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage3Frame | None] = {}
@@ -346,6 +347,8 @@ class BeeBiteStage3Detector:
         box_low = float(stage2.box_low)
         box_high = float(stage2.box_high)
         box_height = max(box_high - box_low, self._EPSILON)
+        if self._is_box_mostly_above_stage1_peak(stage1=stage1, stage2=stage2):
+            return "box_mostly_above_stage1_peak"
         if self._is_regime_exhausted_above_stage1_peak(
             prepared=prepared,
             stage1=stage1,
@@ -384,6 +387,23 @@ class BeeBiteStage3Detector:
         )
         tolerance = max((peak_price - base_price) * 0.1, peak_price * 0.0025, self._EPSILON)
         return float(stage2.box_low) > (peak_price + tolerance)
+
+    def _is_box_mostly_above_stage1_peak(
+        self,
+        *,
+        stage1: BeeBiteStage1Result,
+        stage2: BeeBiteStage2Result,
+    ) -> bool:
+        if stage1.pump_peak_price is None or stage2.box_low is None or stage2.box_high is None:
+            return False
+        box_low = float(stage2.box_low)
+        box_high = float(stage2.box_high)
+        box_height = max(box_high - box_low, self._EPSILON)
+        peak_price = float(stage1.pump_peak_price)
+
+        above_peak_height = max(box_high - max(box_low, peak_price), 0.0)
+        above_peak_ratio = above_peak_height / box_height
+        return above_peak_ratio > self._MAX_BOX_ABOVE_STAGE1_PEAK_RATIO
 
     def _is_regime_exhausted_above_stage1_peak(
         self,
