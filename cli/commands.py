@@ -1101,6 +1101,33 @@ def _resolve_stage3_lower_zone_end_timestamp(stage3_result: BeeBiteStage3Result)
     return int(lower_zone.end_timestamp)
 
 
+def _build_reference_box_stale_result(
+    *,
+    symbol: str,
+    stage2_result: BeeBiteStage2Result,
+    snapshot_timestamp: int,
+    reason: str,
+) -> BeeBiteStage3Result:
+    reference_box_start_timestamp = (
+        int(stage2_result.box_start_timestamp) if stage2_result.box_start_timestamp is not None else None
+    )
+    reference_box_end_timestamp = (
+        int(stage2_result.box_end_timestamp) if stage2_result.box_end_timestamp is not None else None
+    )
+    return BeeBiteStage3Result(
+        symbol=symbol,
+        passed=False,
+        reason=reason,
+        analysis_start_timestamp=reference_box_end_timestamp,
+        analysis_end_timestamp=int(snapshot_timestamp),
+        active_lower_liquidity_zone=None,
+        box_low=float(stage2_result.box_low) if stage2_result.box_low is not None else None,
+        box_high=float(stage2_result.box_high) if stage2_result.box_high is not None else None,
+        reference_box_start_timestamp=reference_box_start_timestamp,
+        reference_box_end_timestamp=reference_box_end_timestamp,
+    )
+
+
 def _is_stage3_terminal_failure(stage3_result: BeeBiteStage3Result) -> bool:
     if stage3_result.passed:
         return False
@@ -1212,6 +1239,22 @@ def _build_stage23_evolution_snapshots(
         stage2_results_by_timestamp[int(initial_stage2_result.analysis_end_timestamp)] = initial_stage2_result
 
     for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
+        stale_stage3_result: BeeBiteStage3Result | None = None
+        if reference_stage2_result is not None:
+            stale_reason = stage3_detector.resolve_reference_box_staleness(
+                frame=frame,
+                stage2=reference_stage2_result,
+                analysis_end_timestamp=int(snapshot_timestamp),
+            )
+            if stale_reason is not None:
+                stale_stage3_result = _build_reference_box_stale_result(
+                    symbol=symbol,
+                    stage2_result=reference_stage2_result,
+                    snapshot_timestamp=int(snapshot_timestamp),
+                    reason=stale_reason,
+                )
+                reference_stage2_result = None
+
         dynamic_stage2_result = _get_cached_stage2_result(
             cache=stage2_results_by_timestamp,
             symbol=symbol,
@@ -1225,10 +1268,23 @@ def _build_stage23_evolution_snapshots(
             stage1_event=stage1_event,
             stage2_result=dynamic_stage2_result,
         ):
-            reference_stage2_result = dynamic_stage2_result
+            dynamic_stale_reason = stage3_detector.resolve_reference_box_staleness(
+                frame=frame,
+                stage2=dynamic_stage2_result,
+                analysis_end_timestamp=int(snapshot_timestamp),
+            )
+            if dynamic_stale_reason is None:
+                reference_stage2_result = dynamic_stage2_result
+            else:
+                stale_stage3_result = _build_reference_box_stale_result(
+                    symbol=symbol,
+                    stage2_result=dynamic_stage2_result,
+                    snapshot_timestamp=int(snapshot_timestamp),
+                    reason=dynamic_stale_reason,
+                )
 
         if reference_stage2_result is None:
-            stage3_result = BeeBiteStage3Result(
+            stage3_result = stale_stage3_result or BeeBiteStage3Result(
                 symbol=symbol,
                 passed=False,
                 reason="stage2_reference_not_locked",
@@ -1298,6 +1354,23 @@ def _resolve_stage23_terminal_result(
         stage2_results_by_timestamp[int(initial_stage2_result.analysis_end_timestamp)] = initial_stage2_result
 
     for snapshot_timestamp in snapshot_timestamps:
+        stale_stage3_result: BeeBiteStage3Result | None = None
+        if reference_stage2_result is not None:
+            stale_reason = stage3_detector.resolve_reference_box_staleness(
+                frame=frame,
+                stage2=reference_stage2_result,
+                analysis_end_timestamp=int(snapshot_timestamp),
+            )
+            if stale_reason is not None:
+                stale_stage3_result = _build_reference_box_stale_result(
+                    symbol=symbol,
+                    stage2_result=reference_stage2_result,
+                    snapshot_timestamp=int(snapshot_timestamp),
+                    reason=stale_reason,
+                )
+                last_actionable_stage3_result = stale_stage3_result
+                reference_stage2_result = None
+
         if reference_stage2_result is None:
             dynamic_stage2_result = _get_cached_stage2_result(
                 cache=stage2_results_by_timestamp,
@@ -1312,9 +1385,25 @@ def _resolve_stage23_terminal_result(
                 stage1_event=stage1_event,
                 stage2_result=dynamic_stage2_result,
             ):
-                reference_stage2_result = dynamic_stage2_result
+                dynamic_stale_reason = stage3_detector.resolve_reference_box_staleness(
+                    frame=frame,
+                    stage2=dynamic_stage2_result,
+                    analysis_end_timestamp=int(snapshot_timestamp),
+                )
+                if dynamic_stale_reason is None:
+                    reference_stage2_result = dynamic_stage2_result
+                else:
+                    stale_stage3_result = _build_reference_box_stale_result(
+                        symbol=symbol,
+                        stage2_result=dynamic_stage2_result,
+                        snapshot_timestamp=int(snapshot_timestamp),
+                        reason=dynamic_stale_reason,
+                    )
+                    last_actionable_stage3_result = stale_stage3_result
             else:
                 continue
+        if reference_stage2_result is None:
+            continue
 
         stage3_result = stage3_detector.detect(
             symbol=symbol,

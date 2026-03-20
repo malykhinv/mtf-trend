@@ -61,6 +61,7 @@ class BeeBiteStage3Detector:
 
     _EPSILON = 1e-12
     _MIN_LOWER_ZONE_TO_BOX_RATIO = 0.5
+    _MAX_OUTSIDE_CLOSE_RATIO = 0.5
 
     def __init__(self) -> None:
         self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage3Frame | None] = {}
@@ -316,6 +317,46 @@ class BeeBiteStage3Detector:
             reference_box_start_timestamp=reference_box_start_timestamp,
             reference_box_end_timestamp=reference_box_end_timestamp,
         )
+
+    def resolve_reference_box_staleness(
+        self,
+        *,
+        frame: pd.DataFrame,
+        stage2: BeeBiteStage2Result,
+        analysis_end_timestamp: int | None = None,
+    ) -> str | None:
+        if stage2.box_low is None or stage2.box_high is None or stage2.box_end_timestamp is None:
+            return None
+        prepared = self._prepare_frame(frame=frame)
+        if prepared is None:
+            return None
+        monitor_start_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(stage2.box_end_timestamp))
+        if monitor_start_idx is None:
+            return None
+        monitor_end_idx = len(prepared.timestamps) - 1
+        if analysis_end_timestamp is not None:
+            resolved_end_idx = self._resolve_index_by_timestamp(prepared.timestamps, int(analysis_end_timestamp))
+            if resolved_end_idx is not None:
+                monitor_end_idx = min(monitor_end_idx, resolved_end_idx)
+        if monitor_end_idx < monitor_start_idx:
+            return None
+
+        box_low = float(stage2.box_low)
+        box_high = float(stage2.box_high)
+        box_height = max(box_high - box_low, self._EPSILON)
+        highs_slice = prepared.highs[monitor_start_idx : monitor_end_idx + 1]
+        closes_slice = prepared.closes[monitor_start_idx : monitor_end_idx + 1]
+        if highs_slice.size == 0 or closes_slice.size == 0:
+            return None
+
+        if float(np.max(highs_slice)) > (box_high + box_height + self._EPSILON):
+            return "box_extended_above_range"
+
+        inside_mask = (closes_slice >= (box_low - self._EPSILON)) & (closes_slice <= (box_high + self._EPSILON))
+        outside_close_ratio = 1.0 - (float(np.count_nonzero(inside_mask)) / float(closes_slice.size))
+        if outside_close_ratio > self._MAX_OUTSIDE_CLOSE_RATIO:
+            return "box_mostly_outside"
+        return None
 
     @staticmethod
     def _resolve_active_lower_liquidity_zone(*, stage2: BeeBiteStage2Result) -> BeeBiteStage2LiquidityZone | None:
