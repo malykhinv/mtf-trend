@@ -3115,6 +3115,10 @@ def _build_markdown_table(headers: list[str], rows: list[list[object]]) -> str:
     return "\n".join(lines)
 
 
+def _resolve_stage4_float(row: dict[str, object], key: str) -> float:
+    return float(row.get(key, 0.0) or 0.0)
+
+
 def _resolve_stage4_month_label(timestamp_ms: object) -> str | None:
     if timestamp_ms is None:
         return None
@@ -3234,8 +3238,18 @@ def _render_stage4_postmortem_report(
 
     monthly_best_rows: list[list[object]] = []
     monthly_year_best_rows: list[list[object]] = []
+    monthly_drift_rows: list[list[object]] = []
+    monthly_match_count = 0
+    drift_rr_values: list[float] = []
+    drift_pnl_values: list[float] = []
     for month_label, month_summary_rows in monthly_summary_map.items():
         month_best = _select_best_stage4_summary_row(month_summary_rows)
+        year_best_month_row = None
+        if best_param_key is not None:
+            for row in month_summary_rows:
+                if _resolve_stage4_param_key(row) == best_param_key:
+                    year_best_month_row = row
+                    break
         if month_best is not None:
             monthly_best_rows.append(
                 [
@@ -3249,12 +3263,28 @@ def _render_stage4_postmortem_report(
                     _format_stage4_metric(month_best.get("total_pnl_pct"), pct=True),
                 ]
             )
-        year_best_month_row = None
-        if best_param_key is not None:
-            for row in month_summary_rows:
-                if _resolve_stage4_param_key(row) == best_param_key:
-                    year_best_month_row = row
-                    break
+        if month_best is not None and year_best_month_row is not None:
+            matches_year_best = _resolve_stage4_param_key(month_best) == best_param_key
+            if matches_year_best:
+                monthly_match_count += 1
+            delta_rr = _resolve_stage4_float(month_best, "total_realized_rr") - _resolve_stage4_float(year_best_month_row, "total_realized_rr")
+            delta_pnl = _resolve_stage4_float(month_best, "total_pnl_pct") - _resolve_stage4_float(year_best_month_row, "total_pnl_pct")
+            drift_rr_values.append(delta_rr)
+            drift_pnl_values.append(delta_pnl)
+            monthly_drift_rows.append(
+                [
+                    month_label,
+                    "yes" if matches_year_best else "no",
+                    _format_stage4_param_triplet(month_best),
+                    int(month_best.get("eligible_trades", 0) or 0),
+                    _format_stage4_metric(month_best.get("total_realized_rr")),
+                    _format_stage4_metric(year_best_month_row.get("total_realized_rr")),
+                    f"{delta_rr:+.2f}",
+                    _format_stage4_metric(month_best.get("total_pnl_pct"), pct=True),
+                    _format_stage4_metric(year_best_month_row.get("total_pnl_pct"), pct=True),
+                    f"{delta_pnl:+.2f}%",
+                ]
+            )
         if year_best_month_row is not None:
             monthly_year_best_rows.append(
                 [
@@ -3288,6 +3318,100 @@ def _render_stage4_postmortem_report(
             monthly_year_best_rows,
         )
     )
+
+    lines.extend(["", "## Best Yearly Vs Best Monthly Drift", ""])
+    if monthly_drift_rows:
+        total_months = len(monthly_drift_rows)
+        match_rate = (monthly_match_count / total_months) * 100.0 if total_months else 0.0
+        avg_drift_rr = sum(drift_rr_values) / len(drift_rr_values) if drift_rr_values else 0.0
+        avg_drift_pnl = sum(drift_pnl_values) / len(drift_pnl_values) if drift_pnl_values else 0.0
+        lines.append(f"- Year-best params: `{_format_stage4_param_triplet(best_summary_row)}`")
+        lines.append(f"- Months analysed: `{total_months}`")
+        lines.append(f"- Months where monthly best == yearly best: `{monthly_match_count}/{total_months}` ({match_rate:.1f}%)")
+        lines.append(f"- Average monthly RR drift vs yearly best: `{avg_drift_rr:+.2f}`")
+        lines.append(f"- Average monthly PnL drift vs yearly best: `{avg_drift_pnl:+.2f}%`")
+        lines.append("")
+        lines.append(
+            _build_markdown_table(
+                ["Month", "Match", "Monthly Best Params", "Trades", "Best RR", "Year RR", "dRR", "Best PnL", "Year PnL", "dPnL"],
+                monthly_drift_rows,
+            )
+        )
+    else:
+        lines.append("_No monthly drift data available._")
+
+    lines.extend(["", "## Stability: Best And Worst Months", ""])
+    if monthly_year_best_rows:
+        stability_rows = []
+        for row in monthly_year_best_rows:
+            stability_rows.append(
+                {
+                    "month": str(row[0]),
+                    "trades": int(row[1]),
+                    "wr": str(row[2]),
+                    "total_rr": float(str(row[3])),
+                    "pf_rr": str(row[4]),
+                    "total_pnl": float(str(row[5]).rstrip("%")),
+                    "tp3": int(row[6]),
+                    "stop": int(row[7]),
+                    "be": int(row[8]),
+                    "open": int(row[9]),
+                }
+            )
+        best_months = sorted(
+            stability_rows,
+            key=lambda row: (row["total_rr"], row["total_pnl"], row["trades"]),
+            reverse=True,
+        )[:5]
+        worst_months = sorted(
+            stability_rows,
+            key=lambda row: (row["total_rr"], row["total_pnl"], -row["trades"]),
+        )[:5]
+        lines.append("### Best Months")
+        lines.append("")
+        lines.append(
+            _build_markdown_table(
+                ["Month", "Trades", "WR", "Total RR", "Total PnL", "TP3", "Stop", "BE", "Open"],
+                [
+                    [
+                        row["month"],
+                        row["trades"],
+                        row["wr"],
+                        f"{row['total_rr']:.2f}",
+                        f"{row['total_pnl']:.2f}%",
+                        row["tp3"],
+                        row["stop"],
+                        row["be"],
+                        row["open"],
+                    ]
+                    for row in best_months
+                ],
+            )
+        )
+        lines.append("")
+        lines.append("### Worst Months")
+        lines.append("")
+        lines.append(
+            _build_markdown_table(
+                ["Month", "Trades", "WR", "Total RR", "Total PnL", "TP3", "Stop", "BE", "Open"],
+                [
+                    [
+                        row["month"],
+                        row["trades"],
+                        row["wr"],
+                        f"{row['total_rr']:.2f}",
+                        f"{row['total_pnl']:.2f}%",
+                        row["tp3"],
+                        row["stop"],
+                        row["be"],
+                        row["open"],
+                    ]
+                    for row in worst_months
+                ],
+            )
+        )
+    else:
+        lines.append("_No monthly stability data available._")
 
     lines.extend(["", "## Notes", ""])
     lines.append("- `Trades` means eligible stage-4 entries after the RR filter for that parameter set.")
