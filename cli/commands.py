@@ -3030,6 +3030,66 @@ def _resolve_stage4_profit_factor_sort_value(value: object) -> float:
     return numeric
 
 
+def _normalize_stage4_metric(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    low = min(values)
+    high = max(values)
+    if math.isclose(high, low, rel_tol=1e-12, abs_tol=1e-12):
+        return [1.0 for _ in values]
+    return [(value - low) / (high - low) for value in values]
+
+
+def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
+    if not eligible_rows:
+        for row in summary_rows:
+            row["score_total_realized_rr"] = 0.0
+            row["score_profit_factor_rr"] = 0.0
+            row["score_win_rate"] = 0.0
+            row["score_total_pnl_pct"] = 0.0
+            row["stage4_score"] = 0.0
+        return summary_rows
+
+    rr_values = [float(row.get("total_realized_rr", 0.0) or 0.0) for row in eligible_rows]
+    pf_values = [_resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")) for row in eligible_rows]
+    wr_values = [float(row.get("win_rate", 0.0) or 0.0) for row in eligible_rows]
+    pnl_values = [float(row.get("total_pnl_pct", 0.0) or 0.0) for row in eligible_rows]
+
+    normalized_rr = _normalize_stage4_metric(rr_values)
+    normalized_pf = _normalize_stage4_metric(pf_values)
+    normalized_wr = _normalize_stage4_metric(wr_values)
+    normalized_pnl = _normalize_stage4_metric(pnl_values)
+
+    for row, rr_score, pf_score, wr_score, pnl_score in zip(
+        eligible_rows,
+        normalized_rr,
+        normalized_pf,
+        normalized_wr,
+        normalized_pnl,
+        strict=True,
+    ):
+        row["score_total_realized_rr"] = rr_score
+        row["score_profit_factor_rr"] = pf_score
+        row["score_win_rate"] = wr_score
+        row["score_total_pnl_pct"] = pnl_score
+        row["stage4_score"] = (
+            (rr_score * 0.45)
+            + (pf_score * 0.30)
+            + (wr_score * 0.15)
+            + (pnl_score * 0.10)
+        )
+
+    for row in summary_rows:
+        if row not in eligible_rows:
+            row["score_total_realized_rr"] = 0.0
+            row["score_profit_factor_rr"] = 0.0
+            row["score_win_rate"] = 0.0
+            row["score_total_pnl_pct"] = 0.0
+            row["stage4_score"] = 0.0
+    return summary_rows
+
+
 def _select_best_stage4_summary_row(summary_rows: list[dict[str, object]]) -> dict[str, object] | None:
     eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
     if not eligible_rows:
@@ -3037,11 +3097,11 @@ def _select_best_stage4_summary_row(summary_rows: list[dict[str, object]]) -> di
     return max(
         eligible_rows,
         key=lambda row: (
-            float(row.get("total_pnl_pct", 0.0) or 0.0),
+            float(row.get("stage4_score", 0.0) or 0.0),
             float(row.get("total_realized_rr", 0.0) or 0.0),
             _resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")),
+            float(row.get("total_pnl_pct", 0.0) or 0.0),
             float(row.get("win_rate", 0.0) or 0.0),
-            float(row.get("eligible_trades", 0.0) or 0.0),
             -float(row.get("minimal_rr", 0.0) or 0.0),
         ),
     )
@@ -3807,6 +3867,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
         param_grid=param_grid,
         rows=rows,
     )
+    summary_rows = _score_stage4_summary_rows(summary_rows)
     best_summary_row = _select_best_stage4_summary_row(summary_rows)
     best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
     for summary_row in summary_rows:
@@ -3867,7 +3928,8 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
             f"m={float(best_summary_row['tp3_multiplier']):.1f},"
             f"w={float(best_summary_row['tp1_share']):.2f}/"
             f"{float(best_summary_row['tp2_share']):.2f}/"
-            f"{float(best_summary_row['tp3_share']):.2f}"
+            f"{float(best_summary_row['tp3_share']):.2f},"
+            f"score={float(best_summary_row['stage4_score']):.4f}"
             if best_summary_row is not None else "n/a"
         ),
         output_path,
