@@ -3011,6 +3011,42 @@ def _build_stage4_postmortem_summary_rows(
     return summary_rows
 
 
+def _resolve_stage4_param_key(row: dict[str, object]) -> tuple[float, float, float, float, float]:
+    return (
+        float(row["minimal_rr"]),
+        float(row["tp3_multiplier"]),
+        float(row["tp1_share"]),
+        float(row["tp2_share"]),
+        float(row["tp3_share"]),
+    )
+
+
+def _resolve_stage4_profit_factor_sort_value(value: object) -> float:
+    if value is None:
+        return 0.0
+    numeric = float(value)
+    if math.isinf(numeric):
+        return 1e18
+    return numeric
+
+
+def _select_best_stage4_summary_row(summary_rows: list[dict[str, object]]) -> dict[str, object] | None:
+    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
+    if not eligible_rows:
+        return None
+    return max(
+        eligible_rows,
+        key=lambda row: (
+            float(row.get("total_pnl_pct", 0.0) or 0.0),
+            float(row.get("total_realized_rr", 0.0) or 0.0),
+            _resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")),
+            float(row.get("win_rate", 0.0) or 0.0),
+            float(row.get("eligible_trades", 0.0) or 0.0),
+            -float(row.get("minimal_rr", 0.0) or 0.0),
+        ),
+    )
+
+
 def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("review-stage2", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("review-stage2: cache_dir=%s", config.backtest.cache_dir)
@@ -3650,6 +3686,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     stage2_timestamp_cache: dict[str, dict[int, BeeBiteStage2Result]] = {}
     stage4_plotter = BeeBiteStage4Plotter()
     rows: list[dict[str, object]] = []
+    plot_payloads: list[dict[str, object]] = []
     stage3_passed_count = 0
     plots_built = 0
     empty_frame_symbols: list[str] = []
@@ -3743,34 +3780,26 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
             )
             rows.extend(trade_rows)
             for trade_row in trade_rows:
-                if not bool(trade_row.get("eligible")):
-                    continue
-                plot_path = plots_dir / (
-                    f"{symbol.replace('/', '_')}_stage4_regime_{regime.regime_index:02d}"
-                    f"_rr_{float(trade_row['minimal_rr']):.2f}"
-                    f"_m_{float(trade_row['tp3_multiplier']):.1f}"
-                    f"_w_{int(round(float(trade_row['tp1_share']) * 100.0))}"
-                    f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
-                    f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
+                plot_payloads.append(
+                    {
+                        "symbol": symbol,
+                        "regime_index": regime.regime_index,
+                        "frame": frame,
+                        "stage1_event": stage1_event,
+                        "reference_stage2_result": reference_stage2_result,
+                        "stage3_result": stage3_result,
+                        "trade_row": trade_row,
+                    }
                 )
-                stage4_plotter.plot_result(
-                    frame=frame,
-                    stage1_event=stage1_event,
-                    reference_stage2_result=reference_stage2_result,
-                    stage3_result=stage3_result,
-                    trade_row=trade_row,
-                    output_path=plot_path,
-                )
-                plots_built += 1
 
         if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
             logger.info(
-                "postmortem-stage4: progress=%s/%s stage3_passed=%s rows=%s plots=%s",
+                "postmortem-stage4: progress=%s/%s stage3_passed=%s rows=%s queued_plots=%s",
                 index,
                 len(symbols),
                 stage3_passed_count,
                 len(rows),
-                plots_built,
+                len(plot_payloads),
             )
 
     summary_rows = _build_stage4_postmortem_summary_rows(
@@ -3778,6 +3807,40 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
         param_grid=param_grid,
         rows=rows,
     )
+    best_summary_row = _select_best_stage4_summary_row(summary_rows)
+    best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
+    for summary_row in summary_rows:
+        summary_row["is_best"] = bool(best_param_key is not None and _resolve_stage4_param_key(summary_row) == best_param_key)
+
+    selected_plot_payloads = [
+        payload
+        for payload in plot_payloads
+        if bool(payload["trade_row"].get("eligible"))
+        and best_param_key is not None
+        and _resolve_stage4_param_key(cast(dict[str, object], payload["trade_row"])) == best_param_key
+    ]
+    for payload in selected_plot_payloads:
+        trade_row = cast(dict[str, object], payload["trade_row"])
+        symbol = cast(str, payload["symbol"])
+        regime_index = int(payload["regime_index"])
+        plot_path = plots_dir / (
+            f"{symbol.replace('/', '_')}_stage4_regime_{regime_index:02d}"
+            f"_rr_{float(trade_row['minimal_rr']):.2f}"
+            f"_m_{float(trade_row['tp3_multiplier']):.1f}"
+            f"_w_{int(round(float(trade_row['tp1_share']) * 100.0))}"
+            f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
+            f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
+        )
+        stage4_plotter.plot_result(
+            frame=cast(pd.DataFrame, payload["frame"]),
+            stage1_event=cast(BeeBiteStage1Result, payload["stage1_event"]),
+            reference_stage2_result=cast(BeeBiteStage2Result, payload["reference_stage2_result"]),
+            stage3_result=cast(BeeBiteStage3Result, payload["stage3_result"]),
+            trade_row=trade_row,
+            output_path=plot_path,
+        )
+        plots_built += 1
+
     results_frame = pd.DataFrame([*summary_rows, *rows])
     if not results_frame.empty:
         sort_columns = [column for column in ("row_type", "row_order", "symbol", "regime_index") if column in results_frame.columns]
@@ -3793,12 +3856,20 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     if empty_frame_symbols:
         logger.warning("postmortem-stage4: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
     logger.info(
-        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid_size=%s csv=%s overview=%s",
+        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid_size=%s best=%s csv=%s overview=%s",
         len(symbols),
         stage3_passed_count,
         len(rows),
         plots_built,
         len(param_grid),
+        (
+            f"rr={float(best_summary_row['minimal_rr']):.2f},"
+            f"m={float(best_summary_row['tp3_multiplier']):.1f},"
+            f"w={float(best_summary_row['tp1_share']):.2f}/"
+            f"{float(best_summary_row['tp2_share']):.2f}/"
+            f"{float(best_summary_row['tp3_share']):.2f}"
+            if best_summary_row is not None else "n/a"
+        ),
         output_path,
         overview_path,
     )
