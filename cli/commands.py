@@ -3119,6 +3119,101 @@ def _resolve_stage4_float(row: dict[str, object], key: str) -> float:
     return float(row.get(key, 0.0) or 0.0)
 
 
+def _build_stage4_stability_heatmap(summary_rows: list[dict[str, object]]) -> str:
+    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
+    if not eligible_rows:
+        return "_No eligible rows._"
+
+    rr_values = sorted({float(row.get("minimal_rr", 0.0) or 0.0) for row in summary_rows})
+    multiplier_values = sorted({float(row.get("tp3_multiplier", 0.0) or 0.0) for row in summary_rows})
+    pair_map: dict[tuple[float, float], list[dict[str, object]]] = {}
+    for row in summary_rows:
+        key = (
+            float(row.get("minimal_rr", 0.0) or 0.0),
+            float(row.get("tp3_multiplier", 0.0) or 0.0),
+        )
+        pair_map.setdefault(key, []).append(row)
+
+    headers = ["RR \\ M"] + [f"{value:.1f}" for value in multiplier_values]
+    table_rows: list[list[object]] = []
+    for rr_value in rr_values:
+        row_cells: list[object] = [f"{rr_value:.2f}"]
+        for multiplier in multiplier_values:
+            pair_rows = pair_map.get((rr_value, multiplier), [])
+            if not pair_rows:
+                row_cells.append("n/a")
+                continue
+            eligible_pair_rows = [row for row in pair_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
+            profiles_total = len(pair_rows)
+            profiles_ok = len(eligible_pair_rows)
+            if not eligible_pair_rows:
+                row_cells.append(f"0/{profiles_total}")
+                continue
+            avg_score = sum(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows) / len(eligible_pair_rows)
+            best_score = max(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows)
+            row_cells.append(f"a{avg_score:.2f}/b{best_score:.2f}; {profiles_ok}/{profiles_total}")
+        table_rows.append(row_cells)
+    return _build_markdown_table(headers, table_rows)
+
+
+def _build_stage4_stability_pairs_table(summary_rows: list[dict[str, object]]) -> str:
+    if not summary_rows:
+        return "_No eligible rows._"
+    pair_map: dict[tuple[float, float], list[dict[str, object]]] = {}
+    for row in summary_rows:
+        key = (
+            float(row.get("minimal_rr", 0.0) or 0.0),
+            float(row.get("tp3_multiplier", 0.0) or 0.0),
+        )
+        pair_map.setdefault(key, []).append(row)
+
+    aggregate_rows: list[list[object]] = []
+    for (rr_value, multiplier), pair_rows in pair_map.items():
+        eligible_pair_rows = [row for row in pair_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
+        profiles_total = len(pair_rows)
+        profiles_ok = len(eligible_pair_rows)
+        if not eligible_pair_rows:
+            avg_score = 0.0
+            best_score = 0.0
+            avg_total_rr = 0.0
+        else:
+            avg_score = sum(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows) / len(eligible_pair_rows)
+            best_score = max(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows)
+            avg_total_rr = sum(float(row.get("total_realized_rr", 0.0) or 0.0) for row in eligible_pair_rows) / len(eligible_pair_rows)
+        aggregate_rows.append(
+            [
+                rr_value,
+                multiplier,
+                profiles_ok,
+                profiles_total,
+                avg_score,
+                best_score,
+                avg_total_rr,
+            ]
+        )
+
+    top_rows = sorted(
+        aggregate_rows,
+        key=lambda row: (row[4], row[2], row[5], row[6]),
+        reverse=True,
+    )[:8]
+    return _build_markdown_table(
+        ["RR", "M", "Eligible Profiles", "All Profiles", "Avg Score", "Best Score", "Avg Total RR"],
+        [
+            [
+                f"{row[0]:.2f}",
+                f"{row[1]:.1f}",
+                int(row[2]),
+                int(row[3]),
+                f"{row[4]:.3f}",
+                f"{row[5]:.3f}",
+                f"{row[6]:.2f}",
+            ]
+            for row in top_rows
+        ],
+    )
+
+
 def _resolve_stage4_month_label(timestamp_ms: object) -> str | None:
     if timestamp_ms is None:
         return None
@@ -3235,6 +3330,16 @@ def _render_stage4_postmortem_report(
             ],
         )
     )
+
+    lines.extend(["", "## Parameter Stability Heatmap", ""])
+    lines.append("- Cell format: `aAVG/bBEST; eligible_profiles/all_profiles`.")
+    lines.append("- Higher `aAVG` means the whole `RR x multiplier` slice is more stable across TP-share profiles.")
+    lines.append("- Large gap between `aAVG` and `bBEST` usually means a narrow peak rather than robust behavior.")
+    lines.append("")
+    lines.append(_build_stage4_stability_heatmap(summary_rows))
+
+    lines.extend(["", "## Most Stable RR x Multiplier Pairs", ""])
+    lines.append(_build_stage4_stability_pairs_table(summary_rows))
 
     monthly_best_rows: list[list[object]] = []
     monthly_year_best_rows: list[list[object]] = []
