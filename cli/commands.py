@@ -2682,7 +2682,35 @@ def _resolve_stage4_trade_outcome(
     for column in prepared.columns:
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
     prepared = prepared.dropna(subset=["high", "low", "close"]).reset_index(drop=True)
-    if prepared.empty:
+    return _resolve_stage4_trade_outcome_prepared(
+        prepared=prepared,
+        entry_idx=entry_idx,
+        stop_price=stop_price,
+        entry_price=entry_price,
+        tp1_price=tp1_price,
+        tp2_price=tp2_price,
+        tp3_price=tp3_price,
+        tp1_share=tp1_share,
+        tp2_share=tp2_share,
+        tp3_share=tp3_share,
+    )
+
+
+def _resolve_stage4_trade_outcome_prepared(
+    *,
+    prepared: pd.DataFrame,
+    entry_idx: int,
+    stop_price: float,
+    entry_price: float,
+    tp1_price: float,
+    tp2_price: float,
+    tp3_price: float,
+    tp1_share: float,
+    tp2_share: float,
+    tp3_share: float,
+) -> dict[str, object]:
+    required_columns = {"high", "low", "close"}
+    if prepared.empty or not required_columns.issubset(prepared.columns):
         return {
             "outcome": "frame_invalid",
             "exit_idx": None,
@@ -2828,13 +2856,13 @@ def _build_stage4_postmortem_rows(
     ):
         return []
 
-    required_columns = {"timestamp", "close", "high"}
+    required_columns = {"timestamp", "close", "high", "low"}
     if frame.empty or not required_columns.issubset(frame.columns):
         return []
-    prepared = frame.loc[:, ["timestamp", "close", "high"]].copy()
+    prepared = frame.loc[:, ["timestamp", "close", "high", "low"]].copy()
     for column in prepared.columns:
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp", "close", "high"]).reset_index(drop=True)
+    prepared = prepared.dropna(subset=["timestamp", "close", "high", "low"]).reset_index(drop=True)
     if prepared.empty or stage3_result.reclaim_idx >= len(prepared):
         return []
 
@@ -2854,6 +2882,8 @@ def _build_stage4_postmortem_rows(
         key=lambda zone: zone.low,
     )
     risk = entry_price - stop_price
+    trade_frame = prepared.loc[:, ["high", "low", "close"]].copy()
+    trade_outcome_cache: dict[tuple[float, float, float, float], dict[str, object]] = {}
 
     rows: list[dict[str, object]] = []
     for row_order, params in enumerate(param_grid, start=1):
@@ -2893,19 +2923,30 @@ def _build_stage4_postmortem_rows(
         exit_stop_price = stop_price
         if not target_stack_valid:
             outcome = "invalid_target_stack"
-        if eligible:
-            trade_outcome = _resolve_stage4_trade_outcome(
-                frame=frame,
-                entry_idx=entry_idx,
-                stop_price=stop_price,
-                entry_price=entry_price,
-                tp1_price=tp1_price,
-                tp2_price=tp2_price,
-                tp3_price=tp3_price,
-                tp1_share=float(params.tp1_share),
-                tp2_share=float(params.tp2_share),
-                tp3_share=float(params.tp3_share),
-            )
+        param_cache_key = (
+            float(params.tp3_multiplier),
+            float(params.tp1_share),
+            float(params.tp2_share),
+            float(params.tp3_share),
+        )
+        trade_outcome: dict[str, object] | None = None
+        if target_stack_valid and rr_value is not None:
+            trade_outcome = trade_outcome_cache.get(param_cache_key)
+            if trade_outcome is None:
+                trade_outcome = _resolve_stage4_trade_outcome_prepared(
+                    prepared=trade_frame,
+                    entry_idx=entry_idx,
+                    stop_price=stop_price,
+                    entry_price=entry_price,
+                    tp1_price=tp1_price,
+                    tp2_price=tp2_price,
+                    tp3_price=tp3_price,
+                    tp1_share=float(params.tp1_share),
+                    tp2_share=float(params.tp2_share),
+                    tp3_share=float(params.tp3_share),
+                )
+                trade_outcome_cache[param_cache_key] = trade_outcome
+        if eligible and trade_outcome is not None:
             outcome = str(trade_outcome["outcome"])
             exit_idx = cast(int | None, trade_outcome["exit_idx"])
             exit_price = cast(float | None, trade_outcome["exit_price"])
