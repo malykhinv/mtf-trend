@@ -3156,9 +3156,9 @@ def _build_stage4_stability_heatmap(summary_rows: list[dict[str, object]]) -> st
     return _build_markdown_table(headers, table_rows)
 
 
-def _build_stage4_stability_pairs_table(summary_rows: list[dict[str, object]]) -> str:
+def _collect_stage4_stability_pairs(summary_rows: list[dict[str, object]]) -> list[dict[str, float]]:
     if not summary_rows:
-        return "_No eligible rows._"
+        return []
     pair_map: dict[tuple[float, float], list[dict[str, object]]] = {}
     for row in summary_rows:
         key = (
@@ -3181,37 +3181,63 @@ def _build_stage4_stability_pairs_table(summary_rows: list[dict[str, object]]) -
             best_score = max(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows)
             avg_total_rr = sum(float(row.get("total_realized_rr", 0.0) or 0.0) for row in eligible_pair_rows) / len(eligible_pair_rows)
         aggregate_rows.append(
-            [
-                rr_value,
-                multiplier,
-                profiles_ok,
-                profiles_total,
-                avg_score,
-                best_score,
-                avg_total_rr,
-            ]
+            {
+                "minimal_rr": rr_value,
+                "tp3_multiplier": multiplier,
+                "profiles_ok": float(profiles_ok),
+                "profiles_total": float(profiles_total),
+                "avg_score": avg_score,
+                "best_score": best_score,
+                "avg_total_rr": avg_total_rr,
+            }
         )
-
-    top_rows = sorted(
+    return sorted(
         aggregate_rows,
-        key=lambda row: (row[4], row[2], row[5], row[6]),
+        key=lambda row: (row["avg_score"], row["profiles_ok"], row["best_score"], row["avg_total_rr"]),
         reverse=True,
-    )[:8]
+    )
+
+
+def _build_stage4_stability_pairs_table(summary_rows: list[dict[str, object]]) -> str:
+    aggregate_rows = _collect_stage4_stability_pairs(summary_rows)
+    if not aggregate_rows:
+        return "_No eligible rows._"
+
+    top_rows = aggregate_rows[:8]
     return _build_markdown_table(
         ["RR", "M", "Eligible Profiles", "All Profiles", "Avg Score", "Best Score", "Avg Total RR"],
         [
             [
-                f"{row[0]:.2f}",
-                f"{row[1]:.1f}",
-                int(row[2]),
-                int(row[3]),
-                f"{row[4]:.3f}",
-                f"{row[5]:.3f}",
-                f"{row[6]:.2f}",
+                f"{row['minimal_rr']:.2f}",
+                f"{row['tp3_multiplier']:.1f}",
+                int(row["profiles_ok"]),
+                int(row["profiles_total"]),
+                f"{row['avg_score']:.3f}",
+                f"{row['best_score']:.3f}",
+                f"{row['avg_total_rr']:.2f}",
             ]
             for row in top_rows
         ],
     )
+
+
+def _classify_stage4_report_verdict(
+    *,
+    months_analysed: int,
+    monthly_match_count: int,
+    avg_drift_rr: float,
+    best_summary_row: dict[str, object],
+) -> str:
+    match_rate = (monthly_match_count / months_analysed) if months_analysed > 0 else 0.0
+    profit_factor = _resolve_stage4_profit_factor_sort_value(best_summary_row.get("profit_factor_rr"))
+    total_rr = _resolve_stage4_float(best_summary_row, "total_realized_rr")
+    if months_analysed >= 4 and match_rate >= 0.6 and avg_drift_rr <= 0.75 and profit_factor >= 1.5 and total_rr > 0.0:
+        return "Robust"
+    if match_rate >= 0.4 and avg_drift_rr <= 1.5 and profit_factor >= 1.0 and total_rr > 0.0:
+        return "Promising"
+    if total_rr > 0.0:
+        return "Positive but fragile"
+    return "Unstable"
 
 
 def _resolve_stage4_month_label(timestamp_ms: object) -> str | None:
@@ -3272,74 +3298,18 @@ def _render_stage4_postmortem_report(
         param_grid=param_grid,
         trade_rows=trade_rows,
     )
+    stability_pairs = _collect_stage4_stability_pairs(summary_rows)
     best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
-
-    lines: list[str] = [
-        f"# Bee Bite Stage-4 Postmortem Report ({timeframe.value})",
-        "",
-        f"Generated: {generated_at}",
-        "",
-        "## Run Overview",
-        "",
-        f"- Symbols scanned: {symbols_count}",
-        f"- Stage-3 passed setups: {stage3_passed_count}",
-        f"- Stage-4 trade rows: {len(trade_rows)}",
-        f"- Grid size: {len(param_grid)}",
-    ]
+    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common(8)) if reason_counts else "none"
+    lines: list[str] = [f"# Bee Bite Stage-4 Postmortem Report ({timeframe.value})", "", f"_Generated: {generated_at}_", ""]
     if reason_counts:
-        top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common(8))
-        lines.append(f"- Top rejection reasons before stage-4: {top_reasons}")
+        lines.append(f"> Top rejection reasons before stage-4: `{top_reasons}`")
+        lines.append("")
 
-    lines.extend(["", "## Best Params For Full Period", ""])
+    lines.extend(["## Executive Summary", ""])
     if best_summary_row is None:
         lines.append("_No eligible stage-4 trades for this timeframe._")
         return "\n".join(lines).strip() + "\n"
-
-    lines.append(f"- Params: `{_format_stage4_param_triplet(best_summary_row)}`")
-    lines.append(f"- Score: `{float(best_summary_row.get('stage4_score', 0.0) or 0.0):.4f}`")
-    lines.append(f"- Eligible trades: `{int(best_summary_row.get('eligible_trades', 0) or 0)}`")
-    lines.append(f"- Win rate: `{_format_stage4_win_rate(best_summary_row.get('win_rate'))}`")
-    lines.append(f"- Total realized RR: `{_format_stage4_metric(best_summary_row.get('total_realized_rr'))}`")
-    lines.append(f"- Profit factor RR: `{_format_stage4_metric(best_summary_row.get('profit_factor_rr'))}`")
-    lines.append(f"- Total PnL: `{_format_stage4_metric(best_summary_row.get('total_pnl_pct'), pct=True)}`")
-    lines.append(
-        f"- Outcome mix: `tp1={int(best_summary_row.get('tp1_full_exits', 0) or 0)}`, "
-        f"`tp2={int(best_summary_row.get('tp2_final_hits', 0) or 0)}`, "
-        f"`tp3={int(best_summary_row.get('tp3_hits', 0) or 0)}`, "
-        f"`stop={int(best_summary_row.get('stop_hits', 0) or 0)}`, "
-        f"`be={int(best_summary_row.get('be_hits', 0) or 0)}`, "
-        f"`open={int(best_summary_row.get('open_trades', 0) or 0)}`"
-    )
-
-    lines.extend(["", "## Full-Period Top Grid Combos", ""])
-    lines.append(
-        _build_markdown_table(
-            ["Rank", "Params", "Score", "Trades", "WR", "Total RR", "PF RR", "Total PnL"],
-            [
-                [
-                    rank,
-                    _format_stage4_param_triplet(row),
-                    f"{float(row.get('stage4_score', 0.0) or 0.0):.4f}",
-                    int(row.get("eligible_trades", 0) or 0),
-                    _format_stage4_win_rate(row.get("win_rate")),
-                    _format_stage4_metric(row.get("total_realized_rr")),
-                    _format_stage4_metric(row.get("profit_factor_rr")),
-                    _format_stage4_metric(row.get("total_pnl_pct"), pct=True),
-                ]
-                for rank, row in enumerate(leaderboard_rows, start=1)
-            ],
-        )
-    )
-
-    lines.extend(["", "## Parameter Stability Heatmap", ""])
-    lines.append("- Cell format: `aAVG/bBEST; eligible_profiles/all_profiles`.")
-    lines.append("- Higher `aAVG` means the whole `RR x multiplier` slice is more stable across TP-share profiles.")
-    lines.append("- Large gap between `aAVG` and `bBEST` usually means a narrow peak rather than robust behavior.")
-    lines.append("")
-    lines.append(_build_stage4_stability_heatmap(summary_rows))
-
-    lines.extend(["", "## Most Stable RR x Multiplier Pairs", ""])
-    lines.append(_build_stage4_stability_pairs_table(summary_rows))
 
     monthly_best_rows: list[list[object]] = []
     monthly_year_best_rows: list[list[object]] = []
@@ -3406,7 +3376,97 @@ def _render_stage4_postmortem_report(
                 ]
             )
 
-    lines.extend(["", "## Best Params By Month", ""])
+    months_analysed = len(monthly_drift_rows)
+    match_rate = (monthly_match_count / months_analysed) * 100.0 if months_analysed else 0.0
+    avg_drift_rr = sum(drift_rr_values) / len(drift_rr_values) if drift_rr_values else 0.0
+    avg_drift_pnl = sum(drift_pnl_values) / len(drift_pnl_values) if drift_pnl_values else 0.0
+    verdict = _classify_stage4_report_verdict(
+        months_analysed=months_analysed,
+        monthly_match_count=monthly_match_count,
+        avg_drift_rr=abs(avg_drift_rr),
+        best_summary_row=best_summary_row,
+    )
+    best_pair = stability_pairs[0] if stability_pairs else None
+
+    lines.append(
+        _build_markdown_table(
+            ["Metric", "Value"],
+            [
+                ["Verdict", verdict],
+                ["Best full-period params", f"`{_format_stage4_param_triplet(best_summary_row)}`"],
+                ["Score", f"{float(best_summary_row.get('stage4_score', 0.0) or 0.0):.4f}"],
+                ["Eligible trades", int(best_summary_row.get("eligible_trades", 0) or 0)],
+                ["Win rate", _format_stage4_win_rate(best_summary_row.get("win_rate"))],
+                ["Total realized RR", _format_stage4_metric(best_summary_row.get("total_realized_rr"))],
+                ["Profit factor RR", _format_stage4_metric(best_summary_row.get("profit_factor_rr"))],
+                ["Total PnL", _format_stage4_metric(best_summary_row.get("total_pnl_pct"), pct=True)],
+                ["Months analysed", months_analysed],
+                ["Monthly match rate", f"{match_rate:.1f}%"],
+                ["Avg monthly dRR vs year-best", f"{avg_drift_rr:+.2f}"],
+                ["Avg monthly dPnL vs year-best", f"{avg_drift_pnl:+.2f}%"],
+            ],
+        )
+    )
+    lines.extend(["", "## Key Takeaways", ""])
+    lines.append(
+        f"- The strongest full-period setup is `{_format_stage4_param_triplet(best_summary_row)}` with "
+        f"`{_format_stage4_metric(best_summary_row.get('total_realized_rr'))}` total RR and "
+        f"`{_format_stage4_metric(best_summary_row.get('total_pnl_pct'), pct=True)}` total PnL."
+    )
+    lines.append(
+        f"- Monthly drift is `{avg_drift_rr:+.2f}` RR on average and the yearly-best setup matches the monthly-best "
+        f"configuration in `{monthly_match_count}/{months_analysed}` months."
+        if months_analysed
+        else "- Monthly drift is not available yet because there are no month-level comparable results."
+    )
+    if best_pair is not None:
+        lines.append(
+            f"- The most stable `RR x multiplier` slice is `rr={best_pair['minimal_rr']:.2f}, m={best_pair['tp3_multiplier']:.1f}` "
+            f"with average score `{best_pair['avg_score']:.3f}` across "
+            f"`{int(best_pair['profiles_ok'])}/{int(best_pair['profiles_total'])}` share profiles."
+        )
+    lines.append(
+        f"- Outcome mix for the best full-period setup: "
+        f"`tp1={int(best_summary_row.get('tp1_full_exits', 0) or 0)}`, "
+        f"`tp2={int(best_summary_row.get('tp2_final_hits', 0) or 0)}`, "
+        f"`tp3={int(best_summary_row.get('tp3_hits', 0) or 0)}`, "
+        f"`stop={int(best_summary_row.get('stop_hits', 0) or 0)}`, "
+        f"`be={int(best_summary_row.get('be_hits', 0) or 0)}`, "
+        f"`open={int(best_summary_row.get('open_trades', 0) or 0)}`."
+    )
+
+    lines.extend(["", "---", "", "## Full-Period Leaderboard", ""])
+
+    lines.append(
+        _build_markdown_table(
+            ["Rank", "Params", "Score", "Trades", "WR", "Total RR", "PF RR", "Total PnL"],
+            [
+                [
+                    rank,
+                    _format_stage4_param_triplet(row),
+                    f"{float(row.get('stage4_score', 0.0) or 0.0):.4f}",
+                    int(row.get("eligible_trades", 0) or 0),
+                    _format_stage4_win_rate(row.get("win_rate")),
+                    _format_stage4_metric(row.get("total_realized_rr")),
+                    _format_stage4_metric(row.get("profit_factor_rr")),
+                    _format_stage4_metric(row.get("total_pnl_pct"), pct=True),
+                ]
+                for rank, row in enumerate(leaderboard_rows, start=1)
+            ],
+        )
+    )
+
+    lines.extend(["", "---", "", "## Parameter Stability", ""])
+    lines.append("- Cell format: `aAVG/bBEST; eligible_profiles/all_profiles`.")
+    lines.append("- Higher `aAVG` means the whole `RR x multiplier` slice is more stable across TP-share profiles.")
+    lines.append("- Large gap between `aAVG` and `bBEST` usually means a narrow peak rather than robust behavior.")
+    lines.append("")
+    lines.append(_build_stage4_stability_heatmap(summary_rows))
+
+    lines.extend(["", "### Most Stable RR x Multiplier Pairs", ""])
+    lines.append(_build_stage4_stability_pairs_table(summary_rows))
+
+    lines.extend(["", "---", "", "## Monthly Diagnostics", "", "### Best Params By Month", ""])
     lines.append(
         _build_markdown_table(
             ["Month", "Best Params", "Score", "Trades", "WR", "Total RR", "PF RR", "Total PnL"],
@@ -3414,7 +3474,7 @@ def _render_stage4_postmortem_report(
         )
     )
 
-    lines.extend(["", "## Monthly Results For Full-Period Best Params", ""])
+    lines.extend(["", "### Monthly Results For Full-Period Best Params", ""])
     lines.append(f"Best params reused for each month: `{_format_stage4_param_triplet(best_summary_row)}`")
     lines.append("")
     lines.append(
@@ -3424,15 +3484,11 @@ def _render_stage4_postmortem_report(
         )
     )
 
-    lines.extend(["", "## Best Yearly Vs Best Monthly Drift", ""])
+    lines.extend(["", "### Best Yearly Vs Best Monthly Drift", ""])
     if monthly_drift_rows:
-        total_months = len(monthly_drift_rows)
-        match_rate = (monthly_match_count / total_months) * 100.0 if total_months else 0.0
-        avg_drift_rr = sum(drift_rr_values) / len(drift_rr_values) if drift_rr_values else 0.0
-        avg_drift_pnl = sum(drift_pnl_values) / len(drift_pnl_values) if drift_pnl_values else 0.0
         lines.append(f"- Year-best params: `{_format_stage4_param_triplet(best_summary_row)}`")
-        lines.append(f"- Months analysed: `{total_months}`")
-        lines.append(f"- Months where monthly best == yearly best: `{monthly_match_count}/{total_months}` ({match_rate:.1f}%)")
+        lines.append(f"- Months analysed: `{months_analysed}`")
+        lines.append(f"- Months where monthly best == yearly best: `{monthly_match_count}/{months_analysed}` ({match_rate:.1f}%)")
         lines.append(f"- Average monthly RR drift vs yearly best: `{avg_drift_rr:+.2f}`")
         lines.append(f"- Average monthly PnL drift vs yearly best: `{avg_drift_pnl:+.2f}%`")
         lines.append("")
@@ -3445,7 +3501,7 @@ def _render_stage4_postmortem_report(
     else:
         lines.append("_No monthly drift data available._")
 
-    lines.extend(["", "## Stability: Best And Worst Months", ""])
+    lines.extend(["", "### Stability Extremes", ""])
     if monthly_year_best_rows:
         stability_rows = []
         for row in monthly_year_best_rows:
@@ -3472,7 +3528,7 @@ def _render_stage4_postmortem_report(
             stability_rows,
             key=lambda row: (row["total_rr"], row["total_pnl"], -row["trades"]),
         )[:5]
-        lines.append("### Best Months")
+        lines.append("#### Best Months")
         lines.append("")
         lines.append(
             _build_markdown_table(
@@ -3494,7 +3550,7 @@ def _render_stage4_postmortem_report(
             )
         )
         lines.append("")
-        lines.append("### Worst Months")
+        lines.append("#### Worst Months")
         lines.append("")
         lines.append(
             _build_markdown_table(
@@ -3518,7 +3574,7 @@ def _render_stage4_postmortem_report(
     else:
         lines.append("_No monthly stability data available._")
 
-    lines.extend(["", "## Notes", ""])
+    lines.extend(["", "---", "", "## Method Notes", ""])
     lines.append("- `Trades` means eligible stage-4 entries after the RR filter for that parameter set.")
     lines.append("- `WR` is based on closed profitable trades only; open trades are excluded from win-rate.")
     lines.append("- `Total RR` is the main edge metric; `Total PnL` is still useful but less robust before full portfolio modelling.")
