@@ -2603,9 +2603,10 @@ def _resolve_stage4_trade_outcome(
     prepared = prepared.dropna(subset=["high", "low", "close"]).reset_index(drop=True)
     if prepared.empty or entry_idx >= (len(prepared) - 1):
         final_close = float(prepared.iloc[-1]["close"]) if not prepared.empty else None
+        final_idx = (len(prepared) - 1) if not prepared.empty else None
         return {
             "outcome": "no_future_data",
-            "exit_idx": None,
+            "exit_idx": final_idx,
             "exit_price": final_close,
             "tp1_hit": False,
             "tp1_timestamp": None,
@@ -2703,7 +2704,7 @@ def _resolve_stage4_trade_outcome(
 
     return {
         "outcome": "open",
-        "exit_idx": None,
+        "exit_idx": len(prepared) - 1,
         "exit_price": float(prepared.iloc[-1]["close"]),
         "tp1_hit": tp1_hit,
         "tp1_timestamp": tp1_timestamp,
