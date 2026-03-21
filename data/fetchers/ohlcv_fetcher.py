@@ -5,9 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from constants import (
-    DEFAULT_REQUEST_TIMEOUT_SECONDS,
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
     LOG_MSG_SKIP_UP_TO_DATE,
 )
 from data.quality.data_validator import DataValidator
@@ -22,7 +22,7 @@ from utils.logger import get_logger
 
 class OhlcvFetcher:
     """Класс."""
-    # region Приватные
+
     def __init__(
         self,
         exchange_client: ExchangeClient,
@@ -47,39 +47,60 @@ class OhlcvFetcher:
         """Загружает OHLCV-данные для одного символа."""
         start_timestamp_ms = int(start_timestamp_ms)
         end_timestamp_ms = int(end_timestamp_ms)
-        next_start_ms = start_timestamp_ms
+        timeframe_ms = timeframe.to_milliseconds()
         watermark_column = "close"
+        first_timestamp_ms = self._storage.get_first_timestamp_for_column(symbol, timeframe, watermark_column)
         last_timestamp_ms = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
-        if last_timestamp_ms is not None:
-            timeframe_ms = timeframe.to_milliseconds()
-            next_start_ms = max(start_timestamp_ms, last_timestamp_ms + timeframe_ms)
+
+        segments: list[tuple[int, int, str]] = []
+        if first_timestamp_ms is None or last_timestamp_ms is None:
+            segments.append((start_timestamp_ms, end_timestamp_ms, "full"))
+        else:
+            prefix_end_ms = min(end_timestamp_ms, first_timestamp_ms - timeframe_ms)
+            if start_timestamp_ms <= prefix_end_ms:
+                segments.append((start_timestamp_ms, prefix_end_ms, "prefix"))
+
+            suffix_start_ms = max(start_timestamp_ms, last_timestamp_ms + timeframe_ms)
+            if suffix_start_ms <= end_timestamp_ms:
+                segments.append((suffix_start_ms, end_timestamp_ms, "suffix"))
 
         self._logger.info(
-            "OHLCV водораздел: %s %s колонка=%s последний_ms=%s выбранный_ms=%s",
+            "OHLCV водораздел: %s %s колонка=%s первый_ms=%s последний_ms=%s сегментов=%s",
             symbol,
             timeframe.value,
             watermark_column,
+            first_timestamp_ms,
             last_timestamp_ms,
-            next_start_ms,
+            len(segments),
         )
-        self._logger.info("OHLCV старт: %s %s %s -> %s", symbol, timeframe.value, next_start_ms, end_timestamp_ms)
-        if next_start_ms > end_timestamp_ms:
+        if not segments:
             self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OHLCV", symbol)
             return 0
 
-        data = self._exchange_client.fetch_ohlcv(symbol, timeframe, next_start_ms, end_timestamp_ms)
-        data = self._deduplicator.deduplicate(data)
+        added_rows = 0
+        for segment_start_ms, segment_end_ms, segment_kind in segments:
+            self._logger.info(
+                "OHLCV сегмент: %s %s %s %s -> %s",
+                symbol,
+                timeframe.value,
+                segment_kind,
+                segment_start_ms,
+                segment_end_ms,
+            )
+            data = self._exchange_client.fetch_ohlcv(symbol, timeframe, segment_start_ms, segment_end_ms)
+            data = self._deduplicator.deduplicate(data)
 
-        gaps = self._gap_detector.detect_gaps(data, expected_step_ms=timeframe.to_milliseconds())
-        if gaps:
-            self._logger.info(f"OHLCV пропуски: {symbol} найдено {len(gaps)} пропусков")
+            gaps = self._gap_detector.detect_gaps(data, expected_step_ms=timeframe_ms)
+            if gaps:
+                self._logger.info("OHLCV пропуски: %s найдено %s пропусков", symbol, len(gaps))
 
-        issues = self._validator.validate(symbol, timeframe, data)
-        if issues:
-            self._logger.info(f"OHLCV качество: {symbol} найдено {len(issues)} аномалий")
+            issues = self._validator.validate(symbol, timeframe, data)
+            if issues:
+                self._logger.info("OHLCV качество: %s найдено %s аномалий", symbol, len(issues))
 
-        added_rows = self._storage.save_incremental(symbol, timeframe, data)
-        self._logger.info(f"OHLCV завершен: {symbol}, добавлено {added_rows} строк")
+            added_rows += self._storage.save_incremental(symbol, timeframe, data)
+
+        self._logger.info("OHLCV завершен: %s, добавлено %s строк", symbol, added_rows)
         return added_rows
 
     def fetch_many(

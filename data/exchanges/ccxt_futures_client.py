@@ -432,28 +432,35 @@ class CcxtFuturesClient(ExchangeClient):
                 }
 
             try:
-                batch = self._retry_exchange_call(
-                    operation="ccxt_fetch_open_interest_history",
-                    symbol=symbol,
-                    endpoint="fetch_open_interest_history",
-                    call=self._client.fetch_open_interest_history,
-                    args=(symbol,),
-                    timeframe=ccxt_timeframe,
-                    since=since,
-                    limit=oi_limit,
-                    params=params,
-                )
-            except TypeError:
-                batch = self._retry_exchange_call(
-                    operation="ccxt_fetch_open_interest_history",
-                    symbol=symbol,
-                    endpoint="fetch_open_interest_history",
-                    call=self._client.fetch_open_interest_history,
-                    args=(symbol,),
-                    timeframe=ccxt_timeframe,
-                    since=since,
-                    limit=oi_limit,
-                )
+                try:
+                    batch = self._retry_exchange_call(
+                        operation="ccxt_fetch_open_interest_history",
+                        symbol=symbol,
+                        endpoint="fetch_open_interest_history",
+                        call=self._client.fetch_open_interest_history,
+                        args=(symbol,),
+                        timeframe=ccxt_timeframe,
+                        since=since,
+                        limit=oi_limit,
+                        params=params,
+                    )
+                except TypeError:
+                    batch = self._retry_exchange_call(
+                        operation="ccxt_fetch_open_interest_history",
+                        symbol=symbol,
+                        endpoint="fetch_open_interest_history",
+                        call=self._client.fetch_open_interest_history,
+                        args=(symbol,),
+                        timeframe=ccxt_timeframe,
+                        since=since,
+                        limit=oi_limit,
+                    )
+            except RuntimeError as exc:
+                message = str(exc)
+                if self.exchange == Exchange.BINANCE and "startTime" in message and "invalid" in message:
+                    since = request_end_ms + 1
+                    continue
+                raise
             if not isinstance(batch, list):
                 break
             if not batch:

@@ -103,6 +103,16 @@ class ParquetStorage:
             return None
         return int(timestamps.max())
 
+    def get_first_timestamp(self, symbol: str, timeframe: Timeframe) -> int | None:
+        data = self.load(symbol, timeframe)
+        if data.empty or "timestamp" not in data.columns:
+            return None
+
+        timestamps = data["timestamp"].dropna()
+        if timestamps.empty:
+            return None
+        return int(timestamps.min())
+
     def get_last_timestamp_for_column(self, symbol: str, timeframe: Timeframe, column_name: str) -> int | None:
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:
@@ -122,6 +132,26 @@ class ParquetStorage:
         if timestamps.empty:
             return None
         return int(timestamps.max())
+
+    def get_first_timestamp_for_column(self, symbol: str, timeframe: Timeframe, column_name: str) -> int | None:
+        data = self.load(symbol, timeframe)
+        if data.empty or "timestamp" not in data.columns:
+            return None
+
+        if column_name == "timestamp":
+            return self.get_first_timestamp(symbol, timeframe)
+
+        if column_name not in data.columns:
+            return None
+
+        valid_rows = data[column_name].notna()
+        if not valid_rows.any():
+            return None
+
+        timestamps = data.loc[valid_rows, "timestamp"].dropna()
+        if timestamps.empty:
+            return None
+        return int(timestamps.min())
 
     def save_incremental(self, symbol: str, timeframe: Timeframe, new_data: pd.DataFrame) -> int:
         if new_data.empty:

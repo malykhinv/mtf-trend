@@ -851,6 +851,39 @@ def _resolve_symbols(
     )
     return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
 
+
+def _resolve_explicit_symbols(
+    *,
+    requested_symbols: list[str] | None,
+    futures_symbols_raw: list[str],
+    logger: Logger,
+) -> list[str] | None:
+    if not requested_symbols:
+        return None
+
+    futures_symbol_map = {
+        normalize_symbol(symbol): symbol
+        for symbol in futures_symbols_raw
+    }
+    resolved: list[str] = []
+    missing: list[str] = []
+    seen: set[str] = set()
+    for raw_symbol in requested_symbols:
+        normalized = normalize_symbol(raw_symbol)
+        resolved_symbol = futures_symbol_map.get(normalized)
+        if resolved_symbol is None:
+            missing.append(str(raw_symbol))
+            continue
+        if resolved_symbol in seen:
+            continue
+        seen.add(resolved_symbol)
+        resolved.append(resolved_symbol)
+
+    if missing:
+        logger.warning("explicit-symbols: skipped_missing=%s", ",".join(missing))
+    logger.info("explicit-symbols: requested=%s resolved=%s", len(requested_symbols), len(resolved))
+    return resolved
+
 def _resolve_fetch_anchor_timestamp_ms(config: AppConfig, end_timestamp_ms_raw: int | None) -> int:
     if end_timestamp_ms_raw is not None:
         return int(end_timestamp_ms_raw)
@@ -1501,17 +1534,26 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     fetcher, exchange_client = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
+    explicit_symbols = _resolve_explicit_symbols(
+        requested_symbols=getattr(args, "symbols", None),
+        futures_symbols_raw=futures_symbols,
+        logger=logger,
+    )
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     top_n = args.top_n if args.top_n is not None else all_futures_count
-    symbols, liquidity_quality_by_symbol = _resolve_symbols(
-        exchange_client,
-        top_n=top_n,
-        min_volume_usd=min_volume_usd,
-        logger=logger,
-        cache_dir=config.backtest.cache_dir,
-        liquidity_timeframe=config.fetch.timeframe,
-        futures_symbols_raw=futures_symbols,
-    )
+    if explicit_symbols is None:
+        symbols, liquidity_quality_by_symbol = _resolve_symbols(
+            exchange_client,
+            top_n=top_n,
+            min_volume_usd=min_volume_usd,
+            logger=logger,
+            cache_dir=config.backtest.cache_dir,
+            liquidity_timeframe=config.fetch.timeframe,
+            futures_symbols_raw=futures_symbols,
+        )
+    else:
+        symbols = explicit_symbols
+        liquidity_quality_by_symbol = {}
     logger.info(
         "загрузка-данных: найдено фьючерсов=%s выбрано_символов=%s (режим_подбора=%s)",
         all_futures_count,
@@ -1571,32 +1613,33 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     root_stage_status = "ok"
     followup_symbols = symbols
-    liquidity_summary = fetch_summaries.get(primary_timeframe)
-    skip_reason = _resolve_liquidity_skip_reason(
-        liquidity_summary,
-        config.fetch.liquidity_skip_error_ratio_threshold,
-    )
-    if skip_reason is None:
-        followup_symbols, liquidity_quality_by_symbol = _resolve_symbols(
-            exchange_client,
-            top_n=top_n,
-            min_volume_usd=min_volume_usd,
-            logger=logger,
-            cache_dir=config.backtest.cache_dir,
-            liquidity_timeframe=config.fetch.timeframe,
-            futures_symbols_raw=futures_symbols,
+    if explicit_symbols is None:
+        liquidity_summary = fetch_summaries.get(primary_timeframe)
+        skip_reason = _resolve_liquidity_skip_reason(
+            liquidity_summary,
+            config.fetch.liquidity_skip_error_ratio_threshold,
         )
-        logger.info(
-            "fetch-data: recomputed liquid symbol list after primary timeframe load (symbols=%s)",
-            len(followup_symbols),
-        )
-    else:
-        root_stage_status = "ohlcv_cache_failed"
-        logger.warning(
-            "liquidity-skip: reason=%s timeframe=%s",
-            skip_reason,
-            primary_timeframe.value,
-        )
+        if skip_reason is None:
+            followup_symbols, liquidity_quality_by_symbol = _resolve_symbols(
+                exchange_client,
+                top_n=top_n,
+                min_volume_usd=min_volume_usd,
+                logger=logger,
+                cache_dir=config.backtest.cache_dir,
+                liquidity_timeframe=config.fetch.timeframe,
+                futures_symbols_raw=futures_symbols,
+            )
+            logger.info(
+                "fetch-data: recomputed liquid symbol list after primary timeframe load (symbols=%s)",
+                len(followup_symbols),
+            )
+        else:
+            root_stage_status = "ohlcv_cache_failed"
+            logger.warning(
+                "liquidity-skip: reason=%s timeframe=%s",
+                skip_reason,
+                primary_timeframe.value,
+            )
 
     for timeframe in config.fetch.timeframes:
         if timeframe == primary_timeframe:
@@ -1625,17 +1668,26 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     fetcher, exchange_client = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
+    explicit_symbols = _resolve_explicit_symbols(
+        requested_symbols=getattr(args, "symbols", None),
+        futures_symbols_raw=futures_symbols,
+        logger=logger,
+    )
     min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
     top_n = args.top_n if args.top_n is not None else all_futures_count
-    symbols, liquidity_quality_by_symbol = _resolve_symbols(
-        exchange_client,
-        top_n=top_n,
-        min_volume_usd=min_volume_usd,
-        logger=logger,
-        cache_dir=config.backtest.cache_dir,
-        liquidity_timeframe=config.fetch.timeframe,
-        futures_symbols_raw=futures_symbols,
-    )
+    if explicit_symbols is None:
+        symbols, liquidity_quality_by_symbol = _resolve_symbols(
+            exchange_client,
+            top_n=top_n,
+            min_volume_usd=min_volume_usd,
+            logger=logger,
+            cache_dir=config.backtest.cache_dir,
+            liquidity_timeframe=config.fetch.timeframe,
+            futures_symbols_raw=futures_symbols,
+        )
+    else:
+        symbols = explicit_symbols
+        liquidity_quality_by_symbol = {}
     logger.info(
         "обновление-кэша: найдено фьючерсов=%s отправлено в fetch_all=%s",
         all_futures_count,
