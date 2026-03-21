@@ -19,6 +19,8 @@ import pandas as pd
 
 from config import AppConfig
 from constants import (
+    BEE_BITE_STAGE4_SLIPPAGE_RATE,
+    BEE_BITE_STAGE4_TAKER_FEE_RATE,
     DEFAULT_BACKTEST_OUTPUT_FILE,
     DEFAULT_FAILED_PLOTS_DIR_NAME,
     DEFAULT_STAGE1_EVENTS_OUTPUT_FILE,
@@ -2737,6 +2739,8 @@ def _resolve_stage4_trade_outcome_prepared(
     tp2_timestamp: int | None = None
     tp3_timestamp: int | None = None
     fills: list[tuple[int, float, float]] = []
+    fee_rate = BEE_BITE_STAGE4_TAKER_FEE_RATE
+    slippage_rate = BEE_BITE_STAGE4_SLIPPAGE_RATE
 
     def _record_fill(*, idx: int, price: float, share: float) -> None:
         nonlocal remaining_share
@@ -2748,11 +2752,26 @@ def _resolve_stage4_trade_outcome_prepared(
 
     def _finalize(*, outcome: str, exit_idx: int | None, exit_price: float | None) -> dict[str, object]:
         realized_rr = None
+        gross_realized_rr = None
+        total_fee_in_price = None
+        total_fee_pct = None
         if risk > 0.0 and fills:
-            realized_rr = sum((share * ((price - entry_price) / risk)) for _, price, share in fills)
+            gross_pnl_in_price = sum((share * (price - entry_price)) for _, price, share in fills)
+            exit_fee_in_price = sum((share * price * fee_rate) for _, price, share in fills)
+            entry_fee_in_price = entry_price * fee_rate
+            total_fee_in_price = entry_fee_in_price + exit_fee_in_price
+            net_pnl_in_price = gross_pnl_in_price - total_fee_in_price
+            gross_realized_rr = gross_pnl_in_price / risk
+            realized_rr = net_pnl_in_price / risk
         realized_pnl_pct = None
+        gross_realized_pnl_pct = None
         if entry_price > 0.0 and fills:
-            realized_pnl_pct = sum((share * (((price - entry_price) / entry_price) * 100.0)) for _, price, share in fills)
+            gross_pnl_pct = sum((share * (((price - entry_price) / entry_price) * 100.0)) for _, price, share in fills)
+            exit_fee_pct = sum((share * ((price / entry_price) * fee_rate * 100.0)) for _, price, share in fills)
+            entry_fee_pct = fee_rate * 100.0
+            total_fee_pct = entry_fee_pct + exit_fee_pct
+            gross_realized_pnl_pct = gross_pnl_pct
+            realized_pnl_pct = gross_pnl_pct - total_fee_pct
         return {
             "outcome": outcome,
             "exit_idx": exit_idx,
@@ -2765,8 +2784,14 @@ def _resolve_stage4_trade_outcome_prepared(
             "tp3_timestamp": tp3_timestamp,
             "be_armed": tp1_hit and remaining_share > 0.0,
             "exit_stop_price": active_stop,
+            "fee_rate": fee_rate,
+            "slippage_rate": slippage_rate,
+            "gross_realized_rr": gross_realized_rr,
             "realized_rr": realized_rr,
+            "gross_realized_pnl_pct": gross_realized_pnl_pct,
             "realized_pnl_pct": realized_pnl_pct,
+            "total_fee_in_price": total_fee_in_price,
+            "total_fee_pct": total_fee_pct,
         }
 
     if entry_idx >= (len(prepared) - 1):
@@ -2965,6 +2990,15 @@ def _build_stage4_postmortem_rows(
                 exit_timestamp = int(prepared.iloc[exit_idx]["timestamp"])
             realized_rr = cast(float | None, trade_outcome["realized_rr"])
             realized_pnl_pct = cast(float | None, trade_outcome["realized_pnl_pct"])
+            gross_realized_rr = cast(float | None, trade_outcome["gross_realized_rr"])
+            gross_realized_pnl_pct = cast(float | None, trade_outcome["gross_realized_pnl_pct"])
+            total_fee_in_price = cast(float | None, trade_outcome["total_fee_in_price"])
+            total_fee_pct = cast(float | None, trade_outcome["total_fee_pct"])
+        else:
+            gross_realized_rr = None
+            gross_realized_pnl_pct = None
+            total_fee_in_price = None
+            total_fee_pct = None
 
         rows.append(
             {
@@ -2992,6 +3026,9 @@ def _build_stage4_postmortem_rows(
                 "rr": rr_value,
                 "target_stack_valid": target_stack_valid,
                 "eligible": eligible,
+                "fee_model": "binance_futures_taker",
+                "taker_fee_rate": BEE_BITE_STAGE4_TAKER_FEE_RATE,
+                "slippage_rate": BEE_BITE_STAGE4_SLIPPAGE_RATE,
                 "tp1_hit": tp1_hit,
                 "tp1_timestamp": tp1_timestamp,
                 "tp2_hit": tp2_hit,
@@ -3003,8 +3040,12 @@ def _build_stage4_postmortem_rows(
                 "exit_timestamp": exit_timestamp,
                 "exit_price": exit_price,
                 "exit_stop_price": exit_stop_price,
+                "gross_realized_rr": gross_realized_rr,
                 "realized_rr": realized_rr,
+                "gross_realized_pnl_pct": gross_realized_pnl_pct,
                 "realized_pnl_pct": realized_pnl_pct,
+                "total_fee_in_price": total_fee_in_price,
+                "total_fee_pct": total_fee_pct,
             }
         )
     return rows
@@ -3066,6 +3107,11 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
             for row in eligible_rows
             if row.get("realized_pnl_pct") is not None
         ]
+        fee_pct_values = [
+            float(row["total_fee_pct"])
+            for row in eligible_rows
+            if row.get("total_fee_pct") is not None
+        ]
         loss_rr_values = [value for value in realized_rr_values if value < 0.0]
         gain_rr_values = [value for value in realized_rr_values if value > 0.0]
         closed_rows = [row for row in eligible_rows if row["outcome"] not in {"open", "no_future_data"}]
@@ -3106,6 +3152,8 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
                 "total_realized_rr": total_realized_rr,
                 "avg_pnl_pct": (sum(realized_pnl_pct_values) / len(realized_pnl_pct_values)) if realized_pnl_pct_values else 0.0,
                 "total_pnl_pct": total_pnl_pct,
+                "avg_fee_pct": (sum(fee_pct_values) / len(fee_pct_values)) if fee_pct_values else 0.0,
+                "total_fee_pct": sum(fee_pct_values) if fee_pct_values else 0.0,
                 "profit_factor_rr": (sum(gain_rr_values) / abs(sum(loss_rr_values))) if loss_rr_values and abs(sum(loss_rr_values)) > 0.0 else (math.inf if gain_rr_values else 0.0),
                 "delta_total_pnl_pct": total_pnl_pct - previous_total_pnl_pct,
                 "delta_win_rate_pct": (win_rate - previous_win_rate) * 100.0,
@@ -3440,7 +3488,11 @@ def _render_stage4_postmortem_report(
                 ["Win rate", _format_stage4_win_rate(best_summary_row.get("win_rate"))],
                 ["Total realized RR", _format_stage4_metric(best_summary_row.get("total_realized_rr"))],
                 ["Profit factor RR", _format_stage4_metric(best_summary_row.get("profit_factor_rr"))],
-                ["Total PnL", _format_stage4_metric(best_summary_row.get("total_pnl_pct"), pct=True)],
+                ["Total PnL (net)", _format_stage4_metric(best_summary_row.get("total_pnl_pct"), pct=True)],
+                ["Average fee drag per trade", _format_stage4_metric(best_summary_row.get("avg_fee_pct"), pct=True)],
+                ["Total fee drag", _format_stage4_metric(best_summary_row.get("total_fee_pct"), pct=True)],
+                ["Fee model", f"Binance Futures taker {BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}% in + out"],
+                ["Slippage model", f"{BEE_BITE_STAGE4_SLIPPAGE_RATE * 100.0:.2f}%"],
                 ["Months analysed", months_analysed],
                 ["Monthly match rate", f"{match_rate:.1f}%"],
                 ["Avg monthly dRR vs year-best", f"{avg_drift_rr:+.2f}"],
@@ -3451,8 +3503,9 @@ def _render_stage4_postmortem_report(
     lines.extend(["", "## Key Takeaways", ""])
     lines.append(
         f"- The strongest full-period setup is `{_format_stage4_param_triplet(best_summary_row)}` with "
-        f"`{_format_stage4_metric(best_summary_row.get('total_realized_rr'))}` total RR and "
-        f"`{_format_stage4_metric(best_summary_row.get('total_pnl_pct'), pct=True)}` total PnL."
+        f"`{_format_stage4_metric(best_summary_row.get('total_realized_rr'))}` net total RR and "
+        f"`{_format_stage4_metric(best_summary_row.get('total_pnl_pct'), pct=True)}` net total PnL "
+        f"after Binance taker fees."
     )
     lines.append(
         f"- Monthly drift is `{avg_drift_rr:+.2f}` RR on average and the yearly-best setup matches the monthly-best "
@@ -3480,7 +3533,7 @@ def _render_stage4_postmortem_report(
 
     lines.append(
         _build_markdown_table(
-            ["Rank", "Params", "Score", "Trades", "WR", "Total RR", "PF RR", "Total PnL"],
+            ["Rank", "Params", "Score", "Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)"],
             [
                 [
                     rank,
@@ -3510,7 +3563,7 @@ def _render_stage4_postmortem_report(
     lines.extend(["", "---", "", "## Monthly Diagnostics", "", "### Best Params By Month", ""])
     lines.append(
         _build_markdown_table(
-            ["Month", "Best Params", "Score", "Trades", "WR", "Total RR", "PF RR", "Total PnL"],
+            ["Month", "Best Params", "Score", "Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)"],
             monthly_best_rows,
         )
     )
@@ -3520,7 +3573,7 @@ def _render_stage4_postmortem_report(
     lines.append("")
     lines.append(
         _build_markdown_table(
-            ["Month", "Trades", "WR", "Total RR", "PF RR", "Total PnL", "TP3", "Stop", "BE", "Open"],
+            ["Month", "Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)", "TP3", "Stop", "BE", "Open"],
             monthly_year_best_rows,
         )
     )
@@ -3573,7 +3626,7 @@ def _render_stage4_postmortem_report(
         lines.append("")
         lines.append(
             _build_markdown_table(
-                ["Month", "Trades", "WR", "Total RR", "Total PnL", "TP3", "Stop", "BE", "Open"],
+                ["Month", "Trades", "WR", "Total RR (net)", "Total PnL (net)", "TP3", "Stop", "BE", "Open"],
                 [
                     [
                         row["month"],
@@ -3595,7 +3648,7 @@ def _render_stage4_postmortem_report(
         lines.append("")
         lines.append(
             _build_markdown_table(
-                ["Month", "Trades", "WR", "Total RR", "Total PnL", "TP3", "Stop", "BE", "Open"],
+                ["Month", "Trades", "WR", "Total RR (net)", "Total PnL (net)", "TP3", "Stop", "BE", "Open"],
                 [
                     [
                         row["month"],
@@ -3617,6 +3670,12 @@ def _render_stage4_postmortem_report(
 
     lines.extend(["", "---", "", "## Method Notes", ""])
     lines.append("- `Trades` means eligible stage-4 entries after the RR filter for that parameter set.")
+    lines.append(
+        f"- All RR and PnL metrics in this report are net of Binance Futures taker fees: "
+        f"`{BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}%` on entry and "
+        f"`{BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}%` on each exit fill."
+    )
+    lines.append(f"- Slippage is fixed at `{BEE_BITE_STAGE4_SLIPPAGE_RATE * 100.0:.2f}%` and is currently disabled.")
     lines.append("- `WR` is based on closed profitable trades only; open trades are excluded from win-rate.")
     lines.append("- `Total RR` is the main edge metric; `Total PnL` is still useful but less robust before full portfolio modelling.")
     lines.append("- `PF RR` uses realized RR gains versus realized RR losses.")
