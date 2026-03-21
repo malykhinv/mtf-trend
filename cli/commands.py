@@ -98,6 +98,7 @@ _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE = "stage3_events.csv"
 _DEFAULT_STAGE3_PLOTS_DIR_NAME = "stage3_plots"
 _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
 _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
+_DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE = "stage4_grid_overview.csv"
 _TItem = TypeVar("_TItem")
 
 
@@ -2761,6 +2762,7 @@ def _build_stage4_postmortem_rows(
         exit_idx: int | None = None
         exit_price: float | None = None
         realized_rr: float | None = None
+        realized_pnl_pct: float | None = None
         exit_timestamp: int | None = None
         tp1_timestamp: int | None = None
         tp1_hit = False
@@ -2787,6 +2789,8 @@ def _build_stage4_postmortem_rows(
                 exit_timestamp = int(prepared.iloc[exit_idx]["timestamp"])
             if risk > 0.0 and exit_price is not None:
                 realized_rr = (float(exit_price) - entry_price) / risk
+            if exit_price is not None and entry_price > 0.0:
+                realized_pnl_pct = ((float(exit_price) - entry_price) / entry_price) * 100.0
 
         rows.append(
             {
@@ -2814,6 +2818,7 @@ def _build_stage4_postmortem_rows(
                 "exit_price": exit_price,
                 "exit_stop_price": exit_stop_price,
                 "realized_rr": realized_rr,
+                "realized_pnl_pct": realized_pnl_pct,
             }
         )
     return rows
@@ -2843,6 +2848,13 @@ def _build_stage4_postmortem_summary_rows(
             for row in eligible_rows
             if row.get("realized_rr") is not None
         ]
+        realized_pnl_pct_values = [
+            float(row["realized_pnl_pct"])
+            for row in eligible_rows
+            if row.get("realized_pnl_pct") is not None
+        ]
+        loss_rr_values = [value for value in realized_rr_values if value < 0.0]
+        gain_rr_values = [value for value in realized_rr_values if value > 0.0]
         summary_rows.append(
             {
                 "symbol": "__summary__",
@@ -2861,6 +2873,9 @@ def _build_stage4_postmortem_summary_rows(
                 "win_rate": (tp2_hits / len(eligible_rows)) if eligible_rows else 0.0,
                 "avg_realized_rr": (sum(realized_rr_values) / len(realized_rr_values)) if realized_rr_values else 0.0,
                 "total_realized_rr": sum(realized_rr_values) if realized_rr_values else 0.0,
+                "avg_pnl_pct": (sum(realized_pnl_pct_values) / len(realized_pnl_pct_values)) if realized_pnl_pct_values else 0.0,
+                "total_pnl_pct": sum(realized_pnl_pct_values) if realized_pnl_pct_values else 0.0,
+                "profit_factor_rr": (sum(gain_rr_values) / abs(sum(loss_rr_values))) if loss_rr_values and abs(sum(loss_rr_values)) > 0.0 else (math.inf if gain_rr_values else 0.0),
             }
         )
     return summary_rows
@@ -3485,6 +3500,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     output_dir = results_dir / "stage4_postmortem" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE
+    overview_path = output_dir / _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE
     plots_dir = output_dir / "stage4_plots"
     _reset_review_plot_dir(plots_dir)
 
@@ -3630,7 +3646,9 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
         sort_columns = [column for column in ("row_type", "row_order", "symbol", "regime_index") if column in results_frame.columns]
         results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    overview_path.parent.mkdir(parents=True, exist_ok=True)
     results_frame.to_csv(output_path, index=False)
+    pd.DataFrame(summary_rows).to_csv(overview_path, index=False)
 
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
     if top_reasons:
@@ -3638,13 +3656,14 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     if empty_frame_symbols:
         logger.warning("postmortem-stage4: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
     logger.info(
-        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid=%s csv=%s",
+        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid=%s csv=%s overview=%s",
         len(symbols),
         stage3_passed_count,
         len(rows),
         plots_built,
         ",".join(f"{value:g}" for value in min_rr_grid),
         output_path,
+        overview_path,
     )
     return 0
 
