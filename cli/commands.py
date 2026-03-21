@@ -76,6 +76,7 @@ from strategy.bee_bite import (
     BeeBiteStage2Result,
     BeeBiteStage3Detector,
     BeeBiteStage3Result,
+    get_bee_bite_stage4_postmortem_grid,
     get_bee_bite_runtime,
     parse_bee_bite_grid_mode,
     parse_bee_bite_profile_id,
@@ -1000,22 +1001,8 @@ def _resolve_stage3_review_mode(args: argparse.Namespace) -> str:
     return "evolution" if str(getattr(args, "review_mode", "snapshot")).strip().lower() == "evolution" else "snapshot"
 
 
-def _resolve_stage4_min_rr_grid(args: argparse.Namespace) -> list[float]:
-    raw_value = getattr(args, "min_rr_grid", None)
-    if raw_value is None:
-        raw_value = "0.5,0.75,1.0,1.25,1.5,2.0"
-    tokens = [part.strip() for part in str(raw_value).split(",")]
-    parsed_values: list[float] = []
-    for token in tokens:
-        if not token:
-            continue
-        parsed = float(token)
-        if parsed <= 0.0:
-            raise ValueError("min_rr_grid values must be > 0")
-        parsed_values.append(parsed)
-    if not parsed_values:
-        raise ValueError("min_rr_grid must contain at least one positive value")
-    return sorted(set(round(value, 6) for value in parsed_values))
+def _resolve_stage4_min_rr_grid() -> list[float]:
+    return [float(item.min_rr) for item in get_bee_bite_stage4_postmortem_grid()]
 
 
 def _select_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: int) -> list[_TItem]:
@@ -3493,7 +3480,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     logger = get_logger("postmortem-stage4", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("postmortem-stage4: cache_dir=%s", config.backtest.cache_dir)
     review_timeframe = _resolve_review_timeframe(args)
-    min_rr_grid = _resolve_stage4_min_rr_grid(args)
+    min_rr_grid = _resolve_stage4_min_rr_grid()
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
     output_dir = results_dir / "stage4_postmortem" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)

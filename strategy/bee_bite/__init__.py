@@ -23,6 +23,10 @@ from strategy.bee_bite.stage2_detector import (
     BeeBiteStage2Result,
 )
 from strategy.bee_bite.stage3_detector import BeeBiteStage3Detector, BeeBiteStage3Result
+from strategy.bee_bite.stage4_postmortem_grid import (
+    BeeBiteStage4PostmortemParams,
+    get_bee_bite_stage4_postmortem_grid,
+)
 
 __all__ = [
     "BeeBiteStrategy",
@@ -47,4 +51,6 @@ __all__ = [
     "BeeBiteStage2MergedRange",
     "BeeBiteStage3Detector",
     "BeeBiteStage3Result",
+    "BeeBiteStage4PostmortemParams",
+    "get_bee_bite_stage4_postmortem_grid",
 ]

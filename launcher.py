@@ -77,7 +77,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tf-all", action="store_true", default=False, help="Run review for both 15m and 5m")
     parser.add_argument("--review-mode", choices=["snapshot", "evolution"], default="snapshot", help="Review mode for review-stage3")
     parser.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
-    parser.add_argument("--min-rr-grid", default="0.5,0.75,1.0,1.25,1.5,2.0", help="Comma-separated minimal RR grid for postmortem-stage4")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
     parser.add_argument("--strategy", choices=["bee_bite"], default=None, help="Only bee_bite strategy is available")
@@ -110,7 +109,6 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         tf_all=bool(task.get("tf_all", cli_args.tf_all)),
         review_mode=task.get("review_mode", cli_args.review_mode),
         plot_scope=task.get("plot_scope", cli_args.plot_scope),
-        min_rr_grid=task.get("min_rr_grid", cli_args.min_rr_grid),
         levels_tf=task.get("levels_tf", cli_args.levels_tf),
         entry_tf=task.get("entry_tf", cli_args.entry_tf),
         strategy=task.get("strategy", cli_args.strategy),

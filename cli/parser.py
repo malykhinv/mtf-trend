@@ -92,11 +92,10 @@ def build_parser() -> argparse.ArgumentParser:
     stage3.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
     stage3.add_argument("--output", default=None, help="Path to CSV with detected stage-3 sweeps")
 
-    stage4 = subparsers.add_parser("postmortem-stage4", help="Run stage-4 postmortem with a grid of minimal RR values")
+    stage4 = subparsers.add_parser("postmortem-stage4", help="Run stage-4 postmortem on the built-in parameter grid")
     stage4.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     stage4.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
     stage4.add_argument("--tf-all", action="store_true", help="Run postmortem for both 15m and 5m")
-    stage4.add_argument("--min-rr-grid", default="0.5,0.75,1.0,1.25,1.5,2.0", help="Comma-separated minimal RR grid, e.g. 0.5,1.0,1.5")
     stage4.add_argument("--output", default=None, help="Path to CSV with stage-4 postmortem results")
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
