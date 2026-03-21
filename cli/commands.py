@@ -100,6 +100,7 @@ _DEFAULT_STAGE3_PLOTS_DIR_NAME = "stage3_plots"
 _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
 _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
 _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE = "stage4_grid_overview.csv"
+_DEFAULT_STAGE4_REPORT_OUTPUT_FILE = "stage4_report.md"
 _TItem = TypeVar("_TItem")
 
 
@@ -2975,6 +2976,19 @@ def _build_stage4_postmortem_summary_rows(
     rows: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     trade_rows = [row for row in rows if row.get("row_type") == "trade"]
+    return _build_stage4_postmortem_summary_rows_from_trade_rows(
+        timeframe=timeframe,
+        param_grid=param_grid,
+        trade_rows=trade_rows,
+    )
+
+
+def _build_stage4_postmortem_summary_rows_from_trade_rows(
+    *,
+    timeframe: Timeframe,
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+    trade_rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
     if not trade_rows:
         return []
 
@@ -3061,6 +3075,226 @@ def _build_stage4_postmortem_summary_rows(
         previous_win_rate = win_rate
         previous_total_realized_rr = total_realized_rr
     return summary_rows
+
+
+def _format_stage4_metric(value: object, *, digits: int = 2, pct: bool = False) -> str:
+    if value is None:
+        return "n/a"
+    numeric = float(value)
+    if math.isinf(numeric):
+        return "inf"
+    formatted = f"{numeric:.{digits}f}"
+    return f"{formatted}%" if pct else formatted
+
+
+def _format_stage4_win_rate(value: object) -> str:
+    if value is None:
+        return "n/a"
+    return f"{float(value) * 100.0:.1f}%"
+
+
+def _format_stage4_param_triplet(row: dict[str, object]) -> str:
+    return (
+        f"rr={float(row.get('minimal_rr', 0.0) or 0.0):.2f}, "
+        f"m={float(row.get('tp3_multiplier', 0.0) or 0.0):.1f}, "
+        f"w={float(row.get('tp1_share', 0.0) or 0.0):.2f}/"
+        f"{float(row.get('tp2_share', 0.0) or 0.0):.2f}/"
+        f"{float(row.get('tp3_share', 0.0) or 0.0):.2f}"
+    )
+
+
+def _build_markdown_table(headers: list[str], rows: list[list[object]]) -> str:
+    if not rows:
+        return "_No rows._"
+    lines = [
+        f"| {' | '.join(headers)} |",
+        f"| {' | '.join('---' for _ in headers)} |",
+    ]
+    for row in rows:
+        lines.append(f"| {' | '.join(str(cell) for cell in row)} |")
+    return "\n".join(lines)
+
+
+def _resolve_stage4_month_label(timestamp_ms: object) -> str | None:
+    if timestamp_ms is None:
+        return None
+    return pd.to_datetime(int(timestamp_ms), unit="ms", utc=True).strftime("%Y-%m")
+
+
+def _build_stage4_monthly_summary_map(
+    *,
+    timeframe: Timeframe,
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+    trade_rows: list[dict[str, object]],
+) -> dict[str, list[dict[str, object]]]:
+    monthly_trade_rows: dict[str, list[dict[str, object]]] = {}
+    for row in trade_rows:
+        month_label = _resolve_stage4_month_label(row.get("entry_timestamp"))
+        if month_label is None:
+            continue
+        monthly_trade_rows.setdefault(month_label, []).append(row)
+
+    monthly_summary_map: dict[str, list[dict[str, object]]] = {}
+    for month_label, month_rows in sorted(monthly_trade_rows.items()):
+        summary_rows = _build_stage4_postmortem_summary_rows_from_trade_rows(
+            timeframe=timeframe,
+            param_grid=param_grid,
+            trade_rows=month_rows,
+        )
+        monthly_summary_map[month_label] = _score_stage4_summary_rows(summary_rows)
+    return monthly_summary_map
+
+
+def _render_stage4_postmortem_report(
+    *,
+    timeframe: Timeframe,
+    symbols_count: int,
+    stage3_passed_count: int,
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+    summary_rows: list[dict[str, object]],
+    trade_rows: list[dict[str, object]],
+    reason_counts: Counter[str],
+) -> str:
+    generated_at = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    best_summary_row = _select_best_stage4_summary_row(summary_rows)
+    eligible_year_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
+    leaderboard_rows = sorted(
+        eligible_year_rows,
+        key=lambda row: (
+            float(row.get("stage4_score", 0.0) or 0.0),
+            float(row.get("total_realized_rr", 0.0) or 0.0),
+            _resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")),
+            float(row.get("total_pnl_pct", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )[:10]
+    monthly_summary_map = _build_stage4_monthly_summary_map(
+        timeframe=timeframe,
+        param_grid=param_grid,
+        trade_rows=trade_rows,
+    )
+    best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
+
+    lines: list[str] = [
+        f"# Bee Bite Stage-4 Postmortem Report ({timeframe.value})",
+        "",
+        f"Generated: {generated_at}",
+        "",
+        "## Run Overview",
+        "",
+        f"- Symbols scanned: {symbols_count}",
+        f"- Stage-3 passed setups: {stage3_passed_count}",
+        f"- Stage-4 trade rows: {len(trade_rows)}",
+        f"- Grid size: {len(param_grid)}",
+    ]
+    if reason_counts:
+        top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common(8))
+        lines.append(f"- Top rejection reasons before stage-4: {top_reasons}")
+
+    lines.extend(["", "## Best Params For Full Period", ""])
+    if best_summary_row is None:
+        lines.append("_No eligible stage-4 trades for this timeframe._")
+        return "\n".join(lines).strip() + "\n"
+
+    lines.append(f"- Params: `{_format_stage4_param_triplet(best_summary_row)}`")
+    lines.append(f"- Score: `{float(best_summary_row.get('stage4_score', 0.0) or 0.0):.4f}`")
+    lines.append(f"- Eligible trades: `{int(best_summary_row.get('eligible_trades', 0) or 0)}`")
+    lines.append(f"- Win rate: `{_format_stage4_win_rate(best_summary_row.get('win_rate'))}`")
+    lines.append(f"- Total realized RR: `{_format_stage4_metric(best_summary_row.get('total_realized_rr'))}`")
+    lines.append(f"- Profit factor RR: `{_format_stage4_metric(best_summary_row.get('profit_factor_rr'))}`")
+    lines.append(f"- Total PnL: `{_format_stage4_metric(best_summary_row.get('total_pnl_pct'), pct=True)}`")
+    lines.append(
+        f"- Outcome mix: `tp1={int(best_summary_row.get('tp1_full_exits', 0) or 0)}`, "
+        f"`tp2={int(best_summary_row.get('tp2_final_hits', 0) or 0)}`, "
+        f"`tp3={int(best_summary_row.get('tp3_hits', 0) or 0)}`, "
+        f"`stop={int(best_summary_row.get('stop_hits', 0) or 0)}`, "
+        f"`be={int(best_summary_row.get('be_hits', 0) or 0)}`, "
+        f"`open={int(best_summary_row.get('open_trades', 0) or 0)}`"
+    )
+
+    lines.extend(["", "## Full-Period Top Grid Combos", ""])
+    lines.append(
+        _build_markdown_table(
+            ["Rank", "Params", "Score", "Trades", "WR", "Total RR", "PF RR", "Total PnL"],
+            [
+                [
+                    rank,
+                    _format_stage4_param_triplet(row),
+                    f"{float(row.get('stage4_score', 0.0) or 0.0):.4f}",
+                    int(row.get("eligible_trades", 0) or 0),
+                    _format_stage4_win_rate(row.get("win_rate")),
+                    _format_stage4_metric(row.get("total_realized_rr")),
+                    _format_stage4_metric(row.get("profit_factor_rr")),
+                    _format_stage4_metric(row.get("total_pnl_pct"), pct=True),
+                ]
+                for rank, row in enumerate(leaderboard_rows, start=1)
+            ],
+        )
+    )
+
+    monthly_best_rows: list[list[object]] = []
+    monthly_year_best_rows: list[list[object]] = []
+    for month_label, month_summary_rows in monthly_summary_map.items():
+        month_best = _select_best_stage4_summary_row(month_summary_rows)
+        if month_best is not None:
+            monthly_best_rows.append(
+                [
+                    month_label,
+                    _format_stage4_param_triplet(month_best),
+                    f"{float(month_best.get('stage4_score', 0.0) or 0.0):.4f}",
+                    int(month_best.get("eligible_trades", 0) or 0),
+                    _format_stage4_win_rate(month_best.get("win_rate")),
+                    _format_stage4_metric(month_best.get("total_realized_rr")),
+                    _format_stage4_metric(month_best.get("profit_factor_rr")),
+                    _format_stage4_metric(month_best.get("total_pnl_pct"), pct=True),
+                ]
+            )
+        year_best_month_row = None
+        if best_param_key is not None:
+            for row in month_summary_rows:
+                if _resolve_stage4_param_key(row) == best_param_key:
+                    year_best_month_row = row
+                    break
+        if year_best_month_row is not None:
+            monthly_year_best_rows.append(
+                [
+                    month_label,
+                    int(year_best_month_row.get("eligible_trades", 0) or 0),
+                    _format_stage4_win_rate(year_best_month_row.get("win_rate")),
+                    _format_stage4_metric(year_best_month_row.get("total_realized_rr")),
+                    _format_stage4_metric(year_best_month_row.get("profit_factor_rr")),
+                    _format_stage4_metric(year_best_month_row.get("total_pnl_pct"), pct=True),
+                    int(year_best_month_row.get("tp3_hits", 0) or 0),
+                    int(year_best_month_row.get("stop_hits", 0) or 0),
+                    int(year_best_month_row.get("be_hits", 0) or 0),
+                    int(year_best_month_row.get("open_trades", 0) or 0),
+                ]
+            )
+
+    lines.extend(["", "## Best Params By Month", ""])
+    lines.append(
+        _build_markdown_table(
+            ["Month", "Best Params", "Score", "Trades", "WR", "Total RR", "PF RR", "Total PnL"],
+            monthly_best_rows,
+        )
+    )
+
+    lines.extend(["", "## Monthly Results For Full-Period Best Params", ""])
+    lines.append(f"Best params reused for each month: `{_format_stage4_param_triplet(best_summary_row)}`")
+    lines.append("")
+    lines.append(
+        _build_markdown_table(
+            ["Month", "Trades", "WR", "Total RR", "PF RR", "Total PnL", "TP3", "Stop", "BE", "Open"],
+            monthly_year_best_rows,
+        )
+    )
+
+    lines.extend(["", "## Notes", ""])
+    lines.append("- `Trades` means eligible stage-4 entries after the RR filter for that parameter set.")
+    lines.append("- `WR` is based on closed profitable trades only; open trades are excluded from win-rate.")
+    lines.append("- `Total RR` is the main edge metric; `Total PnL` is still useful but less robust before full portfolio modelling.")
+    lines.append("- `PF RR` uses realized RR gains versus realized RR losses.")
+    return "\n".join(lines).strip() + "\n"
 
 
 def _resolve_stage4_param_key(row: dict[str, object]) -> tuple[float, float, float, float, float]:
@@ -3779,6 +4013,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = Path(args.output) if getattr(args, "output", None) else output_dir / _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE
     overview_path = output_dir / _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE
+    report_path = output_dir / _DEFAULT_STAGE4_REPORT_OUTPUT_FILE
     plots_dir = output_dir / "stage4_plots"
     _reset_review_plot_dir(plots_dir)
 
@@ -3960,8 +4195,21 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
         results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     overview_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     results_frame.to_csv(output_path, index=False)
     pd.DataFrame(summary_rows).to_csv(overview_path, index=False)
+    report_path.write_text(
+        _render_stage4_postmortem_report(
+            timeframe=review_timeframe,
+            symbols_count=len(symbols),
+            stage3_passed_count=stage3_passed_count,
+            param_grid=param_grid,
+            summary_rows=summary_rows,
+            trade_rows=rows,
+            reason_counts=reason_counts,
+        ),
+        encoding="utf-8",
+    )
 
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
     if top_reasons:
@@ -3969,7 +4217,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     if empty_frame_symbols:
         logger.warning("postmortem-stage4: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
     logger.info(
-        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid_size=%s best=%s csv=%s overview=%s",
+        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid_size=%s best=%s csv=%s overview=%s report=%s",
         len(symbols),
         stage3_passed_count,
         len(rows),
@@ -3986,6 +4234,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
         ),
         output_path,
         overview_path,
+        report_path,
     )
     return 0
 
