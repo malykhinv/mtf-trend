@@ -72,6 +72,7 @@ from domain.models.reporting.trade_results_distribution import TradeResultsDistr
 from strategy.bee_bite import (
     BeeBiteParams,
     BeeBiteStrategy,
+    BeeBiteStage4PostmortemParams,
     BeeBiteStage2Detector,
     BeeBiteStage2Result,
     BeeBiteStage3Detector,
@@ -1002,8 +1003,8 @@ def _resolve_stage3_review_mode(args: argparse.Namespace) -> str:
     return "evolution" if str(getattr(args, "review_mode", "snapshot")).strip().lower() == "evolution" else "snapshot"
 
 
-def _resolve_stage4_min_rr_grid() -> list[float]:
-    return [float(item.min_rr) for item in get_bee_bite_stage4_postmortem_grid()]
+def _resolve_stage4_param_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
+    return tuple(get_bee_bite_stage4_postmortem_grid())
 
 
 def _select_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: int) -> list[_TItem]:
@@ -2576,6 +2577,23 @@ def _stage23_backtest_row(
     }
 
 
+def _resolve_stage4_active_upper_zones(reference_stage2_result: BeeBiteStage2Result) -> list[object]:
+    return [
+        zone
+        for zone in reference_stage2_result.liquidity_zones
+        if zone.side == "upper"
+        and reference_stage2_result.box_end_timestamp is not None
+        and zone.end_timestamp >= int(reference_stage2_result.box_end_timestamp)
+    ]
+
+
+def _resolve_index_by_timestamp_from_frame(frame: pd.DataFrame, timestamp: int) -> int | None:
+    matches = frame.index[frame["timestamp"].astype("int64") == int(timestamp)]
+    if len(matches) == 0:
+        return None
+    return int(matches[-1])
+
+
 def _resolve_stage4_trade_outcome(
     *,
     frame: pd.DataFrame,
@@ -2584,6 +2602,10 @@ def _resolve_stage4_trade_outcome(
     entry_price: float,
     tp1_price: float,
     tp2_price: float,
+    tp3_price: float,
+    tp1_share: float,
+    tp2_share: float,
+    tp3_share: float,
 ) -> dict[str, object]:
     required_columns = {"high", "low", "close"}
     if frame.empty or not required_columns.issubset(frame.columns):
@@ -2593,124 +2615,143 @@ def _resolve_stage4_trade_outcome(
             "exit_price": None,
             "tp1_hit": False,
             "tp1_timestamp": None,
+            "tp2_hit": False,
+            "tp2_timestamp": None,
+            "tp3_hit": False,
+            "tp3_timestamp": None,
             "be_armed": False,
             "exit_stop_price": stop_price,
+            "realized_rr": None,
+            "realized_pnl_pct": None,
         }
 
     prepared = frame.loc[:, ["high", "low", "close"]].copy()
     for column in prepared.columns:
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
     prepared = prepared.dropna(subset=["high", "low", "close"]).reset_index(drop=True)
-    if prepared.empty or entry_idx >= (len(prepared) - 1):
-        final_close = float(prepared.iloc[-1]["close"]) if not prepared.empty else None
-        final_idx = (len(prepared) - 1) if not prepared.empty else None
+    if prepared.empty:
         return {
-            "outcome": "no_future_data",
-            "exit_idx": final_idx,
-            "exit_price": final_close,
+            "outcome": "frame_invalid",
+            "exit_idx": None,
+            "exit_price": None,
             "tp1_hit": False,
             "tp1_timestamp": None,
+            "tp2_hit": False,
+            "tp2_timestamp": None,
+            "tp3_hit": False,
+            "tp3_timestamp": None,
             "be_armed": False,
             "exit_stop_price": stop_price,
+            "realized_rr": None,
+            "realized_pnl_pct": None,
         }
 
-    tp1_hit = False
-    tp1_timestamp: int | None = None
+    risk = entry_price - stop_price
+    remaining_share = 1.0
     active_stop = stop_price
+    tp1_hit = False
+    tp2_hit = False
+    tp3_hit = False
+    tp1_timestamp: int | None = None
+    tp2_timestamp: int | None = None
+    tp3_timestamp: int | None = None
+    fills: list[tuple[int, float, float]] = []
+
+    def _record_fill(*, idx: int, price: float, share: float) -> None:
+        nonlocal remaining_share
+        if share <= 0.0 or remaining_share <= 0.0:
+            return
+        normalized_share = min(max(share, 0.0), remaining_share)
+        fills.append((idx, price, normalized_share))
+        remaining_share = max(0.0, remaining_share - normalized_share)
+
+    def _finalize(*, outcome: str, exit_idx: int | None, exit_price: float | None) -> dict[str, object]:
+        realized_rr = None
+        if risk > 0.0 and fills:
+            realized_rr = sum((share * ((price - entry_price) / risk)) for _, price, share in fills)
+        realized_pnl_pct = None
+        if entry_price > 0.0 and fills:
+            realized_pnl_pct = sum((share * (((price - entry_price) / entry_price) * 100.0)) for _, price, share in fills)
+        return {
+            "outcome": outcome,
+            "exit_idx": exit_idx,
+            "exit_price": exit_price,
+            "tp1_hit": tp1_hit,
+            "tp1_timestamp": tp1_timestamp,
+            "tp2_hit": tp2_hit,
+            "tp2_timestamp": tp2_timestamp,
+            "tp3_hit": tp3_hit,
+            "tp3_timestamp": tp3_timestamp,
+            "be_armed": tp1_hit and remaining_share > 0.0,
+            "exit_stop_price": active_stop,
+            "realized_rr": realized_rr,
+            "realized_pnl_pct": realized_pnl_pct,
+        }
+
+    if entry_idx >= (len(prepared) - 1):
+        final_idx = len(prepared) - 1
+        final_close = float(prepared.iloc[final_idx]["close"])
+        _record_fill(idx=final_idx, price=final_close, share=remaining_share)
+        return _finalize(outcome="no_future_data", exit_idx=final_idx, exit_price=final_close)
+
     for idx in range(entry_idx + 1, len(prepared)):
         candle_high = float(prepared.iloc[idx]["high"])
         candle_low = float(prepared.iloc[idx]["low"])
-        hit_stop = candle_low <= active_stop
-        hit_tp1 = candle_high >= tp1_price
-        hit_tp2 = candle_high >= tp2_price
 
         if not tp1_hit:
+            hit_stop = candle_low <= active_stop
+            hit_tp1 = candle_high >= tp1_price
             if hit_stop and hit_tp1:
-                return {
-                    "outcome": "stop_same_candle_pre_tp1",
-                    "exit_idx": idx,
-                    "exit_price": stop_price,
-                    "tp1_hit": False,
-                    "tp1_timestamp": None,
-                    "be_armed": False,
-                    "exit_stop_price": stop_price,
-                }
+                _record_fill(idx=idx, price=stop_price, share=remaining_share)
+                return _finalize(outcome="stop_same_candle_pre_tp1", exit_idx=idx, exit_price=stop_price)
             if hit_stop:
-                return {
-                    "outcome": "stop_hit",
-                    "exit_idx": idx,
-                    "exit_price": stop_price,
-                    "tp1_hit": False,
-                    "tp1_timestamp": None,
-                    "be_armed": False,
-                    "exit_stop_price": stop_price,
-                }
+                _record_fill(idx=idx, price=stop_price, share=remaining_share)
+                return _finalize(outcome="stop_hit", exit_idx=idx, exit_price=stop_price)
             if hit_tp1:
                 tp1_hit = True
                 tp1_timestamp = idx
+                _record_fill(idx=idx, price=tp1_price, share=tp1_share)
                 active_stop = entry_price
-                if hit_tp2:
-                    return {
-                        "outcome": "tp2_hit",
-                        "exit_idx": idx,
-                        "exit_price": tp2_price,
-                        "tp1_hit": True,
-                        "tp1_timestamp": tp1_timestamp,
-                        "be_armed": True,
-                        "exit_stop_price": active_stop,
-                    }
+                if remaining_share <= 0.0:
+                    return _finalize(outcome="tp1_full_exit", exit_idx=idx, exit_price=tp1_price)
                 if candle_low <= active_stop:
-                    return {
-                        "outcome": "be_same_candle_after_tp1",
-                        "exit_idx": idx,
-                        "exit_price": entry_price,
-                        "tp1_hit": True,
-                        "tp1_timestamp": tp1_timestamp,
-                        "be_armed": True,
-                        "exit_stop_price": active_stop,
-                    }
+                    _record_fill(idx=idx, price=active_stop, share=remaining_share)
+                    return _finalize(outcome="be_same_candle_after_tp1", exit_idx=idx, exit_price=active_stop)
+                if not tp2_hit and tp2_share > 0.0 and candle_high >= tp2_price:
+                    tp2_hit = True
+                    tp2_timestamp = idx
+                    _record_fill(idx=idx, price=tp2_price, share=tp2_share)
+                    if remaining_share <= 0.0:
+                        return _finalize(outcome="tp2_final_hit", exit_idx=idx, exit_price=tp2_price)
+                if tp3_share > 0.0 and candle_high >= tp3_price:
+                    tp3_hit = True
+                    tp3_timestamp = idx
+                    _record_fill(idx=idx, price=tp3_price, share=remaining_share)
+                    return _finalize(outcome="tp3_hit", exit_idx=idx, exit_price=tp3_price)
                 continue
 
-        if hit_stop and hit_tp2:
-            return {
-                "outcome": "be_same_candle_after_tp1",
-                "exit_idx": idx,
-                "exit_price": active_stop,
-                "tp1_hit": tp1_hit,
-                "tp1_timestamp": tp1_timestamp,
-                "be_armed": True,
-                "exit_stop_price": active_stop,
-            }
+        hit_stop = candle_low <= active_stop
         if hit_stop:
-            return {
-                "outcome": "be_hit",
-                "exit_idx": idx,
-                "exit_price": active_stop,
-                "tp1_hit": tp1_hit,
-                "tp1_timestamp": tp1_timestamp,
-                "be_armed": True,
-                "exit_stop_price": active_stop,
-            }
-        if hit_tp2:
-            return {
-                "outcome": "tp2_hit",
-                "exit_idx": idx,
-                "exit_price": tp2_price,
-                "tp1_hit": tp1_hit,
-                "tp1_timestamp": tp1_timestamp,
-                "be_armed": True,
-                "exit_stop_price": active_stop,
-            }
+            _record_fill(idx=idx, price=active_stop, share=remaining_share)
+            return _finalize(outcome="be_hit", exit_idx=idx, exit_price=active_stop)
 
-    return {
-        "outcome": "open",
-        "exit_idx": len(prepared) - 1,
-        "exit_price": float(prepared.iloc[-1]["close"]),
-        "tp1_hit": tp1_hit,
-        "tp1_timestamp": tp1_timestamp,
-        "be_armed": tp1_hit,
-        "exit_stop_price": active_stop,
-    }
+        if not tp2_hit and tp2_share > 0.0 and candle_high >= tp2_price:
+            tp2_hit = True
+            tp2_timestamp = idx
+            _record_fill(idx=idx, price=tp2_price, share=tp2_share)
+            if remaining_share <= 0.0:
+                return _finalize(outcome="tp2_final_hit", exit_idx=idx, exit_price=tp2_price)
+
+        if tp3_share > 0.0 and candle_high >= tp3_price:
+            tp3_hit = True
+            tp3_timestamp = idx
+            _record_fill(idx=idx, price=tp3_price, share=remaining_share)
+            return _finalize(outcome="tp3_hit", exit_idx=idx, exit_price=tp3_price)
+
+    final_idx = len(prepared) - 1
+    final_close = float(prepared.iloc[final_idx]["close"])
+    _record_fill(idx=final_idx, price=final_close, share=remaining_share)
+    return _finalize(outcome="open", exit_idx=final_idx, exit_price=final_close)
 
 
 def _build_stage4_postmortem_rows(
@@ -2719,9 +2760,10 @@ def _build_stage4_postmortem_rows(
     timeframe: Timeframe,
     regime: _Stage1Regime,
     stage1_event: BeeBiteStage1Result,
+    reference_stage2_result: BeeBiteStage2Result,
     stage3_result: BeeBiteStage3Result,
     frame: pd.DataFrame,
-    min_rr_grid: list[float],
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
 ) -> list[dict[str, object]]:
     if (
         not stage3_result.passed
@@ -2733,13 +2775,13 @@ def _build_stage4_postmortem_rows(
     ):
         return []
 
-    required_columns = {"timestamp", "close"}
+    required_columns = {"timestamp", "close", "high"}
     if frame.empty or not required_columns.issubset(frame.columns):
         return []
-    prepared = frame.loc[:, ["timestamp", "close"]].copy()
+    prepared = frame.loc[:, ["timestamp", "close", "high"]].copy()
     for column in prepared.columns:
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp", "close"]).reset_index(drop=True)
+    prepared = prepared.dropna(subset=["timestamp", "close", "high"]).reset_index(drop=True)
     if prepared.empty or stage3_result.reclaim_idx >= len(prepared):
         return []
 
@@ -2749,16 +2791,39 @@ def _build_stage4_postmortem_rows(
     stop_price = float(stage3_result.lowest_break_price)
     peak_price = float(stage1_event.pump_peak_price)
     box_height = max(float(stage3_result.box_high) - float(stage3_result.box_low), 0.0)
-    tp1_price = peak_price
-    tp2_price = peak_price + box_height
-    rr_target_price = (tp1_price * 0.75) + (tp2_price * 0.25)
+    peak_idx = _resolve_index_by_timestamp_from_frame(prepared, int(stage1_event.pump_peak_timestamp or 0))
+    if peak_idx is None:
+        return []
+    highest_high_after_peak = float(prepared.iloc[peak_idx : entry_idx + 1]["high"].max())
+    active_upper_zones = _resolve_stage4_active_upper_zones(reference_stage2_result)
+    upper_zone_above_peak = sorted(
+        (zone for zone in active_upper_zones if zone.low > peak_price),
+        key=lambda zone: zone.low,
+    )
     risk = entry_price - stop_price
-    reward = rr_target_price - entry_price
-    rr_value = (reward / risk) if risk > 0.0 else None
 
     rows: list[dict[str, object]] = []
-    for row_order, min_rr in enumerate(min_rr_grid, start=1):
-        eligible = rr_value is not None and rr_value >= min_rr
+    for row_order, params in enumerate(param_grid, start=1):
+        tp1_price = peak_price
+        if upper_zone_above_peak:
+            tp2_source = "upper_zone_bottom"
+            tp2_price = float(upper_zone_above_peak[0].low)
+        else:
+            tp2_source = "fallback_high_after_peak"
+            tp2_price = max(peak_price, highest_high_after_peak)
+        tp3_price = peak_price + (box_height * float(params.tp3_multiplier))
+        weighted_target_price = (
+            (tp1_price * float(params.tp1_share))
+            + (tp2_price * float(params.tp2_share))
+            + (tp3_price * float(params.tp3_share))
+        )
+        rr_value = ((weighted_target_price - entry_price) / risk) if risk > 0.0 else None
+        target_stack_valid = (
+            tp1_price > entry_price
+            and (float(params.tp2_share) <= 0.0 or tp2_price >= tp1_price)
+            and (float(params.tp3_share) <= 0.0 or tp3_price >= max(tp1_price, tp2_price if float(params.tp2_share) > 0.0 else tp1_price))
+        )
+        eligible = bool(target_stack_valid) and rr_value is not None and rr_value >= float(params.min_rr)
         outcome = "rr_below_threshold"
         exit_idx: int | None = None
         exit_price: float | None = None
@@ -2766,9 +2831,15 @@ def _build_stage4_postmortem_rows(
         realized_pnl_pct: float | None = None
         exit_timestamp: int | None = None
         tp1_timestamp: int | None = None
+        tp2_timestamp: int | None = None
+        tp3_timestamp: int | None = None
         tp1_hit = False
+        tp2_hit = False
+        tp3_hit = False
         be_armed = False
         exit_stop_price = stop_price
+        if not target_stack_valid:
+            outcome = "invalid_target_stack"
         if eligible:
             trade_outcome = _resolve_stage4_trade_outcome(
                 frame=frame,
@@ -2777,21 +2848,29 @@ def _build_stage4_postmortem_rows(
                 entry_price=entry_price,
                 tp1_price=tp1_price,
                 tp2_price=tp2_price,
+                tp3_price=tp3_price,
+                tp1_share=float(params.tp1_share),
+                tp2_share=float(params.tp2_share),
+                tp3_share=float(params.tp3_share),
             )
             outcome = str(trade_outcome["outcome"])
             exit_idx = cast(int | None, trade_outcome["exit_idx"])
             exit_price = cast(float | None, trade_outcome["exit_price"])
             tp1_hit = bool(trade_outcome["tp1_hit"])
+            tp2_hit = bool(trade_outcome["tp2_hit"])
+            tp3_hit = bool(trade_outcome["tp3_hit"])
             tp1_raw_idx = cast(int | None, trade_outcome["tp1_timestamp"])
+            tp2_raw_idx = cast(int | None, trade_outcome["tp2_timestamp"])
+            tp3_raw_idx = cast(int | None, trade_outcome["tp3_timestamp"])
             tp1_timestamp = int(prepared.iloc[tp1_raw_idx]["timestamp"]) if tp1_raw_idx is not None and tp1_raw_idx < len(prepared) else None
+            tp2_timestamp = int(prepared.iloc[tp2_raw_idx]["timestamp"]) if tp2_raw_idx is not None and tp2_raw_idx < len(prepared) else None
+            tp3_timestamp = int(prepared.iloc[tp3_raw_idx]["timestamp"]) if tp3_raw_idx is not None and tp3_raw_idx < len(prepared) else None
             be_armed = bool(trade_outcome["be_armed"])
             exit_stop_price = float(cast(float | int, trade_outcome["exit_stop_price"]))
             if exit_idx is not None and exit_idx < len(prepared):
                 exit_timestamp = int(prepared.iloc[exit_idx]["timestamp"])
-            if risk > 0.0 and exit_price is not None:
-                realized_rr = (float(exit_price) - entry_price) / risk
-            if exit_price is not None and entry_price > 0.0:
-                realized_pnl_pct = ((float(exit_price) - entry_price) / entry_price) * 100.0
+            realized_rr = cast(float | None, trade_outcome["realized_rr"])
+            realized_pnl_pct = cast(float | None, trade_outcome["realized_pnl_pct"])
 
         rows.append(
             {
@@ -2800,19 +2879,31 @@ def _build_stage4_postmortem_rows(
                 "regime_index": regime.regime_index,
                 "row_type": "trade",
                 "row_order": row_order,
+                "tp3_multiplier": float(params.tp3_multiplier),
+                "tp1_share": float(params.tp1_share),
+                "tp2_share": float(params.tp2_share),
+                "tp3_share": float(params.tp3_share),
                 "stage3_reclaim_timestamp": stage3_result.reclaim_timestamp,
                 "entry_timestamp": entry_timestamp,
                 "entry_price": entry_price,
                 "stop_price": stop_price,
                 "tp1_price": tp1_price,
                 "tp2_price": tp2_price,
-                "rr_target_price": rr_target_price,
+                "tp3_price": tp3_price,
+                "tp2_source": tp2_source,
+                "highest_high_after_peak": highest_high_after_peak,
+                "weighted_target_price": weighted_target_price,
                 "box_height": box_height,
-                "minimal_rr": min_rr,
+                "minimal_rr": float(params.min_rr),
                 "rr": rr_value,
+                "target_stack_valid": target_stack_valid,
                 "eligible": eligible,
                 "tp1_hit": tp1_hit,
                 "tp1_timestamp": tp1_timestamp,
+                "tp2_hit": tp2_hit,
+                "tp2_timestamp": tp2_timestamp,
+                "tp3_hit": tp3_hit,
+                "tp3_timestamp": tp3_timestamp,
                 "be_armed": be_armed,
                 "outcome": outcome,
                 "exit_timestamp": exit_timestamp,
@@ -2828,6 +2919,7 @@ def _build_stage4_postmortem_rows(
 def _build_stage4_postmortem_summary_rows(
     *,
     timeframe: Timeframe,
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
     rows: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     trade_rows = [row for row in rows if row.get("row_type") == "trade"]
@@ -2835,15 +2927,28 @@ def _build_stage4_postmortem_summary_rows(
         return []
 
     summary_rows: list[dict[str, object]] = []
-    min_rr_values = sorted({float(row["minimal_rr"]) for row in trade_rows})
     stage3_candidates = len({(str(row["symbol"]), int(row["regime_index"])) for row in trade_rows})
-    for row_order, min_rr in enumerate(min_rr_values, start=1):
-        threshold_rows = [row for row in trade_rows if float(row["minimal_rr"]) == min_rr]
+    previous_total_pnl_pct = 0.0
+    previous_win_rate = 0.0
+    previous_total_realized_rr = 0.0
+    for row_order, params in enumerate(param_grid, start=1):
+        threshold_rows = [
+            row
+            for row in trade_rows
+            if float(row["minimal_rr"]) == float(params.min_rr)
+            and float(row["tp3_multiplier"]) == float(params.tp3_multiplier)
+            and float(row["tp1_share"]) == float(params.tp1_share)
+            and float(row["tp2_share"]) == float(params.tp2_share)
+            and float(row["tp3_share"]) == float(params.tp3_share)
+        ]
         eligible_rows = [row for row in threshold_rows if bool(row["eligible"])]
-        tp2_hits = sum(1 for row in eligible_rows if row["outcome"] == "tp2_hit")
+        tp1_full_exits = sum(1 for row in eligible_rows if row["outcome"] == "tp1_full_exit")
+        tp2_final_hits = sum(1 for row in eligible_rows if row["outcome"] == "tp2_final_hit")
+        tp3_hits = sum(1 for row in eligible_rows if row["outcome"] == "tp3_hit")
         stop_hits = sum(1 for row in eligible_rows if row["outcome"] in {"stop_hit", "stop_same_candle_pre_tp1"})
         be_hits = sum(1 for row in eligible_rows if row["outcome"] in {"be_hit", "be_same_candle_after_tp1"})
         open_trades = sum(1 for row in eligible_rows if row["outcome"] in {"open", "no_future_data"})
+        invalid_target_stack = sum(1 for row in threshold_rows if row["outcome"] == "invalid_target_stack")
         realized_rr_values = [
             float(row["realized_rr"])
             for row in eligible_rows
@@ -2856,6 +2961,15 @@ def _build_stage4_postmortem_summary_rows(
         ]
         loss_rr_values = [value for value in realized_rr_values if value < 0.0]
         gain_rr_values = [value for value in realized_rr_values if value > 0.0]
+        closed_rows = [row for row in eligible_rows if row["outcome"] not in {"open", "no_future_data"}]
+        profitable_closed_trades = sum(
+            1
+            for row in closed_rows
+            if row.get("realized_pnl_pct") is not None and float(row["realized_pnl_pct"]) > 0.0
+        )
+        win_rate = (profitable_closed_trades / len(closed_rows)) if closed_rows else 0.0
+        total_realized_rr = sum(realized_rr_values) if realized_rr_values else 0.0
+        total_pnl_pct = sum(realized_pnl_pct_values) if realized_pnl_pct_values else 0.0
         summary_rows.append(
             {
                 "symbol": "__summary__",
@@ -2863,22 +2977,37 @@ def _build_stage4_postmortem_summary_rows(
                 "regime_index": 0,
                 "row_type": "summary",
                 "row_order": row_order,
-                "minimal_rr": min_rr,
+                "minimal_rr": float(params.min_rr),
+                "tp3_multiplier": float(params.tp3_multiplier),
+                "tp1_share": float(params.tp1_share),
+                "tp2_share": float(params.tp2_share),
+                "tp3_share": float(params.tp3_share),
                 "stage3_candidates": stage3_candidates,
                 "eligible_trades": len(eligible_rows),
                 "rr_filtered_out": sum(1 for row in threshold_rows if not bool(row["eligible"])),
-                "tp2_hits": tp2_hits,
+                "invalid_target_stack": invalid_target_stack,
+                "tp1_full_exits": tp1_full_exits,
+                "tp2_final_hits": tp2_final_hits,
+                "tp3_hits": tp3_hits,
                 "stop_hits": stop_hits,
                 "be_hits": be_hits,
                 "open_trades": open_trades,
-                "win_rate": (tp2_hits / len(eligible_rows)) if eligible_rows else 0.0,
+                "closed_trades": len(closed_rows),
+                "profitable_closed_trades": profitable_closed_trades,
+                "win_rate": win_rate,
                 "avg_realized_rr": (sum(realized_rr_values) / len(realized_rr_values)) if realized_rr_values else 0.0,
-                "total_realized_rr": sum(realized_rr_values) if realized_rr_values else 0.0,
+                "total_realized_rr": total_realized_rr,
                 "avg_pnl_pct": (sum(realized_pnl_pct_values) / len(realized_pnl_pct_values)) if realized_pnl_pct_values else 0.0,
-                "total_pnl_pct": sum(realized_pnl_pct_values) if realized_pnl_pct_values else 0.0,
+                "total_pnl_pct": total_pnl_pct,
                 "profit_factor_rr": (sum(gain_rr_values) / abs(sum(loss_rr_values))) if loss_rr_values and abs(sum(loss_rr_values)) > 0.0 else (math.inf if gain_rr_values else 0.0),
+                "delta_total_pnl_pct": total_pnl_pct - previous_total_pnl_pct,
+                "delta_win_rate_pct": (win_rate - previous_win_rate) * 100.0,
+                "delta_total_realized_rr": total_realized_rr - previous_total_realized_rr,
             }
         )
+        previous_total_pnl_pct = total_pnl_pct
+        previous_win_rate = win_rate
+        previous_total_realized_rr = total_realized_rr
     return summary_rows
 
 
@@ -3496,7 +3625,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     logger = get_logger("postmortem-stage4", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("postmortem-stage4: cache_dir=%s", config.backtest.cache_dir)
     review_timeframe = _resolve_review_timeframe(args)
-    min_rr_grid = _resolve_stage4_min_rr_grid()
+    param_grid = _resolve_stage4_param_grid()
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
     output_dir = results_dir / "stage4_postmortem" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -3589,16 +3718,6 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
                 continue
 
             stage3_passed_count += 1
-            trade_rows = _build_stage4_postmortem_rows(
-                symbol=symbol,
-                timeframe=review_timeframe,
-                regime=regime,
-                stage1_event=stage1_event,
-                stage3_result=stage3_result,
-                frame=frame,
-                min_rr_grid=min_rr_grid,
-            )
-            rows.extend(trade_rows)
             reference_stage2_end_timestamp = int(
                 stage3_result.reference_box_end_timestamp
                 or dynamic_stage2_result.analysis_end_timestamp
@@ -3612,11 +3731,27 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
                 stage2_detector=stage2_detector,
                 analysis_end_timestamp=reference_stage2_end_timestamp,
             )
+            trade_rows = _build_stage4_postmortem_rows(
+                symbol=symbol,
+                timeframe=review_timeframe,
+                regime=regime,
+                stage1_event=stage1_event,
+                reference_stage2_result=reference_stage2_result,
+                stage3_result=stage3_result,
+                frame=frame,
+                param_grid=param_grid,
+            )
+            rows.extend(trade_rows)
             for trade_row in trade_rows:
                 if not bool(trade_row.get("eligible")):
                     continue
                 plot_path = plots_dir / (
-                    f"{symbol.replace('/', '_')}_stage4_regime_{regime.regime_index:02d}_rr_{float(trade_row['minimal_rr']):.2f}.png"
+                    f"{symbol.replace('/', '_')}_stage4_regime_{regime.regime_index:02d}"
+                    f"_rr_{float(trade_row['minimal_rr']):.2f}"
+                    f"_m_{float(trade_row['tp3_multiplier']):.1f}"
+                    f"_w_{int(round(float(trade_row['tp1_share']) * 100.0))}"
+                    f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
+                    f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
                 )
                 stage4_plotter.plot_result(
                     frame=frame,
@@ -3640,6 +3775,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
 
     summary_rows = _build_stage4_postmortem_summary_rows(
         timeframe=review_timeframe,
+        param_grid=param_grid,
         rows=rows,
     )
     results_frame = pd.DataFrame([*summary_rows, *rows])
@@ -3657,12 +3793,12 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     if empty_frame_symbols:
         logger.warning("postmortem-stage4: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
     logger.info(
-        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid=%s csv=%s overview=%s",
+        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid_size=%s csv=%s overview=%s",
         len(symbols),
         stage3_passed_count,
         len(rows),
         plots_built,
-        ",".join(f"{value:g}" for value in min_rr_grid),
+        len(param_grid),
         output_path,
         overview_path,
     )

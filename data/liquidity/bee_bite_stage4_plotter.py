@@ -35,7 +35,8 @@ class BeeBiteStage4Plotter:
     _ENTRY_COLOR = "#38bdf8"
     _STOP_COLOR = "#ef4444"
     _TP1_COLOR = "#f59e0b"
-    _TP2_COLOR = "#22c55e"
+    _TP2_COLOR = "#eab308"
+    _TP3_COLOR = "#22c55e"
     _PEAK_COLOR = "#fb7185"
     _STAGE1_COLOR = "#a3e635"
     _EXIT_COLOR = "#fde047"
@@ -173,10 +174,16 @@ class BeeBiteStage4Plotter:
         stop_price = float(trade_row["stop_price"])
         tp1_price = float(trade_row["tp1_price"])
         tp2_price = float(trade_row["tp2_price"])
+        tp3_price = float(trade_row["tp3_price"])
+        tp2_share = float(trade_row.get("tp2_share", 0.0))
+        tp3_share = float(trade_row.get("tp3_share", 0.0))
         price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle="-", linewidth=1.2, alpha=0.95, label="entry")
         price_ax.axhline(stop_price, color=self._STOP_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="sl")
         price_ax.axhline(tp1_price, color=self._TP1_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="tp1")
-        price_ax.axhline(tp2_price, color=self._TP2_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="tp2")
+        if tp2_share > 0.0:
+            price_ax.axhline(tp2_price, color=self._TP2_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="tp2")
+        if tp3_share > 0.0:
+            price_ax.axhline(tp3_price, color=self._TP3_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="tp3")
         if bool(trade_row.get("be_armed")):
             price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle=":", linewidth=1.1, alpha=0.9, label="be")
 
@@ -201,6 +208,14 @@ class BeeBiteStage4Plotter:
         if tp1_timestamp is not None:
             tp1_idx = self._timestamp_to_index(prepared, int(tp1_timestamp))
             self._draw_marker(price_ax, tp1_idx - window_start, tp1_price, self._TP1_COLOR, "tp1 hit")
+        tp2_timestamp = trade_row.get("tp2_timestamp")
+        if tp2_share > 0.0 and tp2_timestamp is not None:
+            tp2_idx = self._timestamp_to_index(prepared, int(tp2_timestamp))
+            self._draw_marker(price_ax, tp2_idx - window_start, tp2_price, self._TP2_COLOR, "tp2 hit")
+        tp3_timestamp = trade_row.get("tp3_timestamp")
+        if tp3_share > 0.0 and tp3_timestamp is not None:
+            tp3_idx = self._timestamp_to_index(prepared, int(tp3_timestamp))
+            self._draw_marker(price_ax, tp3_idx - window_start, tp3_price, self._TP3_COLOR, "tp3 hit")
         exit_timestamp = trade_row.get("exit_timestamp")
         exit_price = trade_row.get("exit_price")
         if exit_timestamp is not None and exit_price is not None:
@@ -221,9 +236,20 @@ class BeeBiteStage4Plotter:
             f"SL: {stop_price:.5f}",
             f"TP1: {tp1_price:.5f}",
             f"TP2: {tp2_price:.5f}",
+            f"TP3: {tp3_price:.5f}",
+            (
+                "Size split: "
+                f"{float(trade_row.get('tp1_share', 0.0)):.2f}/"
+                f"{float(trade_row.get('tp2_share', 0.0)):.2f}/"
+                f"{float(trade_row.get('tp3_share', 0.0)):.2f}"
+            ),
+            f"TP2 source: {trade_row.get('tp2_source')}",
+            f"TP3 mult: {float(trade_row.get('tp3_multiplier', 0.0)):.1f}",
         ]
         if trade_row.get("realized_rr") is not None:
             info_lines.append(f"Realized RR: {float(trade_row['realized_rr']):.2f}")
+        if trade_row.get("realized_pnl_pct") is not None:
+            info_lines.append(f"Realized PnL: {float(trade_row['realized_pnl_pct']):.2f}%")
         price_ax.text(
             0.015,
             0.985,
