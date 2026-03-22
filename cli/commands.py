@@ -118,6 +118,15 @@ class _Stage1Regime:
     regime_end_reason: str
 
 
+def _format_eta_compact(total_seconds: float) -> str:
+    seconds = max(0, int(total_seconds))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
 @dataclass(slots=True)
 class _Stage23ReviewCandidate:
     symbol: str
@@ -4423,112 +4432,119 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int
     plots_built = 0
     empty_frame_symbols: list[str] = []
     reason_counts: Counter[str] = Counter()
+    progress_started_at = time.perf_counter()
 
     for index, symbol in enumerate(symbols, start=1):
-        frame = _get_cached_review_frame(
-            cache=frame_cache,
-            preparer=preparer,
-            symbol=symbol,
-            timeframe=review_timeframe,
-        )
-        if frame.empty:
-            empty_frame_symbols.append(symbol)
-            continue
-
-        stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
-            cache=frame_cache,
-            preparer=preparer,
-            symbol=symbol,
-            timeframe=stage1_timeframe,
-        )
-        if stage1_frame.empty:
-            reason_counts["stage1:empty_reference_frame"] += 1
-            continue
-
-        stage1_events, stage1_evaluation = _get_cached_stage1_review(
-            cache=stage1_review_cache,
-            selector=selector,
-            symbol=symbol,
-            timeframe=stage1_timeframe,
-            frame=stage1_frame,
-        )
-        if not stage1_events:
-            reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
-            continue
-
-        regimes = _resolve_stage1_regime_ends(
-            frame=stage1_frame,
-            regimes=_group_stage1_events_into_regimes(stage1_events),
-        )
-        for regime in regimes:
-            stage1_event = regime.first_event
-            dynamic_stage2_result = stage2_detector.detect(
-                symbol=symbol,
-                frame=frame,
-                stage1=stage1_event,
-                analysis_end_timestamp=int(regime.regime_end_timestamp),
-            )
-            if not dynamic_stage2_result.passed:
-                reason_counts["stage2_not_passed"] += 1
-                continue
-
-            stage3_result = _resolve_stage23_terminal_result(
+        try:
+            frame = _get_cached_review_frame(
+                cache=frame_cache,
+                preparer=preparer,
                 symbol=symbol,
                 timeframe=review_timeframe,
-                frame=frame,
-                stage1_event=stage1_event,
-                regime=regime,
-                stage2_detector=stage2_detector,
-                stage3_detector=stage3_detector,
-                initial_stage2_result=dynamic_stage2_result,
             )
-            if not stage3_result.passed:
-                reason_counts[stage3_result.reason] += 1
+            if frame.empty:
+                empty_frame_symbols.append(symbol)
                 continue
 
-            stage3_passed_count += 1
-            reference_stage2_end_timestamp = int(
-                stage3_result.reference_box_end_timestamp
-                or dynamic_stage2_result.analysis_end_timestamp
-                or regime.regime_end_timestamp
-            )
-            reference_stage2_result = _get_cached_stage2_result(
-                cache=stage2_timestamp_cache.setdefault(symbol, {}),
+            stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
+                cache=frame_cache,
+                preparer=preparer,
                 symbol=symbol,
-                frame=frame,
-                stage1_event=stage1_event,
-                stage2_detector=stage2_detector,
-                analysis_end_timestamp=reference_stage2_end_timestamp,
+                timeframe=stage1_timeframe,
             )
-            trade_rows = _build_stage4_postmortem_rows(
+            if stage1_frame.empty:
+                reason_counts["stage1:empty_reference_frame"] += 1
+                continue
+
+            stage1_events, stage1_evaluation = _get_cached_stage1_review(
+                cache=stage1_review_cache,
+                selector=selector,
                 symbol=symbol,
-                timeframe=review_timeframe,
-                regime=regime,
-                stage1_event=stage1_event,
-                reference_stage2_result=reference_stage2_result,
-                stage3_result=stage3_result,
-                frame=frame,
-                param_grid=param_grid,
+                timeframe=stage1_timeframe,
+                frame=stage1_frame,
             )
-            rows.extend(trade_rows)
-            for trade_row in trade_rows:
-                plot_payloads.append(
-                    {
-                        "symbol": symbol,
-                        "regime_index": regime.regime_index,
-                        "frame": frame,
-                        "stage1_event": stage1_event,
-                        "reference_stage2_result": reference_stage2_result,
-                        "stage3_result": stage3_result,
-                        "trade_row": trade_row,
-                    }
+            if not stage1_events:
+                reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
+                continue
+
+            regimes = _resolve_stage1_regime_ends(
+                frame=stage1_frame,
+                regimes=_group_stage1_events_into_regimes(stage1_events),
+            )
+            for regime in regimes:
+                stage1_event = regime.first_event
+                dynamic_stage2_result = stage2_detector.detect(
+                    symbol=symbol,
+                    frame=frame,
+                    stage1=stage1_event,
+                    analysis_end_timestamp=int(regime.regime_end_timestamp),
                 )
+                if not dynamic_stage2_result.passed:
+                    reason_counts["stage2_not_passed"] += 1
+                    continue
 
-        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
+                stage3_result = _resolve_stage23_terminal_result(
+                    symbol=symbol,
+                    timeframe=review_timeframe,
+                    frame=frame,
+                    stage1_event=stage1_event,
+                    regime=regime,
+                    stage2_detector=stage2_detector,
+                    stage3_detector=stage3_detector,
+                    initial_stage2_result=dynamic_stage2_result,
+                )
+                if not stage3_result.passed:
+                    reason_counts[stage3_result.reason] += 1
+                    continue
+
+                stage3_passed_count += 1
+                reference_stage2_end_timestamp = int(
+                    stage3_result.reference_box_end_timestamp
+                    or dynamic_stage2_result.analysis_end_timestamp
+                    or regime.regime_end_timestamp
+                )
+                reference_stage2_result = _get_cached_stage2_result(
+                    cache=stage2_timestamp_cache.setdefault(symbol, {}),
+                    symbol=symbol,
+                    frame=frame,
+                    stage1_event=stage1_event,
+                    stage2_detector=stage2_detector,
+                    analysis_end_timestamp=reference_stage2_end_timestamp,
+                )
+                trade_rows = _build_stage4_postmortem_rows(
+                    symbol=symbol,
+                    timeframe=review_timeframe,
+                    regime=regime,
+                    stage1_event=stage1_event,
+                    reference_stage2_result=reference_stage2_result,
+                    stage3_result=stage3_result,
+                    frame=frame,
+                    param_grid=param_grid,
+                )
+                rows.extend(trade_rows)
+                for trade_row in trade_rows:
+                    plot_payloads.append(
+                        {
+                            "symbol": symbol,
+                            "regime_index": regime.regime_index,
+                            "frame": frame,
+                            "stage1_event": stage1_event,
+                            "reference_stage2_result": reference_stage2_result,
+                            "stage3_result": stage3_result,
+                            "trade_row": trade_row,
+                        }
+                    )
+        finally:
+            elapsed_seconds = time.perf_counter() - progress_started_at
+            progress = (index / len(symbols)) * 100.0 if symbols else 0.0
+            eta_seconds = (elapsed_seconds / index) * (len(symbols) - index) if index else 0.0
             logger.info(
-                "postmortem-stage4: progress=%s/%s stage3_passed=%s rows=%s queued_plots=%s",
+                "postmortem-stage4: progress=%s/%s (%.1f%%) eta=%s symbol=%s stage3_passed=%s rows=%s queued_plots=%s",
                 index,
                 len(symbols),
+                progress,
+                _format_eta_compact(eta_seconds),
+                symbol,
                 stage3_passed_count,
                 len(rows),
                 len(plot_payloads),
