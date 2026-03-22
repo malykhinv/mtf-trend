@@ -4397,8 +4397,8 @@ def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("postmortem-stage4", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, logger_name: str = "postmortem-stage4") -> int:
+    logger = get_logger(logger_name, level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     logger.info("postmortem-stage4: cache_dir=%s", config.backtest.cache_dir)
     review_timeframe = _resolve_review_timeframe(args)
     param_grid = _resolve_stage4_param_grid()
@@ -5103,7 +5103,7 @@ def postmortem_stage4(config: AppConfig, args: argparse.Namespace) -> int:
     """Собирает stage-4 postmortem по валидным stage-3 setups и сетке minimal_rr."""
     timeframes = _resolve_review_timeframes(args)
     if len(timeframes) == 1:
-        return _run_with_logging("postmortem-stage4", config, lambda: _postmortem_stage4_inner(config, args))
+        return _run_with_logging("postmortem-stage4", config, lambda: _postmortem_stage4_inner(config, args, logger_name="postmortem-stage4"))
 
     exit_codes: list[int] = []
     base_output = Path(args.output) if getattr(args, "output", None) else None
@@ -5117,7 +5117,7 @@ def postmortem_stage4(config: AppConfig, args: argparse.Namespace) -> int:
             _run_with_logging(
                 f"postmortem-stage4[{timeframe.value}]",
                 config,
-                lambda stage_args=scoped_args: _postmortem_stage4_inner(config, stage_args),
+                lambda stage_args=scoped_args, command_name=f"postmortem-stage4[{timeframe.value}]": _postmortem_stage4_inner(config, stage_args, logger_name=command_name),
             )
         )
     return max(exit_codes, default=0)
