@@ -33,6 +33,9 @@ class BeeBiteStage1Plotter:
     _HOLD_BASE_COLOR = "#f8fafc"
     _STAGE1_COLOR = "#a3e635"
     _LOWEST_COLOR = "#c084fc"
+    _FIGURE_SIZE = (8, 6)
+    _FIGURE_DPI = 100
+    _GRIDSPEC_HEIGHT_RATIOS = [4, 1]
 
     def plot_event(
         self,
@@ -95,9 +98,9 @@ class BeeBiteStage1Plotter:
         fig, (price_ax, volume_ax) = plt.subplots(
             2,
             1,
-            figsize=(16, 9),
+            figsize=self._FIGURE_SIZE,
             sharex=True,
-            gridspec_kw={"height_ratios": [4, 1]},
+            gridspec_kw={"height_ratios": self._GRIDSPEC_HEIGHT_RATIOS},
             facecolor=self._FIGURE_FACE,
         )
         price_ax.set_facecolor(self._AXIS_FACE)
@@ -212,8 +215,8 @@ class BeeBiteStage1Plotter:
         volume_ax.set_xticklabels(tick_labels, rotation=0, ha="center", color=self._TEXT_COLOR)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.tight_layout()
-        fig.savefig(output_path, dpi=160)
+        fig.subplots_adjust(left=0.07, right=0.985, top=0.93, bottom=0.08, hspace=0.06)
+        fig.savefig(output_path, dpi=self._FIGURE_DPI)
         plt.close(fig)
 
     def _draw_candles(self, axis, frame: pd.DataFrame, x_positions: list[int]) -> None:

@@ -46,6 +46,9 @@ class BeeBiteStage2Plotter:
     _CROSSED_ZONE_ALPHA = 0.3
     _ACTIVE_ZONE_MIN_ALPHA = 0.3
     _ACTIVE_ZONE_MAX_ALPHA = 0.9
+    _FIGURE_SIZE = (8, 6)
+    _FIGURE_DPI = 100
+    _GRIDSPEC_HEIGHT_RATIOS = [4, 1]
 
     def plot_result(
         self,
@@ -56,7 +59,7 @@ class BeeBiteStage2Plotter:
         output_path: Path,
         window_end_timestamp: int | None = None,
         title_suffix: str | None = None,
-        dpi: int = 160,
+        dpi: int = 100,
         include_volume: bool = True,
     ) -> None:
         required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
@@ -79,36 +82,27 @@ class BeeBiteStage2Plotter:
         window = prepared.iloc[window_start : window_end + 1].reset_index(drop=True)
         x_positions = list(range(len(window)))
 
-        if include_volume:
-            fig, (price_ax, volume_ax) = plt.subplots(
-                2,
-                1,
-                figsize=(16, 9),
-                sharex=True,
-                gridspec_kw={"height_ratios": [4, 1]},
-                facecolor=self._FIGURE_FACE,
-            )
-        else:
-            fig, price_ax = plt.subplots(
-                1,
-                1,
-                figsize=(16, 7),
-                facecolor=self._FIGURE_FACE,
-            )
-            volume_ax = None
+        fig, (price_ax, volume_ax) = plt.subplots(
+            2,
+            1,
+            figsize=self._FIGURE_SIZE,
+            sharex=True,
+            gridspec_kw={"height_ratios": self._GRIDSPEC_HEIGHT_RATIOS},
+            facecolor=self._FIGURE_FACE,
+        )
         price_ax.set_facecolor(self._AXIS_FACE)
-        axes = [price_ax]
-        if volume_ax is not None:
-            volume_ax.set_facecolor(self._AXIS_FACE)
-            axes.append(volume_ax)
+        volume_ax.set_facecolor(self._AXIS_FACE)
+        axes = [price_ax, volume_ax]
         for axis in axes:
             axis.tick_params(colors=self._TEXT_COLOR)
             for spine in axis.spines.values():
                 spine.set_color(self._GRID_COLOR)
 
         self._draw_candles(price_ax, window, x_positions)
-        if volume_ax is not None:
+        if include_volume:
             self._draw_volume(volume_ax, window, x_positions)
+        else:
+            volume_ax.set_visible(False)
 
         stage2_hold_price = resolve_stage2_hold_price(
             high_pump=stage1_event.pump_peak_price,
@@ -271,7 +265,7 @@ class BeeBiteStage2Plotter:
 
         tick_positions = self._build_tick_positions(window)
         tick_labels = self._build_tick_labels(window, tick_positions)
-        if volume_ax is not None:
+        if include_volume:
             volume_ax.set_ylabel("Volume", color=self._TEXT_COLOR)
             volume_ax.grid(alpha=0.18, color=self._GRID_COLOR)
             volume_ax.set_xticks(tick_positions)
@@ -281,8 +275,8 @@ class BeeBiteStage2Plotter:
             price_ax.set_xticklabels(tick_labels, rotation=0, ha="center", color=self._TEXT_COLOR)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        fig.tight_layout()
-        fig.savefig(output_path, dpi=max(int(dpi), 72))
+        fig.subplots_adjust(left=0.07, right=0.985, top=0.93, bottom=0.08, hspace=0.06)
+        fig.savefig(output_path, dpi=max(int(dpi), self._FIGURE_DPI))
         plt.close(fig)
 
     @staticmethod
