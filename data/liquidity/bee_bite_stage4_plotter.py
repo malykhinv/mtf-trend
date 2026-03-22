@@ -40,6 +40,8 @@ class BeeBiteStage4Plotter:
     _PEAK_COLOR = "#fb7185"
     _STAGE1_COLOR = "#a3e635"
     _EXIT_COLOR = "#fde047"
+    _POSITIVE_EVENT_COLOR = "#22c55e"
+    _NEGATIVE_EVENT_COLOR = "#ef4444"
     _FIGURE_SIZE = (8, 6)
     _FIGURE_DPI = 100
     _GRIDSPEC_HEIGHT_RATIOS = [4, 1]
@@ -176,50 +178,45 @@ class BeeBiteStage4Plotter:
         tp3_price = float(trade_row["tp3_price"])
         tp2_share = float(trade_row.get("tp2_share", 0.0))
         tp3_share = float(trade_row.get("tp3_share", 0.0))
-        price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle="-", linewidth=1.2, alpha=0.95, label="entry")
-        price_ax.axhline(stop_price, color=self._STOP_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="sl")
-        price_ax.axhline(tp1_price, color=self._TP1_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="tp1")
+        price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle="-", linewidth=1.0, alpha=0.95)
+        price_ax.axhline(stop_price, color=self._STOP_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
+        price_ax.axhline(tp1_price, color=self._TP1_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
         if tp2_share > 0.0:
-            price_ax.axhline(tp2_price, color=self._TP2_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="tp2")
+            price_ax.axhline(tp2_price, color=self._TP2_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
         if tp3_share > 0.0:
-            price_ax.axhline(tp3_price, color=self._TP3_COLOR, linestyle="--", linewidth=1.2, alpha=0.95, label="tp3")
+            price_ax.axhline(tp3_price, color=self._TP3_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
         if bool(trade_row.get("be_armed")):
-            price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle=":", linewidth=1.1, alpha=0.9, label="be")
+            price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle=":", linewidth=1.0, alpha=0.9)
 
-        self._draw_marker(
-            price_ax,
-            pump_start_idx - window_start,
-            float(stage1_event.pump_base_price or prepared.iloc[pump_start_idx]["low"]),
-            self._ENTRY_COLOR,
-            "pump start",
-        )
+        self._draw_vertical_event(price_ax, pump_start_idx - window_start, self._ENTRY_COLOR, alpha=0.55, linewidth=1.0)
         if stage1_event.pump_peak_timestamp is not None and stage1_event.pump_peak_price is not None:
             peak_idx = self._timestamp_to_index(prepared, stage1_event.pump_peak_timestamp)
-            self._draw_marker(price_ax, peak_idx - window_start, float(stage1_event.pump_peak_price), self._PEAK_COLOR, "peak")
+            self._draw_marker(price_ax, peak_idx - window_start, float(stage1_event.pump_peak_price), self._PEAK_COLOR)
         if stage1_event.stage1_confirmed_timestamp is not None:
             confirmed_idx = self._timestamp_to_index(prepared, stage1_event.stage1_confirmed_timestamp)
-            self._draw_marker(price_ax, confirmed_idx - window_start, float(prepared.iloc[confirmed_idx]["close"]), self._STAGE1_COLOR, "stage1 confirmed")
-        if stage3_result.lowest_break_idx is not None and stage3_result.lowest_break_price is not None:
-            self._draw_marker(price_ax, stage3_result.lowest_break_idx - window_start, float(stage3_result.lowest_break_price), self._STOP_COLOR, "sweep low")
+            self._draw_vertical_event(price_ax, confirmed_idx - window_start, self._STAGE1_COLOR, alpha=0.35, linewidth=1.0)
         if stage3_result.reclaim_idx is not None:
-            self._draw_marker(price_ax, stage3_result.reclaim_idx - window_start, entry_price, self._ENTRY_COLOR, "entry candle")
+            self._draw_marker(price_ax, stage3_result.reclaim_idx - window_start, entry_price, self._ENTRY_COLOR)
+            self._draw_vertical_event(price_ax, stage3_result.reclaim_idx - window_start, self._ENTRY_COLOR, alpha=0.85, linewidth=2.0)
         tp1_timestamp = trade_row.get("tp1_timestamp")
         if tp1_timestamp is not None:
             tp1_idx = self._timestamp_to_index(prepared, int(tp1_timestamp))
-            self._draw_marker(price_ax, tp1_idx - window_start, tp1_price, self._TP1_COLOR, "tp1 hit")
+            self._draw_vertical_event(price_ax, tp1_idx - window_start, self._POSITIVE_EVENT_COLOR, alpha=0.9, linewidth=2.0)
         tp2_timestamp = trade_row.get("tp2_timestamp")
         if tp2_share > 0.0 and tp2_timestamp is not None:
             tp2_idx = self._timestamp_to_index(prepared, int(tp2_timestamp))
-            self._draw_marker(price_ax, tp2_idx - window_start, tp2_price, self._TP2_COLOR, "tp2 hit")
+            self._draw_vertical_event(price_ax, tp2_idx - window_start, self._POSITIVE_EVENT_COLOR, alpha=0.9, linewidth=2.0)
         tp3_timestamp = trade_row.get("tp3_timestamp")
         if tp3_share > 0.0 and tp3_timestamp is not None:
             tp3_idx = self._timestamp_to_index(prepared, int(tp3_timestamp))
-            self._draw_marker(price_ax, tp3_idx - window_start, tp3_price, self._TP3_COLOR, "tp3 hit")
+            self._draw_vertical_event(price_ax, tp3_idx - window_start, self._POSITIVE_EVENT_COLOR, alpha=0.9, linewidth=2.0)
         exit_timestamp = trade_row.get("exit_timestamp")
         exit_price = trade_row.get("exit_price")
         if exit_timestamp is not None and exit_price is not None:
             exit_idx = self._timestamp_to_index(prepared, int(exit_timestamp))
-            self._draw_marker(price_ax, exit_idx - window_start, float(exit_price), self._EXIT_COLOR, "exit")
+            outcome = str(trade_row.get("outcome") or "").strip().lower()
+            exit_color = self._NEGATIVE_EVENT_COLOR if outcome in {"stop_hit", "be_hit"} else self._POSITIVE_EVENT_COLOR
+            self._draw_vertical_event(price_ax, exit_idx - window_start, exit_color, alpha=0.95, linewidth=2.0)
 
         title = f"{stage1_event.symbol} | stage4"
         price_ax.set_title(title)
@@ -228,27 +225,10 @@ class BeeBiteStage4Plotter:
         price_ax.grid(alpha=0.18, color=self._GRID_COLOR)
 
         info_lines = [
-            f"Stage-4: {trade_row.get('outcome')}",
-            f"RR filter: {float(trade_row.get('minimal_rr', 0.0)):.2f}",
+            f"Result: {trade_row.get('outcome')}",
             f"RR: {float(trade_row.get('rr') or 0.0):.2f}",
-            f"Entry: {entry_price:.5f}",
-            f"SL: {stop_price:.5f}",
-            f"TP1: {tp1_price:.5f}",
-            f"TP2: {tp2_price:.5f}",
-            f"TP3: {tp3_price:.5f}",
-            (
-                "Size split: "
-                f"{float(trade_row.get('tp1_share', 0.0)):.2f}/"
-                f"{float(trade_row.get('tp2_share', 0.0)):.2f}/"
-                f"{float(trade_row.get('tp3_share', 0.0)):.2f}"
-            ),
-            f"TP2 source: {trade_row.get('tp2_source')}",
-            f"TP3 mult: {float(trade_row.get('tp3_multiplier', 0.0)):.1f}",
+            f"PnL: {float(trade_row.get('realized_pnl_pct') or 0.0):.2f}%",
         ]
-        if trade_row.get("realized_rr") is not None:
-            info_lines.append(f"Realized RR: {float(trade_row['realized_rr']):.2f}")
-        if trade_row.get("realized_pnl_pct") is not None:
-            info_lines.append(f"Realized PnL: {float(trade_row['realized_pnl_pct']):.2f}%")
         price_ax.text(
             0.015,
             0.985,
@@ -265,17 +245,6 @@ class BeeBiteStage4Plotter:
                 "alpha": 0.95,
             },
         )
-
-        legend = price_ax.legend(
-            loc="upper left",
-            bbox_to_anchor=(0.015, 0.78),
-            frameon=True,
-            facecolor="#111827",
-            edgecolor=self._GRID_COLOR,
-            fontsize=10,
-        )
-        for text in legend.get_texts():
-            text.set_color(self._TEXT_COLOR)
 
         tick_positions = self._build_tick_positions(window)
         tick_labels = self._build_tick_labels(window, tick_positions)
@@ -361,8 +330,19 @@ class BeeBiteStage4Plotter:
         )
 
     @staticmethod
-    def _draw_marker(axis: plt.Axes, x: int, y: float, color: str, label: str) -> None:
-        axis.scatter(x, y, color=color, s=42, marker="o", zorder=7, label=label)
+    def _draw_marker(axis: plt.Axes, x: int, y: float, color: str) -> None:
+        axis.scatter(x, y, color=color, s=42, marker="o", zorder=7)
+
+    @staticmethod
+    def _draw_vertical_event(
+        axis: plt.Axes,
+        x: int,
+        color: str,
+        *,
+        alpha: float,
+        linewidth: float,
+    ) -> None:
+        axis.axvline(x, color=color, alpha=alpha, linewidth=linewidth, zorder=6)
 
     @staticmethod
     def _build_tick_positions(window: pd.DataFrame) -> list[int]:
