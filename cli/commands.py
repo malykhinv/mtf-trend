@@ -397,6 +397,43 @@ def _resolve_stage2_analysis_end_timestamp(*, frame: pd.DataFrame, regime: _Stag
     return int(timestamps[end_idx - 1])
 
 
+_STAGE23_POST_REGIME_EXTENSION_MS = 24 * 60 * 60 * 1000
+
+
+def _resolve_stage23_analysis_end_timestamp(
+    *,
+    frame: pd.DataFrame,
+    timeframe: Timeframe,
+    regime: _Stage1Regime,
+) -> int:
+    if frame.empty:
+        return int(regime.regime_end_timestamp)
+
+    prepared = frame.loc[:, ["timestamp"]].copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp"])
+    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
+    if prepared.empty:
+        return int(regime.regime_end_timestamp)
+
+    timestamps = prepared["timestamp"].astype("int64").to_numpy()
+    frame_end_timestamp = int(timestamps[-1])
+    regime_end_timestamp = int(regime.regime_end_timestamp)
+    capped_end_timestamp = min(
+        frame_end_timestamp,
+        regime_end_timestamp + _STAGE23_POST_REGIME_EXTENSION_MS,
+    )
+    capped_end_matches = np.where(timestamps <= capped_end_timestamp)[0]
+    if capped_end_matches.size == 0:
+        return regime_end_timestamp
+
+    resolved_end_timestamp = int(timestamps[int(capped_end_matches[-1])])
+    min_required_end_timestamp = regime_end_timestamp + timeframe.to_milliseconds()
+    if resolved_end_timestamp < min_required_end_timestamp:
+        return min(frame_end_timestamp, max(regime_end_timestamp, min_required_end_timestamp))
+    return resolved_end_timestamp
+
+
 def _is_significant_regime_breakout(
     *,
     effective_highs: np.ndarray,
@@ -1299,12 +1336,16 @@ def _build_stage23_evolution_snapshots(
     prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
     if prepared.empty:
         return []
-    frame_end_timestamp = int(prepared["timestamp"].astype("int64").iloc[-1])
+    analysis_end_timestamp = _resolve_stage23_analysis_end_timestamp(
+        frame=frame,
+        timeframe=timeframe,
+        regime=regime,
+    )
 
     snapshot_timestamps = _resolve_snapshot_timestamps(
         frame=frame,
         start_timestamp=int(stage1_event.pump_peak_timestamp) + timeframe.to_milliseconds(),
-        end_timestamp=frame_end_timestamp,
+        end_timestamp=analysis_end_timestamp,
     )
     snapshots: list[_Stage23EvolutionSnapshot] = []
     reference_stage2_result: BeeBiteStage2Result | None = None
@@ -1413,11 +1454,15 @@ def _resolve_stage23_terminal_result(
     if prepared.empty:
         return BeeBiteStage3Result(symbol=symbol, passed=False, reason="frame_invalid")
 
-    frame_end_timestamp = int(prepared["timestamp"].astype("int64").iloc[-1])
+    analysis_end_timestamp = _resolve_stage23_analysis_end_timestamp(
+        frame=frame,
+        timeframe=timeframe,
+        regime=regime,
+    )
     snapshot_timestamps = _resolve_snapshot_timestamps(
         frame=frame,
         start_timestamp=int(stage1_event.pump_peak_timestamp) + timeframe.to_milliseconds(),
-        end_timestamp=frame_end_timestamp,
+        end_timestamp=analysis_end_timestamp,
     )
     if not snapshot_timestamps:
         return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage2_reference_not_locked")
