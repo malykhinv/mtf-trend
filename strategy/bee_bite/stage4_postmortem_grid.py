@@ -13,16 +13,15 @@ class BeeBiteStage4PostmortemParams:
 
 
 def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
-    # Full research grid for stage-4 execution:
-    # - RR threshold
-    # - TP3 extension beyond peak
-    # - partial take-profit distribution across TP1/TP2/TP3
-    rr_grid = tuple(round(step * 0.25, 2) for step in range(1, 13))
+    # Optimized research grid for stage-4 execution:
+    # - skip RR <= 1.0 as structurally weak
+    # - keep denser search in the currently relevant center
+    # - keep only practical partial-take profiles
+    rr_grid = (1.25, 1.50, 1.75, 2.00, 2.25, 2.50, 3.00)
     tp3_multipliers = (1.0, 2.0, 3.0)
     share_profiles = (
         (0.50, 0.25, 0.25),
         (0.50, 0.50, 0.00),
-        (0.50, 0.00, 0.50),
         (0.75, 0.25, 0.00),
         (0.75, 0.00, 0.25),
         (1.00, 0.00, 0.00),
