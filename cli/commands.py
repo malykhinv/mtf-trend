@@ -4435,6 +4435,12 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     progress_started_at = time.perf_counter()
 
     for index, symbol in enumerate(symbols, start=1):
+        logger.info(
+            "postmortem-stage4: processing=%s/%s symbol=%s",
+            index,
+            len(symbols),
+            symbol,
+        )
         try:
             frame = _get_cached_review_frame(
                 cache=frame_cache,
