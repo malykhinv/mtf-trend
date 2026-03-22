@@ -17,20 +17,19 @@ class BeeBiteStage4PostmortemParams:
 
 def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
     # Optimized research grid for stage-4 execution:
-    # - skip RR <= 1.0 as structurally weak
-    # - keep denser search in the currently relevant center
-    # - keep only practical partial-take profiles
-    rr_grid = (1.25, 1.50, 1.75, 2.00, 2.25, 2.50, 3.00)
-    tp3_multipliers = (1.0, 2.0, 3.0)
+    # - backup year-long run showed RR=1.25 as weak on both 15m and 5m
+    # - tp3 multiplier 1.0 underperformed 2.0/3.0 on both 15m and 5m
+    # - two share profiles were consistently weakest on both timeframes:
+    #   0.75/0.25/0.00 and 1.00/0.00/0.00
+    rr_grid = (1.50, 1.75, 2.00, 2.25, 2.50, 3.00)
+    tp3_multipliers = (2.0, 3.0)
     sweep_size_multipliers = (1.0, 2.0, 3.0, 4.0)
     stop_modes = ("sweep_low", "entry_minus_avg_body")
     tp1_stop_modes = ("entry", "last_red_low")
     share_profiles = (
         (0.50, 0.25, 0.25),
         (0.50, 0.50, 0.00),
-        (0.75, 0.25, 0.00),
         (0.75, 0.00, 0.25),
-        (1.00, 0.00, 0.00),
     )
     grid: list[BeeBiteStage4PostmortemParams] = []
     for min_rr in rr_grid:
