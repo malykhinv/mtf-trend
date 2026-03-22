@@ -837,7 +837,7 @@ def _resolve_symbols(
         for symbol in liquid_symbols
     }
     liquidity_score_by_symbol: dict[str, float] = {}
-    newly_admitted_symbols: set[str] = set()
+    exchange_liquid_symbols: set[str] = set()
 
     try:
         ranked_metrics = exchange_client.get_futures_symbols_with_liquidity_metrics()
@@ -858,16 +858,19 @@ def _resolve_symbols(
                 'quality_metadata': dict(cast(dict[str, object], item.get('quality_metadata', {}))),
             }
 
-            if symbol not in avg_daily_volumes_normalized and quote_volume >= min_volume_usd:
-                newly_admitted_symbols.add(symbol)
-                combined_volume_score_by_symbol[symbol] = quote_volume
+            if quote_volume >= min_volume_usd:
+                exchange_liquid_symbols.add(symbol)
+                combined_volume_score_by_symbol[symbol] = max(
+                    combined_volume_score_by_symbol.get(symbol, 0.0),
+                    quote_volume,
+                )
     except Exception as exc:
         logger.warning(
             '??????-????????: ????? ?? ???????? ??????????? ????? ?????????? (%s)',
             exc,
         )
 
-    combined_symbols = set(liquid_symbols) | newly_admitted_symbols
+    combined_symbols = set(liquid_symbols) | exchange_liquid_symbols
     if not combined_symbols:
         fallback_symbols = exchange_symbols_normalized[:top_n]
         logger.info(
@@ -901,7 +904,7 @@ def _resolve_symbols(
     )
     logger.info(
         '??????-????????: newly admitted symbols ?? ???????? ??????=%s',
-        len(newly_admitted_symbols),
+        len(exchange_liquid_symbols - set(liquid_symbols)),
     )
     return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
 
