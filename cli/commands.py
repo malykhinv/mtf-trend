@@ -1060,6 +1060,26 @@ def _resolve_review_timeframe(args: argparse.Namespace) -> Timeframe:
     )
 
 
+def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timeframe, ...]) -> tuple[Timeframe, ...]:
+    raw_values = getattr(args, "timeframes", None)
+    if not raw_values:
+        return fallback
+
+    resolved: list[Timeframe] = []
+    seen: set[Timeframe] = set()
+    for raw_value in raw_values:
+        timeframe = _resolve_timeframe(
+            str(raw_value),
+            fallback=Timeframe.M15,
+            argument_name="--timeframes",
+        )
+        if timeframe in seen:
+            continue
+        seen.add(timeframe)
+        resolved.append(timeframe)
+    return tuple(resolved) if resolved else fallback
+
+
 def _resolve_review_timeframes(args: argparse.Namespace) -> list[Timeframe]:
     if bool(getattr(args, "tf_all", False)):
         return [Timeframe.M15, Timeframe.M5]
@@ -1585,6 +1605,7 @@ def _select_terminal_stage23_snapshot(snapshots: list[_Stage23EvolutionSnapshot]
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    fetch_timeframes = _resolve_fetch_timeframes(args, config.fetch.timeframes)
 
     if args.top_n is not None and args.top_n <= 0:
         logger.error("fetch-data: --top-n must be > 0")
@@ -1628,6 +1649,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
+    include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
     failed_symbols: set[str] = set()
     fetch_summaries: dict[Timeframe, FetchSummary] = {}
 
@@ -1647,6 +1669,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             timeframe=requested_timeframe,
             start_timestamp_ms=start_timestamp_ms,
             end_timestamp_ms=end_timestamp_ms,
+            include_open_interest=include_open_interest,
         )
         enriched_ohlcv = _attach_liquidity_quality_metadata(result.ohlcv, liquidity_quality_by_symbol)
         result.ohlcv.clear()
@@ -1670,7 +1693,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             or isinstance(result.market_caps.market_caps.get(symbol), str)
         )
 
-    primary_timeframe = config.fetch.timeframe
+    primary_timeframe = fetch_timeframes[0]
     _fetch_for_timeframe(primary_timeframe, symbols, emit_log=True)
 
     root_stage_status = "ok"
@@ -1703,7 +1726,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 primary_timeframe.value,
             )
 
-    for timeframe in config.fetch.timeframes:
+    for timeframe in fetch_timeframes:
         if timeframe == primary_timeframe:
             continue
         _fetch_for_timeframe(timeframe, followup_symbols, emit_log=True)
@@ -1719,6 +1742,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("update-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    fetch_timeframes = _resolve_fetch_timeframes(args, config.fetch.timeframes)
 
     if args.top_n is not None and args.top_n <= 0:
         logger.error("update-cache: --top-n must be > 0")
@@ -1760,10 +1784,17 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
+    include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
     failed_symbols: set[str] = set()
-    for timeframe in config.fetch.timeframes:
+    for timeframe in fetch_timeframes:
         logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
-        result = fetcher.fetch_all(symbols=symbols, timeframe=timeframe, start_timestamp_ms=start_timestamp_ms, end_timestamp_ms=end_timestamp_ms)
+        result = fetcher.fetch_all(
+            symbols=symbols,
+            timeframe=timeframe,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+            include_open_interest=include_open_interest,
+        )
         enriched_ohlcv = _attach_liquidity_quality_metadata(result.ohlcv, liquidity_quality_by_symbol)
         result.ohlcv.clear()
         result.ohlcv.update(enriched_ohlcv)

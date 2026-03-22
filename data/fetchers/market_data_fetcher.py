@@ -95,6 +95,8 @@ class MarketDataFetcher:
         timeframe: Timeframe,
         start_timestamp_ms: int,
         end_timestamp_ms: int,
+        *,
+        include_open_interest: bool = True,
     ) -> FetchAllResult:
         """Загружает полный набор рыночных метрик."""
         self._logger.info(f"Загрузка старт: {len(symbols)} символов, TF={timeframe.value}")
@@ -105,12 +107,16 @@ class MarketDataFetcher:
             start_timestamp_ms,
             end_timestamp_ms,
         )
-        oi_result = self._oi_fetcher.fetch_many(
-            symbols,
-            timeframe,
-            start_timestamp_ms,
-            end_timestamp_ms,
-        )
+        if include_open_interest:
+            oi_result = self._oi_fetcher.fetch_many(
+                symbols,
+                timeframe,
+                start_timestamp_ms,
+                end_timestamp_ms,
+            )
+        else:
+            self._logger.info("OI skipped for TF=%s", timeframe.value)
+            oi_result = {symbol: SymbolFetchResult.ok(0) for symbol in symbols}
 
         market_caps = self.fetch_market_caps(symbols)
 

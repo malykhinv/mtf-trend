@@ -116,7 +116,7 @@ class CcxtFuturesClient(ExchangeClient):
             )
         except RetryExhaustedError as exc:
             raise RuntimeError(
-                f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts}"
+                f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts} cause={exc}"
             ) from exc
 
     def _retry_exchange_startup_call(
@@ -157,6 +157,54 @@ class CcxtFuturesClient(ExchangeClient):
             call=self._client.load_markets,
         )
         self._markets_loaded = True
+
+    @staticmethod
+    def _aggregate_ohlcv_frame(frame: pd.DataFrame, *, target_timeframe: Timeframe) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame(columns=OHLCV_FRAME_COLUMNS)
+
+        prepared = frame.loc[:, list(OHLCV_FRAME_COLUMNS)].copy()
+        for column in OHLCV_FRAME_COLUMNS:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+        if prepared.empty:
+            return pd.DataFrame(columns=OHLCV_FRAME_COLUMNS)
+
+        timeframe_ms = target_timeframe.to_milliseconds()
+        prepared["bucket"] = (prepared["timestamp"] // timeframe_ms) * timeframe_ms
+        aggregated = (
+            prepared.groupby("bucket", as_index=False)
+            .agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+            )
+            .rename(columns={"bucket": "timestamp"})
+        )
+        return aggregated.loc[:, list(OHLCV_FRAME_COLUMNS)].reset_index(drop=True)
+
+    @staticmethod
+    def _aggregate_open_interest_frame(frame: pd.DataFrame, *, target_timeframe: Timeframe) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame(columns=OPEN_INTEREST_FRAME_COLUMNS)
+
+        prepared = frame.loc[:, list(OPEN_INTEREST_FRAME_COLUMNS)].copy()
+        for column in OPEN_INTEREST_FRAME_COLUMNS:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        prepared = prepared.dropna(subset=["timestamp", "open_interest"])
+        if prepared.empty:
+            return pd.DataFrame(columns=OPEN_INTEREST_FRAME_COLUMNS)
+
+        timeframe_ms = target_timeframe.to_milliseconds()
+        prepared["bucket"] = (prepared["timestamp"] // timeframe_ms) * timeframe_ms
+        aggregated = (
+            prepared.groupby("bucket", as_index=False)
+            .agg(open_interest=("open_interest", "last"))
+            .rename(columns={"bucket": "timestamp"})
+        )
+        return aggregated.loc[:, list(OPEN_INTEREST_FRAME_COLUMNS)].reset_index(drop=True)
 
     # endregion Приватные
 
@@ -363,6 +411,19 @@ class CcxtFuturesClient(ExchangeClient):
         end_timestamp_ms: int,
     ) -> pd.DataFrame:
         """Запрашивает свечи по символу и интервалу."""
+        if timeframe == Timeframe.M10:
+            base_frame = self.fetch_ohlcv(
+                symbol=symbol,
+                timeframe=Timeframe.M5,
+                start_timestamp_ms=start_timestamp_ms,
+                end_timestamp_ms=end_timestamp_ms,
+            )
+            aggregated = self._aggregate_ohlcv_frame(base_frame, target_timeframe=timeframe)
+            return aggregated.loc[
+                (aggregated["timestamp"] >= start_timestamp_ms)
+                & (aggregated["timestamp"] <= end_timestamp_ms)
+            ].reset_index(drop=True)
+
         self._ensure_markets_loaded()
         since = start_timestamp_ms
 
@@ -374,7 +435,7 @@ class CcxtFuturesClient(ExchangeClient):
                 endpoint="fetch_ohlcv",
                 call=self._client.fetch_ohlcv,
                 args=(symbol,),
-                timeframe=timeframe,
+                timeframe=timeframe.value,
                 since=since,
                 limit=DEFAULT_FETCH_BATCH_SIZE,
             )
@@ -412,6 +473,23 @@ class CcxtFuturesClient(ExchangeClient):
         end_timestamp_ms: int,
     ) -> pd.DataFrame:
         """Запрашивает историю open interest по символу."""
+        if timeframe == Timeframe.M10:
+            base_frame = self.fetch_open_interest(
+                symbol=symbol,
+                timeframe=Timeframe.M5,
+                start_timestamp_ms=start_timestamp_ms,
+                end_timestamp_ms=end_timestamp_ms,
+            )
+            aggregated = self._aggregate_open_interest_frame(base_frame, target_timeframe=timeframe)
+            return aggregated.loc[
+                (aggregated["timestamp"] >= start_timestamp_ms)
+                & (aggregated["timestamp"] <= end_timestamp_ms)
+            ].reset_index(drop=True)
+
+        if timeframe == Timeframe.M3:
+            self._logger.info("OI skip unsupported timeframe: %s %s", symbol, timeframe.value)
+            return pd.DataFrame(columns=OPEN_INTEREST_FRAME_COLUMNS)
+
         self._ensure_markets_loaded()
         if not isinstance(self._client, CcxtOpenInterestApi):
             raise NotImplementedError(f"Exchange {self.exchange.value} does not support fetch_open_interest_history in CCXT")

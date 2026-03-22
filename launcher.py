@@ -71,6 +71,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-n", type=int, default=None, help="Top symbols for fetch/update or limit after stage-1 filter")
     parser.add_argument("--min-volume-usd", type=float, default=None, help="Minimum 24h volume in USD")
     parser.add_argument("--days", type=int, default=30, help="Number of days for fetch/update")
+    parser.add_argument("--timeframes", nargs="*", default=None, help="Fetch/update timeframes, e.g. 15m 10m 5m 3m")
+    parser.add_argument("--skip-open-interest", action="store_true", default=False, help="Skip open interest fetching for fetch/update")
     parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
     parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     parser.add_argument("--tf", default=None, help="Review timeframe for stage review modes")
@@ -103,6 +105,8 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         top_n=int(task["top_n"]) if "top_n" in task and task.get("top_n") is not None else cli_args.top_n,
         min_volume_usd=task.get("min_volume_usd", cli_args.min_volume_usd),
         days=int(task.get("days", cli_args.days)),
+        timeframes=task.get("timeframes", cli_args.timeframes),
+        skip_open_interest=_to_bool(task.get("skip_open_interest"), fallback=cli_args.skip_open_interest) if "skip_open_interest" in task else cli_args.skip_open_interest,
         end_timestamp_ms=task.get("end_timestamp_ms", cli_args.end_timestamp_ms),
         symbols=task.get("symbols", cli_args.symbols),
         tf=task.get("tf", cli_args.tf),
