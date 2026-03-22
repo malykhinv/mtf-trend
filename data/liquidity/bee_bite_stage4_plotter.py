@@ -40,8 +40,10 @@ class BeeBiteStage4Plotter:
     _PEAK_COLOR = "#fb7185"
     _STAGE1_COLOR = "#a3e635"
     _EXIT_COLOR = "#fde047"
-    _POSITIVE_EVENT_COLOR = "#22c55e"
-    _NEGATIVE_EVENT_COLOR = "#ef4444"
+    _RISK_FACE = "#7f1d1d"
+    _TP1_FACE = "#14532d"
+    _TP2_FACE = "#166534"
+    _TP3_FACE = "#15803d"
     _FIGURE_SIZE = (8, 6)
     _FIGURE_DPI = 100
     _GRIDSPEC_HEIGHT_RATIOS = [4, 1]
@@ -178,6 +180,67 @@ class BeeBiteStage4Plotter:
         tp3_price = float(trade_row["tp3_price"])
         tp2_share = float(trade_row.get("tp2_share", 0.0))
         tp3_share = float(trade_row.get("tp3_share", 0.0))
+        entry_timestamp = int(trade_row.get("entry_timestamp") or stage3_result.reclaim_timestamp or prepared.iloc[window_start]["timestamp"])
+        exit_timestamp = trade_row.get("exit_timestamp")
+        exit_price = trade_row.get("exit_price")
+        entry_idx = self._timestamp_to_index(prepared, entry_timestamp)
+        exit_idx = (
+            self._timestamp_to_index(prepared, int(exit_timestamp))
+            if exit_timestamp is not None
+            else window_end
+        )
+
+        self._draw_trade_band(
+            axis=price_ax,
+            start_idx=entry_idx,
+            end_idx=exit_idx,
+            visible_start_idx=window_start,
+            visible_end_idx=window_end,
+            low=min(stop_price, entry_price),
+            high=max(stop_price, entry_price),
+            index_shift=window_start,
+            face_color=self._RISK_FACE,
+            alpha=0.24,
+        )
+        self._draw_trade_band(
+            axis=price_ax,
+            start_idx=entry_idx,
+            end_idx=exit_idx,
+            visible_start_idx=window_start,
+            visible_end_idx=window_end,
+            low=min(entry_price, tp1_price),
+            high=max(entry_price, tp1_price),
+            index_shift=window_start,
+            face_color=self._TP1_FACE,
+            alpha=0.18,
+        )
+        if tp2_price > tp1_price:
+            self._draw_trade_band(
+                axis=price_ax,
+                start_idx=entry_idx,
+                end_idx=exit_idx,
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
+                low=tp1_price,
+                high=tp2_price,
+                index_shift=window_start,
+                face_color=self._TP2_FACE,
+                alpha=0.14,
+            )
+        if tp3_price > tp2_price:
+            self._draw_trade_band(
+                axis=price_ax,
+                start_idx=entry_idx,
+                end_idx=exit_idx,
+                visible_start_idx=window_start,
+                visible_end_idx=window_end,
+                low=tp2_price,
+                high=tp3_price,
+                index_shift=window_start,
+                face_color=self._TP3_FACE,
+                alpha=0.12,
+            )
+
         price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle="-", linewidth=1.0, alpha=0.95)
         price_ax.axhline(stop_price, color=self._STOP_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
         price_ax.axhline(tp1_price, color=self._TP1_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
@@ -197,26 +260,8 @@ class BeeBiteStage4Plotter:
             self._draw_vertical_event(price_ax, confirmed_idx - window_start, self._STAGE1_COLOR, alpha=0.35, linewidth=1.0)
         if stage3_result.reclaim_idx is not None:
             self._draw_marker(price_ax, stage3_result.reclaim_idx - window_start, entry_price, self._ENTRY_COLOR)
-            self._draw_vertical_event(price_ax, stage3_result.reclaim_idx - window_start, self._ENTRY_COLOR, alpha=0.85, linewidth=2.0)
-        tp1_timestamp = trade_row.get("tp1_timestamp")
-        if tp1_timestamp is not None:
-            tp1_idx = self._timestamp_to_index(prepared, int(tp1_timestamp))
-            self._draw_vertical_event(price_ax, tp1_idx - window_start, self._POSITIVE_EVENT_COLOR, alpha=0.9, linewidth=2.0)
-        tp2_timestamp = trade_row.get("tp2_timestamp")
-        if tp2_share > 0.0 and tp2_timestamp is not None:
-            tp2_idx = self._timestamp_to_index(prepared, int(tp2_timestamp))
-            self._draw_vertical_event(price_ax, tp2_idx - window_start, self._POSITIVE_EVENT_COLOR, alpha=0.9, linewidth=2.0)
-        tp3_timestamp = trade_row.get("tp3_timestamp")
-        if tp3_share > 0.0 and tp3_timestamp is not None:
-            tp3_idx = self._timestamp_to_index(prepared, int(tp3_timestamp))
-            self._draw_vertical_event(price_ax, tp3_idx - window_start, self._POSITIVE_EVENT_COLOR, alpha=0.9, linewidth=2.0)
-        exit_timestamp = trade_row.get("exit_timestamp")
-        exit_price = trade_row.get("exit_price")
         if exit_timestamp is not None and exit_price is not None:
-            exit_idx = self._timestamp_to_index(prepared, int(exit_timestamp))
-            outcome = str(trade_row.get("outcome") or "").strip().lower()
-            exit_color = self._NEGATIVE_EVENT_COLOR if outcome in {"stop_hit", "be_hit"} else self._POSITIVE_EVENT_COLOR
-            self._draw_vertical_event(price_ax, exit_idx - window_start, exit_color, alpha=0.95, linewidth=2.0)
+            self._draw_marker(price_ax, exit_idx - window_start, float(exit_price), self._EXIT_COLOR)
 
         title = f"{stage1_event.symbol} | stage4"
         price_ax.set_title(title)
@@ -326,6 +371,37 @@ class BeeBiteStage4Plotter:
                 alpha=alpha,
                 label=label,
                 zorder=1,
+            )
+        )
+
+    def _draw_trade_band(
+        self,
+        *,
+        axis: plt.Axes,
+        start_idx: int,
+        end_idx: int,
+        visible_start_idx: int,
+        visible_end_idx: int,
+        low: float,
+        high: float,
+        index_shift: int,
+        face_color: str,
+        alpha: float,
+    ) -> None:
+        draw_start = max(start_idx, visible_start_idx)
+        draw_end = min(end_idx, visible_end_idx)
+        if draw_end < draw_start:
+            return
+        axis.add_patch(
+            Rectangle(
+                (draw_start - index_shift - 0.5, low),
+                (draw_end - draw_start) + 1,
+                max(high - low, 1e-12),
+                linewidth=0.0,
+                edgecolor="none",
+                facecolor=face_color,
+                alpha=alpha,
+                zorder=1.5,
             )
         )
 
