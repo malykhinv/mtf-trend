@@ -3327,7 +3327,7 @@ def _run_stage4_symbol_with_timeout(
     symbol: str,
     review_timeframe: Timeframe,
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    timeout_seconds: int,
+    timeout_seconds: int | None,
 ) -> tuple[dict[str, object] | None, str | None]:
     with tempfile.NamedTemporaryFile(prefix="stage4_symbol_", suffix=".json", delete=False) as handle:
         output_path = Path(handle.name)
@@ -3380,7 +3380,7 @@ def _run_stage4_plot_with_timeout(
     reference_box_end_timestamp: int | None,
     trade_row: dict[str, object],
     output_path: Path,
-    timeout_seconds: int,
+    timeout_seconds: int | None,
 ) -> str | None:
     trade_row_payload = json.dumps(trade_row)
     worker_code = (
@@ -4766,6 +4766,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     progress_started_at = time.perf_counter()
 
     for index, symbol in enumerate(symbols, start=1):
+        symbol_timeout_for_run = None if index == 1 else symbol_timeout_seconds
         logger.info(
             "postmortem-stage4: processing=%s/%s symbol=%s",
             index,
@@ -4778,7 +4779,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                 symbol=symbol,
                 review_timeframe=review_timeframe,
                 param_grid=param_grid,
-                timeout_seconds=symbol_timeout_seconds,
+                timeout_seconds=symbol_timeout_for_run,
             )
             if symbol_error == "timeout":
                 timed_out_symbols.append(symbol)
@@ -4837,6 +4838,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     for trade_row in selected_trade_rows:
         symbol = cast(str, trade_row["symbol"])
         regime_index = int(trade_row["regime_index"])
+        plot_timeout_for_run = None if symbol == symbols[0] else symbol_timeout_seconds
         plot_error = _run_stage4_plot_with_timeout(
             cache_dir=config.backtest.cache_dir,
             symbol=symbol,
@@ -4856,7 +4858,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                 f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
                 f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
             ),
-            timeout_seconds=symbol_timeout_seconds,
+            timeout_seconds=plot_timeout_for_run,
         )
         if plot_error is not None:
             if plot_error == "timeout":
