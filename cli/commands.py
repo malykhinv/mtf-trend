@@ -3306,6 +3306,21 @@ def _process_stage4_symbol(
     }
 
 
+def _serialize_stage4_param_grid(
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+) -> list[dict[str, float]]:
+    return [
+        {
+            "min_rr": float(params.min_rr),
+            "tp3_multiplier": float(params.tp3_multiplier),
+            "tp1_share": float(params.tp1_share),
+            "tp2_share": float(params.tp2_share),
+            "tp3_share": float(params.tp3_share),
+        }
+        for params in param_grid
+    ]
+
+
 def _run_stage4_symbol_with_timeout(
     *,
     cache_dir: Path,
@@ -3316,15 +3331,18 @@ def _run_stage4_symbol_with_timeout(
 ) -> tuple[dict[str, object] | None, str | None]:
     with tempfile.NamedTemporaryFile(prefix="stage4_symbol_", suffix=".json", delete=False) as handle:
         output_path = Path(handle.name)
+    serialized_param_grid = json.dumps(_serialize_stage4_param_grid(param_grid))
     worker_code = (
         "import json, traceback\n"
         "from pathlib import Path\n"
         "from cli.commands import _process_stage4_symbol\n"
-        "from strategy.bee_bite import get_bee_bite_stage4_postmortem_grid\n"
+        "from strategy.bee_bite import BeeBiteStage4PostmortemParams\n"
         "from domain.enums.timeframe import Timeframe\n"
         f"output_path = Path(r'''{str(output_path)}''')\n"
+        f"param_grid_payload = json.loads(r'''{serialized_param_grid}''')\n"
+        "param_grid = tuple(BeeBiteStage4PostmortemParams(**item) for item in param_grid_payload)\n"
         "try:\n"
-        f"    result = _process_stage4_symbol(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), param_grid=get_bee_bite_stage4_postmortem_grid())\n"
+        f"    result = _process_stage4_symbol(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), param_grid=param_grid)\n"
         "    output_path.write_text(json.dumps({'ok': True, 'result': result}), encoding='utf-8')\n"
         "except Exception:\n"
         "    output_path.write_text(json.dumps({'ok': False, 'error': traceback.format_exc()}), encoding='utf-8')\n"
@@ -3351,6 +3369,60 @@ def _run_stage4_symbol_with_timeout(
     if not bool(payload.get("ok")):
         return None, str(payload.get("error") or f"worker_exit_{completed.returncode}")
     return cast(dict[str, object], payload["result"]), None
+
+
+def _run_stage4_plot_with_timeout(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    review_timeframe: Timeframe,
+    regime_index: int,
+    reference_box_end_timestamp: int | None,
+    trade_row: dict[str, object],
+    output_path: Path,
+    timeout_seconds: int,
+) -> str | None:
+    trade_row_payload = json.dumps(trade_row)
+    worker_code = (
+        "import json, traceback\n"
+        "from pathlib import Path\n"
+        "from cli.commands import _rebuild_stage4_plot_context\n"
+        "from data.liquidity.bee_bite_stage4_plotter import BeeBiteStage4Plotter\n"
+        "from domain.enums.timeframe import Timeframe\n"
+        f"trade_row = json.loads(r'''{trade_row_payload}''')\n"
+        "try:\n"
+        f"    plot_context = _rebuild_stage4_plot_context(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), regime_index={regime_index}, reference_box_end_timestamp={repr(reference_box_end_timestamp)})\n"
+        "    if plot_context is None:\n"
+        "        raise RuntimeError('plot_context_rebuild_failed')\n"
+        "    frame, stage1_event, reference_stage2_result, stage3_result = plot_context\n"
+        "    BeeBiteStage4Plotter().plot_result(\n"
+        "        frame=frame,\n"
+        "        stage1_event=stage1_event,\n"
+        "        reference_stage2_result=reference_stage2_result,\n"
+        "        stage3_result=stage3_result,\n"
+        "        trade_row=trade_row,\n"
+        f"        output_path=Path(r'''{str(output_path)}'''),\n"
+        "    )\n"
+        "except Exception:\n"
+        "    traceback.print_exc()\n"
+        "    raise\n"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", worker_code],
+            cwd=str(Path.cwd()),
+            timeout=timeout_seconds,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "timeout"
+    if completed.returncode != 0:
+        stderr = completed.stderr.strip()
+        stdout = completed.stdout.strip()
+        return stderr or stdout or f"worker_exit_{completed.returncode}"
+    return None
 
 
 def _rebuild_stage4_plot_context(
@@ -4685,7 +4757,6 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         logger.info("postmortem-stage4: no data in cache for tf=%s", review_timeframe.value)
         return 0
 
-    stage4_plotter = BeeBiteStage4Plotter()
     rows: list[dict[str, object]] = []
     stage3_passed_count = 0
     plots_built = 0
@@ -4766,7 +4837,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     for trade_row in selected_trade_rows:
         symbol = cast(str, trade_row["symbol"])
         regime_index = int(trade_row["regime_index"])
-        plot_context = _rebuild_stage4_plot_context(
+        plot_error = _run_stage4_plot_with_timeout(
             cache_dir=config.backtest.cache_dir,
             symbol=symbol,
             review_timeframe=review_timeframe,
@@ -4776,31 +4847,36 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                 if trade_row.get("reference_box_end_timestamp") is not None
                 else None
             ),
-        )
-        if plot_context is None:
-            logger.warning(
-                "postmortem-stage4: skipped_plot_rebuild symbol=%s regime=%s",
-                symbol,
-                regime_index,
-            )
-            continue
-        frame, stage1_event, reference_stage2_result, stage3_result = plot_context
-        plot_path = plots_dir / (
-            f"{symbol.replace('/', '_')}_stage4_regime_{regime_index:02d}"
-            f"_rr_{float(trade_row['minimal_rr']):.2f}"
-            f"_m_{float(trade_row['tp3_multiplier']):.1f}"
-            f"_w_{int(round(float(trade_row['tp1_share']) * 100.0))}"
-            f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
-            f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
-        )
-        stage4_plotter.plot_result(
-            frame=frame,
-            stage1_event=stage1_event,
-            reference_stage2_result=reference_stage2_result,
-            stage3_result=stage3_result,
             trade_row=cast(dict[str, object], trade_row),
-            output_path=plot_path,
+            output_path=plots_dir / (
+                f"{symbol.replace('/', '_')}_stage4_regime_{regime_index:02d}"
+                f"_rr_{float(trade_row['minimal_rr']):.2f}"
+                f"_m_{float(trade_row['tp3_multiplier']):.1f}"
+                f"_w_{int(round(float(trade_row['tp1_share']) * 100.0))}"
+                f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
+                f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
+            ),
+            timeout_seconds=symbol_timeout_seconds,
         )
+        if plot_error is not None:
+            if plot_error == "timeout":
+                timed_out_symbols.append(f"{symbol}#plot")
+                reason_counts["plot_timeout"] += 1
+                logger.warning(
+                    "postmortem-stage4: plot_timeout=%ss symbol=%s regime=%s",
+                    symbol_timeout_seconds,
+                    symbol,
+                    regime_index,
+                )
+            else:
+                reason_counts["plot_rebuild_error"] += 1
+                logger.warning(
+                    "postmortem-stage4: skipped_plot_rebuild symbol=%s regime=%s error=%s",
+                    symbol,
+                    regime_index,
+                    plot_error,
+                )
+            continue
         plots_built += 1
 
     results_frame = pd.DataFrame([*summary_rows, *rows])
