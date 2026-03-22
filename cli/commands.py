@@ -7,7 +7,11 @@ import csv
 import json
 import math
 import shutil
+import subprocess
+import sys
+import tempfile
 import time
+import traceback
 from collections import Counter
 from dataclasses import asdict, dataclass
 from logging import Logger
@@ -103,6 +107,7 @@ _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
 _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
 _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE = "stage4_grid_overview.csv"
 _DEFAULT_STAGE4_REPORT_OUTPUT_FILE = "stage4_report.md"
+_DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS = 600
 _TItem = TypeVar("_TItem")
 
 
@@ -3079,7 +3084,7 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
     timeframe: Timeframe,
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
     trade_rows: list[dict[str, object]],
-) -> list[dict[str, object]]:
+    ) -> list[dict[str, object]]:
     if not trade_rows:
         return []
 
@@ -3173,6 +3178,258 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
         previous_win_rate = win_rate
         previous_total_realized_rr = total_realized_rr
     return summary_rows
+
+
+def _process_stage4_symbol(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    review_timeframe: Timeframe,
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+) -> dict[str, object]:
+    preparer = DataPreparer(cache_dir)
+    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
+    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
+    stage2_detector = BeeBiteStage2Detector()
+    stage3_detector = BeeBiteStage3Detector()
+    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
+    stage2_timestamp_cache: dict[int, BeeBiteStage2Result] = {}
+
+    frame = _get_cached_review_frame(
+        cache=frame_cache,
+        preparer=preparer,
+        symbol=symbol,
+        timeframe=review_timeframe,
+    )
+    if frame.empty:
+        return {
+            "symbol": symbol,
+            "rows": [],
+            "stage3_passed_count": 0,
+            "reason_counts": {},
+            "empty_frame": True,
+        }
+
+    stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
+        cache=frame_cache,
+        preparer=preparer,
+        symbol=symbol,
+        timeframe=stage1_timeframe,
+    )
+    if stage1_frame.empty:
+        return {
+            "symbol": symbol,
+            "rows": [],
+            "stage3_passed_count": 0,
+            "reason_counts": {"stage1:empty_reference_frame": 1},
+            "empty_frame": False,
+        }
+
+    stage1_events = selector.detect_events(symbol=symbol, frame=stage1_frame)
+    if not stage1_events:
+        stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=stage1_frame)
+        reason = stage1_evaluation.reason if stage1_evaluation is not None else "unknown"
+        return {
+            "symbol": symbol,
+            "rows": [],
+            "stage3_passed_count": 0,
+            "reason_counts": {f"stage1:{reason}": 1},
+            "empty_frame": False,
+        }
+
+    regimes = _resolve_stage1_regime_ends(
+        frame=stage1_frame,
+        regimes=_group_stage1_events_into_regimes(stage1_events),
+    )
+    rows: list[dict[str, object]] = []
+    reason_counts: Counter[str] = Counter()
+    stage3_passed_count = 0
+    for regime in regimes:
+        stage1_event = regime.first_event
+        dynamic_stage2_result = stage2_detector.detect(
+            symbol=symbol,
+            frame=frame,
+            stage1=stage1_event,
+            analysis_end_timestamp=int(regime.regime_end_timestamp),
+        )
+        if not dynamic_stage2_result.passed:
+            reason_counts["stage2_not_passed"] += 1
+            continue
+
+        stage3_result = _resolve_stage23_terminal_result(
+            symbol=symbol,
+            timeframe=review_timeframe,
+            frame=frame,
+            stage1_event=stage1_event,
+            regime=regime,
+            stage2_detector=stage2_detector,
+            stage3_detector=stage3_detector,
+            initial_stage2_result=dynamic_stage2_result,
+        )
+        if not stage3_result.passed:
+            reason_counts[stage3_result.reason] += 1
+            continue
+
+        stage3_passed_count += 1
+        reference_stage2_end_timestamp = int(
+            stage3_result.reference_box_end_timestamp
+            or dynamic_stage2_result.analysis_end_timestamp
+            or regime.regime_end_timestamp
+        )
+        reference_stage2_result = _get_cached_stage2_result(
+            cache=stage2_timestamp_cache,
+            symbol=symbol,
+            frame=frame,
+            stage1_event=stage1_event,
+            stage2_detector=stage2_detector,
+            analysis_end_timestamp=reference_stage2_end_timestamp,
+        )
+        rows.extend(
+            _build_stage4_postmortem_rows(
+                symbol=symbol,
+                timeframe=review_timeframe,
+                regime=regime,
+                stage1_event=stage1_event,
+                reference_stage2_result=reference_stage2_result,
+                stage3_result=stage3_result,
+                frame=frame,
+                param_grid=param_grid,
+            )
+        )
+
+    return {
+        "symbol": symbol,
+        "rows": rows,
+        "stage3_passed_count": stage3_passed_count,
+        "reason_counts": dict(reason_counts),
+        "empty_frame": False,
+    }
+
+
+def _run_stage4_symbol_with_timeout(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    review_timeframe: Timeframe,
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+    timeout_seconds: int,
+) -> tuple[dict[str, object] | None, str | None]:
+    with tempfile.NamedTemporaryFile(prefix="stage4_symbol_", suffix=".json", delete=False) as handle:
+        output_path = Path(handle.name)
+    worker_code = (
+        "import json, traceback\n"
+        "from pathlib import Path\n"
+        "from cli.commands import _process_stage4_symbol\n"
+        "from strategy.bee_bite import get_bee_bite_stage4_postmortem_grid\n"
+        "from domain.enums.timeframe import Timeframe\n"
+        f"output_path = Path(r'''{str(output_path)}''')\n"
+        "try:\n"
+        f"    result = _process_stage4_symbol(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), param_grid=get_bee_bite_stage4_postmortem_grid())\n"
+        "    output_path.write_text(json.dumps({'ok': True, 'result': result}), encoding='utf-8')\n"
+        "except Exception:\n"
+        "    output_path.write_text(json.dumps({'ok': False, 'error': traceback.format_exc()}), encoding='utf-8')\n"
+        "    raise\n"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", worker_code],
+            cwd=str(Path.cwd()),
+            timeout=timeout_seconds,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        output_path.unlink(missing_ok=True)
+        return None, "timeout"
+    if not output_path.exists():
+        return None, f"worker_exit_{completed.returncode}"
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    finally:
+        output_path.unlink(missing_ok=True)
+    if not bool(payload.get("ok")):
+        return None, str(payload.get("error") or f"worker_exit_{completed.returncode}")
+    return cast(dict[str, object], payload["result"]), None
+
+
+def _rebuild_stage4_plot_context(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    review_timeframe: Timeframe,
+    regime_index: int,
+    reference_box_end_timestamp: int | None,
+) -> tuple[pd.DataFrame, BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result] | None:
+    preparer = DataPreparer(cache_dir)
+    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
+    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
+    stage2_detector = BeeBiteStage2Detector()
+    stage3_detector = BeeBiteStage3Detector()
+    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
+    stage2_timestamp_cache: dict[int, BeeBiteStage2Result] = {}
+
+    frame = _get_cached_review_frame(
+        cache=frame_cache,
+        preparer=preparer,
+        symbol=symbol,
+        timeframe=review_timeframe,
+    )
+    if frame.empty:
+        return None
+    stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
+        cache=frame_cache,
+        preparer=preparer,
+        symbol=symbol,
+        timeframe=stage1_timeframe,
+    )
+    if stage1_frame.empty:
+        return None
+    stage1_events = selector.detect_events(symbol=symbol, frame=stage1_frame)
+    if not stage1_events:
+        return None
+    regimes = _resolve_stage1_regime_ends(
+        frame=stage1_frame,
+        regimes=_group_stage1_events_into_regimes(stage1_events),
+    )
+    target_regime = next((regime for regime in regimes if regime.regime_index == regime_index), None)
+    if target_regime is None:
+        return None
+    stage1_event = target_regime.first_event
+    dynamic_stage2_result = stage2_detector.detect(
+        symbol=symbol,
+        frame=frame,
+        stage1=stage1_event,
+        analysis_end_timestamp=int(target_regime.regime_end_timestamp),
+    )
+    if not dynamic_stage2_result.passed:
+        return None
+    stage3_result = _resolve_stage23_terminal_result(
+        symbol=symbol,
+        timeframe=review_timeframe,
+        frame=frame,
+        stage1_event=stage1_event,
+        regime=target_regime,
+        stage2_detector=stage2_detector,
+        stage3_detector=stage3_detector,
+        initial_stage2_result=dynamic_stage2_result,
+    )
+    if not stage3_result.passed:
+        return None
+    reference_stage2_result = _get_cached_stage2_result(
+        cache=stage2_timestamp_cache,
+        symbol=symbol,
+        frame=frame,
+        stage1_event=stage1_event,
+        stage2_detector=stage2_detector,
+        analysis_end_timestamp=int(
+            reference_box_end_timestamp
+            or stage3_result.reference_box_end_timestamp
+            or dynamic_stage2_result.analysis_end_timestamp
+            or target_regime.regime_end_timestamp
+        ),
+    )
+    return frame, stage1_event, reference_stage2_result, stage3_result
 
 
 def _format_stage4_metric(value: object, *, digits: int = 2, pct: bool = False) -> str:
@@ -3377,6 +3634,7 @@ def _render_stage4_postmortem_report(
     summary_rows: list[dict[str, object]],
     trade_rows: list[dict[str, object]],
     reason_counts: Counter[str],
+    timed_out_symbols: list[str],
 ) -> str:
     generated_at = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     best_summary_row = _select_best_stage4_summary_row(summary_rows)
@@ -3506,6 +3764,7 @@ def _render_stage4_postmortem_report(
                 ["Monthly match rate", f"{match_rate:.1f}%"],
                 ["Avg monthly dRR vs year-best", f"{avg_drift_rr:+.2f}"],
                 ["Avg monthly dPnL vs year-best", f"{avg_drift_pnl:+.2f}%"],
+                ["Timed out symbols", len(timed_out_symbols)],
             ],
         )
     )
@@ -3537,6 +3796,10 @@ def _render_stage4_postmortem_report(
         f"`be={int(best_summary_row.get('be_hits', 0) or 0)}`, "
         f"`open={int(best_summary_row.get('open_trades', 0) or 0)}`."
     )
+    if timed_out_symbols:
+        preview = ", ".join(timed_out_symbols[:10])
+        suffix = " ..." if len(timed_out_symbols) > 10 else ""
+        lines.append(f"- Timed out symbols skipped during this run: `{preview}{suffix}`.")
 
     lines.extend(["", "---", "", "## Full-Period Leaderboard", ""])
 
@@ -3688,6 +3951,9 @@ def _render_stage4_postmortem_report(
     lines.append("- `WR` is based on closed profitable trades only; open trades are excluded from win-rate.")
     lines.append("- `Total RR` is the main edge metric; `Total PnL` is still useful but less robust before full portfolio modelling.")
     lines.append("- `PF RR` uses realized RR gains versus realized RR losses.")
+    if timed_out_symbols:
+        lines.extend(["", "## Timed Out Symbols", ""])
+        lines.append(", ".join(f"`{symbol}`" for symbol in timed_out_symbols))
     return "\n".join(lines).strip() + "\n"
 
 
@@ -4402,6 +4668,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     logger.info("postmortem-stage4: cache_dir=%s", config.backtest.cache_dir)
     review_timeframe = _resolve_review_timeframe(args)
     param_grid = _resolve_stage4_param_grid()
+    symbol_timeout_seconds = _DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS
     results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
     output_dir = results_dir / "stage4_postmortem" / review_timeframe.value
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -4418,19 +4685,12 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         logger.info("postmortem-stage4: no data in cache for tf=%s", review_timeframe.value)
         return 0
 
-    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
-    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
-    stage2_detector = BeeBiteStage2Detector()
-    stage3_detector = BeeBiteStage3Detector()
-    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
-    stage1_review_cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]] = {}
-    stage2_timestamp_cache: dict[str, dict[int, BeeBiteStage2Result]] = {}
     stage4_plotter = BeeBiteStage4Plotter()
     rows: list[dict[str, object]] = []
-    plot_payloads: list[dict[str, object]] = []
     stage3_passed_count = 0
     plots_built = 0
     empty_frame_symbols: list[str] = []
+    timed_out_symbols: list[str] = []
     reason_counts: Counter[str] = Counter()
     progress_started_at = time.perf_counter()
 
@@ -4442,104 +4702,32 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
             symbol,
         )
         try:
-            frame = _get_cached_review_frame(
-                cache=frame_cache,
-                preparer=preparer,
+            symbol_result, symbol_error = _run_stage4_symbol_with_timeout(
+                cache_dir=config.backtest.cache_dir,
                 symbol=symbol,
-                timeframe=review_timeframe,
+                review_timeframe=review_timeframe,
+                param_grid=param_grid,
+                timeout_seconds=symbol_timeout_seconds,
             )
-            if frame.empty:
+            if symbol_error == "timeout":
+                timed_out_symbols.append(symbol)
+                reason_counts["symbol_timeout"] += 1
+                logger.warning(
+                    "postmortem-stage4: symbol_timeout=%ss symbol=%s",
+                    symbol_timeout_seconds,
+                    symbol,
+                )
+                continue
+            if symbol_error is not None or symbol_result is None:
+                reason_counts["symbol_worker_error"] += 1
+                logger.warning("postmortem-stage4: symbol_worker_error symbol=%s error=%s", symbol, symbol_error)
+                continue
+            if bool(symbol_result.get("empty_frame")):
                 empty_frame_symbols.append(symbol)
                 continue
-
-            stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
-                cache=frame_cache,
-                preparer=preparer,
-                symbol=symbol,
-                timeframe=stage1_timeframe,
-            )
-            if stage1_frame.empty:
-                reason_counts["stage1:empty_reference_frame"] += 1
-                continue
-
-            stage1_events, stage1_evaluation = _get_cached_stage1_review(
-                cache=stage1_review_cache,
-                selector=selector,
-                symbol=symbol,
-                timeframe=stage1_timeframe,
-                frame=stage1_frame,
-            )
-            if not stage1_events:
-                reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
-                continue
-
-            regimes = _resolve_stage1_regime_ends(
-                frame=stage1_frame,
-                regimes=_group_stage1_events_into_regimes(stage1_events),
-            )
-            for regime in regimes:
-                stage1_event = regime.first_event
-                dynamic_stage2_result = stage2_detector.detect(
-                    symbol=symbol,
-                    frame=frame,
-                    stage1=stage1_event,
-                    analysis_end_timestamp=int(regime.regime_end_timestamp),
-                )
-                if not dynamic_stage2_result.passed:
-                    reason_counts["stage2_not_passed"] += 1
-                    continue
-
-                stage3_result = _resolve_stage23_terminal_result(
-                    symbol=symbol,
-                    timeframe=review_timeframe,
-                    frame=frame,
-                    stage1_event=stage1_event,
-                    regime=regime,
-                    stage2_detector=stage2_detector,
-                    stage3_detector=stage3_detector,
-                    initial_stage2_result=dynamic_stage2_result,
-                )
-                if not stage3_result.passed:
-                    reason_counts[stage3_result.reason] += 1
-                    continue
-
-                stage3_passed_count += 1
-                reference_stage2_end_timestamp = int(
-                    stage3_result.reference_box_end_timestamp
-                    or dynamic_stage2_result.analysis_end_timestamp
-                    or regime.regime_end_timestamp
-                )
-                reference_stage2_result = _get_cached_stage2_result(
-                    cache=stage2_timestamp_cache.setdefault(symbol, {}),
-                    symbol=symbol,
-                    frame=frame,
-                    stage1_event=stage1_event,
-                    stage2_detector=stage2_detector,
-                    analysis_end_timestamp=reference_stage2_end_timestamp,
-                )
-                trade_rows = _build_stage4_postmortem_rows(
-                    symbol=symbol,
-                    timeframe=review_timeframe,
-                    regime=regime,
-                    stage1_event=stage1_event,
-                    reference_stage2_result=reference_stage2_result,
-                    stage3_result=stage3_result,
-                    frame=frame,
-                    param_grid=param_grid,
-                )
-                rows.extend(trade_rows)
-                for trade_row in trade_rows:
-                    plot_payloads.append(
-                        {
-                            "symbol": symbol,
-                            "regime_index": regime.regime_index,
-                            "frame": frame,
-                            "stage1_event": stage1_event,
-                            "reference_stage2_result": reference_stage2_result,
-                            "stage3_result": stage3_result,
-                            "trade_row": trade_row,
-                        }
-                    )
+            rows.extend(cast(list[dict[str, object]], symbol_result.get("rows") or []))
+            stage3_passed_count += int(symbol_result.get("stage3_passed_count") or 0)
+            reason_counts.update(cast(dict[str, int], symbol_result.get("reason_counts") or {}))
         finally:
             elapsed_seconds = time.perf_counter() - progress_started_at
             progress = (index / len(symbols)) * 100.0 if symbols else 0.0
@@ -4553,7 +4741,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                 symbol,
                 stage3_passed_count,
                 len(rows),
-                len(plot_payloads),
+                len(rows),
             )
 
     summary_rows = _build_stage4_postmortem_summary_rows(
@@ -4567,17 +4755,36 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     for summary_row in summary_rows:
         summary_row["is_best"] = bool(best_param_key is not None and _resolve_stage4_param_key(summary_row) == best_param_key)
 
-    selected_plot_payloads = [
-        payload
-        for payload in plot_payloads
-        if bool(payload["trade_row"].get("eligible"))
+    selected_trade_rows = [
+        trade_row
+        for trade_row in rows
+        if trade_row.get("row_type") == "trade"
+        and bool(trade_row.get("eligible"))
         and best_param_key is not None
-        and _resolve_stage4_param_key(cast(dict[str, object], payload["trade_row"])) == best_param_key
+        and _resolve_stage4_param_key(cast(dict[str, object], trade_row)) == best_param_key
     ]
-    for payload in selected_plot_payloads:
-        trade_row = cast(dict[str, object], payload["trade_row"])
-        symbol = cast(str, payload["symbol"])
-        regime_index = int(payload["regime_index"])
+    for trade_row in selected_trade_rows:
+        symbol = cast(str, trade_row["symbol"])
+        regime_index = int(trade_row["regime_index"])
+        plot_context = _rebuild_stage4_plot_context(
+            cache_dir=config.backtest.cache_dir,
+            symbol=symbol,
+            review_timeframe=review_timeframe,
+            regime_index=regime_index,
+            reference_box_end_timestamp=(
+                int(trade_row["reference_box_end_timestamp"])
+                if trade_row.get("reference_box_end_timestamp") is not None
+                else None
+            ),
+        )
+        if plot_context is None:
+            logger.warning(
+                "postmortem-stage4: skipped_plot_rebuild symbol=%s regime=%s",
+                symbol,
+                regime_index,
+            )
+            continue
+        frame, stage1_event, reference_stage2_result, stage3_result = plot_context
         plot_path = plots_dir / (
             f"{symbol.replace('/', '_')}_stage4_regime_{regime_index:02d}"
             f"_rr_{float(trade_row['minimal_rr']):.2f}"
@@ -4587,11 +4794,11 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
             f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
         )
         stage4_plotter.plot_result(
-            frame=cast(pd.DataFrame, payload["frame"]),
-            stage1_event=cast(BeeBiteStage1Result, payload["stage1_event"]),
-            reference_stage2_result=cast(BeeBiteStage2Result, payload["reference_stage2_result"]),
-            stage3_result=cast(BeeBiteStage3Result, payload["stage3_result"]),
-            trade_row=trade_row,
+            frame=frame,
+            stage1_event=stage1_event,
+            reference_stage2_result=reference_stage2_result,
+            stage3_result=stage3_result,
+            trade_row=cast(dict[str, object], trade_row),
             output_path=plot_path,
         )
         plots_built += 1
@@ -4614,6 +4821,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
             summary_rows=summary_rows,
             trade_rows=rows,
             reason_counts=reason_counts,
+            timed_out_symbols=timed_out_symbols,
         ),
         encoding="utf-8",
     )
@@ -4623,6 +4831,12 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         logger.info("postmortem-stage4: rejection_reasons %s", top_reasons)
     if empty_frame_symbols:
         logger.warning("postmortem-stage4: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
+    if timed_out_symbols:
+        logger.warning(
+            "postmortem-stage4: timed_out_symbols=%s list=%s",
+            len(timed_out_symbols),
+            ", ".join(timed_out_symbols[:10]),
+        )
     logger.info(
         "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid_size=%s best=%s csv=%s overview=%s report=%s",
         len(symbols),
