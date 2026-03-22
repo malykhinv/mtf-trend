@@ -4058,17 +4058,36 @@ def _render_stage4_postmortem_report(
 ) -> str:
     generated_at = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     best_summary_row = _select_best_stage4_summary_row(summary_rows)
-    eligible_year_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
-    leaderboard_rows = sorted(
-        eligible_year_rows,
-        key=lambda row: (
-            float(row.get("stage4_score", 0.0) or 0.0),
-            float(row.get("total_realized_rr", 0.0) or 0.0),
-            _resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")),
-            float(row.get("total_pnl_pct", 0.0) or 0.0),
-        ),
-        reverse=True,
-    )[:10]
+    leaderboard_balanced_rows = _build_stage4_leaderboard_rows(
+        summary_rows,
+        sort_keys=["stage4_score", "score_eligible_trades", "total_realized_rr", "profit_factor_rr", "total_pnl_pct", "win_rate"],
+        limit=7,
+    )
+    leaderboard_trades_rows = _build_stage4_leaderboard_rows(
+        summary_rows,
+        sort_keys=["eligible_trades", "total_realized_rr", "profit_factor_rr", "stage4_score"],
+        limit=7,
+    )
+    leaderboard_rr_rows = _build_stage4_leaderboard_rows(
+        summary_rows,
+        sort_keys=["total_realized_rr", "profit_factor_rr", "eligible_trades", "stage4_score"],
+        limit=7,
+    )
+    leaderboard_pnl_rows = _build_stage4_leaderboard_rows(
+        summary_rows,
+        sort_keys=["total_pnl_pct", "total_realized_rr", "profit_factor_rr", "eligible_trades", "stage4_score"],
+        limit=7,
+    )
+    leaderboard_pf_rows = _build_stage4_leaderboard_rows(
+        summary_rows,
+        sort_keys=["profit_factor_rr", "total_realized_rr", "eligible_trades", "stage4_score"],
+        limit=7,
+    )
+    leaderboard_wr_rows = _build_stage4_leaderboard_rows(
+        summary_rows,
+        sort_keys=["win_rate", "total_realized_rr", "eligible_trades", "profit_factor_rr", "stage4_score"],
+        limit=7,
+    )
     monthly_summary_map = _build_stage4_monthly_summary_map(
         timeframe=timeframe,
         param_grid=param_grid,
@@ -4191,6 +4210,7 @@ def _render_stage4_postmortem_report(
                 ["Verdict", verdict],
                 ["Best full-period params", f"`{_format_stage4_param_triplet(best_summary_row)}`"],
                 ["Score", f"{float(best_summary_row.get('stage4_score', 0.0) or 0.0):.4f}"],
+                ["Trade count score", f"{float(best_summary_row.get('score_eligible_trades', 0.0) or 0.0):.4f}"],
                 ["Eligible trades", int(best_summary_row.get("eligible_trades", 0) or 0)],
                 ["Win rate", _format_stage4_win_rate(best_summary_row.get("win_rate"))],
                 ["Total realized RR", _format_stage4_metric(best_summary_row.get("total_realized_rr"))],
@@ -4213,7 +4233,8 @@ def _render_stage4_postmortem_report(
         f"- The strongest full-period setup is `{_format_stage4_param_triplet(best_summary_row)}` with "
         f"`{_format_stage4_metric(best_summary_row.get('total_realized_rr'))}` net total RR and "
         f"`{_format_stage4_metric(best_summary_row.get('total_pnl_pct'), pct=True)}` net total PnL "
-        f"after Binance taker fees."
+        f"after Binance taker fees, while still preserving "
+        f"`{int(best_summary_row.get('eligible_trades', 0) or 0)}` eligible trades."
     )
     lines.append(
         f"- Monthly drift is `{avg_drift_rr:+.2f}` RR on average and the yearly-best setup matches the monthly-best "
@@ -4273,26 +4294,44 @@ def _render_stage4_postmortem_report(
             )
         )
 
-    lines.extend(["", "---", "", "## Full-Period Leaderboard", ""])
-
-    lines.append(
-        _build_markdown_table(
-            ["Rank", "Params", "Score", "Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)"],
-            [
+    def _build_stage4_report_leaderboard(title: str, rows: list[dict[str, object]], *, include_score: bool = False) -> None:
+        lines.extend(["", f"### {title}", ""])
+        headers = ["Rank", "Params"]
+        if include_score:
+            headers.extend(["Score", "Trade score"])
+        headers.extend(["Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)"])
+        table_rows: list[list[object]] = []
+        for rank, row in enumerate(rows, start=1):
+            table_row: list[object] = [rank, _format_stage4_param_triplet(row)]
+            if include_score:
+                table_row.extend(
+                    [
+                        f"{float(row.get('stage4_score', 0.0) or 0.0):.4f}",
+                        f"{float(row.get('score_eligible_trades', 0.0) or 0.0):.4f}",
+                    ]
+                )
+            table_row.extend(
                 [
-                    rank,
-                    _format_stage4_param_triplet(row),
-                    f"{float(row.get('stage4_score', 0.0) or 0.0):.4f}",
                     int(row.get("eligible_trades", 0) or 0),
                     _format_stage4_win_rate(row.get("win_rate")),
                     _format_stage4_metric(row.get("total_realized_rr")),
                     _format_stage4_metric(row.get("profit_factor_rr")),
                     _format_stage4_metric(row.get("total_pnl_pct"), pct=True),
                 ]
-                for rank, row in enumerate(leaderboard_rows, start=1)
-            ],
-        )
-    )
+            )
+            table_rows.append(table_row)
+        lines.append(_build_markdown_table(headers, table_rows))
+
+    lines.extend(["", "---", "", "## Full-Period Leaderboards", ""])
+    lines.append("- `Top By Balanced Score` is the recommended main selector.")
+    lines.append("- `Top By Trades` shows density, while `Top By Total Realized RR` shows raw edge without density preference.")
+    lines.append("- `Balanced score` = `35% RR + 25% PF + 20% trades + 10% WR + 10% PnL`.")
+    _build_stage4_report_leaderboard("Top By Balanced Score", leaderboard_balanced_rows, include_score=True)
+    _build_stage4_report_leaderboard("Top By Trades", leaderboard_trades_rows)
+    _build_stage4_report_leaderboard("Top By Total Realized RR", leaderboard_rr_rows)
+    _build_stage4_report_leaderboard("Top By Total PnL (Net)", leaderboard_pnl_rows)
+    _build_stage4_report_leaderboard("Top By Profit Factor RR", leaderboard_pf_rows)
+    _build_stage4_report_leaderboard("Top By Win Rate", leaderboard_wr_rows)
 
     lines.extend(["", "---", "", "## Parameter Stability", ""])
     lines.append("- Cell format: `aAVG/bBEST; eligible_profiles/all_profiles`.")
@@ -4419,6 +4458,9 @@ def _render_stage4_postmortem_report(
         "`sl` = initial stop model, `tp1sl` = protective stop model after TP1, `pm` = pump minute filter, `sess` = pump/sweep session filter."
     )
     lines.append(
+        "- `Balanced score` = `35% total_realized_rr + 25% profit_factor_rr + 20% eligible_trades(log-scaled) + 10% win_rate + 10% total_pnl_pct`."
+    )
+    lines.append(
         f"- All RR and PnL metrics in this report are net of Binance Futures taker fees: "
         f"`{BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}%` on entry and "
         f"`{BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}%` on each exit fill."
@@ -4469,12 +4511,35 @@ def _normalize_stage4_metric(values: list[float]) -> list[float]:
     return [(value - low) / (high - low) for value in values]
 
 
+def _build_stage4_leaderboard_rows(
+    rows: list[dict[str, object]],
+    *,
+    sort_keys: list[str],
+    limit: int = 5,
+) -> list[dict[str, object]]:
+    eligible_rows = [row for row in rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
+    if not eligible_rows:
+        return []
+
+    def _sort_value(row: dict[str, object], key: str) -> float:
+        if key == "profit_factor_rr":
+            return _resolve_stage4_profit_factor_sort_value(row.get(key))
+        return float(row.get(key, 0.0) or 0.0)
+
+    return sorted(
+        eligible_rows,
+        key=lambda row: tuple(_sort_value(row, key) for key in sort_keys),
+        reverse=True,
+    )[:limit]
+
+
 def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[dict[str, object]]:
     eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
     if not eligible_rows:
         for row in summary_rows:
             row["score_total_realized_rr"] = 0.0
             row["score_profit_factor_rr"] = 0.0
+            row["score_eligible_trades"] = 0.0
             row["score_win_rate"] = 0.0
             row["score_total_pnl_pct"] = 0.0
             row["stage4_score"] = 0.0
@@ -4482,30 +4547,35 @@ def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[di
 
     rr_values = [float(row.get("total_realized_rr", 0.0) or 0.0) for row in eligible_rows]
     pf_values = [_resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")) for row in eligible_rows]
+    trade_values = [math.log1p(float(row.get("eligible_trades", 0.0) or 0.0)) for row in eligible_rows]
     wr_values = [float(row.get("win_rate", 0.0) or 0.0) for row in eligible_rows]
     pnl_values = [float(row.get("total_pnl_pct", 0.0) or 0.0) for row in eligible_rows]
 
     normalized_rr = _normalize_stage4_metric(rr_values)
     normalized_pf = _normalize_stage4_metric(pf_values)
+    normalized_trades = _normalize_stage4_metric(trade_values)
     normalized_wr = _normalize_stage4_metric(wr_values)
     normalized_pnl = _normalize_stage4_metric(pnl_values)
 
-    for row, rr_score, pf_score, wr_score, pnl_score in zip(
+    for row, rr_score, pf_score, trade_score, wr_score, pnl_score in zip(
         eligible_rows,
         normalized_rr,
         normalized_pf,
+        normalized_trades,
         normalized_wr,
         normalized_pnl,
         strict=True,
     ):
         row["score_total_realized_rr"] = rr_score
         row["score_profit_factor_rr"] = pf_score
+        row["score_eligible_trades"] = trade_score
         row["score_win_rate"] = wr_score
         row["score_total_pnl_pct"] = pnl_score
         row["stage4_score"] = (
-            (rr_score * 0.45)
-            + (pf_score * 0.30)
-            + (wr_score * 0.15)
+            (rr_score * 0.35)
+            + (pf_score * 0.25)
+            + (trade_score * 0.20)
+            + (wr_score * 0.10)
             + (pnl_score * 0.10)
         )
 
@@ -4513,6 +4583,7 @@ def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[di
         if row not in eligible_rows:
             row["score_total_realized_rr"] = 0.0
             row["score_profit_factor_rr"] = 0.0
+            row["score_eligible_trades"] = 0.0
             row["score_win_rate"] = 0.0
             row["score_total_pnl_pct"] = 0.0
             row["stage4_score"] = 0.0
@@ -4527,6 +4598,7 @@ def _select_best_stage4_summary_row(summary_rows: list[dict[str, object]]) -> di
         eligible_rows,
         key=lambda row: (
             float(row.get("stage4_score", 0.0) or 0.0),
+            float(row.get("score_eligible_trades", 0.0) or 0.0),
             float(row.get("total_realized_rr", 0.0) or 0.0),
             _resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")),
             float(row.get("total_pnl_pct", 0.0) or 0.0),
