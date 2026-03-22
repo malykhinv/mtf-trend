@@ -7,6 +7,9 @@ from dataclasses import dataclass
 class BeeBiteStage4PostmortemParams:
     min_rr: float
     tp3_multiplier: float
+    sweep_size_multiplier: float
+    stop_mode: str
+    tp1_stop_mode: str
     tp1_share: float
     tp2_share: float
     tp3_share: float
@@ -19,6 +22,9 @@ def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
     # - keep only practical partial-take profiles
     rr_grid = (1.25, 1.50, 1.75, 2.00, 2.25, 2.50, 3.00)
     tp3_multipliers = (1.0, 2.0, 3.0)
+    sweep_size_multipliers = (1.0, 2.0, 3.0, 4.0)
+    stop_modes = ("sweep_low", "entry_minus_avg_body")
+    tp1_stop_modes = ("entry", "last_red_low")
     share_profiles = (
         (0.50, 0.25, 0.25),
         (0.50, 0.50, 0.00),
@@ -29,16 +35,22 @@ def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
     grid: list[BeeBiteStage4PostmortemParams] = []
     for min_rr in rr_grid:
         for tp3_multiplier in tp3_multipliers:
-            for tp1_share, tp2_share, tp3_share in share_profiles:
-                grid.append(
-                    BeeBiteStage4PostmortemParams(
-                        min_rr=min_rr,
-                        tp3_multiplier=tp3_multiplier,
-                        tp1_share=tp1_share,
-                        tp2_share=tp2_share,
-                        tp3_share=tp3_share,
-                    )
-                )
+            for sweep_size_multiplier in sweep_size_multipliers:
+                for stop_mode in stop_modes:
+                    for tp1_stop_mode in tp1_stop_modes:
+                        for tp1_share, tp2_share, tp3_share in share_profiles:
+                            grid.append(
+                                BeeBiteStage4PostmortemParams(
+                                    min_rr=min_rr,
+                                    tp3_multiplier=tp3_multiplier,
+                                    sweep_size_multiplier=sweep_size_multiplier,
+                                    stop_mode=stop_mode,
+                                    tp1_stop_mode=tp1_stop_mode,
+                                    tp1_share=tp1_share,
+                                    tp2_share=tp2_share,
+                                    tp3_share=tp3_share,
+                                )
+                            )
     return tuple(grid)
 
 
