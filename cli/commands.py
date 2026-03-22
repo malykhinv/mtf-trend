@@ -2708,6 +2708,59 @@ def _resolve_index_by_timestamp_from_frame(frame: pd.DataFrame, timestamp: int) 
     return int(matches[-1])
 
 
+def _resolve_stage4_timestamp_utc_parts(timestamp_ms: int | None) -> dict[str, object]:
+    if timestamp_ms is None:
+        return {
+            "hour_utc": None,
+            "minute_utc": None,
+            "label_utc": None,
+            "session_utc": None,
+            "minute_marker": "unknown",
+        }
+    timestamp = pd.to_datetime(int(timestamp_ms), unit="ms", utc=True)
+    hour = int(timestamp.hour)
+    minute = int(timestamp.minute)
+    if 0 <= hour < 8:
+        session = "asia"
+    elif 8 <= hour < 13:
+        session = "europe"
+    elif 13 <= hour < 17:
+        session = "us_overlap"
+    else:
+        session = "us_late"
+    minute_marker = "00_or_30" if minute in {0, 30} else "other"
+    return {
+        "hour_utc": hour,
+        "minute_utc": minute,
+        "label_utc": timestamp.strftime("%H:%M"),
+        "session_utc": session,
+        "minute_marker": minute_marker,
+    }
+
+
+def _passes_stage4_pump_minute_filter(*, pump_minute: int | None, filter_mode: str) -> bool:
+    normalized = str(filter_mode or "any").strip().lower()
+    if normalized in {"", "any"}:
+        return True
+    if normalized == "minute_00_or_30":
+        return pump_minute in {0, 30}
+    return True
+
+
+def _passes_stage4_timing_session_filter(
+    *,
+    pump_session: str | None,
+    sweep_session: str | None,
+    filter_mode: str,
+) -> bool:
+    normalized = str(filter_mode or "any").strip().lower()
+    if normalized in {"", "any"}:
+        return True
+    if normalized == "pump_not_us_overlap_and_sweep_not_europe":
+        return pump_session != "us_overlap" and sweep_session != "europe"
+    return True
+
+
 def _resolve_stage4_trade_outcome(
     *,
     frame: pd.DataFrame,
@@ -2982,6 +3035,9 @@ def _build_stage4_postmortem_rows(
     entry_price = float(prepared.iloc[entry_idx]["close"])
     structural_stop_price = float(stage3_result.lowest_break_price)
     peak_price = float(stage1_event.pump_peak_price)
+    pump_start_timestamp = int(stage1_event.pump_start_timestamp) if stage1_event.pump_start_timestamp is not None else None
+    pump_peak_timestamp = int(stage1_event.pump_peak_timestamp) if stage1_event.pump_peak_timestamp is not None else None
+    sweep_timestamp = int(stage3_result.lowest_break_timestamp or stage3_result.break_timestamp or 0) or None
     box_height = max(float(stage3_result.box_high) - float(stage3_result.box_low), 0.0)
     peak_idx = _resolve_index_by_timestamp_from_frame(prepared, int(stage1_event.pump_peak_timestamp or 0))
     sweep_idx = stage3_result.lowest_break_idx if stage3_result.lowest_break_idx is not None else stage3_result.break_idx
@@ -3013,6 +3069,10 @@ def _build_stage4_postmortem_rows(
         if pump_to_peak_bars is not None and peak_to_sweep_bars > 0
         else None
     )
+    pump_marker = _resolve_stage4_timestamp_utc_parts(pump_start_timestamp)
+    peak_marker = _resolve_stage4_timestamp_utc_parts(pump_peak_timestamp)
+    sweep_marker = _resolve_stage4_timestamp_utc_parts(sweep_timestamp)
+    reclaim_marker = _resolve_stage4_timestamp_utc_parts(stage3_result.reclaim_timestamp)
     highest_high_after_peak = float(prepared.iloc[peak_idx : entry_idx + 1]["high"].max())
     active_upper_zones = _resolve_stage4_active_upper_zones(reference_stage2_result)
     upper_zone_above_peak = sorted(
@@ -3047,6 +3107,15 @@ def _build_stage4_postmortem_rows(
             sweep_size_ratio is not None
             and sweep_size_ratio >= float(params.sweep_size_multiplier)
         )
+        pump_minute_filter_passed = _passes_stage4_pump_minute_filter(
+            pump_minute=cast(int | None, pump_marker["minute_utc"]),
+            filter_mode=params.pump_minute_filter,
+        )
+        timing_session_filter_passed = _passes_stage4_timing_session_filter(
+            pump_session=cast(str | None, pump_marker["session_utc"]),
+            sweep_session=cast(str | None, sweep_marker["session_utc"]),
+            filter_mode=params.timing_session_filter,
+        )
         target_stack_valid = (
             sweep_filter_passed
             and risk > 0.0
@@ -3058,7 +3127,13 @@ def _build_stage4_postmortem_rows(
                 or tp3_price >= max(tp1_price, tp2_price if float(params.tp2_share) > 0.0 else tp1_price)
             )
         )
-        eligible = bool(target_stack_valid) and rr_value is not None and rr_value >= float(params.min_rr)
+        eligible = (
+            bool(target_stack_valid)
+            and pump_minute_filter_passed
+            and timing_session_filter_passed
+            and rr_value is not None
+            and rr_value >= float(params.min_rr)
+        )
         outcome = "rr_below_threshold"
         exit_idx: int | None = None
         exit_price: float | None = None
@@ -3076,6 +3151,10 @@ def _build_stage4_postmortem_rows(
         tp1_stop_price = None
         if not target_stack_valid:
             outcome = "sweep_size_filter_failed" if not sweep_filter_passed else "invalid_target_stack"
+        elif not pump_minute_filter_passed:
+            outcome = "pump_minute_filter_failed"
+        elif not timing_session_filter_passed:
+            outcome = "timing_session_filter_failed"
         param_cache_key = (
             float(params.tp3_multiplier),
             str(params.stop_mode),
@@ -3139,6 +3218,8 @@ def _build_stage4_postmortem_rows(
                 "regime_index": regime.regime_index,
                 "row_type": "trade",
                 "row_order": row_order,
+                "pump_minute_filter": str(params.pump_minute_filter),
+                "timing_session_filter": str(params.timing_session_filter),
                 "sweep_size_multiplier": float(params.sweep_size_multiplier),
                 "stop_mode": str(params.stop_mode),
                 "tp1_stop_mode": str(params.tp1_stop_mode),
@@ -3146,7 +3227,32 @@ def _build_stage4_postmortem_rows(
                 "tp1_share": float(params.tp1_share),
                 "tp2_share": float(params.tp2_share),
                 "tp3_share": float(params.tp3_share),
+                "pump_start_timestamp": pump_start_timestamp,
+                "pump_peak_timestamp": pump_peak_timestamp,
+                "sweep_timestamp": sweep_timestamp,
                 "stage3_reclaim_timestamp": stage3_result.reclaim_timestamp,
+                "pump_hour_utc": pump_marker["hour_utc"],
+                "pump_minute_utc": pump_marker["minute_utc"],
+                "pump_label_utc": pump_marker["label_utc"],
+                "pump_session_utc": pump_marker["session_utc"],
+                "pump_minute_marker": pump_marker["minute_marker"],
+                "peak_hour_utc": peak_marker["hour_utc"],
+                "peak_minute_utc": peak_marker["minute_utc"],
+                "peak_label_utc": peak_marker["label_utc"],
+                "peak_session_utc": peak_marker["session_utc"],
+                "sweep_hour_utc": sweep_marker["hour_utc"],
+                "sweep_minute_utc": sweep_marker["minute_utc"],
+                "sweep_label_utc": sweep_marker["label_utc"],
+                "sweep_session_utc": sweep_marker["session_utc"],
+                "sweep_minute_marker": sweep_marker["minute_marker"],
+                "reclaim_hour_utc": reclaim_marker["hour_utc"],
+                "reclaim_minute_utc": reclaim_marker["minute_utc"],
+                "reclaim_label_utc": reclaim_marker["label_utc"],
+                "reclaim_session_utc": reclaim_marker["session_utc"],
+                "timing_context_marker": (
+                    f"pump:{pump_marker['label_utc']}/{pump_marker['session_utc']} | "
+                    f"sweep:{sweep_marker['label_utc']}/{sweep_marker['session_utc']}"
+                ),
                 "entry_timestamp": entry_timestamp,
                 "entry_price": entry_price,
                 "stop_price": stop_price,
@@ -3162,6 +3268,8 @@ def _build_stage4_postmortem_rows(
                 "avg_body_peak_to_sweep": avg_body_peak_to_sweep,
                 "sweep_size_ratio": sweep_size_ratio,
                 "sweep_filter_passed": sweep_filter_passed,
+                "pump_minute_filter_passed": pump_minute_filter_passed,
+                "timing_session_filter_passed": timing_session_filter_passed,
                 "pump_to_peak_bars": pump_to_peak_bars,
                 "peak_to_sweep_bars": peak_to_sweep_bars,
                 "pump_to_sweep_duration_ratio": pump_to_sweep_duration_ratio,
@@ -3229,6 +3337,8 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
             row
             for row in trade_rows
             if float(row["minimal_rr"]) == float(params.min_rr)
+            and str(row.get("pump_minute_filter") or "") == str(params.pump_minute_filter)
+            and str(row.get("timing_session_filter") or "") == str(params.timing_session_filter)
             and float(row.get("sweep_size_multiplier", 0.0) or 0.0) == float(params.sweep_size_multiplier)
             and str(row.get("stop_mode") or "") == str(params.stop_mode)
             and str(row.get("tp1_stop_mode") or "") == str(params.tp1_stop_mode)
@@ -3251,6 +3361,8 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
         open_trades = sum(1 for row in eligible_rows if row["outcome"] in {"open", "no_future_data"})
         invalid_target_stack = sum(1 for row in threshold_rows if row["outcome"] == "invalid_target_stack")
         sweep_filter_failed = sum(1 for row in threshold_rows if row["outcome"] == "sweep_size_filter_failed")
+        pump_minute_filter_failed = sum(1 for row in threshold_rows if row["outcome"] == "pump_minute_filter_failed")
+        timing_session_filter_failed = sum(1 for row in threshold_rows if row["outcome"] == "timing_session_filter_failed")
         realized_rr_values = [
             float(row["realized_rr"])
             for row in eligible_rows
@@ -3285,6 +3397,8 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
                 "row_type": "summary",
                 "row_order": row_order,
                 "minimal_rr": float(params.min_rr),
+                "pump_minute_filter": str(params.pump_minute_filter),
+                "timing_session_filter": str(params.timing_session_filter),
                 "sweep_size_multiplier": float(params.sweep_size_multiplier),
                 "stop_mode": str(params.stop_mode),
                 "tp1_stop_mode": str(params.tp1_stop_mode),
@@ -3297,6 +3411,8 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
                 "rr_filtered_out": sum(1 for row in threshold_rows if not bool(row["eligible"])),
                 "invalid_target_stack": invalid_target_stack,
                 "sweep_filter_failed": sweep_filter_failed,
+                "pump_minute_filter_failed": pump_minute_filter_failed,
+                "timing_session_filter_failed": timing_session_filter_failed,
                 "tp1_full_exits": tp1_full_exits,
                 "tp2_final_hits": tp2_final_hits,
                 "tp3_hits": tp3_hits,
@@ -3461,6 +3577,8 @@ def _serialize_stage4_param_grid(
             "sweep_size_multiplier": float(params.sweep_size_multiplier),
             "stop_mode": str(params.stop_mode),
             "tp1_stop_mode": str(params.tp1_stop_mode),
+            "pump_minute_filter": str(params.pump_minute_filter),
+            "timing_session_filter": str(params.timing_session_filter),
             "tp1_share": float(params.tp1_share),
             "tp2_share": float(params.tp2_share),
             "tp3_share": float(params.tp3_share),
@@ -3692,6 +3810,24 @@ def _format_stage4_tp1_stop_mode(value: object) -> str:
     return normalized or "n/a"
 
 
+def _format_stage4_pump_minute_filter(value: object) -> str:
+    normalized = str(value or "")
+    if normalized == "any":
+        return "pm:any"
+    if normalized == "minute_00_or_30":
+        return "pm:00|30"
+    return f"pm:{normalized}" if normalized else "pm:n/a"
+
+
+def _format_stage4_timing_session_filter(value: object) -> str:
+    normalized = str(value or "")
+    if normalized == "any":
+        return "sess:any"
+    if normalized == "pump_not_us_overlap_and_sweep_not_europe":
+        return "sess:no_usov_pump/no_eu_sw"
+    return f"sess:{normalized}" if normalized else "sess:n/a"
+
+
 def _format_stage4_param_triplet(row: dict[str, object]) -> str:
     return (
         f"rr={float(row.get('minimal_rr', 0.0) or 0.0):.2f}, "
@@ -3699,6 +3835,8 @@ def _format_stage4_param_triplet(row: dict[str, object]) -> str:
         f"sw={float(row.get('sweep_size_multiplier', 0.0) or 0.0):.1f}x, "
         f"sl={_format_stage4_stop_mode(row.get('stop_mode'))}, "
         f"tp1sl={_format_stage4_tp1_stop_mode(row.get('tp1_stop_mode'))}, "
+        f"{_format_stage4_pump_minute_filter(row.get('pump_minute_filter'))}, "
+        f"{_format_stage4_timing_session_filter(row.get('timing_session_filter'))}, "
         f"w={float(row.get('tp1_share', 0.0) or 0.0):.2f}/"
         f"{float(row.get('tp2_share', 0.0) or 0.0):.2f}/"
         f"{float(row.get('tp3_share', 0.0) or 0.0):.2f}"
@@ -3719,6 +3857,41 @@ def _build_markdown_table(headers: list[str], rows: list[list[object]]) -> str:
 
 def _resolve_stage4_float(row: dict[str, object], key: str) -> float:
     return float(row.get(key, 0.0) or 0.0)
+
+
+def _build_stage4_timing_breakdown_rows(
+    *,
+    trade_rows: list[dict[str, object]],
+    key_name: str,
+) -> list[list[object]]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for row in trade_rows:
+        bucket = str(row.get(key_name) or "unknown")
+        grouped.setdefault(bucket, []).append(row)
+
+    breakdown_rows: list[list[object]] = []
+    for bucket, bucket_rows in sorted(
+        grouped.items(),
+        key=lambda item: (
+            sum(float(row.get("realized_rr", 0.0) or 0.0) for row in item[1]),
+            sum(float(row.get("realized_pnl_pct", 0.0) or 0.0) for row in item[1]),
+            len(item[1]),
+        ),
+        reverse=True,
+    ):
+        closed_rows = [row for row in bucket_rows if str(row.get("outcome") or "") != "open"]
+        profitable_rows = [row for row in closed_rows if float(row.get("realized_pnl_pct", 0.0) or 0.0) > 0.0]
+        win_rate = (len(profitable_rows) / len(closed_rows)) if closed_rows else 0.0
+        breakdown_rows.append(
+            [
+                bucket,
+                len(bucket_rows),
+                _format_stage4_win_rate(win_rate),
+                _format_stage4_metric(sum(float(row.get("realized_rr", 0.0) or 0.0) for row in bucket_rows)),
+                _format_stage4_metric(sum(float(row.get("realized_pnl_pct", 0.0) or 0.0) for row in bucket_rows), pct=True),
+            ]
+        )
+    return breakdown_rows
 
 
 def _build_stage4_stability_heatmap(summary_rows: list[dict[str, object]]) -> str:
@@ -3904,6 +4077,26 @@ def _render_stage4_postmortem_report(
     stability_pairs = _collect_stage4_stability_pairs(summary_rows)
     best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common(8)) if reason_counts else "none"
+    best_trade_rows = [
+        cast(dict[str, object], row)
+        for row in trade_rows
+        if row.get("row_type") == "trade"
+        and bool(row.get("eligible"))
+        and best_param_key is not None
+        and _resolve_stage4_param_key(cast(dict[str, object], row)) == best_param_key
+    ]
+    pump_minute_breakdown = _build_stage4_timing_breakdown_rows(
+        trade_rows=best_trade_rows,
+        key_name="pump_minute_marker",
+    )
+    pump_session_breakdown = _build_stage4_timing_breakdown_rows(
+        trade_rows=best_trade_rows,
+        key_name="pump_session_utc",
+    )
+    sweep_session_breakdown = _build_stage4_timing_breakdown_rows(
+        trade_rows=best_trade_rows,
+        key_name="sweep_session_utc",
+    )
     lines: list[str] = [f"# Bee Bite Stage-4 Postmortem Report ({timeframe.value})", "", f"_Generated: {generated_at}_", ""]
     if reason_counts:
         lines.append(f"> Top rejection reasons before stage-4: `{top_reasons}`")
@@ -4048,6 +4241,38 @@ def _render_stage4_postmortem_report(
         suffix = " ..." if len(timed_out_symbols) > 10 else ""
         lines.append(f"- Timed out symbols skipped during this run: `{preview}{suffix}`.")
 
+    if best_trade_rows:
+        lines.extend(["", "### Timing Markers For Best Params", ""])
+        lines.append(
+            f"- Pump minute filter in best params: `{_format_stage4_pump_minute_filter(best_summary_row.get('pump_minute_filter'))}`"
+        )
+        lines.append(
+            f"- Session filter in best params: `{_format_stage4_timing_session_filter(best_summary_row.get('timing_session_filter'))}`"
+        )
+        lines.append("")
+        lines.append("#### Pump Minute Markers")
+        lines.append("")
+        lines.append(
+            _build_markdown_table(
+                ["Marker", "Trades", "WR", "Total RR (net)", "Total PnL (net)"],
+                pump_minute_breakdown,
+            )
+        )
+        lines.extend(["", "#### Pump Sessions (UTC)", ""])
+        lines.append(
+            _build_markdown_table(
+                ["Session", "Trades", "WR", "Total RR (net)", "Total PnL (net)"],
+                pump_session_breakdown,
+            )
+        )
+        lines.extend(["", "#### Sweep Sessions (UTC)", ""])
+        lines.append(
+            _build_markdown_table(
+                ["Session", "Trades", "WR", "Total RR (net)", "Total PnL (net)"],
+                sweep_session_breakdown,
+            )
+        )
+
     lines.extend(["", "---", "", "## Full-Period Leaderboard", ""])
 
     lines.append(
@@ -4189,7 +4414,10 @@ def _render_stage4_postmortem_report(
 
     lines.extend(["", "---", "", "## Method Notes", ""])
     lines.append("- `Trades` means eligible stage-4 entries after the RR filter for that parameter set.")
-    lines.append("- Param shorthand: `m` = TP3 box-height multiplier, `sw` = sweep-size filter versus average peak-to-sweep candle range, `sl` = initial stop model, `tp1sl` = protective stop model after TP1.")
+    lines.append(
+        "- Param shorthand: `m` = TP3 box-height multiplier, `sw` = sweep-size filter versus average peak-to-sweep candle range, "
+        "`sl` = initial stop model, `tp1sl` = protective stop model after TP1, `pm` = pump minute filter, `sess` = pump/sweep session filter."
+    )
     lines.append(
         f"- All RR and PnL metrics in this report are net of Binance Futures taker fees: "
         f"`{BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}%` on entry and "
@@ -4205,13 +4433,17 @@ def _render_stage4_postmortem_report(
     return "\n".join(lines).strip() + "\n"
 
 
-def _resolve_stage4_param_key(row: dict[str, object]) -> tuple[float, float, float, str, str, float, float, float]:
+def _resolve_stage4_param_key(
+    row: dict[str, object],
+) -> tuple[float, float, float, str, str, str, str, float, float, float]:
     return (
         float(row["minimal_rr"]),
         float(row["tp3_multiplier"]),
         float(row.get("sweep_size_multiplier", 0.0) or 0.0),
         str(row.get("stop_mode") or ""),
         str(row.get("tp1_stop_mode") or ""),
+        str(row.get("pump_minute_filter") or ""),
+        str(row.get("timing_session_filter") or ""),
         float(row["tp1_share"]),
         float(row["tp2_share"]),
         float(row["tp3_share"]),
@@ -5036,6 +5268,8 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                 f"_sw_{float(trade_row.get('sweep_size_multiplier', 0.0) or 0.0):.1f}"
                 f"_sl_{_format_stage4_stop_mode(trade_row.get('stop_mode'))}"
                 f"_tp1sl_{_format_stage4_tp1_stop_mode(trade_row.get('tp1_stop_mode'))}"
+                f"_{_format_stage4_pump_minute_filter(trade_row.get('pump_minute_filter')).replace(':', '_').replace('|', '_')}"
+                f"_{_format_stage4_timing_session_filter(trade_row.get('timing_session_filter')).replace(':', '_').replace('/', '_')}"
                 f"_w_{int(round(float(trade_row['tp1_share']) * 100.0))}"
                 f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
                 f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"

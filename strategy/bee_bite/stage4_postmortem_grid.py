@@ -10,6 +10,8 @@ class BeeBiteStage4PostmortemParams:
     sweep_size_multiplier: float
     stop_mode: str
     tp1_stop_mode: str
+    pump_minute_filter: str
+    timing_session_filter: str
     tp1_share: float
     tp2_share: float
     tp3_share: float
@@ -26,6 +28,8 @@ def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
     sweep_size_multipliers = (1.0, 2.0, 3.0, 4.0)
     stop_modes = ("sweep_low", "entry_minus_avg_body")
     tp1_stop_modes = ("entry", "last_red_low")
+    pump_minute_filters = ("any", "minute_00_or_30")
+    timing_session_filters = ("any", "pump_not_us_overlap_and_sweep_not_europe")
     share_profiles = (
         (0.50, 0.25, 0.25),
         (0.50, 0.50, 0.00),
@@ -37,19 +41,23 @@ def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
             for sweep_size_multiplier in sweep_size_multipliers:
                 for stop_mode in stop_modes:
                     for tp1_stop_mode in tp1_stop_modes:
-                        for tp1_share, tp2_share, tp3_share in share_profiles:
-                            grid.append(
-                                BeeBiteStage4PostmortemParams(
-                                    min_rr=min_rr,
-                                    tp3_multiplier=tp3_multiplier,
-                                    sweep_size_multiplier=sweep_size_multiplier,
-                                    stop_mode=stop_mode,
-                                    tp1_stop_mode=tp1_stop_mode,
-                                    tp1_share=tp1_share,
-                                    tp2_share=tp2_share,
-                                    tp3_share=tp3_share,
-                                )
-                            )
+                        for pump_minute_filter in pump_minute_filters:
+                            for timing_session_filter in timing_session_filters:
+                                for tp1_share, tp2_share, tp3_share in share_profiles:
+                                    grid.append(
+                                        BeeBiteStage4PostmortemParams(
+                                            min_rr=min_rr,
+                                            tp3_multiplier=tp3_multiplier,
+                                            sweep_size_multiplier=sweep_size_multiplier,
+                                            stop_mode=stop_mode,
+                                            tp1_stop_mode=tp1_stop_mode,
+                                            pump_minute_filter=pump_minute_filter,
+                                            timing_session_filter=timing_session_filter,
+                                            tp1_share=tp1_share,
+                                            tp2_share=tp2_share,
+                                            tp3_share=tp3_share,
+                                        )
+                                    )
     return tuple(grid)
 
 

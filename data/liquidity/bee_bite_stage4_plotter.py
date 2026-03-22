@@ -265,7 +265,10 @@ class BeeBiteStage4Plotter:
         if exit_timestamp is not None and exit_price is not None:
             self._draw_marker(price_ax, exit_idx - window_start, float(exit_price), self._EXIT_COLOR)
 
+        timing_marker = str(trade_row.get("timing_context_marker") or "").strip()
         title = f"{stage1_event.symbol} | stage4"
+        if timing_marker:
+            title = f"{title} | {timing_marker}"
         price_ax.set_title(title)
         price_ax.title.set_color(self._TEXT_COLOR)
         price_ax.set_ylabel("Price", color=self._TEXT_COLOR)
