@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import math
 
 import matplotlib
 
@@ -47,6 +48,7 @@ class BeeBiteStage4Plotter:
     _FIGURE_SIZE = (8, 6)
     _FIGURE_DPI = 100
     _GRIDSPEC_HEIGHT_RATIOS = [4, 1]
+    _MAX_X_TICKS = 8
 
     def plot_result(
         self,
@@ -421,18 +423,38 @@ class BeeBiteStage4Plotter:
         axis.axvline(x, color=color, alpha=alpha, linewidth=linewidth, zorder=6)
 
     @staticmethod
-    def _build_tick_positions(window: pd.DataFrame) -> list[int]:
+    def _thin_tick_positions(positions: list[int], *, max_ticks: int) -> list[int]:
+        if len(positions) <= max_ticks:
+            return positions
+        step = max(int(math.ceil(len(positions) / max_ticks)), 1)
+        thinned = positions[::step]
+        if positions[-1] not in thinned:
+            thinned.append(positions[-1])
+        return thinned
+
+    @classmethod
+    def _build_tick_positions(cls, window: pd.DataFrame) -> list[int]:
         timestamps = pd.to_datetime(window["timestamp"].astype("int64"), unit="ms", utc=True)
         hour_positions = [idx for idx, value in enumerate(timestamps) if value.minute == 0]
         if len(hour_positions) >= 3:
-            return hour_positions
+            return cls._thin_tick_positions(hour_positions, max_ticks=cls._MAX_X_TICKS)
         half_hour_positions = [idx for idx, value in enumerate(timestamps) if value.minute in {0, 30}]
         if len(half_hour_positions) >= 3:
-            return half_hour_positions
+            return cls._thin_tick_positions(half_hour_positions, max_ticks=cls._MAX_X_TICKS)
         step = max(len(window) // 6, 1)
-        return list(range(0, len(window), step))
+        raw_positions = list(range(0, len(window), step))
+        if raw_positions and raw_positions[-1] != len(window) - 1:
+            raw_positions.append(len(window) - 1)
+        return cls._thin_tick_positions(raw_positions, max_ticks=cls._MAX_X_TICKS)
 
     @staticmethod
     def _build_tick_labels(window: pd.DataFrame, positions: list[int]) -> list[str]:
         timestamps = pd.to_datetime(window["timestamp"].astype("int64"), unit="ms", utc=True)
-        return [timestamps.iloc[position].strftime("%m-%d %H:%M") for position in positions]
+        labels: list[str] = []
+        for position in positions:
+            timestamp = timestamps.iloc[position]
+            if timestamp.hour == 0 and timestamp.minute == 0:
+                labels.append(timestamp.strftime("%m-%d"))
+            else:
+                labels.append(timestamp.strftime("%H:%M"))
+        return labels
