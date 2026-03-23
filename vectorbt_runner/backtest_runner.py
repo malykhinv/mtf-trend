@@ -6,6 +6,7 @@ import logging
 from collections import Counter, defaultdict
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
+from statistics import median
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
 
@@ -43,6 +44,12 @@ ZERO_ENTRY_REJECTION_KEYS = (
     "retest_confirmation_not_received",
     "retest_confirmation_expired",
 )
+
+
+def _resolve_median_metric(values: list[int | float]) -> float | None:
+    if not values:
+        return None
+    return round(float(median(values)), BACKTEST_ROUND_METRICS)
 
 
 def _format_duration_human(seconds: float) -> str:
@@ -98,6 +105,8 @@ class BacktestRunner:
                 "trades_count": BACKTEST_EMPTY_TRADES_COUNT,
                 "max_dd": BACKTEST_EMPTY_MAX_DD,
                 "max_drawdown_pct": BACKTEST_EMPTY_MAX_DD,
+                "median_pump_to_peak_bars": None,
+                "median_pump_to_peak_minutes": None,
                 "sl_count": BACKTEST_ZERO_COUNT,
                 "be_count": BACKTEST_ZERO_COUNT,
                 "time_exit_profit_count": BACKTEST_ZERO_COUNT,
@@ -157,6 +166,12 @@ class BacktestRunner:
         initial_deposit = BacktestRunner._resolve_initial_deposit(base_row)
         peak_equity = initial_deposit
         max_drawdown_pct = BACKTEST_EMPTY_MAX_DD
+        pump_to_peak_bars_values = [
+            trade.pump_to_peak_bars for trade in normalized_trades if trade.pump_to_peak_bars is not None
+        ]
+        pump_to_peak_minutes_values = [
+            trade.pump_to_peak_minutes for trade in normalized_trades if trade.pump_to_peak_minutes is not None
+        ]
         for sorted_trade in sorted_trades:
             cumulative_pnl += sorted_trade.pnl
             if cumulative_pnl > peak_pnl:
@@ -180,6 +195,8 @@ class BacktestRunner:
             "trades_count": trades_count,
             "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
             "max_drawdown_pct": round(float(max_drawdown_pct), BACKTEST_ROUND_MAX_DD),
+            "median_pump_to_peak_bars": _resolve_median_metric(pump_to_peak_bars_values),
+            "median_pump_to_peak_minutes": _resolve_median_metric(pump_to_peak_minutes_values),
             "sl_count": sl_count,
             "be_count": be_count,
             "time_exit_profit_count": time_exit_profit_count,

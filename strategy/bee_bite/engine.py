@@ -58,6 +58,7 @@ class SetupContext:
     retest_deadline_idx: int | None = None
     t_pump_start: int | None = None
     t_pump_end: int | None = None
+    pump_to_peak_bars: int | None = None
     high_pump: float | None = None
     low_before_pump: float | None = None
 
@@ -222,6 +223,7 @@ class BeeBiteEngine:
                         atr_bg,
                         t_pump_start,
                         t_pump_end,
+                        pump_to_peak_bars,
                         high_pump,
                         low_before_pump,
                     ) = pump_signal
@@ -243,6 +245,7 @@ class BeeBiteEngine:
                         atr_bg=atr_bg,
                         t_pump_start=t_pump_start,
                         t_pump_end=t_pump_end,
+                        pump_to_peak_bars=pump_to_peak_bars,
                         high_pump=high_pump,
                         low_before_pump=low_before_pump,
                     )
@@ -723,6 +726,9 @@ class BeeBiteEngine:
 
         pnl = realized_pnl
         pnl_percent = 0.0 if entry_price == 0 else (pnl / entry_price) * 100.0
+        pump_to_peak_minutes = None
+        if setup.pump_to_peak_bars is not None:
+            pump_to_peak_minutes = float(setup.pump_to_peak_bars * self._timeframe_minutes(params.entry_timeframe))
         trade = TradeResult(
             entry_price=Price(entry_price),
             exit_price=Price(exit_price),
@@ -733,6 +739,8 @@ class BeeBiteEngine:
             pnl_percent=Percentage(pnl_percent),
             breakout_timestamp_ms=setup.breakout_timestamp,
             retest_timestamp_ms=setup.retest_timestamp,
+            pump_to_peak_bars=setup.pump_to_peak_bars,
+            pump_to_peak_minutes=pump_to_peak_minutes,
         )
         return trade, exit_idx, False
 
@@ -795,7 +803,7 @@ class BeeBiteEngine:
         rows: list[PriceRow],
         idx: int,
         params: BeeBiteParams,
-    ) -> tuple[PositionSide, float, float, float, float, int, int, float, float] | None:
+    ) -> tuple[PositionSide, float, float, float, float, int, int, int, float, float] | None:
         pump_window = 6
         pre_pump_len = 14
         atr_bg_window_len = 96
@@ -861,6 +869,7 @@ class BeeBiteEngine:
         t_pump_start = int(recent[0].timestamp)
         pump_peak_offset = int(np.argmax(pump_highs))
         t_pump_end = int(recent[pump_peak_offset].timestamp)
+        pump_to_peak_bars = pump_peak_offset + 1
         if up_impulse < down_impulse:
             return None
         return (
@@ -871,6 +880,7 @@ class BeeBiteEngine:
             atr_bg,
             t_pump_start,
             t_pump_end,
+            pump_to_peak_bars,
             high_pump,
             low_before_pump,
         )
@@ -933,7 +943,7 @@ class BeeBiteEngine:
 
 
     @staticmethod
-    def _hours_to_candles(hours: int, timeframe) -> int:
+    def _timeframe_minutes(timeframe) -> int:
         timeframe_minutes = {
             "1m": 1,
             "5m": 5,
@@ -945,5 +955,9 @@ class BeeBiteEngine:
             "1w": 10080,
         }
         key = timeframe.value if hasattr(timeframe, "value") else str(timeframe)
-        minutes = timeframe_minutes.get(key, 15)
+        return timeframe_minutes.get(key, 15)
+
+    @staticmethod
+    def _hours_to_candles(hours: int, timeframe) -> int:
+        minutes = BeeBiteEngine._timeframe_minutes(timeframe)
         return max(1, int((hours * 60) / minutes))

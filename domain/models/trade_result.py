@@ -20,6 +20,8 @@ class TradeResult:
     pnl_percent: Percentage
     breakout_timestamp_ms: int | None = None
     retest_timestamp_ms: int | None = None
+    pump_to_peak_bars: int | None = None
+    pump_to_peak_minutes: float | None = None
 
     # region Приватные
     def __post_init__(self) -> None:
@@ -81,5 +83,13 @@ class TradeResult:
                 f"exit_timestamp_ms, got retest_timestamp_ms={self.retest_timestamp_ms}, "
                 f"exit_timestamp_ms={self.exit_timestamp_ms}."
             )
+            raise ValueError(msg)
+
+        if self.pump_to_peak_bars is not None and self.pump_to_peak_bars < 1:
+            msg = f"Trade result pump_to_peak_bars must be >= 1, got {self.pump_to_peak_bars}."
+            raise ValueError(msg)
+
+        if self.pump_to_peak_minutes is not None and self.pump_to_peak_minutes <= 0:
+            msg = f"Trade result pump_to_peak_minutes must be > 0, got {self.pump_to_peak_minutes}."
             raise ValueError(msg)
     # endregion Приватные

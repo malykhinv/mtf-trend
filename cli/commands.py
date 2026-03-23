@@ -6038,6 +6038,10 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 1
     if "max_drawdown_pct" not in frame.columns:
         frame["max_drawdown_pct"] = frame["max_dd"]
+    if "median_pump_to_peak_bars" not in frame.columns:
+        frame["median_pump_to_peak_bars"] = pd.NA
+    if "median_pump_to_peak_minutes" not in frame.columns:
+        frame["median_pump_to_peak_minutes"] = pd.NA
 
     filtered = frame[
         (frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER)
@@ -6092,6 +6096,12 @@ def _build_profitable_variants(frame: pd.DataFrame) -> list[ProfitableVariant]:
 
     profitable = profitable.sort_values(["profit_factor", "pnl_percent", "trades_count"], ascending=[False, False, False])
 
+    def _optional_rounded_float(row: pd.Series, column_name: str) -> float | None:
+        raw_value = row.get(column_name)
+        if pd.isna(raw_value):
+            return None
+        return round(float(raw_value), 4)
+
     variants: list[ProfitableVariant] = []
     for index, (_, row) in enumerate(profitable.iterrows(), start=1):
         variants.append(
@@ -6113,6 +6123,8 @@ def _build_profitable_variants(frame: pd.DataFrame) -> list[ProfitableVariant]:
                 trades_count=int(row["trades_count"]),
                 max_dd=round(float(row["max_dd"]), 4),
                 max_drawdown_pct=round(float(row["max_drawdown_pct"]), 4),
+                median_pump_to_peak_bars=_optional_rounded_float(row, "median_pump_to_peak_bars"),
+                median_pump_to_peak_minutes=_optional_rounded_float(row, "median_pump_to_peak_minutes"),
                 sl_count=int(row["sl_count"]),
                 be_count=int(row["be_count"]),
                 tp1_be_count=int(row["tp1_be_count"]),
@@ -6137,10 +6149,12 @@ def _build_ai_analysis_report(summary: BacktestSummary, variants: list[Profitabl
         f"Best Profit Factor: {summary.best_pf}",
         "",
         "## Variants",
-        "Format: rank | PF | PnL% | WinRate% | Trades | MaxDD% | params",
+        "Format: rank | PF | PnL% | WinRate% | Trades | MaxDD% | PumpLenBars | PumpLenMin | params",
     ]
 
     for variant in variants:
+        pump_len_bars = "n/a" if variant.median_pump_to_peak_bars is None else str(variant.median_pump_to_peak_bars)
+        pump_len_minutes = "n/a" if variant.median_pump_to_peak_minutes is None else str(variant.median_pump_to_peak_minutes)
         params = (
             f"profile={variant.bite_profile_id}, grid={variant.bite_grid_mode}, "
             f"lookback={variant.bite_lookback}, volume_mult={variant.bite_volume_mult}, "
@@ -6150,7 +6164,7 @@ def _build_ai_analysis_report(summary: BacktestSummary, variants: list[Profitabl
         )
         lines.append(
             f"{variant.rank} | {variant.profit_factor} | {variant.pnl_percent} | {variant.win_rate} | "
-            f"{variant.trades_count} | {variant.max_drawdown_pct} | {params}"
+            f"{variant.trades_count} | {variant.max_drawdown_pct} | {pump_len_bars} | {pump_len_minutes} | {params}"
         )
 
     return "\n".join(lines)

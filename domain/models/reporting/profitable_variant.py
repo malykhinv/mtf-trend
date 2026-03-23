@@ -24,6 +24,8 @@ class ProfitableVariant:
     trades_count: int
     max_dd: float
     max_drawdown_pct: float
+    median_pump_to_peak_bars: float | None
+    median_pump_to_peak_minutes: float | None
     sl_count: int
     be_count: int
     tp1_be_count: int
