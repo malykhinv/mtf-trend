@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import concurrent.futures
 import json
 import math
 import shutil
@@ -79,7 +80,10 @@ from strategy.bee_bite import (
     BeeBiteParams,
     BeeBiteStrategy,
     BeeBiteStage4PostmortemParams,
+    BeeBiteStage2ConfirmedHigh,
     BeeBiteStage2Detector,
+    BeeBiteStage2MergedRange,
+    BeeBiteStage2Range,
     BeeBiteStage2Result,
     BeeBiteStage3Detector,
     BeeBiteStage3Result,
@@ -91,6 +95,7 @@ from strategy.bee_bite import (
     parse_bee_bite_retest_mode,
     validate_bee_bite_runtime,
 )
+from strategy.bee_bite.stage2_detector import BeeBiteStage2LiquidityZone
 from strategy.bee_bite.stage3_rules import resolve_stage2_hold_price
 from strategy.factory import build_strategy
 from utils.logger import get_logger
@@ -108,6 +113,7 @@ _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
 _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE = "stage4_grid_overview.csv"
 _DEFAULT_STAGE4_REPORT_OUTPUT_FILE = "stage4_report.md"
 _DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS = 120
+_DEFAULT_STAGE4_SYMBOL_WORKERS = 2
 _TItem = TypeVar("_TItem")
 
 
@@ -3346,6 +3352,134 @@ def _build_stage4_postmortem_rows(
     return rows
 
 
+def _write_stage4_rows_jsonl(*, rows: list[dict[str, object]], output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8", newline="\n") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True))
+            handle.write("\n")
+
+
+def _load_stage4_rows_jsonl(*, input_path: Path) -> list[dict[str, object]]:
+    if not input_path.exists():
+        return []
+    rows: list[dict[str, object]] = []
+    with input_path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            payload = line.strip()
+            if not payload:
+                continue
+            rows.append(cast(dict[str, object], json.loads(payload)))
+    return rows
+
+
+def _append_stage4_rows_jsonl(*, source_path: Path, target_path: Path) -> int:
+    if not source_path.exists():
+        return 0
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    lines_written = 0
+    with source_path.open("r", encoding="utf-8") as source_handle, target_path.open("a", encoding="utf-8", newline="\n") as target_handle:
+        for line in source_handle:
+            payload = line.rstrip("\r\n")
+            if not payload:
+                continue
+            target_handle.write(payload)
+            target_handle.write("\n")
+            lines_written += 1
+    return lines_written
+
+
+def _serialize_stage4_plot_context(
+    *,
+    stage1_event: BeeBiteStage1Result,
+    reference_stage2_result: BeeBiteStage2Result,
+    stage3_result: BeeBiteStage3Result,
+) -> dict[str, object]:
+    return {
+        "stage1_event": asdict(stage1_event),
+        "reference_stage2_result": asdict(reference_stage2_result),
+        "stage3_result": asdict(stage3_result),
+    }
+
+
+def _deserialize_stage4_stage2_result(payload: dict[str, object]) -> BeeBiteStage2Result:
+    return BeeBiteStage2Result(
+        symbol=str(payload["symbol"]),
+        passed=bool(payload["passed"]),
+        reason=str(payload["reason"]),
+        analysis_start_timestamp=cast(int | None, payload.get("analysis_start_timestamp")),
+        analysis_end_timestamp=cast(int | None, payload.get("analysis_end_timestamp")),
+        confirmed_highs=tuple(
+            BeeBiteStage2ConfirmedHigh(**cast(dict[str, object], item))
+            for item in cast(list[dict[str, object]], payload.get("confirmed_highs") or [])
+        ),
+        local_ranges=tuple(
+            BeeBiteStage2Range(**cast(dict[str, object], item))
+            for item in cast(list[dict[str, object]], payload.get("local_ranges") or [])
+        ),
+        merged_ranges=tuple(
+            BeeBiteStage2MergedRange(**cast(dict[str, object], item))
+            for item in cast(list[dict[str, object]], payload.get("merged_ranges") or [])
+        ),
+        liquidity_zones=tuple(
+            BeeBiteStage2LiquidityZone(**cast(dict[str, object], item))
+            for item in cast(list[dict[str, object]], payload.get("liquidity_zones") or [])
+        ),
+        box_start_timestamp=cast(int | None, payload.get("box_start_timestamp")),
+        box_end_timestamp=cast(int | None, payload.get("box_end_timestamp")),
+        box_high=cast(float | None, payload.get("box_high")),
+        box_low=cast(float | None, payload.get("box_low")),
+    )
+
+
+def _deserialize_stage4_stage3_result(payload: dict[str, object]) -> BeeBiteStage3Result:
+    lower_zone_payload = cast(dict[str, object] | None, payload.get("active_lower_liquidity_zone"))
+    return BeeBiteStage3Result(
+        symbol=str(payload["symbol"]),
+        passed=bool(payload["passed"]),
+        reason=str(payload["reason"]),
+        analysis_start_timestamp=cast(int | None, payload.get("analysis_start_timestamp")),
+        analysis_end_timestamp=cast(int | None, payload.get("analysis_end_timestamp")),
+        active_lower_liquidity_zone=(
+            BeeBiteStage2LiquidityZone(**lower_zone_payload)
+            if lower_zone_payload is not None
+            else None
+        ),
+        break_timestamp=cast(int | None, payload.get("break_timestamp")),
+        reclaim_timestamp=cast(int | None, payload.get("reclaim_timestamp")),
+        invalidation_timestamp=cast(int | None, payload.get("invalidation_timestamp")),
+        break_idx=cast(int | None, payload.get("break_idx")),
+        reclaim_idx=cast(int | None, payload.get("reclaim_idx")),
+        invalidation_idx=cast(int | None, payload.get("invalidation_idx")),
+        lowest_break_idx=cast(int | None, payload.get("lowest_break_idx")),
+        lowest_break_price=cast(float | None, payload.get("lowest_break_price")),
+        lowest_break_timestamp=cast(int | None, payload.get("lowest_break_timestamp")),
+        below_range_high_price=cast(float | None, payload.get("below_range_high_price")),
+        under_range_span=cast(float | None, payload.get("under_range_span")),
+        under_range_span_pct=cast(float | None, payload.get("under_range_span_pct")),
+        range_size_pct=cast(float | None, payload.get("range_size_pct")),
+        bars_under_range=cast(int | None, payload.get("bars_under_range")),
+        box_low=cast(float | None, payload.get("box_low")),
+        box_high=cast(float | None, payload.get("box_high")),
+        hold_price=cast(float | None, payload.get("hold_price")),
+        reference_box_start_timestamp=cast(int | None, payload.get("reference_box_start_timestamp")),
+        reference_box_end_timestamp=cast(int | None, payload.get("reference_box_end_timestamp")),
+    )
+
+
+def _deserialize_stage4_plot_context(
+    payload: dict[str, object],
+) -> tuple[BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result]:
+    stage1_event = BeeBiteStage1Result(**cast(dict[str, object], payload["stage1_event"]))
+    reference_stage2_result = _deserialize_stage4_stage2_result(
+        cast(dict[str, object], payload["reference_stage2_result"])
+    )
+    stage3_result = _deserialize_stage4_stage3_result(
+        cast(dict[str, object], payload["stage3_result"])
+    )
+    return stage1_event, reference_stage2_result, stage3_result
+
+
 def _prepare_stage4_trade_frame(frame: pd.DataFrame) -> pd.DataFrame:
     required_columns = {"timestamp", "open", "close", "high", "low"}
     if frame.empty or not required_columns.issubset(frame.columns):
@@ -3609,6 +3743,8 @@ def _process_stage4_symbol(
     symbol: str,
     review_timeframe: Timeframe,
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+    rows_output_path: Path | None = None,
+    include_rows_in_result: bool = True,
 ) -> dict[str, object]:
     preparer = DataPreparer(cache_dir)
     stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
@@ -3628,18 +3764,22 @@ def _process_stage4_symbol(
         return {
             "symbol": symbol,
             "rows": [],
+            "rows_count": 0,
             "stage3_passed_count": 0,
             "reason_counts": {},
             "empty_frame": True,
+            "plot_contexts": [],
         }
     prepared_stage4_frame = _prepare_stage4_trade_frame(frame)
     if prepared_stage4_frame.empty:
         return {
             "symbol": symbol,
             "rows": [],
+            "rows_count": 0,
             "stage3_passed_count": 0,
             "reason_counts": {},
             "empty_frame": True,
+            "plot_contexts": [],
         }
 
     stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
@@ -3652,9 +3792,11 @@ def _process_stage4_symbol(
         return {
             "symbol": symbol,
             "rows": [],
+            "rows_count": 0,
             "stage3_passed_count": 0,
             "reason_counts": {"stage1:empty_reference_frame": 1},
             "empty_frame": False,
+            "plot_contexts": [],
         }
 
     stage1_events = selector.detect_events(symbol=symbol, frame=stage1_frame)
@@ -3664,9 +3806,11 @@ def _process_stage4_symbol(
         return {
             "symbol": symbol,
             "rows": [],
+            "rows_count": 0,
             "stage3_passed_count": 0,
             "reason_counts": {f"stage1:{reason}": 1},
             "empty_frame": False,
+            "plot_contexts": [],
         }
 
     regimes = _resolve_stage1_regime_ends(
@@ -3674,6 +3818,7 @@ def _process_stage4_symbol(
         regimes=_group_stage1_events_into_regimes(stage1_events),
     )
     rows: list[dict[str, object]] = []
+    plot_contexts: list[dict[str, object]] = []
     reason_counts: Counter[str] = Counter()
     stage3_passed_count = 0
     for regime in regimes:
@@ -3716,6 +3861,17 @@ def _process_stage4_symbol(
             stage2_detector=stage2_detector,
             analysis_end_timestamp=reference_stage2_end_timestamp,
         )
+        plot_contexts.append(
+            {
+                "symbol": symbol,
+                "regime_index": regime.regime_index,
+                "context": _serialize_stage4_plot_context(
+                    stage1_event=stage1_event,
+                    reference_stage2_result=reference_stage2_result,
+                    stage3_result=stage3_result,
+                ),
+            }
+        )
         rows.extend(
             _build_stage4_postmortem_rows(
                 symbol=symbol,
@@ -3729,12 +3885,17 @@ def _process_stage4_symbol(
             )
         )
 
+    if rows_output_path is not None:
+        _write_stage4_rows_jsonl(rows=rows, output_path=rows_output_path)
+
     return {
         "symbol": symbol,
-        "rows": rows,
+        "rows": rows if include_rows_in_result else [],
+        "rows_count": len(rows),
         "stage3_passed_count": stage3_passed_count,
         "reason_counts": dict(reason_counts),
         "empty_frame": False,
+        "plot_contexts": plot_contexts,
     }
 
 
@@ -3765,9 +3926,11 @@ def _run_stage4_symbol_with_timeout(
     review_timeframe: Timeframe,
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
     timeout_seconds: int | None,
-) -> tuple[dict[str, object] | None, str | None]:
+) -> tuple[dict[str, object] | None, str | None, Path | None]:
     with tempfile.NamedTemporaryFile(prefix="stage4_symbol_", suffix=".json", delete=False) as handle:
         output_path = Path(handle.name)
+    with tempfile.NamedTemporaryFile(prefix="stage4_symbol_rows_", suffix=".jsonl", delete=False) as handle:
+        rows_output_path = Path(handle.name)
     with tempfile.NamedTemporaryFile(prefix="stage4_symbol_grid_", suffix=".json", delete=False, mode="w", encoding="utf-8") as handle:
         payload_path = Path(handle.name)
         json.dump(_serialize_stage4_param_grid(param_grid), handle)
@@ -3778,11 +3941,12 @@ def _run_stage4_symbol_with_timeout(
         "from strategy.bee_bite import BeeBiteStage4PostmortemParams\n"
         "from domain.enums.timeframe import Timeframe\n"
         f"output_path = Path(r'''{str(output_path)}''')\n"
+        f"rows_output_path = Path(r'''{str(rows_output_path)}''')\n"
         f"payload_path = Path(r'''{str(payload_path)}''')\n"
         "param_grid_payload = json.loads(payload_path.read_text(encoding='utf-8'))\n"
         "param_grid = tuple(BeeBiteStage4PostmortemParams(**item) for item in param_grid_payload)\n"
         "try:\n"
-        f"    result = _process_stage4_symbol(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), param_grid=param_grid)\n"
+        f"    result = _process_stage4_symbol(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), param_grid=param_grid, rows_output_path=rows_output_path, include_rows_in_result=False)\n"
         "    output_path.write_text(json.dumps({'ok': True, 'result': result}), encoding='utf-8')\n"
         "except Exception:\n"
         "    output_path.write_text(json.dumps({'ok': False, 'error': traceback.format_exc()}), encoding='utf-8')\n"
@@ -3799,19 +3963,22 @@ def _run_stage4_symbol_with_timeout(
         )
     except subprocess.TimeoutExpired:
         output_path.unlink(missing_ok=True)
+        rows_output_path.unlink(missing_ok=True)
         payload_path.unlink(missing_ok=True)
-        return None, "timeout"
+        return None, "timeout", None
     if not output_path.exists():
+        rows_output_path.unlink(missing_ok=True)
         payload_path.unlink(missing_ok=True)
-        return None, f"worker_exit_{completed.returncode}"
+        return None, f"worker_exit_{completed.returncode}", None
     try:
         payload = json.loads(output_path.read_text(encoding="utf-8"))
     finally:
         output_path.unlink(missing_ok=True)
         payload_path.unlink(missing_ok=True)
     if not bool(payload.get("ok")):
-        return None, str(payload.get("error") or f"worker_exit_{completed.returncode}")
-    return cast(dict[str, object], payload["result"]), None
+        rows_output_path.unlink(missing_ok=True)
+        return None, str(payload.get("error") or f"worker_exit_{completed.returncode}"), None
+    return cast(dict[str, object], payload["result"]), None, rows_output_path
 
 
 def _run_stage4_plot_with_timeout(
@@ -3819,25 +3986,29 @@ def _run_stage4_plot_with_timeout(
     cache_dir: Path,
     symbol: str,
     review_timeframe: Timeframe,
-    regime_index: int,
-    reference_box_end_timestamp: int | None,
+    plot_context: dict[str, object],
     trade_row: dict[str, object],
     output_path: Path,
     timeout_seconds: int | None,
 ) -> str | None:
     trade_row_payload = json.dumps(trade_row)
+    plot_context_payload = json.dumps(plot_context)
     worker_code = (
         "import json, traceback\n"
         "from pathlib import Path\n"
-        "from cli.commands import _rebuild_stage4_plot_context\n"
+        "from cli.commands import _deserialize_stage4_plot_context, _get_cached_review_frame\n"
         "from data.liquidity.bee_bite_stage4_plotter import BeeBiteStage4Plotter\n"
+        "from vectorbt_runner import DataPreparer\n"
         "from domain.enums.timeframe import Timeframe\n"
         f"trade_row = json.loads(r'''{trade_row_payload}''')\n"
+        f"plot_context = json.loads(r'''{plot_context_payload}''')\n"
         "try:\n"
-        f"    plot_context = _rebuild_stage4_plot_context(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), regime_index={regime_index}, reference_box_end_timestamp={repr(reference_box_end_timestamp)})\n"
-        "    if plot_context is None:\n"
-        "        raise RuntimeError('plot_context_rebuild_failed')\n"
-        "    frame, stage1_event, reference_stage2_result, stage3_result = plot_context\n"
+        f"    preparer = DataPreparer(Path(r'''{str(cache_dir)}'''))\n"
+        "    frame_cache = {}\n"
+        f"    frame = _get_cached_review_frame(cache=frame_cache, preparer=preparer, symbol=r'''{symbol}''', timeframe=Timeframe(r'''{review_timeframe.value}'''))\n"
+        "    if frame.empty:\n"
+        "        raise RuntimeError('plot_context_frame_missing')\n"
+        "    stage1_event, reference_stage2_result, stage3_result = _deserialize_stage4_plot_context(plot_context)\n"
         "    BeeBiteStage4Plotter().plot_result(\n"
         "        frame=frame,\n"
         "        stage1_event=stage1_event,\n"
@@ -3866,85 +4037,6 @@ def _run_stage4_plot_with_timeout(
         stdout = completed.stdout.strip()
         return stderr or stdout or f"worker_exit_{completed.returncode}"
     return None
-
-
-def _rebuild_stage4_plot_context(
-    *,
-    cache_dir: Path,
-    symbol: str,
-    review_timeframe: Timeframe,
-    regime_index: int,
-    reference_box_end_timestamp: int | None,
-) -> tuple[pd.DataFrame, BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result] | None:
-    preparer = DataPreparer(cache_dir)
-    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
-    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
-    stage2_detector = BeeBiteStage2Detector()
-    stage3_detector = BeeBiteStage3Detector()
-    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
-    stage2_timestamp_cache: dict[int, BeeBiteStage2Result] = {}
-
-    frame = _get_cached_review_frame(
-        cache=frame_cache,
-        preparer=preparer,
-        symbol=symbol,
-        timeframe=review_timeframe,
-    )
-    if frame.empty:
-        return None
-    stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
-        cache=frame_cache,
-        preparer=preparer,
-        symbol=symbol,
-        timeframe=stage1_timeframe,
-    )
-    if stage1_frame.empty:
-        return None
-    stage1_events = selector.detect_events(symbol=symbol, frame=stage1_frame)
-    if not stage1_events:
-        return None
-    regimes = _resolve_stage1_regime_ends(
-        frame=stage1_frame,
-        regimes=_group_stage1_events_into_regimes(stage1_events),
-    )
-    target_regime = next((regime for regime in regimes if regime.regime_index == regime_index), None)
-    if target_regime is None:
-        return None
-    stage1_event = target_regime.first_event
-    dynamic_stage2_result = stage2_detector.detect(
-        symbol=symbol,
-        frame=frame,
-        stage1=stage1_event,
-        analysis_end_timestamp=int(target_regime.regime_end_timestamp),
-    )
-    if not dynamic_stage2_result.passed:
-        return None
-    stage3_result = _resolve_stage23_terminal_result(
-        symbol=symbol,
-        timeframe=review_timeframe,
-        frame=frame,
-        stage1_event=stage1_event,
-        regime=target_regime,
-        stage2_detector=stage2_detector,
-        stage3_detector=stage3_detector,
-        initial_stage2_result=dynamic_stage2_result,
-    )
-    if not stage3_result.passed:
-        return None
-    reference_stage2_result = _get_cached_stage2_result(
-        cache=stage2_timestamp_cache,
-        symbol=symbol,
-        frame=frame,
-        stage1_event=stage1_event,
-        stage2_detector=stage2_detector,
-        analysis_end_timestamp=int(
-            reference_box_end_timestamp
-            or stage3_result.reference_box_end_timestamp
-            or dynamic_stage2_result.analysis_end_timestamp
-            or target_regime.regime_end_timestamp
-        ),
-    )
-    return frame, stage1_event, reference_stage2_result, stage3_result
 
 
 def _format_stage4_metric(value: object, *, digits: int = 2, pct: bool = False) -> str:
@@ -5540,64 +5632,120 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         logger.info("postmortem-stage4: no data in cache for tf=%s", review_timeframe.value)
         return 0
 
-    rows: list[dict[str, object]] = []
     stage3_passed_count = 0
     plots_built = 0
+    total_trade_rows = 0
     empty_frame_symbols: list[str] = []
     timed_out_symbols: list[str] = []
     reason_counts: Counter[str] = Counter()
+    plot_contexts_by_key: dict[tuple[str, int], dict[str, object]] = {}
     progress_started_at = time.perf_counter()
+    with tempfile.NamedTemporaryFile(prefix="stage4_rows_", suffix=".jsonl", delete=False) as handle:
+        trade_rows_path = Path(handle.name)
 
-    for index, symbol in enumerate(symbols, start=1):
-        symbol_timeout_for_run = None if index == 1 else symbol_timeout_seconds
-        logger.info(
-            "postmortem-stage4: processing=%s/%s symbol=%s",
-            index,
-            len(symbols),
-            symbol,
-        )
-        try:
-            symbol_result, symbol_error = _run_stage4_symbol_with_timeout(
+    try:
+        max_workers = min(_DEFAULT_STAGE4_SYMBOL_WORKERS, len(symbols))
+        completed_symbols = 0
+        next_index_to_submit = 1
+        pending_futures: dict[concurrent.futures.Future[tuple[dict[str, object] | None, str | None, Path | None]], tuple[int, str]] = {}
+
+        def _submit_symbol(
+            *,
+            executor: concurrent.futures.ThreadPoolExecutor,
+            symbol_index: int,
+        ) -> None:
+            symbol = symbols[symbol_index - 1]
+            symbol_timeout_for_run = None if symbol_index == 1 else symbol_timeout_seconds
+            logger.info(
+                "postmortem-stage4: processing=%s/%s symbol=%s",
+                symbol_index,
+                len(symbols),
+                symbol,
+            )
+            future = executor.submit(
+                _run_stage4_symbol_with_timeout,
                 cache_dir=config.backtest.cache_dir,
                 symbol=symbol,
                 review_timeframe=review_timeframe,
                 param_grid=param_grid,
                 timeout_seconds=symbol_timeout_for_run,
             )
-            if symbol_error == "timeout":
-                timed_out_symbols.append(symbol)
-                reason_counts["symbol_timeout"] += 1
-                logger.warning(
-                    "postmortem-stage4: symbol_timeout=%ss symbol=%s",
-                    symbol_timeout_seconds,
-                    symbol,
+            pending_futures[future] = (symbol_index, symbol)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            while next_index_to_submit <= len(symbols) and len(pending_futures) < max_workers:
+                _submit_symbol(executor=executor, symbol_index=next_index_to_submit)
+                next_index_to_submit += 1
+
+            while pending_futures:
+                done_futures, _ = concurrent.futures.wait(
+                    pending_futures,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
                 )
-                continue
-            if symbol_error is not None or symbol_result is None:
-                reason_counts["symbol_worker_error"] += 1
-                logger.warning("postmortem-stage4: symbol_worker_error symbol=%s error=%s", symbol, symbol_error)
-                continue
-            if bool(symbol_result.get("empty_frame")):
-                empty_frame_symbols.append(symbol)
-                continue
-            rows.extend(cast(list[dict[str, object]], symbol_result.get("rows") or []))
-            stage3_passed_count += int(symbol_result.get("stage3_passed_count") or 0)
-            reason_counts.update(cast(dict[str, int], symbol_result.get("reason_counts") or {}))
-        finally:
-            elapsed_seconds = time.perf_counter() - progress_started_at
-            progress = (index / len(symbols)) * 100.0 if symbols else 0.0
-            eta_seconds = (elapsed_seconds / index) * (len(symbols) - index) if index else 0.0
-            logger.info(
-                "postmortem-stage4: progress=%s/%s (%.1f%%) eta=%s symbol=%s stage3_passed=%s rows=%s queued_plots=%s",
-                index,
-                len(symbols),
-                progress,
-                _format_eta_compact(eta_seconds),
-                symbol,
-                stage3_passed_count,
-                len(rows),
-                len(rows),
-            )
+                for done_future in done_futures:
+                    index, symbol = pending_futures.pop(done_future)
+                    symbol_result = None
+                    symbol_error = None
+                    symbol_rows_path = None
+                    try:
+                        symbol_result, symbol_error, symbol_rows_path = done_future.result()
+                        if symbol_error == "timeout":
+                            timed_out_symbols.append(symbol)
+                            reason_counts["symbol_timeout"] += 1
+                            logger.warning(
+                                "postmortem-stage4: symbol_timeout=%ss symbol=%s",
+                                symbol_timeout_seconds,
+                                symbol,
+                            )
+                            continue
+                        if symbol_error is not None or symbol_result is None:
+                            reason_counts["symbol_worker_error"] += 1
+                            logger.warning("postmortem-stage4: symbol_worker_error symbol=%s error=%s", symbol, symbol_error)
+                            continue
+                        if bool(symbol_result.get("empty_frame")):
+                            empty_frame_symbols.append(symbol)
+                            continue
+
+                        if symbol_rows_path is not None:
+                            total_trade_rows += _append_stage4_rows_jsonl(
+                                source_path=symbol_rows_path,
+                                target_path=trade_rows_path,
+                            )
+                        stage3_passed_count += int(symbol_result.get("stage3_passed_count") or 0)
+                        reason_counts.update(cast(dict[str, int], symbol_result.get("reason_counts") or {}))
+                        for context_item in cast(list[dict[str, object]], symbol_result.get("plot_contexts") or []):
+                            plot_contexts_by_key[
+                                (str(context_item["symbol"]), int(context_item["regime_index"]))
+                            ] = cast(dict[str, object], context_item["context"])
+                    finally:
+                        if symbol_rows_path is not None:
+                            symbol_rows_path.unlink(missing_ok=True)
+                        completed_symbols += 1
+                        elapsed_seconds = time.perf_counter() - progress_started_at
+                        progress = (completed_symbols / len(symbols)) * 100.0 if symbols else 0.0
+                        eta_seconds = (
+                            (elapsed_seconds / completed_symbols) * (len(symbols) - completed_symbols)
+                            if completed_symbols
+                            else 0.0
+                        )
+                        logger.info(
+                            "postmortem-stage4: progress=%s/%s (%.1f%%) eta=%s symbol=%s stage3_passed=%s rows=%s queued_plots=%s",
+                            completed_symbols,
+                            len(symbols),
+                            progress,
+                            _format_eta_compact(eta_seconds),
+                            symbol,
+                            stage3_passed_count,
+                            total_trade_rows,
+                            total_trade_rows,
+                        )
+                        if next_index_to_submit <= len(symbols):
+                            _submit_symbol(executor=executor, symbol_index=next_index_to_submit)
+                            next_index_to_submit += 1
+
+        rows = _load_stage4_rows_jsonl(input_path=trade_rows_path)
+    finally:
+        trade_rows_path.unlink(missing_ok=True)
 
     summary_rows = _build_stage4_postmortem_summary_rows(
         timeframe=review_timeframe,
@@ -5622,16 +5770,20 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         symbol = cast(str, trade_row["symbol"])
         regime_index = int(trade_row["regime_index"])
         plot_timeout_for_run = None if symbol == symbols[0] else symbol_timeout_seconds
+        plot_context = plot_contexts_by_key.get((symbol, regime_index))
+        if plot_context is None:
+            reason_counts["plot_context_missing"] += 1
+            logger.warning(
+                "postmortem-stage4: missing_plot_context symbol=%s regime=%s",
+                symbol,
+                regime_index,
+            )
+            continue
         plot_error = _run_stage4_plot_with_timeout(
             cache_dir=config.backtest.cache_dir,
             symbol=symbol,
             review_timeframe=review_timeframe,
-            regime_index=regime_index,
-            reference_box_end_timestamp=(
-                int(trade_row["reference_box_end_timestamp"])
-                if trade_row.get("reference_box_end_timestamp") is not None
-                else None
-            ),
+            plot_context=plot_context,
             trade_row=cast(dict[str, object], trade_row),
             output_path=plots_dir / (
                 f"{symbol.replace('/', '_')}_stage4_regime_{regime_index:02d}"
