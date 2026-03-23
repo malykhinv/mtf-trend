@@ -357,10 +357,16 @@ class BeeBiteStage2Plotter:
     def _timestamp_to_index(frame: pd.DataFrame, timestamp: int | None) -> int:
         if timestamp is None:
             raise ValueError("Stage-2 plot requires timestamps.")
-        matches = frame.index[frame["timestamp"].astype("int64") == int(timestamp)]
-        if len(matches) == 0:
-            raise ValueError(f"Timestamp {timestamp} was not found in the plotting frame.")
-        return int(matches[0])
+        timestamp_series = frame["timestamp"].astype("int64")
+        matches = frame.index[timestamp_series == int(timestamp)]
+        if len(matches) > 0:
+            return int(matches[0])
+        insertion_idx = int(timestamp_series.searchsorted(int(timestamp), side="right") - 1)
+        if insertion_idx < 0:
+            insertion_idx = 0
+        if insertion_idx >= len(frame):
+            insertion_idx = len(frame) - 1
+        return insertion_idx
 
     @staticmethod
     def _build_tick_positions(frame: pd.DataFrame) -> list[int]:

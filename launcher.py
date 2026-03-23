@@ -76,7 +76,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
     parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     parser.add_argument("--tf", default=None, help="Review timeframe for stage review modes")
-    parser.add_argument("--tf-all", action="store_true", default=False, help="Run review for both 15m and 5m")
+    parser.add_argument("--tf-all", action="store_true", default=False, help="Run review/postmortem for 15m, 10m, 5m and 3m")
     parser.add_argument("--review-mode", choices=["snapshot", "evolution"], default="snapshot", help="Review mode for review-stage3")
     parser.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")

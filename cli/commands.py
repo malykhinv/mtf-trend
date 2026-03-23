@@ -1094,7 +1094,7 @@ def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timefram
 
 def _resolve_review_timeframes(args: argparse.Namespace) -> list[Timeframe]:
     if bool(getattr(args, "tf_all", False)):
-        return [Timeframe.M15, Timeframe.M5]
+        return [Timeframe.M15, Timeframe.M10, Timeframe.M5, Timeframe.M3]
     return [_resolve_review_timeframe(args)]
 
 

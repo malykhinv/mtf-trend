@@ -340,10 +340,16 @@ class BeeBiteStage4Plotter:
 
     @staticmethod
     def _timestamp_to_index(frame: pd.DataFrame, timestamp: int) -> int:
-        matches = frame.index[frame["timestamp"].astype("int64") == int(timestamp)]
-        if len(matches) == 0:
-            raise ValueError(f"Timestamp {timestamp} not found in frame")
-        return int(matches[-1])
+        timestamp_series = frame["timestamp"].astype("int64")
+        matches = frame.index[timestamp_series == int(timestamp)]
+        if len(matches) > 0:
+            return int(matches[-1])
+        insertion_idx = int(timestamp_series.searchsorted(int(timestamp), side="right") - 1)
+        if insertion_idx < 0:
+            insertion_idx = 0
+        if insertion_idx >= len(frame):
+            insertion_idx = len(frame) - 1
+        return insertion_idx
 
     def _draw_rectangle(
         self,
