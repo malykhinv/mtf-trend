@@ -3053,7 +3053,7 @@ def _build_stage4_postmortem_rows(
     stage1_event: BeeBiteStage1Result,
     reference_stage2_result: BeeBiteStage2Result,
     stage3_result: BeeBiteStage3Result,
-    frame: pd.DataFrame,
+    prepared_frame: pd.DataFrame,
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
 ) -> list[dict[str, object]]:
     if (
@@ -3066,13 +3066,9 @@ def _build_stage4_postmortem_rows(
     ):
         return []
 
-    required_columns = {"timestamp", "open", "close", "high", "low"}
-    if frame.empty or not required_columns.issubset(frame.columns):
+    if prepared_frame.empty:
         return []
-    prepared = frame.loc[:, ["timestamp", "open", "close", "high", "low"]].copy()
-    for column in prepared.columns:
-        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp", "open", "close", "high", "low"]).reset_index(drop=True)
+    prepared = prepared_frame
     if prepared.empty or stage3_result.reclaim_idx >= len(prepared):
         return []
 
@@ -3350,6 +3346,16 @@ def _build_stage4_postmortem_rows(
     return rows
 
 
+def _prepare_stage4_trade_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    required_columns = {"timestamp", "open", "close", "high", "low"}
+    if frame.empty or not required_columns.issubset(frame.columns):
+        return pd.DataFrame()
+    prepared = frame.loc[:, ["timestamp", "open", "close", "high", "low"]].copy()
+    for column in prepared.columns:
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    return prepared.dropna(subset=["timestamp", "open", "close", "high", "low"]).reset_index(drop=True)
+
+
 def _build_stage4_postmortem_summary_rows(
     *,
     timeframe: Timeframe,
@@ -3364,77 +3370,160 @@ def _build_stage4_postmortem_summary_rows(
     )
 
 
-def _build_stage4_postmortem_summary_rows_from_trade_rows(
+def _initialize_stage4_param_aggregate() -> dict[str, object]:
+    return {
+        "threshold_rows": 0,
+        "eligible_rows": 0,
+        "invalid_target_stack": 0,
+        "sweep_filter_failed": 0,
+        "pump_minute_filter_failed": 0,
+        "timing_session_filter_failed": 0,
+        "tp1_full_exits": 0,
+        "tp2_final_hits": 0,
+        "tp3_hits": 0,
+        "stop_hits": 0,
+        "be_hits": 0,
+        "tp1_stop_hits": 0,
+        "open_trades": 0,
+        "closed_trades": 0,
+        "profitable_closed_trades": 0,
+        "sum_realized_rr": 0.0,
+        "count_realized_rr": 0,
+        "sum_realized_pnl_pct": 0.0,
+        "count_realized_pnl_pct": 0,
+        "sum_fee_pct": 0.0,
+        "count_fee_pct": 0,
+        "sum_gain_rr": 0.0,
+        "sum_loss_rr_abs": 0.0,
+    }
+
+
+def _build_stage4_param_grid_map(
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+) -> dict[tuple[float, float, float, str, str, str, str, float, float, float], tuple[int, BeeBiteStage4PostmortemParams]]:
+    return {
+        (
+            float(params.min_rr),
+            float(params.tp3_multiplier),
+            float(params.sweep_size_multiplier),
+            str(params.stop_mode),
+            str(params.tp1_stop_mode),
+            str(params.pump_minute_filter),
+            str(params.timing_session_filter),
+            float(params.tp1_share),
+            float(params.tp2_share),
+            float(params.tp3_share),
+        ): (row_order, params)
+        for row_order, params in enumerate(param_grid, start=1)
+    }
+
+
+def _resolve_stage4_trade_param_key(row: dict[str, object]) -> tuple[float, float, float, str, str, str, str, float, float, float]:
+    return (
+        float(row["minimal_rr"]),
+        float(row["tp3_multiplier"]),
+        float(row.get("sweep_size_multiplier", 0.0) or 0.0),
+        str(row.get("stop_mode") or ""),
+        str(row.get("tp1_stop_mode") or ""),
+        str(row.get("pump_minute_filter") or ""),
+        str(row.get("timing_session_filter") or ""),
+        float(row["tp1_share"]),
+        float(row["tp2_share"]),
+        float(row["tp3_share"]),
+    )
+
+
+def _accumulate_stage4_param_aggregate(aggregate: dict[str, object], row: dict[str, object]) -> None:
+    aggregate["threshold_rows"] = int(aggregate["threshold_rows"]) + 1
+    outcome = str(row.get("outcome") or "")
+    if outcome == "invalid_target_stack":
+        aggregate["invalid_target_stack"] = int(aggregate["invalid_target_stack"]) + 1
+    elif outcome == "sweep_size_filter_failed":
+        aggregate["sweep_filter_failed"] = int(aggregate["sweep_filter_failed"]) + 1
+    elif outcome == "pump_minute_filter_failed":
+        aggregate["pump_minute_filter_failed"] = int(aggregate["pump_minute_filter_failed"]) + 1
+    elif outcome == "timing_session_filter_failed":
+        aggregate["timing_session_filter_failed"] = int(aggregate["timing_session_filter_failed"]) + 1
+
+    if not bool(row.get("eligible")):
+        return
+
+    aggregate["eligible_rows"] = int(aggregate["eligible_rows"]) + 1
+    if outcome == "tp1_full_exit":
+        aggregate["tp1_full_exits"] = int(aggregate["tp1_full_exits"]) + 1
+    elif outcome == "tp2_final_hit":
+        aggregate["tp2_final_hits"] = int(aggregate["tp2_final_hits"]) + 1
+    elif outcome == "tp3_hit":
+        aggregate["tp3_hits"] = int(aggregate["tp3_hits"]) + 1
+    elif outcome in {"stop_hit", "stop_same_candle_pre_tp1"}:
+        aggregate["stop_hits"] = int(aggregate["stop_hits"]) + 1
+    elif outcome in {"be_hit", "be_same_candle_after_tp1"}:
+        aggregate["be_hits"] = int(aggregate["be_hits"]) + 1
+
+    if outcome in {"be_hit", "be_same_candle_after_tp1", "tp1_stop_hit", "tp1_stop_same_candle_after_tp1"}:
+        aggregate["tp1_stop_hits"] = int(aggregate["tp1_stop_hits"]) + 1
+    if outcome in {"open", "no_future_data"}:
+        aggregate["open_trades"] = int(aggregate["open_trades"]) + 1
+    else:
+        aggregate["closed_trades"] = int(aggregate["closed_trades"]) + 1
+        realized_pnl_pct = row.get("realized_pnl_pct")
+        if realized_pnl_pct is not None and float(realized_pnl_pct) > 0.0:
+            aggregate["profitable_closed_trades"] = int(aggregate["profitable_closed_trades"]) + 1
+
+    realized_rr = row.get("realized_rr")
+    if realized_rr is not None:
+        realized_rr_value = float(realized_rr)
+        aggregate["sum_realized_rr"] = float(aggregate["sum_realized_rr"]) + realized_rr_value
+        aggregate["count_realized_rr"] = int(aggregate["count_realized_rr"]) + 1
+        if realized_rr_value > 0.0:
+            aggregate["sum_gain_rr"] = float(aggregate["sum_gain_rr"]) + realized_rr_value
+        elif realized_rr_value < 0.0:
+            aggregate["sum_loss_rr_abs"] = float(aggregate["sum_loss_rr_abs"]) + abs(realized_rr_value)
+
+    realized_pnl_pct = row.get("realized_pnl_pct")
+    if realized_pnl_pct is not None:
+        aggregate["sum_realized_pnl_pct"] = float(aggregate["sum_realized_pnl_pct"]) + float(realized_pnl_pct)
+        aggregate["count_realized_pnl_pct"] = int(aggregate["count_realized_pnl_pct"]) + 1
+
+    fee_pct = row.get("total_fee_pct")
+    if fee_pct is not None:
+        aggregate["sum_fee_pct"] = float(aggregate["sum_fee_pct"]) + float(fee_pct)
+        aggregate["count_fee_pct"] = int(aggregate["count_fee_pct"]) + 1
+
+
+def _build_stage4_summary_rows_from_aggregates(
     *,
     timeframe: Timeframe,
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    trade_rows: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-    if not trade_rows:
-        return []
-
+    stage3_candidates: int,
+    aggregate_by_key: dict[tuple[float, float, float, str, str, str, str, float, float, float], dict[str, object]],
+) -> list[dict[str, object]]:
     summary_rows: list[dict[str, object]] = []
-    stage3_candidates = len({(str(row["symbol"]), int(row["regime_index"])) for row in trade_rows})
     previous_total_pnl_pct = 0.0
     previous_win_rate = 0.0
     previous_total_realized_rr = 0.0
     for row_order, params in enumerate(param_grid, start=1):
-        threshold_rows = [
-            row
-            for row in trade_rows
-            if float(row["minimal_rr"]) == float(params.min_rr)
-            and str(row.get("pump_minute_filter") or "") == str(params.pump_minute_filter)
-            and str(row.get("timing_session_filter") or "") == str(params.timing_session_filter)
-            and float(row.get("sweep_size_multiplier", 0.0) or 0.0) == float(params.sweep_size_multiplier)
-            and str(row.get("stop_mode") or "") == str(params.stop_mode)
-            and str(row.get("tp1_stop_mode") or "") == str(params.tp1_stop_mode)
-            and float(row["tp3_multiplier"]) == float(params.tp3_multiplier)
-            and float(row["tp1_share"]) == float(params.tp1_share)
-            and float(row["tp2_share"]) == float(params.tp2_share)
-            and float(row["tp3_share"]) == float(params.tp3_share)
-        ]
-        eligible_rows = [row for row in threshold_rows if bool(row["eligible"])]
-        tp1_full_exits = sum(1 for row in eligible_rows if row["outcome"] == "tp1_full_exit")
-        tp2_final_hits = sum(1 for row in eligible_rows if row["outcome"] == "tp2_final_hit")
-        tp3_hits = sum(1 for row in eligible_rows if row["outcome"] == "tp3_hit")
-        stop_hits = sum(1 for row in eligible_rows if row["outcome"] in {"stop_hit", "stop_same_candle_pre_tp1"})
-        be_hits = sum(1 for row in eligible_rows if row["outcome"] in {"be_hit", "be_same_candle_after_tp1"})
-        tp1_stop_hits = sum(
-            1
-            for row in eligible_rows
-            if row["outcome"] in {"be_hit", "be_same_candle_after_tp1", "tp1_stop_hit", "tp1_stop_same_candle_after_tp1"}
+        param_key = (
+            float(params.min_rr),
+            float(params.tp3_multiplier),
+            float(params.sweep_size_multiplier),
+            str(params.stop_mode),
+            str(params.tp1_stop_mode),
+            str(params.pump_minute_filter),
+            str(params.timing_session_filter),
+            float(params.tp1_share),
+            float(params.tp2_share),
+            float(params.tp3_share),
         )
-        open_trades = sum(1 for row in eligible_rows if row["outcome"] in {"open", "no_future_data"})
-        invalid_target_stack = sum(1 for row in threshold_rows if row["outcome"] == "invalid_target_stack")
-        sweep_filter_failed = sum(1 for row in threshold_rows if row["outcome"] == "sweep_size_filter_failed")
-        pump_minute_filter_failed = sum(1 for row in threshold_rows if row["outcome"] == "pump_minute_filter_failed")
-        timing_session_filter_failed = sum(1 for row in threshold_rows if row["outcome"] == "timing_session_filter_failed")
-        realized_rr_values = [
-            float(row["realized_rr"])
-            for row in eligible_rows
-            if row.get("realized_rr") is not None
-        ]
-        realized_pnl_pct_values = [
-            float(row["realized_pnl_pct"])
-            for row in eligible_rows
-            if row.get("realized_pnl_pct") is not None
-        ]
-        fee_pct_values = [
-            float(row["total_fee_pct"])
-            for row in eligible_rows
-            if row.get("total_fee_pct") is not None
-        ]
-        loss_rr_values = [value for value in realized_rr_values if value < 0.0]
-        gain_rr_values = [value for value in realized_rr_values if value > 0.0]
-        closed_rows = [row for row in eligible_rows if row["outcome"] not in {"open", "no_future_data"}]
-        profitable_closed_trades = sum(
-            1
-            for row in closed_rows
-            if row.get("realized_pnl_pct") is not None and float(row["realized_pnl_pct"]) > 0.0
-        )
-        win_rate = (profitable_closed_trades / len(closed_rows)) if closed_rows else 0.0
-        total_realized_rr = sum(realized_rr_values) if realized_rr_values else 0.0
-        total_pnl_pct = sum(realized_pnl_pct_values) if realized_pnl_pct_values else 0.0
+        aggregate = aggregate_by_key.get(param_key) or _initialize_stage4_param_aggregate()
+        eligible_trades = int(aggregate["eligible_rows"])
+        closed_trades = int(aggregate["closed_trades"])
+        profitable_closed_trades = int(aggregate["profitable_closed_trades"])
+        win_rate = (profitable_closed_trades / closed_trades) if closed_trades else 0.0
+        total_realized_rr = float(aggregate["sum_realized_rr"])
+        total_pnl_pct = float(aggregate["sum_realized_pnl_pct"])
+        sum_loss_rr_abs = float(aggregate["sum_loss_rr_abs"])
+        sum_gain_rr = float(aggregate["sum_gain_rr"])
         summary_rows.append(
             {
                 "symbol": "__summary__",
@@ -3453,29 +3542,29 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
                 "tp2_share": float(params.tp2_share),
                 "tp3_share": float(params.tp3_share),
                 "stage3_candidates": stage3_candidates,
-                "eligible_trades": len(eligible_rows),
-                "rr_filtered_out": sum(1 for row in threshold_rows if not bool(row["eligible"])),
-                "invalid_target_stack": invalid_target_stack,
-                "sweep_filter_failed": sweep_filter_failed,
-                "pump_minute_filter_failed": pump_minute_filter_failed,
-                "timing_session_filter_failed": timing_session_filter_failed,
-                "tp1_full_exits": tp1_full_exits,
-                "tp2_final_hits": tp2_final_hits,
-                "tp3_hits": tp3_hits,
-                "stop_hits": stop_hits,
-                "be_hits": be_hits,
-                "tp1_stop_hits": tp1_stop_hits,
-                "open_trades": open_trades,
-                "closed_trades": len(closed_rows),
+                "eligible_trades": eligible_trades,
+                "rr_filtered_out": int(aggregate["threshold_rows"]) - eligible_trades,
+                "invalid_target_stack": int(aggregate["invalid_target_stack"]),
+                "sweep_filter_failed": int(aggregate["sweep_filter_failed"]),
+                "pump_minute_filter_failed": int(aggregate["pump_minute_filter_failed"]),
+                "timing_session_filter_failed": int(aggregate["timing_session_filter_failed"]),
+                "tp1_full_exits": int(aggregate["tp1_full_exits"]),
+                "tp2_final_hits": int(aggregate["tp2_final_hits"]),
+                "tp3_hits": int(aggregate["tp3_hits"]),
+                "stop_hits": int(aggregate["stop_hits"]),
+                "be_hits": int(aggregate["be_hits"]),
+                "tp1_stop_hits": int(aggregate["tp1_stop_hits"]),
+                "open_trades": int(aggregate["open_trades"]),
+                "closed_trades": closed_trades,
                 "profitable_closed_trades": profitable_closed_trades,
                 "win_rate": win_rate,
-                "avg_realized_rr": (sum(realized_rr_values) / len(realized_rr_values)) if realized_rr_values else 0.0,
+                "avg_realized_rr": (total_realized_rr / int(aggregate["count_realized_rr"])) if int(aggregate["count_realized_rr"]) else 0.0,
                 "total_realized_rr": total_realized_rr,
-                "avg_pnl_pct": (sum(realized_pnl_pct_values) / len(realized_pnl_pct_values)) if realized_pnl_pct_values else 0.0,
+                "avg_pnl_pct": (total_pnl_pct / int(aggregate["count_realized_pnl_pct"])) if int(aggregate["count_realized_pnl_pct"]) else 0.0,
                 "total_pnl_pct": total_pnl_pct,
-                "avg_fee_pct": (sum(fee_pct_values) / len(fee_pct_values)) if fee_pct_values else 0.0,
-                "total_fee_pct": sum(fee_pct_values) if fee_pct_values else 0.0,
-                "profit_factor_rr": (sum(gain_rr_values) / abs(sum(loss_rr_values))) if loss_rr_values and abs(sum(loss_rr_values)) > 0.0 else (math.inf if gain_rr_values else 0.0),
+                "avg_fee_pct": (float(aggregate["sum_fee_pct"]) / int(aggregate["count_fee_pct"])) if int(aggregate["count_fee_pct"]) else 0.0,
+                "total_fee_pct": float(aggregate["sum_fee_pct"]) if int(aggregate["count_fee_pct"]) else 0.0,
+                "profit_factor_rr": (sum_gain_rr / sum_loss_rr_abs) if sum_loss_rr_abs > 0.0 else (math.inf if sum_gain_rr > 0.0 else 0.0),
                 "delta_total_pnl_pct": total_pnl_pct - previous_total_pnl_pct,
                 "delta_win_rate_pct": (win_rate - previous_win_rate) * 100.0,
                 "delta_total_realized_rr": total_realized_rr - previous_total_realized_rr,
@@ -3485,6 +3574,33 @@ def _build_stage4_postmortem_summary_rows_from_trade_rows(
         previous_win_rate = win_rate
         previous_total_realized_rr = total_realized_rr
     return summary_rows
+
+
+def _build_stage4_postmortem_summary_rows_from_trade_rows(
+    *,
+    timeframe: Timeframe,
+    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
+    trade_rows: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+    if not trade_rows:
+        return []
+    stage3_candidates = len({(str(row["symbol"]), int(row["regime_index"])) for row in trade_rows})
+    param_grid_map = _build_stage4_param_grid_map(param_grid)
+    aggregate_by_key = {
+        param_key: _initialize_stage4_param_aggregate()
+        for param_key in param_grid_map
+    }
+    for row in trade_rows:
+        param_key = _resolve_stage4_trade_param_key(row)
+        if param_key not in aggregate_by_key:
+            continue
+        _accumulate_stage4_param_aggregate(aggregate_by_key[param_key], row)
+    return _build_stage4_summary_rows_from_aggregates(
+        timeframe=timeframe,
+        param_grid=param_grid,
+        stage3_candidates=stage3_candidates,
+        aggregate_by_key=aggregate_by_key,
+    )
 
 
 def _process_stage4_symbol(
@@ -3509,6 +3625,15 @@ def _process_stage4_symbol(
         timeframe=review_timeframe,
     )
     if frame.empty:
+        return {
+            "symbol": symbol,
+            "rows": [],
+            "stage3_passed_count": 0,
+            "reason_counts": {},
+            "empty_frame": True,
+        }
+    prepared_stage4_frame = _prepare_stage4_trade_frame(frame)
+    if prepared_stage4_frame.empty:
         return {
             "symbol": symbol,
             "rows": [],
@@ -3599,7 +3724,7 @@ def _process_stage4_symbol(
                 stage1_event=stage1_event,
                 reference_stage2_result=reference_stage2_result,
                 stage3_result=stage3_result,
-                frame=frame,
+                prepared_frame=prepared_stage4_frame,
                 param_grid=param_grid,
             )
         )
@@ -4073,19 +4198,33 @@ def _build_stage4_monthly_summary_map(
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
     trade_rows: list[dict[str, object]],
 ) -> dict[str, list[dict[str, object]]]:
-    monthly_trade_rows: dict[str, list[dict[str, object]]] = {}
+    param_grid_map = _build_stage4_param_grid_map(param_grid)
+    monthly_stage3_candidates: dict[str, set[tuple[str, int]]] = {}
+    monthly_aggregate_by_key: dict[str, dict[tuple[float, float, float, str, str, str, str, float, float, float], dict[str, object]]] = {}
     for row in trade_rows:
         month_label = _resolve_stage4_month_label(row.get("entry_timestamp"))
         if month_label is None:
             continue
-        monthly_trade_rows.setdefault(month_label, []).append(row)
+        monthly_stage3_candidates.setdefault(month_label, set()).add((str(row["symbol"]), int(row["regime_index"])))
+        aggregate_by_key = monthly_aggregate_by_key.setdefault(
+            month_label,
+            {
+                param_key: _initialize_stage4_param_aggregate()
+                for param_key in param_grid_map
+            },
+        )
+        param_key = _resolve_stage4_trade_param_key(row)
+        if param_key not in aggregate_by_key:
+            continue
+        _accumulate_stage4_param_aggregate(aggregate_by_key[param_key], row)
 
     monthly_summary_map: dict[str, list[dict[str, object]]] = {}
-    for month_label, month_rows in sorted(monthly_trade_rows.items()):
-        summary_rows = _build_stage4_postmortem_summary_rows_from_trade_rows(
+    for month_label, aggregate_by_key in sorted(monthly_aggregate_by_key.items()):
+        summary_rows = _build_stage4_summary_rows_from_aggregates(
             timeframe=timeframe,
             param_grid=param_grid,
-            trade_rows=month_rows,
+            stage3_candidates=len(monthly_stage3_candidates.get(month_label, set())),
+            aggregate_by_key=aggregate_by_key,
         )
         monthly_summary_map[month_label] = _score_stage4_summary_rows(summary_rows)
     return monthly_summary_map
