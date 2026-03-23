@@ -20,10 +20,12 @@ class BeeBiteStage4PostmortemParams:
 def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
     # Optimized research grid for stage-4 execution:
     # - backup year-long run showed RR=1.25 as weak on both 15m and 5m
+    # - current 15m full run shows intermediate RR steps 1.75 and 2.25 do not
+    #   add a distinct frontier regime versus neighboring anchors 1.50/2.00/2.50/3.00
     # - tp3 multiplier 1.0 underperformed 2.0/3.0 on both 15m and 5m
     # - two share profiles were consistently weakest on both timeframes:
     #   0.75/0.25/0.00 and 1.00/0.00/0.00
-    rr_grid = (1.50, 1.75, 2.00, 2.25, 2.50, 3.00)
+    rr_grid = (1.50, 2.00, 2.50, 3.00)
     tp3_multipliers = (2.0, 3.0)
     sweep_size_multipliers = (1.0, 2.0, 3.0, 4.0)
     stop_modes = ("sweep_low", "entry_minus_avg_body")
