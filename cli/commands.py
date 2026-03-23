@@ -4290,7 +4290,6 @@ def _build_stage4_monthly_summary_map(
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
     trade_rows: list[dict[str, object]],
 ) -> dict[str, list[dict[str, object]]]:
-    param_grid_map = _build_stage4_param_grid_map(param_grid)
     monthly_stage3_candidates: dict[str, set[tuple[str, int]]] = {}
     monthly_aggregate_by_key: dict[str, dict[tuple[float, float, float, str, str, str, str, float, float, float], dict[str, object]]] = {}
     for row in trade_rows:
@@ -4298,17 +4297,10 @@ def _build_stage4_monthly_summary_map(
         if month_label is None:
             continue
         monthly_stage3_candidates.setdefault(month_label, set()).add((str(row["symbol"]), int(row["regime_index"])))
-        aggregate_by_key = monthly_aggregate_by_key.setdefault(
-            month_label,
-            {
-                param_key: _initialize_stage4_param_aggregate()
-                for param_key in param_grid_map
-            },
-        )
+        aggregate_by_key = monthly_aggregate_by_key.setdefault(month_label, {})
         param_key = _resolve_stage4_trade_param_key(row)
-        if param_key not in aggregate_by_key:
-            continue
-        _accumulate_stage4_param_aggregate(aggregate_by_key[param_key], row)
+        aggregate = aggregate_by_key.setdefault(param_key, _initialize_stage4_param_aggregate())
+        _accumulate_stage4_param_aggregate(aggregate, row)
 
     monthly_summary_map: dict[str, list[dict[str, object]]] = {}
     for month_label, aggregate_by_key in sorted(monthly_aggregate_by_key.items()):
@@ -4375,6 +4367,7 @@ def _render_stage4_postmortem_report(
     param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
     summary_rows: list[dict[str, object]],
     trade_rows: list[dict[str, object]],
+    monthly_summary_map: dict[str, list[dict[str, object]]],
     reason_counts: Counter[str],
     timed_out_symbols: list[str],
     progress_callback: Callable[[int, int, str], None] | None = None,
@@ -4420,12 +4413,7 @@ def _render_stage4_postmortem_report(
     )
     _report_progress(2, "frontier")
     trade_density_frontier_rows = _build_stage4_trade_density_frontier_rows(summary_rows)
-    _report_progress(3, "monthly_summary")
-    monthly_summary_map = _build_stage4_monthly_summary_map(
-        timeframe=timeframe,
-        param_grid=param_grid,
-        trade_rows=trade_rows,
-    )
+    _report_progress(3, "monthly_summary_ready")
     _report_progress(4, "stability")
     stability_pairs = _collect_stage4_stability_pairs(summary_rows)
     best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
@@ -5777,6 +5765,16 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     logger.info("postmortem-stage4: scoring_summary")
     summary_rows = _score_stage4_summary_rows(summary_rows)
     logger.info("postmortem-stage4: summary_scored")
+    logger.info("postmortem-stage4: building_monthly_summary")
+    monthly_summary_map = _build_stage4_monthly_summary_map(
+        timeframe=review_timeframe,
+        param_grid=param_grid,
+        trade_rows=rows,
+    )
+    logger.info(
+        "postmortem-stage4: monthly_summary_ready months=%s",
+        len(monthly_summary_map),
+    )
     logger.info("postmortem-stage4: selecting_best_combo")
     best_summary_row = _select_best_stage4_summary_row(summary_rows)
     best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
@@ -5930,6 +5928,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         param_grid=param_grid,
         summary_rows=summary_rows,
         trade_rows=rows,
+        monthly_summary_map=monthly_summary_map,
         reason_counts=reason_counts,
         timed_out_symbols=timed_out_symbols,
         progress_callback=_stage4_report_progress,
