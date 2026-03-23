@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
+
 from constants import (
     DEFAULT_LOG_LEVEL,
     DEFAULT_LOGS_DIR,
@@ -43,8 +45,63 @@ class OhlcvFetcher:
         self._gap_detector = GapDetector()
         self._validator = DataValidator()
 
+    @staticmethod
+    def _aggregate_cached_frame(frame: pd.DataFrame, target_timeframe: Timeframe) -> pd.DataFrame:
+        if frame.empty:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        timeframe_ms = target_timeframe.to_milliseconds()
+        prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
+        prepared["bucket"] = (prepared["timestamp"] // timeframe_ms) * timeframe_ms
+        aggregated = (
+            prepared.groupby("bucket", as_index=False)
+            .agg(
+                open=("open", "first"),
+                high=("high", "max"),
+                low=("low", "min"),
+                close=("close", "last"),
+                volume=("volume", "sum"),
+            )
+            .rename(columns={"bucket": "timestamp"})
+        )
+        return aggregated.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+
+    def _load_cached_base_frame(
+        self,
+        symbol: str,
+        source_timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        frame = self._storage.load(symbol, source_timeframe)
+        if frame.empty or "timestamp" not in frame.columns:
+            return pd.DataFrame()
+        prepared = frame.copy()
+        for column in ("timestamp", "open", "high", "low", "close", "volume"):
+            if column in prepared.columns:
+                prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+        if prepared.empty:
+            return pd.DataFrame()
+        return prepared.loc[
+            (prepared["timestamp"] >= start_timestamp_ms)
+            & (prepared["timestamp"] <= end_timestamp_ms)
+        ].sort_values("timestamp").reset_index(drop=True)
+
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_timestamp_ms: int, end_timestamp_ms: int) -> int:
         """Загружает OHLCV-данные для одного символа."""
+        if timeframe == Timeframe.M10:
+            cached_base_frame = self._load_cached_base_frame(
+                symbol=symbol,
+                source_timeframe=Timeframe.M5,
+                start_timestamp_ms=start_timestamp_ms,
+                end_timestamp_ms=end_timestamp_ms,
+            )
+            if not cached_base_frame.empty:
+                data = self._aggregate_cached_frame(cached_base_frame, target_timeframe=timeframe)
+                added_rows = self._storage.save_incremental(symbol, timeframe, data)
+                self._logger.info("OHLCV local aggregate: %s %s from %s rows=%s", symbol, timeframe.value, Timeframe.M5.value, added_rows)
+                return added_rows
+
         start_timestamp_ms = int(start_timestamp_ms)
         end_timestamp_ms = int(end_timestamp_ms)
         timeframe_ms = timeframe.to_milliseconds()

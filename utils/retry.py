@@ -51,6 +51,12 @@ def run_with_retry(
     endpoint_value = endpoint or "n/a"
     symbol_value = symbol or "n/a"
 
+    def _compute_sleep_seconds(exc: Exception, attempt_number: int) -> float:
+        message = str(exc).lower()
+        if "too many requests" in message or "429" in message or "-1003" in message:
+            return max(backoff_seconds * attempt_number, 20.0)
+        return backoff_seconds
+
     for attempt_number in range(1, attempts + 1):
         try:
             result = call(*args, **kwargs)
@@ -77,7 +83,7 @@ def run_with_retry(
             if is_last:
                 raise RetryExhaustedError(operation=operation, attempts=attempts, reason=str(exc)) from exc
 
-            sleep_seconds = backoff_seconds
+            sleep_seconds = _compute_sleep_seconds(exc, attempt_number)
             if jitter_seconds and jitter_seconds > 0:
                 sleep_seconds += random.uniform(0.0, jitter_seconds)
             if sleep_seconds > 0:

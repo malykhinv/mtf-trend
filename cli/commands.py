@@ -1080,7 +1080,16 @@ def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timefram
             continue
         seen.add(timeframe)
         resolved.append(timeframe)
-    return tuple(resolved) if resolved else fallback
+    if not resolved:
+        return fallback
+
+    priority = {
+        Timeframe.M15: 0,
+        Timeframe.M5: 1,
+        Timeframe.M10: 2,
+        Timeframe.M3: 3,
+    }
+    return tuple(sorted(resolved, key=lambda timeframe: priority.get(timeframe, 100)))
 
 
 def _resolve_review_timeframes(args: argparse.Namespace) -> list[Timeframe]:
@@ -1789,7 +1798,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
     failed_symbols: set[str] = set()
-    for timeframe in fetch_timeframes:
+    for index, timeframe in enumerate(fetch_timeframes):
         logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
         result = fetcher.fetch_all(
             symbols=symbols,
@@ -1812,6 +1821,9 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
             or (symbol in result.open_interest and not result.open_interest[symbol].success)
             or isinstance(result.market_caps.market_caps.get(symbol), str)
         )
+        if index < len(fetch_timeframes) - 1:
+            logger.info("обновление-кэша: cooldown after TF=%s sleep=75s", timeframe.value)
+            time.sleep(75)
 
     exit_code = _fetch_exit_code(len(failed_symbols))
     _log_loaded_coins(logger, len(symbols), "updated")
