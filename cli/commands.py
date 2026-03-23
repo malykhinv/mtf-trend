@@ -115,7 +115,7 @@ _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
 _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE = "stage4_grid_overview.csv"
 _DEFAULT_STAGE4_REPORT_OUTPUT_FILE = "stage4_report.md"
 _DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS = 120
-_DEFAULT_STAGE4_SYMBOL_WORKERS = 2
+_DEFAULT_STAGE4_SYMBOL_WORKERS = 6
 _TItem = TypeVar("_TItem")
 
 
@@ -5667,6 +5667,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
 
     try:
         max_workers = min(_DEFAULT_STAGE4_SYMBOL_WORKERS, len(symbols))
+        logger.info("postmortem-stage4: workers=%s", max_workers)
         completed_symbols = 0
         next_index_to_submit = 1
         pending_futures: dict[concurrent.futures.Future[tuple[dict[str, object] | None, str | None, Path | None]], tuple[int, str]] = {}
