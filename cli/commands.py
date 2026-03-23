@@ -114,7 +114,7 @@ _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
 _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
 _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE = "stage4_grid_overview.csv"
 _DEFAULT_STAGE4_REPORT_OUTPUT_FILE = "stage4_report.md"
-_DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS = 120
+_DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS = 600
 _DEFAULT_STAGE4_SYMBOL_WORKERS = 6
 _TItem = TypeVar("_TItem")
 
@@ -2970,7 +2970,7 @@ def _resolve_stage4_trade_outcome_prepared(
             "tp2_timestamp": tp2_timestamp,
             "tp3_hit": tp3_hit,
             "tp3_timestamp": tp3_timestamp,
-            "be_armed": tp1_hit and remaining_share > 0.0 and tp1_stop_mode == "entry",
+            "be_armed": tp2_hit and remaining_share > 0.0 and tp1_stop_price is not None,
             "tp1_stop_price": tp1_stop_price,
             "exit_stop_price": active_stop,
             "fee_rate": fee_rate,
@@ -3006,37 +3006,23 @@ def _resolve_stage4_trade_outcome_prepared(
                 tp1_hit = True
                 tp1_timestamp = idx
                 _record_fill(idx=idx, price=tp1_price, share=tp1_share)
-                if tp1_stop_mode == "last_red_low":
-                    last_red_candle: pd.Series | None = None
-                    for red_idx in range(idx, entry_idx, -1):
-                        red_open = float(prepared.iloc[red_idx]["open"])
-                        red_close = float(prepared.iloc[red_idx]["close"])
-                        if red_close < red_open:
-                            last_red_candle = prepared.iloc[red_idx]
-                            break
-                    if last_red_candle is not None:
-                        tp1_stop_price = max(float(last_red_candle["low"]), stop_price)
-                    else:
-                        tp1_stop_price = entry_price
-                else:
-                    tp1_stop_price = entry_price
-                active_stop = float(tp1_stop_price)
                 if remaining_share <= 0.0:
                     return _finalize(outcome="tp1_full_exit", exit_idx=idx, exit_price=tp1_price)
-                if candle_low <= active_stop:
-                    _record_fill(idx=idx, price=active_stop, share=remaining_share)
-                    same_candle_outcome = (
-                        "be_same_candle_after_tp1"
-                        if tp1_stop_mode == "entry"
-                        else "tp1_stop_same_candle_after_tp1"
-                    )
-                    return _finalize(outcome=same_candle_outcome, exit_idx=idx, exit_price=active_stop)
                 if not tp2_hit and tp2_share > 0.0 and candle_high >= tp2_price:
                     tp2_hit = True
                     tp2_timestamp = idx
                     _record_fill(idx=idx, price=tp2_price, share=tp2_share)
+                    tp1_stop_price = tp1_price
+                    active_stop = tp1_price
                     if remaining_share <= 0.0:
                         return _finalize(outcome="tp2_final_hit", exit_idx=idx, exit_price=tp2_price)
+                    if candle_low <= active_stop:
+                        _record_fill(idx=idx, price=active_stop, share=remaining_share)
+                        return _finalize(
+                            outcome="tp1_stop_same_candle_after_tp2",
+                            exit_idx=idx,
+                            exit_price=active_stop,
+                        )
                 if tp3_share > 0.0 and candle_high >= tp3_price:
                     tp3_hit = True
                     tp3_timestamp = idx
@@ -3047,15 +3033,24 @@ def _resolve_stage4_trade_outcome_prepared(
         hit_stop = candle_low <= active_stop
         if hit_stop:
             _record_fill(idx=idx, price=active_stop, share=remaining_share)
-            stop_outcome = "be_hit" if tp1_stop_mode == "entry" else "tp1_stop_hit"
+            stop_outcome = "tp1_stop_hit" if tp2_hit else "stop_hit"
             return _finalize(outcome=stop_outcome, exit_idx=idx, exit_price=active_stop)
 
         if not tp2_hit and tp2_share > 0.0 and candle_high >= tp2_price:
             tp2_hit = True
             tp2_timestamp = idx
             _record_fill(idx=idx, price=tp2_price, share=tp2_share)
+            tp1_stop_price = tp1_price
+            active_stop = tp1_price
             if remaining_share <= 0.0:
                 return _finalize(outcome="tp2_final_hit", exit_idx=idx, exit_price=tp2_price)
+            if candle_low <= active_stop:
+                _record_fill(idx=idx, price=active_stop, share=remaining_share)
+                return _finalize(
+                    outcome="tp1_stop_same_candle_after_tp2",
+                    exit_idx=idx,
+                    exit_price=active_stop,
+                )
 
         if tp3_share > 0.0 and candle_high >= tp3_price:
             tp3_hit = True
@@ -3151,13 +3146,9 @@ def _build_stage4_postmortem_rows(
     rows: list[dict[str, object]] = []
     for row_order, params in enumerate(param_grid, start=1):
         tp1_price = peak_price
-        if upper_zone_above_peak:
-            tp2_source = "upper_zone_bottom"
-            tp2_price = float(upper_zone_above_peak[0].low)
-        else:
-            tp2_source = "fallback_high_after_peak"
-            tp2_price = max(peak_price, highest_high_after_peak)
         tp3_price = peak_price + (box_height * float(params.tp3_multiplier))
+        tp2_source = "mid_tp1_tp3"
+        tp2_price = tp1_price + ((tp3_price - tp1_price) / 2.0)
         if params.stop_mode == "entry_minus_avg_body":
             stop_price = max(structural_stop_price, entry_price - avg_body_peak_to_sweep)
         else:
@@ -3612,7 +3603,13 @@ def _accumulate_stage4_param_aggregate(aggregate: dict[str, object], row: dict[s
     elif outcome in {"be_hit", "be_same_candle_after_tp1"}:
         aggregate["be_hits"] = int(aggregate["be_hits"]) + 1
 
-    if outcome in {"be_hit", "be_same_candle_after_tp1", "tp1_stop_hit", "tp1_stop_same_candle_after_tp1"}:
+    if outcome in {
+        "be_hit",
+        "be_same_candle_after_tp1",
+        "tp1_stop_hit",
+        "tp1_stop_same_candle_after_tp1",
+        "tp1_stop_same_candle_after_tp2",
+    }:
         aggregate["tp1_stop_hits"] = int(aggregate["tp1_stop_hits"]) + 1
     if outcome in {"open", "no_future_data"}:
         aggregate["open_trades"] = int(aggregate["open_trades"]) + 1
@@ -4088,6 +4085,8 @@ def _format_stage4_tp1_stop_mode(value: object) -> str:
         return "be"
     if normalized == "last_red_low":
         return "redlow"
+    if normalized == "tp1_after_tp2":
+        return "tp1@tp2"
     return normalized or "n/a"
 
 

@@ -22,20 +22,20 @@ def _build_default_stage4_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
     # - backup year-long run showed RR=1.25 as weak on both 15m and 5m
     # - current 15m full run shows intermediate RR steps 1.75 and 2.25 do not
     #   add a distinct frontier regime versus neighboring anchors 1.50/2.00/2.50/3.00
-    # - tp3 multiplier 1.0 underperformed 2.0/3.0 on both 15m and 5m
-    # - two share profiles were consistently weakest on both timeframes:
-    #   0.75/0.25/0.00 and 1.00/0.00/0.00
+    # - tp3 multiplier is the box-height distance knob for the third target
+    # - stage-4 now uses a single post-TP2 stop policy: move the stop to TP1
+    # - share profiles are intentionally TP3-accented to test the long-tail thesis
     rr_grid = (1.50, 2.00, 2.50, 3.00)
     tp3_multipliers = (2.0, 3.0)
     sweep_size_multipliers = (1.0, 2.0, 3.0, 4.0)
     stop_modes = ("sweep_low", "entry_minus_avg_body")
-    tp1_stop_modes = ("entry", "last_red_low")
+    tp1_stop_modes = ("tp1_after_tp2",)
     pump_minute_filters = ("any", "minute_00_or_30")
     timing_session_filters = ("any", "pump_not_us_overlap_and_sweep_not_europe")
     share_profiles = (
-        (0.50, 0.25, 0.25),
-        (0.50, 0.50, 0.00),
-        (0.75, 0.00, 0.25),
+        (0.25, 0.25, 0.50),
+        (0.20, 0.20, 0.60),
+        (0.10, 0.10, 0.80),
     )
     grid: list[BeeBiteStage4PostmortemParams] = []
     for min_rr in rr_grid:

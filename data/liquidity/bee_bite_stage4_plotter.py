@@ -251,7 +251,8 @@ class BeeBiteStage4Plotter:
         if tp3_share > 0.0:
             price_ax.axhline(tp3_price, color=self._TP3_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
         if bool(trade_row.get("be_armed")):
-            price_ax.axhline(entry_price, color=self._ENTRY_COLOR, linestyle=":", linewidth=1.0, alpha=0.9)
+            armed_stop_price = float(trade_row.get("tp1_stop_price") or entry_price)
+            price_ax.axhline(armed_stop_price, color=self._ENTRY_COLOR, linestyle=":", linewidth=1.0, alpha=0.9)
 
         self._draw_vertical_event(price_ax, pump_start_idx - window_start, self._ENTRY_COLOR, alpha=0.55, linewidth=1.0)
         if stage1_event.pump_peak_timestamp is not None and stage1_event.pump_peak_price is not None:
