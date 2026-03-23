@@ -74,6 +74,17 @@ class BacktestRunner:
         self._logger = logger or module_logger
 
     @staticmethod
+    def _resolve_initial_deposit(base_row: dict[str, int | float | str | None]) -> float | None:
+        raw_deposit = base_row.get("bite_deposit")
+        if raw_deposit is None:
+            return None
+        try:
+            deposit = float(raw_deposit)
+        except (TypeError, ValueError):
+            return None
+        return deposit if deposit > 0 else None
+
+    @staticmethod
     def _build_metrics_row(
         base_row: dict[str, int | float | str | None],
         trades: list[TradeResult],
@@ -86,6 +97,7 @@ class BacktestRunner:
                 "win_rate": BACKTEST_EMPTY_WIN_RATE,
                 "trades_count": BACKTEST_EMPTY_TRADES_COUNT,
                 "max_dd": BACKTEST_EMPTY_MAX_DD,
+                "max_drawdown_pct": BACKTEST_EMPTY_MAX_DD,
                 "sl_count": BACKTEST_ZERO_COUNT,
                 "be_count": BACKTEST_ZERO_COUNT,
                 "time_exit_profit_count": BACKTEST_ZERO_COUNT,
@@ -142,6 +154,9 @@ class BacktestRunner:
         cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
         peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
         max_dd = BACKTEST_EMPTY_MAX_DD
+        initial_deposit = BacktestRunner._resolve_initial_deposit(base_row)
+        peak_equity = initial_deposit
+        max_drawdown_pct = BACKTEST_EMPTY_MAX_DD
         for sorted_trade in sorted_trades:
             cumulative_pnl += sorted_trade.pnl
             if cumulative_pnl > peak_pnl:
@@ -149,6 +164,13 @@ class BacktestRunner:
             drawdown = peak_pnl - cumulative_pnl
             if drawdown > max_dd:
                 max_dd = drawdown
+            if initial_deposit is not None:
+                current_equity = initial_deposit + cumulative_pnl
+                peak_equity = max(peak_equity or initial_deposit, current_equity)
+                if peak_equity > 0:
+                    drawdown_pct = ((peak_equity - current_equity) / peak_equity) * 100
+                    if drawdown_pct > max_drawdown_pct:
+                        max_drawdown_pct = drawdown_pct
 
         return {
             **base_row,
@@ -157,6 +179,7 @@ class BacktestRunner:
             "win_rate": round(float(win_rate), BACKTEST_ROUND_METRICS),
             "trades_count": trades_count,
             "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
+            "max_drawdown_pct": round(float(max_drawdown_pct), BACKTEST_ROUND_MAX_DD),
             "sl_count": sl_count,
             "be_count": be_count,
             "time_exit_profit_count": time_exit_profit_count,

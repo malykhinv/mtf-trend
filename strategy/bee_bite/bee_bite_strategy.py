@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from dataclasses import replace
 
 import pandas as pd
 
@@ -35,6 +36,8 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         cooldown_hours: int,
         max_age_range_hours: int,
         portfolio_top_n: int | None = None,
+        deposit: float,
+        risk_pct: float,
     ) -> None:
         self._profile_id = profile_id
         self._grid_mode = grid_mode
@@ -43,6 +46,8 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         self._cooldown_hours = cooldown_hours
         self._max_age_range_hours = max_age_range_hours
         self._portfolio_top_n = portfolio_top_n
+        self._deposit = deposit
+        self._risk_pct = risk_pct
         self._engine = BeeBiteEngine()
         self._last_generation_diagnostics: dict[str, object] = {}
 
@@ -136,7 +141,9 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             config=PortfolioEngineConfig(
                 top_n=resolved_top_n,
                 score_threshold=get_bee_bite_score_threshold(profile_id).min_score,
-                r_trade=params.bite_r_trade,
+                deposit=params.bite_deposit,
+                risk_per_trade_pct=params.bite_risk_pct,
+                legacy_r_trade=params.bite_r_trade,
                 portfolio_risk_limit=params.bite_portfolio_risk_limit,
                 min_stop_atr_ratio=params.bite_min_stop_atr_ratio,
                 t_max_in_trade=params.bite_t_max_in_trade,
@@ -178,7 +185,7 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
         return max(1, hours * 4)
 
     def build_parameter_grid(self) -> list[BeeBiteParams]:
-        return build_bee_bite_grid(
+        grid = build_bee_bite_grid(
             profile_id=self._profile_id,
             grid_mode=self._grid_mode,
             reclaim_mode=self._reclaim_mode,
@@ -186,6 +193,15 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             cooldown_hours=self._cooldown_hours,
             max_age_range_hours=self._max_age_range_hours,
         )
+        return [
+            replace(
+                params,
+                bite_deposit=self._deposit,
+                bite_risk_pct=self._risk_pct,
+                bite_r_trade=self._deposit * self._risk_pct,
+            )
+            for params in grid
+        ]
 
     def params_to_row(self, params: BeeBiteParams) -> dict[str, int | float | str | None]:
         """Параметры, влияющие на поведение алгоритма и отчёт оптимизации."""
@@ -208,7 +224,9 @@ class BeeBiteStrategy(BaseStrategy[BeeBiteParams]):
             "bite_retest_mode": params.bite_retest_mode,
             "bite_max_age_range_hours": params.bite_max_age_range_hours,
             "bite_cooldown_hours": params.bite_cooldown_hours,
-            "bite_r_trade": params.bite_r_trade,
+            "bite_deposit": params.bite_deposit,
+            "bite_risk_pct": params.bite_risk_pct,
+            "bite_r_trade": params.bite_r_trade if params.bite_r_trade is not None else params.bite_deposit * params.bite_risk_pct,
             "bite_portfolio_risk_limit": params.bite_portfolio_risk_limit,
             "bite_min_stop_atr_ratio": params.bite_min_stop_atr_ratio,
             "bite_t_max_in_trade": params.bite_t_max_in_trade,

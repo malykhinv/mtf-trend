@@ -23,6 +23,7 @@ class ProfitableVariant:
     win_rate: float
     trades_count: int
     max_dd: float
+    max_drawdown_pct: float
     sl_count: int
     be_count: int
     tp1_be_count: int

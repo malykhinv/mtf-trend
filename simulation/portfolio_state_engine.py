@@ -43,8 +43,10 @@ class PortfolioState(str, Enum):
 class PortfolioEngineConfig:
     top_n: int = 1
     score_threshold: float = 0.0
-    r_trade: float = 1.0
+    deposit: float = 1000.0
+    risk_per_trade_pct: float = 0.02
     portfolio_risk_limit: float = 3.0
+    legacy_r_trade: float | None = None
     min_stop_atr_ratio: float = 0.3
     t_max_in_trade: int | None = None
     cooldown_bars: int = 8
@@ -190,8 +192,10 @@ class PortfolioStateEngine:
         if self._risk_manager is None:
             self._risk_manager = RiskManager(
                 RiskConfig(
-                    r_trade=self.config.r_trade,
+                    deposit=self.config.deposit,
+                    risk_per_trade_pct=self.config.risk_per_trade_pct,
                     portfolio_risk_limit=self.config.portfolio_risk_limit,
+                    legacy_r_trade=self.config.legacy_r_trade,
                     min_stop_atr_ratio=self.config.min_stop_atr_ratio,
                 )
             )

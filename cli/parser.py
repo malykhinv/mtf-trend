@@ -59,6 +59,8 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt.add_argument("--bee-bite-retest-mode", choices=["confirmation", "immediate"], default=None, help="Bee bite entry mode")
     run_bt.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=_positive_int_for("--bee-bite-cooldown-hours"), default=None, help="Cooldown for bee_bite in hours")
     run_bt.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=_positive_int_for("--bee-bite-max-age-range-hours"), default=None, help="Max range age for bee_bite in hours")
+    run_bt.add_argument("--bee-bite-deposit", type=float, default=None, help="Deposit used for position sizing")
+    run_bt.add_argument("--bee-bite-risk-pct", type=float, default=None, help="Risk per trade as a decimal share of deposit, e.g. 0.02")
     run_bt.add_argument("--plot", default=False, help="Save diagnostic files for the best combination (true/false)")
     run_bt.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
     run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")

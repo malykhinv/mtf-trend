@@ -12,14 +12,21 @@ from domain.models.trade_signal import TradeSignal
 
 @dataclass(frozen=True, slots=True)
 class RiskConfig:
-    r_trade: float
+    deposit: float
+    risk_per_trade_pct: float
     portfolio_risk_limit: float
+    legacy_r_trade: float | None = None
     min_stop_atr_ratio: float = 0.3
 
 
 @dataclass(slots=True)
 class RiskManager:
     config: RiskConfig
+
+    def risk_amount(self) -> float:
+        if self.config.legacy_r_trade is not None:
+            return self.config.legacy_r_trade
+        return self.config.deposit * self.config.risk_per_trade_pct
 
     @staticmethod
     def per_unit_risk(*, entry_price: float, stop_loss: float, side: PositionSide) -> float:
@@ -33,7 +40,7 @@ class RiskManager:
             stop_loss=signal.stop_loss.value,
             side=signal.position_side,
         )
-        return self.config.r_trade / risk
+        return self.risk_amount() / risk
 
     def check_stop_distance_by_atr(self, *, signal: TradeSignal, atr_bg: float) -> bool:
         if atr_bg <= 0:
@@ -59,5 +66,6 @@ class RiskManager:
     def can_open_with_portfolio_limit(self, *, active_positions: list[tuple[Position, PositionSide]], signal: TradeSignal) -> bool:
         del signal
         current_risk = self.total_open_risk(active_positions)
-        new_trade_risk = self.config.r_trade
-        return (current_risk + new_trade_risk) <= self.config.portfolio_risk_limit
+        new_trade_risk = self.risk_amount()
+        portfolio_risk_limit = self.config.portfolio_risk_limit * self.risk_amount()
+        return (current_risk + new_trade_risk) <= portfolio_risk_limit

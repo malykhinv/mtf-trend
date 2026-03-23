@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from constants import DEFAULT_BEE_BITE_DEPOSIT, DEFAULT_BEE_BITE_RISK_PCT
 from domain.enums.timeframe import Timeframe
 from strategy.bee_bite.config import (
     BeeBiteGridMode,
@@ -25,3 +26,5 @@ class StrategyConfig:
     bee_bite_cooldown_hours: int = 8
     bee_bite_max_age_range_hours: int = 24
     bee_bite_portfolio_top_n: int | None = None
+    bee_bite_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
+    bee_bite_risk_pct: float = DEFAULT_BEE_BITE_RISK_PCT

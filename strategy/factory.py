@@ -19,4 +19,6 @@ def build_strategy(config: AppConfig, _logger: object = None) -> BaseStrategy[ob
         cooldown_hours=config.strategy.bee_bite_cooldown_hours,
         max_age_range_hours=config.strategy.bee_bite_max_age_range_hours,
         portfolio_top_n=config.strategy.bee_bite_portfolio_top_n,
+        deposit=config.strategy.bee_bite_deposit,
+        risk_pct=config.strategy.bee_bite_risk_pct,
     )

@@ -6,6 +6,7 @@ from dataclasses import dataclass, replace
 from itertools import product
 from typing import Literal
 
+from constants import DEFAULT_BEE_BITE_DEPOSIT, DEFAULT_BEE_BITE_RISK_PCT
 from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.timeframe import Timeframe
 
@@ -90,7 +91,9 @@ class BeeBiteParams:
     symbol: str
     levels_timeframe: Timeframe = Timeframe.D1
     entry_timeframe: Timeframe = Timeframe.M15
-    bite_r_trade: float = 1.0
+    bite_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
+    bite_risk_pct: float = DEFAULT_BEE_BITE_RISK_PCT
+    bite_r_trade: float | None = None
     bite_portfolio_risk_limit: float = 3.0
     bite_min_stop_atr_ratio: float = 0.3
     bite_t_max_in_trade: int | None = None

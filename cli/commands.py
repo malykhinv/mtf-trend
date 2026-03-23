@@ -27,6 +27,8 @@ from constants import (
     BEE_BITE_STAGE4_SLIPPAGE_RATE,
     BEE_BITE_STAGE4_TAKER_FEE_RATE,
     DEFAULT_BACKTEST_OUTPUT_FILE,
+    DEFAULT_BEE_BITE_DEPOSIT,
+    DEFAULT_BEE_BITE_RISK_PCT,
     DEFAULT_FAILED_PLOTS_DIR_NAME,
     DEFAULT_STAGE1_EVENTS_OUTPUT_FILE,
     DEFAULT_STAGE1_PLOTS_DIR_NAME,
@@ -483,6 +485,10 @@ def _build_bee_bite_params_from_row(
     def _normalize_enum_raw(value: object) -> str | None:
         return None if _is_missing_scalar(value) else str(value)
 
+    def _optional_float(column_name: str) -> float | None:
+        raw_value = row.get(column_name)
+        return None if _is_missing_scalar(raw_value) else float(raw_value)
+
     bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
     bite_t_max_in_trade = None if _is_missing_scalar(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
     if bite_t_max_in_trade is not None and bite_t_max_in_trade < 1:
@@ -500,6 +506,12 @@ def _build_bee_bite_params_from_row(
     bite_retest_mode_raw = row.get("bite_retest_mode")
     bite_profile_id_raw = row.get("bite_profile_id")
     bite_grid_mode_raw = row.get("bite_grid_mode")
+    bite_deposit = _optional_float("bite_deposit") or DEFAULT_BEE_BITE_DEPOSIT
+    bite_risk_pct = _optional_float("bite_risk_pct")
+    bite_r_trade = _optional_float("bite_r_trade")
+    if bite_risk_pct is None:
+        bite_risk_pct = (bite_r_trade / bite_deposit) if bite_r_trade is not None else DEFAULT_BEE_BITE_RISK_PCT
+    resolved_trade_risk = bite_r_trade if bite_r_trade is not None else bite_deposit * bite_risk_pct
 
     return BeeBiteParams(
         bite_lookback=int(row["bite_lookback"]),
@@ -521,7 +533,9 @@ def _build_bee_bite_params_from_row(
         symbol=symbol,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
-        bite_r_trade=float(row["bite_r_trade"]),
+        bite_deposit=bite_deposit,
+        bite_risk_pct=bite_risk_pct,
+        bite_r_trade=resolved_trade_risk,
         bite_portfolio_risk_limit=float(row["bite_portfolio_risk_limit"]),
         bite_min_stop_atr_ratio=float(row["bite_min_stop_atr_ratio"]),
         bite_t_max_in_trade=bite_t_max_in_trade,
@@ -1866,6 +1880,10 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             if getattr(args, "bee_bite_max_age_range_hours", None) is not None
             else profile_runtime.max_age_range_hours
         )
+        if getattr(args, "bee_bite_deposit", None) is not None:
+            config.strategy.bee_bite_deposit = float(args.bee_bite_deposit)
+        if getattr(args, "bee_bite_risk_pct", None) is not None:
+            config.strategy.bee_bite_risk_pct = float(args.bee_bite_risk_pct)
         validate_bee_bite_runtime(
             profile_id=config.strategy.bee_bite_profile,
             grid_mode=config.strategy.bee_bite_grid_mode,
@@ -6018,6 +6036,8 @@ def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
     if frame.empty:
         logger.info("make-report: results file is empty")
         return 1
+    if "max_drawdown_pct" not in frame.columns:
+        frame["max_drawdown_pct"] = frame["max_dd"]
 
     filtered = frame[
         (frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER)
@@ -6092,6 +6112,7 @@ def _build_profitable_variants(frame: pd.DataFrame) -> list[ProfitableVariant]:
                 win_rate=round(float(row["win_rate"]), 4),
                 trades_count=int(row["trades_count"]),
                 max_dd=round(float(row["max_dd"]), 4),
+                max_drawdown_pct=round(float(row["max_drawdown_pct"]), 4),
                 sl_count=int(row["sl_count"]),
                 be_count=int(row["be_count"]),
                 tp1_be_count=int(row["tp1_be_count"]),
@@ -6129,7 +6150,7 @@ def _build_ai_analysis_report(summary: BacktestSummary, variants: list[Profitabl
         )
         lines.append(
             f"{variant.rank} | {variant.profit_factor} | {variant.pnl_percent} | {variant.win_rate} | "
-            f"{variant.trades_count} | {variant.max_dd} | {params}"
+            f"{variant.trades_count} | {variant.max_drawdown_pct} | {params}"
         )
 
     return "\n".join(lines)

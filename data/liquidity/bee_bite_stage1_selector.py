@@ -18,6 +18,7 @@ from constants import (
     BEE_BITE_STAGE1_PUMP_START_LOOKBACK_BARS,
     BEE_BITE_STAGE1_PUMP_WINDOW_BARS,
     BEE_BITE_STAGE1_SLEEP_WINDOW_BARS_15M,
+    BEE_BITE_STAGE1_STAIR_CONFIRM_DELAY_BARS_15M,
     BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M,
 )
 from domain.enums.timeframe import Timeframe
@@ -80,6 +81,7 @@ class BeeBiteStage1Selector:
         pump_start_lookback_bars: int = BEE_BITE_STAGE1_PUMP_START_LOOKBACK_BARS,
         volume_window_bars: int = BEE_BITE_STAGE1_VOLUME_WINDOW_BARS_15M,
         max_initial_pump_duration_bars: int = BEE_BITE_STAGE1_MAX_INITIAL_PUMP_DURATION_BARS_15M,
+        stair_confirm_delay_bars: int = BEE_BITE_STAGE1_STAIR_CONFIRM_DELAY_BARS_15M,
         min_confirm_delay_bars: int = BEE_BITE_STAGE1_MIN_CONFIRM_DELAY_BARS_15M,
         max_confirm_delay_bars: int = BEE_BITE_STAGE1_MAX_CONFIRM_DELAY_BARS_15M,
     ) -> None:
@@ -93,6 +95,7 @@ class BeeBiteStage1Selector:
         self._volume_window_bars = int(volume_window_bars)
         self._max_initial_pump_duration_bars = int(max(max_initial_pump_duration_bars, 1))
         self._min_confirm_delay_bars = int(max(min_confirm_delay_bars, 1))
+        self._stair_confirm_delay_bars = int(max(min(stair_confirm_delay_bars, self._min_confirm_delay_bars), 2))
         self._max_confirm_delay_bars = int(max(max_confirm_delay_bars, self._min_confirm_delay_bars))
         self._prepared_frame_cache: dict[tuple[object, ...], _PreparedStage1Frame | BeeBiteStage1Result] = {}
 
@@ -123,6 +126,10 @@ class BeeBiteStage1Selector:
             ),
             max_initial_pump_duration_bars=cls._duration_to_bars(
                 duration_ms=BEE_BITE_STAGE1_MAX_INITIAL_PUMP_DURATION_BARS_15M * reference_step_ms,
+                bar_duration_ms=target_step_ms,
+            ),
+            stair_confirm_delay_bars=cls._duration_to_bars(
+                duration_ms=BEE_BITE_STAGE1_STAIR_CONFIRM_DELAY_BARS_15M * reference_step_ms,
                 bar_duration_ms=target_step_ms,
             ),
             min_confirm_delay_bars=cls._duration_to_bars(
@@ -161,7 +168,7 @@ class BeeBiteStage1Selector:
         last_frame_idx = len(prepared.timestamps) - 1
 
         for candidate in self._iter_stage1_candidates(prepared=prepared):
-            confirm_start_idx = candidate.peak_idx + self._min_confirm_delay_bars
+            confirm_start_idx = candidate.peak_idx + candidate.confirm_delay_bars
             confirm_end_idx = min(candidate.regime_end_idx, last_frame_idx)
             if confirm_start_idx > confirm_end_idx:
                 saw_confirm_too_late = True
@@ -263,7 +270,7 @@ class BeeBiteStage1Selector:
             if candidate_key in seen_keys:
                 continue
 
-            confirm_start_idx = candidate.peak_idx + self._min_confirm_delay_bars
+            confirm_start_idx = candidate.peak_idx + candidate.confirm_delay_bars
             confirm_end_idx = min(candidate.regime_end_idx, len(prepared.timestamps) - 1)
             if confirm_start_idx > confirm_end_idx:
                 continue
@@ -487,6 +494,7 @@ class BeeBiteStage1Selector:
                 hold_base_idx=pump_start_idx,
                 hold_base_price=pump_base_price,
                 pump_percent=pump_percent,
+                confirm_delay_bars=self._min_confirm_delay_bars,
             )
             candidate = self._finalize_candidate_regime(prepared=prepared, candidate=initial_candidate)
             candidate = self._rebase_candidate_launch_start(prepared=prepared, candidate=candidate)
@@ -777,6 +785,7 @@ class BeeBiteStage1Selector:
         current_peak_price = float(candidate.pump_peak_price)
         current_hold_base_idx = int(candidate.hold_base_idx)
         current_hold_base_price = float(candidate.hold_base_price)
+        current_confirm_delay_bars = int(candidate.confirm_delay_bars)
         regime_end_idx = min(
             len(prepared.timestamps) - 1,
             current_peak_idx + self._max_confirm_delay_bars,
@@ -816,6 +825,9 @@ class BeeBiteStage1Selector:
                 had_long_balance_before_breakout = breakout_is_significant and (
                     (idx - current_peak_idx) >= self._min_confirm_delay_bars
                 )
+                had_compact_balance_before_breakout = breakout_is_significant and (
+                    (idx - current_peak_idx) >= self._stair_confirm_delay_bars
+                )
                 if not breakout_is_significant:
                     idx += 1
                     continue
@@ -826,6 +838,23 @@ class BeeBiteStage1Selector:
                     hold_price=hold_price,
                     peak_price=current_peak_price,
                 ):
+                    regime_end_idx = idx - 1
+                    break
+                if (
+                    had_compact_balance_before_breakout
+                    and not had_long_balance_before_breakout
+                    and self._has_upper_hold_before_breakout(
+                        prepared=prepared,
+                        peak_idx=current_peak_idx,
+                        breakout_idx=idx,
+                        hold_price=hold_price,
+                        peak_price=current_peak_price,
+                        required_bars=self._stair_confirm_delay_bars,
+                        close_breakout_tolerance_ratio=0.02,
+                        wick_breakout_tolerance_ratio=0.03,
+                    )
+                ):
+                    current_confirm_delay_bars = min(current_confirm_delay_bars, self._stair_confirm_delay_bars)
                     regime_end_idx = idx - 1
                     break
                 if had_long_balance_before_breakout and current_hold_base_idx == candidate.pump_start_idx:
@@ -863,6 +892,7 @@ class BeeBiteStage1Selector:
             hold_base_idx=current_hold_base_idx,
             hold_base_price=current_hold_base_price,
             pump_percent=(current_peak_price / candidate.pump_base_price) - 1.0,
+            confirm_delay_bars=current_confirm_delay_bars,
         )
 
     def _rebase_candidate_launch_start(
@@ -914,6 +944,7 @@ class BeeBiteStage1Selector:
             hold_base_idx=hold_base_idx,
             hold_base_price=hold_base_price,
             pump_percent=rebased_pump_percent,
+            confirm_delay_bars=candidate.confirm_delay_bars,
         )
 
     def _has_upper_hold_before_breakout(
@@ -924,22 +955,26 @@ class BeeBiteStage1Selector:
         breakout_idx: int,
         hold_price: float,
         peak_price: float,
+        required_bars: int | None = None,
+        close_breakout_tolerance_ratio: float = 0.01,
+        wick_breakout_tolerance_ratio: float = 0.02,
     ) -> bool:
+        hold_bars = self._min_confirm_delay_bars if required_bars is None else max(int(required_bars), 1)
         bars_since_peak = breakout_idx - peak_idx
-        if bars_since_peak < self._min_confirm_delay_bars:
+        if bars_since_peak < hold_bars:
             return False
 
-        hold_start_idx = breakout_idx - self._min_confirm_delay_bars
+        hold_start_idx = breakout_idx - hold_bars
         hold_closes = prepared.closes[hold_start_idx:breakout_idx]
         hold_highs = self._effective_highs(prepared)[hold_start_idx:breakout_idx]
-        if hold_closes.size < self._min_confirm_delay_bars:
+        if hold_closes.size < hold_bars:
             return False
         if np.any(hold_closes < hold_price):
             return False
-        close_breakout_tolerance = max(peak_price * 0.01, self._EPSILON)
+        close_breakout_tolerance = max(peak_price * close_breakout_tolerance_ratio, self._EPSILON)
         if np.any(hold_closes > (peak_price + close_breakout_tolerance)):
             return False
-        wick_breakout_tolerance = max(peak_price * 0.02, self._EPSILON)
+        wick_breakout_tolerance = max(peak_price * wick_breakout_tolerance_ratio, self._EPSILON)
         if np.any(hold_highs > (peak_price + wick_breakout_tolerance)):
             return False
         return True
@@ -1107,7 +1142,7 @@ class BeeBiteStage1Selector:
         if initial_pump_duration_bars > self._max_initial_pump_duration_bars:
             result.reason = "initial_pump_too_long"
             return result
-        if bars_since_peak < self._min_confirm_delay_bars:
+        if bars_since_peak < candidate.confirm_delay_bars:
             result.reason = "confirm_before_min_hold"
             return result
         if bars_since_peak > self._max_confirm_delay_bars:
@@ -1157,3 +1192,4 @@ class _Stage1Candidate:
     hold_base_idx: int
     hold_base_price: float
     pump_percent: float
+    confirm_delay_bars: int

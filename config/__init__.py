@@ -12,6 +12,8 @@ from config.simulation_config import SimulationConfig
 from config.strategy_config import StrategyConfig
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
+    DEFAULT_BEE_BITE_DEPOSIT,
+    DEFAULT_BEE_BITE_RISK_PCT,
     DEFAULT_CACHE_DIR,
     DEFAULT_COMMISSION_RATE,
     DEFAULT_LOG_LEVEL,
@@ -156,6 +158,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
             if os.getenv("BEE_BITE_TOP_N") is not None
             else None
         ),
+        bee_bite_deposit=float(os.getenv("BEE_BITE_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))),
+        bee_bite_risk_pct=float(os.getenv("BEE_BITE_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))),
     )
 
     simulation_cfg = SimulationConfig(

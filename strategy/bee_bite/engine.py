@@ -627,11 +627,11 @@ class BeeBiteEngine:
         stop = trade_plan.stop_loss
         tp1 = trade_plan.tp1
 
-        trade_risk = params.bite_r_trade
-        if trade_risk > params.bite_portfolio_risk_limit:
+        trade_risk = params.bite_r_trade if params.bite_r_trade is not None else params.bite_deposit * params.bite_risk_pct
+        if params.bite_portfolio_risk_limit < 1.0:
             return None, entry_idx, False
 
-        position_size = params.bite_r_trade / risk
+        position_size = trade_risk / risk
         tp1_share = resolve_profile_tp1_share(params.bite_profile_id, params.bite_tp1_share)
         remainder_share = 1.0 - tp1_share
 
