@@ -5747,14 +5747,30 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     finally:
         trade_rows_path.unlink(missing_ok=True)
 
+    logger.info(
+        "postmortem-stage4: building_summary trade_rows=%s grid_size=%s",
+        len(rows),
+        len(param_grid),
+    )
     summary_rows = _build_stage4_postmortem_summary_rows(
         timeframe=review_timeframe,
         param_grid=param_grid,
         rows=rows,
     )
+    logger.info("postmortem-stage4: summary_ready rows=%s", len(summary_rows))
+    logger.info("postmortem-stage4: scoring_summary")
     summary_rows = _score_stage4_summary_rows(summary_rows)
+    logger.info("postmortem-stage4: summary_scored")
+    logger.info("postmortem-stage4: selecting_best_combo")
     best_summary_row = _select_best_stage4_summary_row(summary_rows)
     best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
+    logger.info(
+        "postmortem-stage4: best_combo_selected best=%s",
+        (
+            _format_stage4_param_triplet(best_summary_row)
+            if best_summary_row is not None else "n/a"
+        ),
+    )
     for summary_row in summary_rows:
         summary_row["is_best"] = bool(best_param_key is not None and _resolve_stage4_param_key(summary_row) == best_param_key)
 
@@ -5766,7 +5782,21 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         and best_param_key is not None
         and _resolve_stage4_param_key(cast(dict[str, object], trade_row)) == best_param_key
     ]
-    for trade_row in selected_trade_rows:
+    logger.info(
+        "postmortem-stage4: selected_best_trades count=%s",
+        len(selected_trade_rows),
+    )
+
+    total_selected_plots = len(selected_trade_rows)
+    if total_selected_plots:
+        logger.info(
+            "postmortem-stage4: plotting_start selected_plots=%s",
+            total_selected_plots,
+        )
+    else:
+        logger.info("postmortem-stage4: plotting_start selected_plots=0")
+
+    for plot_index, trade_row in enumerate(selected_trade_rows, start=1):
         symbol = cast(str, trade_row["symbol"])
         regime_index = int(trade_row["regime_index"])
         plot_timeout_for_run = None if symbol == symbols[0] else symbol_timeout_seconds
@@ -5779,6 +5809,13 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                 regime_index,
             )
             continue
+        logger.info(
+            "postmortem-stage4: plotting=%s/%s symbol=%s regime=%s",
+            plot_index,
+            total_selected_plots,
+            symbol,
+            regime_index,
+        )
         plot_error = _run_stage4_plot_with_timeout(
             cache_dir=config.backtest.cache_dir,
             symbol=symbol,
@@ -5817,31 +5854,61 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                     symbol,
                     regime_index,
                     plot_error,
-                )
+            )
             continue
         plots_built += 1
 
+    logger.info(
+        "postmortem-stage4: plotting_ready built=%s selected=%s",
+        plots_built,
+        total_selected_plots,
+    )
+
+    logger.info("postmortem-stage4: building_results_frame")
     results_frame = pd.DataFrame([*summary_rows, *rows])
     if not results_frame.empty:
         sort_columns = [column for column in ("row_type", "row_order", "symbol", "regime_index") if column in results_frame.columns]
         results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
+    logger.info("postmortem-stage4: results_frame_ready rows=%s", len(results_frame))
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     overview_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.parent.mkdir(parents=True, exist_ok=True)
+
+    logger.info("postmortem-stage4: writing_csv path=%s", output_path)
     results_frame.to_csv(output_path, index=False)
+    logger.info("postmortem-stage4: csv_ready path=%s", output_path)
+
+    logger.info("postmortem-stage4: writing_overview path=%s", overview_path)
     pd.DataFrame(summary_rows).to_csv(overview_path, index=False)
-    report_path.write_text(
-        _render_stage4_postmortem_report(
-            timeframe=review_timeframe,
-            symbols_count=len(symbols),
-            stage3_passed_count=stage3_passed_count,
-            param_grid=param_grid,
-            summary_rows=summary_rows,
-            trade_rows=rows,
-            reason_counts=reason_counts,
-            timed_out_symbols=timed_out_symbols,
-        ),
-        encoding="utf-8",
+    logger.info("postmortem-stage4: overview_ready path=%s", overview_path)
+
+    logger.info("postmortem-stage4: rendering_report")
+    report_markdown = _render_stage4_postmortem_report(
+        timeframe=review_timeframe,
+        symbols_count=len(symbols),
+        stage3_passed_count=stage3_passed_count,
+        param_grid=param_grid,
+        summary_rows=summary_rows,
+        trade_rows=rows,
+        reason_counts=reason_counts,
+        timed_out_symbols=timed_out_symbols,
+    )
+    logger.info("postmortem-stage4: report_rendered")
+    logger.info("postmortem-stage4: writing_report path=%s", report_path)
+    report_path.write_text(report_markdown, encoding="utf-8")
+    logger.info("postmortem-stage4: report_ready path=%s", report_path)
+
+    logger.info(
+        "postmortem-stage4: analysis_ready symbols=%s stage3_passed=%s trades=%s grid_size=%s selected_plots=%s csv=%s overview=%s report=%s",
+        len(symbols),
+        stage3_passed_count,
+        len(rows),
+        len(param_grid),
+        len(selected_trade_rows),
+        output_path,
+        overview_path,
+        report_path,
     )
 
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
