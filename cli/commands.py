@@ -4377,7 +4377,15 @@ def _render_stage4_postmortem_report(
     trade_rows: list[dict[str, object]],
     reason_counts: Counter[str],
     timed_out_symbols: list[str],
+    progress_callback: Callable[[int, int, str], None] | None = None,
 ) -> str:
+    total_steps = 9
+
+    def _report_progress(step: int, phase: str) -> None:
+        if progress_callback is not None:
+            progress_callback(step, total_steps, phase)
+
+    _report_progress(1, "leaderboards")
     generated_at = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     best_summary_row = _select_best_stage4_summary_row(summary_rows)
     leaderboard_balanced_rows = _build_stage4_leaderboard_rows(
@@ -4410,15 +4418,19 @@ def _render_stage4_postmortem_report(
         sort_keys=["win_rate", "total_realized_rr", "eligible_trades", "profit_factor_rr", "stage4_score"],
         limit=7,
     )
+    _report_progress(2, "frontier")
     trade_density_frontier_rows = _build_stage4_trade_density_frontier_rows(summary_rows)
+    _report_progress(3, "monthly_summary")
     monthly_summary_map = _build_stage4_monthly_summary_map(
         timeframe=timeframe,
         param_grid=param_grid,
         trade_rows=trade_rows,
     )
+    _report_progress(4, "stability")
     stability_pairs = _collect_stage4_stability_pairs(summary_rows)
     best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
     top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common(8)) if reason_counts else "none"
+    _report_progress(5, "best_trade_rows")
     best_trade_rows = [
         cast(dict[str, object], row)
         for row in trade_rows
@@ -4427,6 +4439,7 @@ def _render_stage4_postmortem_report(
         and best_param_key is not None
         and _resolve_stage4_param_key(cast(dict[str, object], row)) == best_param_key
     ]
+    _report_progress(6, "timing_breakdown")
     pump_minute_breakdown = _build_stage4_timing_breakdown_rows(
         trade_rows=best_trade_rows,
         key_name="pump_minute_marker",
@@ -4439,6 +4452,7 @@ def _render_stage4_postmortem_report(
         trade_rows=best_trade_rows,
         key_name="sweep_session_utc",
     )
+    _report_progress(7, "monthly_drift")
     lines: list[str] = [f"# Bee Bite Stage-4 Postmortem Report ({timeframe.value})", "", f"_Generated: {generated_at}_", ""]
     if reason_counts:
         lines.append(f"> Top rejection reasons before stage-4: `{top_reasons}`")
@@ -4646,6 +4660,7 @@ def _render_stage4_postmortem_report(
             table_rows.append(table_row)
         lines.append(_build_markdown_table(headers, table_rows))
 
+    _report_progress(8, "markdown_sections")
     lines.extend(["", "---", "", "## Full-Period Leaderboards", ""])
     lines.append("- `Top By Balanced Score` is the recommended main selector.")
     lines.append("- `Top By Trades` shows density, while `Top By Total Realized RR` shows raw edge without density preference.")
@@ -4811,6 +4826,7 @@ def _render_stage4_postmortem_report(
     if timed_out_symbols:
         lines.extend(["", "## Timed Out Symbols", ""])
         lines.append(", ".join(f"`{symbol}`" for symbol in timed_out_symbols))
+    _report_progress(9, "done")
     return "\n".join(lines).strip() + "\n"
 
 
@@ -5796,6 +5812,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     else:
         logger.info("postmortem-stage4: plotting_start selected_plots=0")
 
+    plotting_started_at = time.perf_counter()
     for plot_index, trade_row in enumerate(selected_trade_rows, start=1):
         symbol = cast(str, trade_row["symbol"])
         regime_index = int(trade_row["regime_index"])
@@ -5809,10 +5826,16 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
                 regime_index,
             )
             continue
+        plotting_elapsed = max(time.perf_counter() - plotting_started_at, 1e-9)
+        plotting_avg_seconds = plotting_elapsed / max(plot_index - 1, 1)
+        plotting_remaining = max(total_selected_plots - plot_index + 1, 0)
+        plotting_eta_seconds = plotting_avg_seconds * plotting_remaining
         logger.info(
-            "postmortem-stage4: plotting=%s/%s symbol=%s regime=%s",
+            "postmortem-stage4: plotting=%s/%s (%.1f%%) eta=%s symbol=%s regime=%s",
             plot_index,
             total_selected_plots,
+            (plot_index / total_selected_plots) * 100.0 if total_selected_plots else 100.0,
+            _format_eta_compact(plotting_eta_seconds),
             symbol,
             regime_index,
         )
@@ -5884,6 +5907,22 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
     logger.info("postmortem-stage4: overview_ready path=%s", overview_path)
 
     logger.info("postmortem-stage4: rendering_report")
+    report_started_at = time.perf_counter()
+
+    def _stage4_report_progress(step: int, total_steps: int, phase: str) -> None:
+        elapsed = max(time.perf_counter() - report_started_at, 1e-9)
+        avg_seconds = elapsed / max(step, 1)
+        remaining_steps = max(total_steps - step, 0)
+        eta_seconds = avg_seconds * remaining_steps
+        logger.info(
+            "postmortem-stage4: report_progress=%s/%s (%.1f%%) eta=%s phase=%s",
+            step,
+            total_steps,
+            (step / total_steps) * 100.0 if total_steps else 100.0,
+            _format_eta_compact(eta_seconds),
+            phase,
+        )
+
     report_markdown = _render_stage4_postmortem_report(
         timeframe=review_timeframe,
         symbols_count=len(symbols),
@@ -5893,6 +5932,7 @@ def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, log
         trade_rows=rows,
         reason_counts=reason_counts,
         timed_out_symbols=timed_out_symbols,
+        progress_callback=_stage4_report_progress,
     )
     logger.info("postmortem-stage4: report_rendered")
     logger.info("postmortem-stage4: writing_report path=%s", report_path)
