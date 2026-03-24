@@ -12,6 +12,7 @@ from strategy.bee_bite.config import (
     BeeBiteReclaimMode,
     BeeBiteRetestMode,
 )
+from strategy.post_pump_absorption.config import PostPumpAbsorptionProfileId
 
 
 @dataclass(slots=True)
@@ -28,3 +29,6 @@ class StrategyConfig:
     bee_bite_portfolio_top_n: int | None = None
     bee_bite_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
     bee_bite_risk_pct: float = DEFAULT_BEE_BITE_RISK_PCT
+    post_pump_absorption_profile: PostPumpAbsorptionProfileId = "balanced"
+    post_pump_absorption_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
+    post_pump_absorption_risk_pct: float = DEFAULT_BEE_BITE_RISK_PCT

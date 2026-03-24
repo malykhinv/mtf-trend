@@ -127,16 +127,20 @@ class DataPreparer:
             )
 
         trades_sorted = sorted(trades, key=lambda trade: (trade.entry_timestamp_ms, trade.exit_timestamp_ms))
-        trade_rows = [
-            {
+        trade_rows = []
+        for trade in trades_sorted:
+            row = {
                 "entry_timestamp_ms": int(trade.entry_timestamp_ms),
                 "exit_timestamp_ms": int(trade.exit_timestamp_ms),
                 "pnl": float(trade.pnl),
                 "pnl_percent": float(trade.pnl_percent.value),
                 "result_type": trade.result_type.value,
             }
-            for trade in trades_sorted
-        ]
+            if trade.metadata:
+                for key, value in trade.metadata.items():
+                    if isinstance(value, (str, int, float, bool)) or value is None:
+                        row[key] = value
+            trade_rows.append(row)
         trades_frame = pd.DataFrame(trade_rows)
 
         timeline = pd.Index(

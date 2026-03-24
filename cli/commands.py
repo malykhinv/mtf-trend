@@ -14,6 +14,7 @@ import tempfile
 import time
 import traceback
 from collections import Counter
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from logging import Logger
 from pathlib import Path
@@ -100,6 +101,20 @@ from strategy.bee_bite import (
 from strategy.bee_bite.stage2_detector import BeeBiteStage2LiquidityZone
 from strategy.bee_bite.stage3_rules import resolve_stage2_hold_price
 from strategy.factory import build_strategy
+from strategy.post_pump_absorption import (
+    PostPumpAbsorptionParams,
+    PostPumpAbsorptionStrategy,
+    parse_post_pump_absorption_profile_id,
+)
+from strategy.post_pump_absorption.config import (
+    POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME,
+    POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES,
+)
+from strategy.post_pump_absorption.research import (
+    PostPumpAbsorptionResearchRun,
+    build_post_pump_absorption_research_artifacts,
+    load_post_pump_absorption_research_run,
+)
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
@@ -179,16 +194,16 @@ def _resolve_strategy_id(args: argparse.Namespace) -> str:
     strategy_override = getattr(args, "strategy", None)
     if strategy_override is not None:
         normalized = str(strategy_override).strip().lower()
-        if normalized != "bee_bite":
+        if normalized not in {"bee_bite", "post_pump_absorption"}:
             raise ValueError(f"Неподдерживаемый strategy_id: {normalized}")
         return normalized
     return "bee_bite"
 
 
 def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) -> Path:
-    if strategy_id != "bee_bite":
+    if strategy_id not in {"bee_bite", "post_pump_absorption"}:
         raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
-    return base_results_dir / "strategy" / "bee_bite"
+    return base_results_dir / "strategy" / strategy_id
 
 
 def _format_timestamp_ms(timestamp_ms: int | None) -> str:
@@ -542,7 +557,144 @@ def _build_bee_bite_params_from_row(
         bite_profile_id=parse_bee_bite_profile_id(_normalize_enum_raw(bite_profile_id_raw), default="A"),
         bite_grid_mode=parse_bee_bite_grid_mode(_normalize_enum_raw(bite_grid_mode_raw), default="baseline"),
     )
+def _build_post_pump_absorption_params_from_row(
+    row: pd.Series,
+    *,
+    symbol: str,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+) -> PostPumpAbsorptionParams:
+    def _is_missing_scalar(value: object) -> bool:
+        if value is None or value is pd.NA:
+            return True
+        if isinstance(value, (pd.Series, pd.DataFrame)):
+            return False
+        if isinstance(value, float):
+            return bool(pd.isna(value))
+        return False
 
+    def _optional_float(column_name: str) -> float | None:
+        raw_value = row.get(column_name)
+        return None if _is_missing_scalar(raw_value) else float(raw_value)
+
+    deposit = _optional_float("ppa_deposit") or DEFAULT_BEE_BITE_DEPOSIT
+    risk_pct = _optional_float("ppa_risk_pct")
+    r_trade = _optional_float("ppa_r_trade")
+    profile_raw = row.get("ppa_profile_id")
+    profile_id = (
+        parse_post_pump_absorption_profile_id(None)
+        if _is_missing_scalar(profile_raw)
+        else parse_post_pump_absorption_profile_id(str(profile_raw))
+    )
+    if risk_pct is None:
+        risk_pct = (r_trade / deposit) if r_trade is not None else DEFAULT_BEE_BITE_RISK_PCT
+    resolved_trade_risk = r_trade if r_trade is not None else deposit * risk_pct
+
+    return PostPumpAbsorptionParams(
+        profile_id=profile_id,
+        symbol=symbol,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        atr_window_minutes=int(row["ppa_atr_window_minutes"]),
+        pump_window_minutes=int(row["ppa_pump_window_minutes"]),
+        pump_baseline_window_minutes=int(row["ppa_pump_baseline_window_minutes"]),
+        pump_min_move_atr=float(row["ppa_pump_min_move_atr"]),
+        pump_volume_mult=float(row["ppa_pump_volume_mult"]),
+        range_min_minutes=int(row["ppa_range_min_minutes"]),
+        range_max_minutes=int(row["ppa_range_max_minutes"]),
+        lower_zone_fraction=float(row["ppa_lower_zone_fraction"]),
+        max_range_width_atr=float(row["ppa_max_range_width_atr"]),
+        max_range_width_pump_fraction=float(row["ppa_max_range_width_pump_fraction"]),
+        taker_ratio_threshold=float(row["ppa_taker_ratio_threshold"]),
+        taker_volume_mult=float(row["ppa_taker_volume_mult"]),
+        flow_baseline_window_minutes=int(row["ppa_flow_baseline_window_minutes"]),
+        structure_break_minutes=int(row["ppa_structure_break_minutes"]),
+        micro_base_minutes=int(row["ppa_micro_base_minutes"]),
+        micro_base_max_width_atr=float(row["ppa_micro_base_max_width_atr"]),
+        entry_break_buffer_atr=float(row["ppa_entry_break_buffer_atr"]),
+        stop_buffer_atr=float(row["ppa_stop_buffer_atr"]),
+        min_stop_atr=float(row["ppa_min_stop_atr"]),
+        max_stop_atr=float(row["ppa_max_stop_atr"]),
+        max_stop_range_fraction=float(row["ppa_max_stop_range_fraction"]),
+        max_entry_range_fraction=float(row["ppa_max_entry_range_fraction"]),
+        tp1_share=float(row["ppa_tp1_share"]),
+        be_buffer_pct=float(row["ppa_be_buffer_pct"]),
+        time_exit_minutes=int(row["ppa_time_exit_minutes"]),
+        ppa_deposit=deposit,
+        ppa_risk_pct=risk_pct,
+        ppa_r_trade=resolved_trade_risk,
+    )
+
+
+def _flatten_trade_for_diagnostics(trade: object) -> dict[str, object]:
+    payload = {
+        "entry_timestamp_ms": int(getattr(trade, "entry_timestamp_ms")),
+        "exit_timestamp_ms": int(getattr(trade, "exit_timestamp_ms")),
+        "pnl": float(getattr(trade, "pnl")),
+        "pnl_percent": float(getattr(getattr(trade, "pnl_percent"), "value", getattr(trade, "pnl_percent"))),
+        "result_type": str(getattr(getattr(trade, "result_type"), "value", getattr(trade, "result_type"))),
+    }
+    metadata = getattr(trade, "metadata", None)
+    if isinstance(metadata, dict):
+        payload.update(metadata)
+    return payload
+
+
+def _plot_post_pump_absorption_diagnostics_for_symbols(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: PostPumpAbsorptionStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> None:
+    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+    diagnostics_dir = output_dir / "post_pump_absorption_diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+
+    symbols_with_trades = 0
+    total_trades_generated = 0
+
+    for symbol, mtf_frames in symbol_frames.items():
+        params = _build_post_pump_absorption_params_from_row(
+            params_row,
+            symbol=symbol,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
+        trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+        diagnostics = strategy.consume_last_generation_diagnostics()
+        trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
+        total_trades_generated += len(trade_rows)
+        if trade_rows:
+            symbols_with_trades += 1
+
+        payload = {
+            "symbol": symbol,
+            "trades_generated": len(trade_rows),
+            "diagnostics": diagnostics,
+            "trades": trade_rows,
+        }
+        base_name = symbol.replace("/", "_")
+        (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
+
+    logger.info(
+        "%s: сохранена диагностика post_pump_absorption symbols=%s trades_generated=%s output_dir=%s",
+        log_prefix,
+        symbols_with_trades,
+        total_trades_generated,
+        diagnostics_dir,
+    )
+    if symbols_with_trades == 0:
+        logger.warning("%s: не найдено сделок post_pump_absorption для диагностического вывода", log_prefix)
 
 
 def _plot_bee_bite_diagnostics_for_symbols(
@@ -635,6 +787,50 @@ def _plot_for_strategy(
     return False
 
 
+def _plot_for_strategy_dispatch(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy_id: str,
+    strategy: object,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> bool:
+    if strategy_id == "post_pump_absorption":
+        if not isinstance(strategy, PostPumpAbsorptionStrategy):
+            logger.error("%s: unsupported visualization type for post_pump_absorption", log_prefix)
+            return False
+        _plot_post_pump_absorption_diagnostics_for_symbols(
+            config=config,
+            args=args,
+            logger=logger,
+            strategy=strategy,
+            symbol_frames=symbol_frames,
+            params_row=params_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix=log_prefix,
+        )
+        return True
+
+    return _plot_for_strategy(
+        config=config,
+        args=args,
+        logger=logger,
+        strategy_id=strategy_id,
+        strategy=strategy,
+        symbol_frames=symbol_frames,
+        params_row=params_row,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        log_prefix=log_prefix,
+    )
+
+
 def _load_plot_params_row_from_results(
     config: AppConfig,
     args: argparse.Namespace,
@@ -691,6 +887,35 @@ def _load_plot_params_row_from_results(
             "bite_portfolio_risk_limit",
             "bite_min_stop_atr_ratio",
             "bite_t_max_in_trade",
+        ],
+        "post_pump_absorption": [
+            "ppa_profile_id",
+            "ppa_atr_window_minutes",
+            "ppa_pump_window_minutes",
+            "ppa_pump_baseline_window_minutes",
+            "ppa_pump_min_move_atr",
+            "ppa_pump_volume_mult",
+            "ppa_range_min_minutes",
+            "ppa_range_max_minutes",
+            "ppa_lower_zone_fraction",
+            "ppa_max_range_width_atr",
+            "ppa_max_range_width_pump_fraction",
+            "ppa_taker_ratio_threshold",
+            "ppa_taker_volume_mult",
+            "ppa_flow_baseline_window_minutes",
+            "ppa_structure_break_minutes",
+            "ppa_micro_base_minutes",
+            "ppa_micro_base_max_width_atr",
+            "ppa_entry_break_buffer_atr",
+            "ppa_stop_buffer_atr",
+            "ppa_min_stop_atr",
+            "ppa_max_stop_atr",
+            "ppa_max_stop_range_fraction",
+            "ppa_max_entry_range_fraction",
+            "ppa_tp1_share",
+            "ppa_be_buffer_pct",
+            "ppa_time_exit_minutes",
+            "ppa_r_trade",
         ],
     }
     required_columns = required_columns_by_strategy.get(strategy_id)
@@ -1102,14 +1327,7 @@ def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timefram
         resolved.append(timeframe)
     if not resolved:
         return fallback
-
-    priority = {
-        Timeframe.M15: 0,
-        Timeframe.M5: 1,
-        Timeframe.M10: 2,
-        Timeframe.M3: 3,
-    }
-    return tuple(sorted(resolved, key=lambda timeframe: priority.get(timeframe, 100)))
+    return tuple(resolved)
 
 
 def _resolve_review_timeframes(args: argparse.Namespace) -> list[Timeframe]:
@@ -1118,12 +1336,59 @@ def _resolve_review_timeframes(args: argparse.Namespace) -> list[Timeframe]:
     return [_resolve_review_timeframe(args)]
 
 
+def _resolve_ppa_research_timeframes(args: argparse.Namespace) -> tuple[Timeframe, ...]:
+    raw_values = getattr(args, "timeframes", None)
+    if not raw_values:
+        return POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES
+
+    resolved: list[Timeframe] = []
+    seen: set[Timeframe] = set()
+    supported = set(POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES)
+    for raw_value in raw_values:
+        timeframe = _resolve_timeframe(
+            str(raw_value),
+            fallback=POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME,
+            argument_name="--timeframes",
+        )
+        if timeframe not in supported:
+            supported_values = ", ".join(tf.value for tf in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES)
+            raise ValueError(
+                "run-ppa-research supports only micro timeframes "
+                f"{{{supported_values}}}, got {timeframe.value}"
+            )
+        if timeframe in seen:
+            continue
+        seen.add(timeframe)
+        resolved.append(timeframe)
+    return tuple(resolved) if resolved else POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES
+
+
 def _with_review_timeframe(args: argparse.Namespace, timeframe: Timeframe, *, output_path: Path | None = None) -> argparse.Namespace:
     cloned = argparse.Namespace(**vars(args))
     cloned.tf = timeframe.value
     cloned.tf_all = False
     if output_path is not None:
         cloned.output = str(output_path)
+    return cloned
+
+
+def _with_ppa_research_timeframe(args: argparse.Namespace, timeframe: Timeframe) -> argparse.Namespace:
+    cloned = argparse.Namespace(**vars(args))
+    cloned.command = "run-backtest"
+    cloned.strategy = "post_pump_absorption"
+    cloned.entry_tf = timeframe.value
+    cloned.levels_tf = timeframe.value
+    cloned.plot = True
+    cloned.plot_from_results = False
+    cloned.results_input = None
+    cloned.id = None
+    cloned.bee_bite_grid = None
+    cloned.bee_bite_reclaim_mode = None
+    cloned.bee_bite_retest_mode = None
+    cloned.bee_bite_cooldown_hours = None
+    cloned.bee_bite_max_age_range_hours = None
+    cloned.bee_bite_deposit = None
+    cloned.bee_bite_risk_pct = None
     return cloned
 
 
@@ -1852,7 +2117,11 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("run-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    strategy_id = _resolve_strategy_id(args)
+    strategy_id = (
+        _resolve_strategy_id(args)
+        if getattr(args, "strategy", None) is not None
+        else str(config.strategy.strategy_id).strip().lower()
+    )
     config.strategy.strategy_id = strategy_id
     config.backtest.results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, strategy_id)
 
@@ -1894,16 +2163,48 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             max_age_range_hours=config.strategy.bee_bite_max_age_range_hours,
         )
         config.strategy.bee_bite_portfolio_top_n = getattr(args, "top_n", None)
-    levels_timeframe = _resolve_timeframe(
-        getattr(args, "levels_tf", None),
-        fallback=config.strategy.levels_timeframe,
-        argument_name="--levels-tf",
-    )
-    entry_timeframe = _resolve_timeframe(
-        getattr(args, "entry_tf", None),
-        fallback=config.strategy.entry_timeframe,
-        argument_name="--entry-tf",
-    )
+    elif strategy_id == "post_pump_absorption":
+        config.strategy.post_pump_absorption_profile = parse_post_pump_absorption_profile_id(
+            getattr(args, "ppa_profile", None),
+            default=config.strategy.post_pump_absorption_profile,
+        )
+        if getattr(args, "entry_tf", None) is None and config.strategy.entry_timeframe not in {
+            *POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES,
+        }:
+            config.strategy.entry_timeframe = POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME
+        if getattr(args, "levels_tf", None) is None:
+            config.strategy.levels_timeframe = config.strategy.entry_timeframe
+        if getattr(args, "ppa_deposit", None) is not None:
+            config.strategy.post_pump_absorption_deposit = float(args.ppa_deposit)
+        if getattr(args, "ppa_risk_pct", None) is not None:
+            config.strategy.post_pump_absorption_risk_pct = float(args.ppa_risk_pct)
+    if strategy_id == "post_pump_absorption":
+        entry_timeframe = _resolve_timeframe(
+            getattr(args, "entry_tf", None),
+            fallback=config.strategy.entry_timeframe,
+            argument_name="--entry-tf",
+        )
+        levels_timeframe = _resolve_timeframe(
+            getattr(args, "levels_tf", None),
+            fallback=entry_timeframe,
+            argument_name="--levels-tf",
+        )
+        if levels_timeframe != entry_timeframe:
+            raise ValueError(
+                "post_pump_absorption currently supports only single-timeframe execution: "
+                "--levels-tf must match --entry-tf"
+            )
+    else:
+        levels_timeframe = _resolve_timeframe(
+            getattr(args, "levels_tf", None),
+            fallback=config.strategy.levels_timeframe,
+            argument_name="--levels-tf",
+        )
+        entry_timeframe = _resolve_timeframe(
+            getattr(args, "entry_tf", None),
+            fallback=config.strategy.entry_timeframe,
+            argument_name="--entry-tf",
+        )
     logger.info(
         "запуск-бэктеста: явный запуск, уровни: %s, входы: %s",
         levels_timeframe.value,
@@ -2148,7 +2449,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         best_row = _load_plot_params_row_from_results(config, args, logger=logger, strategy_id=strategy_id)
         if best_row is None:
             return 1
-        if not _plot_for_strategy(
+        if not _plot_for_strategy_dispatch(
             config=config,
             args=args,
             logger=logger,
@@ -2203,7 +2504,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             return 0
 
         best_row = results.iloc[0]
-        if not _plot_for_strategy(
+        if not _plot_for_strategy_dispatch(
             config=config,
             args=args,
             logger=logger,
@@ -2217,6 +2518,77 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ):
             return 1
     return 0
+
+
+def _run_ppa_research_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-ppa-research", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    timeframes = _resolve_ppa_research_timeframes(args)
+    timestamp_label = time.strftime("%Y%m%d_%H%M%S")
+    root_output_dir = (
+        Path(args.output_dir)
+        if getattr(args, "output_dir", None)
+        else Path(config.backtest.results_dir) / "research" / "post_pump_absorption" / timestamp_label
+    )
+    root_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "run-ppa-research: timeframes=%s output_dir=%s",
+        ",".join(timeframe.value for timeframe in timeframes),
+        root_output_dir,
+    )
+
+    run_exit_codes: list[int] = []
+    runs: list[PostPumpAbsorptionResearchRun] = []
+    for timeframe in timeframes:
+        scoped_config = deepcopy(config)
+        scoped_config.strategy.strategy_id = "post_pump_absorption"
+        scoped_config.backtest.results_dir = root_output_dir / timeframe.value
+        scoped_args = _with_ppa_research_timeframe(args, timeframe)
+        logger.info(
+            "run-ppa-research: start timeframe=%s results_base=%s",
+            timeframe.value,
+            scoped_config.backtest.results_dir,
+        )
+        exit_code = _run_backtest_inner(scoped_config, scoped_args)
+        run_exit_codes.append(exit_code)
+
+        strategy_results_dir = Path(scoped_config.backtest.results_dir)
+        runs.append(
+            load_post_pump_absorption_research_run(
+                timeframe=timeframe,
+                strategy_results_dir=strategy_results_dir,
+                results_file_name=scoped_config.backtest.results_file_name,
+            )
+        )
+        logger.info(
+            "run-ppa-research: finished timeframe=%s code=%s strategy_results_dir=%s",
+            timeframe.value,
+            exit_code,
+            strategy_results_dir,
+        )
+
+    run_context = {
+        "strategy": "post_pump_absorption",
+        "timeframes": [timeframe.value for timeframe in timeframes],
+        "symbols": list(getattr(args, "symbols", None) or []),
+        "top_n": getattr(args, "top_n", None),
+        "ppa_profile": getattr(args, "ppa_profile", None) or config.strategy.post_pump_absorption_profile,
+        "ppa_deposit": getattr(args, "ppa_deposit", None) or config.strategy.post_pump_absorption_deposit,
+        "ppa_risk_pct": getattr(args, "ppa_risk_pct", None) or config.strategy.post_pump_absorption_risk_pct,
+        "generated_at_local": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    artifacts = build_post_pump_absorption_research_artifacts(
+        output_dir=root_output_dir,
+        runs=runs,
+        run_context=run_context,
+        logger=logger,
+    )
+    logger.info(
+        "run-ppa-research: artifacts report=%s charts_dir=%s",
+        artifacts["report"],
+        artifacts["charts_dir"],
+    )
+    return max(run_exit_codes, default=0)
 
 
 def _stage1_event_to_row(
@@ -4667,9 +5039,9 @@ def _render_stage4_postmortem_report(
 
     _report_progress(8, "markdown_sections")
     lines.extend(["", "---", "", "## Full-Period Leaderboards", ""])
-    lines.append("- `Top By Balanced Score` is the recommended main selector.")
+    lines.append("- `Top By Balanced Score` is the recommended main selector and first enforces `WR >= 33.3%` when such setups exist.")
     lines.append("- `Top By Trades` shows density, while `Top By Total Realized RR` shows raw edge without density preference.")
-    lines.append("- `Balanced score` = `35% RR + 30% trade-density + 15% PF + 10% shrunk WR + 10% PnL`.")
+    lines.append("- `Balanced score` = `35% RR + 30% trade-density + 15% PF + 10% shrunk WR + 10% PnL`, but rows below the WR floor are excluded from selection when stable alternatives exist.")
     _build_stage4_report_leaderboard("Top By Balanced Score", leaderboard_balanced_rows, include_score=True)
     _build_stage4_report_leaderboard("Top By Trades", leaderboard_trades_rows)
     _build_stage4_report_leaderboard("Top By Total Realized RR", leaderboard_rr_rows)
@@ -4895,6 +5267,20 @@ def _resolve_stage4_shrunk_win_rate(*, eligible_trades: float, win_rate: float) 
     return (wins + (prior_win_rate * prior_weight)) / (max(eligible_trades, 0.0) + prior_weight)
 
 
+def _passes_stage4_win_rate_floor(row: dict[str, object]) -> bool:
+    eligible_trades = float(row.get("eligible_trades", 0.0) or 0.0)
+    win_rate = float(row.get("win_rate", 0.0) or 0.0)
+    return eligible_trades > 0.0 and win_rate >= (1.0 / 3.0)
+
+
+def _resolve_stage4_selector_rows(summary_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
+    if not eligible_rows:
+        return []
+    stable_rows = [row for row in eligible_rows if _passes_stage4_win_rate_floor(row)]
+    return stable_rows if stable_rows else eligible_rows
+
+
 def _normalize_stage4_metric(values: list[float]) -> list[float]:
     if not values:
         return []
@@ -4931,6 +5317,7 @@ def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[di
     eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
     if not eligible_rows:
         for row in summary_rows:
+            row["passes_win_rate_floor"] = False
             row["score_total_realized_rr"] = 0.0
             row["score_profit_factor_rr"] = 0.0
             row["score_eligible_trades"] = 0.0
@@ -4941,21 +5328,25 @@ def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[di
             row["stage4_score"] = 0.0
         return summary_rows
 
-    rr_values = [float(row.get("total_realized_rr", 0.0) or 0.0) for row in eligible_rows]
-    pf_values = [_resolve_stage4_profit_factor_score_value(row.get("profit_factor_rr")) for row in eligible_rows]
-    trade_target = _resolve_stage4_trade_target(eligible_rows)
+    scoring_rows = _resolve_stage4_selector_rows(summary_rows)
+    for row in summary_rows:
+        row["passes_win_rate_floor"] = _passes_stage4_win_rate_floor(row)
+
+    rr_values = [float(row.get("total_realized_rr", 0.0) or 0.0) for row in scoring_rows]
+    pf_values = [_resolve_stage4_profit_factor_score_value(row.get("profit_factor_rr")) for row in scoring_rows]
+    trade_target = _resolve_stage4_trade_target(scoring_rows)
     trade_values = [
         1.0 - math.exp(-(float(row.get("eligible_trades", 0.0) or 0.0) / trade_target))
-        for row in eligible_rows
+        for row in scoring_rows
     ]
     wr_values = [
         _resolve_stage4_shrunk_win_rate(
             eligible_trades=float(row.get("eligible_trades", 0.0) or 0.0),
             win_rate=float(row.get("win_rate", 0.0) or 0.0),
         )
-        for row in eligible_rows
+        for row in scoring_rows
     ]
-    pnl_values = [float(row.get("total_pnl_pct", 0.0) or 0.0) for row in eligible_rows]
+    pnl_values = [float(row.get("total_pnl_pct", 0.0) or 0.0) for row in scoring_rows]
 
     normalized_rr = _normalize_stage4_metric(rr_values)
     normalized_pf = _normalize_stage4_metric(pf_values)
@@ -4964,7 +5355,7 @@ def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[di
     normalized_pnl = _normalize_stage4_metric(pnl_values)
 
     for row, rr_score, pf_score, trade_score, wr_score, pnl_score in zip(
-        eligible_rows,
+        scoring_rows,
         normalized_rr,
         normalized_pf,
         normalized_trades,
@@ -4991,7 +5382,7 @@ def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[di
         )
 
     for row in summary_rows:
-        if row not in eligible_rows:
+        if row not in scoring_rows:
             row["score_total_realized_rr"] = 0.0
             row["score_profit_factor_rr"] = 0.0
             row["score_eligible_trades"] = 0.0
@@ -5004,11 +5395,11 @@ def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[di
 
 
 def _select_best_stage4_summary_row(summary_rows: list[dict[str, object]]) -> dict[str, object] | None:
-    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
-    if not eligible_rows:
+    selector_rows = _resolve_stage4_selector_rows(summary_rows)
+    if not selector_rows:
         return None
     return max(
-        eligible_rows,
+        selector_rows,
         key=lambda row: (
             float(row.get("stage4_score", 0.0) or 0.0),
             float(row.get("score_eligible_trades", 0.0) or 0.0),
@@ -6395,6 +6786,11 @@ def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
 def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
     """Запускает бэктест по текущей конфигурации."""
     return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
+
+
+def run_ppa_research(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs post_pump_absorption on multiple micro timeframes and builds research artifacts."""
+    return _run_with_logging("run-ppa-research", config, lambda: _run_ppa_research_inner(config, args))
 
 
 def make_report(config: AppConfig, args: argparse.Namespace) -> int:

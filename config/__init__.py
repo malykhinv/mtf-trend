@@ -34,6 +34,7 @@ from strategy.bee_bite.config import (
     parse_bee_bite_reclaim_mode,
     parse_bee_bite_retest_mode,
 )
+from strategy.post_pump_absorption.config import parse_post_pump_absorption_profile_id
 
 __all__ = [
     "AppConfig",
@@ -44,7 +45,7 @@ __all__ = [
     "load_config",
 ]
 
-SUPPORTED_STRATEGY_IDS = {"bee_bite"}
+SUPPORTED_STRATEGY_IDS = {"bee_bite", "post_pump_absorption"}
 
 
 # region Приватные
@@ -126,19 +127,26 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         ),
     )
 
-    strategy_levels_timeframe = _parse_timeframe(
-        os.getenv("LEVELS_TIMEFRAME", Timeframe.D1.value),
-        env_name="LEVELS_TIMEFRAME",
-    )
+    strategy_id = _parse_strategy_id(os.getenv("STRATEGY_ID"))
     strategy_entry_timeframe = _parse_timeframe(
-        os.getenv("ENTRY_TIMEFRAME", Timeframe.M15.value),
+        os.getenv(
+            "ENTRY_TIMEFRAME",
+            Timeframe.M3.value if strategy_id == "post_pump_absorption" else Timeframe.M15.value,
+        ),
         env_name="ENTRY_TIMEFRAME",
+    )
+    strategy_levels_timeframe = _parse_timeframe(
+        os.getenv(
+            "LEVELS_TIMEFRAME",
+            strategy_entry_timeframe.value if strategy_id == "post_pump_absorption" else Timeframe.D1.value,
+        ),
+        env_name="LEVELS_TIMEFRAME",
     )
 
     bee_bite_profile = parse_bee_bite_profile_id(os.getenv("BEE_BITE_PROFILE"))
     bee_bite_runtime = get_bee_bite_runtime(bee_bite_profile)
     strategy_cfg = StrategyConfig(
-        strategy_id=_parse_strategy_id(os.getenv("STRATEGY_ID")),
+        strategy_id=strategy_id,
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
         bee_bite_profile=bee_bite_profile,
@@ -160,6 +168,15 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         ),
         bee_bite_deposit=float(os.getenv("BEE_BITE_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))),
         bee_bite_risk_pct=float(os.getenv("BEE_BITE_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))),
+        post_pump_absorption_profile=parse_post_pump_absorption_profile_id(
+            os.getenv("POST_PUMP_ABSORPTION_PROFILE")
+        ),
+        post_pump_absorption_deposit=float(
+            os.getenv("POST_PUMP_ABSORPTION_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))
+        ),
+        post_pump_absorption_risk_pct=float(
+            os.getenv("POST_PUMP_ABSORPTION_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))
+        ),
     )
 
     simulation_cfg = SimulationConfig(

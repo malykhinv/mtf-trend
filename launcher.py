@@ -14,6 +14,7 @@ from config import AppConfig, load_config
 MODE_FETCH_CACHE = "fetch-cache"
 MODE_UPDATE_CACHE = "update-cache"
 MODE_BACKTEST = "analyze-cache"
+MODE_PPA_RESEARCH = "ppa-research"
 MODE_REPORT = "make-report"
 MODE_STAGE1_REVIEW = "review-stage1"
 MODE_STAGE2_REVIEW = "review-stage2"
@@ -26,6 +27,7 @@ MODE_LABELS: dict[str, str] = {
     MODE_FETCH_CACHE: "Cache fetch",
     MODE_UPDATE_CACHE: "Cache update",
     MODE_BACKTEST: "Analyze cache with strategy",
+    MODE_PPA_RESEARCH: "Run PPA research",
     MODE_REPORT: "Build report",
     MODE_STAGE1_REVIEW: "Review historical stage-1",
     MODE_STAGE2_REVIEW: "Review stage-2 balances",
@@ -81,13 +83,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
-    parser.add_argument("--strategy", choices=["bee_bite"], default=None, help="Only bee_bite strategy is available")
+    parser.add_argument("--strategy", choices=["bee_bite", "post_pump_absorption"], default=None, help="Strategy id for analyze-cache mode")
     parser.add_argument("--bee-bite-profile", choices=["A", "B", "C"], default=None, help="Bee bite profile")
     parser.add_argument("--bee-bite-grid", choices=["baseline", "expanded", "research"], default=None, help="Bee bite grid mode")
     parser.add_argument("--bee-bite-reclaim-mode", choices=["strict", "balanced", "aggressive"], default=None, help="Bee bite reclaim mode")
     parser.add_argument("--bee-bite-retest-mode", choices=["confirmation", "immediate"], default=None, help="Bee bite entry mode")
     parser.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=int, default=None, help="Cooldown for bee_bite in hours")
     parser.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=int, default=None, help="Max range age for bee_bite in hours")
+    parser.add_argument("--ppa-profile", choices=["loose", "balanced", "strict"], default=None, help="Post pump absorption profile")
+    parser.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
+    parser.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
     parser.add_argument("--output-dir", default=None, help="Directory for diagnostic files")
     parser.add_argument("--plot-limit", type=int, default=20, help="Maximum number of review plots")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of candles/events")
@@ -110,7 +115,7 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         end_timestamp_ms=task.get("end_timestamp_ms", cli_args.end_timestamp_ms),
         symbols=task.get("symbols", cli_args.symbols),
         tf=task.get("tf", cli_args.tf),
-        tf_all=bool(task.get("tf_all", cli_args.tf_all)),
+        tf_all=_to_bool(task.get("tf_all"), fallback=cli_args.tf_all) if "tf_all" in task else cli_args.tf_all,
         review_mode=task.get("review_mode", cli_args.review_mode),
         plot_scope=task.get("plot_scope", cli_args.plot_scope),
         levels_tf=task.get("levels_tf", cli_args.levels_tf),
@@ -122,6 +127,9 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         bee_bite_retest_mode=task.get("bee_bite_retest_mode", cli_args.bee_bite_retest_mode),
         bee_bite_cooldown_hours=int(task["bee_bite_cooldown_hours"]) if "bee_bite_cooldown_hours" in task and task.get("bee_bite_cooldown_hours") is not None else (int(task["bee_bite_cooldown_bars"]) if "bee_bite_cooldown_bars" in task and task.get("bee_bite_cooldown_bars") is not None else cli_args.bee_bite_cooldown_hours),
         bee_bite_max_age_range_hours=int(task["bee_bite_max_age_range_hours"]) if "bee_bite_max_age_range_hours" in task and task.get("bee_bite_max_age_range_hours") is not None else (int(task["bee_bite_max_age_range"]) if "bee_bite_max_age_range" in task and task.get("bee_bite_max_age_range") is not None else cli_args.bee_bite_max_age_range_hours),
+        ppa_profile=task.get("ppa_profile", cli_args.ppa_profile),
+        ppa_deposit=float(task["ppa_deposit"]) if "ppa_deposit" in task and task.get("ppa_deposit") is not None else cli_args.ppa_deposit,
+        ppa_risk_pct=float(task["ppa_risk_pct"]) if "ppa_risk_pct" in task and task.get("ppa_risk_pct") is not None else cli_args.ppa_risk_pct,
         output_dir=task.get("output_dir", cli_args.output_dir),
         plot_limit=int(task["plot_limit"]) if "plot_limit" in task and task.get("plot_limit") is not None else cli_args.plot_limit,
         limit=int(task["limit"]) if "limit" in task and task.get("limit") is not None else cli_args.limit,
@@ -139,6 +147,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_FETCH_CACHE: commands.fetch_data,
         MODE_UPDATE_CACHE: commands.update_cache,
         MODE_BACKTEST: commands.run_backtest,
+        MODE_PPA_RESEARCH: commands.run_ppa_research,
         MODE_REPORT: commands.make_report,
         MODE_STAGE1_REVIEW: commands.review_stage1,
         MODE_STAGE2_REVIEW: commands.review_stage2,
@@ -171,7 +180,7 @@ def _run_batch(config: AppConfig, cli_args: argparse.Namespace, payload: dict[st
     if not tasks:
         print("Config file has no tasks: key 'tasks' is empty.")
         return 1
-    continue_on_error = bool(payload.get("continue_on_error", False))
+    continue_on_error = bool(_to_bool(payload.get("continue_on_error"), fallback=False))
     for index, task in enumerate(tasks, start=1):
         mode = str(task.get("mode", "")).strip()
         if mode not in MODE_LABELS:

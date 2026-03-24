@@ -1,20 +1,16 @@
 # mtf-trend
 
-Проект переведен в режим `bee_bite` only.
+Active R&D strategy: `post_pump_absorption`.
 
-## Что осталось в проекте
+## What This Repo Does
 
-- загрузка и обновление кэша
-- backtest стратегии `bee_bite`
-- stage-1 отбор монет для `bee_bite`
-- review historical `stage-1` событий с графиками
-- генерация отчета
-- проверка качества данных
-- `launcher.py` и `main.py` работают только с `bee_bite`
+- fetches and updates futures market cache
+- runs backtests on cached data
+- builds research artifacts for `post_pump_absorption`
+- keeps `bee_bite` review and postmortem tooling available
+- validates cache quality
 
-Удалены legacy-стратегия, ее alias и связанные legacy-команды визуализации.
-
-## Быстрый старт
+## Quick Start
 
 ```bash
 python -m venv .venv
@@ -23,82 +19,100 @@ python -m pip install --upgrade pip
 pip install -e .
 ```
 
-Минимальный `.env`:
+Minimal `.env`:
 
 ```env
 BINANCE_API_KEY=...
 BINANCE_SECRET_KEY=...
 LOG_LEVEL=INFO
-CACHE_DIR=./cache
-RESULTS_DIR=./results
-STRATEGY_ID=bee_bite
+CACHE_DIR=./.output/cache
+RESULTS_DIR=./.output/results
+STRATEGY_ID=post_pump_absorption
+ENTRY_TIMEFRAME=3m
+LEVELS_TIMEFRAME=3m
 ```
 
-## Основные команды
+## Main Commands
+
+Build or refresh cache:
 
 ```bash
-python main.py fetch-data --top-n 100 --days 30
-python main.py update-cache --top-n 100 --days 7
+python main.py fetch-data --top-n 100 --days 30 --timeframes 3m 5m
+python main.py update-cache --top-n 100 --days 7 --timeframes 3m 5m
+python main.py update-cache --symbols BTC/USDT ETH/USDT --timeframes 1m --skip-open-interest
+```
+
+Run the main research flow:
+
+```bash
+python main.py run-ppa-research --ppa-profile balanced
+python main.py run-ppa-research --top-n 80 --ppa-profile strict
+python main.py run-ppa-research --symbols BTC/USDT ETH/USDT SOL/USDT
+```
+
+Run one timeframe manually:
+
+```bash
+python main.py run-backtest --strategy post_pump_absorption --entry-tf 1m --levels-tf 1m
+python main.py run-backtest --strategy post_pump_absorption --entry-tf 3m --levels-tf 3m
+python main.py run-backtest --strategy post_pump_absorption --entry-tf 5m --levels-tf 5m
+```
+
+Legacy and support commands:
+
+```bash
 python main.py run-backtest --strategy bee_bite --top-n 50
 python main.py review-stage1 --plot-limit 20
-python main.py make-report --input ./results/backtest_results.csv --output ./results/report.json
+python main.py review-stage2 --plot-limit 20
+python main.py review-stage3 --plot-limit 20
+python main.py postmortem-stage4
 python main.py check-quality
 python main.py clear-cache
 ```
 
-Через launcher:
+## Release Path For PPA
+
+Preferred user path:
 
 ```bash
-python launcher.py --mode fetch-cache --top-n 100 --days 30
-python launcher.py --mode update-cache --top-n 100 --days 7
-python launcher.py --mode analyze-cache --strategy bee_bite --top-n 50
-python launcher.py --mode make-report --input ./results/backtest_results.csv --output ./results/report.json
-python launcher.py --mode check-quality
-python launcher.py --mode clear-cache
+python main.py run-ppa-research --ppa-profile balanced
 ```
 
-## Bee Bite
+This command:
 
-Поддерживаемые runtime-параметры:
+- runs `post_pump_absorption` on `1m`, `3m`, `5m` by default
+- saves raw results for each timeframe
+- exports per-symbol diagnostics for the best combination of each timeframe
+- builds one consolidated research package with:
+  - `summary_by_timeframe.csv`
+  - `summary_by_timeframe.json`
+  - `combined_results.csv`
+  - `all_best_trades.csv`
+  - `symbol_summary.csv`
+  - `diagnostics_by_symbol.csv`
+  - `diagnostics_summary_by_timeframe.csv`
+  - `research_report.md`
+  - `charts/*.png`
 
-- `--bee-bite-grid {baseline,expanded,research}`
-- `--bee-bite-reclaim-mode {strict,balanced,aggressive}`
-- `--bee-bite-cooldown-hours`
-- `--bee-bite-max-age-range-hours`
+## Launcher
 
-Примеры:
+The simplified launcher supports both strategy backtests and the PPA research flow:
 
 ```bash
-python main.py run-backtest --strategy bee_bite --bee-bite-grid baseline --top-n 50
-python main.py run-backtest --strategy bee_bite --bee-bite-grid expanded --top-n 100
-python main.py run-backtest --strategy bee_bite --bee-bite-grid research --top-n 120
-python main.py review-stage1 --symbols BTC/USDT ETH/USDT --plot-limit 10
+python launcher.py --mode ppa-research --ppa-profile balanced
+python launcher.py --mode analyze-cache --strategy post_pump_absorption --entry-tf 3m --levels-tf 3m
+python launcher.py --mode fetch-cache --timeframes 1m 3m 5m --skip-open-interest
 ```
 
-## Stage 1 фильтр
+## Notes
 
-Для `bee_bite` отбор монет в backtest идет по правилам:
+- `post_pump_absorption` currently works only in single-timeframe mode: `levels_tf == entry_tf`
+- supported PPA timeframes are `1m`, `3m`, `5m`
+- `1m` data can be fetched without open interest via `--skip-open-interest`
+- `make-report` is part of the older `bee_bite` reporting flow; for PPA use `run-ppa-research`
 
-1. `24h` объем не ниже `20M USDT`
-2. перед пампом есть спячка длиной `7 дней`, без резких пампов и дампов
-3. на `15m` был памп `15%+`
-4. средний объем после старта пампа как минимум в `15x` выше среднего объема спячки
-5. после пампа монета не скатилась ниже `0.5` высоты пампа
+## Strategy Docs
 
-Если передан `--top-n`, лимит применяется уже после stage-1 фильтра.
-
-## Диагностика
-
-Для `bee_bite` доступен `--plot true` и `--plot-from-results`. Вместо старых trade-plot графиков сохраняются диагностические JSON-файлы по символам.
-
-Для проверки `stage-1` добавлена команда `review-stage1`:
-
-- ищет historical stage-1 события на `15m`
-- сохраняет CSV со всеми найденными событиями
-- сохраняет png по последнему stage-1 на символ
-
-## Примеры
-
-- стратегия: [strategy/bee_bite/README.md](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/bee_bite/README.md)
-- контрольные кейсы: [examples/bee_bite_checkpoints.csv](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/examples/bee_bite_checkpoints.csv)
-- стадии стратегии: [bee_bite_stages.md](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/bee_bite_stages.md)
+- PPA strategy: [strategy/post_pump_absorption/README.md](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/post_pump_absorption/README.md)
+- Bee bite strategy: [strategy/bee_bite/README.md](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/bee_bite/README.md)
+- Current agent instruction: [instruction.md](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/instruction.md)

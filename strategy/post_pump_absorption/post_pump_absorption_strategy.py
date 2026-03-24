@@ -1,0 +1,106 @@
+"""Strategy wrapper for post-pump absorption."""
+
+from __future__ import annotations
+
+import pandas as pd
+
+from domain.models.trade_result import TradeResult
+from strategy.base_strategy import BaseStrategy
+from strategy.post_pump_absorption.config import (
+    PostPumpAbsorptionParams,
+    PostPumpAbsorptionProfileId,
+    build_post_pump_absorption_grid,
+    validate_post_pump_absorption_params,
+    with_post_pump_absorption_risk,
+)
+from strategy.post_pump_absorption.engine import PostPumpAbsorptionEngine
+from vectorbt_runner.mtf_frames import SymbolMtfFrames
+
+
+class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
+    def __init__(
+        self,
+        *,
+        profile_id: PostPumpAbsorptionProfileId,
+        deposit: float,
+        risk_pct: float,
+    ) -> None:
+        self._profile_id = profile_id
+        self._deposit = deposit
+        self._risk_pct = risk_pct
+        self._engine = PostPumpAbsorptionEngine()
+
+    def validate_config(self, params: PostPumpAbsorptionParams) -> None:
+        validate_post_pump_absorption_params(params)
+        self._engine.validate_config(params)
+
+    def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
+        return self._engine.prepare_data(data)
+
+    def generate_events(self, data: pd.DataFrame, params: PostPumpAbsorptionParams) -> list[TradeResult]:
+        return self._engine.generate_events(data, params)
+
+    def generate_events_multi_tf(
+        self,
+        *,
+        mtf_frames: SymbolMtfFrames,
+        params: PostPumpAbsorptionParams,
+        **context: object,
+    ) -> list[TradeResult]:
+        del context
+        return self._engine.generate_events_multi_tf(
+            entry_frame=mtf_frames.entry_frame,
+            params=params,
+        )
+
+    def build_parameter_grid(self) -> list[PostPumpAbsorptionParams]:
+        return [
+            with_post_pump_absorption_risk(params, deposit=self._deposit, risk_pct=self._risk_pct)
+            for params in build_post_pump_absorption_grid(profile_id=self._profile_id)
+        ]
+
+    def params_to_row(self, params: PostPumpAbsorptionParams) -> dict[str, int | float | str | None]:
+        return {
+            "ppa_profile_id": params.profile_id,
+            "ppa_atr_window_minutes": params.atr_window_minutes,
+            "ppa_pump_window_minutes": params.pump_window_minutes,
+            "ppa_pump_baseline_window_minutes": params.pump_baseline_window_minutes,
+            "ppa_pump_min_move_atr": params.pump_min_move_atr,
+            "ppa_pump_volume_mult": params.pump_volume_mult,
+            "ppa_range_min_minutes": params.range_min_minutes,
+            "ppa_range_max_minutes": params.range_max_minutes,
+            "ppa_lower_zone_fraction": params.lower_zone_fraction,
+            "ppa_max_range_width_atr": params.max_range_width_atr,
+            "ppa_max_range_width_pump_fraction": params.max_range_width_pump_fraction,
+            "ppa_taker_ratio_threshold": params.taker_ratio_threshold,
+            "ppa_taker_volume_mult": params.taker_volume_mult,
+            "ppa_flow_baseline_window_minutes": params.flow_baseline_window_minutes,
+            "ppa_structure_break_minutes": params.structure_break_minutes,
+            "ppa_micro_base_minutes": params.micro_base_minutes,
+            "ppa_micro_base_max_width_atr": params.micro_base_max_width_atr,
+            "ppa_entry_break_buffer_atr": params.entry_break_buffer_atr,
+            "ppa_stop_buffer_atr": params.stop_buffer_atr,
+            "ppa_min_stop_atr": params.min_stop_atr,
+            "ppa_max_stop_atr": params.max_stop_atr,
+            "ppa_max_stop_range_fraction": params.max_stop_range_fraction,
+            "ppa_max_entry_range_fraction": params.max_entry_range_fraction,
+            "ppa_tp1_share": params.tp1_share,
+            "ppa_be_buffer_pct": params.be_buffer_pct,
+            "ppa_time_exit_minutes": params.time_exit_minutes,
+            "ppa_deposit": params.ppa_deposit,
+            "ppa_risk_pct": params.ppa_risk_pct,
+            "ppa_r_trade": params.ppa_r_trade,
+        }
+
+    def prepare_symbol_context(
+        self,
+        *,
+        symbol: str,
+        mtf_frames: SymbolMtfFrames,
+        params: PostPumpAbsorptionParams,
+    ) -> None:
+        del symbol, mtf_frames, params
+        return None
+
+    def consume_last_generation_diagnostics(self) -> dict[str, object]:
+        return dict(self._engine.consume_last_generation_diagnostics())

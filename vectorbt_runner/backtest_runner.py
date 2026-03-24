@@ -82,14 +82,67 @@ class BacktestRunner:
 
     @staticmethod
     def _resolve_initial_deposit(base_row: dict[str, int | float | str | None]) -> float | None:
-        raw_deposit = base_row.get("bite_deposit")
-        if raw_deposit is None:
-            return None
-        try:
-            deposit = float(raw_deposit)
-        except (TypeError, ValueError):
-            return None
-        return deposit if deposit > 0 else None
+        for key in ("bite_deposit", "ppa_deposit", "deposit"):
+            raw_deposit = base_row.get(key)
+            if raw_deposit is None:
+                continue
+            try:
+                deposit = float(raw_deposit)
+            except (TypeError, ValueError):
+                continue
+            if deposit > 0:
+                return deposit
+        return None
+
+    @staticmethod
+    def _build_trade_metadata_metrics(trades: list[TradeResult]) -> dict[str, int | float | str | None]:
+        metadata_rows = [
+            trade.metadata
+            for trade in trades
+            if isinstance(getattr(trade, "metadata", None), dict)
+        ]
+        if not metadata_rows:
+            return {}
+
+        metrics: dict[str, int | float | str | None] = {}
+        setup_counts = Counter(
+            str(metadata["setup_type"])
+            for metadata in metadata_rows
+            if metadata.get("setup_type") is not None
+        )
+        if setup_counts:
+            metrics["ppa_setup_lsb_count"] = int(setup_counts.get("LSB", BACKTEST_ZERO_COUNT))
+            metrics["ppa_setup_mbb_count"] = int(setup_counts.get("MBB", BACKTEST_ZERO_COUNT))
+
+        numeric_keys = (
+            "entry_range_fraction",
+            "aggression_ratio",
+            "aggression_volume_mult",
+            "range_width_atr",
+            "range_width_pump_fraction",
+            "pump_height_atr",
+            "stop_distance_atr",
+            "stop_range_fraction",
+            "mfe_r",
+            "mae_r",
+            "holding_bars",
+        )
+        for key in numeric_keys:
+            values = [
+                float(value)
+                for metadata in metadata_rows
+                for value in [metadata.get(key)]
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            ]
+            metric = _resolve_median_metric(values)
+            if metric is not None:
+                metrics[f"ppa_median_{key}"] = metric
+
+        bool_count_keys = ("range_mid_hit", "range_high_hit", "tp1_hit", "tp2_hit")
+        for key in bool_count_keys:
+            metrics[f"ppa_{key}_count"] = sum(1 for metadata in metadata_rows if bool(metadata.get(key)))
+
+        return metrics
 
     @staticmethod
     def _build_metrics_row(
@@ -187,6 +240,8 @@ class BacktestRunner:
                     if drawdown_pct > max_drawdown_pct:
                         max_drawdown_pct = drawdown_pct
 
+        metadata_metrics = BacktestRunner._build_trade_metadata_metrics(normalized_trades)
+
         return {
             **base_row,
             "profit_factor": round(float(pf), BACKTEST_ROUND_METRICS),
@@ -202,6 +257,7 @@ class BacktestRunner:
             "time_exit_profit_count": time_exit_profit_count,
             "tp1_be_count": tp1_be_count,
             "tp2_count": tp2_count,
+            **metadata_metrics,
         }
 
     def _save_results(self, results: pd.DataFrame) -> None:

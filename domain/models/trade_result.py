@@ -22,6 +22,7 @@ class TradeResult:
     retest_timestamp_ms: int | None = None
     pump_to_peak_bars: int | None = None
     pump_to_peak_minutes: float | None = None
+    metadata: dict[str, int | float | str | bool | None] | None = None
 
     # region Приватные
     def __post_init__(self) -> None:
@@ -91,5 +92,9 @@ class TradeResult:
 
         if self.pump_to_peak_minutes is not None and self.pump_to_peak_minutes <= 0:
             msg = f"Trade result pump_to_peak_minutes must be > 0, got {self.pump_to_peak_minutes}."
+            raise ValueError(msg)
+
+        if self.metadata is not None and not isinstance(self.metadata, dict):
+            msg = "Trade result metadata must be a dict when provided."
             raise ValueError(msg)
     # endregion Приватные
