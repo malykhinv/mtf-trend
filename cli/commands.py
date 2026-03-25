@@ -76,6 +76,7 @@ from strategy.post_pump_absorption import (
 )
 from strategy.post_pump_absorption.config import (
     POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME,
+    POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME,
     POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES,
 )
 from strategy.post_pump_absorption.research import (
@@ -260,6 +261,9 @@ def _build_post_pump_absorption_params_from_row(
         max_range_width_pump_fraction=float(row["ppa_max_range_width_pump_fraction"]),
         taker_ratio_threshold=float(row["ppa_taker_ratio_threshold"]),
         taker_volume_mult=float(row["ppa_taker_volume_mult"]),
+        oi_min_delta_pct=float(row.get("ppa_oi_min_delta_pct", 0.0)),
+        oi_ratio_threshold_relaxation=float(row.get("ppa_oi_ratio_threshold_relaxation", 0.01)),
+        oi_volume_mult_relaxation=float(row.get("ppa_oi_volume_mult_relaxation", 0.05)),
         flow_baseline_window_minutes=int(row["ppa_flow_baseline_window_minutes"]),
         structure_break_minutes=int(row["ppa_structure_break_minutes"]),
         micro_base_minutes=int(row["ppa_micro_base_minutes"]),
@@ -1036,16 +1040,20 @@ def _resolve_backtest_timeframes(
             f"{{{supported_values}}}, got {entry_timeframe.value}"
         )
 
-    levels_fallback = entry_timeframe if getattr(args, "levels_tf", None) is None else configured_levels_timeframe
+    levels_fallback = (
+        POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME
+        if getattr(args, "levels_tf", None) is None and entry_timeframe != Timeframe.M5
+        else entry_timeframe
+    )
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),
         fallback=levels_fallback,
         argument_name="--levels-tf",
     )
-    if levels_timeframe != entry_timeframe:
+    if levels_timeframe not in {entry_timeframe, POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME}:
         raise ValueError(
-            "post_pump_absorption currently supports only single-timeframe execution: "
-            "--levels-tf must match --entry-tf"
+            "post_pump_absorption supports --levels-tf only as --entry-tf "
+            "or auxiliary 5m OI source"
         )
     return levels_timeframe, entry_timeframe
 
@@ -1055,7 +1063,11 @@ def _with_ppa_research_timeframe(args: argparse.Namespace, timeframe: Timeframe)
     cloned.command = "run-backtest"
     cloned.strategy = "post_pump_absorption"
     cloned.entry_tf = timeframe.value
-    cloned.levels_tf = timeframe.value
+    cloned.levels_tf = (
+        timeframe.value
+        if timeframe == Timeframe.M5
+        else POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME.value
+    )
     cloned.plot = True
     cloned.plot_from_results = False
     cloned.results_input = None

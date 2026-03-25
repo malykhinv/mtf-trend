@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import pandas as pd
 
+from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
 from strategy.post_pump_absorption.config import (
+    POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME,
     PostPumpAbsorptionParams,
     PostPumpAbsorptionProfileId,
     build_post_pump_absorption_grid,
@@ -47,10 +49,15 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
         params: PostPumpAbsorptionParams,
         **context: object,
     ) -> list[TradeResult]:
-        del context
         return self._engine.generate_events_multi_tf(
             entry_frame=mtf_frames.entry_frame,
             params=params,
+            oi_frame=context.get("oi_frame") if isinstance(context.get("oi_frame"), pd.DataFrame) else None,
+            oi_source_timeframe=(
+                str(context.get("oi_source_timeframe"))
+                if context.get("oi_source_timeframe") is not None
+                else None
+            ),
         )
 
     def build_parameter_grid(self) -> list[PostPumpAbsorptionParams]:
@@ -75,6 +82,9 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
             "ppa_max_range_width_pump_fraction": params.max_range_width_pump_fraction,
             "ppa_taker_ratio_threshold": params.taker_ratio_threshold,
             "ppa_taker_volume_mult": params.taker_volume_mult,
+            "ppa_oi_min_delta_pct": params.oi_min_delta_pct,
+            "ppa_oi_ratio_threshold_relaxation": params.oi_ratio_threshold_relaxation,
+            "ppa_oi_volume_mult_relaxation": params.oi_volume_mult_relaxation,
             "ppa_flow_baseline_window_minutes": params.flow_baseline_window_minutes,
             "ppa_structure_break_minutes": params.structure_break_minutes,
             "ppa_micro_base_minutes": params.micro_base_minutes,
@@ -99,9 +109,27 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
         symbol: str,
         mtf_frames: SymbolMtfFrames,
         params: PostPumpAbsorptionParams,
-    ) -> None:
-        del symbol, mtf_frames, params
-        return None
+    ) -> dict[str, pd.DataFrame | str] | None:
+        del symbol, params
+
+        oi_frame: pd.DataFrame | None = None
+        oi_source_timeframe: str | None = None
+        if mtf_frames.entry_timeframe == Timeframe.M5 and "open_interest" in mtf_frames.entry_frame.columns:
+            oi_frame = mtf_frames.entry_frame
+            oi_source_timeframe = mtf_frames.entry_timeframe.value
+        elif (
+            mtf_frames.levels_timeframe == POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME
+            and "open_interest" in mtf_frames.levels_frame.columns
+        ):
+            oi_frame = mtf_frames.levels_frame
+            oi_source_timeframe = mtf_frames.levels_timeframe.value
+
+        if oi_frame is None or oi_source_timeframe is None:
+            return None
+        return {
+            "oi_frame": oi_frame,
+            "oi_source_timeframe": oi_source_timeframe,
+        }
 
     def consume_last_generation_diagnostics(self) -> dict[str, object]:
         return dict(self._engine.consume_last_generation_diagnostics())

@@ -17,6 +17,7 @@ POST_PUMP_ABSORPTION_PROFILE_IDS: tuple[PostPumpAbsorptionProfileId, ...] = (
     "strict",
 )
 POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME = Timeframe.M3
+POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME = Timeframe.M5
 POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = (
     Timeframe.M1,
     Timeframe.M3,
@@ -46,6 +47,9 @@ class PostPumpAbsorptionParams:
     max_range_width_pump_fraction: float = 0.75
     taker_ratio_threshold: float = 0.56
     taker_volume_mult: float = 1.20
+    oi_min_delta_pct: float = 0.0
+    oi_ratio_threshold_relaxation: float = 0.01
+    oi_volume_mult_relaxation: float = 0.05
     flow_baseline_window_minutes: int = 60
     structure_break_minutes: int = 15
     micro_base_minutes: int = 12
@@ -154,10 +158,12 @@ def validate_post_pump_absorption_params(params: PostPumpAbsorptionParams) -> No
             "post_pump_absorption supports only entry_timeframe "
             f"in {{{supported}}}, got {params.entry_timeframe.value}"
         )
-    if params.levels_timeframe != params.entry_timeframe:
+    allowed_levels_timeframes = {params.entry_timeframe, POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME}
+    if params.levels_timeframe not in allowed_levels_timeframes:
+        allowed = ", ".join(timeframe.value for timeframe in sorted(allowed_levels_timeframes, key=lambda item: item.value))
         raise ValueError(
-            "post_pump_absorption currently runs in single-timeframe mode: "
-            "levels_timeframe must equal entry_timeframe"
+            "post_pump_absorption supports levels_timeframe only as entry_timeframe "
+            f"or auxiliary 5m OI source, got {params.levels_timeframe.value}. Allowed: {{{allowed}}}"
         )
     if params.atr_window_minutes < 5 or params.atr_window_minutes > 240:
         raise ValueError("atr_window_minutes must be in range [5, 240]")
@@ -183,6 +189,12 @@ def validate_post_pump_absorption_params(params: PostPumpAbsorptionParams) -> No
         raise ValueError("taker_ratio_threshold must be in range [0, 1]")
     if params.taker_volume_mult <= 0.0 or params.taker_volume_mult > 5.0:
         raise ValueError("taker_volume_mult must be in range (0, 5]")
+    if params.oi_min_delta_pct < -1.0 or params.oi_min_delta_pct > 10.0:
+        raise ValueError("oi_min_delta_pct must be in range [-1, 10]")
+    if params.oi_ratio_threshold_relaxation < 0.0 or params.oi_ratio_threshold_relaxation > 0.25:
+        raise ValueError("oi_ratio_threshold_relaxation must be in range [0, 0.25]")
+    if params.oi_volume_mult_relaxation < 0.0 or params.oi_volume_mult_relaxation > 1.0:
+        raise ValueError("oi_volume_mult_relaxation must be in range [0, 1]")
     if params.flow_baseline_window_minutes < 5 or params.flow_baseline_window_minutes > 720:
         raise ValueError("flow_baseline_window_minutes must be in range [5, 720]")
     if params.structure_break_minutes < 3 or params.structure_break_minutes > 240:

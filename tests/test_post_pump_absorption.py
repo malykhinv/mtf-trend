@@ -176,6 +176,29 @@ def _build_lsb_frame(timeframe: Timeframe, runtime: PostPumpAbsorptionRuntime) -
     return pd.DataFrame(rows)
 
 
+def _build_oi_frame_from_entry(
+    entry_frame: pd.DataFrame,
+    *,
+    start_oi: float = 1_000.0,
+    step_oi: float = 8.0,
+) -> pd.DataFrame:
+    timestamps = sorted(
+        {
+            int(timestamp)
+            for timestamp in pd.to_numeric(entry_frame["timestamp"], errors="coerce").dropna().astype("int64")
+            if int(timestamp) % Timeframe.M5.to_milliseconds() == 0
+        }
+    )
+    if len(timestamps) < 2:
+        timestamps = [0, Timeframe.M5.to_milliseconds()]
+    return pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open_interest": [start_oi + (step_oi * idx) for idx in range(len(timestamps))],
+        }
+    )
+
+
 @pytest.mark.parametrize("timeframe", [Timeframe.M1, Timeframe.M3, Timeframe.M5])
 def test_post_pump_absorption_engine_generates_trade_on_micro_base_breakout(timeframe: Timeframe) -> None:
     engine = PostPumpAbsorptionEngine()
@@ -288,6 +311,9 @@ def test_post_pump_absorption_exposes_logical_stage_diagnostics() -> None:
         "stage_1_pump > stage_2_range > stage_3_lower_zone > "
         "stage_4_aggression > stage_5_setup > stage_6_trade"
     )
+    assert "entry_on_5m_boundary" in trades[0].metadata
+    assert "entry_on_30m_boundary" in trades[0].metadata
+    assert "entry_on_60m_boundary" in trades[0].metadata
 
 
 def test_post_pump_absorption_reports_missing_taker_data_without_silent_failure() -> None:
@@ -307,6 +333,38 @@ def test_post_pump_absorption_reports_missing_taker_data_without_silent_failure(
 
     assert trades == []
     assert diagnostics["missing_taker_data"] == 1
+
+
+def test_post_pump_absorption_uses_supportive_5m_oi_as_optional_enhancer() -> None:
+    engine = PostPumpAbsorptionEngine()
+    params = PostPumpAbsorptionParams(
+        profile_id="balanced",
+        symbol="TEST/USDT",
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+    )
+    runtime = build_post_pump_absorption_runtime(params)
+    frame, _ = _build_mbb_frame(Timeframe.M1, runtime)
+    breakout_idx = len(frame) - 4
+    frame.loc[breakout_idx, "volume"] = 126.0
+    frame.loc[breakout_idx, "taker_buy_ratio"] = 0.555
+    frame.loc[breakout_idx, "taker_buy_volume"] = 126.0 * 0.555
+    oi_frame = _build_oi_frame_from_entry(frame, start_oi=1_000.0, step_oi=9.0)
+
+    trades_without_oi = engine.generate_events(frame, params)
+    trades_with_oi = engine.generate_events_multi_tf(
+        entry_frame=frame,
+        params=params,
+        oi_frame=oi_frame,
+        oi_source_timeframe=Timeframe.M5.value,
+    )
+
+    assert trades_without_oi == []
+    assert len(trades_with_oi) == 1
+    assert trades_with_oi[0].metadata is not None
+    assert trades_with_oi[0].metadata["oi_available"] is True
+    assert trades_with_oi[0].metadata["oi_supportive"] is True
+    assert trades_with_oi[0].metadata["oi_source_timeframe"] == Timeframe.M5.value
 
 
 def test_post_pump_absorption_runtime_scales_windows_by_timeframe() -> None:
@@ -367,7 +425,7 @@ def test_post_pump_absorption_rejects_unsupported_timeframes() -> None:
         ).validate_config(params)
 
 
-def test_post_pump_absorption_rejects_mismatched_levels_and_entry_timeframes() -> None:
+def test_post_pump_absorption_allows_5m_levels_as_auxiliary_oi_source() -> None:
     params = PostPumpAbsorptionParams(
         profile_id="balanced",
         symbol="TEST/USDT",
@@ -375,7 +433,33 @@ def test_post_pump_absorption_rejects_mismatched_levels_and_entry_timeframes() -
         entry_timeframe=Timeframe.M1,
     )
 
-    with pytest.raises(ValueError, match="single-timeframe mode"):
+    build_strategy(
+        AppConfig(
+            fetch=FetchConfig(binance_api_key="", binance_secret_key=""),
+            strategy=StrategyConfig(strategy_id="post_pump_absorption"),
+            simulation=SimulationConfig(),
+            backtest=BacktestConfig(
+                log_level="INFO",
+                cache_dir=Path("."),
+                logs_dir=Path("."),
+                results_dir=Path("."),
+                results_file_name="results.csv",
+                retry_attempts=1,
+                retry_backoff_seconds=0.0,
+            ),
+        )
+    ).validate_config(params)
+
+
+def test_post_pump_absorption_rejects_non_auxiliary_levels_timeframe() -> None:
+    params = PostPumpAbsorptionParams(
+        profile_id="balanced",
+        symbol="TEST/USDT",
+        levels_timeframe=Timeframe.M15,
+        entry_timeframe=Timeframe.M1,
+    )
+
+    with pytest.raises(ValueError, match="auxiliary 5m OI source"):
         build_strategy(
             AppConfig(
                 fetch=FetchConfig(binance_api_key="", binance_secret_key=""),

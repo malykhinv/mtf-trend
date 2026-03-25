@@ -41,12 +41,17 @@ Implementation details of the current version:
 Important first-version constraints:
 
 - `OI` is optional and is not required for the signal path.
+- `OI` is implemented as an optional enhancer, not as a mandatory gate.
+- when `entry_tf` is `1m` or `3m`, the strategy may use `levels_tf=5m` only as an auxiliary `OI` source.
+- when `entry_tf` is `5m`, the same `5m` frame can supply `OI`.
+- supportive `5m OI` can slightly relax the aggression thresholds; absent `OI` must not disable the signal path.
 - sweep/reclaim is optional and is not required for entry.
-- the strategy currently runs in single-timeframe mode only: `1m`, `3m`, `5m`.
-- for now `levels_tf` must match `entry_tf`.
+- the strategy currently runs only on `1m`, `3m`, `5m`.
+- HTF-box logic is intentionally absent; `levels_tf` is either `entry_tf` or auxiliary `5m` for `OI`.
 - key windows are time-normalized internally and then converted to bars for the current timeframe.
 - no portfolio ranking is used yet; the first iteration runs per symbol.
 - the strategy is designed to maximize candidate frequency first, then tighten filters in later iterations.
+- each trade now exports time-boundary markers (`entry_on_1m_boundary`, `entry_on_5m_boundary`, `entry_on_30m_boundary`, `entry_on_60m_boundary`) for report slicing.
 
 ## Parameter Grid
 

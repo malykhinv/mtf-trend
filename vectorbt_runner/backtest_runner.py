@@ -118,11 +118,16 @@ class BacktestRunner:
             "entry_range_fraction",
             "aggression_ratio",
             "aggression_volume_mult",
+            "aggression_ratio_threshold",
+            "aggression_volume_threshold",
             "range_width_atr",
             "range_width_pump_fraction",
             "pump_height_atr",
             "stop_distance_atr",
             "stop_range_fraction",
+            "oi_delta",
+            "oi_delta_pct",
+            "entry_minute_of_hour",
             "mfe_r",
             "mae_r",
             "holding_bars",
@@ -138,7 +143,18 @@ class BacktestRunner:
             if metric is not None:
                 metrics[f"ppa_median_{key}"] = metric
 
-        bool_count_keys = ("range_mid_hit", "range_high_hit", "tp1_hit", "tp2_hit")
+        bool_count_keys = (
+            "range_mid_hit",
+            "range_high_hit",
+            "tp1_hit",
+            "tp2_hit",
+            "oi_available",
+            "oi_supportive",
+            "entry_on_1m_boundary",
+            "entry_on_5m_boundary",
+            "entry_on_30m_boundary",
+            "entry_on_60m_boundary",
+        )
         for key in bool_count_keys:
             metrics[f"ppa_{key}_count"] = sum(1 for metadata in metadata_rows if bool(metadata.get(key)))
 

@@ -125,8 +125,20 @@ def test_resolve_backtest_timeframes_normalizes_ppa_to_micro_single_tf() -> None
         configured_entry_timeframe=Timeframe.M15,
     )
 
-    assert levels_tf == Timeframe.M3
+    assert levels_tf == Timeframe.M5
     assert entry_tf == Timeframe.M3
+
+
+def test_resolve_backtest_timeframes_allows_ppa_explicit_entry_tf_as_levels_source() -> None:
+    levels_tf, entry_tf = commands._resolve_backtest_timeframes(
+        strategy_id="post_pump_absorption",
+        args=argparse.Namespace(entry_tf="1m", levels_tf="1m"),
+        configured_levels_timeframe=Timeframe.D1,
+        configured_entry_timeframe=Timeframe.M15,
+    )
+
+    assert levels_tf == Timeframe.M1
+    assert entry_tf == Timeframe.M1
 
 
 def test_resolve_backtest_timeframes_rejects_non_micro_ppa_entry_tf() -> None:

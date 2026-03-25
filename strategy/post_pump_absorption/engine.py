@@ -50,6 +50,10 @@ class PriceRow:
     atr14: float
     taker_buy_ratio_resolved: float
     taker_buy_volume_resolved: float
+    open_interest_resolved: float
+    oi_delta_resolved: float
+    oi_delta_pct_resolved: float
+    oi_available_resolved: bool
 
 
 @dataclass(slots=True)
@@ -98,6 +102,13 @@ class AggressionContext:
     volume_now: float
     baseline_volume: float
     volume_mult: float
+    ratio_threshold: float
+    volume_threshold: float
+    oi_available: bool
+    oi_supportive: bool
+    oi_delta: float | None
+    oi_delta_pct: float | None
+    oi_source_timeframe: str | None
 
 
 @dataclass(slots=True)
@@ -208,21 +219,41 @@ class PostPumpAbsorptionEngine:
 
     def generate_events(self, data: pd.DataFrame, params: PostPumpAbsorptionParams) -> list[TradeResult]:
         prepared = self.prepare_data(data)
-        return self._run(prepared=prepared, params=params)
+        return self._run(
+            prepared=prepared,
+            params=params,
+            oi_frame=None,
+            oi_source_timeframe=None,
+        )
 
     def generate_events_multi_tf(
         self,
         *,
         entry_frame: pd.DataFrame,
         params: PostPumpAbsorptionParams,
+        oi_frame: pd.DataFrame | None = None,
+        oi_source_timeframe: str | None = None,
     ) -> list[TradeResult]:
         prepared = self.prepare_data(entry_frame)
-        return self._run(prepared=prepared, params=params)
+        return self._run(
+            prepared=prepared,
+            params=params,
+            oi_frame=oi_frame,
+            oi_source_timeframe=oi_source_timeframe,
+        )
 
-    def _run(self, *, prepared: pd.DataFrame, params: PostPumpAbsorptionParams) -> list[TradeResult]:
+    def _run(
+        self,
+        *,
+        prepared: pd.DataFrame,
+        params: PostPumpAbsorptionParams,
+        oi_frame: pd.DataFrame | None,
+        oi_source_timeframe: str | None,
+    ) -> list[TradeResult]:
         runtime = build_post_pump_absorption_runtime(params)
         diagnostics = self._empty_diagnostics(symbol=params.symbol)
         enriched = self._append_features(prepared, atr_window_bars=runtime.atr_window_bars)
+        enriched = self._attach_oi_context(entry_frame=enriched, oi_frame=oi_frame)
         if not self._has_usable_flow_data(enriched):
             diagnostics["missing_taker_data"] = 1
             self._last_generation_diagnostics = diagnostics
@@ -262,6 +293,7 @@ class PostPumpAbsorptionEngine:
                 pump_ctx=pump_ctx,
                 params=params,
                 runtime=runtime,
+                oi_source_timeframe=oi_source_timeframe,
             )
             trades.extend(regime_trades)
             self._merge_diagnostics(target=diagnostics, source=regime_diagnostics)
@@ -332,6 +364,71 @@ class PostPumpAbsorptionEngine:
         )
         return work
 
+    @staticmethod
+    def _attach_oi_context(
+        *,
+        entry_frame: pd.DataFrame,
+        oi_frame: pd.DataFrame | None,
+    ) -> pd.DataFrame:
+        work = entry_frame.copy()
+        if oi_frame is None or oi_frame.empty or "open_interest" not in oi_frame.columns:
+            work["open_interest_resolved"] = np.nan
+            work["oi_delta_resolved"] = np.nan
+            work["oi_delta_pct_resolved"] = np.nan
+            work["oi_available_resolved"] = False
+            return work
+
+        prepared_oi = oi_frame.copy()
+        prepared_oi["timestamp"] = pd.to_numeric(prepared_oi["timestamp"], errors="coerce")
+        prepared_oi["open_interest"] = pd.to_numeric(prepared_oi["open_interest"], errors="coerce")
+        prepared_oi = prepared_oi.dropna(subset=["timestamp", "open_interest"])
+        if prepared_oi.empty:
+            return work
+
+        prepared_oi["timestamp"] = prepared_oi["timestamp"].astype("int64")
+        prepared_oi = (
+            prepared_oi.sort_values("timestamp")
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .reset_index(drop=True)
+        )
+        prepared_oi["open_interest_resolved"] = prepared_oi["open_interest"]
+        prepared_oi["oi_prev_resolved"] = prepared_oi["open_interest_resolved"].shift(1)
+        prepared_oi["oi_delta_resolved"] = (
+            prepared_oi["open_interest_resolved"] - prepared_oi["oi_prev_resolved"]
+        )
+        denominator = prepared_oi["oi_prev_resolved"].abs().replace(0.0, np.nan)
+        prepared_oi["oi_delta_pct_resolved"] = prepared_oi["oi_delta_resolved"] / denominator
+        prepared_oi["oi_available_resolved"] = (
+            prepared_oi["open_interest_resolved"].notna()
+            & prepared_oi["oi_delta_resolved"].notna()
+            & prepared_oi["oi_delta_pct_resolved"].notna()
+        )
+        merged = pd.merge_asof(
+            work.sort_values("timestamp"),
+            prepared_oi[
+                [
+                    "timestamp",
+                    "open_interest_resolved",
+                    "oi_delta_resolved",
+                    "oi_delta_pct_resolved",
+                    "oi_available_resolved",
+                ]
+            ],
+            on="timestamp",
+            direction="backward",
+        )
+        merged["open_interest_resolved"] = pd.to_numeric(
+            merged["open_interest_resolved"],
+            errors="coerce",
+        )
+        merged["oi_delta_resolved"] = pd.to_numeric(merged["oi_delta_resolved"], errors="coerce")
+        merged["oi_delta_pct_resolved"] = pd.to_numeric(
+            merged["oi_delta_pct_resolved"],
+            errors="coerce",
+        )
+        merged["oi_available_resolved"] = merged["oi_available_resolved"].fillna(False).astype(bool)
+        return merged.reset_index(drop=True)
+
     @classmethod
     def _has_usable_flow_data(cls, frame: pd.DataFrame) -> bool:
         if not any(column in frame.columns for column in cls.FLOW_COLUMNS):
@@ -357,6 +454,10 @@ class PostPumpAbsorptionEngine:
                 atr14=float(row.atr14),
                 taker_buy_ratio_resolved=float(row.taker_buy_ratio_resolved),
                 taker_buy_volume_resolved=float(row.taker_buy_volume_resolved),
+                open_interest_resolved=float(getattr(row, "open_interest_resolved", np.nan)),
+                oi_delta_resolved=float(getattr(row, "oi_delta_resolved", np.nan)),
+                oi_delta_pct_resolved=float(getattr(row, "oi_delta_pct_resolved", np.nan)),
+                oi_available_resolved=bool(getattr(row, "oi_available_resolved", False)),
             )
             for row in frame.itertuples(index=False)
         ]
@@ -380,6 +481,7 @@ class PostPumpAbsorptionEngine:
         pump_ctx: PumpContext,
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
+        oi_source_timeframe: str | None,
     ) -> tuple[list[TradeResult], GenerationDiagnostics, int]:
         diagnostics = self._empty_diagnostics()
         trades: list[TradeResult] = []
@@ -432,6 +534,7 @@ class PostPumpAbsorptionEngine:
                 idx=entry_idx,
                 params=params,
                 runtime=runtime,
+                oi_source_timeframe=oi_source_timeframe,
             )
             if aggression is None:
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
@@ -569,8 +672,15 @@ class PostPumpAbsorptionEngine:
         idx: int,
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
+        oi_source_timeframe: str | None,
     ) -> AggressionContext | None:
-        return self._measure_aggression(market=market, idx=idx, params=params, runtime=runtime)
+        return self._measure_aggression(
+            market=market,
+            idx=idx,
+            params=params,
+            runtime=runtime,
+            oi_source_timeframe=oi_source_timeframe,
+        )
 
     def _run_stage_5_detect_setup(
         self,
@@ -734,6 +844,7 @@ class PostPumpAbsorptionEngine:
         idx: int,
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
+        oi_source_timeframe: str | None,
     ) -> AggressionContext | None:
         row = market.row(idx)
         baseline_start = max(0, idx - runtime.flow_baseline_window_bars)
@@ -761,9 +872,33 @@ class PostPumpAbsorptionEngine:
             return None
 
         volume_mult = volume_now / baseline_volume
+        oi_available = bool(row.oi_available_resolved)
+        oi_delta = row.oi_delta_resolved if oi_available and not np.isnan(row.oi_delta_resolved) else None
+        oi_delta_pct = (
+            row.oi_delta_pct_resolved
+            if oi_available and not np.isnan(row.oi_delta_pct_resolved)
+            else None
+        )
+        oi_supportive = bool(
+            oi_available
+            and oi_delta is not None
+            and oi_delta_pct is not None
+            and oi_delta > 0.0
+            and oi_delta_pct >= params.oi_min_delta_pct
+        )
+        ratio_threshold = max(
+            0.0,
+            params.taker_ratio_threshold
+            - (params.oi_ratio_threshold_relaxation if oi_supportive else 0.0),
+        )
+        volume_threshold = max(
+            0.01,
+            params.taker_volume_mult
+            - (params.oi_volume_mult_relaxation if oi_supportive else 0.0),
+        )
         if (
-            ratio_now < params.taker_ratio_threshold
-            or volume_mult < params.taker_volume_mult
+            ratio_now < ratio_threshold
+            or volume_mult < volume_threshold
             or ratio_now < baseline_ratio
         ):
             return None
@@ -774,6 +909,13 @@ class PostPumpAbsorptionEngine:
             volume_now=volume_now,
             baseline_volume=baseline_volume,
             volume_mult=volume_mult,
+            ratio_threshold=ratio_threshold,
+            volume_threshold=volume_threshold,
+            oi_available=oi_available,
+            oi_supportive=oi_supportive,
+            oi_delta=oi_delta,
+            oi_delta_pct=oi_delta_pct,
+            oi_source_timeframe=oi_source_timeframe,
         )
 
     def _detect_entry_setup(
@@ -1009,6 +1151,13 @@ class PostPumpAbsorptionEngine:
             "aggression_ratio": round(setup.aggression.ratio_now, 6),
             "aggression_baseline_ratio": round(setup.aggression.baseline_ratio, 6),
             "aggression_volume_mult": round(setup.aggression.volume_mult, 6),
+            "aggression_ratio_threshold": round(setup.aggression.ratio_threshold, 6),
+            "aggression_volume_threshold": round(setup.aggression.volume_threshold, 6),
+            "oi_available": setup.aggression.oi_available,
+            "oi_supportive": setup.aggression.oi_supportive,
+            "oi_source_timeframe": setup.aggression.oi_source_timeframe,
+            "oi_delta": round(setup.aggression.oi_delta, 8) if setup.aggression.oi_delta is not None else None,
+            "oi_delta_pct": round(setup.aggression.oi_delta_pct, 8) if setup.aggression.oi_delta_pct is not None else None,
             "range_low": round(setup.range_ctx.range_low, 8),
             "range_high": round(setup.range_ctx.range_high, 8),
             "range_width": round(setup.range_ctx.range_width, 8),
@@ -1020,6 +1169,7 @@ class PostPumpAbsorptionEngine:
             "stop_distance_atr": round(stop_distance / max(pump_ctx.atr_bg, 1e-12), 6),
             "stop_range_fraction": round(stop_distance / max(setup.range_ctx.range_width, 1e-12), 6),
         }
+        metadata.update(self._build_time_boundary_markers(entry_timestamp_ms=int(entry_row.timestamp)))
         return self._simulate_trade_path(
             market=market,
             entry_idx=entry_idx,
@@ -1133,6 +1283,20 @@ class PostPumpAbsorptionEngine:
             ),
             exit_idx,
         )
+
+    @staticmethod
+    def _build_time_boundary_markers(*, entry_timestamp_ms: int) -> dict[str, int | bool]:
+        timestamp = pd.Timestamp(entry_timestamp_ms, unit="ms", tz="UTC")
+        minute_of_hour = int(timestamp.minute)
+        second_of_minute = int(timestamp.second)
+        on_1m_boundary = second_of_minute == 0
+        return {
+            "entry_minute_of_hour": minute_of_hour,
+            "entry_on_1m_boundary": on_1m_boundary,
+            "entry_on_5m_boundary": bool(on_1m_boundary and (minute_of_hour % 5 == 0)),
+            "entry_on_30m_boundary": bool(on_1m_boundary and (minute_of_hour % 30 == 0)),
+            "entry_on_60m_boundary": bool(on_1m_boundary and minute_of_hour == 0),
+        }
 
     @staticmethod
     def _build_trade_detail(trade: TradeResult) -> dict[str, object]:

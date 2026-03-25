@@ -26,7 +26,11 @@
 - `OI` полезен, но не обязателен;
 - `sweep` полезен, но не обязателен;
 - в текущей реализации стратегия работает только на `1m`, `3m`, `5m`;
-- в текущей реализации это single-timeframe стратегия: `levels_tf == entry_tf`;
+- в текущей реализации HTF-box и MTF price-filter не используются;
+- `OI` подтягивается как optional enhancer из `5m`, если `entry_tf=1m/3m` и `levels_tf=5m`;
+- если `entry_tf=5m`, тот же `5m` ряд может быть источником `OI`;
+- `OI` не должен быть обязательным gate, но может смягчать пороги агрессии, когда `5m OI` подтверждает вход;
+- в текущей реализации time-boundary признаки `1m/5m/30m/60m` используются как trade metadata markers для отчётов и анализа, а не как фильтры входа;
 - ключевые окна стратегии хранятся в минутах и нормализуются в бары под текущий ТФ;
 - локальный stop ставится за локальную структуру или микро-базу, а не за весь боковик;
 - базовые цели - `range_mid` и `range_high`;
@@ -36,6 +40,7 @@
 - current implementation supports sequential re-entries inside one post-pump regime after the previous trade is closed.
 - current implementation requires usable taker-flow data; if taker data is absent or unusable, diagnostics must report `missing_taker_data` instead of silently returning zero trades.
 - current implementation stores per-trade metadata (`setup_type`, entry position in range, aggression strength, stop width, `MFE/MAE`, target hits) and uses it in backtest analytics.
+- current implementation also stores `5m OI` confirmation metadata and time-boundary markers (`1m/5m/30m/60m`) for report slicing.
 - current implementation exposes explicit logical stages for PPA diagnostics: `stage_1_pump`, `stage_2_range`, `stage_3_lower_zone`, `stage_4_aggression`, `stage_5_setup`, `stage_6_trade`.
 - current implementation has a dedicated one-command research runner: `run-ppa-research`.
 - `run-ppa-research` is the preferred entry point for PPA analysis; it must run all required micro timeframes (`1m`, `3m`, `5m` by default), export per-timeframe raw results, and build consolidated CSV/JSON/Markdown reports plus PNG charts in one root directory.
