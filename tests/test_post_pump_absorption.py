@@ -254,6 +254,42 @@ def test_post_pump_absorption_can_generate_reentries_within_single_regime() -> N
     assert diagnostics["trades_generated"] == 2
 
 
+def test_post_pump_absorption_exposes_logical_stage_diagnostics() -> None:
+    engine = PostPumpAbsorptionEngine()
+    params = PostPumpAbsorptionParams(
+        profile_id="balanced",
+        symbol="TEST/USDT",
+        levels_timeframe=Timeframe.M3,
+        entry_timeframe=Timeframe.M3,
+    )
+    runtime = build_post_pump_absorption_runtime(params)
+    frame, _ = _build_mbb_frame(Timeframe.M3, runtime)
+
+    trades = engine.generate_events(frame, params)
+    diagnostics = engine.consume_last_generation_diagnostics()
+
+    assert len(trades) == 1
+    assert diagnostics["context"]["stage_order"] == [
+        "stage_1_pump",
+        "stage_2_range",
+        "stage_3_lower_zone",
+        "stage_4_aggression",
+        "stage_5_setup",
+        "stage_6_trade",
+    ]
+    assert diagnostics["stage_hits"]["stage_1_pump"] >= 1
+    assert diagnostics["stage_hits"]["stage_2_range"] >= 1
+    assert diagnostics["stage_hits"]["stage_3_lower_zone"] >= 1
+    assert diagnostics["stage_hits"]["stage_4_aggression"] >= 1
+    assert diagnostics["stage_hits"]["stage_5_setup"] >= 1
+    assert diagnostics["stage_hits"]["stage_6_trade"] >= 1
+    assert trades[0].metadata is not None
+    assert trades[0].metadata["stage_path"] == (
+        "stage_1_pump > stage_2_range > stage_3_lower_zone > "
+        "stage_4_aggression > stage_5_setup > stage_6_trade"
+    )
+
+
 def test_post_pump_absorption_reports_missing_taker_data_without_silent_failure() -> None:
     engine = PostPumpAbsorptionEngine()
     params = PostPumpAbsorptionParams(

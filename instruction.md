@@ -36,6 +36,7 @@
 - current implementation supports sequential re-entries inside one post-pump regime after the previous trade is closed.
 - current implementation requires usable taker-flow data; if taker data is absent or unusable, diagnostics must report `missing_taker_data` instead of silently returning zero trades.
 - current implementation stores per-trade metadata (`setup_type`, entry position in range, aggression strength, stop width, `MFE/MAE`, target hits) and uses it in backtest analytics.
+- current implementation exposes explicit logical stages for PPA diagnostics: `stage_1_pump`, `stage_2_range`, `stage_3_lower_zone`, `stage_4_aggression`, `stage_5_setup`, `stage_6_trade`.
 - current implementation has a dedicated one-command research runner: `run-ppa-research`.
 - `run-ppa-research` is the preferred entry point for PPA analysis; it must run all required micro timeframes (`1m`, `3m`, `5m` by default), export per-timeframe raw results, and build consolidated CSV/JSON/Markdown reports plus PNG charts in one root directory.
 - research artifacts for `post_pump_absorption` must stay strategy-specific and must not be forced through the removed bee_bite reporting path.

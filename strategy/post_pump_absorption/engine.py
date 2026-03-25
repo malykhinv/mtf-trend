@@ -22,6 +22,22 @@ from strategy.post_pump_absorption.trade_plan import (
     build_post_pump_absorption_trade_plan,
 )
 
+PPA_STAGE_1_PUMP = "stage_1_pump"
+PPA_STAGE_2_RANGE = "stage_2_range"
+PPA_STAGE_3_LOWER_ZONE = "stage_3_lower_zone"
+PPA_STAGE_4_AGGRESSION = "stage_4_aggression"
+PPA_STAGE_5_SETUP = "stage_5_setup"
+PPA_STAGE_6_TRADE = "stage_6_trade"
+PPA_STAGE_SEQUENCE: tuple[str, ...] = (
+    PPA_STAGE_1_PUMP,
+    PPA_STAGE_2_RANGE,
+    PPA_STAGE_3_LOWER_ZONE,
+    PPA_STAGE_4_AGGRESSION,
+    PPA_STAGE_5_SETUP,
+    PPA_STAGE_6_TRADE,
+)
+PPA_STAGE_PATH = " > ".join(PPA_STAGE_SEQUENCE)
+
 
 @dataclass(slots=True)
 class PriceRow:
@@ -111,6 +127,7 @@ class GenerationDiagnostics(TypedDict, total=False):
     trades_generated: int
     reentries_generated: int
     missing_taker_data: int
+    stage_hits: dict[str, int]
     trade_details: list[dict[str, object]]
     context: dict[str, object]
 
@@ -139,6 +156,9 @@ class PostPumpAbsorptionEngine:
         trade_details = diagnostics.get("trade_details")
         if isinstance(trade_details, list):
             diagnostics["trade_details"] = [dict(item) for item in trade_details]
+        stage_hits = diagnostics.get("stage_hits")
+        if isinstance(stage_hits, dict):
+            diagnostics["stage_hits"] = dict(stage_hits)
         context = diagnostics.get("context")
         if isinstance(context, dict):
             diagnostics["context"] = dict(context)
@@ -149,12 +169,16 @@ class PostPumpAbsorptionEngine:
     def _empty_diagnostics(*, symbol: str | None = None) -> GenerationDiagnostics:
         diagnostics: GenerationDiagnostics = {
             "trade_details": [],
-            "context": {},
+            "stage_hits": {stage_id: 0 for stage_id in PPA_STAGE_SEQUENCE},
+            "context": {"stage_order": list(PPA_STAGE_SEQUENCE)},
         }
         for key in PostPumpAbsorptionEngine.COUNT_KEYS:
             diagnostics[key] = 0
         if symbol:
-            diagnostics["context"] = {"symbol": symbol}
+            diagnostics["context"] = {
+                "symbol": symbol,
+                "stage_order": list(PPA_STAGE_SEQUENCE),
+            }
         return diagnostics
 
     @staticmethod
@@ -219,7 +243,12 @@ class PostPumpAbsorptionEngine:
         )
         max_entry_offset = max(runtime.range_min_bars, 2)
         while i < len(market) - max_entry_offset:
-            pump_ctx = self._detect_pump(market=market, idx=i, params=params, runtime=runtime)
+            pump_ctx = self._run_stage_1_detect_pump(
+                market=market,
+                idx=i,
+                params=params,
+                runtime=runtime,
+            )
             if pump_ctx is None:
                 i += 1
                 continue
@@ -227,6 +256,7 @@ class PostPumpAbsorptionEngine:
             pump_ctx = self._refine_pump_context(market=market, pump_ctx=pump_ctx, runtime=runtime)
 
             diagnostics["pumps_found"] = int(diagnostics.get("pumps_found", 0)) + 1
+            self._mark_stage_hit(diagnostics, PPA_STAGE_1_PUMP)
             regime_trades, regime_diagnostics, next_i = self._scan_pump_regime(
                 market=market,
                 pump_ctx=pump_ctx,
@@ -245,10 +275,22 @@ class PostPumpAbsorptionEngine:
         for key in cls.COUNT_KEYS:
             target[key] = int(target.get(key, 0)) + int(source.get(key, 0))
 
+        target_stage_hits = target.setdefault("stage_hits", {stage_id: 0 for stage_id in PPA_STAGE_SEQUENCE})
+        source_stage_hits = source.get("stage_hits", {})
+        if isinstance(target_stage_hits, dict) and isinstance(source_stage_hits, dict):
+            for stage_id in PPA_STAGE_SEQUENCE:
+                target_stage_hits[stage_id] = int(target_stage_hits.get(stage_id, 0)) + int(source_stage_hits.get(stage_id, 0))
+
         target_trade_details = target.setdefault("trade_details", [])
         source_trade_details = source.get("trade_details", [])
         if isinstance(target_trade_details, list) and isinstance(source_trade_details, list):
             target_trade_details.extend(source_trade_details)
+
+    @staticmethod
+    def _mark_stage_hit(diagnostics: GenerationDiagnostics, stage_id: str) -> None:
+        stage_hits = diagnostics.setdefault("stage_hits", {stage: 0 for stage in PPA_STAGE_SEQUENCE})
+        if isinstance(stage_hits, dict):
+            stage_hits[stage_id] = int(stage_hits.get(stage_id, 0)) + 1
 
     @staticmethod
     def _append_features(frame: pd.DataFrame, *, atr_window_bars: int) -> pd.DataFrame:
@@ -358,7 +400,7 @@ class PostPumpAbsorptionEngine:
         entry_idx = first_entry_idx
 
         while entry_idx <= max_scan_idx:
-            range_ctx = self._build_locked_range_context(
+            range_ctx = self._run_stage_2_build_range(
                 range_low=range_low,
                 range_high=range_high,
                 pump_ctx=pump_ctx,
@@ -370,8 +412,9 @@ class PostPumpAbsorptionEngine:
                 break
 
             diagnostics["range_candidates"] = int(diagnostics.get("range_candidates", 0)) + 1
+            self._mark_stage_hit(diagnostics, PPA_STAGE_2_RANGE)
             current_row = market.row(entry_idx)
-            if current_row.close > range_ctx.lower_zone_high and current_row.low > range_ctx.lower_zone_high:
+            if not self._run_stage_3_check_lower_zone(range_ctx=range_ctx, current_row=current_row):
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
                     market=market,
                     range_low=range_low,
@@ -383,7 +426,13 @@ class PostPumpAbsorptionEngine:
                 continue
 
             diagnostics["lower_zone_hits"] = int(diagnostics.get("lower_zone_hits", 0)) + 1
-            aggression = self._measure_aggression(market=market, idx=entry_idx, params=params, runtime=runtime)
+            self._mark_stage_hit(diagnostics, PPA_STAGE_3_LOWER_ZONE)
+            aggression = self._run_stage_4_measure_aggression(
+                market=market,
+                idx=entry_idx,
+                params=params,
+                runtime=runtime,
+            )
             if aggression is None:
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
                     market=market,
@@ -396,7 +445,8 @@ class PostPumpAbsorptionEngine:
                 continue
 
             diagnostics["aggression_hits"] = int(diagnostics.get("aggression_hits", 0)) + 1
-            setup = self._detect_entry_setup(
+            self._mark_stage_hit(diagnostics, PPA_STAGE_4_AGGRESSION)
+            setup = self._run_stage_5_detect_setup(
                 market=market,
                 pump_ctx=pump_ctx,
                 range_ctx=range_ctx,
@@ -418,7 +468,8 @@ class PostPumpAbsorptionEngine:
 
             setup_key = "lsb_hits" if setup.setup_type == "LSB" else "mbb_hits"
             diagnostics[setup_key] = int(diagnostics.get(setup_key, 0)) + 1
-            trade, exit_idx = self._simulate_trade(
+            self._mark_stage_hit(diagnostics, PPA_STAGE_5_SETUP)
+            trade, exit_idx = self._run_stage_6_simulate_trade(
                 market=market,
                 entry_idx=entry_idx,
                 setup=setup,
@@ -439,6 +490,7 @@ class PostPumpAbsorptionEngine:
 
             trades.append(trade)
             diagnostics["trades_generated"] = int(diagnostics.get("trades_generated", 0)) + 1
+            self._mark_stage_hit(diagnostics, PPA_STAGE_6_TRADE)
             if len(trades) > 1:
                 diagnostics["reentries_generated"] = int(diagnostics.get("reentries_generated", 0)) + 1
 
@@ -478,6 +530,87 @@ class PostPumpAbsorptionEngine:
         updated_low = min(range_low, float(market.lows[updated_slice].min()))
         updated_high = max(range_high, float(market.highs[updated_slice].max()))
         return updated_low, updated_high, next_locked_idx
+
+    def _run_stage_1_detect_pump(
+        self,
+        *,
+        market: MarketSeries,
+        idx: int,
+        params: PostPumpAbsorptionParams,
+        runtime: PostPumpAbsorptionRuntime,
+    ) -> PumpContext | None:
+        return self._detect_pump(market=market, idx=idx, params=params, runtime=runtime)
+
+    def _run_stage_2_build_range(
+        self,
+        *,
+        range_low: float,
+        range_high: float,
+        pump_ctx: PumpContext,
+        range_age_bars: int,
+        params: PostPumpAbsorptionParams,
+    ) -> RangeContext | None:
+        return self._build_locked_range_context(
+            range_low=range_low,
+            range_high=range_high,
+            pump_ctx=pump_ctx,
+            range_age_bars=range_age_bars,
+            params=params,
+        )
+
+    @staticmethod
+    def _run_stage_3_check_lower_zone(*, range_ctx: RangeContext, current_row: PriceRow) -> bool:
+        return not (current_row.close > range_ctx.lower_zone_high and current_row.low > range_ctx.lower_zone_high)
+
+    def _run_stage_4_measure_aggression(
+        self,
+        *,
+        market: MarketSeries,
+        idx: int,
+        params: PostPumpAbsorptionParams,
+        runtime: PostPumpAbsorptionRuntime,
+    ) -> AggressionContext | None:
+        return self._measure_aggression(market=market, idx=idx, params=params, runtime=runtime)
+
+    def _run_stage_5_detect_setup(
+        self,
+        *,
+        market: MarketSeries,
+        pump_ctx: PumpContext,
+        range_ctx: RangeContext,
+        aggression: AggressionContext,
+        entry_idx: int,
+        params: PostPumpAbsorptionParams,
+        runtime: PostPumpAbsorptionRuntime,
+    ) -> EntrySetup | None:
+        return self._detect_entry_setup(
+            market=market,
+            pump_ctx=pump_ctx,
+            range_ctx=range_ctx,
+            aggression=aggression,
+            entry_idx=entry_idx,
+            params=params,
+            runtime=runtime,
+        )
+
+    def _run_stage_6_simulate_trade(
+        self,
+        *,
+        market: MarketSeries,
+        entry_idx: int,
+        setup: EntrySetup,
+        pump_ctx: PumpContext,
+        params: PostPumpAbsorptionParams,
+        runtime: PostPumpAbsorptionRuntime,
+    ) -> tuple[TradeResult | None, int]:
+        return self._simulate_trade(
+            market=market,
+            entry_idx=entry_idx,
+            setup=setup,
+            pump_ctx=pump_ctx,
+            params=params,
+            runtime=runtime,
+        )
 
     def _detect_pump(
         self,
@@ -869,6 +1002,7 @@ class PostPumpAbsorptionEngine:
         metadata = {
             "strategy_id": "post_pump_absorption",
             "symbol": params.symbol,
+            "stage_path": PPA_STAGE_PATH,
             "setup_type": setup.setup_type,
             "entry_range_fraction": round(setup.entry_range_fraction, 6),
             "trigger_price": round(setup.trigger_price, 8),

@@ -16,6 +16,19 @@ Two entry families are implemented:
 - `LSB` (`local structure break`): buy aggression near the lower range zone plus a break of the recent local bearish structure.
 - `MBB` (`micro base breakout`): buy aggression near the lower range zone plus a breakout of a tight micro-base formed at the bottom.
 
+## Logical Stages
+
+The strategy now exposes an explicit logical stage path instead of one flat block of checks:
+
+1. `stage_1_pump`
+2. `stage_2_range`
+3. `stage_3_lower_zone`
+4. `stage_4_aggression`
+5. `stage_5_setup`
+6. `stage_6_trade`
+
+This stage order is stored in diagnostics, and generated trades export the full `stage_path` in metadata.
+
 Implementation details of the current version:
 
 - the detected pump is refined to the local peak before the post-pump range scan starts;
