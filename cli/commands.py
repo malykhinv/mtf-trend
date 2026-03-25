@@ -124,6 +124,13 @@ def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) 
 
 
 
+def _build_futures_symbol_map(symbols: list[str]) -> dict[str, str]:
+    return {
+        normalize_symbol(symbol): symbol
+        for symbol in symbols
+    }
+
+
 def _build_bee_bite_params_from_row(
     row: pd.Series,
     *,
@@ -695,10 +702,7 @@ def _resolve_symbols(
 ) -> tuple[list[str], dict[str, dict[str, object]]]:
     futures_symbols_raw = futures_symbols_raw or exchange_client.get_futures_symbols()
     liquidity_quality_by_symbol: dict[str, dict[str, object]] = {}
-    futures_symbol_map = {
-        normalize_symbol(symbol): symbol
-        for symbol in futures_symbols_raw
-    }
+    futures_symbol_map = _build_futures_symbol_map(futures_symbols_raw)
     exchange_symbols_normalized = sorted(futures_symbol_map)
 
     ranker = DailyVolumeRanker(cache_dir=cache_dir)
@@ -809,10 +813,7 @@ def _resolve_explicit_symbols(
     if not requested_symbols:
         return None
 
-    futures_symbol_map = {
-        normalize_symbol(symbol): symbol
-        for symbol in futures_symbols_raw
-    }
+    futures_symbol_map = _build_futures_symbol_map(futures_symbols_raw)
     resolved: list[str] = []
     missing: list[str] = []
     seen: set[str] = set()
@@ -946,8 +947,14 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
     raise ValueError(f"ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ð¾Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ðµ {argument_name}: {value}. ÐŸÐ¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ñ: {supported}")
 
 
-def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timeframe, ...]) -> tuple[Timeframe, ...]:
-    raw_values = getattr(args, "timeframes", None)
+def _resolve_timeframe_sequence(
+    raw_values: list[str] | tuple[str, ...] | None,
+    *,
+    fallback: tuple[Timeframe, ...],
+    fallback_timeframe: Timeframe,
+    argument_name: str,
+    supported: set[Timeframe] | None = None,
+) -> tuple[Timeframe, ...]:
     if not raw_values:
         return fallback
 
@@ -956,9 +963,15 @@ def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timefram
     for raw_value in raw_values:
         timeframe = _resolve_timeframe(
             str(raw_value),
-            fallback=Timeframe.M15,
-            argument_name="--timeframes",
+            fallback=fallback_timeframe,
+            argument_name=argument_name,
         )
+        if supported is not None and timeframe not in supported:
+            supported_values = ", ".join(tf.value for tf in fallback)
+            raise ValueError(
+                f"{argument_name} supports only timeframes "
+                f"{{{supported_values}}}, got {timeframe.value}"
+            )
         if timeframe in seen:
             continue
         seen.add(timeframe)
@@ -968,31 +981,23 @@ def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timefram
     return tuple(resolved)
 
 
-def _resolve_ppa_research_timeframes(args: argparse.Namespace) -> tuple[Timeframe, ...]:
-    raw_values = getattr(args, "timeframes", None)
-    if not raw_values:
-        return POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES
+def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timeframe, ...]) -> tuple[Timeframe, ...]:
+    return _resolve_timeframe_sequence(
+        getattr(args, "timeframes", None),
+        fallback=fallback,
+        fallback_timeframe=Timeframe.M15,
+        argument_name="--timeframes",
+    )
 
-    resolved: list[Timeframe] = []
-    seen: set[Timeframe] = set()
-    supported = set(POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES)
-    for raw_value in raw_values:
-        timeframe = _resolve_timeframe(
-            str(raw_value),
-            fallback=POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME,
-            argument_name="--timeframes",
-        )
-        if timeframe not in supported:
-            supported_values = ", ".join(tf.value for tf in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES)
-            raise ValueError(
-                "run-ppa-research supports only micro timeframes "
-                f"{{{supported_values}}}, got {timeframe.value}"
-            )
-        if timeframe in seen:
-            continue
-        seen.add(timeframe)
-        resolved.append(timeframe)
-    return tuple(resolved) if resolved else POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES
+
+def _resolve_ppa_research_timeframes(args: argparse.Namespace) -> tuple[Timeframe, ...]:
+    return _resolve_timeframe_sequence(
+        getattr(args, "timeframes", None),
+        fallback=POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES,
+        fallback_timeframe=POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME,
+        argument_name="--timeframes",
+        supported=set(POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES),
+    )
 
 
 def _resolve_backtest_timeframes(
@@ -1523,11 +1528,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         levels_frame = preloaded_levels_frames.get(symbol)
         if levels_frame is None:
             levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
-        entry_frame: pd.DataFrame | None = (
-            preloaded_entry_frames.get(symbol)
-            if entry_timeframe == Timeframe.M15
-            else None
-        )
+        entry_frame: pd.DataFrame | None = preloaded_entry_frames.get(symbol)
         if levels_timeframe == entry_timeframe:
             entry_frame = levels_frame if entry_frame is None else entry_frame
         elif entry_frame is None:

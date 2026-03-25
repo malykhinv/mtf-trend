@@ -1,6 +1,8 @@
 import argparse
+from types import SimpleNamespace
 
 import launcher
+import pandas as pd
 import pytest
 from cli import commands
 from cli.parser import build_parser, resolve_handler
@@ -135,3 +137,113 @@ def test_resolve_backtest_timeframes_rejects_non_micro_ppa_entry_tf() -> None:
             configured_levels_timeframe=Timeframe.D1,
             configured_entry_timeframe=Timeframe.M15,
         )
+
+
+def test_run_backtest_reuses_preloaded_entry_frame_for_bee_bite_non_m15(monkeypatch, tmp_path) -> None:
+    load_calls: list[tuple[str, Timeframe]] = []
+    frame = pd.DataFrame(
+        {
+            "timestamp": [1, 2, 3],
+            "open": [1.0, 1.1, 1.2],
+            "high": [1.1, 1.2, 1.3],
+            "low": [0.9, 1.0, 1.1],
+            "close": [1.05, 1.15, 1.25],
+            "volume": [10.0, 11.0, 12.0],
+        }
+    )
+
+    class _FakePreparer:
+        def __init__(self, _cache_dir: object) -> None:
+            pass
+
+        def list_symbols(self, _timeframe: Timeframe) -> list[str]:
+            return ["BTC/USDT"]
+
+        def load_symbol_data(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
+            load_calls.append((symbol, timeframe))
+            return frame.copy()
+
+    class _FakeStage1Selector:
+        @classmethod
+        def for_timeframe(cls, _timeframe: Timeframe) -> "_FakeStage1Selector":
+            return cls()
+
+        def evaluate_symbol(self, symbol: str, frame: pd.DataFrame) -> SimpleNamespace:
+            return SimpleNamespace(
+                passed=True,
+                reason="passed",
+                rolling_volume_usdt=1000.0,
+                pump_percent=0.1,
+                retain_ratio=0.6,
+                symbol=symbol,
+            )
+
+    class _FakeRunner:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def run(self, *_args: object, **_kwargs: object) -> pd.DataFrame:
+            return pd.DataFrame()
+
+        def build_summary(self, _results: pd.DataFrame) -> SimpleNamespace:
+            return SimpleNamespace(total_combinations=0, profitable_combinations=0, best_pf=0.0)
+
+    monkeypatch.setattr(commands, "DataPreparer", _FakePreparer)
+    monkeypatch.setattr(commands, "BeeBiteStage1Selector", _FakeStage1Selector)
+    monkeypatch.setattr(commands, "build_strategy", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(commands, "BacktestRunner", _FakeRunner)
+
+    config = SimpleNamespace(
+        strategy=SimpleNamespace(
+            strategy_id="bee_bite",
+            levels_timeframe=Timeframe.D1,
+            entry_timeframe=Timeframe.M5,
+            bee_bite_profile="A",
+            bee_bite_grid_mode="baseline",
+            bee_bite_reclaim_mode="strict",
+            bee_bite_retest_mode="confirmation",
+            bee_bite_cooldown_hours=8,
+            bee_bite_max_age_range_hours=24,
+            bee_bite_portfolio_top_n=None,
+            bee_bite_deposit=1000.0,
+            bee_bite_risk_pct=1.0,
+            post_pump_absorption_profile="balanced",
+            post_pump_absorption_deposit=1000.0,
+            post_pump_absorption_risk_pct=1.0,
+        ),
+        backtest=SimpleNamespace(
+            log_level="INFO",
+            cache_dir=tmp_path,
+            logs_dir=tmp_path,
+            results_dir=tmp_path,
+            results_file_name="results.csv",
+        ),
+    )
+    args = argparse.Namespace(
+        strategy="bee_bite",
+        bee_bite_grid=None,
+        bee_bite_reclaim_mode=None,
+        bee_bite_retest_mode=None,
+        bee_bite_cooldown_hours=None,
+        bee_bite_max_age_range_hours=None,
+        bee_bite_deposit=None,
+        bee_bite_risk_pct=None,
+        ppa_profile=None,
+        ppa_deposit=None,
+        ppa_risk_pct=None,
+        levels_tf="1d",
+        entry_tf="5m",
+        symbols=["BTC/USDT"],
+        top_n=None,
+        plot=False,
+        plot_from_results=False,
+        results_input=None,
+        id=None,
+        output_dir=None,
+    )
+
+    exit_code = commands._run_backtest_inner(config, args)
+
+    assert exit_code == 0
+    assert load_calls.count(("BTC/USDT", Timeframe.M5)) == 1
+    assert load_calls.count(("BTC/USDT", Timeframe.D1)) == 1
