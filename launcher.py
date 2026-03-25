@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
+from ctypes import windll
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +55,22 @@ def _force_single_thread_mode() -> None:
     }
     for key, value in single_thread_env.items():
         os.environ[key] = value
+
+
+def _configure_console_encoding() -> None:
+    if os.name == "nt":
+        try:
+            windll.kernel32.SetConsoleCP(65001)
+            windll.kernel32.SetConsoleOutputCP(65001)
+        except OSError:
+            pass
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            reconfigure(encoding="utf-8", errors="replace")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -170,6 +188,7 @@ def _run_batch(config: AppConfig, cli_args: argparse.Namespace, payload: dict[st
 
 def main() -> int:
     _force_single_thread_mode()
+    _configure_console_encoding()
     parser = _build_parser()
     args = parser.parse_args()
     config_payload = None

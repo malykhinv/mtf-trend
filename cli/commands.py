@@ -407,7 +407,9 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
     selected_stage_ids = _resolve_ppa_stage_ids(args)
 
     symbols_with_trades = 0
+    symbols_with_stage_events = 0
     total_trades_generated = 0
+    total_stage_events = 0
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
         stage_id: []
         for stage_id in selected_stage_ids
@@ -428,6 +430,7 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
             symbols_with_trades += 1
 
         stage_events_raw = diagnostics.get("stage_events", [])
+        symbol_stage_events = 0
         if isinstance(stage_events_raw, list):
             for raw_event in stage_events_raw:
                 if not isinstance(raw_event, dict):
@@ -435,12 +438,16 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
                 stage_id = raw_event.get("stage_id")
                 if not isinstance(stage_id, str) or stage_id not in stage_rows_by_stage:
                     continue
+                symbol_stage_events += 1
                 stage_rows_by_stage[stage_id].append(
                     {
                         "symbol": symbol,
                         **raw_event,
                     }
                 )
+        total_stage_events += symbol_stage_events
+        if symbol_stage_events > 0:
+            symbols_with_stage_events += 1
 
         payload = {
             "symbol": symbol,
@@ -462,15 +469,16 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
     )
 
     logger.info(
-        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸ÐºÐ° post_pump_absorption symbols=%s trades_generated=%s stages=%s output_dir=%s",
+        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸ÐºÐ° post_pump_absorption stage_symbols=%s stage_events=%s trades_generated=%s stages=%s output_dir=%s",
         log_prefix,
-        symbols_with_trades,
+        symbols_with_stage_events,
+        total_stage_events,
         total_trades_generated,
         ",".join(selected_stage_ids),
         diagnostics_dir,
     )
-    if symbols_with_trades == 0:
-        logger.warning("%s: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ´ÐµÐ»Ð¾Ðº post_pump_absorption Ð´Ð»Ñ Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸Ñ‡ÐµÑÐºÐ¾Ð³Ð¾ Ð²Ñ‹Ð²Ð¾Ð´Ð°", log_prefix)
+    if total_stage_events == 0:
+        logger.warning("%s: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ¾Ð±Ñ‹Ñ‚Ð¸Ð¹ post_pump_absorption Ð´Ð»Ñ Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð½Ñ‹Ñ… stages", log_prefix)
 
 
 def _plot_bee_bite_diagnostics_for_symbols(
@@ -605,6 +613,61 @@ def _plot_for_strategy_dispatch(
         entry_timeframe=entry_timeframe,
         log_prefix=log_prefix,
     )
+
+
+def _select_ppa_plot_params_row_by_stage(
+    *,
+    args: argparse.Namespace,
+    strategy: PostPumpAbsorptionStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    results: pd.DataFrame,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    logger: Logger,
+) -> pd.Series | None:
+    if results.empty or not symbol_frames:
+        return None
+
+    selected_stage_ids = set(_resolve_ppa_stage_ids(args))
+    scored_rows: list[tuple[int, int, float, int, pd.Series]] = []
+
+    for row_index, (_, row) in enumerate(results.iterrows()):
+        stage_events_count = 0
+        trades_generated = 0
+
+        for symbol, mtf_frames in symbol_frames.items():
+            params = _build_post_pump_absorption_params_from_row(
+                row,
+                symbol=symbol,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+            strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+            diagnostics = strategy.consume_last_generation_diagnostics()
+
+            stage_events = diagnostics.get("stage_events", [])
+            if isinstance(stage_events, list):
+                stage_events_count += sum(
+                    1
+                    for event in stage_events
+                    if isinstance(event, dict) and event.get("stage_id") in selected_stage_ids
+                )
+            trades_generated += int(diagnostics.get("trades_generated", 0) or 0)
+
+        profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
+        scored_rows.append((stage_events_count, trades_generated, profit_factor, -row_index, row))
+
+    if not scored_rows:
+        return None
+
+    best_score = max(scored_rows, key=lambda item: item[:4])
+    logger.info(
+        "запуск-бэктеста: stage-plot selected row by stage_events=%s trades_generated=%s profit_factor=%.4f",
+        best_score[0],
+        best_score[1],
+        best_score[2],
+    )
+    return best_score[4]
 
 
 def _load_plot_params_row_from_results(
@@ -1788,7 +1851,23 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             logger.warning("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: plot=true, Ð½Ð¾ Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚Ñ‹ Ð¿ÑƒÑÑ‚Ñ‹Ðµ")
             return 0
 
-        best_row = results.iloc[0]
+        if strategy_id == "post_pump_absorption" and (
+            getattr(args, "ppa_stage", None) is not None or getattr(args, "ppa_through_stage", None) is not None
+        ):
+            best_row = _select_ppa_plot_params_row_by_stage(
+                args=args,
+                strategy=strategy,
+                symbol_frames=symbol_frames,
+                results=results,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                logger=logger,
+            )
+            if best_row is None:
+                logger.warning("запуск-бэктеста: stage plot selection returned no params row")
+                return 0
+        else:
+            best_row = results.iloc[0]
         if not _plot_for_strategy_dispatch(
             config=config,
             args=args,

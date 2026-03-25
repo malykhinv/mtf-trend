@@ -261,8 +261,6 @@ class PostPumpAbsorptionEngine:
         enriched = self._attach_oi_context(entry_frame=enriched, oi_frame=oi_frame)
         if not self._has_usable_flow_data(enriched):
             diagnostics["missing_taker_data"] = 1
-            self._last_generation_diagnostics = diagnostics
-            return []
 
         market = self._build_market_series(enriched)
         if not market.rows:

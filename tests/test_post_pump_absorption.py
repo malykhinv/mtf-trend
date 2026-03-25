@@ -342,6 +342,7 @@ def test_post_pump_absorption_reports_missing_taker_data_without_silent_failure(
 
     assert trades == []
     assert diagnostics["missing_taker_data"] == 1
+    assert diagnostics["stage_hits"]["stage_1_pump"] >= 1
 
 
 def test_post_pump_absorption_uses_supportive_5m_oi_as_optional_enhancer() -> None:
