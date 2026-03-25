@@ -118,6 +118,20 @@ python main.py run-backtest --strategy post_pump_absorption --entry-tf 1m --plot
 python main.py run-backtest --strategy post_pump_absorption --entry-tf 3m --plot true --ppa-stage 5
 ```
 
+For compact all-timeframe runs, use the dedicated preset command:
+
+```bash
+python main.py ppa-stage s4
+python main.py ppa-stage t3
+```
+
+Preset rules:
+
+- `sN` / `stageN` = exact stage `N`
+- `tN` / `throughN` = cumulative path `stage_1 ... stage_N`
+
+`ppa-stage` runs `1m`, `3m`, `5m` by default and builds one root directory with per-timeframe stage exports.
+
 What it exports inside `trade_plots/post_pump_absorption_diagnostics/`:
 
 - per-symbol diagnostics JSON

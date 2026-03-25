@@ -91,6 +91,12 @@ def test_resolve_handler_supports_run_ppa_research() -> None:
     assert handler is commands.run_ppa_research
 
 
+def test_resolve_handler_supports_ppa_stage() -> None:
+    handler = resolve_handler("ppa-stage")
+
+    assert handler is commands.run_ppa_stage
+
+
 def test_run_backtest_parser_accepts_ppa_stage_arguments() -> None:
     args = build_parser().parse_args(
         [
@@ -109,6 +115,14 @@ def test_run_backtest_parser_accepts_ppa_stage_arguments() -> None:
     assert args.ppa_through_stage == 4
 
 
+def test_ppa_stage_parser_accepts_compact_stage_preset() -> None:
+    args = build_parser().parse_args(["ppa-stage", "s4", "--timeframes", "1m", "5m"])
+
+    assert args.command == "ppa-stage"
+    assert args.preset == "s4"
+    assert args.timeframes == ["1m", "5m"]
+
+
 def test_resolve_ppa_stage_ids_supports_single_stage_and_cumulative_mode() -> None:
     assert commands._resolve_ppa_stage_ids(argparse.Namespace(ppa_stage=4, ppa_through_stage=None)) == (
         "stage_4_aggression",
@@ -118,6 +132,11 @@ def test_resolve_ppa_stage_ids_supports_single_stage_and_cumulative_mode() -> No
         "stage_2_range",
         "stage_3_lower_zone",
     )
+
+
+def test_resolve_ppa_stage_preset_supports_short_and_long_forms() -> None:
+    assert commands._resolve_ppa_stage_preset("s4") == (4, None, "s4")
+    assert commands._resolve_ppa_stage_preset("through3") == (None, 3, "through3")
 
 
 def test_cli_parser_rejects_removed_legacy_review_command() -> None:

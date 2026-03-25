@@ -129,6 +129,43 @@ def build_parser() -> argparse.ArgumentParser:
     ppa_research.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
     ppa_research.add_argument("--output-dir", default=None, help="Root directory for research results")
 
+    ppa_stage = subparsers.add_parser(
+        "ppa-stage",
+        help="Run compact post_pump_absorption stage review across micro timeframes",
+    )
+    ppa_stage.add_argument(
+        "preset",
+        choices=[
+            "s1", "s2", "s3", "s4", "s5", "s6",
+            "t1", "t2", "t3", "t4", "t5", "t6",
+            "stage1", "stage2", "stage3", "stage4", "stage5", "stage6",
+            "through1", "through2", "through3", "through4", "through5", "through6",
+        ],
+        help="Stage preset: sN/stageN for one stage, tN/throughN for cumulative 1..N",
+    )
+    ppa_stage.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    ppa_stage.add_argument(
+        "--top-n",
+        type=_positive_int_for("--top-n"),
+        default=None,
+        help="Number of symbols after volume pre-rank",
+    )
+    ppa_stage.add_argument(
+        "--timeframes",
+        nargs="*",
+        default=None,
+        help="Micro timeframes to run, default: 1m 3m 5m",
+    )
+    ppa_stage.add_argument(
+        "--ppa-profile",
+        choices=["loose", "balanced", "strict"],
+        default=None,
+        help="Post pump absorption profile",
+    )
+    ppa_stage.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
+    ppa_stage.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
+    ppa_stage.add_argument("--output-dir", default=None, help="Root directory for stage review results")
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -143,6 +180,7 @@ def resolve_handler(command_name: str) -> Handler:
         "update-cache": commands.update_cache,
         "run-backtest": commands.run_backtest,
         "run-ppa-research": commands.run_ppa_research,
+        "ppa-stage": commands.run_ppa_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }

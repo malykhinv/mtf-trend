@@ -302,3 +302,49 @@ def test_cli_parser_supports_run_ppa_research_command() -> None:
 
     assert args.command == "run-ppa-research"
     assert args.timeframes == ["1m", "5m"]
+
+
+def test_run_ppa_stage_inner_runs_all_micro_timeframes(monkeypatch, tmp_path: Path) -> None:
+    config = _build_config(tmp_path)
+    output_dir = tmp_path / "stage_output"
+    calls: list[str] = []
+
+    def _fake_run_backtest_inner(scoped_config: AppConfig, scoped_args: argparse.Namespace) -> int:
+        calls.append(str(scoped_args.entry_tf))
+        strategy_dir = commands._resolve_results_dir_for_strategy(
+            scoped_config.backtest.results_dir,
+            "post_pump_absorption",
+        )
+        diagnostics_dir = strategy_dir / "trade_plots" / "post_pump_absorption_diagnostics" / "stage_reviews"
+        (diagnostics_dir / "stage_4_aggression").mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            [
+                {
+                    "stage_id": "stage_4_aggression",
+                    "events_count": 3,
+                    "events_path": str(diagnostics_dir / "stage_4_aggression" / "events.csv"),
+                    "summary_path": str(diagnostics_dir / "stage_4_aggression" / "summary_by_symbol.csv"),
+                }
+            ]
+        ).to_csv(diagnostics_dir / "manifest.csv", index=False)
+        return 0
+
+    monkeypatch.setattr(commands, "_run_backtest_inner", _fake_run_backtest_inner)
+
+    args = argparse.Namespace(
+        preset="s4",
+        symbols=None,
+        top_n=25,
+        timeframes=None,
+        ppa_profile="balanced",
+        ppa_deposit=1000.0,
+        ppa_risk_pct=0.02,
+        output_dir=str(output_dir),
+    )
+
+    exit_code = commands._run_ppa_stage_inner(config, args)
+
+    assert exit_code == 0
+    assert calls == ["1m", "3m", "5m"]
+    assert (output_dir / "stage_review_summary.csv").exists()
+    assert (output_dir / "stage_review_context.json").exists()

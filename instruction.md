@@ -79,6 +79,8 @@
 - `python main.py run-backtest --strategy post_pump_absorption --ppa-profile balanced`
 - `python main.py run-backtest --strategy post_pump_absorption --entry-tf 1m --plot true --ppa-through-stage 4`
 - `python main.py run-backtest --strategy post_pump_absorption --entry-tf 3m --plot true --ppa-stage 5`
+- `python main.py ppa-stage s4`
+- `python main.py ppa-stage t3`
 - `python main.py run-ppa-research --ppa-profile balanced`
 - `python main.py run-backtest --strategy bee_bite`
 - `python main.py check-quality`

@@ -92,6 +92,12 @@ from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 # region ÐŸÑ€Ð¸Ð²Ð°Ñ‚Ð½Ñ‹Ðµ
 
 _PROGRESS_LOG_EVERY = 100
+_PPA_STAGE_PRESETS: dict[str, tuple[int | None, int | None]] = {
+    **{f"s{idx}": (idx, None) for idx in range(1, len(PPA_STAGE_SEQUENCE) + 1)},
+    **{f"stage{idx}": (idx, None) for idx in range(1, len(PPA_STAGE_SEQUENCE) + 1)},
+    **{f"t{idx}": (None, idx) for idx in range(1, len(PPA_STAGE_SEQUENCE) + 1)},
+    **{f"through{idx}": (None, idx) for idx in range(1, len(PPA_STAGE_SEQUENCE) + 1)},
+}
 
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
@@ -319,6 +325,15 @@ def _resolve_ppa_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
     return tuple(PPA_STAGE_SEQUENCE)
 
 
+def _resolve_ppa_stage_preset(raw_value: object) -> tuple[int | None, int | None, str]:
+    preset = str(raw_value or "").strip().lower()
+    if preset not in _PPA_STAGE_PRESETS:
+        supported = ", ".join(sorted(_PPA_STAGE_PRESETS))
+        raise ValueError(f"Unsupported ppa-stage preset: {preset}. Supported: {supported}")
+    stage, through_stage = _PPA_STAGE_PRESETS[preset]
+    return stage, through_stage, preset
+
+
 def _export_ppa_stage_reviews(
     *,
     diagnostics_dir: Path,
@@ -363,6 +378,15 @@ def _export_ppa_stage_reviews(
         )
 
     pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
+
+
+def _read_csv_or_empty(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
 
 
 def _plot_post_pump_absorption_diagnostics_for_symbols(
@@ -1177,6 +1201,21 @@ def _with_ppa_research_timeframe(args: argparse.Namespace, timeframe: Timeframe)
     return cloned
 
 
+def _with_ppa_stage_timeframe(
+    args: argparse.Namespace,
+    timeframe: Timeframe,
+    *,
+    preset_stage: int | None,
+    preset_through_stage: int | None,
+) -> argparse.Namespace:
+    cloned = _with_ppa_research_timeframe(args, timeframe)
+    cloned.command = "run-backtest"
+    cloned.plot = True
+    cloned.ppa_stage = preset_stage
+    cloned.ppa_through_stage = preset_through_stage
+    return cloned
+
+
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("fetch-data", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     fetch_timeframes = _resolve_fetch_timeframes(args, config.fetch.timeframes)
@@ -1837,6 +1876,89 @@ def _run_ppa_research_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return max(run_exit_codes, default=0)
 
 
+def _run_ppa_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("ppa-stage", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    preset_stage, preset_through_stage, preset_name = _resolve_ppa_stage_preset(getattr(args, "preset", None))
+    timeframes = _resolve_ppa_research_timeframes(args)
+    timestamp_label = time.strftime("%Y%m%d_%H%M%S")
+    root_output_dir = (
+        Path(args.output_dir)
+        if getattr(args, "output_dir", None)
+        else Path(config.backtest.results_dir) / "stage_review" / "post_pump_absorption" / preset_name / timestamp_label
+    )
+    root_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "ppa-stage: preset=%s stage=%s through_stage=%s timeframes=%s output_dir=%s",
+        preset_name,
+        preset_stage,
+        preset_through_stage,
+        ",".join(timeframe.value for timeframe in timeframes),
+        root_output_dir,
+    )
+
+    run_exit_codes: list[int] = []
+    summary_rows: list[dict[str, object]] = []
+    for timeframe in timeframes:
+        scoped_config = deepcopy(config)
+        scoped_config.strategy.strategy_id = "post_pump_absorption"
+        scoped_config.backtest.results_dir = root_output_dir / timeframe.value
+        scoped_args = _with_ppa_stage_timeframe(
+            args,
+            timeframe,
+            preset_stage=preset_stage,
+            preset_through_stage=preset_through_stage,
+        )
+        exit_code = _run_backtest_inner(scoped_config, scoped_args)
+        run_exit_codes.append(exit_code)
+
+        strategy_results_dir = _resolve_results_dir_for_strategy(
+            Path(scoped_config.backtest.results_dir),
+            "post_pump_absorption",
+        )
+        stage_reviews_dir = strategy_results_dir / "trade_plots" / "post_pump_absorption_diagnostics" / "stage_reviews"
+        manifest_path = stage_reviews_dir / "manifest.csv"
+        manifest = _read_csv_or_empty(manifest_path)
+        if not manifest.empty:
+            for _, row in manifest.iterrows():
+                summary_rows.append(
+                    {
+                        "timeframe": timeframe.value,
+                        "preset": preset_name,
+                        "stage_id": row.get("stage_id"),
+                        "events_count": row.get("events_count"),
+                        "events_path": row.get("events_path"),
+                        "summary_path": row.get("summary_path"),
+                    }
+                )
+
+    summary_path = root_output_dir / "stage_review_summary.csv"
+    pd.DataFrame(summary_rows).to_csv(summary_path, index=False)
+    context_path = root_output_dir / "stage_review_context.json"
+    context_path.write_text(
+        json.dumps(
+            {
+                "preset": preset_name,
+                "stage": preset_stage,
+                "through_stage": preset_through_stage,
+                "timeframes": [timeframe.value for timeframe in timeframes],
+                "symbols": list(getattr(args, "symbols", None) or []),
+                "top_n": getattr(args, "top_n", None),
+                "ppa_profile": getattr(args, "ppa_profile", None) or config.strategy.post_pump_absorption_profile,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    logger.info(
+        "ppa-stage: summary=%s context=%s",
+        summary_path,
+        context_path,
+    )
+    return max(run_exit_codes, default=0)
+
+
 def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     if "open_interest" not in frame.columns:
         return [
@@ -2067,6 +2189,11 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
 def run_ppa_research(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs post_pump_absorption on multiple micro timeframes and builds research artifacts."""
     return _run_with_logging("run-ppa-research", config, lambda: _run_ppa_research_inner(config, args))
+
+
+def run_ppa_stage(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs compact stage review for post_pump_absorption across micro timeframes."""
+    return _run_with_logging("ppa-stage", config, lambda: _run_ppa_stage_inner(config, args))
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
