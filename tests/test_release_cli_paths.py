@@ -48,6 +48,25 @@ def test_update_cache_parser_accepts_symbols_timeframes_and_skip_open_interest()
     assert args.skip_open_interest is True
 
 
+def test_fetch_ppa_cache_parser_accepts_year_period_arguments() -> None:
+    args = build_parser().parse_args(
+        [
+            "fetch-ppa-cache",
+            "--days",
+            "366",
+            "--top-n",
+            "50",
+            "--end-timestamp-ms",
+            "1774233300000",
+        ]
+    )
+
+    assert args.command == "fetch-ppa-cache"
+    assert args.days == 366
+    assert args.top_n == 50
+    assert args.end_timestamp_ms == 1774233300000
+
+
 def test_launcher_parser_supports_ppa_research_mode() -> None:
     args = launcher._build_parser().parse_args(
         [
@@ -89,6 +108,12 @@ def test_resolve_handler_supports_run_ppa_research() -> None:
     handler = resolve_handler("run-ppa-research")
 
     assert handler is commands.run_ppa_research
+
+
+def test_resolve_handler_supports_fetch_ppa_cache() -> None:
+    handler = resolve_handler("fetch-ppa-cache")
+
+    assert handler is commands.fetch_ppa_cache
 
 
 def test_resolve_handler_supports_ppa_stage() -> None:

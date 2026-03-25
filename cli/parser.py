@@ -46,6 +46,17 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--timeframes", nargs="*", default=None, help="Timeframes to fetch, e.g. 1m 3m 5m")
     fetch.add_argument("--skip-open-interest", action="store_true", default=False, help="Skip open interest fetching")
     fetch.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
+
+    fetch_ppa = subparsers.add_parser(
+        "fetch-ppa-cache",
+        help="Load post_pump_absorption cache: 5m with OI, 1m/3m without OI",
+    )
+    fetch_ppa.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    fetch_ppa.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
+    fetch_ppa.add_argument("--days", type=_positive_int_for("--days"), default=366)
+    fetch_ppa.add_argument("--min-volume-usd", type=float, default=1_000_000.0)
+    fetch_ppa.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
+
     update = subparsers.add_parser("update-cache", help="Incrementally update the local cache")
     update.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     update.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
@@ -177,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
 def resolve_handler(command_name: str) -> Handler:
     handlers: dict[str, Handler] = {
         "fetch-data": commands.fetch_data,
+        "fetch-ppa-cache": commands.fetch_ppa_cache,
         "update-cache": commands.update_cache,
         "run-backtest": commands.run_backtest,
         "run-ppa-research": commands.run_ppa_research,

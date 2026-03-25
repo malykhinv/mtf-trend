@@ -947,7 +947,7 @@ def _resolve_symbols(
                 )
     except Exception as exc:
         logger.warning(
-            '??????-????????: ????? ?? ???????? ??????????? ????? ?????????? (%s)',
+            'ликвидность-кэша: не удалось получить метрики биржи (%s)',
             exc,
         )
 
@@ -955,7 +955,7 @@ def _resolve_symbols(
     if not combined_symbols:
         fallback_symbols = exchange_symbols_normalized[:top_n]
         logger.info(
-            '??????-????????: ??? ??????????? ???? -> fallback ?? ?????????? top_n=%s',
+            'ликвидность-кэша: не найдено ликвидных символов, fallback на первые top_n=%s',
             len(fallback_symbols),
         )
         return [futures_symbol_map[symbol] for symbol in fallback_symbols], liquidity_quality_by_symbol
@@ -971,7 +971,7 @@ def _resolve_symbols(
     )[:top_n]
 
     logger.info(
-        '??????-????????: ?????=cache+exchange-liquidity, ????? ?? ?????=%s -> ? ???? ? ???????=%s -> ??? ?????? ?????? ???????????=%s -> ???????? ???????????? ???=%s -> ????? top_n=%s',
+        'ликвидность-кэша: источник=cache+exchange-liquidity, символов_на_бирже=%s -> в_кэше_с_объёмом=%s -> прошло_порог_ликвидности=%s -> объединённый_кандидатный_лист=%s -> выбрано_top_n=%s',
         len(exchange_symbols_normalized),
         len(symbols_with_volume),
         len(liquid_symbols),
@@ -979,12 +979,12 @@ def _resolve_symbols(
         len(ranked_top_symbols),
     )
     logger.info(
-        '??????-????????: ?????? ??????????? ?? ?????????????? ?????? (???_avg_daily_volume_usd=%.2f) ?????????=%s',
+        'ликвидность-кэша: исключено по порогу среднего объёма (min_avg_daily_volume_usd=%.2f) символов=%s',
         min_volume_usd,
         len(symbols_with_volume) - len(liquid_symbols),
     )
     logger.info(
-        '??????-????????: newly admitted symbols ?? ???????? ??????=%s',
+        'ликвидность-кэша: добавлено символов по метрикам биржи=%s',
         len(exchange_liquid_symbols - set(liquid_symbols)),
     )
     return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
@@ -1413,6 +1413,133 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     logger.info("fetch-data: status=%s exit_code=%s", root_stage_status, exit_code)
     _log_loaded_coins(logger, len(followup_symbols), "loaded")
+    return exit_code
+
+
+def _resolve_fetch_symbol_list(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+) -> list[str]:
+    _, exchange_client = _build_fetch_stack(config)
+    futures_symbols = exchange_client.get_futures_symbols()
+    explicit_symbols = _resolve_explicit_symbols(
+        requested_symbols=getattr(args, "symbols", None),
+        futures_symbols_raw=futures_symbols,
+        logger=logger,
+    )
+    if explicit_symbols is not None:
+        return explicit_symbols
+
+    all_futures_count = len(futures_symbols)
+    min_volume_usd = args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd
+    top_n = args.top_n if args.top_n is not None else all_futures_count
+    symbols, _ = _resolve_symbols(
+        exchange_client,
+        top_n=top_n,
+        min_volume_usd=min_volume_usd,
+        logger=logger,
+        cache_dir=config.backtest.cache_dir,
+        liquidity_timeframe=config.fetch.timeframe,
+        futures_symbols_raw=futures_symbols,
+    )
+    return symbols
+
+
+def _resolve_fetch_ppa_symbols(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+) -> list[str]:
+    _, exchange_client = _build_fetch_stack(config)
+    futures_symbols = exchange_client.get_futures_symbols()
+    explicit_symbols = _resolve_explicit_symbols(
+        requested_symbols=getattr(args, "symbols", None),
+        futures_symbols_raw=futures_symbols,
+        logger=logger,
+    )
+    if explicit_symbols is not None:
+        return explicit_symbols
+
+    min_volume_usd = float(args.min_volume_usd if args.min_volume_usd is not None else 1_000_000.0)
+    top_n = args.top_n
+    ranked = exchange_client.get_futures_symbols_with_liquidity_metrics()
+    selected = [
+        str(item["symbol"])
+        for item in ranked
+        if float(item.get("quote_volume", 0.0) or 0.0) >= min_volume_usd
+        and int(item.get("trade_count_24h", 0) or 0) > 0
+    ]
+    if top_n is not None:
+        selected = selected[:top_n]
+
+    logger.info(
+        "fetch-ppa-cache: exchange universe filtered active_usdt_perps=%s min_quote_volume_24h=%.2f selected=%s",
+        len(ranked),
+        min_volume_usd,
+        len(selected),
+    )
+    return selected
+
+
+def _clone_fetch_args(
+    args: argparse.Namespace,
+    *,
+    symbols: list[str],
+    timeframes: list[str],
+    skip_open_interest: bool,
+) -> argparse.Namespace:
+    cloned = deepcopy(args)
+    cloned.symbols = list(symbols)
+    cloned.timeframes = list(timeframes)
+    cloned.skip_open_interest = skip_open_interest
+    return cloned
+
+
+def _fetch_ppa_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("fetch-ppa-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    if args.days <= 0:
+        logger.error("fetch-ppa-cache: --days must be > 0")
+        return 1
+    if args.top_n is not None and args.top_n <= 0:
+        logger.error("fetch-ppa-cache: --top-n must be > 0")
+        return 1
+
+    symbols = _resolve_fetch_ppa_symbols(config=config, args=args, logger=logger)
+    if not symbols:
+        logger.info("fetch-ppa-cache: no symbols resolved for cache load")
+        return 0
+
+    logger.info(
+        "fetch-ppa-cache: resolved symbols=%s min_volume_usd=%.2f period_days=%s end_timestamp_ms=%s",
+        len(symbols),
+        float(args.min_volume_usd if args.min_volume_usd is not None else config.fetch.min_volume_usd),
+        args.days,
+        getattr(args, "end_timestamp_ms", None),
+    )
+
+    fetch_5m_args = _clone_fetch_args(
+        args,
+        symbols=symbols,
+        timeframes=[Timeframe.M5.value],
+        skip_open_interest=False,
+    )
+    fetch_micro_args = _clone_fetch_args(
+        args,
+        symbols=symbols,
+        timeframes=[Timeframe.M1.value, Timeframe.M3.value],
+        skip_open_interest=True,
+    )
+
+    logger.info("fetch-ppa-cache: phase 1/2 -> 5m with open interest")
+    code_5m = _fetch_data_inner(config, fetch_5m_args)
+    logger.info("fetch-ppa-cache: phase 2/2 -> 1m/3m without open interest")
+    code_micro = _fetch_data_inner(config, fetch_micro_args)
+
+    exit_code = max(code_5m, code_micro)
+    logger.info("fetch-ppa-cache: completed code_5m=%s code_micro=%s exit_code=%s", code_5m, code_micro, exit_code)
     return exit_code
 
 
@@ -2253,6 +2380,11 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
     """Запускает сценарий загрузки рыночных данных."""
     return _run_with_logging("fetch-data", config, lambda: _fetch_data_inner(config, args))
+
+
+def fetch_ppa_cache(config: AppConfig, args: argparse.Namespace) -> int:
+    """Загружает кэш для post_pump_absorption: 5m c OI, 1m/3m без OI."""
+    return _run_with_logging("fetch-ppa-cache", config, lambda: _fetch_ppa_cache_inner(config, args))
 
 
 def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
