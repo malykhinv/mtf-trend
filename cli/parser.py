@@ -85,6 +85,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_bt.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
     run_bt.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
+    run_bt.add_argument(
+        "--ppa-stage",
+        type=_positive_int_for("--ppa-stage"),
+        default=None,
+        help="Export only one PPA logical stage in diagnostics (1..6)",
+    )
+    run_bt.add_argument(
+        "--ppa-through-stage",
+        type=_positive_int_for("--ppa-through-stage"),
+        default=None,
+        help="Export cumulative PPA logical stages 1..N in diagnostics (1..6)",
+    )
     run_bt.add_argument("--plot", default=False, help="Save diagnostic files for the best combination (true/false)")
     run_bt.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
     run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")

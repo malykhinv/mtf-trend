@@ -306,6 +306,15 @@ def test_post_pump_absorption_exposes_logical_stage_diagnostics() -> None:
     assert diagnostics["stage_hits"]["stage_4_aggression"] >= 1
     assert diagnostics["stage_hits"]["stage_5_setup"] >= 1
     assert diagnostics["stage_hits"]["stage_6_trade"] >= 1
+    assert diagnostics["stage_events"]
+    assert {event["stage_id"] for event in diagnostics["stage_events"]} >= {
+        "stage_1_pump",
+        "stage_2_range",
+        "stage_3_lower_zone",
+        "stage_4_aggression",
+        "stage_5_setup",
+        "stage_6_trade",
+    }
     assert trades[0].metadata is not None
     assert trades[0].metadata["stage_path"] == (
         "stage_1_pump > stage_2_range > stage_3_lower_zone > "

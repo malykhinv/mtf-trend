@@ -91,6 +91,35 @@ def test_resolve_handler_supports_run_ppa_research() -> None:
     assert handler is commands.run_ppa_research
 
 
+def test_run_backtest_parser_accepts_ppa_stage_arguments() -> None:
+    args = build_parser().parse_args(
+        [
+            "run-backtest",
+            "--strategy",
+            "post_pump_absorption",
+            "--entry-tf",
+            "1m",
+            "--ppa-through-stage",
+            "4",
+        ]
+    )
+
+    assert args.command == "run-backtest"
+    assert args.strategy == "post_pump_absorption"
+    assert args.ppa_through_stage == 4
+
+
+def test_resolve_ppa_stage_ids_supports_single_stage_and_cumulative_mode() -> None:
+    assert commands._resolve_ppa_stage_ids(argparse.Namespace(ppa_stage=4, ppa_through_stage=None)) == (
+        "stage_4_aggression",
+    )
+    assert commands._resolve_ppa_stage_ids(argparse.Namespace(ppa_stage=None, ppa_through_stage=3)) == (
+        "stage_1_pump",
+        "stage_2_range",
+        "stage_3_lower_zone",
+    )
+
+
 def test_cli_parser_rejects_removed_legacy_review_command() -> None:
     with pytest.raises(SystemExit):
         build_parser().parse_args(["review-stage1"])

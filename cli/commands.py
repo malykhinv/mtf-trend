@@ -79,6 +79,7 @@ from strategy.post_pump_absorption.config import (
     POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME,
     POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES,
 )
+from strategy.post_pump_absorption.engine import PPA_STAGE_SEQUENCE
 from strategy.post_pump_absorption.research import (
     PostPumpAbsorptionResearchRun,
     build_post_pump_absorption_research_artifacts,
@@ -297,6 +298,73 @@ def _flatten_trade_for_diagnostics(trade: object) -> dict[str, object]:
     return payload
 
 
+def _resolve_ppa_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
+    raw_stage = getattr(args, "ppa_stage", None)
+    raw_through_stage = getattr(args, "ppa_through_stage", None)
+    if raw_stage is not None and raw_through_stage is not None:
+        raise ValueError("Use only one of --ppa-stage or --ppa-through-stage")
+
+    if raw_stage is not None:
+        stage_number = int(raw_stage)
+        if stage_number < 1 or stage_number > len(PPA_STAGE_SEQUENCE):
+            raise ValueError(f"--ppa-stage must be in range 1..{len(PPA_STAGE_SEQUENCE)}")
+        return (PPA_STAGE_SEQUENCE[stage_number - 1],)
+
+    if raw_through_stage is not None:
+        stage_number = int(raw_through_stage)
+        if stage_number < 1 or stage_number > len(PPA_STAGE_SEQUENCE):
+            raise ValueError(f"--ppa-through-stage must be in range 1..{len(PPA_STAGE_SEQUENCE)}")
+        return tuple(PPA_STAGE_SEQUENCE[:stage_number])
+
+    return tuple(PPA_STAGE_SEQUENCE)
+
+
+def _export_ppa_stage_reviews(
+    *,
+    diagnostics_dir: Path,
+    stage_rows_by_stage: dict[str, list[dict[str, object]]],
+    selected_stage_ids: tuple[str, ...],
+) -> None:
+    stage_reviews_dir = diagnostics_dir / "stage_reviews"
+    stage_reviews_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_rows: list[dict[str, object]] = []
+    for stage_id in selected_stage_ids:
+        rows = stage_rows_by_stage.get(stage_id, [])
+        stage_dir = stage_reviews_dir / stage_id
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        events_frame = pd.DataFrame(rows)
+        events_path = stage_dir / "events.csv"
+        events_frame.to_csv(events_path, index=False)
+
+        summary_rows: list[dict[str, object]] = []
+        if not events_frame.empty and "symbol" in events_frame.columns:
+            for symbol, group in events_frame.groupby("symbol", sort=True):
+                summary_rows.append(
+                    {
+                        "symbol": symbol,
+                        "events_count": int(len(group)),
+                        "first_timestamp_ms": int(pd.to_numeric(group["timestamp_ms"], errors="coerce").dropna().min())
+                        if "timestamp_ms" in group.columns and not group.empty
+                        else None,
+                        "last_timestamp_ms": int(pd.to_numeric(group["timestamp_ms"], errors="coerce").dropna().max())
+                        if "timestamp_ms" in group.columns and not group.empty
+                        else None,
+                    }
+                )
+        pd.DataFrame(summary_rows).to_csv(stage_dir / "summary_by_symbol.csv", index=False)
+        manifest_rows.append(
+            {
+                "stage_id": stage_id,
+                "events_count": int(len(rows)),
+                "events_path": str(events_path),
+                "summary_path": str(stage_dir / "summary_by_symbol.csv"),
+            }
+        )
+
+    pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
+
+
 def _plot_post_pump_absorption_diagnostics_for_symbols(
     *,
     config: AppConfig,
@@ -312,9 +380,14 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
     output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
     diagnostics_dir = output_dir / "post_pump_absorption_diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    selected_stage_ids = _resolve_ppa_stage_ids(args)
 
     symbols_with_trades = 0
     total_trades_generated = 0
+    stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
+        stage_id: []
+        for stage_id in selected_stage_ids
+    }
 
     for symbol, mtf_frames in symbol_frames.items():
         params = _build_post_pump_absorption_params_from_row(
@@ -330,6 +403,21 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
         if trade_rows:
             symbols_with_trades += 1
 
+        stage_events_raw = diagnostics.get("stage_events", [])
+        if isinstance(stage_events_raw, list):
+            for raw_event in stage_events_raw:
+                if not isinstance(raw_event, dict):
+                    continue
+                stage_id = raw_event.get("stage_id")
+                if not isinstance(stage_id, str) or stage_id not in stage_rows_by_stage:
+                    continue
+                stage_rows_by_stage[stage_id].append(
+                    {
+                        "symbol": symbol,
+                        **raw_event,
+                    }
+                )
+
         payload = {
             "symbol": symbol,
             "trades_generated": len(trade_rows),
@@ -343,11 +431,18 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
         )
         pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
+    _export_ppa_stage_reviews(
+        diagnostics_dir=diagnostics_dir,
+        stage_rows_by_stage=stage_rows_by_stage,
+        selected_stage_ids=selected_stage_ids,
+    )
+
     logger.info(
-        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸ÐºÐ° post_pump_absorption symbols=%s trades_generated=%s output_dir=%s",
+        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸ÐºÐ° post_pump_absorption symbols=%s trades_generated=%s stages=%s output_dir=%s",
         log_prefix,
         symbols_with_trades,
         total_trades_generated,
+        ",".join(selected_stage_ids),
         diagnostics_dir,
     )
     if symbols_with_trades == 0:

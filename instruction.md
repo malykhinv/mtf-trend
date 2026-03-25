@@ -42,6 +42,7 @@
 - current implementation stores per-trade metadata (`setup_type`, entry position in range, aggression strength, stop width, `MFE/MAE`, target hits) and uses it in backtest analytics.
 - current implementation also stores `5m OI` confirmation metadata and time-boundary markers (`1m/5m/30m/60m`) for report slicing.
 - current implementation exposes explicit logical stages for PPA diagnostics: `stage_1_pump`, `stage_2_range`, `stage_3_lower_zone`, `stage_4_aggression`, `stage_5_setup`, `stage_6_trade`.
+- current implementation exports timestamped `stage_events` for PPA diagnostics, so manual review can be done stage-by-stage.
 - current implementation has a dedicated one-command research runner: `run-ppa-research`.
 - `run-ppa-research` is the preferred entry point for PPA analysis; it must run all required micro timeframes (`1m`, `3m`, `5m` by default), export per-timeframe raw results, and build consolidated CSV/JSON/Markdown reports plus PNG charts in one root directory.
 - research artifacts for `post_pump_absorption` must stay strategy-specific and must not be forced through the removed bee_bite reporting path.
@@ -76,6 +77,8 @@
 
 - `python main.py run-backtest --strategy post_pump_absorption`
 - `python main.py run-backtest --strategy post_pump_absorption --ppa-profile balanced`
+- `python main.py run-backtest --strategy post_pump_absorption --entry-tf 1m --plot true --ppa-through-stage 4`
+- `python main.py run-backtest --strategy post_pump_absorption --entry-tf 3m --plot true --ppa-stage 5`
 - `python main.py run-ppa-research --ppa-profile balanced`
 - `python main.py run-backtest --strategy bee_bite`
 - `python main.py check-quality`

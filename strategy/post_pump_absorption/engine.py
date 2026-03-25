@@ -139,6 +139,7 @@ class GenerationDiagnostics(TypedDict, total=False):
     reentries_generated: int
     missing_taker_data: int
     stage_hits: dict[str, int]
+    stage_events: list[dict[str, object]]
     trade_details: list[dict[str, object]]
     context: dict[str, object]
 
@@ -167,6 +168,9 @@ class PostPumpAbsorptionEngine:
         trade_details = diagnostics.get("trade_details")
         if isinstance(trade_details, list):
             diagnostics["trade_details"] = [dict(item) for item in trade_details]
+        stage_events = diagnostics.get("stage_events")
+        if isinstance(stage_events, list):
+            diagnostics["stage_events"] = [dict(item) for item in stage_events]
         stage_hits = diagnostics.get("stage_hits")
         if isinstance(stage_hits, dict):
             diagnostics["stage_hits"] = dict(stage_hits)
@@ -180,6 +184,7 @@ class PostPumpAbsorptionEngine:
     def _empty_diagnostics(*, symbol: str | None = None) -> GenerationDiagnostics:
         diagnostics: GenerationDiagnostics = {
             "trade_details": [],
+            "stage_events": [],
             "stage_hits": {stage_id: 0 for stage_id in PPA_STAGE_SEQUENCE},
             "context": {"stage_order": list(PPA_STAGE_SEQUENCE)},
         }
@@ -288,6 +293,15 @@ class PostPumpAbsorptionEngine:
 
             diagnostics["pumps_found"] = int(diagnostics.get("pumps_found", 0)) + 1
             self._mark_stage_hit(diagnostics, PPA_STAGE_1_PUMP)
+            self._record_stage_event(
+                diagnostics,
+                stage_id=PPA_STAGE_1_PUMP,
+                row=market.row(pump_ctx.pump_idx),
+                extra={
+                    "pump_height_atr": round(pump_ctx.pump_height / max(pump_ctx.atr_bg, 1e-12), 6),
+                    "pump_high": round(pump_ctx.pump_high, 8),
+                },
+            )
             regime_trades, regime_diagnostics, next_i = self._scan_pump_regime(
                 market=market,
                 pump_ctx=pump_ctx,
@@ -318,11 +332,38 @@ class PostPumpAbsorptionEngine:
         if isinstance(target_trade_details, list) and isinstance(source_trade_details, list):
             target_trade_details.extend(source_trade_details)
 
+        target_stage_events = target.setdefault("stage_events", [])
+        source_stage_events = source.get("stage_events", [])
+        if isinstance(target_stage_events, list) and isinstance(source_stage_events, list):
+            target_stage_events.extend(source_stage_events)
+
     @staticmethod
     def _mark_stage_hit(diagnostics: GenerationDiagnostics, stage_id: str) -> None:
         stage_hits = diagnostics.setdefault("stage_hits", {stage: 0 for stage in PPA_STAGE_SEQUENCE})
         if isinstance(stage_hits, dict):
             stage_hits[stage_id] = int(stage_hits.get(stage_id, 0)) + 1
+
+    @staticmethod
+    def _record_stage_event(
+        diagnostics: GenerationDiagnostics,
+        *,
+        stage_id: str,
+        row: PriceRow,
+        extra: dict[str, object] | None = None,
+    ) -> None:
+        stage_events = diagnostics.setdefault("stage_events", [])
+        if not isinstance(stage_events, list):
+            return
+        payload: dict[str, object] = {
+            "stage_id": stage_id,
+            "timestamp_ms": int(row.timestamp),
+            "close": float(row.close),
+            "low": float(row.low),
+            "high": float(row.high),
+        }
+        if extra:
+            payload.update(extra)
+        stage_events.append(payload)
 
     @staticmethod
     def _append_features(frame: pd.DataFrame, *, atr_window_bars: int) -> pd.DataFrame:
@@ -516,6 +557,16 @@ class PostPumpAbsorptionEngine:
             diagnostics["range_candidates"] = int(diagnostics.get("range_candidates", 0)) + 1
             self._mark_stage_hit(diagnostics, PPA_STAGE_2_RANGE)
             current_row = market.row(entry_idx)
+            self._record_stage_event(
+                diagnostics,
+                stage_id=PPA_STAGE_2_RANGE,
+                row=current_row,
+                extra={
+                    "range_low": round(range_ctx.range_low, 8),
+                    "range_high": round(range_ctx.range_high, 8),
+                    "range_width_atr": round(range_ctx.range_width_atr, 6),
+                },
+            )
             if not self._run_stage_3_check_lower_zone(range_ctx=range_ctx, current_row=current_row):
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
                     market=market,
@@ -529,6 +580,15 @@ class PostPumpAbsorptionEngine:
 
             diagnostics["lower_zone_hits"] = int(diagnostics.get("lower_zone_hits", 0)) + 1
             self._mark_stage_hit(diagnostics, PPA_STAGE_3_LOWER_ZONE)
+            self._record_stage_event(
+                diagnostics,
+                stage_id=PPA_STAGE_3_LOWER_ZONE,
+                row=current_row,
+                extra={
+                    "range_low": round(range_ctx.range_low, 8),
+                    "lower_zone_high": round(range_ctx.lower_zone_high, 8),
+                },
+            )
             aggression = self._run_stage_4_measure_aggression(
                 market=market,
                 idx=entry_idx,
@@ -549,6 +609,16 @@ class PostPumpAbsorptionEngine:
 
             diagnostics["aggression_hits"] = int(diagnostics.get("aggression_hits", 0)) + 1
             self._mark_stage_hit(diagnostics, PPA_STAGE_4_AGGRESSION)
+            self._record_stage_event(
+                diagnostics,
+                stage_id=PPA_STAGE_4_AGGRESSION,
+                row=current_row,
+                extra={
+                    "aggression_ratio": round(aggression.ratio_now, 6),
+                    "aggression_volume_mult": round(aggression.volume_mult, 6),
+                    "oi_supportive": aggression.oi_supportive,
+                },
+            )
             setup = self._run_stage_5_detect_setup(
                 market=market,
                 pump_ctx=pump_ctx,
@@ -572,6 +642,16 @@ class PostPumpAbsorptionEngine:
             setup_key = "lsb_hits" if setup.setup_type == "LSB" else "mbb_hits"
             diagnostics[setup_key] = int(diagnostics.get(setup_key, 0)) + 1
             self._mark_stage_hit(diagnostics, PPA_STAGE_5_SETUP)
+            self._record_stage_event(
+                diagnostics,
+                stage_id=PPA_STAGE_5_SETUP,
+                row=current_row,
+                extra={
+                    "setup_type": setup.setup_type,
+                    "trigger_price": round(setup.trigger_price, 8),
+                    "entry_range_fraction": round(setup.entry_range_fraction, 6),
+                },
+            )
             trade, exit_idx = self._run_stage_6_simulate_trade(
                 market=market,
                 entry_idx=entry_idx,
@@ -594,6 +674,16 @@ class PostPumpAbsorptionEngine:
             trades.append(trade)
             diagnostics["trades_generated"] = int(diagnostics.get("trades_generated", 0)) + 1
             self._mark_stage_hit(diagnostics, PPA_STAGE_6_TRADE)
+            self._record_stage_event(
+                diagnostics,
+                stage_id=PPA_STAGE_6_TRADE,
+                row=current_row,
+                extra={
+                    "setup_type": setup.setup_type,
+                    "result_type": trade.result_type.value,
+                    "pnl": float(trade.pnl),
+                },
+            )
             if len(trades) > 1:
                 diagnostics["reentries_generated"] = int(diagnostics.get("reentries_generated", 0)) + 1
 

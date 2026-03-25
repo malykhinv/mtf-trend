@@ -28,6 +28,7 @@ The strategy now exposes an explicit logical stage path instead of one flat bloc
 6. `stage_6_trade`
 
 This stage order is stored in diagnostics, and generated trades export the full `stage_path` in metadata.
+Diagnostics also export timestamped `stage_events`, so manual graph review can be done by stage instead of only by final trades.
 
 Implementation details of the current version:
 
@@ -107,3 +108,23 @@ python main.py run-ppa-research --top-n 80 --ppa-profile strict
 python main.py run-ppa-research --symbols BTC/USDT ETH/USDT SOL/USDT
 python main.py run-ppa-research --timeframes 1m 5m --output-dir ./.output/results/ppa_manual_run
 ```
+
+## Manual Stage Review
+
+For manual chart work and stage-specific tuning, use the regular backtest diagnostics export with stage filters:
+
+```bash
+python main.py run-backtest --strategy post_pump_absorption --entry-tf 1m --plot true --ppa-through-stage 4
+python main.py run-backtest --strategy post_pump_absorption --entry-tf 3m --plot true --ppa-stage 5
+```
+
+What it exports inside `trade_plots/post_pump_absorption_diagnostics/`:
+
+- per-symbol diagnostics JSON
+- per-symbol trades CSV
+- `stage_reviews/manifest.csv`
+- `stage_reviews/<stage_id>/events.csv`
+- `stage_reviews/<stage_id>/summary_by_symbol.csv`
+
+Use `--ppa-through-stage N` to review the cumulative path `stage_1 ... stage_N`.
+Use `--ppa-stage N` to isolate one exact stage.
