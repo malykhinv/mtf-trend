@@ -1,4 +1,4 @@
-"""Модуль проекта."""
+﻿"""ÐœÐ¾Ð´ÑƒÐ»ÑŒ Ð¿Ñ€Ð¾ÐµÐºÑ‚Ð°."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import argparse
 import csv
 import concurrent.futures
 import json
-import math
 import shutil
 import subprocess
 import sys
@@ -18,26 +17,18 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from logging import Logger
 from pathlib import Path
-from typing import Callable, TypeVar, cast
+from typing import Callable, cast
 
 import numpy as np
 import pandas as pd
 
 from config import AppConfig
 from constants import (
-    BEE_BITE_STAGE4_SLIPPAGE_RATE,
-    BEE_BITE_STAGE4_TAKER_FEE_RATE,
     DEFAULT_BACKTEST_OUTPUT_FILE,
     DEFAULT_BEE_BITE_DEPOSIT,
     DEFAULT_BEE_BITE_RISK_PCT,
-    DEFAULT_FAILED_PLOTS_DIR_NAME,
-    DEFAULT_STAGE1_EVENTS_OUTPUT_FILE,
-    DEFAULT_STAGE1_PLOTS_DIR_NAME,
-    DEFAULT_STAGE2_EVENTS_OUTPUT_FILE,
-    DEFAULT_STAGE2_PLOTS_DIR_NAME,
     DEFAULT_RESULTS_DIR,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
-    DEFAULT_REPORT_OUTPUT_FILE,
     OI_STALE_MIN_OBSERVATIONS,
     OI_STALE_RATIO_THRESHOLD,
     QUALITY_OI_LEADING_GAPS_ISSUE,
@@ -48,9 +39,6 @@ from constants import (
     QUALITY_SEVERITY_ERROR,
     QUALITY_SEVERITY_INFO,
     QUALITY_SEVERITY_WARNING,
-    REPORT_PROFITABLE_PF_THRESHOLD,
-    REPORT_PROFIT_FACTOR_FILTER,
-    REPORT_TRADES_COUNT_FILTER,
     LOG_MSG_TASK_COMPLETED,
 )
 from data.clients.noop_market_data_client import NoOpMarketDataClient
@@ -73,15 +61,6 @@ from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from strategy.bee_bite import (
     BeeBiteParams,
     BeeBiteStrategy,
-    BeeBiteStage4PostmortemParams,
-    BeeBiteStage2ConfirmedHigh,
-    BeeBiteStage2Detector,
-    BeeBiteStage2MergedRange,
-    BeeBiteStage2Range,
-    BeeBiteStage2Result,
-    BeeBiteStage3Detector,
-    BeeBiteStage3Result,
-    get_bee_bite_stage4_postmortem_grid,
     get_bee_bite_runtime,
     parse_bee_bite_grid_mode,
     parse_bee_bite_profile_id,
@@ -89,8 +68,6 @@ from strategy.bee_bite import (
     parse_bee_bite_retest_mode,
     validate_bee_bite_runtime,
 )
-from strategy.bee_bite.stage2_detector import BeeBiteStage2LiquidityZone
-from strategy.bee_bite.stage3_rules import resolve_stage2_hold_price
 from strategy.factory import build_strategy
 from strategy.post_pump_absorption import (
     PostPumpAbsorptionParams,
@@ -110,60 +87,9 @@ from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
-# region Приватные
+# region ÐŸÑ€Ð¸Ð²Ð°Ñ‚Ð½Ñ‹Ðµ
 
 _PROGRESS_LOG_EVERY = 100
-_STAGE1_REASON_SAMPLE_LIMIT = 3
-_DEFAULT_STAGE3_EVENTS_OUTPUT_FILE = "stage3_events.csv"
-_DEFAULT_STAGE3_PLOTS_DIR_NAME = "stage3_plots"
-_DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE = "stage23_backtest.csv"
-_DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE = "stage4_postmortem.csv"
-_DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE = "stage4_grid_overview.csv"
-_DEFAULT_STAGE4_REPORT_OUTPUT_FILE = "stage4_report.md"
-_DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS = 600
-_DEFAULT_STAGE4_SYMBOL_WORKERS = 6
-_TItem = TypeVar("_TItem")
-
-
-@dataclass(slots=True)
-class _Stage1Regime:
-    symbol: str
-    regime_index: int
-    events: list[BeeBiteStage1Result]
-    primary_event: BeeBiteStage1Result
-    first_event: BeeBiteStage1Result
-    last_event: BeeBiteStage1Result
-    regime_end_timestamp: int
-    regime_end_reason: str
-
-
-def _format_eta_compact(total_seconds: float) -> str:
-    seconds = max(0, int(total_seconds))
-    hours, remainder = divmod(seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours > 0:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    return f"{minutes:02d}:{secs:02d}"
-
-
-@dataclass(slots=True)
-class _Stage23ReviewCandidate:
-    symbol: str
-    regime: _Stage1Regime
-    stage1_event: BeeBiteStage1Result
-    final_stage2_result: BeeBiteStage2Result
-    final_stage3_result: BeeBiteStage3Result
-    frame: pd.DataFrame
-    snapshots: list["_Stage23EvolutionSnapshot"] | None = None
-
-
-@dataclass(slots=True)
-class _Stage23EvolutionSnapshot:
-    order: int
-    timestamp: int
-    dynamic_stage2_result: BeeBiteStage2Result
-    reference_stage2_result: BeeBiteStage2Result | None
-    stage3_result: BeeBiteStage3Result
 
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
@@ -186,287 +112,15 @@ def _resolve_strategy_id(args: argparse.Namespace) -> str:
     if strategy_override is not None:
         normalized = str(strategy_override).strip().lower()
         if normalized not in {"bee_bite", "post_pump_absorption"}:
-            raise ValueError(f"Неподдерживаемый strategy_id: {normalized}")
+            raise ValueError(f"ÐÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ð¹ strategy_id: {normalized}")
         return normalized
     return "bee_bite"
 
 
 def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) -> Path:
     if strategy_id not in {"bee_bite", "post_pump_absorption"}:
-        raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
+        raise ValueError(f"ÐÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ð¹ strategy_id: {strategy_id}")
     return base_results_dir / "strategy" / strategy_id
-
-
-def _format_timestamp_ms(timestamp_ms: int | None) -> str:
-    if timestamp_ms is None:
-        return "n/a"
-    return pd.to_datetime(timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M")
-
-
-def _format_stage1_reason_sample(result: BeeBiteStage1Result, frame: pd.DataFrame) -> str:
-    rows = int(len(frame))
-    if frame.empty or "timestamp" not in frame.columns:
-        frame_range = "n/a..n/a"
-    else:
-        timestamps = pd.Series(pd.to_numeric(frame["timestamp"], errors="coerce")).dropna()
-        if timestamps.empty:
-            frame_range = "n/a..n/a"
-        else:
-            first_ts = int(timestamps.iloc[0])
-            last_ts = int(timestamps.iloc[-1])
-            frame_range = f"{_format_timestamp_ms(first_ts)}..{_format_timestamp_ms(last_ts)}"
-
-    pump_pct = f"{float(result.pump_percent or 0.0) * 100:.2f}%"
-    retain_pct = f"{float(result.retain_ratio or 0.0) * 100:.2f}%"
-    volume_ratio = f"{float(result.post_pump_volume_ratio or 0.0):.2f}x"
-    rolling_volume = f"{float(result.rolling_volume_usdt or 0.0):.0f}"
-    return (
-        f"symbol={result.symbol} rows={rows} range={frame_range} reason={result.reason} "
-        f"pump={pump_pct} retain={retain_pct} vol_ratio={volume_ratio} rolling_24h_usdt={rolling_volume}"
-    )
-
-
-def _select_primary_stage1_event(events: list[BeeBiteStage1Result]) -> BeeBiteStage1Result:
-    regimes = _group_stage1_events_into_regimes(events)
-    if not regimes:
-        raise ValueError("stage-1 primary event selection requires at least one event")
-    return regimes[0].primary_event
-
-
-def _group_stage1_events_into_regimes(events: list[BeeBiteStage1Result]) -> list[_Stage1Regime]:
-    sorted_events = sorted(
-        events,
-        key=lambda item: (
-            int(item.pump_start_timestamp or 0),
-            int(item.pump_peak_timestamp or 0),
-            int(item.stage1_confirmed_timestamp or 0),
-        ),
-    )
-    if not sorted_events:
-        return []
-
-    grouped_events: list[list[BeeBiteStage1Result]] = []
-    current_group: list[BeeBiteStage1Result] = []
-    current_regime_peak_ms = 0
-    for event in sorted_events:
-        pump_start_ms = int(event.pump_start_timestamp or 0)
-        pump_peak_ms = int(event.pump_peak_timestamp or pump_start_ms)
-        if not current_group:
-            current_group = [event]
-            current_regime_peak_ms = pump_peak_ms
-            continue
-
-        if pump_start_ms <= current_regime_peak_ms:
-            current_group.append(event)
-            current_regime_peak_ms = max(current_regime_peak_ms, pump_peak_ms)
-            continue
-
-        grouped_events.append(current_group)
-        current_group = [event]
-        current_regime_peak_ms = pump_peak_ms
-    if current_group:
-        grouped_events.append(current_group)
-
-    regimes: list[_Stage1Regime] = []
-    for regime_index, regime_events in enumerate(grouped_events, start=1):
-        ordered_by_detection = sorted(
-            regime_events,
-            key=lambda item: (
-                int(item.stage1_confirmed_timestamp or 0),
-                int(item.pump_peak_timestamp or 0),
-                int(item.pump_start_timestamp or 0),
-            ),
-        )
-        first_event = ordered_by_detection[0]
-        last_event = ordered_by_detection[-1]
-        regimes.append(
-            _Stage1Regime(
-                symbol=first_event.symbol,
-                regime_index=regime_index,
-                events=regime_events,
-                primary_event=first_event,
-                first_event=first_event,
-                last_event=last_event,
-                regime_end_timestamp=int(last_event.stage1_confirmed_timestamp or 0),
-                regime_end_reason="unresolved",
-            )
-        )
-    return regimes
-
-
-def _resolve_stage1_regime_ends(*, frame: pd.DataFrame, regimes: list[_Stage1Regime]) -> list[_Stage1Regime]:
-    if frame.empty or not regimes:
-        return regimes
-
-    prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close"]].copy()
-    for column in prepared.columns:
-        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"])
-    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    if prepared.empty:
-        return regimes
-
-    timestamps = prepared["timestamp"].astype("int64").to_numpy()
-    opens = prepared["open"].astype("float64").to_numpy()
-    highs = prepared["high"].astype("float64").to_numpy()
-    lows = prepared["low"].astype("float64").to_numpy()
-    closes = prepared["close"].astype("float64").to_numpy()
-    body_highs = np.maximum(opens, closes)
-    body_sizes = np.abs(closes - opens)
-    upper_wicks = highs - body_highs
-    effective_highs = np.where(upper_wicks > body_sizes, body_highs, highs)
-    timestamp_to_index = {int(timestamp): idx for idx, timestamp in enumerate(timestamps)}
-
-    resolved_regimes: list[_Stage1Regime] = []
-    for idx, regime in enumerate(regimes):
-        default_end_ts = int(regime.last_event.stage1_confirmed_timestamp or timestamps[-1])
-        resolved_end_ts = default_end_ts
-        resolved_reason = "last_detected"
-
-        start_scan_idx = timestamp_to_index.get(default_end_ts)
-        if start_scan_idx is None:
-            resolved_regimes.append(regime)
-            continue
-        peak_scan_idx = timestamp_to_index.get(int(regime.last_event.pump_peak_timestamp or 0), start_scan_idx)
-
-        next_regime_start_ts: int | None = None
-        if idx + 1 < len(regimes):
-            next_regime_start_ts = int(regimes[idx + 1].first_event.pump_start_timestamp or 0)
-
-        hold_price = float(
-            resolve_stage2_hold_price(
-                high_pump=regime.last_event.pump_peak_price,
-                low_before_pump=(
-                    regime.last_event.hold_base_price
-                    if regime.last_event.hold_base_price is not None
-                    else regime.last_event.pump_base_price
-                ),
-            )
-            or 0.0
-        )
-        pump_peak_price = float(regime.last_event.pump_peak_price or 0.0)
-        scan_end_idx = len(timestamps) - 1
-        if next_regime_start_ts is not None and next_regime_start_ts in timestamp_to_index:
-            scan_end_idx = timestamp_to_index[next_regime_start_ts]
-
-        for scan_idx in range(start_scan_idx + 1, scan_end_idx + 1):
-            timestamp_ms = int(timestamps[scan_idx])
-            if next_regime_start_ts is not None and timestamp_ms >= next_regime_start_ts:
-                resolved_end_ts = timestamp_ms
-                resolved_reason = "next_regime_started"
-                break
-            if hold_price > 0.0 and float(lows[scan_idx]) < hold_price:
-                resolved_end_ts = timestamp_ms
-                resolved_reason = "dumped_below_hold"
-                break
-            if pump_peak_price > 0.0 and _is_significant_regime_breakout(
-                effective_highs=effective_highs,
-                highs=highs,
-                lows=lows,
-                peak_price=pump_peak_price,
-                peak_idx=peak_scan_idx,
-                breakout_idx=scan_idx,
-            ):
-                resolved_end_ts = timestamp_ms
-                resolved_reason = "new_high_after_regime"
-                break
-        else:
-            if next_regime_start_ts is not None:
-                resolved_end_ts = int(next_regime_start_ts)
-                resolved_reason = "next_regime_started"
-
-        resolved_regimes.append(
-            _Stage1Regime(
-                symbol=regime.symbol,
-                regime_index=regime.regime_index,
-                events=regime.events,
-                primary_event=regime.primary_event,
-                first_event=regime.first_event,
-                last_event=regime.last_event,
-                regime_end_timestamp=resolved_end_ts,
-                regime_end_reason=resolved_reason,
-            )
-        )
-    return resolved_regimes
-
-
-def _resolve_stage2_analysis_end_timestamp(*, frame: pd.DataFrame, regime: _Stage1Regime) -> int:
-    if frame.empty or regime.regime_end_reason == "last_detected":
-        return int(regime.regime_end_timestamp)
-
-    prepared = frame.loc[:, ["timestamp"]].copy()
-    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp"])
-    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    if prepared.empty:
-        return int(regime.regime_end_timestamp)
-
-    timestamps = prepared["timestamp"].astype("int64").to_numpy()
-    matches = np.where(timestamps == int(regime.regime_end_timestamp))[0]
-    if matches.size == 0:
-        return int(regime.regime_end_timestamp)
-    end_idx = int(matches[-1])
-    if end_idx <= 0:
-        return int(regime.regime_end_timestamp)
-    return int(timestamps[end_idx - 1])
-
-
-_STAGE23_POST_REGIME_EXTENSION_MS = 24 * 60 * 60 * 1000
-
-
-def _resolve_stage23_analysis_end_timestamp(
-    *,
-    frame: pd.DataFrame,
-    timeframe: Timeframe,
-    regime: _Stage1Regime,
-) -> int:
-    if frame.empty:
-        return int(regime.regime_end_timestamp)
-
-    prepared = frame.loc[:, ["timestamp"]].copy()
-    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp"])
-    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    if prepared.empty:
-        return int(regime.regime_end_timestamp)
-
-    timestamps = prepared["timestamp"].astype("int64").to_numpy()
-    frame_end_timestamp = int(timestamps[-1])
-    regime_end_timestamp = int(regime.regime_end_timestamp)
-    capped_end_timestamp = min(
-        frame_end_timestamp,
-        regime_end_timestamp + _STAGE23_POST_REGIME_EXTENSION_MS,
-    )
-    capped_end_matches = np.where(timestamps <= capped_end_timestamp)[0]
-    if capped_end_matches.size == 0:
-        return regime_end_timestamp
-
-    resolved_end_timestamp = int(timestamps[int(capped_end_matches[-1])])
-    min_required_end_timestamp = regime_end_timestamp + timeframe.to_milliseconds()
-    if resolved_end_timestamp < min_required_end_timestamp:
-        return min(frame_end_timestamp, max(regime_end_timestamp, min_required_end_timestamp))
-    return resolved_end_timestamp
-
-
-def _is_significant_regime_breakout(
-    *,
-    effective_highs: np.ndarray,
-    highs: np.ndarray,
-    lows: np.ndarray,
-    peak_price: float,
-    peak_idx: int,
-    breakout_idx: int,
-) -> bool:
-    bars_since_peak = breakout_idx - peak_idx
-    breakout_high = float(highs[breakout_idx]) if bars_since_peak <= 2 else float(effective_highs[breakout_idx])
-    breakout_excess = breakout_high - peak_price
-    if breakout_excess <= 0.0:
-        return False
-    candle_sizes = highs[peak_idx : breakout_idx + 1] - lows[peak_idx : breakout_idx + 1]
-    mean_candle_size = float(np.mean(candle_sizes)) if candle_sizes.size > 0 else 0.0
-    if bars_since_peak <= 2:
-        return breakout_excess >= max(mean_candle_size * 0.1, 1e-12)
-    return breakout_excess >= max(mean_candle_size, 1e-12)
 
 
 
@@ -498,7 +152,7 @@ def _build_bee_bite_params_from_row(
     bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
     bite_t_max_in_trade = None if _is_missing_scalar(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
     if bite_t_max_in_trade is not None and bite_t_max_in_trade < 1:
-        raise ValueError("параметр bite_t_max_in_trade должен быть >= 1 или None")
+        raise ValueError("Ð¿Ð°Ñ€Ð°Ð¼ÐµÑ‚Ñ€ bite_t_max_in_trade Ð´Ð¾Ð»Ð¶ÐµÐ½ Ð±Ñ‹Ñ‚ÑŒ >= 1 Ð¸Ð»Ð¸ None")
     bite_reclaim_limit_raw = row.get("bite_reclaim_limit_bars")
     if _is_missing_scalar(bite_reclaim_limit_raw):
         bite_reclaim_limit_raw = row.get("bite_reclaim_limit")
@@ -679,14 +333,14 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
         pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
     logger.info(
-        "%s: сохранена диагностика post_pump_absorption symbols=%s trades_generated=%s output_dir=%s",
+        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸ÐºÐ° post_pump_absorption symbols=%s trades_generated=%s output_dir=%s",
         log_prefix,
         symbols_with_trades,
         total_trades_generated,
         diagnostics_dir,
     )
     if symbols_with_trades == 0:
-        logger.warning("%s: не найдено сделок post_pump_absorption для диагностического вывода", log_prefix)
+        logger.warning("%s: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ´ÐµÐ»Ð¾Ðº post_pump_absorption Ð´Ð»Ñ Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸Ñ‡ÐµÑÐºÐ¾Ð³Ð¾ Ð²Ñ‹Ð²Ð¾Ð´Ð°", log_prefix)
 
 
 def _plot_bee_bite_diagnostics_for_symbols(
@@ -735,14 +389,14 @@ def _plot_bee_bite_diagnostics_for_symbols(
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     logger.info(
-        "%s: сохранена диагностическая визуализация bee_bite symbols=%s trades_generated=%s output_dir=%s",
+        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸Ñ‡ÐµÑÐºÐ°Ñ Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ñ bee_bite symbols=%s trades_generated=%s output_dir=%s",
         log_prefix,
         symbols_with_states,
         total_trades_generated,
         diagnostics_dir,
     )
     if symbols_with_states == 0:
-        logger.warning("%s: не найдено диагностических данных bee_bite для визуализации", log_prefix)
+        logger.warning("%s: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸Ñ‡ÐµÑÐºÐ¸Ñ… Ð´Ð°Ð½Ð½Ñ‹Ñ… bee_bite Ð´Ð»Ñ Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ð¸", log_prefix)
 
 
 def _plot_for_strategy(
@@ -760,7 +414,7 @@ def _plot_for_strategy(
 ) -> bool:
     if strategy_id == "bee_bite":
         if not isinstance(strategy, BeeBiteStrategy):
-            logger.error("%s: неподдерживаемый тип визуализации для стратегии bee_bite", log_prefix)
+            logger.error("%s: Ð½ÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ð¹ Ñ‚Ð¸Ð¿ Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ð¸ Ð´Ð»Ñ ÑÑ‚Ñ€Ð°Ñ‚ÐµÐ³Ð¸Ð¸ bee_bite", log_prefix)
             return False
         _plot_bee_bite_diagnostics_for_symbols(
             config=config,
@@ -775,7 +429,7 @@ def _plot_for_strategy(
         )
         return True
 
-    logger.error("%s: визуализация не поддерживается для стратегии %s", log_prefix, strategy_id)
+    logger.error("%s: Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ñ Ð½Ðµ Ð¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÑ‚ÑÑ Ð´Ð»Ñ ÑÑ‚Ñ€Ð°Ñ‚ÐµÐ³Ð¸Ð¸ %s", log_prefix, strategy_id)
     return False
 
 
@@ -847,12 +501,12 @@ def _load_plot_params_row_from_results(
         csv_path = next((candidate for candidate in candidate_paths if candidate.exists()), candidate_paths[0])
 
     if not csv_path.exists():
-        logger.error("plot-from-results: файл результатов не найден: %s", csv_path)
+        logger.error("plot-from-results: Ñ„Ð°Ð¹Ð» Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚Ð¾Ð² Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½: %s", csv_path)
         return None
 
     frame = pd.read_csv(csv_path)
     if frame.empty:
-        logger.error("plot-from-results: файл результатов пустой: %s", csv_path)
+        logger.error("plot-from-results: Ñ„Ð°Ð¹Ð» Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚Ð¾Ð² Ð¿ÑƒÑÑ‚Ð¾Ð¹: %s", csv_path)
         return None
 
     required_columns_by_strategy = {
@@ -912,11 +566,11 @@ def _load_plot_params_row_from_results(
     }
     required_columns = required_columns_by_strategy.get(strategy_id)
     if required_columns is None:
-        logger.error("plot-from-results: неподдерживаемая стратегия %s", strategy_id)
+        logger.error("plot-from-results: Ð½ÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ð°Ñ ÑÑ‚Ñ€Ð°Ñ‚ÐµÐ³Ð¸Ñ %s", strategy_id)
         return None
     missing_columns = [column for column in required_columns if column not in frame.columns]
     if missing_columns:
-        logger.error("plot-from-results: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
+        logger.error("plot-from-results: Ð¾Ñ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÑŽÑ‚ Ð¾Ð±ÑÐ·Ð°Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ¸: %s", ", ".join(missing_columns))
         return None
 
     selected_id_raw = getattr(args, "id", None)
@@ -934,7 +588,7 @@ def _load_plot_params_row_from_results(
             if not matches.empty:
                 matched_by_column = matches
                 logger.info(
-                    "plot-from-results: найдена комбинация по колонке %s, id=%s, совпадений=%s",
+                    "plot-from-results: Ð½Ð°Ð¹Ð´ÐµÐ½Ð° ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸Ñ Ð¿Ð¾ ÐºÐ¾Ð»Ð¾Ð½ÐºÐµ %s, id=%s, ÑÐ¾Ð²Ð¿Ð°Ð´ÐµÐ½Ð¸Ð¹=%s",
                     column,
                     selected_id,
                     len(matches),
@@ -947,14 +601,14 @@ def _load_plot_params_row_from_results(
             row_index = selected_id - 1
             if row_index < 0 or row_index >= len(frame):
                 logger.error(
-                    "plot-from-results: id=%s не найден (нет колонок id/combination_id/rank и номер строки вне диапазона 1..%s)",
+                    "plot-from-results: id=%s Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½ (Ð½ÐµÑ‚ ÐºÐ¾Ð»Ð¾Ð½Ð¾Ðº id/combination_id/rank Ð¸ Ð½Ð¾Ð¼ÐµÑ€ ÑÑ‚Ñ€Ð¾ÐºÐ¸ Ð²Ð½Ðµ Ð´Ð¸Ð°Ð¿Ð°Ð·Ð¾Ð½Ð° 1..%s)",
                     selected_id,
                     len(frame),
                 )
                 return None
             selected_row = frame.iloc[row_index]
             logger.warning(
-                "plot-from-results: id=%s не найден в id/combination_id/rank, использован 1-based номер строки=%s",
+                "plot-from-results: id=%s Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½ Ð² id/combination_id/rank, Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½ 1-based Ð½Ð¾Ð¼ÐµÑ€ ÑÑ‚Ñ€Ð¾ÐºÐ¸=%s",
                 selected_id,
                 selected_id,
             )
@@ -963,7 +617,7 @@ def _load_plot_params_row_from_results(
         selected_row = sorted_frame.iloc[0]
 
     logger.info(
-        "plot-from-results: использованы параметры из %s (pf=%s, trades_count=%s, id=%s)",
+        "plot-from-results: Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½Ñ‹ Ð¿Ð°Ñ€Ð°Ð¼ÐµÑ‚Ñ€Ñ‹ Ð¸Ð· %s (pf=%s, trades_count=%s, id=%s)",
         csv_path,
         selected_row.get("profit_factor", "n/a"),
         selected_row.get("trades_count", "n/a"),
@@ -977,13 +631,13 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
-    logger.info(f"{command_name}: старт")
+    logger.info(f"{command_name}: ÑÑ‚Ð°Ñ€Ñ‚")
     try:
         code = body()
-        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (код={code})")
+        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (ÐºÐ¾Ð´={code})")
         return code
     except Exception as exc:
-        logger.exception(f"{command_name}: ошибка: {exc}")
+        logger.exception(f"{command_name}: Ð¾ÑˆÐ¸Ð±ÐºÐ°: {exc}")
         return 1
 
 
@@ -1222,7 +876,7 @@ def _log_fetch_summary(
     )
     if emit_log:
         logger.info(
-            "%s: сводка загрузки всего=%s успешно=%s с ошибками=%s доля_ошибок=%.2f%%",
+            "%s: ÑÐ²Ð¾Ð´ÐºÐ° Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¸ Ð²ÑÐµÐ³Ð¾=%s ÑƒÑÐ¿ÐµÑˆÐ½Ð¾=%s Ñ Ð¾ÑˆÐ¸Ð±ÐºÐ°Ð¼Ð¸=%s Ð´Ð¾Ð»Ñ_Ð¾ÑˆÐ¸Ð±Ð¾Ðº=%.2f%%",
             command_name,
             summary.total_symbols,
             summary.success_symbols,
@@ -1248,12 +902,12 @@ def _resolve_liquidity_skip_reason(summary: FetchSummary | None, threshold: floa
 
 def _log_loaded_coins(logger: Logger, count: int, action: str) -> None:
     templates = {
-        "loaded": "Загружено %s монет.",
-        "updated": "Обновлено %s монет.",
+        "loaded": "Ð—Ð°Ð³Ñ€ÑƒÐ¶ÐµÐ½Ð¾ %s Ð¼Ð¾Ð½ÐµÑ‚.",
+        "updated": "ÐžÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾ %s Ð¼Ð¾Ð½ÐµÑ‚.",
     }
     template = templates.get(action)
     if template is None:
-        raise ValueError(f"Неподдерживаемое действие: {action}")
+        raise ValueError(f"ÐÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ð¾Ðµ Ð´ÐµÐ¹ÑÑ‚Ð²Ð¸Ðµ: {action}")
     logger.info(template, count)
 
 
@@ -1289,15 +943,7 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
             return timeframe
 
     supported = ", ".join(tf.value for tf in Timeframe)
-    raise ValueError(f"Некорректное значение {argument_name}: {value}. Поддерживаемые значения: {supported}")
-
-
-def _resolve_review_timeframe(args: argparse.Namespace) -> Timeframe:
-    return _resolve_timeframe(
-        getattr(args, "tf", None),
-        fallback=Timeframe.M15,
-        argument_name="--tf",
-    )
+    raise ValueError(f"ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ð¾Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ðµ {argument_name}: {value}. ÐŸÐ¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ñ: {supported}")
 
 
 def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timeframe, ...]) -> tuple[Timeframe, ...]:
@@ -1320,12 +966,6 @@ def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timefram
     if not resolved:
         return fallback
     return tuple(resolved)
-
-
-def _resolve_review_timeframes(args: argparse.Namespace) -> list[Timeframe]:
-    if bool(getattr(args, "tf_all", False)):
-        return [Timeframe.M15, Timeframe.M10, Timeframe.M5, Timeframe.M3]
-    return [_resolve_review_timeframe(args)]
 
 
 def _resolve_ppa_research_timeframes(args: argparse.Namespace) -> tuple[Timeframe, ...]:
@@ -1405,15 +1045,6 @@ def _resolve_backtest_timeframes(
     return levels_timeframe, entry_timeframe
 
 
-def _with_review_timeframe(args: argparse.Namespace, timeframe: Timeframe, *, output_path: Path | None = None) -> argparse.Namespace:
-    cloned = argparse.Namespace(**vars(args))
-    cloned.tf = timeframe.value
-    cloned.tf_all = False
-    if output_path is not None:
-        cloned.output = str(output_path)
-    return cloned
-
-
 def _with_ppa_research_timeframe(args: argparse.Namespace, timeframe: Timeframe) -> argparse.Namespace:
     cloned = argparse.Namespace(**vars(args))
     cloned.command = "run-backtest"
@@ -1432,514 +1063,6 @@ def _with_ppa_research_timeframe(args: argparse.Namespace, timeframe: Timeframe)
     cloned.bee_bite_deposit = None
     cloned.bee_bite_risk_pct = None
     return cloned
-
-
-def _append_timeframe_suffix(path: Path, timeframe: Timeframe) -> Path:
-    return path.with_name(f"{path.stem}_{timeframe.value}{path.suffix}")
-
-
-def _resolve_plot_scope(args: argparse.Namespace, *, default_scope: str = "latest") -> str:
-    raw_value = getattr(args, "plot_scope", None)
-    if raw_value is None:
-        return "all" if default_scope == "all" else "latest"
-    return "all" if str(raw_value).strip().lower() == "all" else "latest"
-
-
-def _resolve_stage3_review_mode(args: argparse.Namespace) -> str:
-    return "evolution" if str(getattr(args, "review_mode", "snapshot")).strip().lower() == "evolution" else "snapshot"
-
-
-def _resolve_stage4_param_grid() -> tuple[BeeBiteStage4PostmortemParams, ...]:
-    return tuple(get_bee_bite_stage4_postmortem_grid())
-
-
-def _select_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: int) -> list[_TItem]:
-    if not items:
-        return []
-    if plot_scope != "all":
-        return items[:1]
-    return items[: max(1, plot_limit)]
-
-
-def _select_failed_plot_payload(items: list[_TItem], *, plot_scope: str, plot_limit: int) -> list[_TItem]:
-    if not items:
-        return []
-    if plot_scope == "latest":
-        return items[:1]
-    return items[: max(1, plot_limit)]
-
-
-def _slugify_reason(value: str) -> str:
-    normalized = "".join(character.lower() if character.isalnum() else "_" for character in value.strip())
-    compact = "_".join(part for part in normalized.split("_") if part)
-    return compact or "unknown_reason"
-
-
-def _resolve_snapshot_timestamps(
-    *,
-    frame: pd.DataFrame,
-    start_timestamp: int,
-    end_timestamp: int,
-) -> list[int]:
-    prepared = frame.loc[:, ["timestamp"]].copy()
-    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp"])
-    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    if prepared.empty:
-        return []
-
-    timestamps = prepared["timestamp"].astype("int64").to_numpy()
-    start_matches = np.where(timestamps == int(start_timestamp))[0]
-    if start_matches.size == 0:
-        return []
-    end_matches = np.where(timestamps == int(end_timestamp))[0]
-    if end_matches.size == 0:
-        return []
-
-    start_idx = int(start_matches[0])
-    end_idx = int(end_matches[-1])
-    if end_idx < start_idx:
-        return []
-    return [int(timestamp) for timestamp in timestamps[start_idx : end_idx + 1]]
-
-
-def _stage2_has_reference_box(stage2_result: BeeBiteStage2Result) -> bool:
-    if not stage2_result.passed:
-        return False
-    if stage2_result.box_low is None or stage2_result.box_high is None or stage2_result.box_end_timestamp is None:
-        return False
-    return any(zone.side == "lower" for zone in stage2_result.liquidity_zones)
-
-
-def _stage23_can_lock_reference_box(
-    *,
-    snapshot_timestamp: int,
-    stage1_event: BeeBiteStage1Result,
-    stage2_result: BeeBiteStage2Result,
-) -> bool:
-    if not _stage2_has_reference_box(stage2_result):
-        return False
-    confirmed_timestamp = stage1_event.stage1_confirmed_timestamp
-    if confirmed_timestamp is None:
-        return False
-    if int(snapshot_timestamp) < int(confirmed_timestamp):
-        return False
-    if stage2_result.box_start_timestamp is None or stage2_result.box_end_timestamp is None:
-        return False
-
-    lower_zones = [zone for zone in stage2_result.liquidity_zones if zone.side == "lower"]
-    if not lower_zones:
-        return False
-    box_low = float(stage2_result.box_low or 0.0)
-    box_high = float(stage2_result.box_high or box_low)
-    range_height = max(box_high - box_low, 1e-12)
-    boundary_tolerance = max(range_height * 0.15, 1e-12)
-
-    def _zone_distance_to_boundary(zone: BeeBiteStage2LiquidityZone) -> float:
-        if zone.low <= box_low <= zone.high:
-            return 0.0
-        if zone.high < box_low:
-            return box_low - zone.high
-        return zone.low - box_low
-
-    lower_zone = max(
-        lower_zones,
-        key=lambda zone: (
-            zone.low <= (box_low + boundary_tolerance) and zone.high >= (box_low - boundary_tolerance),
-            -_zone_distance_to_boundary(zone),
-            zone.touch_count,
-            zone.end_timestamp - zone.start_timestamp,
-            zone.end_timestamp,
-        ),
-    )
-    zone_duration_ms = max(int(lower_zone.end_timestamp - lower_zone.start_timestamp), 0)
-    box_duration_ms = max(int(stage2_result.box_end_timestamp - stage2_result.box_start_timestamp), 0)
-    if box_duration_ms <= 0:
-        return False
-    return zone_duration_ms >= int(math.ceil(box_duration_ms * 0.5))
-
-
-def _resolve_stage3_lower_zone_end_timestamp(stage3_result: BeeBiteStage3Result) -> int | None:
-    lower_zone = stage3_result.active_lower_liquidity_zone
-    if lower_zone is None:
-        return None
-    if stage3_result.break_timestamp is not None:
-        return int(stage3_result.break_timestamp)
-    if stage3_result.analysis_end_timestamp is not None:
-        return int(stage3_result.analysis_end_timestamp)
-    return int(lower_zone.end_timestamp)
-
-
-def _build_reference_box_stale_result(
-    *,
-    symbol: str,
-    stage2_result: BeeBiteStage2Result,
-    snapshot_timestamp: int,
-    reason: str,
-) -> BeeBiteStage3Result:
-    reference_box_start_timestamp = (
-        int(stage2_result.box_start_timestamp) if stage2_result.box_start_timestamp is not None else None
-    )
-    reference_box_end_timestamp = (
-        int(stage2_result.box_end_timestamp) if stage2_result.box_end_timestamp is not None else None
-    )
-    return BeeBiteStage3Result(
-        symbol=symbol,
-        passed=False,
-        reason=reason,
-        analysis_start_timestamp=reference_box_end_timestamp,
-        analysis_end_timestamp=int(snapshot_timestamp),
-        active_lower_liquidity_zone=None,
-        box_low=float(stage2_result.box_low) if stage2_result.box_low is not None else None,
-        box_high=float(stage2_result.box_high) if stage2_result.box_high is not None else None,
-        reference_box_start_timestamp=reference_box_start_timestamp,
-        reference_box_end_timestamp=reference_box_end_timestamp,
-    )
-
-
-def _is_stage3_terminal_failure(stage3_result: BeeBiteStage3Result) -> bool:
-    if stage3_result.passed:
-        return False
-    return stage3_result.reason in {
-        "break_too_deep",
-        "close_below_hold",
-        "sweep_missed_lower_zone",
-        "under_range_span_too_wide",
-    }
-
-
-def _get_cached_stage2_result(
-    *,
-    cache: dict[int, BeeBiteStage2Result],
-    symbol: str,
-    frame: pd.DataFrame,
-    stage1_event: BeeBiteStage1Result,
-    stage2_detector: BeeBiteStage2Detector,
-    analysis_end_timestamp: int,
-) -> BeeBiteStage2Result:
-    cached = cache.get(int(analysis_end_timestamp))
-    if cached is not None:
-        return cached
-    result = stage2_detector.detect(
-        symbol=symbol,
-        frame=frame,
-        stage1=stage1_event,
-        analysis_end_timestamp=int(analysis_end_timestamp),
-    )
-    cache[int(analysis_end_timestamp)] = result
-    return result
-
-
-def _get_cached_review_frame(
-    *,
-    cache: dict[tuple[str, Timeframe], pd.DataFrame],
-    preparer: DataPreparer,
-    symbol: str,
-    timeframe: Timeframe,
-) -> pd.DataFrame:
-    cache_key = (symbol, timeframe)
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
-    loaded = preparer.load_symbol_data(symbol, timeframe)
-    cache[cache_key] = loaded
-    return loaded
-
-
-def _get_cached_stage1_review(
-    *,
-    cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]],
-    selector: BeeBiteStage1Selector,
-    symbol: str,
-    timeframe: Timeframe,
-    frame: pd.DataFrame,
-) -> tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]:
-    cache_key = (symbol, timeframe)
-    cached = cache.get(cache_key)
-    if cached is not None:
-        return cached
-    events = selector.detect_events(symbol=symbol, frame=frame)
-    evaluation: BeeBiteStage1Result | None = None
-    if not events:
-        evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
-    cache[cache_key] = (events, evaluation)
-    return events, evaluation
-
-
-def _reset_review_plot_dir(path: Path) -> None:
-    if path.exists():
-        shutil.rmtree(path, ignore_errors=True)
-    path.mkdir(parents=True, exist_ok=True)
-
-
-def _build_stage23_evolution_snapshots(
-    *,
-    symbol: str,
-    timeframe: Timeframe,
-    frame: pd.DataFrame,
-    stage1_event: BeeBiteStage1Result,
-    regime: _Stage1Regime,
-    stage2_detector: BeeBiteStage2Detector,
-    stage3_detector: BeeBiteStage3Detector,
-    initial_stage2_result: BeeBiteStage2Result | None = None,
-) -> list[_Stage23EvolutionSnapshot]:
-    if stage1_event.pump_peak_timestamp is None:
-        return []
-
-    required_columns = {"timestamp"}
-    if frame.empty or not required_columns.issubset(frame.columns):
-        return []
-    prepared = frame.loc[:, ["timestamp"]].copy()
-    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp"])
-    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    if prepared.empty:
-        return []
-    analysis_end_timestamp = _resolve_stage23_analysis_end_timestamp(
-        frame=frame,
-        timeframe=timeframe,
-        regime=regime,
-    )
-
-    snapshot_timestamps = _resolve_snapshot_timestamps(
-        frame=frame,
-        start_timestamp=int(stage1_event.pump_peak_timestamp) + timeframe.to_milliseconds(),
-        end_timestamp=analysis_end_timestamp,
-    )
-    snapshots: list[_Stage23EvolutionSnapshot] = []
-    reference_stage2_result: BeeBiteStage2Result | None = None
-    stage2_results_by_timestamp: dict[int, BeeBiteStage2Result] = {}
-    if initial_stage2_result is not None and initial_stage2_result.analysis_end_timestamp is not None:
-        stage2_results_by_timestamp[int(initial_stage2_result.analysis_end_timestamp)] = initial_stage2_result
-
-    for snapshot_order, snapshot_timestamp in enumerate(snapshot_timestamps, start=1):
-        stale_stage3_result: BeeBiteStage3Result | None = None
-        if reference_stage2_result is not None:
-            stale_reason = stage3_detector.resolve_reference_box_staleness(
-                frame=frame,
-                stage1=stage1_event,
-                stage2=reference_stage2_result,
-                analysis_end_timestamp=int(snapshot_timestamp),
-            )
-            if stale_reason is not None:
-                stale_stage3_result = _build_reference_box_stale_result(
-                    symbol=symbol,
-                    stage2_result=reference_stage2_result,
-                    snapshot_timestamp=int(snapshot_timestamp),
-                    reason=stale_reason,
-                )
-                reference_stage2_result = None
-
-        dynamic_stage2_result = _get_cached_stage2_result(
-            cache=stage2_results_by_timestamp,
-            symbol=symbol,
-            frame=frame,
-            stage1_event=stage1_event,
-            stage2_detector=stage2_detector,
-            analysis_end_timestamp=int(snapshot_timestamp),
-        )
-        if reference_stage2_result is None and _stage23_can_lock_reference_box(
-            snapshot_timestamp=snapshot_timestamp,
-            stage1_event=stage1_event,
-            stage2_result=dynamic_stage2_result,
-        ):
-            dynamic_stale_reason = stage3_detector.resolve_reference_box_staleness(
-                frame=frame,
-                stage1=stage1_event,
-                stage2=dynamic_stage2_result,
-                analysis_end_timestamp=int(snapshot_timestamp),
-            )
-            if dynamic_stale_reason is None:
-                reference_stage2_result = dynamic_stage2_result
-            else:
-                stale_stage3_result = _build_reference_box_stale_result(
-                    symbol=symbol,
-                    stage2_result=dynamic_stage2_result,
-                    snapshot_timestamp=int(snapshot_timestamp),
-                    reason=dynamic_stale_reason,
-                )
-
-        if reference_stage2_result is None:
-            stage3_result = stale_stage3_result or BeeBiteStage3Result(
-                symbol=symbol,
-                passed=False,
-                reason="stage2_reference_not_locked",
-                analysis_end_timestamp=snapshot_timestamp,
-            )
-        else:
-            stage3_result = stage3_detector.detect(
-                symbol=symbol,
-                frame=frame,
-                stage1=stage1_event,
-                stage2=reference_stage2_result,
-                analysis_end_timestamp=snapshot_timestamp,
-            )
-
-        snapshots.append(
-            _Stage23EvolutionSnapshot(
-                order=snapshot_order,
-                timestamp=snapshot_timestamp,
-                dynamic_stage2_result=dynamic_stage2_result,
-                reference_stage2_result=reference_stage2_result,
-                stage3_result=stage3_result,
-            )
-        )
-
-    return snapshots
-
-
-def _resolve_stage23_terminal_result(
-    *,
-    symbol: str,
-    timeframe: Timeframe,
-    frame: pd.DataFrame,
-    stage1_event: BeeBiteStage1Result,
-    regime: _Stage1Regime,
-    stage2_detector: BeeBiteStage2Detector,
-    stage3_detector: BeeBiteStage3Detector,
-    initial_stage2_result: BeeBiteStage2Result | None = None,
-) -> BeeBiteStage3Result:
-    if stage1_event.pump_peak_timestamp is None:
-        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage1_peak_missing")
-
-    required_columns = {"timestamp"}
-    if frame.empty or not required_columns.issubset(frame.columns):
-        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="frame_invalid")
-
-    prepared = frame.loc[:, ["timestamp"]].copy()
-    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp"])
-    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    if prepared.empty:
-        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="frame_invalid")
-
-    analysis_end_timestamp = _resolve_stage23_analysis_end_timestamp(
-        frame=frame,
-        timeframe=timeframe,
-        regime=regime,
-    )
-    snapshot_timestamps = _resolve_snapshot_timestamps(
-        frame=frame,
-        start_timestamp=int(stage1_event.pump_peak_timestamp) + timeframe.to_milliseconds(),
-        end_timestamp=analysis_end_timestamp,
-    )
-    if not snapshot_timestamps:
-        return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage2_reference_not_locked")
-
-    reference_stage2_result: BeeBiteStage2Result | None = None
-    last_actionable_stage3_result: BeeBiteStage3Result | None = None
-    last_reference_locked_stage3_result: BeeBiteStage3Result | None = None
-    stage2_results_by_timestamp: dict[int, BeeBiteStage2Result] = {}
-    if initial_stage2_result is not None and initial_stage2_result.analysis_end_timestamp is not None:
-        stage2_results_by_timestamp[int(initial_stage2_result.analysis_end_timestamp)] = initial_stage2_result
-
-    for snapshot_timestamp in snapshot_timestamps:
-        stale_stage3_result: BeeBiteStage3Result | None = None
-        if reference_stage2_result is not None:
-            stale_reason = stage3_detector.resolve_reference_box_staleness(
-                frame=frame,
-                stage1=stage1_event,
-                stage2=reference_stage2_result,
-                analysis_end_timestamp=int(snapshot_timestamp),
-            )
-            if stale_reason is not None:
-                stale_stage3_result = _build_reference_box_stale_result(
-                    symbol=symbol,
-                    stage2_result=reference_stage2_result,
-                    snapshot_timestamp=int(snapshot_timestamp),
-                    reason=stale_reason,
-                )
-                last_actionable_stage3_result = stale_stage3_result
-                reference_stage2_result = None
-
-        if reference_stage2_result is None:
-            dynamic_stage2_result = _get_cached_stage2_result(
-                cache=stage2_results_by_timestamp,
-                symbol=symbol,
-                frame=frame,
-                stage1_event=stage1_event,
-                stage2_detector=stage2_detector,
-                analysis_end_timestamp=int(snapshot_timestamp),
-            )
-            if _stage23_can_lock_reference_box(
-                snapshot_timestamp=snapshot_timestamp,
-                stage1_event=stage1_event,
-                stage2_result=dynamic_stage2_result,
-            ):
-                dynamic_stale_reason = stage3_detector.resolve_reference_box_staleness(
-                    frame=frame,
-                    stage1=stage1_event,
-                    stage2=dynamic_stage2_result,
-                    analysis_end_timestamp=int(snapshot_timestamp),
-                )
-                if dynamic_stale_reason is None:
-                    reference_stage2_result = dynamic_stage2_result
-                else:
-                    stale_stage3_result = _build_reference_box_stale_result(
-                        symbol=symbol,
-                        stage2_result=dynamic_stage2_result,
-                        snapshot_timestamp=int(snapshot_timestamp),
-                        reason=dynamic_stale_reason,
-                    )
-                    last_actionable_stage3_result = stale_stage3_result
-            else:
-                continue
-        if reference_stage2_result is None:
-            continue
-
-        stage3_result = stage3_detector.detect(
-            symbol=symbol,
-            frame=frame,
-            stage1=stage1_event,
-            stage2=reference_stage2_result,
-            analysis_end_timestamp=snapshot_timestamp,
-        )
-        last_reference_locked_stage3_result = stage3_result
-        if (
-            stage3_result.break_timestamp is not None
-            or stage3_result.reclaim_timestamp is not None
-            or stage3_result.invalidation_timestamp is not None
-        ):
-            last_actionable_stage3_result = stage3_result
-        if stage3_result.passed:
-            return stage3_result
-        if _is_stage3_terminal_failure(stage3_result):
-            return stage3_result
-
-    if last_actionable_stage3_result is not None:
-        return last_actionable_stage3_result
-    if last_reference_locked_stage3_result is not None:
-        return last_reference_locked_stage3_result
-    return BeeBiteStage3Result(symbol=symbol, passed=False, reason="stage2_reference_not_locked")
-
-
-def _select_terminal_stage23_snapshot(snapshots: list[_Stage23EvolutionSnapshot]) -> _Stage23EvolutionSnapshot | None:
-    if not snapshots:
-        return None
-
-    passed_snapshots = [snapshot for snapshot in snapshots if snapshot.stage3_result.passed]
-    if passed_snapshots:
-        return passed_snapshots[0]
-
-    actionable_failures = [
-        snapshot
-        for snapshot in snapshots
-        if snapshot.stage3_result.break_timestamp is not None
-        or snapshot.stage3_result.reclaim_timestamp is not None
-        or snapshot.stage3_result.invalidation_timestamp is not None
-    ]
-    if actionable_failures:
-        return actionable_failures[-1]
-
-    reference_locked = [
-        snapshot
-        for snapshot in snapshots
-        if snapshot.reference_stage2_result is not None
-    ]
-    if reference_locked:
-        return reference_locked[-1]
-
-    return snapshots[-1]
 
 
 def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
@@ -1977,14 +1100,14 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols = explicit_symbols
         liquidity_quality_by_symbol = {}
     logger.info(
-        "загрузка-данных: найдено фьючерсов=%s выбрано_символов=%s (режим_подбора=%s)",
+        "Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°-Ð´Ð°Ð½Ð½Ñ‹Ñ…: Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ñ„ÑŒÑŽÑ‡ÐµÑ€ÑÐ¾Ð²=%s Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð¾_ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð²=%s (Ñ€ÐµÐ¶Ð¸Ð¼_Ð¿Ð¾Ð´Ð±Ð¾Ñ€Ð°=%s)",
         all_futures_count,
         len(symbols),
         "cache+exchange-liquidity",
     )
     if not symbols:
         liquidity_quality_by_symbol = {}
-        logger.info("загрузка-данных: не найдено символов для загрузки")
+        logger.info("Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°-Ð´Ð°Ð½Ð½Ñ‹Ñ…: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð´Ð»Ñ Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¸")
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
@@ -1999,7 +1122,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         emit_log: bool = True,
     ) -> None:
         logger.info(
-            "загрузка-данных: сбор кэша для TF=%s (символов=%s)",
+            "Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°-Ð´Ð°Ð½Ð½Ñ‹Ñ…: ÑÐ±Ð¾Ñ€ ÐºÑÑˆÐ° Ð´Ð»Ñ TF=%s (ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð²=%s)",
             requested_timeframe.value,
             len(symbols_to_fetch),
         )
@@ -2114,19 +1237,19 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols = explicit_symbols
         liquidity_quality_by_symbol = {}
     logger.info(
-        "обновление-кэша: найдено фьючерсов=%s отправлено в fetch_all=%s",
+        "Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ñ„ÑŒÑŽÑ‡ÐµÑ€ÑÐ¾Ð²=%s Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¾ Ð² fetch_all=%s",
         all_futures_count,
         len(symbols),
     )
     if not symbols:
-        logger.info("обновление-кэша: не найдено символов для обновления")
+        logger.info("Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð´Ð»Ñ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ñ")
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
     failed_symbols: set[str] = set()
     for index, timeframe in enumerate(fetch_timeframes):
-        logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
+        logger.info("Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: ÑÐ±Ð¾Ñ€ ÐºÑÑˆÐ° Ð´Ð»Ñ TF=%s", timeframe.value)
         result = fetcher.fetch_all(
             symbols=symbols,
             timeframe=timeframe,
@@ -2149,7 +1272,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
             or isinstance(result.market_caps.market_caps.get(symbol), str)
         )
         if index < len(fetch_timeframes) - 1:
-            logger.info("обновление-кэша: cooldown after TF=%s sleep=75s", timeframe.value)
+            logger.info("Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: cooldown after TF=%s sleep=75s", timeframe.value)
             time.sleep(75)
 
     exit_code = _fetch_exit_code(len(failed_symbols))
@@ -2221,7 +1344,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         configured_entry_timeframe=config.strategy.entry_timeframe,
     )
     logger.info(
-        "запуск-бэктеста: явный запуск, уровни: %s, входы: %s",
+        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ²Ð½Ñ‹Ð¹ Ð·Ð°Ð¿ÑƒÑÐº, ÑƒÑ€Ð¾Ð²Ð½Ð¸: %s, Ð²Ñ…Ð¾Ð´Ñ‹: %s",
         levels_timeframe.value,
         entry_timeframe.value,
     )
@@ -2229,7 +1352,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(entry_timeframe)
     if not symbols:
-        logger.info("запуск-бектеста: нет данных в кэше")
+        logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÐµÐºÑ‚ÐµÑÑ‚Ð°: Ð½ÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ… Ð² ÐºÑÑˆÐµ")
         return 0
 
     symbols_before_ranking = len(symbols)
@@ -2269,7 +1392,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols = [item.symbol for item in selected_stage1_results]
         ranked_symbols_count = len(stage1_results)
         rejected_symbols_count = symbols_before_ranking - ranked_symbols_count
-        top_n_applied = top_n if pre_rank_enabled else "не применялся"
+        top_n_applied = top_n if pre_rank_enabled else "Ð½Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÑÐ»ÑÑ"
         preview = selected_stage1_results[:10]
         top_preview_text = ", ".join(
             (
@@ -2280,9 +1403,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             for item in preview
         )
         if not top_preview_text:
-            top_preview_text = "пусто"
+            top_preview_text = "Ð¿ÑƒÑÑ‚Ð¾"
         logger.info(
-            "запуск-бэктеста: bee_bite stage1 symbols_total=%s passed=%s top_n=%s selected=%s reasons=%s",
+            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: bee_bite stage1 symbols_total=%s passed=%s top_n=%s selected=%s reasons=%s",
             symbols_before_ranking,
             ranked_symbols_count,
             top_n_applied,
@@ -2295,7 +1418,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             preloaded_levels_frames[symbol] = levels_frame
             if levels_frame.empty:
                 logger.debug(
-                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=пустой levels_tf=%s",
+                    "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ¸Ð¼Ð²Ð¾Ð» %s Ð¸ÑÐºÐ»ÑŽÑ‡Ñ‘Ð½ Ð¸Ð· pre-rank, Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð°=Ð¿ÑƒÑÑ‚Ð¾Ð¹ levels_tf=%s",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -2303,7 +1426,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 continue
             if "volume" not in levels_frame.columns:
                 logger.info(
-                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет колонки volume на levels_tf=%s",
+                    "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ¸Ð¼Ð²Ð¾Ð» %s Ð¸ÑÐºÐ»ÑŽÑ‡Ñ‘Ð½ Ð¸Ð· pre-rank, Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð°=Ð½ÐµÑ‚ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ¸ volume Ð½Ð° levels_tf=%s",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -2314,7 +1437,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             volume_series = volume_numeric.dropna()
             if volume_series.empty:
                 logger.debug(
-                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет валидного volume на levels_tf=%s",
+                    "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ¸Ð¼Ð²Ð¾Ð» %s Ð¸ÑÐºÐ»ÑŽÑ‡Ñ‘Ð½ Ð¸Ð· pre-rank, Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð°=Ð½ÐµÑ‚ Ð²Ð°Ð»Ð¸Ð´Ð½Ð¾Ð³Ð¾ volume Ð½Ð° levels_tf=%s",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -2335,22 +1458,22 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             for symbol, avg_volume in preview
         )
         if not top_preview_text:
-            top_preview_text = "пусто"
+            top_preview_text = "Ð¿ÑƒÑÑ‚Ð¾"
     else:
         ranked_symbols_count = 0
         symbols = list(symbols)
-        top_n_applied = "не применялся"
-        top_preview_text = "pre-rank отключён"
+        top_n_applied = "Ð½Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÑÐ»ÑÑ"
+        top_preview_text = "pre-rank Ð¾Ñ‚ÐºÐ»ÑŽÑ‡Ñ‘Ð½"
 
     pre_rank_elapsed_seconds = time.perf_counter() - pre_rank_started_at
     logger.info(
-        "запуск-бэктеста: pre-rank время=%.3fs enabled=%s",
+        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank Ð²Ñ€ÐµÐ¼Ñ=%.3fs enabled=%s",
         pre_rank_elapsed_seconds,
         pre_filter_active,
     )
     if strategy_id == "bee_bite":
         logger.info(
-            "запуск-бэктеста: bee_bite stage1 total=%s passed=%s rejected=%s top_n=%s selected=%s",
+            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: bee_bite stage1 total=%s passed=%s rejected=%s top_n=%s selected=%s",
             symbols_before_ranking,
             ranked_symbols_count,
             rejected_symbols_count,
@@ -2359,12 +1482,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
         if not pre_rank_enabled:
             logger.info(
-                "запуск-бэктеста: bee_bite stage1 top_n не задан, используется весь stage1-отбор (%s)",
+                "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: bee_bite stage1 top_n Ð½Ðµ Ð·Ð°Ð´Ð°Ð½, Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÑ‚ÑÑ Ð²ÐµÑÑŒ stage1-Ð¾Ñ‚Ð±Ð¾Ñ€ (%s)",
                 len(symbols),
             )
     else:
         logger.info(
-            "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s rejected=%s top_n=%s выбрано_после_отсечения=%s",
+            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank symbols_total=%s Ð²Ð°Ð»Ð¸Ð´Ð½Ñ‹Ð¹_volume_levels_tf=%s rejected=%s top_n=%s Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð¾_Ð¿Ð¾ÑÐ»Ðµ_Ð¾Ñ‚ÑÐµÑ‡ÐµÐ½Ð¸Ñ=%s",
             symbols_before_ranking,
             ranked_symbols_count,
             rejected_symbols_count,
@@ -2373,21 +1496,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
         if not pre_rank_enabled:
             logger.info(
-                "запуск-бэктеста: pre-rank top_n не задан или <= 0, используется исходный список символов (%s)",
+                "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank top_n Ð½Ðµ Ð·Ð°Ð´Ð°Ð½ Ð¸Ð»Ð¸ <= 0, Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÑ‚ÑÑ Ð¸ÑÑ…Ð¾Ð´Ð½Ñ‹Ð¹ ÑÐ¿Ð¸ÑÐ¾Ðº ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² (%s)",
                 len(symbols),
             )
-    logger.info("запуск-бэктеста: pre-rank top-list: %s", top_preview_text)
+    logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank top-list: %s", top_preview_text)
 
     if not symbols:
         if strategy_id == "bee_bite":
-            logger.info("запуск-бэктеста: ранний выход, после bee_bite stage1 список символов пуст")
+            logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ñ€Ð°Ð½Ð½Ð¸Ð¹ Ð²Ñ‹Ñ…Ð¾Ð´, Ð¿Ð¾ÑÐ»Ðµ bee_bite stage1 ÑÐ¿Ð¸ÑÐ¾Ðº ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð¿ÑƒÑÑ‚")
         elif ranked_symbols_count == 0:
             logger.info(
-                "запуск-бэктеста: ранний выход, нет символов с валидным объёмом на levels_tf=%s",
+                "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ñ€Ð°Ð½Ð½Ð¸Ð¹ Ð²Ñ‹Ñ…Ð¾Ð´, Ð½ÐµÑ‚ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ñ Ð²Ð°Ð»Ð¸Ð´Ð½Ñ‹Ð¼ Ð¾Ð±ÑŠÑ‘Ð¼Ð¾Ð¼ Ð½Ð° levels_tf=%s",
                 levels_timeframe.value,
             )
         else:
-            logger.info("запуск-бэктеста: ранний выход, после применения top_n=%s список символов пуст", top_n)
+            logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ñ€Ð°Ð½Ð½Ð¸Ð¹ Ð²Ñ‹Ñ…Ð¾Ð´, Ð¿Ð¾ÑÐ»Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½Ð¸Ñ top_n=%s ÑÐ¿Ð¸ÑÐ¾Ðº ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð¿ÑƒÑÑ‚", top_n)
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
@@ -2428,14 +1551,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             progress = (idx / symbols_total) * 100 if symbols_total else 0.0
             eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
             logger.info(
-                "анализ-кэша: подготовка-символов %s/%s (%.1f%%), eta=%ss",
+                "Ð°Ð½Ð°Ð»Ð¸Ð·-ÐºÑÑˆÐ°: Ð¿Ð¾Ð´Ð³Ð¾Ñ‚Ð¾Ð²ÐºÐ°-ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² %s/%s (%.1f%%), eta=%ss",
                 idx,
                 symbols_total,
                 progress,
                 int(eta_seconds),
             )
     if not symbol_frames:
-        logger.info("запуск-бектеста: не удалось подготовить данные")
+        logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÐµÐºÑ‚ÐµÑÑ‚Ð°: Ð½Ðµ ÑƒÐ´Ð°Ð»Ð¾ÑÑŒ Ð¿Ð¾Ð´Ð³Ð¾Ñ‚Ð¾Ð²Ð¸Ñ‚ÑŒ Ð´Ð°Ð½Ð½Ñ‹Ðµ")
         return 0
 
     strategy = build_strategy(config, logger)
@@ -2446,7 +1569,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     symbols_used_ratio = symbols_used / symbols_total if symbols_total else 0.0
     logger.info(
-        "запуск-бэктеста: сводка по символам всего=%s использовано=%s без_данных_levels_tf=%s без_данных_entry_tf=%s",
+        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ²Ð¾Ð´ÐºÐ° Ð¿Ð¾ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð°Ð¼ Ð²ÑÐµÐ³Ð¾=%s Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½Ð¾=%s Ð±ÐµÐ·_Ð´Ð°Ð½Ð½Ñ‹Ñ…_levels_tf=%s Ð±ÐµÐ·_Ð´Ð°Ð½Ð½Ñ‹Ñ…_entry_tf=%s",
         symbols_total,
         symbols_used,
         symbols_missing_levels_tf,
@@ -2454,7 +1577,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     if symbols_total and symbols_used_ratio < 0.2:
         logger.warning(
-            "запуск-бэктеста: используется только %.1f%% символов (%s из %s); результат бэктеста может быть нерепрезентативным",
+            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÑ‚ÑÑ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ %.1f%% ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² (%s Ð¸Ð· %s); Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚ Ð±ÑÐºÑ‚ÐµÑÑ‚Ð° Ð¼Ð¾Ð¶ÐµÑ‚ Ð±Ñ‹Ñ‚ÑŒ Ð½ÐµÑ€ÐµÐ¿Ñ€ÐµÐ·ÐµÐ½Ñ‚Ð°Ñ‚Ð¸Ð²Ð½Ñ‹Ð¼",
             symbols_used_ratio * 100,
             symbols_used,
             symbols_total,
@@ -2495,7 +1618,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     median_trades_per_combination = float(results["trades_count"].median()) if not results.empty else 0.0
     logger.info(
-        "запуск-бэктеста: всего=%s прибыльных=%s лучший_pf=%.4f комбинаций_со_сделками=%s сумма_сделок_по_сетке=%s среднее_сделок_на_комбинацию=%.4f медиана_сделок_на_комбинацию=%.4f",
+        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ð²ÑÐµÐ³Ð¾=%s Ð¿Ñ€Ð¸Ð±Ñ‹Ð»ÑŒÐ½Ñ‹Ñ…=%s Ð»ÑƒÑ‡ÑˆÐ¸Ð¹_pf=%.4f ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸Ð¹_ÑÐ¾_ÑÐ´ÐµÐ»ÐºÐ°Ð¼Ð¸=%s ÑÑƒÐ¼Ð¼Ð°_ÑÐ´ÐµÐ»Ð¾Ðº_Ð¿Ð¾_ÑÐµÑ‚ÐºÐµ=%s ÑÑ€ÐµÐ´Ð½ÐµÐµ_ÑÐ´ÐµÐ»Ð¾Ðº_Ð½Ð°_ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸ÑŽ=%.4f Ð¼ÐµÐ´Ð¸Ð°Ð½Ð°_ÑÐ´ÐµÐ»Ð¾Ðº_Ð½Ð°_ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸ÑŽ=%.4f",
         summary.total_combinations,
         summary.profitable_combinations,
         summary.best_pf,
@@ -2506,7 +1629,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     if summary.best_pf == 0 and total_trades == 0:
         logger.warning(
-            "запуск-бэктеста: отсутствуют сделки по всем комбинациям; проверьте достаточность истории для levels_tf=%s и соответствие таймфреймов в кэше (%s/%s)",
+            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ð¾Ñ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÑŽÑ‚ ÑÐ´ÐµÐ»ÐºÐ¸ Ð¿Ð¾ Ð²ÑÐµÐ¼ ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸ÑÐ¼; Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑŒÑ‚Ðµ Ð´Ð¾ÑÑ‚Ð°Ñ‚Ð¾Ñ‡Ð½Ð¾ÑÑ‚ÑŒ Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ð¸ Ð´Ð»Ñ levels_tf=%s Ð¸ ÑÐ¾Ð¾Ñ‚Ð²ÐµÑ‚ÑÑ‚Ð²Ð¸Ðµ Ñ‚Ð°Ð¹Ð¼Ñ„Ñ€ÐµÐ¹Ð¼Ð¾Ð² Ð² ÐºÑÑˆÐµ (%s/%s)",
             levels_timeframe.value,
             levels_timeframe.value,
             entry_timeframe.value,
@@ -2515,7 +1638,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
     if should_plot:
         if results.empty:
-            logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
+            logger.warning("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: plot=true, Ð½Ð¾ Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚Ñ‹ Ð¿ÑƒÑÑ‚Ñ‹Ðµ")
             return 0
 
         best_row = results.iloc[0]
@@ -2529,7 +1652,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             params_row=best_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
-            log_prefix="запуск-бэктеста: plot=true",
+            log_prefix="Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: plot=true",
         ):
             return 1
     return 0
@@ -2606,3983 +1729,13 @@ def _run_ppa_research_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return max(run_exit_codes, default=0)
 
 
-def _stage1_event_to_row(
-    event: BeeBiteStage1Result,
-    *,
-    timeframe: Timeframe | None = None,
-    regime_index: int | None = None,
-    regime_role: str | None = None,
-    regime_end_timestamp: int | None = None,
-    regime_end_reason: str | None = None,
-    display_metrics: dict[str, object] | None = None,
-) -> dict[str, object]:
-    row = {
-        "symbol": event.symbol,
-        "timeframe": timeframe.value if timeframe is not None else None,
-        "regime_index": regime_index,
-        "regime_role": regime_role,
-        "regime_end_timestamp": regime_end_timestamp,
-        "regime_end_reason": regime_end_reason,
-        "reason": event.reason,
-        "sleep_start_timestamp": event.sleep_start_timestamp,
-        "sleep_end_timestamp": event.sleep_end_timestamp,
-        "pump_start_timestamp": event.pump_start_timestamp,
-        "pump_peak_timestamp": event.pump_peak_timestamp,
-        "stage1_confirmed_timestamp": event.stage1_confirmed_timestamp,
-        "pump_base_price": event.pump_base_price,
-        "pump_peak_price": event.pump_peak_price,
-        "hold_base_price": event.hold_base_price,
-        "hold_base_timestamp": event.hold_base_timestamp,
-        "hold_price": event.hold_price,
-        "lowest_after_pump": event.lowest_after_pump,
-        "lowest_after_pump_timestamp": event.lowest_after_pump_timestamp,
-        "pump_percent": event.pump_percent,
-        "retain_ratio": event.retain_ratio,
-        "rolling_volume_usdt": event.rolling_volume_usdt,
-        "sleep_avg_volume_usdt": event.sleep_avg_volume_usdt,
-        "post_pump_avg_volume_usdt": event.post_pump_avg_volume_usdt,
-        "post_pump_volume_ratio": event.post_pump_volume_ratio,
-    }
-    if display_metrics:
-        row.update(display_metrics)
-    return row
-
-
-def _resolve_stage1_display_metrics(
-    *,
-    frame: pd.DataFrame,
-    event: BeeBiteStage1Result,
-    window_end_timestamp: int | None,
-) -> dict[str, object]:
-    required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
-    if frame.empty or not required_columns.issubset(frame.columns):
-        return {}
-
-    prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
-    for column in prepared.columns:
-        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
-    prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last").reset_index(drop=True)
-    if prepared.empty:
-        return {}
-
-    try:
-        explicit_window_end_idx = BeeBiteStage1Plotter._timestamp_to_index(
-            prepared,
-            window_end_timestamp if window_end_timestamp is not None else event.stage1_confirmed_timestamp,
-        )
-        display_start_idx = BeeBiteStage1Plotter._timestamp_to_index(prepared, event.pump_start_timestamp)
-        display_pump_base_price = float(event.pump_base_price or prepared.iloc[display_start_idx]["low"])
-        display_peak_idx, display_peak_price = BeeBiteStage1Plotter._resolve_display_peak(
-            prepared=prepared,
-            pump_peak_timestamp=event.pump_peak_timestamp,
-            fallback_peak_price=event.pump_peak_price,
-            window_end_idx=explicit_window_end_idx,
-        )
-    except ValueError:
-        return {}
-
-    lowest_after_pump_idx, lowest_after_pump = BeeBiteStage1Plotter._resolve_display_low_after_peak(
-        prepared=prepared,
-        peak_idx=display_peak_idx,
-        window_end_idx=explicit_window_end_idx,
-    )
-    hold_base_price = float(event.hold_base_price if event.hold_base_price is not None else (event.pump_base_price or 0.0))
-    display_hold_price = (
-        hold_base_price + ((display_peak_price - hold_base_price) * 0.5)
-        if display_peak_price is not None and hold_base_price > 0.0
-        else event.hold_price
-    )
-    pump_base_price = float(display_pump_base_price or 0.0)
-    display_pump_percent = (
-        (display_peak_price / pump_base_price) - 1.0
-        if display_peak_price is not None and pump_base_price > 0.0
-        else event.pump_percent
-    )
-    display_retain_ratio = None
-    has_display_retrace_reference = (
-        lowest_after_pump is not None
-        and display_peak_price is not None
-        and hold_base_price > 0.0
-        and display_peak_price > hold_base_price
-    )
-    if has_display_retrace_reference:
-        display_retain_ratio = (lowest_after_pump - hold_base_price) / max(display_peak_price - hold_base_price, 1e-12)
-
-    display_pump_start_timestamp = int(prepared.iloc[display_start_idx]["timestamp"])
-    display_peak_timestamp = int(prepared.iloc[display_peak_idx]["timestamp"])
-    display_lowest_timestamp = int(prepared.iloc[lowest_after_pump_idx]["timestamp"]) if lowest_after_pump_idx is not None else None
-    return {
-        "display_pump_start_timestamp": display_pump_start_timestamp,
-        "display_pump_base_price": display_pump_base_price,
-        "display_pump_peak_timestamp": display_peak_timestamp,
-        "display_pump_peak_price": display_peak_price,
-        "display_hold_price": display_hold_price,
-        "display_lowest_after_pump": lowest_after_pump,
-        "display_lowest_after_pump_timestamp": display_lowest_timestamp,
-        "display_pump_percent": display_pump_percent,
-        "display_retain_ratio": display_retain_ratio,
-    }
-
-
-def _review_stage1_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("review-stage1", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    logger.info("review-stage1: cache_dir=%s", config.backtest.cache_dir)
-    review_timeframe = _resolve_review_timeframe(args)
-    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
-    output_dir = results_dir / "stage1_review" / review_timeframe.value
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE1_EVENTS_OUTPUT_FILE
-    plots_dir = output_dir / DEFAULT_STAGE1_PLOTS_DIR_NAME
-    _reset_review_plot_dir(plots_dir)
-    plot_limit = int(getattr(args, "plot_limit", 20) or 20)
-
-    preparer = DataPreparer(config.backtest.cache_dir)
-    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
-    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
-    if not symbols:
-        logger.info("review-stage1: нет данных в кэше для entry_tf=15m")
-        return 0
-
-    selector = BeeBiteStage1Selector.for_timeframe(review_timeframe)
-    plotter = BeeBiteStage1Plotter()
-    all_events: list[BeeBiteStage1Result] = []
-    regimes_by_symbol: dict[str, list[_Stage1Regime]] = {}
-    frames_by_symbol: dict[str, pd.DataFrame] = {}
-    reason_counts: Counter[str] = Counter()
-    reason_samples: dict[str, list[str]] = {}
-    empty_frame_symbols: list[str] = []
-    populated_frame_symbols = 0
-    min_rows: int | None = None
-    max_rows: int | None = None
-
-    for index, symbol in enumerate(symbols, start=1):
-        frame = preparer.load_symbol_data(symbol, review_timeframe)
-        frames_by_symbol[symbol] = frame
-        rows_count = int(len(frame))
-        if frame.empty:
-            empty_frame_symbols.append(symbol)
-        else:
-            populated_frame_symbols += 1
-            min_rows = rows_count if min_rows is None else min(min_rows, rows_count)
-            max_rows = rows_count if max_rows is None else max(max_rows, rows_count)
-        events = selector.detect_events(symbol=symbol, frame=frame)
-        if events:
-            all_events.extend(events)
-            regimes_by_symbol[symbol] = _resolve_stage1_regime_ends(
-                frame=frame,
-                regimes=_group_stage1_events_into_regimes(events),
-            )
-        else:
-            evaluation = selector.evaluate_symbol(symbol=symbol, frame=frame)
-            reason_key = evaluation.reason if not evaluation.passed else "passed_now_but_no_historical_event"
-            reason_counts[reason_key] += 1
-            if len(reason_samples.get(reason_key, [])) < _STAGE1_REASON_SAMPLE_LIMIT:
-                reason_samples.setdefault(reason_key, []).append(_format_stage1_reason_sample(evaluation, frame))
-
-        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
-            logger.info(
-                "review-stage1: progress=%s/%s symbols_with_events=%s events_total=%s populated_frames=%s empty_frames=%s",
-                index,
-                len(symbols),
-                len(regimes_by_symbol),
-                len(all_events),
-                populated_frame_symbols,
-                len(empty_frame_symbols),
-            )
-
-    rows: list[dict[str, object]] = []
-    regimes_total = 0
-    for symbol, regimes in regimes_by_symbol.items():
-        frame = frames_by_symbol.get(symbol, pd.DataFrame())
-        for regime in regimes:
-            regimes_total += 1
-            for event in regime.events:
-                regime_role: str | None = None
-                if event is regime.first_event and event is regime.last_event:
-                    regime_role = "first_last"
-                elif event is regime.first_event:
-                    regime_role = "first"
-                elif event is regime.last_event:
-                    regime_role = "last"
-                window_end_timestamp = event.stage1_confirmed_timestamp
-                display_metrics = _resolve_stage1_display_metrics(
-                    frame=frame,
-                    event=event,
-                    window_end_timestamp=window_end_timestamp,
-                )
-                rows.append(
-                    _stage1_event_to_row(
-                        event,
-                        timeframe=review_timeframe,
-                        regime_index=regime.regime_index,
-                        regime_role=regime_role,
-                        regime_end_timestamp=regime.regime_end_timestamp,
-                        regime_end_reason=regime.regime_end_reason,
-                        display_metrics=display_metrics,
-                    )
-                )
-    events_frame = pd.DataFrame(rows)
-    if not events_frame.empty:
-        events_frame = events_frame.sort_values(
-            ["symbol", "regime_index", "stage1_confirmed_timestamp", "pump_peak_timestamp"],
-            ascending=[True, True, True, True],
-        ).reset_index(drop=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    events_frame.to_csv(output_path, index=False)
-
-    regimes_for_plots = sorted(
-        [regime for regimes in regimes_by_symbol.values() for regime in regimes],
-        key=lambda item: (
-            int(item.last_event.stage1_confirmed_timestamp or 0),
-            int(item.last_event.pump_peak_timestamp or 0),
-            item.symbol,
-            item.regime_index,
-        ),
-        reverse=True,
-    )
-    plots_built = 0
-    for regime in regimes_for_plots[:plot_limit]:
-        frame = frames_by_symbol.get(regime.symbol)
-        if frame is None or frame.empty:
-            continue
-        symbol_slug = regime.symbol.replace("/", "_")
-        first_output = plots_dir / f"{symbol_slug}_stage1_regime_{regime.regime_index:02d}_first.png"
-        plotter.plot_event(
-            frame=frame,
-            event=regime.first_event,
-            output_path=first_output,
-            window_end_timestamp=regime.first_event.stage1_confirmed_timestamp,
-            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} first",
-        )
-        plots_built += 1
-
-        last_output = plots_dir / f"{symbol_slug}_stage1_regime_{regime.regime_index:02d}_last.png"
-        plotter.plot_event(
-            frame=frame,
-            event=regime.last_event,
-            output_path=last_output,
-            window_end_timestamp=regime.last_event.stage1_confirmed_timestamp,
-            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} last ({regime.regime_end_reason})",
-        )
-        plots_built += 1
-
-    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
-    logger.info(
-        "review-stage1: frames populated=%s empty=%s min_rows=%s max_rows=%s",
-        populated_frame_symbols,
-        len(empty_frame_symbols),
-        min_rows or 0,
-        max_rows or 0,
-    )
-    if top_reasons:
-        logger.info("review-stage1: rejection_reasons %s", top_reasons)
-    if empty_frame_symbols:
-        logger.warning(
-            "review-stage1: empty_frames symbols=%s",
-            ", ".join(empty_frame_symbols[:10]),
-        )
-    for reason, samples in reason_samples.items():
-        logger.info("review-stage1: reason=%s samples=%s", reason, " | ".join(samples))
-
-    logger.info(
-        "review-stage1: symbols=%s symbols_with_events=%s regimes=%s events=%s csv=%s plots=%s plots_dir=%s",
-        len(symbols),
-        len(regimes_by_symbol),
-        regimes_total,
-        len(all_events),
-        output_path,
-        plots_built,
-        plots_dir,
-    )
-    return 0
-
-
-def _stage2_result_to_rows(
-    *,
-    symbol: str,
-    timeframe: Timeframe,
-    regime: _Stage1Regime,
-    stage1_event: BeeBiteStage1Result,
-    stage2_result: BeeBiteStage2Result,
-) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = [
-        {
-            "symbol": symbol,
-            "timeframe": timeframe.value,
-            "regime_index": regime.regime_index,
-            "row_type": "summary",
-            "stage1_confirmed_timestamp": stage1_event.stage1_confirmed_timestamp,
-            "regime_end_timestamp": regime.regime_end_timestamp,
-            "regime_end_reason": regime.regime_end_reason,
-            "stage2_passed": stage2_result.passed,
-            "stage2_reason": stage2_result.reason,
-            "analysis_start_timestamp": stage2_result.analysis_start_timestamp,
-            "analysis_end_timestamp": stage2_result.analysis_end_timestamp,
-            "confirmed_highs_count": len(stage2_result.confirmed_highs),
-            "local_ranges_count": len(stage2_result.local_ranges),
-            "merged_ranges_count": len(stage2_result.merged_ranges),
-            "liquidity_zones_count": len(stage2_result.liquidity_zones),
-            "box_start_timestamp": stage2_result.box_start_timestamp,
-            "box_end_timestamp": stage2_result.box_end_timestamp,
-            "box_high": stage2_result.box_high,
-            "box_low": stage2_result.box_low,
-        }
-    ]
-
-    for order, confirmed_high in enumerate(stage2_result.confirmed_highs, start=1):
-        rows.append(
-            {
-                "symbol": symbol,
-                "timeframe": timeframe.value,
-                "regime_index": regime.regime_index,
-                "row_type": "confirmed_high",
-                "row_order": order,
-                "timestamp": confirmed_high.timestamp,
-                "price": confirmed_high.price,
-                "idx": confirmed_high.idx,
-            }
-        )
-
-    for order, local_range in enumerate(stage2_result.local_ranges, start=1):
-        rows.append(
-            {
-                "symbol": symbol,
-                "timeframe": timeframe.value,
-                "regime_index": regime.regime_index,
-                "row_type": "local_range",
-                "row_order": order,
-                "start_timestamp": local_range.start_timestamp,
-                "end_timestamp": local_range.end_timestamp,
-                "confirmed_high_timestamp": local_range.confirmed_high_timestamp,
-                "confirmed_high_price": local_range.confirmed_high_price,
-                "high": local_range.high,
-                "low": local_range.low,
-                "bars": local_range.bars,
-            }
-        )
-
-    for order, merged_range in enumerate(stage2_result.merged_ranges, start=1):
-        rows.append(
-            {
-                "symbol": symbol,
-                "timeframe": timeframe.value,
-                "regime_index": regime.regime_index,
-                "row_type": "merged_range",
-                "row_order": order,
-                "start_timestamp": merged_range.start_timestamp,
-                "end_timestamp": merged_range.end_timestamp,
-                "high": merged_range.high,
-                "low": merged_range.low,
-                "bars": merged_range.bars,
-                "source_ranges": merged_range.source_ranges,
-                "confirmed_high_timestamps": ",".join(str(item) for item in merged_range.confirmed_high_timestamps),
-                "confirmed_high_prices": ",".join(f"{item:.10f}" for item in merged_range.confirmed_high_prices),
-            }
-        )
-
-    for order, liquidity_zone in enumerate(stage2_result.liquidity_zones, start=1):
-        rows.append(
-            {
-                "symbol": symbol,
-                "timeframe": timeframe.value,
-                "regime_index": regime.regime_index,
-                "row_type": "liquidity_zone",
-                "row_order": order,
-                "side": liquidity_zone.side,
-                "start_timestamp": liquidity_zone.start_timestamp,
-                "end_timestamp": liquidity_zone.end_timestamp,
-                "last_touch_timestamp": liquidity_zone.last_touch_timestamp,
-                "high": liquidity_zone.high,
-                "low": liquidity_zone.low,
-                "touch_count": liquidity_zone.touch_count,
-                "bars": (liquidity_zone.end_idx - liquidity_zone.start_idx) + 1,
-            }
-        )
-
-    return rows
-
-
-def _stage3_result_to_rows(
-    *,
-    symbol: str,
-    timeframe: Timeframe,
-    regime: _Stage1Regime,
-    stage1_event: BeeBiteStage1Result,
-    stage2_result: BeeBiteStage2Result,
-    stage3_result: BeeBiteStage3Result,
-) -> list[dict[str, object]]:
-    lower_zone = stage3_result.active_lower_liquidity_zone
-    lower_zone_end_timestamp = _resolve_stage3_lower_zone_end_timestamp(stage3_result)
-    rows: list[dict[str, object]] = [
-        {
-            "symbol": symbol,
-            "timeframe": timeframe.value,
-            "regime_index": regime.regime_index,
-            "row_type": "summary",
-            "stage1_confirmed_timestamp": stage1_event.stage1_confirmed_timestamp,
-            "regime_end_timestamp": regime.regime_end_timestamp,
-            "regime_end_reason": regime.regime_end_reason,
-            "stage2_passed": stage2_result.passed,
-            "stage2_reason": stage2_result.reason,
-            "stage3_passed": stage3_result.passed,
-            "stage3_reason": stage3_result.reason,
-            "analysis_start_timestamp": stage3_result.analysis_start_timestamp,
-            "analysis_end_timestamp": stage3_result.analysis_end_timestamp,
-            "stage2_box_start_timestamp": stage2_result.box_start_timestamp,
-            "stage2_box_end_timestamp": stage2_result.box_end_timestamp,
-            "stage2_box_low": stage2_result.box_low,
-            "stage2_box_high": stage2_result.box_high,
-            "reference_box_start_timestamp": stage3_result.reference_box_start_timestamp,
-            "reference_box_end_timestamp": stage3_result.reference_box_end_timestamp,
-            "box_start_timestamp": stage3_result.reference_box_start_timestamp,
-            "box_end_timestamp": stage3_result.reference_box_end_timestamp,
-            "box_low": stage3_result.box_low,
-            "box_high": stage3_result.box_high,
-            "hold_price": stage3_result.hold_price,
-            "break_timestamp": stage3_result.break_timestamp,
-            "reclaim_timestamp": stage3_result.reclaim_timestamp,
-            "invalidation_timestamp": stage3_result.invalidation_timestamp,
-            "lowest_break_timestamp": stage3_result.lowest_break_timestamp,
-            "lowest_break_price": stage3_result.lowest_break_price,
-            "below_range_high_price": stage3_result.below_range_high_price,
-            "under_range_span": stage3_result.under_range_span,
-            "under_range_span_pct": stage3_result.under_range_span_pct,
-            "range_size_pct": stage3_result.range_size_pct,
-            "bars_under_range": stage3_result.bars_under_range,
-            "active_lower_zone_start_timestamp": (lower_zone.start_timestamp if lower_zone is not None else None),
-            "active_lower_zone_end_timestamp": lower_zone_end_timestamp,
-            "active_lower_zone_low": (lower_zone.low if lower_zone is not None else None),
-            "active_lower_zone_high": (lower_zone.high if lower_zone is not None else None),
-            "active_lower_zone_touch_count": (lower_zone.touch_count if lower_zone is not None else None),
-        }
-    ]
-    if lower_zone is not None:
-        lower_zone_bars = None
-        if lower_zone_end_timestamp is not None:
-            timeframe_ms = timeframe.to_milliseconds()
-            lower_zone_bars = max(
-                int((int(lower_zone_end_timestamp) - int(lower_zone.start_timestamp)) // max(timeframe_ms, 1)) + 1,
-                1,
-            )
-        rows.append(
-            {
-                "symbol": symbol,
-                "timeframe": timeframe.value,
-                "regime_index": regime.regime_index,
-                "row_type": "active_lower_liquidity_zone",
-                "row_order": 1,
-                "start_timestamp": lower_zone.start_timestamp,
-                "end_timestamp": lower_zone_end_timestamp,
-                "last_touch_timestamp": lower_zone.last_touch_timestamp,
-                "low": lower_zone.low,
-                "high": lower_zone.high,
-                "touch_count": lower_zone.touch_count,
-                "bars": lower_zone_bars,
-            }
-        )
-    return rows
-
-
-def _stage23_backtest_row(
-    *,
-    symbol: str,
-    timeframe: Timeframe,
-    regime: _Stage1Regime,
-    stage1_event: BeeBiteStage1Result,
-    snapshot_order: int,
-    snapshot_timestamp: int,
-    stage2_result: BeeBiteStage2Result,
-    stage3_result: BeeBiteStage3Result,
-) -> dict[str, object]:
-    lower_zone = stage3_result.active_lower_liquidity_zone
-    lower_zone_end_timestamp = _resolve_stage3_lower_zone_end_timestamp(stage3_result)
-    return {
-        "symbol": symbol,
-        "timeframe": timeframe.value,
-        "regime_index": regime.regime_index,
-        "row_type": "evolution",
-        "row_order": snapshot_order,
-        "snapshot_timestamp": snapshot_timestamp,
-        "stage1_confirmed_timestamp": stage1_event.stage1_confirmed_timestamp,
-        "regime_end_timestamp": regime.regime_end_timestamp,
-        "regime_end_reason": regime.regime_end_reason,
-        "stage2_passed": stage2_result.passed,
-        "stage2_reason": stage2_result.reason,
-        "stage2_analysis_end_timestamp": stage2_result.analysis_end_timestamp,
-        "confirmed_highs_count": len(stage2_result.confirmed_highs),
-        "local_ranges_count": len(stage2_result.local_ranges),
-        "merged_ranges_count": len(stage2_result.merged_ranges),
-        "liquidity_zones_count": len(stage2_result.liquidity_zones),
-        "stage2_box_start_timestamp": stage2_result.box_start_timestamp,
-        "stage2_box_end_timestamp": stage2_result.box_end_timestamp,
-        "stage2_box_low": stage2_result.box_low,
-        "stage2_box_high": stage2_result.box_high,
-        "reference_box_start_timestamp": stage3_result.reference_box_start_timestamp,
-        "reference_box_end_timestamp": stage3_result.reference_box_end_timestamp,
-        "box_start_timestamp": stage3_result.reference_box_start_timestamp,
-        "box_end_timestamp": stage3_result.reference_box_end_timestamp,
-        "box_low": stage3_result.box_low,
-        "box_high": stage3_result.box_high,
-        "stage3_passed": stage3_result.passed,
-        "stage3_reason": stage3_result.reason,
-        "stage3_analysis_end_timestamp": stage3_result.analysis_end_timestamp,
-        "hold_price": stage3_result.hold_price,
-        "break_timestamp": stage3_result.break_timestamp,
-        "reclaim_timestamp": stage3_result.reclaim_timestamp,
-        "invalidation_timestamp": stage3_result.invalidation_timestamp,
-        "lowest_break_timestamp": stage3_result.lowest_break_timestamp,
-        "lowest_break_price": stage3_result.lowest_break_price,
-        "below_range_high_price": stage3_result.below_range_high_price,
-        "under_range_span": stage3_result.under_range_span,
-        "under_range_span_pct": stage3_result.under_range_span_pct,
-        "range_size_pct": stage3_result.range_size_pct,
-        "bars_under_range": stage3_result.bars_under_range,
-        "active_lower_zone_start_timestamp": (lower_zone.start_timestamp if lower_zone is not None else None),
-        "active_lower_zone_end_timestamp": lower_zone_end_timestamp,
-        "active_lower_zone_last_touch_timestamp": (lower_zone.last_touch_timestamp if lower_zone is not None else None),
-        "active_lower_zone_low": (lower_zone.low if lower_zone is not None else None),
-        "active_lower_zone_high": (lower_zone.high if lower_zone is not None else None),
-        "active_lower_zone_touch_count": (lower_zone.touch_count if lower_zone is not None else None),
-    }
-
-
-def _resolve_stage4_active_upper_zones(reference_stage2_result: BeeBiteStage2Result) -> list[object]:
-    return [
-        zone
-        for zone in reference_stage2_result.liquidity_zones
-        if zone.side == "upper"
-        and reference_stage2_result.box_end_timestamp is not None
-        and zone.end_timestamp >= int(reference_stage2_result.box_end_timestamp)
-    ]
-
-
-def _resolve_index_by_timestamp_from_frame(frame: pd.DataFrame, timestamp: int) -> int | None:
-    matches = frame.index[frame["timestamp"].astype("int64") == int(timestamp)]
-    if len(matches) == 0:
-        return None
-    return int(matches[-1])
-
-
-def _resolve_stage4_timestamp_utc_parts(timestamp_ms: int | None) -> dict[str, object]:
-    if timestamp_ms is None:
-        return {
-            "hour_utc": None,
-            "minute_utc": None,
-            "label_utc": None,
-            "session_utc": None,
-            "minute_marker": "unknown",
-        }
-    timestamp = pd.to_datetime(int(timestamp_ms), unit="ms", utc=True)
-    hour = int(timestamp.hour)
-    minute = int(timestamp.minute)
-    if 0 <= hour < 8:
-        session = "asia"
-    elif 8 <= hour < 13:
-        session = "europe"
-    elif 13 <= hour < 17:
-        session = "us_overlap"
-    else:
-        session = "us_late"
-    minute_marker = "00_or_30" if minute in {0, 30} else "other"
-    return {
-        "hour_utc": hour,
-        "minute_utc": minute,
-        "label_utc": timestamp.strftime("%H:%M"),
-        "session_utc": session,
-        "minute_marker": minute_marker,
-    }
-
-
-def _passes_stage4_pump_minute_filter(*, pump_minute: int | None, filter_mode: str) -> bool:
-    normalized = str(filter_mode or "any").strip().lower()
-    if normalized in {"", "any"}:
-        return True
-    if normalized == "minute_00_or_30":
-        return pump_minute in {0, 30}
-    return True
-
-
-def _passes_stage4_timing_session_filter(
-    *,
-    pump_session: str | None,
-    sweep_session: str | None,
-    filter_mode: str,
-) -> bool:
-    normalized = str(filter_mode or "any").strip().lower()
-    if normalized in {"", "any"}:
-        return True
-    if normalized == "pump_not_us_overlap_and_sweep_not_europe":
-        return pump_session != "us_overlap" and sweep_session != "europe"
-    return True
-
-
-def _resolve_stage4_trade_outcome(
-    *,
-    frame: pd.DataFrame,
-    entry_idx: int,
-    stop_price: float,
-    entry_price: float,
-    tp1_price: float,
-    tp2_price: float,
-    tp3_price: float,
-    tp1_stop_mode: str,
-    tp1_share: float,
-    tp2_share: float,
-    tp3_share: float,
-) -> dict[str, object]:
-    required_columns = {"open", "high", "low", "close"}
-    if frame.empty or not required_columns.issubset(frame.columns):
-        return {
-            "outcome": "frame_invalid",
-            "exit_idx": None,
-            "exit_price": None,
-            "tp1_hit": False,
-            "tp1_timestamp": None,
-            "tp2_hit": False,
-            "tp2_timestamp": None,
-            "tp3_hit": False,
-            "tp3_timestamp": None,
-            "be_armed": False,
-            "tp1_stop_price": None,
-            "exit_stop_price": stop_price,
-            "realized_rr": None,
-            "realized_pnl_pct": None,
-        }
-
-    prepared = frame.loc[:, ["open", "high", "low", "close"]].copy()
-    for column in prepared.columns:
-        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = prepared.dropna(subset=["open", "high", "low", "close"]).reset_index(drop=True)
-    return _resolve_stage4_trade_outcome_prepared(
-        prepared=prepared,
-        entry_idx=entry_idx,
-        stop_price=stop_price,
-        entry_price=entry_price,
-        tp1_price=tp1_price,
-        tp2_price=tp2_price,
-        tp3_price=tp3_price,
-        tp1_stop_mode=tp1_stop_mode,
-        tp1_share=tp1_share,
-        tp2_share=tp2_share,
-        tp3_share=tp3_share,
-    )
-
-
-def _resolve_stage4_trade_outcome_prepared(
-    *,
-    prepared: pd.DataFrame,
-    entry_idx: int,
-    stop_price: float,
-    entry_price: float,
-    tp1_price: float,
-    tp2_price: float,
-    tp3_price: float,
-    tp1_stop_mode: str,
-    tp1_share: float,
-    tp2_share: float,
-    tp3_share: float,
-) -> dict[str, object]:
-    required_columns = {"open", "high", "low", "close"}
-    if prepared.empty or not required_columns.issubset(prepared.columns):
-        return {
-            "outcome": "frame_invalid",
-            "exit_idx": None,
-            "exit_price": None,
-            "tp1_hit": False,
-            "tp1_timestamp": None,
-            "tp2_hit": False,
-            "tp2_timestamp": None,
-            "tp3_hit": False,
-            "tp3_timestamp": None,
-            "be_armed": False,
-            "tp1_stop_price": None,
-            "exit_stop_price": stop_price,
-            "realized_rr": None,
-            "realized_pnl_pct": None,
-        }
-
-    risk = entry_price - stop_price
-    remaining_share = 1.0
-    active_stop = stop_price
-    tp1_hit = False
-    tp2_hit = False
-    tp3_hit = False
-    tp1_stop_price: float | None = None
-    tp1_timestamp: int | None = None
-    tp2_timestamp: int | None = None
-    tp3_timestamp: int | None = None
-    fills: list[tuple[int, float, float]] = []
-    fee_rate = BEE_BITE_STAGE4_TAKER_FEE_RATE
-    slippage_rate = BEE_BITE_STAGE4_SLIPPAGE_RATE
-
-    def _record_fill(*, idx: int, price: float, share: float) -> None:
-        nonlocal remaining_share
-        if share <= 0.0 or remaining_share <= 0.0:
-            return
-        normalized_share = min(max(share, 0.0), remaining_share)
-        fills.append((idx, price, normalized_share))
-        remaining_share = max(0.0, remaining_share - normalized_share)
-
-    def _finalize(*, outcome: str, exit_idx: int | None, exit_price: float | None) -> dict[str, object]:
-        realized_rr = None
-        gross_realized_rr = None
-        total_fee_in_price = None
-        total_fee_pct = None
-        if risk > 0.0 and fills:
-            gross_pnl_in_price = sum((share * (price - entry_price)) for _, price, share in fills)
-            exit_fee_in_price = sum((share * price * fee_rate) for _, price, share in fills)
-            entry_fee_in_price = entry_price * fee_rate
-            total_fee_in_price = entry_fee_in_price + exit_fee_in_price
-            net_pnl_in_price = gross_pnl_in_price - total_fee_in_price
-            gross_realized_rr = gross_pnl_in_price / risk
-            realized_rr = net_pnl_in_price / risk
-        realized_pnl_pct = None
-        gross_realized_pnl_pct = None
-        if entry_price > 0.0 and fills:
-            gross_pnl_pct = sum((share * (((price - entry_price) / entry_price) * 100.0)) for _, price, share in fills)
-            exit_fee_pct = sum((share * ((price / entry_price) * fee_rate * 100.0)) for _, price, share in fills)
-            entry_fee_pct = fee_rate * 100.0
-            total_fee_pct = entry_fee_pct + exit_fee_pct
-            gross_realized_pnl_pct = gross_pnl_pct
-            realized_pnl_pct = gross_pnl_pct - total_fee_pct
-        return {
-            "outcome": outcome,
-            "exit_idx": exit_idx,
-            "exit_price": exit_price,
-            "tp1_hit": tp1_hit,
-            "tp1_timestamp": tp1_timestamp,
-            "tp2_hit": tp2_hit,
-            "tp2_timestamp": tp2_timestamp,
-            "tp3_hit": tp3_hit,
-            "tp3_timestamp": tp3_timestamp,
-            "be_armed": tp2_hit and remaining_share > 0.0 and tp1_stop_price is not None,
-            "tp1_stop_price": tp1_stop_price,
-            "exit_stop_price": active_stop,
-            "fee_rate": fee_rate,
-            "slippage_rate": slippage_rate,
-            "gross_realized_rr": gross_realized_rr,
-            "realized_rr": realized_rr,
-            "gross_realized_pnl_pct": gross_realized_pnl_pct,
-            "realized_pnl_pct": realized_pnl_pct,
-            "total_fee_in_price": total_fee_in_price,
-            "total_fee_pct": total_fee_pct,
-        }
-
-    if entry_idx >= (len(prepared) - 1):
-        final_idx = len(prepared) - 1
-        final_close = float(prepared.iloc[final_idx]["close"])
-        _record_fill(idx=final_idx, price=final_close, share=remaining_share)
-        return _finalize(outcome="no_future_data", exit_idx=final_idx, exit_price=final_close)
-
-    for idx in range(entry_idx + 1, len(prepared)):
-        candle_high = float(prepared.iloc[idx]["high"])
-        candle_low = float(prepared.iloc[idx]["low"])
-
-        if not tp1_hit:
-            hit_stop = candle_low <= active_stop
-            hit_tp1 = candle_high >= tp1_price
-            if hit_stop and hit_tp1:
-                _record_fill(idx=idx, price=stop_price, share=remaining_share)
-                return _finalize(outcome="stop_same_candle_pre_tp1", exit_idx=idx, exit_price=stop_price)
-            if hit_stop:
-                _record_fill(idx=idx, price=stop_price, share=remaining_share)
-                return _finalize(outcome="stop_hit", exit_idx=idx, exit_price=stop_price)
-            if hit_tp1:
-                tp1_hit = True
-                tp1_timestamp = idx
-                _record_fill(idx=idx, price=tp1_price, share=tp1_share)
-                if remaining_share <= 0.0:
-                    return _finalize(outcome="tp1_full_exit", exit_idx=idx, exit_price=tp1_price)
-                if not tp2_hit and tp2_share > 0.0 and candle_high >= tp2_price:
-                    tp2_hit = True
-                    tp2_timestamp = idx
-                    _record_fill(idx=idx, price=tp2_price, share=tp2_share)
-                    tp1_stop_price = tp1_price
-                    active_stop = tp1_price
-                    if remaining_share <= 0.0:
-                        return _finalize(outcome="tp2_final_hit", exit_idx=idx, exit_price=tp2_price)
-                    if candle_low <= active_stop:
-                        _record_fill(idx=idx, price=active_stop, share=remaining_share)
-                        return _finalize(
-                            outcome="tp1_stop_same_candle_after_tp2",
-                            exit_idx=idx,
-                            exit_price=active_stop,
-                        )
-                if tp3_share > 0.0 and candle_high >= tp3_price:
-                    tp3_hit = True
-                    tp3_timestamp = idx
-                    _record_fill(idx=idx, price=tp3_price, share=remaining_share)
-                    return _finalize(outcome="tp3_hit", exit_idx=idx, exit_price=tp3_price)
-                continue
-
-        hit_stop = candle_low <= active_stop
-        if hit_stop:
-            _record_fill(idx=idx, price=active_stop, share=remaining_share)
-            stop_outcome = "tp1_stop_hit" if tp2_hit else "stop_hit"
-            return _finalize(outcome=stop_outcome, exit_idx=idx, exit_price=active_stop)
-
-        if not tp2_hit and tp2_share > 0.0 and candle_high >= tp2_price:
-            tp2_hit = True
-            tp2_timestamp = idx
-            _record_fill(idx=idx, price=tp2_price, share=tp2_share)
-            tp1_stop_price = tp1_price
-            active_stop = tp1_price
-            if remaining_share <= 0.0:
-                return _finalize(outcome="tp2_final_hit", exit_idx=idx, exit_price=tp2_price)
-            if candle_low <= active_stop:
-                _record_fill(idx=idx, price=active_stop, share=remaining_share)
-                return _finalize(
-                    outcome="tp1_stop_same_candle_after_tp2",
-                    exit_idx=idx,
-                    exit_price=active_stop,
-                )
-
-        if tp3_share > 0.0 and candle_high >= tp3_price:
-            tp3_hit = True
-            tp3_timestamp = idx
-            _record_fill(idx=idx, price=tp3_price, share=remaining_share)
-            return _finalize(outcome="tp3_hit", exit_idx=idx, exit_price=tp3_price)
-
-    final_idx = len(prepared) - 1
-    final_close = float(prepared.iloc[final_idx]["close"])
-    _record_fill(idx=final_idx, price=final_close, share=remaining_share)
-    return _finalize(outcome="open", exit_idx=final_idx, exit_price=final_close)
-
-
-def _build_stage4_postmortem_rows(
-    *,
-    symbol: str,
-    timeframe: Timeframe,
-    regime: _Stage1Regime,
-    stage1_event: BeeBiteStage1Result,
-    reference_stage2_result: BeeBiteStage2Result,
-    stage3_result: BeeBiteStage3Result,
-    prepared_frame: pd.DataFrame,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-) -> list[dict[str, object]]:
-    if (
-        not stage3_result.passed
-        or stage3_result.reclaim_idx is None
-        or stage3_result.lowest_break_price is None
-        or stage1_event.pump_peak_price is None
-        or stage3_result.box_high is None
-        or stage3_result.box_low is None
-    ):
-        return []
-
-    if prepared_frame.empty:
-        return []
-    prepared = prepared_frame
-    if prepared.empty or stage3_result.reclaim_idx >= len(prepared):
-        return []
-
-    entry_idx = int(stage3_result.reclaim_idx)
-    entry_timestamp = int(prepared.iloc[entry_idx]["timestamp"])
-    entry_price = float(prepared.iloc[entry_idx]["close"])
-    structural_stop_price = float(stage3_result.lowest_break_price)
-    peak_price = float(stage1_event.pump_peak_price)
-    pump_start_timestamp = int(stage1_event.pump_start_timestamp) if stage1_event.pump_start_timestamp is not None else None
-    pump_peak_timestamp = int(stage1_event.pump_peak_timestamp) if stage1_event.pump_peak_timestamp is not None else None
-    sweep_timestamp = int(stage3_result.lowest_break_timestamp or stage3_result.break_timestamp or 0) or None
-    box_height = max(float(stage3_result.box_high) - float(stage3_result.box_low), 0.0)
-    peak_idx = _resolve_index_by_timestamp_from_frame(prepared, int(stage1_event.pump_peak_timestamp or 0))
-    sweep_idx = stage3_result.lowest_break_idx if stage3_result.lowest_break_idx is not None else stage3_result.break_idx
-    pump_start_idx = _resolve_index_by_timestamp_from_frame(prepared, int(stage1_event.pump_start_timestamp or 0))
-    if peak_idx is None or sweep_idx is None:
-        return []
-    segment_end_idx = max(min(int(sweep_idx), len(prepared) - 1), peak_idx)
-    peak_to_sweep_slice = prepared.iloc[peak_idx : segment_end_idx + 1].copy()
-    if peak_to_sweep_slice.empty:
-        return []
-    peak_to_sweep_ranges = (peak_to_sweep_slice["high"] - peak_to_sweep_slice["low"]).astype(float)
-    peak_to_sweep_bodies = (peak_to_sweep_slice["close"] - peak_to_sweep_slice["open"]).abs().astype(float)
-    avg_range_peak_to_sweep = float(peak_to_sweep_ranges.mean()) if not peak_to_sweep_ranges.empty else 0.0
-    avg_body_peak_to_sweep = float(peak_to_sweep_bodies.mean()) if not peak_to_sweep_bodies.empty else 0.0
-    sweep_candle_range = float(prepared.iloc[segment_end_idx]["high"] - prepared.iloc[segment_end_idx]["low"])
-    sweep_size_ratio = (
-        (sweep_candle_range / avg_range_peak_to_sweep)
-        if avg_range_peak_to_sweep > 0.0
-        else None
-    )
-    pump_to_peak_bars = (
-        max(peak_idx - pump_start_idx + 1, 0)
-        if pump_start_idx is not None
-        else None
-    )
-    peak_to_sweep_bars = max(segment_end_idx - peak_idx + 1, 0)
-    pump_to_sweep_duration_ratio = (
-        (float(pump_to_peak_bars) / float(peak_to_sweep_bars))
-        if pump_to_peak_bars is not None and peak_to_sweep_bars > 0
-        else None
-    )
-    pump_marker = _resolve_stage4_timestamp_utc_parts(pump_start_timestamp)
-    peak_marker = _resolve_stage4_timestamp_utc_parts(pump_peak_timestamp)
-    sweep_marker = _resolve_stage4_timestamp_utc_parts(sweep_timestamp)
-    reclaim_marker = _resolve_stage4_timestamp_utc_parts(stage3_result.reclaim_timestamp)
-    highest_high_after_peak = float(prepared.iloc[peak_idx : entry_idx + 1]["high"].max())
-    active_upper_zones = _resolve_stage4_active_upper_zones(reference_stage2_result)
-    upper_zone_above_peak = sorted(
-        (zone for zone in active_upper_zones if zone.low > peak_price),
-        key=lambda zone: zone.low,
-    )
-    trade_frame = prepared.loc[:, ["open", "high", "low", "close"]].copy()
-    trade_outcome_cache: dict[tuple[float, str, str, float, float, float], dict[str, object]] = {}
-
-    rows: list[dict[str, object]] = []
-    for row_order, params in enumerate(param_grid, start=1):
-        tp1_price = peak_price
-        tp3_price = peak_price + (box_height * float(params.tp3_multiplier))
-        tp2_source = "mid_tp1_tp3"
-        tp2_price = tp1_price + ((tp3_price - tp1_price) / 2.0)
-        if params.stop_mode == "entry_minus_avg_body":
-            stop_price = max(structural_stop_price, entry_price - avg_body_peak_to_sweep)
-        else:
-            stop_price = structural_stop_price
-        risk = entry_price - stop_price
-        weighted_target_price = (
-            (tp1_price * float(params.tp1_share))
-            + (tp2_price * float(params.tp2_share))
-            + (tp3_price * float(params.tp3_share))
-        )
-        rr_value = ((weighted_target_price - entry_price) / risk) if risk > 0.0 else None
-        sweep_filter_passed = (
-            sweep_size_ratio is not None
-            and sweep_size_ratio >= float(params.sweep_size_multiplier)
-        )
-        pump_minute_filter_passed = _passes_stage4_pump_minute_filter(
-            pump_minute=cast(int | None, pump_marker["minute_utc"]),
-            filter_mode=params.pump_minute_filter,
-        )
-        timing_session_filter_passed = _passes_stage4_timing_session_filter(
-            pump_session=cast(str | None, pump_marker["session_utc"]),
-            sweep_session=cast(str | None, sweep_marker["session_utc"]),
-            filter_mode=params.timing_session_filter,
-        )
-        target_stack_valid = (
-            sweep_filter_passed
-            and risk > 0.0
-            and stop_price < entry_price
-            and tp1_price > entry_price
-            and (float(params.tp2_share) <= 0.0 or tp2_price >= tp1_price)
-            and (
-                float(params.tp3_share) <= 0.0
-                or tp3_price >= max(tp1_price, tp2_price if float(params.tp2_share) > 0.0 else tp1_price)
-            )
-        )
-        eligible = (
-            bool(target_stack_valid)
-            and pump_minute_filter_passed
-            and timing_session_filter_passed
-            and rr_value is not None
-            and rr_value >= float(params.min_rr)
-        )
-        outcome = "rr_below_threshold"
-        exit_idx: int | None = None
-        exit_price: float | None = None
-        realized_rr: float | None = None
-        realized_pnl_pct: float | None = None
-        exit_timestamp: int | None = None
-        tp1_timestamp: int | None = None
-        tp2_timestamp: int | None = None
-        tp3_timestamp: int | None = None
-        tp1_hit = False
-        tp2_hit = False
-        tp3_hit = False
-        be_armed = False
-        exit_stop_price = stop_price
-        tp1_stop_price = None
-        if not target_stack_valid:
-            outcome = "sweep_size_filter_failed" if not sweep_filter_passed else "invalid_target_stack"
-        elif not pump_minute_filter_passed:
-            outcome = "pump_minute_filter_failed"
-        elif not timing_session_filter_passed:
-            outcome = "timing_session_filter_failed"
-        param_cache_key = (
-            float(params.tp3_multiplier),
-            str(params.stop_mode),
-            str(params.tp1_stop_mode),
-            float(params.tp1_share),
-            float(params.tp2_share),
-            float(params.tp3_share),
-        )
-        trade_outcome: dict[str, object] | None = None
-        if target_stack_valid and rr_value is not None:
-            trade_outcome = trade_outcome_cache.get(param_cache_key)
-            if trade_outcome is None:
-                trade_outcome = _resolve_stage4_trade_outcome_prepared(
-                    prepared=trade_frame,
-                    entry_idx=entry_idx,
-                    stop_price=stop_price,
-                    entry_price=entry_price,
-                    tp1_price=tp1_price,
-                    tp2_price=tp2_price,
-                    tp3_price=tp3_price,
-                    tp1_stop_mode=params.tp1_stop_mode,
-                    tp1_share=float(params.tp1_share),
-                    tp2_share=float(params.tp2_share),
-                    tp3_share=float(params.tp3_share),
-                )
-                trade_outcome_cache[param_cache_key] = trade_outcome
-        if eligible and trade_outcome is not None:
-            outcome = str(trade_outcome["outcome"])
-            exit_idx = cast(int | None, trade_outcome["exit_idx"])
-            exit_price = cast(float | None, trade_outcome["exit_price"])
-            tp1_hit = bool(trade_outcome["tp1_hit"])
-            tp2_hit = bool(trade_outcome["tp2_hit"])
-            tp3_hit = bool(trade_outcome["tp3_hit"])
-            tp1_raw_idx = cast(int | None, trade_outcome["tp1_timestamp"])
-            tp2_raw_idx = cast(int | None, trade_outcome["tp2_timestamp"])
-            tp3_raw_idx = cast(int | None, trade_outcome["tp3_timestamp"])
-            tp1_timestamp = int(prepared.iloc[tp1_raw_idx]["timestamp"]) if tp1_raw_idx is not None and tp1_raw_idx < len(prepared) else None
-            tp2_timestamp = int(prepared.iloc[tp2_raw_idx]["timestamp"]) if tp2_raw_idx is not None and tp2_raw_idx < len(prepared) else None
-            tp3_timestamp = int(prepared.iloc[tp3_raw_idx]["timestamp"]) if tp3_raw_idx is not None and tp3_raw_idx < len(prepared) else None
-            be_armed = bool(trade_outcome["be_armed"])
-            tp1_stop_price = cast(float | None, trade_outcome.get("tp1_stop_price"))
-            exit_stop_price = float(cast(float | int, trade_outcome["exit_stop_price"]))
-            if exit_idx is not None and exit_idx < len(prepared):
-                exit_timestamp = int(prepared.iloc[exit_idx]["timestamp"])
-            realized_rr = cast(float | None, trade_outcome["realized_rr"])
-            realized_pnl_pct = cast(float | None, trade_outcome["realized_pnl_pct"])
-            gross_realized_rr = cast(float | None, trade_outcome["gross_realized_rr"])
-            gross_realized_pnl_pct = cast(float | None, trade_outcome["gross_realized_pnl_pct"])
-            total_fee_in_price = cast(float | None, trade_outcome["total_fee_in_price"])
-            total_fee_pct = cast(float | None, trade_outcome["total_fee_pct"])
-        else:
-            gross_realized_rr = None
-            gross_realized_pnl_pct = None
-            total_fee_in_price = None
-            total_fee_pct = None
-
-        rows.append(
-            {
-                "symbol": symbol,
-                "timeframe": timeframe.value,
-                "regime_index": regime.regime_index,
-                "row_type": "trade",
-                "row_order": row_order,
-                "pump_minute_filter": str(params.pump_minute_filter),
-                "timing_session_filter": str(params.timing_session_filter),
-                "sweep_size_multiplier": float(params.sweep_size_multiplier),
-                "stop_mode": str(params.stop_mode),
-                "tp1_stop_mode": str(params.tp1_stop_mode),
-                "tp3_multiplier": float(params.tp3_multiplier),
-                "tp1_share": float(params.tp1_share),
-                "tp2_share": float(params.tp2_share),
-                "tp3_share": float(params.tp3_share),
-                "pump_start_timestamp": pump_start_timestamp,
-                "pump_peak_timestamp": pump_peak_timestamp,
-                "sweep_timestamp": sweep_timestamp,
-                "stage3_reclaim_timestamp": stage3_result.reclaim_timestamp,
-                "pump_hour_utc": pump_marker["hour_utc"],
-                "pump_minute_utc": pump_marker["minute_utc"],
-                "pump_label_utc": pump_marker["label_utc"],
-                "pump_session_utc": pump_marker["session_utc"],
-                "pump_minute_marker": pump_marker["minute_marker"],
-                "peak_hour_utc": peak_marker["hour_utc"],
-                "peak_minute_utc": peak_marker["minute_utc"],
-                "peak_label_utc": peak_marker["label_utc"],
-                "peak_session_utc": peak_marker["session_utc"],
-                "sweep_hour_utc": sweep_marker["hour_utc"],
-                "sweep_minute_utc": sweep_marker["minute_utc"],
-                "sweep_label_utc": sweep_marker["label_utc"],
-                "sweep_session_utc": sweep_marker["session_utc"],
-                "sweep_minute_marker": sweep_marker["minute_marker"],
-                "reclaim_hour_utc": reclaim_marker["hour_utc"],
-                "reclaim_minute_utc": reclaim_marker["minute_utc"],
-                "reclaim_label_utc": reclaim_marker["label_utc"],
-                "reclaim_session_utc": reclaim_marker["session_utc"],
-                "timing_context_marker": (
-                    f"pump:{pump_marker['label_utc']}/{pump_marker['session_utc']} | "
-                    f"sweep:{sweep_marker['label_utc']}/{sweep_marker['session_utc']}"
-                ),
-                "entry_timestamp": entry_timestamp,
-                "entry_price": entry_price,
-                "stop_price": stop_price,
-                "structural_stop_price": structural_stop_price,
-                "tp1_stop_price": tp1_stop_price,
-                "tp1_price": tp1_price,
-                "tp2_price": tp2_price,
-                "tp3_price": tp3_price,
-                "tp2_source": tp2_source,
-                "highest_high_after_peak": highest_high_after_peak,
-                "sweep_candle_range": sweep_candle_range,
-                "avg_range_peak_to_sweep": avg_range_peak_to_sweep,
-                "avg_body_peak_to_sweep": avg_body_peak_to_sweep,
-                "sweep_size_ratio": sweep_size_ratio,
-                "sweep_filter_passed": sweep_filter_passed,
-                "pump_minute_filter_passed": pump_minute_filter_passed,
-                "timing_session_filter_passed": timing_session_filter_passed,
-                "pump_to_peak_bars": pump_to_peak_bars,
-                "peak_to_sweep_bars": peak_to_sweep_bars,
-                "pump_to_sweep_duration_ratio": pump_to_sweep_duration_ratio,
-                "weighted_target_price": weighted_target_price,
-                "box_height": box_height,
-                "minimal_rr": float(params.min_rr),
-                "rr": rr_value,
-                "target_stack_valid": target_stack_valid,
-                "eligible": eligible,
-                "fee_model": "binance_futures_taker",
-                "taker_fee_rate": BEE_BITE_STAGE4_TAKER_FEE_RATE,
-                "slippage_rate": BEE_BITE_STAGE4_SLIPPAGE_RATE,
-                "tp1_hit": tp1_hit,
-                "tp1_timestamp": tp1_timestamp,
-                "tp2_hit": tp2_hit,
-                "tp2_timestamp": tp2_timestamp,
-                "tp3_hit": tp3_hit,
-                "tp3_timestamp": tp3_timestamp,
-                "be_armed": be_armed,
-                "outcome": outcome,
-                "exit_timestamp": exit_timestamp,
-                "exit_price": exit_price,
-                "exit_stop_price": exit_stop_price,
-                "gross_realized_rr": gross_realized_rr,
-                "realized_rr": realized_rr,
-                "gross_realized_pnl_pct": gross_realized_pnl_pct,
-                "realized_pnl_pct": realized_pnl_pct,
-                "total_fee_in_price": total_fee_in_price,
-                "total_fee_pct": total_fee_pct,
-            }
-        )
-    return rows
-
-
-def _write_stage4_rows_jsonl(*, rows: list[dict[str, object]], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", newline="\n") as handle:
-        for row in rows:
-            handle.write(json.dumps(row, ensure_ascii=True))
-            handle.write("\n")
-
-
-def _load_stage4_rows_jsonl(*, input_path: Path) -> list[dict[str, object]]:
-    if not input_path.exists():
-        return []
-    rows: list[dict[str, object]] = []
-    with input_path.open("r", encoding="utf-8") as handle:
-        for line in handle:
-            payload = line.strip()
-            if not payload:
-                continue
-            rows.append(cast(dict[str, object], json.loads(payload)))
-    return rows
-
-
-def _append_stage4_rows_jsonl(*, source_path: Path, target_path: Path) -> int:
-    if not source_path.exists():
-        return 0
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    lines_written = 0
-    with source_path.open("r", encoding="utf-8") as source_handle, target_path.open("a", encoding="utf-8", newline="\n") as target_handle:
-        for line in source_handle:
-            payload = line.rstrip("\r\n")
-            if not payload:
-                continue
-            target_handle.write(payload)
-            target_handle.write("\n")
-            lines_written += 1
-    return lines_written
-
-
-def _serialize_stage4_plot_context(
-    *,
-    stage1_event: BeeBiteStage1Result,
-    reference_stage2_result: BeeBiteStage2Result,
-    stage3_result: BeeBiteStage3Result,
-) -> dict[str, object]:
-    return {
-        "stage1_event": asdict(stage1_event),
-        "reference_stage2_result": asdict(reference_stage2_result),
-        "stage3_result": asdict(stage3_result),
-    }
-
-
-def _deserialize_stage4_stage2_result(payload: dict[str, object]) -> BeeBiteStage2Result:
-    return BeeBiteStage2Result(
-        symbol=str(payload["symbol"]),
-        passed=bool(payload["passed"]),
-        reason=str(payload["reason"]),
-        analysis_start_timestamp=cast(int | None, payload.get("analysis_start_timestamp")),
-        analysis_end_timestamp=cast(int | None, payload.get("analysis_end_timestamp")),
-        confirmed_highs=tuple(
-            BeeBiteStage2ConfirmedHigh(**cast(dict[str, object], item))
-            for item in cast(list[dict[str, object]], payload.get("confirmed_highs") or [])
-        ),
-        local_ranges=tuple(
-            BeeBiteStage2Range(**cast(dict[str, object], item))
-            for item in cast(list[dict[str, object]], payload.get("local_ranges") or [])
-        ),
-        merged_ranges=tuple(
-            BeeBiteStage2MergedRange(**cast(dict[str, object], item))
-            for item in cast(list[dict[str, object]], payload.get("merged_ranges") or [])
-        ),
-        liquidity_zones=tuple(
-            BeeBiteStage2LiquidityZone(**cast(dict[str, object], item))
-            for item in cast(list[dict[str, object]], payload.get("liquidity_zones") or [])
-        ),
-        box_start_timestamp=cast(int | None, payload.get("box_start_timestamp")),
-        box_end_timestamp=cast(int | None, payload.get("box_end_timestamp")),
-        box_high=cast(float | None, payload.get("box_high")),
-        box_low=cast(float | None, payload.get("box_low")),
-    )
-
-
-def _deserialize_stage4_stage3_result(payload: dict[str, object]) -> BeeBiteStage3Result:
-    lower_zone_payload = cast(dict[str, object] | None, payload.get("active_lower_liquidity_zone"))
-    return BeeBiteStage3Result(
-        symbol=str(payload["symbol"]),
-        passed=bool(payload["passed"]),
-        reason=str(payload["reason"]),
-        analysis_start_timestamp=cast(int | None, payload.get("analysis_start_timestamp")),
-        analysis_end_timestamp=cast(int | None, payload.get("analysis_end_timestamp")),
-        active_lower_liquidity_zone=(
-            BeeBiteStage2LiquidityZone(**lower_zone_payload)
-            if lower_zone_payload is not None
-            else None
-        ),
-        break_timestamp=cast(int | None, payload.get("break_timestamp")),
-        reclaim_timestamp=cast(int | None, payload.get("reclaim_timestamp")),
-        invalidation_timestamp=cast(int | None, payload.get("invalidation_timestamp")),
-        break_idx=cast(int | None, payload.get("break_idx")),
-        reclaim_idx=cast(int | None, payload.get("reclaim_idx")),
-        invalidation_idx=cast(int | None, payload.get("invalidation_idx")),
-        lowest_break_idx=cast(int | None, payload.get("lowest_break_idx")),
-        lowest_break_price=cast(float | None, payload.get("lowest_break_price")),
-        lowest_break_timestamp=cast(int | None, payload.get("lowest_break_timestamp")),
-        below_range_high_price=cast(float | None, payload.get("below_range_high_price")),
-        under_range_span=cast(float | None, payload.get("under_range_span")),
-        under_range_span_pct=cast(float | None, payload.get("under_range_span_pct")),
-        range_size_pct=cast(float | None, payload.get("range_size_pct")),
-        bars_under_range=cast(int | None, payload.get("bars_under_range")),
-        box_low=cast(float | None, payload.get("box_low")),
-        box_high=cast(float | None, payload.get("box_high")),
-        hold_price=cast(float | None, payload.get("hold_price")),
-        reference_box_start_timestamp=cast(int | None, payload.get("reference_box_start_timestamp")),
-        reference_box_end_timestamp=cast(int | None, payload.get("reference_box_end_timestamp")),
-    )
-
-
-def _deserialize_stage4_plot_context(
-    payload: dict[str, object],
-) -> tuple[BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result]:
-    stage1_event = BeeBiteStage1Result(**cast(dict[str, object], payload["stage1_event"]))
-    reference_stage2_result = _deserialize_stage4_stage2_result(
-        cast(dict[str, object], payload["reference_stage2_result"])
-    )
-    stage3_result = _deserialize_stage4_stage3_result(
-        cast(dict[str, object], payload["stage3_result"])
-    )
-    return stage1_event, reference_stage2_result, stage3_result
-
-
-def _prepare_stage4_trade_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    required_columns = {"timestamp", "open", "close", "high", "low"}
-    if frame.empty or not required_columns.issubset(frame.columns):
-        return pd.DataFrame()
-    prepared = frame.loc[:, ["timestamp", "open", "close", "high", "low"]].copy()
-    for column in prepared.columns:
-        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    return prepared.dropna(subset=["timestamp", "open", "close", "high", "low"]).reset_index(drop=True)
-
-
-def _build_stage4_postmortem_summary_rows(
-    *,
-    timeframe: Timeframe,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    rows: list[dict[str, object]],
-) -> list[dict[str, object]]:
-    trade_rows = [row for row in rows if row.get("row_type") == "trade"]
-    return _build_stage4_postmortem_summary_rows_from_trade_rows(
-        timeframe=timeframe,
-        param_grid=param_grid,
-        trade_rows=trade_rows,
-    )
-
-
-def _initialize_stage4_param_aggregate() -> dict[str, object]:
-    return {
-        "threshold_rows": 0,
-        "eligible_rows": 0,
-        "invalid_target_stack": 0,
-        "sweep_filter_failed": 0,
-        "pump_minute_filter_failed": 0,
-        "timing_session_filter_failed": 0,
-        "tp1_full_exits": 0,
-        "tp2_final_hits": 0,
-        "tp3_hits": 0,
-        "stop_hits": 0,
-        "be_hits": 0,
-        "tp1_stop_hits": 0,
-        "open_trades": 0,
-        "closed_trades": 0,
-        "profitable_closed_trades": 0,
-        "sum_realized_rr": 0.0,
-        "count_realized_rr": 0,
-        "sum_realized_pnl_pct": 0.0,
-        "count_realized_pnl_pct": 0,
-        "sum_fee_pct": 0.0,
-        "count_fee_pct": 0,
-        "sum_gain_rr": 0.0,
-        "sum_loss_rr_abs": 0.0,
-    }
-
-
-def _build_stage4_param_grid_map(
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-) -> dict[tuple[float, float, float, str, str, str, str, float, float, float], tuple[int, BeeBiteStage4PostmortemParams]]:
-    return {
-        (
-            float(params.min_rr),
-            float(params.tp3_multiplier),
-            float(params.sweep_size_multiplier),
-            str(params.stop_mode),
-            str(params.tp1_stop_mode),
-            str(params.pump_minute_filter),
-            str(params.timing_session_filter),
-            float(params.tp1_share),
-            float(params.tp2_share),
-            float(params.tp3_share),
-        ): (row_order, params)
-        for row_order, params in enumerate(param_grid, start=1)
-    }
-
-
-def _resolve_stage4_trade_param_key(row: dict[str, object]) -> tuple[float, float, float, str, str, str, str, float, float, float]:
-    return (
-        float(row["minimal_rr"]),
-        float(row["tp3_multiplier"]),
-        float(row.get("sweep_size_multiplier", 0.0) or 0.0),
-        str(row.get("stop_mode") or ""),
-        str(row.get("tp1_stop_mode") or ""),
-        str(row.get("pump_minute_filter") or ""),
-        str(row.get("timing_session_filter") or ""),
-        float(row["tp1_share"]),
-        float(row["tp2_share"]),
-        float(row["tp3_share"]),
-    )
-
-
-def _accumulate_stage4_param_aggregate(aggregate: dict[str, object], row: dict[str, object]) -> None:
-    aggregate["threshold_rows"] = int(aggregate["threshold_rows"]) + 1
-    outcome = str(row.get("outcome") or "")
-    if outcome == "invalid_target_stack":
-        aggregate["invalid_target_stack"] = int(aggregate["invalid_target_stack"]) + 1
-    elif outcome == "sweep_size_filter_failed":
-        aggregate["sweep_filter_failed"] = int(aggregate["sweep_filter_failed"]) + 1
-    elif outcome == "pump_minute_filter_failed":
-        aggregate["pump_minute_filter_failed"] = int(aggregate["pump_minute_filter_failed"]) + 1
-    elif outcome == "timing_session_filter_failed":
-        aggregate["timing_session_filter_failed"] = int(aggregate["timing_session_filter_failed"]) + 1
-
-    if not bool(row.get("eligible")):
-        return
-
-    aggregate["eligible_rows"] = int(aggregate["eligible_rows"]) + 1
-    if outcome == "tp1_full_exit":
-        aggregate["tp1_full_exits"] = int(aggregate["tp1_full_exits"]) + 1
-    elif outcome == "tp2_final_hit":
-        aggregate["tp2_final_hits"] = int(aggregate["tp2_final_hits"]) + 1
-    elif outcome == "tp3_hit":
-        aggregate["tp3_hits"] = int(aggregate["tp3_hits"]) + 1
-    elif outcome in {"stop_hit", "stop_same_candle_pre_tp1"}:
-        aggregate["stop_hits"] = int(aggregate["stop_hits"]) + 1
-    elif outcome in {"be_hit", "be_same_candle_after_tp1"}:
-        aggregate["be_hits"] = int(aggregate["be_hits"]) + 1
-
-    if outcome in {
-        "be_hit",
-        "be_same_candle_after_tp1",
-        "tp1_stop_hit",
-        "tp1_stop_same_candle_after_tp1",
-        "tp1_stop_same_candle_after_tp2",
-    }:
-        aggregate["tp1_stop_hits"] = int(aggregate["tp1_stop_hits"]) + 1
-    if outcome in {"open", "no_future_data"}:
-        aggregate["open_trades"] = int(aggregate["open_trades"]) + 1
-    else:
-        aggregate["closed_trades"] = int(aggregate["closed_trades"]) + 1
-        realized_pnl_pct = row.get("realized_pnl_pct")
-        if realized_pnl_pct is not None and float(realized_pnl_pct) > 0.0:
-            aggregate["profitable_closed_trades"] = int(aggregate["profitable_closed_trades"]) + 1
-
-    realized_rr = row.get("realized_rr")
-    if realized_rr is not None:
-        realized_rr_value = float(realized_rr)
-        aggregate["sum_realized_rr"] = float(aggregate["sum_realized_rr"]) + realized_rr_value
-        aggregate["count_realized_rr"] = int(aggregate["count_realized_rr"]) + 1
-        if realized_rr_value > 0.0:
-            aggregate["sum_gain_rr"] = float(aggregate["sum_gain_rr"]) + realized_rr_value
-        elif realized_rr_value < 0.0:
-            aggregate["sum_loss_rr_abs"] = float(aggregate["sum_loss_rr_abs"]) + abs(realized_rr_value)
-
-    realized_pnl_pct = row.get("realized_pnl_pct")
-    if realized_pnl_pct is not None:
-        aggregate["sum_realized_pnl_pct"] = float(aggregate["sum_realized_pnl_pct"]) + float(realized_pnl_pct)
-        aggregate["count_realized_pnl_pct"] = int(aggregate["count_realized_pnl_pct"]) + 1
-
-    fee_pct = row.get("total_fee_pct")
-    if fee_pct is not None:
-        aggregate["sum_fee_pct"] = float(aggregate["sum_fee_pct"]) + float(fee_pct)
-        aggregate["count_fee_pct"] = int(aggregate["count_fee_pct"]) + 1
-
-
-def _build_stage4_summary_rows_from_aggregates(
-    *,
-    timeframe: Timeframe,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    stage3_candidates: int,
-    aggregate_by_key: dict[tuple[float, float, float, str, str, str, str, float, float, float], dict[str, object]],
-) -> list[dict[str, object]]:
-    summary_rows: list[dict[str, object]] = []
-    previous_total_pnl_pct = 0.0
-    previous_win_rate = 0.0
-    previous_total_realized_rr = 0.0
-    for row_order, params in enumerate(param_grid, start=1):
-        param_key = (
-            float(params.min_rr),
-            float(params.tp3_multiplier),
-            float(params.sweep_size_multiplier),
-            str(params.stop_mode),
-            str(params.tp1_stop_mode),
-            str(params.pump_minute_filter),
-            str(params.timing_session_filter),
-            float(params.tp1_share),
-            float(params.tp2_share),
-            float(params.tp3_share),
-        )
-        aggregate = aggregate_by_key.get(param_key) or _initialize_stage4_param_aggregate()
-        eligible_trades = int(aggregate["eligible_rows"])
-        closed_trades = int(aggregate["closed_trades"])
-        profitable_closed_trades = int(aggregate["profitable_closed_trades"])
-        win_rate = (profitable_closed_trades / closed_trades) if closed_trades else 0.0
-        total_realized_rr = float(aggregate["sum_realized_rr"])
-        total_pnl_pct = float(aggregate["sum_realized_pnl_pct"])
-        sum_loss_rr_abs = float(aggregate["sum_loss_rr_abs"])
-        sum_gain_rr = float(aggregate["sum_gain_rr"])
-        summary_rows.append(
-            {
-                "symbol": "__summary__",
-                "timeframe": timeframe.value,
-                "regime_index": 0,
-                "row_type": "summary",
-                "row_order": row_order,
-                "minimal_rr": float(params.min_rr),
-                "pump_minute_filter": str(params.pump_minute_filter),
-                "timing_session_filter": str(params.timing_session_filter),
-                "sweep_size_multiplier": float(params.sweep_size_multiplier),
-                "stop_mode": str(params.stop_mode),
-                "tp1_stop_mode": str(params.tp1_stop_mode),
-                "tp3_multiplier": float(params.tp3_multiplier),
-                "tp1_share": float(params.tp1_share),
-                "tp2_share": float(params.tp2_share),
-                "tp3_share": float(params.tp3_share),
-                "stage3_candidates": stage3_candidates,
-                "eligible_trades": eligible_trades,
-                "rr_filtered_out": int(aggregate["threshold_rows"]) - eligible_trades,
-                "invalid_target_stack": int(aggregate["invalid_target_stack"]),
-                "sweep_filter_failed": int(aggregate["sweep_filter_failed"]),
-                "pump_minute_filter_failed": int(aggregate["pump_minute_filter_failed"]),
-                "timing_session_filter_failed": int(aggregate["timing_session_filter_failed"]),
-                "tp1_full_exits": int(aggregate["tp1_full_exits"]),
-                "tp2_final_hits": int(aggregate["tp2_final_hits"]),
-                "tp3_hits": int(aggregate["tp3_hits"]),
-                "stop_hits": int(aggregate["stop_hits"]),
-                "be_hits": int(aggregate["be_hits"]),
-                "tp1_stop_hits": int(aggregate["tp1_stop_hits"]),
-                "open_trades": int(aggregate["open_trades"]),
-                "closed_trades": closed_trades,
-                "profitable_closed_trades": profitable_closed_trades,
-                "win_rate": win_rate,
-                "avg_realized_rr": (total_realized_rr / int(aggregate["count_realized_rr"])) if int(aggregate["count_realized_rr"]) else 0.0,
-                "total_realized_rr": total_realized_rr,
-                "avg_pnl_pct": (total_pnl_pct / int(aggregate["count_realized_pnl_pct"])) if int(aggregate["count_realized_pnl_pct"]) else 0.0,
-                "total_pnl_pct": total_pnl_pct,
-                "avg_fee_pct": (float(aggregate["sum_fee_pct"]) / int(aggregate["count_fee_pct"])) if int(aggregate["count_fee_pct"]) else 0.0,
-                "total_fee_pct": float(aggregate["sum_fee_pct"]) if int(aggregate["count_fee_pct"]) else 0.0,
-                "profit_factor_rr": (sum_gain_rr / sum_loss_rr_abs) if sum_loss_rr_abs > 0.0 else (math.inf if sum_gain_rr > 0.0 else 0.0),
-                "delta_total_pnl_pct": total_pnl_pct - previous_total_pnl_pct,
-                "delta_win_rate_pct": (win_rate - previous_win_rate) * 100.0,
-                "delta_total_realized_rr": total_realized_rr - previous_total_realized_rr,
-            }
-        )
-        previous_total_pnl_pct = total_pnl_pct
-        previous_win_rate = win_rate
-        previous_total_realized_rr = total_realized_rr
-    return summary_rows
-
-
-def _build_stage4_postmortem_summary_rows_from_trade_rows(
-    *,
-    timeframe: Timeframe,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    trade_rows: list[dict[str, object]],
-    ) -> list[dict[str, object]]:
-    if not trade_rows:
-        return []
-    stage3_candidates = len({(str(row["symbol"]), int(row["regime_index"])) for row in trade_rows})
-    param_grid_map = _build_stage4_param_grid_map(param_grid)
-    aggregate_by_key = {
-        param_key: _initialize_stage4_param_aggregate()
-        for param_key in param_grid_map
-    }
-    for row in trade_rows:
-        param_key = _resolve_stage4_trade_param_key(row)
-        if param_key not in aggregate_by_key:
-            continue
-        _accumulate_stage4_param_aggregate(aggregate_by_key[param_key], row)
-    return _build_stage4_summary_rows_from_aggregates(
-        timeframe=timeframe,
-        param_grid=param_grid,
-        stage3_candidates=stage3_candidates,
-        aggregate_by_key=aggregate_by_key,
-    )
-
-
-def _process_stage4_symbol(
-    *,
-    cache_dir: Path,
-    symbol: str,
-    review_timeframe: Timeframe,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    rows_output_path: Path | None = None,
-    include_rows_in_result: bool = True,
-) -> dict[str, object]:
-    preparer = DataPreparer(cache_dir)
-    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
-    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
-    stage2_detector = BeeBiteStage2Detector()
-    stage3_detector = BeeBiteStage3Detector()
-    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
-    stage2_timestamp_cache: dict[int, BeeBiteStage2Result] = {}
-
-    frame = _get_cached_review_frame(
-        cache=frame_cache,
-        preparer=preparer,
-        symbol=symbol,
-        timeframe=review_timeframe,
-    )
-    if frame.empty:
-        return {
-            "symbol": symbol,
-            "rows": [],
-            "rows_count": 0,
-            "stage3_passed_count": 0,
-            "reason_counts": {},
-            "empty_frame": True,
-            "plot_contexts": [],
-        }
-    prepared_stage4_frame = _prepare_stage4_trade_frame(frame)
-    if prepared_stage4_frame.empty:
-        return {
-            "symbol": symbol,
-            "rows": [],
-            "rows_count": 0,
-            "stage3_passed_count": 0,
-            "reason_counts": {},
-            "empty_frame": True,
-            "plot_contexts": [],
-        }
-
-    stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
-        cache=frame_cache,
-        preparer=preparer,
-        symbol=symbol,
-        timeframe=stage1_timeframe,
-    )
-    if stage1_frame.empty:
-        return {
-            "symbol": symbol,
-            "rows": [],
-            "rows_count": 0,
-            "stage3_passed_count": 0,
-            "reason_counts": {"stage1:empty_reference_frame": 1},
-            "empty_frame": False,
-            "plot_contexts": [],
-        }
-
-    stage1_events = selector.detect_events(symbol=symbol, frame=stage1_frame)
-    if not stage1_events:
-        stage1_evaluation = selector.evaluate_symbol(symbol=symbol, frame=stage1_frame)
-        reason = stage1_evaluation.reason if stage1_evaluation is not None else "unknown"
-        return {
-            "symbol": symbol,
-            "rows": [],
-            "rows_count": 0,
-            "stage3_passed_count": 0,
-            "reason_counts": {f"stage1:{reason}": 1},
-            "empty_frame": False,
-            "plot_contexts": [],
-        }
-
-    regimes = _resolve_stage1_regime_ends(
-        frame=stage1_frame,
-        regimes=_group_stage1_events_into_regimes(stage1_events),
-    )
-    rows: list[dict[str, object]] = []
-    plot_contexts: list[dict[str, object]] = []
-    reason_counts: Counter[str] = Counter()
-    stage3_passed_count = 0
-    for regime in regimes:
-        stage1_event = regime.first_event
-        dynamic_stage2_result = stage2_detector.detect(
-            symbol=symbol,
-            frame=frame,
-            stage1=stage1_event,
-            analysis_end_timestamp=int(regime.regime_end_timestamp),
-        )
-        if not dynamic_stage2_result.passed:
-            reason_counts["stage2_not_passed"] += 1
-            continue
-
-        stage3_result = _resolve_stage23_terminal_result(
-            symbol=symbol,
-            timeframe=review_timeframe,
-            frame=frame,
-            stage1_event=stage1_event,
-            regime=regime,
-            stage2_detector=stage2_detector,
-            stage3_detector=stage3_detector,
-            initial_stage2_result=dynamic_stage2_result,
-        )
-        if not stage3_result.passed:
-            reason_counts[stage3_result.reason] += 1
-            continue
-
-        stage3_passed_count += 1
-        reference_stage2_end_timestamp = int(
-            stage3_result.reference_box_end_timestamp
-            or dynamic_stage2_result.analysis_end_timestamp
-            or regime.regime_end_timestamp
-        )
-        reference_stage2_result = _get_cached_stage2_result(
-            cache=stage2_timestamp_cache,
-            symbol=symbol,
-            frame=frame,
-            stage1_event=stage1_event,
-            stage2_detector=stage2_detector,
-            analysis_end_timestamp=reference_stage2_end_timestamp,
-        )
-        plot_contexts.append(
-            {
-                "symbol": symbol,
-                "regime_index": regime.regime_index,
-                "context": _serialize_stage4_plot_context(
-                    stage1_event=stage1_event,
-                    reference_stage2_result=reference_stage2_result,
-                    stage3_result=stage3_result,
-                ),
-            }
-        )
-        rows.extend(
-            _build_stage4_postmortem_rows(
-                symbol=symbol,
-                timeframe=review_timeframe,
-                regime=regime,
-                stage1_event=stage1_event,
-                reference_stage2_result=reference_stage2_result,
-                stage3_result=stage3_result,
-                prepared_frame=prepared_stage4_frame,
-                param_grid=param_grid,
-            )
-        )
-
-    if rows_output_path is not None:
-        _write_stage4_rows_jsonl(rows=rows, output_path=rows_output_path)
-
-    return {
-        "symbol": symbol,
-        "rows": rows if include_rows_in_result else [],
-        "rows_count": len(rows),
-        "stage3_passed_count": stage3_passed_count,
-        "reason_counts": dict(reason_counts),
-        "empty_frame": False,
-        "plot_contexts": plot_contexts,
-    }
-
-
-def _serialize_stage4_param_grid(
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-) -> list[dict[str, object]]:
-    return [
-        {
-            "min_rr": float(params.min_rr),
-            "tp3_multiplier": float(params.tp3_multiplier),
-            "sweep_size_multiplier": float(params.sweep_size_multiplier),
-            "stop_mode": str(params.stop_mode),
-            "tp1_stop_mode": str(params.tp1_stop_mode),
-            "pump_minute_filter": str(params.pump_minute_filter),
-            "timing_session_filter": str(params.timing_session_filter),
-            "tp1_share": float(params.tp1_share),
-            "tp2_share": float(params.tp2_share),
-            "tp3_share": float(params.tp3_share),
-        }
-        for params in param_grid
-    ]
-
-
-def _run_stage4_symbol_with_timeout(
-    *,
-    cache_dir: Path,
-    symbol: str,
-    review_timeframe: Timeframe,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    timeout_seconds: int | None,
-) -> tuple[dict[str, object] | None, str | None, Path | None]:
-    with tempfile.NamedTemporaryFile(prefix="stage4_symbol_", suffix=".json", delete=False) as handle:
-        output_path = Path(handle.name)
-    with tempfile.NamedTemporaryFile(prefix="stage4_symbol_rows_", suffix=".jsonl", delete=False) as handle:
-        rows_output_path = Path(handle.name)
-    with tempfile.NamedTemporaryFile(prefix="stage4_symbol_grid_", suffix=".json", delete=False, mode="w", encoding="utf-8") as handle:
-        payload_path = Path(handle.name)
-        json.dump(_serialize_stage4_param_grid(param_grid), handle)
-    worker_code = (
-        "import json, traceback\n"
-        "from pathlib import Path\n"
-        "from cli.commands import _process_stage4_symbol\n"
-        "from strategy.bee_bite import BeeBiteStage4PostmortemParams\n"
-        "from domain.enums.timeframe import Timeframe\n"
-        f"output_path = Path(r'''{str(output_path)}''')\n"
-        f"rows_output_path = Path(r'''{str(rows_output_path)}''')\n"
-        f"payload_path = Path(r'''{str(payload_path)}''')\n"
-        "param_grid_payload = json.loads(payload_path.read_text(encoding='utf-8'))\n"
-        "param_grid = tuple(BeeBiteStage4PostmortemParams(**item) for item in param_grid_payload)\n"
-        "try:\n"
-        f"    result = _process_stage4_symbol(cache_dir=Path(r'''{str(cache_dir)}'''), symbol=r'''{symbol}''', review_timeframe=Timeframe(r'''{review_timeframe.value}'''), param_grid=param_grid, rows_output_path=rows_output_path, include_rows_in_result=False)\n"
-        "    output_path.write_text(json.dumps({'ok': True, 'result': result}), encoding='utf-8')\n"
-        "except Exception:\n"
-        "    output_path.write_text(json.dumps({'ok': False, 'error': traceback.format_exc()}), encoding='utf-8')\n"
-        "    raise\n"
-    )
-    try:
-        completed = subprocess.run(
-            [sys.executable, "-c", worker_code],
-            cwd=str(Path.cwd()),
-            timeout=timeout_seconds,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        output_path.unlink(missing_ok=True)
-        rows_output_path.unlink(missing_ok=True)
-        payload_path.unlink(missing_ok=True)
-        return None, "timeout", None
-    if not output_path.exists():
-        rows_output_path.unlink(missing_ok=True)
-        payload_path.unlink(missing_ok=True)
-        return None, f"worker_exit_{completed.returncode}", None
-    try:
-        payload = json.loads(output_path.read_text(encoding="utf-8"))
-    finally:
-        output_path.unlink(missing_ok=True)
-        payload_path.unlink(missing_ok=True)
-    if not bool(payload.get("ok")):
-        rows_output_path.unlink(missing_ok=True)
-        return None, str(payload.get("error") or f"worker_exit_{completed.returncode}"), None
-    return cast(dict[str, object], payload["result"]), None, rows_output_path
-
-
-def _run_stage4_plot_with_timeout(
-    *,
-    cache_dir: Path,
-    symbol: str,
-    review_timeframe: Timeframe,
-    plot_context: dict[str, object],
-    trade_row: dict[str, object],
-    output_path: Path,
-    timeout_seconds: int | None,
-) -> str | None:
-    trade_row_payload = json.dumps(trade_row)
-    plot_context_payload = json.dumps(plot_context)
-    worker_code = (
-        "import json, traceback\n"
-        "from pathlib import Path\n"
-        "from cli.commands import _deserialize_stage4_plot_context, _get_cached_review_frame\n"
-        "from data.liquidity.bee_bite_stage4_plotter import BeeBiteStage4Plotter\n"
-        "from vectorbt_runner import DataPreparer\n"
-        "from domain.enums.timeframe import Timeframe\n"
-        f"trade_row = json.loads(r'''{trade_row_payload}''')\n"
-        f"plot_context = json.loads(r'''{plot_context_payload}''')\n"
-        "try:\n"
-        f"    preparer = DataPreparer(Path(r'''{str(cache_dir)}'''))\n"
-        "    frame_cache = {}\n"
-        f"    frame = _get_cached_review_frame(cache=frame_cache, preparer=preparer, symbol=r'''{symbol}''', timeframe=Timeframe(r'''{review_timeframe.value}'''))\n"
-        "    if frame.empty:\n"
-        "        raise RuntimeError('plot_context_frame_missing')\n"
-        "    stage1_event, reference_stage2_result, stage3_result = _deserialize_stage4_plot_context(plot_context)\n"
-        "    BeeBiteStage4Plotter().plot_result(\n"
-        "        frame=frame,\n"
-        "        stage1_event=stage1_event,\n"
-        "        reference_stage2_result=reference_stage2_result,\n"
-        "        stage3_result=stage3_result,\n"
-        "        trade_row=trade_row,\n"
-        f"        output_path=Path(r'''{str(output_path)}'''),\n"
-        "    )\n"
-        "except Exception:\n"
-        "    traceback.print_exc()\n"
-        "    raise\n"
-    )
-    try:
-        completed = subprocess.run(
-            [sys.executable, "-c", worker_code],
-            cwd=str(Path.cwd()),
-            timeout=timeout_seconds,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return "timeout"
-    if completed.returncode != 0:
-        stderr = completed.stderr.strip()
-        stdout = completed.stdout.strip()
-        return stderr or stdout or f"worker_exit_{completed.returncode}"
-    return None
-
-
-def _format_stage4_metric(value: object, *, digits: int = 2, pct: bool = False) -> str:
-    if value is None:
-        return "n/a"
-    numeric = float(value)
-    if math.isinf(numeric):
-        return "inf"
-    formatted = f"{numeric:.{digits}f}"
-    return f"{formatted}%" if pct else formatted
-
-
-def _format_stage4_win_rate(value: object) -> str:
-    if value is None:
-        return "n/a"
-    return f"{float(value) * 100.0:.1f}%"
-
-
-def _format_stage4_stop_mode(value: object) -> str:
-    normalized = str(value or "")
-    if normalized == "sweep_low":
-        return "sweep"
-    if normalized == "entry_minus_avg_body":
-        return "avgbody"
-    return normalized or "n/a"
-
-
-def _format_stage4_tp1_stop_mode(value: object) -> str:
-    normalized = str(value or "")
-    if normalized == "entry":
-        return "be"
-    if normalized == "last_red_low":
-        return "redlow"
-    if normalized == "tp1_after_tp2":
-        return "tp1@tp2"
-    return normalized or "n/a"
-
-
-def _format_stage4_pump_minute_filter(value: object) -> str:
-    normalized = str(value or "")
-    if normalized == "any":
-        return "pm:any"
-    if normalized == "minute_00_or_30":
-        return "pm:00|30"
-    return f"pm:{normalized}" if normalized else "pm:n/a"
-
-
-def _format_stage4_timing_session_filter(value: object) -> str:
-    normalized = str(value or "")
-    if normalized == "any":
-        return "sess:any"
-    if normalized == "pump_not_us_overlap_and_sweep_not_europe":
-        return "sess:no_usov_pump/no_eu_sw"
-    return f"sess:{normalized}" if normalized else "sess:n/a"
-
-
-def _format_stage4_param_triplet(row: dict[str, object]) -> str:
-    return (
-        f"rr={float(row.get('minimal_rr', 0.0) or 0.0):.2f}, "
-        f"m={float(row.get('tp3_multiplier', 0.0) or 0.0):.1f}, "
-        f"sw={float(row.get('sweep_size_multiplier', 0.0) or 0.0):.1f}x, "
-        f"sl={_format_stage4_stop_mode(row.get('stop_mode'))}, "
-        f"tp1sl={_format_stage4_tp1_stop_mode(row.get('tp1_stop_mode'))}, "
-        f"{_format_stage4_pump_minute_filter(row.get('pump_minute_filter'))}, "
-        f"{_format_stage4_timing_session_filter(row.get('timing_session_filter'))}, "
-        f"w={float(row.get('tp1_share', 0.0) or 0.0):.2f}/"
-        f"{float(row.get('tp2_share', 0.0) or 0.0):.2f}/"
-        f"{float(row.get('tp3_share', 0.0) or 0.0):.2f}"
-    )
-
-
-def _build_markdown_table(headers: list[str], rows: list[list[object]]) -> str:
-    if not rows:
-        return "_No rows._"
-    lines = [
-        f"| {' | '.join(headers)} |",
-        f"| {' | '.join('---' for _ in headers)} |",
-    ]
-    for row in rows:
-        lines.append(f"| {' | '.join(str(cell) for cell in row)} |")
-    return "\n".join(lines)
-
-
-def _resolve_stage4_float(row: dict[str, object], key: str) -> float:
-    return float(row.get(key, 0.0) or 0.0)
-
-
-def _build_stage4_timing_breakdown_rows(
-    *,
-    trade_rows: list[dict[str, object]],
-    key_name: str,
-) -> list[list[object]]:
-    grouped: dict[str, list[dict[str, object]]] = {}
-    for row in trade_rows:
-        bucket = str(row.get(key_name) or "unknown")
-        grouped.setdefault(bucket, []).append(row)
-
-    breakdown_rows: list[list[object]] = []
-    for bucket, bucket_rows in sorted(
-        grouped.items(),
-        key=lambda item: (
-            sum(float(row.get("realized_rr", 0.0) or 0.0) for row in item[1]),
-            sum(float(row.get("realized_pnl_pct", 0.0) or 0.0) for row in item[1]),
-            len(item[1]),
-        ),
-        reverse=True,
-    ):
-        closed_rows = [row for row in bucket_rows if str(row.get("outcome") or "") != "open"]
-        profitable_rows = [row for row in closed_rows if float(row.get("realized_pnl_pct", 0.0) or 0.0) > 0.0]
-        win_rate = (len(profitable_rows) / len(closed_rows)) if closed_rows else 0.0
-        breakdown_rows.append(
-            [
-                bucket,
-                len(bucket_rows),
-                _format_stage4_win_rate(win_rate),
-                _format_stage4_metric(sum(float(row.get("realized_rr", 0.0) or 0.0) for row in bucket_rows)),
-                _format_stage4_metric(sum(float(row.get("realized_pnl_pct", 0.0) or 0.0) for row in bucket_rows), pct=True),
-            ]
-        )
-    return breakdown_rows
-
-
-def _build_stage4_stability_heatmap(summary_rows: list[dict[str, object]]) -> str:
-    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
-    if not eligible_rows:
-        return "_No eligible rows._"
-
-    rr_values = sorted({float(row.get("minimal_rr", 0.0) or 0.0) for row in summary_rows})
-    multiplier_values = sorted({float(row.get("tp3_multiplier", 0.0) or 0.0) for row in summary_rows})
-    pair_map: dict[tuple[float, float], list[dict[str, object]]] = {}
-    for row in summary_rows:
-        key = (
-            float(row.get("minimal_rr", 0.0) or 0.0),
-            float(row.get("tp3_multiplier", 0.0) or 0.0),
-        )
-        pair_map.setdefault(key, []).append(row)
-
-    headers = ["RR \\ M"] + [f"{value:.1f}" for value in multiplier_values]
-    table_rows: list[list[object]] = []
-    for rr_value in rr_values:
-        row_cells: list[object] = [f"{rr_value:.2f}"]
-        for multiplier in multiplier_values:
-            pair_rows = pair_map.get((rr_value, multiplier), [])
-            if not pair_rows:
-                row_cells.append("n/a")
-                continue
-            eligible_pair_rows = [row for row in pair_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
-            profiles_total = len(pair_rows)
-            profiles_ok = len(eligible_pair_rows)
-            if not eligible_pair_rows:
-                row_cells.append(f"0/{profiles_total}")
-                continue
-            avg_score = sum(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows) / len(eligible_pair_rows)
-            best_score = max(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows)
-            row_cells.append(f"a{avg_score:.2f}/b{best_score:.2f}; {profiles_ok}/{profiles_total}")
-        table_rows.append(row_cells)
-    return _build_markdown_table(headers, table_rows)
-
-
-def _collect_stage4_stability_pairs(summary_rows: list[dict[str, object]]) -> list[dict[str, float]]:
-    if not summary_rows:
-        return []
-    pair_map: dict[tuple[float, float], list[dict[str, object]]] = {}
-    for row in summary_rows:
-        key = (
-            float(row.get("minimal_rr", 0.0) or 0.0),
-            float(row.get("tp3_multiplier", 0.0) or 0.0),
-        )
-        pair_map.setdefault(key, []).append(row)
-
-    aggregate_rows: list[list[object]] = []
-    for (rr_value, multiplier), pair_rows in pair_map.items():
-        eligible_pair_rows = [row for row in pair_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
-        profiles_total = len(pair_rows)
-        profiles_ok = len(eligible_pair_rows)
-        if not eligible_pair_rows:
-            avg_score = 0.0
-            best_score = 0.0
-            avg_total_rr = 0.0
-        else:
-            avg_score = sum(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows) / len(eligible_pair_rows)
-            best_score = max(float(row.get("stage4_score", 0.0) or 0.0) for row in eligible_pair_rows)
-            avg_total_rr = sum(float(row.get("total_realized_rr", 0.0) or 0.0) for row in eligible_pair_rows) / len(eligible_pair_rows)
-        aggregate_rows.append(
-            {
-                "minimal_rr": rr_value,
-                "tp3_multiplier": multiplier,
-                "profiles_ok": float(profiles_ok),
-                "profiles_total": float(profiles_total),
-                "avg_score": avg_score,
-                "best_score": best_score,
-                "avg_total_rr": avg_total_rr,
-            }
-        )
-    return sorted(
-        aggregate_rows,
-        key=lambda row: (row["avg_score"], row["profiles_ok"], row["best_score"], row["avg_total_rr"]),
-        reverse=True,
-    )
-
-
-def _build_stage4_stability_pairs_table(summary_rows: list[dict[str, object]]) -> str:
-    aggregate_rows = _collect_stage4_stability_pairs(summary_rows)
-    if not aggregate_rows:
-        return "_No eligible rows._"
-
-    top_rows = aggregate_rows[:8]
-    return _build_markdown_table(
-        ["RR", "M", "Eligible Profiles", "All Profiles", "Avg Score", "Best Score", "Avg Total RR"],
-        [
-            [
-                f"{row['minimal_rr']:.2f}",
-                f"{row['tp3_multiplier']:.1f}",
-                int(row["profiles_ok"]),
-                int(row["profiles_total"]),
-                f"{row['avg_score']:.3f}",
-                f"{row['best_score']:.3f}",
-                f"{row['avg_total_rr']:.2f}",
-            ]
-            for row in top_rows
-        ],
-    )
-
-
-def _classify_stage4_report_verdict(
-    *,
-    months_analysed: int,
-    monthly_match_count: int,
-    avg_drift_rr: float,
-    best_summary_row: dict[str, object],
-) -> str:
-    match_rate = (monthly_match_count / months_analysed) if months_analysed > 0 else 0.0
-    profit_factor = _resolve_stage4_profit_factor_sort_value(best_summary_row.get("profit_factor_rr"))
-    total_rr = _resolve_stage4_float(best_summary_row, "total_realized_rr")
-    if months_analysed >= 4 and match_rate >= 0.6 and avg_drift_rr <= 0.75 and profit_factor >= 1.5 and total_rr > 0.0:
-        return "Robust"
-    if match_rate >= 0.4 and avg_drift_rr <= 1.5 and profit_factor >= 1.0 and total_rr > 0.0:
-        return "Promising"
-    if total_rr > 0.0:
-        return "Positive but fragile"
-    return "Unstable"
-
-
-def _resolve_stage4_month_label(timestamp_ms: object) -> str | None:
-    if timestamp_ms is None:
-        return None
-    return pd.to_datetime(int(timestamp_ms), unit="ms", utc=True).strftime("%Y-%m")
-
-
-def _build_stage4_monthly_summary_map(
-    *,
-    timeframe: Timeframe,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    trade_rows: list[dict[str, object]],
-) -> dict[str, list[dict[str, object]]]:
-    monthly_stage3_candidates: dict[str, set[tuple[str, int]]] = {}
-    monthly_aggregate_by_key: dict[str, dict[tuple[float, float, float, str, str, str, str, float, float, float], dict[str, object]]] = {}
-    for row in trade_rows:
-        month_label = _resolve_stage4_month_label(row.get("entry_timestamp"))
-        if month_label is None:
-            continue
-        monthly_stage3_candidates.setdefault(month_label, set()).add((str(row["symbol"]), int(row["regime_index"])))
-        aggregate_by_key = monthly_aggregate_by_key.setdefault(month_label, {})
-        param_key = _resolve_stage4_trade_param_key(row)
-        aggregate = aggregate_by_key.setdefault(param_key, _initialize_stage4_param_aggregate())
-        _accumulate_stage4_param_aggregate(aggregate, row)
-
-    monthly_summary_map: dict[str, list[dict[str, object]]] = {}
-    for month_label, aggregate_by_key in sorted(monthly_aggregate_by_key.items()):
-        summary_rows = _build_stage4_summary_rows_from_aggregates(
-            timeframe=timeframe,
-            param_grid=param_grid,
-            stage3_candidates=len(monthly_stage3_candidates.get(month_label, set())),
-            aggregate_by_key=aggregate_by_key,
-        )
-        monthly_summary_map[month_label] = _score_stage4_summary_rows(summary_rows)
-    return monthly_summary_map
-
-
-def _build_stage4_trade_density_frontier_rows(summary_rows: list[dict[str, object]]) -> list[list[object]]:
-    bucket_defs = [
-        (1, 2),
-        (3, 5),
-        (6, 10),
-        (11, 15),
-        (16, 20),
-        (21, 30),
-        (31, 40),
-        (41, 60),
-        (61, 10_000),
-    ]
-    rows: list[list[object]] = []
-    for lower, upper in bucket_defs:
-        bucket_rows = [
-            row
-            for row in summary_rows
-            if lower <= int(float(row.get("eligible_trades", 0.0) or 0.0)) <= upper
-        ]
-        if not bucket_rows:
-            continue
-        best_row = max(
-            bucket_rows,
-            key=lambda row: (
-                float(row.get("total_realized_rr", 0.0) or 0.0),
-                float(row.get("score_eligible_trades", 0.0) or 0.0),
-                _resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")),
-                float(row.get("total_pnl_pct", 0.0) or 0.0),
-                float(row.get("win_rate", 0.0) or 0.0),
-            ),
-        )
-        rows.append(
-            [
-                f"{lower}-{upper if upper < 10_000 else 'max'}",
-                int(float(best_row.get("eligible_trades", 0.0) or 0.0)),
-                _format_stage4_param_triplet(best_row),
-                _format_stage4_win_rate(best_row.get("win_rate")),
-                _format_stage4_metric(best_row.get("total_realized_rr")),
-                _format_stage4_metric(best_row.get("profit_factor_rr")),
-                _format_stage4_metric(best_row.get("total_pnl_pct"), pct=True),
-            ]
-        )
-    return rows
-
-
-def _render_stage4_postmortem_report(
-    *,
-    timeframe: Timeframe,
-    symbols_count: int,
-    stage3_passed_count: int,
-    param_grid: tuple[BeeBiteStage4PostmortemParams, ...],
-    summary_rows: list[dict[str, object]],
-    trade_rows: list[dict[str, object]],
-    monthly_summary_map: dict[str, list[dict[str, object]]],
-    reason_counts: Counter[str],
-    timed_out_symbols: list[str],
-    progress_callback: Callable[[int, int, str], None] | None = None,
-) -> str:
-    total_steps = 9
-
-    def _report_progress(step: int, phase: str) -> None:
-        if progress_callback is not None:
-            progress_callback(step, total_steps, phase)
-
-    _report_progress(1, "leaderboards")
-    generated_at = pd.Timestamp.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    best_summary_row = _select_best_stage4_summary_row(summary_rows)
-    leaderboard_balanced_rows = _build_stage4_leaderboard_rows(
-        summary_rows,
-        sort_keys=["stage4_score", "score_eligible_trades", "total_realized_rr", "profit_factor_rr", "total_pnl_pct", "win_rate"],
-        limit=7,
-    )
-    leaderboard_trades_rows = _build_stage4_leaderboard_rows(
-        summary_rows,
-        sort_keys=["eligible_trades", "total_realized_rr", "profit_factor_rr", "stage4_score"],
-        limit=7,
-    )
-    leaderboard_rr_rows = _build_stage4_leaderboard_rows(
-        summary_rows,
-        sort_keys=["total_realized_rr", "profit_factor_rr", "eligible_trades", "stage4_score"],
-        limit=7,
-    )
-    leaderboard_pnl_rows = _build_stage4_leaderboard_rows(
-        summary_rows,
-        sort_keys=["total_pnl_pct", "total_realized_rr", "profit_factor_rr", "eligible_trades", "stage4_score"],
-        limit=7,
-    )
-    leaderboard_pf_rows = _build_stage4_leaderboard_rows(
-        summary_rows,
-        sort_keys=["profit_factor_rr", "total_realized_rr", "eligible_trades", "stage4_score"],
-        limit=7,
-    )
-    leaderboard_wr_rows = _build_stage4_leaderboard_rows(
-        summary_rows,
-        sort_keys=["win_rate", "total_realized_rr", "eligible_trades", "profit_factor_rr", "stage4_score"],
-        limit=7,
-    )
-    _report_progress(2, "frontier")
-    trade_density_frontier_rows = _build_stage4_trade_density_frontier_rows(summary_rows)
-    _report_progress(3, "monthly_summary_ready")
-    _report_progress(4, "stability")
-    stability_pairs = _collect_stage4_stability_pairs(summary_rows)
-    best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
-    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common(8)) if reason_counts else "none"
-    _report_progress(5, "best_trade_rows")
-    best_trade_rows = [
-        cast(dict[str, object], row)
-        for row in trade_rows
-        if row.get("row_type") == "trade"
-        and bool(row.get("eligible"))
-        and best_param_key is not None
-        and _resolve_stage4_param_key(cast(dict[str, object], row)) == best_param_key
-    ]
-    _report_progress(6, "timing_breakdown")
-    pump_minute_breakdown = _build_stage4_timing_breakdown_rows(
-        trade_rows=best_trade_rows,
-        key_name="pump_minute_marker",
-    )
-    pump_session_breakdown = _build_stage4_timing_breakdown_rows(
-        trade_rows=best_trade_rows,
-        key_name="pump_session_utc",
-    )
-    sweep_session_breakdown = _build_stage4_timing_breakdown_rows(
-        trade_rows=best_trade_rows,
-        key_name="sweep_session_utc",
-    )
-    _report_progress(7, "monthly_drift")
-    lines: list[str] = [f"# Bee Bite Stage-4 Postmortem Report ({timeframe.value})", "", f"_Generated: {generated_at}_", ""]
-    if reason_counts:
-        lines.append(f"> Top rejection reasons before stage-4: `{top_reasons}`")
-        lines.append("")
-
-    lines.extend(["## Executive Summary", ""])
-    if best_summary_row is None:
-        lines.append("_No eligible stage-4 trades for this timeframe._")
-        return "\n".join(lines).strip() + "\n"
-
-    monthly_best_rows: list[list[object]] = []
-    monthly_year_best_rows: list[list[object]] = []
-    monthly_drift_rows: list[list[object]] = []
-    monthly_match_count = 0
-    drift_rr_values: list[float] = []
-    drift_pnl_values: list[float] = []
-    for month_label, month_summary_rows in monthly_summary_map.items():
-        month_best = _select_best_stage4_summary_row(month_summary_rows)
-        year_best_month_row = None
-        if best_param_key is not None:
-            for row in month_summary_rows:
-                if _resolve_stage4_param_key(row) == best_param_key:
-                    year_best_month_row = row
-                    break
-        if month_best is not None:
-            monthly_best_rows.append(
-                [
-                    month_label,
-                    _format_stage4_param_triplet(month_best),
-                    f"{float(month_best.get('stage4_score', 0.0) or 0.0):.4f}",
-                    int(month_best.get("eligible_trades", 0) or 0),
-                    _format_stage4_win_rate(month_best.get("win_rate")),
-                    _format_stage4_metric(month_best.get("total_realized_rr")),
-                    _format_stage4_metric(month_best.get("profit_factor_rr")),
-                    _format_stage4_metric(month_best.get("total_pnl_pct"), pct=True),
-                ]
-            )
-        if month_best is not None and year_best_month_row is not None:
-            matches_year_best = _resolve_stage4_param_key(month_best) == best_param_key
-            if matches_year_best:
-                monthly_match_count += 1
-            delta_rr = _resolve_stage4_float(month_best, "total_realized_rr") - _resolve_stage4_float(year_best_month_row, "total_realized_rr")
-            delta_pnl = _resolve_stage4_float(month_best, "total_pnl_pct") - _resolve_stage4_float(year_best_month_row, "total_pnl_pct")
-            drift_rr_values.append(delta_rr)
-            drift_pnl_values.append(delta_pnl)
-            monthly_drift_rows.append(
-                [
-                    month_label,
-                    "yes" if matches_year_best else "no",
-                    _format_stage4_param_triplet(month_best),
-                    int(month_best.get("eligible_trades", 0) or 0),
-                    _format_stage4_metric(month_best.get("total_realized_rr")),
-                    _format_stage4_metric(year_best_month_row.get("total_realized_rr")),
-                    f"{delta_rr:+.2f}",
-                    _format_stage4_metric(month_best.get("total_pnl_pct"), pct=True),
-                    _format_stage4_metric(year_best_month_row.get("total_pnl_pct"), pct=True),
-                    f"{delta_pnl:+.2f}%",
-                ]
-            )
-        if year_best_month_row is not None:
-            monthly_year_best_rows.append(
-                [
-                    month_label,
-                    int(year_best_month_row.get("eligible_trades", 0) or 0),
-                    _format_stage4_win_rate(year_best_month_row.get("win_rate")),
-                    _format_stage4_metric(year_best_month_row.get("total_realized_rr")),
-                    _format_stage4_metric(year_best_month_row.get("profit_factor_rr")),
-                    _format_stage4_metric(year_best_month_row.get("total_pnl_pct"), pct=True),
-                    int(year_best_month_row.get("tp3_hits", 0) or 0),
-                    int(year_best_month_row.get("stop_hits", 0) or 0),
-                    int(year_best_month_row.get("tp1_stop_hits", 0) or 0),
-                    int(year_best_month_row.get("open_trades", 0) or 0),
-                ]
-            )
-
-    months_analysed = len(monthly_drift_rows)
-    match_rate = (monthly_match_count / months_analysed) * 100.0 if months_analysed else 0.0
-    avg_drift_rr = sum(drift_rr_values) / len(drift_rr_values) if drift_rr_values else 0.0
-    avg_drift_pnl = sum(drift_pnl_values) / len(drift_pnl_values) if drift_pnl_values else 0.0
-    verdict = _classify_stage4_report_verdict(
-        months_analysed=months_analysed,
-        monthly_match_count=monthly_match_count,
-        avg_drift_rr=abs(avg_drift_rr),
-        best_summary_row=best_summary_row,
-    )
-    best_pair = stability_pairs[0] if stability_pairs else None
-
-    lines.append(
-        _build_markdown_table(
-            ["Metric", "Value"],
-            [
-                ["Verdict", verdict],
-                ["Best full-period params", f"`{_format_stage4_param_triplet(best_summary_row)}`"],
-                ["Score", f"{float(best_summary_row.get('stage4_score', 0.0) or 0.0):.4f}"],
-                ["Trade count score", f"{float(best_summary_row.get('score_eligible_trades', 0.0) or 0.0):.4f}"],
-                ["Trade target", f"{float(best_summary_row.get('score_trade_target', 0.0) or 0.0):.1f}"],
-                ["Eligible trades", int(best_summary_row.get("eligible_trades", 0) or 0)],
-                ["Win rate", _format_stage4_win_rate(best_summary_row.get("win_rate"))],
-                ["Total realized RR", _format_stage4_metric(best_summary_row.get("total_realized_rr"))],
-                ["Profit factor RR", _format_stage4_metric(best_summary_row.get("profit_factor_rr"))],
-                ["Total PnL (net)", _format_stage4_metric(best_summary_row.get("total_pnl_pct"), pct=True)],
-                ["Average fee drag per trade", _format_stage4_metric(best_summary_row.get("avg_fee_pct"), pct=True)],
-                ["Total fee drag", _format_stage4_metric(best_summary_row.get("total_fee_pct"), pct=True)],
-                ["Fee model", f"Binance Futures taker {BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}% in + out"],
-                ["Slippage model", f"{BEE_BITE_STAGE4_SLIPPAGE_RATE * 100.0:.2f}%"],
-                ["Months analysed", months_analysed],
-                ["Monthly match rate", f"{match_rate:.1f}%"],
-                ["Avg monthly dRR vs year-best", f"{avg_drift_rr:+.2f}"],
-                ["Avg monthly dPnL vs year-best", f"{avg_drift_pnl:+.2f}%"],
-                ["Timed out symbols", len(timed_out_symbols)],
-            ],
-        )
-    )
-    lines.extend(["", "## Key Takeaways", ""])
-    lines.append(
-        f"- The strongest full-period setup is `{_format_stage4_param_triplet(best_summary_row)}` with "
-        f"`{_format_stage4_metric(best_summary_row.get('total_realized_rr'))}` net total RR and "
-        f"`{_format_stage4_metric(best_summary_row.get('total_pnl_pct'), pct=True)}` net total PnL "
-        f"after Binance taker fees, while still preserving "
-        f"`{int(best_summary_row.get('eligible_trades', 0) or 0)}` eligible trades."
-    )
-    lines.append(
-        f"- Monthly drift is `{avg_drift_rr:+.2f}` RR on average and the yearly-best setup matches the monthly-best "
-        f"configuration in `{monthly_match_count}/{months_analysed}` months."
-        if months_analysed
-        else "- Monthly drift is not available yet because there are no month-level comparable results."
-    )
-    if best_pair is not None:
-        lines.append(
-            f"- The most stable `RR x multiplier` slice is `rr={best_pair['minimal_rr']:.2f}, m={best_pair['tp3_multiplier']:.1f}` "
-            f"with average score `{best_pair['avg_score']:.3f}` across "
-            f"`{int(best_pair['profiles_ok'])}/{int(best_pair['profiles_total'])}` share profiles."
-        )
-    lines.append(
-        f"- Outcome mix for the best full-period setup: "
-        f"`tp1={int(best_summary_row.get('tp1_full_exits', 0) or 0)}`, "
-        f"`tp2={int(best_summary_row.get('tp2_final_hits', 0) or 0)}`, "
-        f"`tp3={int(best_summary_row.get('tp3_hits', 0) or 0)}`, "
-        f"`stop={int(best_summary_row.get('stop_hits', 0) or 0)}`, "
-        f"`tp1_stop={int(best_summary_row.get('tp1_stop_hits', 0) or 0)}`, "
-        f"`open={int(best_summary_row.get('open_trades', 0) or 0)}`."
-    )
-    if timed_out_symbols:
-        preview = ", ".join(timed_out_symbols[:10])
-        suffix = " ..." if len(timed_out_symbols) > 10 else ""
-        lines.append(f"- Timed out symbols skipped during this run: `{preview}{suffix}`.")
-
-    if best_trade_rows:
-        lines.extend(["", "### Timing Markers For Best Params", ""])
-        lines.append(
-            f"- Pump minute filter in best params: `{_format_stage4_pump_minute_filter(best_summary_row.get('pump_minute_filter'))}`"
-        )
-        lines.append(
-            f"- Session filter in best params: `{_format_stage4_timing_session_filter(best_summary_row.get('timing_session_filter'))}`"
-        )
-        lines.append("")
-        lines.append("#### Pump Minute Markers")
-        lines.append("")
-        lines.append(
-            _build_markdown_table(
-                ["Marker", "Trades", "WR", "Total RR (net)", "Total PnL (net)"],
-                pump_minute_breakdown,
-            )
-        )
-        lines.extend(["", "#### Pump Sessions (UTC)", ""])
-        lines.append(
-            _build_markdown_table(
-                ["Session", "Trades", "WR", "Total RR (net)", "Total PnL (net)"],
-                pump_session_breakdown,
-            )
-        )
-        lines.extend(["", "#### Sweep Sessions (UTC)", ""])
-        lines.append(
-            _build_markdown_table(
-                ["Session", "Trades", "WR", "Total RR (net)", "Total PnL (net)"],
-                sweep_session_breakdown,
-            )
-        )
-
-    def _build_stage4_report_leaderboard(title: str, rows: list[dict[str, object]], *, include_score: bool = False) -> None:
-        lines.extend(["", f"### {title}", ""])
-        headers = ["Rank", "Params"]
-        if include_score:
-            headers.extend(["Score", "Trade score"])
-        headers.extend(["Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)"])
-        table_rows: list[list[object]] = []
-        for rank, row in enumerate(rows, start=1):
-            table_row: list[object] = [rank, _format_stage4_param_triplet(row)]
-            if include_score:
-                table_row.extend(
-                    [
-                        f"{float(row.get('stage4_score', 0.0) or 0.0):.4f}",
-                        f"{float(row.get('score_eligible_trades', 0.0) or 0.0):.4f}",
-                    ]
-                )
-            table_row.extend(
-                [
-                    int(row.get("eligible_trades", 0) or 0),
-                    _format_stage4_win_rate(row.get("win_rate")),
-                    _format_stage4_metric(row.get("total_realized_rr")),
-                    _format_stage4_metric(row.get("profit_factor_rr")),
-                    _format_stage4_metric(row.get("total_pnl_pct"), pct=True),
-                ]
-            )
-            table_rows.append(table_row)
-        lines.append(_build_markdown_table(headers, table_rows))
-
-    _report_progress(8, "markdown_sections")
-    lines.extend(["", "---", "", "## Full-Period Leaderboards", ""])
-    lines.append("- `Top By Balanced Score` is the recommended main selector and first enforces `WR >= 33.3%` when such setups exist.")
-    lines.append("- `Top By Trades` shows density, while `Top By Total Realized RR` shows raw edge without density preference.")
-    lines.append("- `Balanced score` = `35% RR + 30% trade-density + 15% PF + 10% shrunk WR + 10% PnL`, but rows below the WR floor are excluded from selection when stable alternatives exist.")
-    _build_stage4_report_leaderboard("Top By Balanced Score", leaderboard_balanced_rows, include_score=True)
-    _build_stage4_report_leaderboard("Top By Trades", leaderboard_trades_rows)
-    _build_stage4_report_leaderboard("Top By Total Realized RR", leaderboard_rr_rows)
-    _build_stage4_report_leaderboard("Top By Total PnL (Net)", leaderboard_pnl_rows)
-    _build_stage4_report_leaderboard("Top By Profit Factor RR", leaderboard_pf_rows)
-    _build_stage4_report_leaderboard("Top By Win Rate", leaderboard_wr_rows)
-    lines.extend(["", "### Trade Density Frontier", ""])
-    lines.append("- Best `Total RR` inside each trade-count bucket. Use this to find the sweet spot between edge and frequency.")
-    lines.append("")
-    lines.append(
-        _build_markdown_table(
-            ["Trade Bucket", "Trades", "Params", "WR", "Total RR (net)", "PF RR", "Total PnL (net)"],
-            trade_density_frontier_rows,
-        )
-    )
-
-    lines.extend(["", "---", "", "## Parameter Stability", ""])
-    lines.append("- Cell format: `aAVG/bBEST; eligible_profiles/all_profiles`.")
-    lines.append("- Higher `aAVG` means the whole `RR x multiplier` slice is more stable across TP-share profiles.")
-    lines.append("- Large gap between `aAVG` and `bBEST` usually means a narrow peak rather than robust behavior.")
-    lines.append("")
-    lines.append(_build_stage4_stability_heatmap(summary_rows))
-
-    lines.extend(["", "### Most Stable RR x Multiplier Pairs", ""])
-    lines.append(_build_stage4_stability_pairs_table(summary_rows))
-
-    lines.extend(["", "---", "", "## Monthly Diagnostics", "", "### Best Params By Month", ""])
-    lines.append(
-        _build_markdown_table(
-            ["Month", "Best Params", "Score", "Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)"],
-            monthly_best_rows,
-        )
-    )
-
-    lines.extend(["", "### Monthly Results For Full-Period Best Params", ""])
-    lines.append(f"Best params reused for each month: `{_format_stage4_param_triplet(best_summary_row)}`")
-    lines.append("")
-    lines.append(
-        _build_markdown_table(
-            ["Month", "Trades", "WR", "Total RR (net)", "PF RR", "Total PnL (net)", "TP3", "Stop", "TP1 Stop", "Open"],
-            monthly_year_best_rows,
-        )
-    )
-
-    lines.extend(["", "### Best Yearly Vs Best Monthly Drift", ""])
-    if monthly_drift_rows:
-        lines.append(f"- Year-best params: `{_format_stage4_param_triplet(best_summary_row)}`")
-        lines.append(f"- Months analysed: `{months_analysed}`")
-        lines.append(f"- Months where monthly best == yearly best: `{monthly_match_count}/{months_analysed}` ({match_rate:.1f}%)")
-        lines.append(f"- Average monthly RR drift vs yearly best: `{avg_drift_rr:+.2f}`")
-        lines.append(f"- Average monthly PnL drift vs yearly best: `{avg_drift_pnl:+.2f}%`")
-        lines.append("")
-        lines.append(
-            _build_markdown_table(
-                ["Month", "Match", "Monthly Best Params", "Trades", "Best RR", "Year RR", "dRR", "Best PnL", "Year PnL", "dPnL"],
-                monthly_drift_rows,
-            )
-        )
-    else:
-        lines.append("_No monthly drift data available._")
-
-    lines.extend(["", "### Stability Extremes", ""])
-    if monthly_year_best_rows:
-        stability_rows = []
-        for row in monthly_year_best_rows:
-            stability_rows.append(
-                {
-                    "month": str(row[0]),
-                    "trades": int(row[1]),
-                    "wr": str(row[2]),
-                    "total_rr": float(str(row[3])),
-                    "pf_rr": str(row[4]),
-                    "total_pnl": float(str(row[5]).rstrip("%")),
-                    "tp3": int(row[6]),
-                    "stop": int(row[7]),
-                    "tp1_stop": int(row[8]),
-                    "open": int(row[9]),
-                }
-            )
-        best_months = sorted(
-            stability_rows,
-            key=lambda row: (row["total_rr"], row["total_pnl"], row["trades"]),
-            reverse=True,
-        )[:5]
-        worst_months = sorted(
-            stability_rows,
-            key=lambda row: (row["total_rr"], row["total_pnl"], -row["trades"]),
-        )[:5]
-        lines.append("#### Best Months")
-        lines.append("")
-        lines.append(
-            _build_markdown_table(
-                ["Month", "Trades", "WR", "Total RR (net)", "Total PnL (net)", "TP3", "Stop", "TP1 Stop", "Open"],
-                [
-                    [
-                        row["month"],
-                        row["trades"],
-                        row["wr"],
-                        f"{row['total_rr']:.2f}",
-                        f"{row['total_pnl']:.2f}%",
-                        row["tp3"],
-                        row["stop"],
-                        row["tp1_stop"],
-                        row["open"],
-                    ]
-                    for row in best_months
-                ],
-            )
-        )
-        lines.append("")
-        lines.append("#### Worst Months")
-        lines.append("")
-        lines.append(
-            _build_markdown_table(
-                ["Month", "Trades", "WR", "Total RR (net)", "Total PnL (net)", "TP3", "Stop", "TP1 Stop", "Open"],
-                [
-                    [
-                        row["month"],
-                        row["trades"],
-                        row["wr"],
-                        f"{row['total_rr']:.2f}",
-                        f"{row['total_pnl']:.2f}%",
-                        row["tp3"],
-                        row["stop"],
-                        row["tp1_stop"],
-                        row["open"],
-                    ]
-                    for row in worst_months
-                ],
-            )
-        )
-    else:
-        lines.append("_No monthly stability data available._")
-
-    lines.extend(["", "---", "", "## Method Notes", ""])
-    lines.append("- `Trades` means eligible stage-4 entries after the RR filter for that parameter set.")
-    lines.append(
-        "- Param shorthand: `m` = TP3 box-height multiplier, `sw` = sweep-size filter versus average peak-to-sweep candle range, "
-        "`sl` = initial stop model, `tp1sl` = protective stop model after TP1, `pm` = pump minute filter, `sess` = pump/sweep session filter."
-    )
-    lines.append(
-        "- `Balanced score` = `35% total_realized_rr + 30% trade-density + 15% capped/log PF + 10% shrunk win_rate + 10% total_pnl_pct`."
-    )
-    lines.append(
-        "- `Trade-density` is a saturating score against a dynamic trade target, so `2/2` samples no longer dominate dense but still profitable setups."
-    )
-    lines.append(
-        "- `Shrunk win_rate` pulls tiny samples toward a neutral prior, so `100%` on `1-2` trades is treated cautiously."
-    )
-    lines.append(
-        f"- All RR and PnL metrics in this report are net of Binance Futures taker fees: "
-        f"`{BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}%` on entry and "
-        f"`{BEE_BITE_STAGE4_TAKER_FEE_RATE * 100.0:.2f}%` on each exit fill."
-    )
-    lines.append(f"- Slippage is fixed at `{BEE_BITE_STAGE4_SLIPPAGE_RATE * 100.0:.2f}%` and is currently disabled.")
-    lines.append("- `WR` is based on closed profitable trades only; open trades are excluded from win-rate.")
-    lines.append("- `Total RR` is the main edge metric; `Total PnL` is still useful but less robust before full portfolio modelling.")
-    lines.append("- `PF RR` uses realized RR gains versus realized RR losses.")
-    if timed_out_symbols:
-        lines.extend(["", "## Timed Out Symbols", ""])
-        lines.append(", ".join(f"`{symbol}`" for symbol in timed_out_symbols))
-    _report_progress(9, "done")
-    return "\n".join(lines).strip() + "\n"
-
-
-def _resolve_stage4_param_key(
-    row: dict[str, object],
-) -> tuple[float, float, float, str, str, str, str, float, float, float]:
-    return (
-        float(row["minimal_rr"]),
-        float(row["tp3_multiplier"]),
-        float(row.get("sweep_size_multiplier", 0.0) or 0.0),
-        str(row.get("stop_mode") or ""),
-        str(row.get("tp1_stop_mode") or ""),
-        str(row.get("pump_minute_filter") or ""),
-        str(row.get("timing_session_filter") or ""),
-        float(row["tp1_share"]),
-        float(row["tp2_share"]),
-        float(row["tp3_share"]),
-    )
-
-
-def _resolve_stage4_profit_factor_sort_value(value: object) -> float:
-    if value is None:
-        return 0.0
-    numeric = float(value)
-    if math.isinf(numeric):
-        return 1e18
-    return numeric
-
-
-def _resolve_stage4_profit_factor_score_value(value: object) -> float:
-    numeric = _resolve_stage4_profit_factor_sort_value(value)
-    if numeric <= 0.0:
-        return 0.0
-    return math.log1p(min(numeric, 4.0))
-
-
-def _resolve_stage4_trade_target(eligible_rows: list[dict[str, object]]) -> float:
-    candidate_counts = sorted(
-        int(float(row.get("eligible_trades", 0.0) or 0.0))
-        for row in eligible_rows
-        if float(row.get("total_realized_rr", 0.0) or 0.0) > 0.0
-        and float(row.get("total_pnl_pct", 0.0) or 0.0) > 0.0
-        and int(float(row.get("eligible_trades", 0.0) or 0.0)) > 0
-    )
-    if not candidate_counts:
-        candidate_counts = sorted(
-            int(float(row.get("eligible_trades", 0.0) or 0.0))
-            for row in eligible_rows
-            if int(float(row.get("eligible_trades", 0.0) or 0.0)) > 0
-        )
-    if not candidate_counts:
-        return 20.0
-    median_count = float(candidate_counts[len(candidate_counts) // 2])
-    return min(max(median_count, 12.0), 40.0)
-
-
-def _resolve_stage4_shrunk_win_rate(*, eligible_trades: float, win_rate: float) -> float:
-    prior_win_rate = 0.35
-    prior_weight = 20.0
-    wins = max(eligible_trades, 0.0) * max(min(win_rate, 1.0), 0.0)
-    return (wins + (prior_win_rate * prior_weight)) / (max(eligible_trades, 0.0) + prior_weight)
-
-
-def _passes_stage4_win_rate_floor(row: dict[str, object]) -> bool:
-    eligible_trades = float(row.get("eligible_trades", 0.0) or 0.0)
-    win_rate = float(row.get("win_rate", 0.0) or 0.0)
-    return eligible_trades > 0.0 and win_rate >= (1.0 / 3.0)
-
-
-def _resolve_stage4_selector_rows(summary_rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0.0) or 0.0) > 0.0]
-    if not eligible_rows:
-        return []
-    stable_rows = [row for row in eligible_rows if _passes_stage4_win_rate_floor(row)]
-    return stable_rows if stable_rows else eligible_rows
-
-
-def _normalize_stage4_metric(values: list[float]) -> list[float]:
-    if not values:
-        return []
-    low = min(values)
-    high = max(values)
-    if math.isclose(high, low, rel_tol=1e-12, abs_tol=1e-12):
-        return [1.0 for _ in values]
-    return [(value - low) / (high - low) for value in values]
-
-
-def _build_stage4_leaderboard_rows(
-    rows: list[dict[str, object]],
-    *,
-    sort_keys: list[str],
-    limit: int = 5,
-) -> list[dict[str, object]]:
-    eligible_rows = [row for row in rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
-    if not eligible_rows:
-        return []
-
-    def _sort_value(row: dict[str, object], key: str) -> float:
-        if key == "profit_factor_rr":
-            return _resolve_stage4_profit_factor_sort_value(row.get(key))
-        return float(row.get(key, 0.0) or 0.0)
-
-    return sorted(
-        eligible_rows,
-        key=lambda row: tuple(_sort_value(row, key) for key in sort_keys),
-        reverse=True,
-    )[:limit]
-
-
-def _score_stage4_summary_rows(summary_rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    eligible_rows = [row for row in summary_rows if float(row.get("eligible_trades", 0) or 0) > 0.0]
-    if not eligible_rows:
-        for row in summary_rows:
-            row["passes_win_rate_floor"] = False
-            row["score_total_realized_rr"] = 0.0
-            row["score_profit_factor_rr"] = 0.0
-            row["score_eligible_trades"] = 0.0
-            row["score_win_rate"] = 0.0
-            row["score_total_pnl_pct"] = 0.0
-            row["score_trade_target"] = 0.0
-            row["score_shrunk_win_rate"] = 0.0
-            row["stage4_score"] = 0.0
-        return summary_rows
-
-    scoring_rows = _resolve_stage4_selector_rows(summary_rows)
-    for row in summary_rows:
-        row["passes_win_rate_floor"] = _passes_stage4_win_rate_floor(row)
-
-    rr_values = [float(row.get("total_realized_rr", 0.0) or 0.0) for row in scoring_rows]
-    pf_values = [_resolve_stage4_profit_factor_score_value(row.get("profit_factor_rr")) for row in scoring_rows]
-    trade_target = _resolve_stage4_trade_target(scoring_rows)
-    trade_values = [
-        1.0 - math.exp(-(float(row.get("eligible_trades", 0.0) or 0.0) / trade_target))
-        for row in scoring_rows
-    ]
-    wr_values = [
-        _resolve_stage4_shrunk_win_rate(
-            eligible_trades=float(row.get("eligible_trades", 0.0) or 0.0),
-            win_rate=float(row.get("win_rate", 0.0) or 0.0),
-        )
-        for row in scoring_rows
-    ]
-    pnl_values = [float(row.get("total_pnl_pct", 0.0) or 0.0) for row in scoring_rows]
-
-    normalized_rr = _normalize_stage4_metric(rr_values)
-    normalized_pf = _normalize_stage4_metric(pf_values)
-    normalized_trades = trade_values
-    normalized_wr = _normalize_stage4_metric(wr_values)
-    normalized_pnl = _normalize_stage4_metric(pnl_values)
-
-    for row, rr_score, pf_score, trade_score, wr_score, pnl_score in zip(
-        scoring_rows,
-        normalized_rr,
-        normalized_pf,
-        normalized_trades,
-        normalized_wr,
-        normalized_pnl,
-        strict=True,
-    ):
-        row["score_total_realized_rr"] = rr_score
-        row["score_profit_factor_rr"] = pf_score
-        row["score_eligible_trades"] = trade_score
-        row["score_win_rate"] = wr_score
-        row["score_total_pnl_pct"] = pnl_score
-        row["score_trade_target"] = trade_target
-        row["score_shrunk_win_rate"] = _resolve_stage4_shrunk_win_rate(
-            eligible_trades=float(row.get("eligible_trades", 0.0) or 0.0),
-            win_rate=float(row.get("win_rate", 0.0) or 0.0),
-        )
-        row["stage4_score"] = (
-            (rr_score * 0.35)
-            + (trade_score * 0.30)
-            + (pf_score * 0.15)
-            + (wr_score * 0.10)
-            + (pnl_score * 0.10)
-        )
-
-    for row in summary_rows:
-        if row not in scoring_rows:
-            row["score_total_realized_rr"] = 0.0
-            row["score_profit_factor_rr"] = 0.0
-            row["score_eligible_trades"] = 0.0
-            row["score_win_rate"] = 0.0
-            row["score_total_pnl_pct"] = 0.0
-            row["score_trade_target"] = 0.0
-            row["score_shrunk_win_rate"] = 0.0
-            row["stage4_score"] = 0.0
-    return summary_rows
-
-
-def _select_best_stage4_summary_row(summary_rows: list[dict[str, object]]) -> dict[str, object] | None:
-    selector_rows = _resolve_stage4_selector_rows(summary_rows)
-    if not selector_rows:
-        return None
-    return max(
-        selector_rows,
-        key=lambda row: (
-            float(row.get("stage4_score", 0.0) or 0.0),
-            float(row.get("score_eligible_trades", 0.0) or 0.0),
-            float(row.get("total_realized_rr", 0.0) or 0.0),
-            _resolve_stage4_profit_factor_sort_value(row.get("profit_factor_rr")),
-            float(row.get("total_pnl_pct", 0.0) or 0.0),
-            float(row.get("win_rate", 0.0) or 0.0),
-            -float(row.get("minimal_rr", 0.0) or 0.0),
-        ),
-    )
-
-
-def _review_stage2_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("review-stage2", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    logger.info("review-stage2: cache_dir=%s", config.backtest.cache_dir)
-    review_timeframe = _resolve_review_timeframe(args)
-    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
-    output_dir = results_dir / "stage2_review" / review_timeframe.value
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / DEFAULT_STAGE2_EVENTS_OUTPUT_FILE
-    plots_dir = output_dir / DEFAULT_STAGE2_PLOTS_DIR_NAME
-    failed_plots_dir = output_dir / DEFAULT_FAILED_PLOTS_DIR_NAME
-    _reset_review_plot_dir(plots_dir)
-    _reset_review_plot_dir(failed_plots_dir)
-    plot_limit = int(getattr(args, "plot_limit", 20) or 20)
-    plot_scope = _resolve_plot_scope(args, default_scope="all")
-
-    preparer = DataPreparer(config.backtest.cache_dir)
-    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
-    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
-    if not symbols:
-        logger.info("review-stage2: no data in cache for tf=%s", review_timeframe.value)
-        return 0
-
-    selector = BeeBiteStage1Selector.for_timeframe(review_timeframe)
-    detector = BeeBiteStage2Detector()
-    plotter = BeeBiteStage2Plotter()
-    rows: list[dict[str, object]] = []
-    passed_stage2_results: list[tuple[str, _Stage1Regime, BeeBiteStage1Result, BeeBiteStage2Result, pd.DataFrame]] = []
-    failed_stage2_results: list[tuple[str, _Stage1Regime, BeeBiteStage1Result, BeeBiteStage2Result, pd.DataFrame]] = []
-    reason_counts: Counter[str] = Counter()
-    empty_frame_symbols: list[str] = []
-    populated_frame_symbols = 0
-    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
-    stage1_review_cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]] = {}
-
-    for index, symbol in enumerate(symbols, start=1):
-        frame = _get_cached_review_frame(
-            cache=frame_cache,
-            preparer=preparer,
-            symbol=symbol,
-            timeframe=review_timeframe,
-        )
-        if frame.empty:
-            empty_frame_symbols.append(symbol)
-            continue
-        populated_frame_symbols += 1
-
-        stage1_events, stage1_evaluation = _get_cached_stage1_review(
-            cache=stage1_review_cache,
-            selector=selector,
-            symbol=symbol,
-            timeframe=review_timeframe,
-            frame=frame,
-        )
-        if not stage1_events:
-            reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
-            continue
-
-        regimes = _resolve_stage1_regime_ends(
-            frame=frame,
-            regimes=_group_stage1_events_into_regimes(stage1_events),
-        )
-        for regime in regimes:
-            stage1_event = regime.first_event
-            stage2_result = detector.detect(
-                symbol=symbol,
-                frame=frame,
-                stage1=stage1_event,
-                analysis_end_timestamp=_resolve_stage2_analysis_end_timestamp(frame=frame, regime=regime),
-            )
-            rows.extend(
-                _stage2_result_to_rows(
-                    symbol=symbol,
-                    timeframe=review_timeframe,
-                    regime=regime,
-                    stage1_event=stage1_event,
-                    stage2_result=stage2_result,
-                )
-            )
-            if stage2_result.passed:
-                passed_stage2_results.append((symbol, regime, stage1_event, stage2_result, frame))
-            else:
-                failed_stage2_results.append((symbol, regime, stage1_event, stage2_result, frame))
-                reason_counts[stage2_result.reason] += 1
-
-        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
-            logger.info(
-                "review-stage2: progress=%s/%s symbols_with_stage2=%s rows=%s populated_frames=%s empty_frames=%s",
-                index,
-                len(symbols),
-                len({item[0] for item in passed_stage2_results}),
-                len(rows),
-                populated_frame_symbols,
-                len(empty_frame_symbols),
-            )
-
-    results_frame = pd.DataFrame(rows)
-    if not results_frame.empty:
-        sort_columns = [column for column in ("symbol", "regime_index", "row_type", "row_order") if column in results_frame.columns]
-        results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    results_frame.to_csv(output_path, index=False)
-
-    passed_plots_built = 0
-    failed_plots_built = 0
-    passed_plots_payload = sorted(
-        passed_stage2_results,
-        key=lambda item: (
-            int(item[3].analysis_end_timestamp or 0),
-            item[0],
-            item[1].regime_index,
-        ),
-        reverse=True,
-    )
-    failed_plots_payload = sorted(
-        failed_stage2_results,
-        key=lambda item: (
-            int(item[3].analysis_end_timestamp or 0),
-            item[0],
-            item[1].regime_index,
-        ),
-        reverse=True,
-    )
-    failed_plot_scope = "all" if getattr(args, "plot_scope", None) is None else plot_scope
-    for symbol, regime, stage1_event, stage2_result, frame in _select_plot_payload(
-        passed_plots_payload,
-        plot_scope=plot_scope,
-        plot_limit=plot_limit,
-    ):
-        symbol_slug = symbol.replace("/", "_")
-        plot_path = plots_dir / f"{symbol_slug}_stage2_regime_{regime.regime_index:02d}.png"
-        plotter.plot_result(
-            frame=frame,
-            stage1_event=stage1_event,
-            stage2_result=stage2_result,
-            output_path=plot_path,
-            window_end_timestamp=stage2_result.box_end_timestamp or stage2_result.analysis_end_timestamp,
-            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
-        )
-        passed_plots_built += 1
-    for symbol, regime, stage1_event, stage2_result, frame in _select_failed_plot_payload(
-        failed_plots_payload,
-        plot_scope=failed_plot_scope,
-        plot_limit=plot_limit,
-    ):
-        symbol_slug = symbol.replace("/", "_")
-        reason_slug = _slugify_reason(stage2_result.reason)
-        plot_path = failed_plots_dir / f"{symbol_slug}_stage2_regime_{regime.regime_index:02d}_{reason_slug}.png"
-        plotter.plot_result(
-            frame=frame,
-            stage1_event=stage1_event,
-            stage2_result=stage2_result,
-            output_path=plot_path,
-            window_end_timestamp=stage2_result.analysis_end_timestamp,
-            title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} | {stage2_result.reason}",
-            dpi=120,
-            include_volume=False,
-        )
-        failed_plots_built += 1
-
-    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
-    if top_reasons:
-        logger.info("review-stage2: rejection_reasons %s", top_reasons)
-    if empty_frame_symbols:
-        logger.warning("review-stage2: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
-    logger.info(
-        "review-stage2: symbols=%s symbols_with_stage2=%s csv=%s plots=%s plots_dir=%s plot_scope=%s",
-        len(symbols),
-        len({item[0] for item in passed_stage2_results}),
-        output_path,
-        passed_plots_built,
-        plots_dir,
-        plot_scope,
-    )
-    logger.info(
-        "review-stage2: failed_stage2=%s failed_plots=%s failed_plots_dir=%s",
-        len(failed_stage2_results),
-        failed_plots_built,
-        failed_plots_dir,
-    )
-    return 0
-
-
-def _review_stage3_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("review-stage3", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    logger.info("review-stage3: cache_dir=%s", config.backtest.cache_dir)
-    review_timeframe = _resolve_review_timeframe(args)
-    review_mode = _resolve_stage3_review_mode(args)
-    plot_scope = _resolve_plot_scope(args, default_scope="latest")
-    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
-    output_dir = results_dir / "stage3_review" / review_timeframe.value
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    default_output_name = _DEFAULT_STAGE23_BACKTEST_OUTPUT_FILE if review_mode == "evolution" else _DEFAULT_STAGE3_EVENTS_OUTPUT_FILE
-    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / default_output_name
-    plots_dir = output_dir / _DEFAULT_STAGE3_PLOTS_DIR_NAME
-    failed_plots_dir = output_dir / DEFAULT_FAILED_PLOTS_DIR_NAME
-    _reset_review_plot_dir(plots_dir)
-    _reset_review_plot_dir(failed_plots_dir)
-    plot_limit = int(getattr(args, "plot_limit", 20) or 20)
-
-    preparer = DataPreparer(config.backtest.cache_dir)
-    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
-    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
-    if not symbols:
-        logger.info("review-stage3: no data in cache for tf=%s", review_timeframe.value)
-        return 0
-
-    stage1_timeframe = Timeframe.M15 if review_timeframe != Timeframe.M15 else review_timeframe
-    selector = BeeBiteStage1Selector.for_timeframe(stage1_timeframe)
-    stage2_detector = BeeBiteStage2Detector()
-    stage3_detector = BeeBiteStage3Detector()
-    stage2_plotter = BeeBiteStage2Plotter()
-    stage3_plotter = BeeBiteStage3Plotter()
-    rows: list[dict[str, object]] = []
-    passed_stage3_results: list[tuple[str, _Stage1Regime, BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result, pd.DataFrame]] = []
-    failed_stage3_results: list[tuple[str, _Stage1Regime, BeeBiteStage1Result, BeeBiteStage2Result, BeeBiteStage3Result, pd.DataFrame]] = []
-    passed_review_candidates: list[_Stage23ReviewCandidate] = []
-    failed_review_candidates: list[_Stage23ReviewCandidate] = []
-    reason_counts: Counter[str] = Counter()
-    empty_frame_symbols: list[str] = []
-    populated_frame_symbols = 0
-    frame_cache: dict[tuple[str, Timeframe], pd.DataFrame] = {}
-    stage1_review_cache: dict[tuple[str, Timeframe], tuple[list[BeeBiteStage1Result], BeeBiteStage1Result | None]] = {}
-
-    for index, symbol in enumerate(symbols, start=1):
-        frame = _get_cached_review_frame(
-            cache=frame_cache,
-            preparer=preparer,
-            symbol=symbol,
-            timeframe=review_timeframe,
-        )
-        if frame.empty:
-            empty_frame_symbols.append(symbol)
-            continue
-        populated_frame_symbols += 1
-
-        stage1_frame = frame if stage1_timeframe == review_timeframe else _get_cached_review_frame(
-            cache=frame_cache,
-            preparer=preparer,
-            symbol=symbol,
-            timeframe=stage1_timeframe,
-        )
-        if stage1_frame.empty:
-            reason_counts["stage1:empty_reference_frame"] += 1
-            continue
-
-        stage1_events, stage1_evaluation = _get_cached_stage1_review(
-            cache=stage1_review_cache,
-            selector=selector,
-            symbol=symbol,
-            timeframe=stage1_timeframe,
-            frame=stage1_frame,
-        )
-        if not stage1_events:
-            reason_counts[f"stage1:{stage1_evaluation.reason if stage1_evaluation is not None else 'unknown'}"] += 1
-            continue
-
-        regimes = _resolve_stage1_regime_ends(
-            frame=stage1_frame,
-            regimes=_group_stage1_events_into_regimes(stage1_events),
-        )
-        for regime in regimes:
-            stage1_event = regime.first_event
-            dynamic_stage2_result = stage2_detector.detect(
-                symbol=symbol,
-                frame=frame,
-                stage1=stage1_event,
-                analysis_end_timestamp=int(regime.regime_end_timestamp),
-            )
-            if not dynamic_stage2_result.passed:
-                rows.extend(
-                    _stage3_result_to_rows(
-                        symbol=symbol,
-                        timeframe=review_timeframe,
-                        regime=regime,
-                        stage1_event=stage1_event,
-                        stage2_result=dynamic_stage2_result,
-                        stage3_result=BeeBiteStage3Result(
-                            symbol=symbol,
-                            passed=False,
-                            reason="stage2_not_passed",
-                        ),
-                    )
-                )
-                reason_counts["stage2_not_passed"] += 1
-                continue
-
-            snapshots: list[_Stage23EvolutionSnapshot] = []
-            if review_mode == "evolution":
-                snapshots = _build_stage23_evolution_snapshots(
-                    symbol=symbol,
-                    timeframe=review_timeframe,
-                    frame=frame,
-                    stage1_event=stage1_event,
-                    regime=regime,
-                    stage2_detector=stage2_detector,
-                    stage3_detector=stage3_detector,
-                    initial_stage2_result=dynamic_stage2_result,
-                )
-                terminal_snapshot = _select_terminal_stage23_snapshot(snapshots)
-                stage3_result = terminal_snapshot.stage3_result if terminal_snapshot is not None else BeeBiteStage3Result(
-                    symbol=symbol,
-                    passed=False,
-                    reason="stage2_reference_not_locked",
-                )
-            else:
-                stage3_result = _resolve_stage23_terminal_result(
-                    symbol=symbol,
-                    timeframe=review_timeframe,
-                    frame=frame,
-                    stage1_event=stage1_event,
-                    regime=regime,
-                    stage2_detector=stage2_detector,
-                    stage3_detector=stage3_detector,
-                    initial_stage2_result=dynamic_stage2_result,
-                )
-            rows.extend(
-                _stage3_result_to_rows(
-                    symbol=symbol,
-                    timeframe=review_timeframe,
-                    regime=regime,
-                    stage1_event=stage1_event,
-                    stage2_result=dynamic_stage2_result,
-                    stage3_result=stage3_result,
-                )
-            )
-            if stage3_result.passed:
-                passed_stage3_results.append((symbol, regime, stage1_event, dynamic_stage2_result, stage3_result, frame))
-                passed_review_candidates.append(
-                    _Stage23ReviewCandidate(
-                        symbol=symbol,
-                        regime=regime,
-                        stage1_event=stage1_event,
-                        final_stage2_result=dynamic_stage2_result,
-                        final_stage3_result=stage3_result,
-                        frame=frame,
-                        snapshots=snapshots if review_mode == "evolution" else None,
-                    )
-                )
-            else:
-                failed_stage3_results.append((symbol, regime, stage1_event, dynamic_stage2_result, stage3_result, frame))
-                failed_review_candidates.append(
-                    _Stage23ReviewCandidate(
-                        symbol=symbol,
-                        regime=regime,
-                        stage1_event=stage1_event,
-                        final_stage2_result=dynamic_stage2_result,
-                        final_stage3_result=stage3_result,
-                        frame=frame,
-                        snapshots=snapshots if review_mode == "evolution" else None,
-                    )
-                )
-                reason_counts[stage3_result.reason] += 1
-            if review_mode == "evolution":
-                for snapshot in snapshots:
-                    rows.append(
-                        _stage23_backtest_row(
-                            symbol=symbol,
-                            timeframe=review_timeframe,
-                            regime=regime,
-                            stage1_event=stage1_event,
-                            snapshot_order=snapshot.order,
-                            snapshot_timestamp=snapshot.timestamp,
-                            stage2_result=snapshot.dynamic_stage2_result,
-                            stage3_result=snapshot.stage3_result,
-                        )
-                    )
-
-        if index % _PROGRESS_LOG_EVERY == 0 or index == len(symbols):
-            logger.info(
-                "review-stage3: progress=%s/%s symbols_with_stage3=%s rows=%s populated_frames=%s empty_frames=%s",
-                index,
-                len(symbols),
-                len({item[0] for item in passed_stage3_results}),
-                len(rows),
-                populated_frame_symbols,
-                len(empty_frame_symbols),
-            )
-
-    results_frame = pd.DataFrame(rows)
-    if not results_frame.empty:
-        sort_columns = [column for column in ("symbol", "regime_index", "row_type", "row_order") if column in results_frame.columns]
-        results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    results_frame.to_csv(output_path, index=False)
-
-    passed_plots_built = 0
-    failed_plots_built = 0
-    passed_plots_payload = sorted(
-        passed_stage3_results,
-        key=lambda item: (
-            int(item[4].reclaim_timestamp or item[4].break_timestamp or 0),
-            item[0],
-            item[1].regime_index,
-        ),
-        reverse=True,
-    )
-    failed_plots_payload = sorted(
-        failed_stage3_results,
-        key=lambda item: (
-            int(item[4].invalidation_timestamp or item[4].break_timestamp or item[4].analysis_end_timestamp or 0),
-            item[0],
-            item[1].regime_index,
-        ),
-        reverse=True,
-    )
-    selected_passed_snapshot_payload = _select_plot_payload(
-        passed_plots_payload,
-        plot_scope=plot_scope,
-        plot_limit=plot_limit,
-    )
-    failed_plot_scope = "all" if getattr(args, "plot_scope", None) is None else plot_scope
-    selected_failed_snapshot_payload = _select_failed_plot_payload(
-        failed_plots_payload,
-        plot_scope=failed_plot_scope,
-        plot_limit=plot_limit,
-    )
-    if review_mode == "snapshot":
-        for symbol, regime, stage1_event, stage2_result, stage3_result, frame in selected_passed_snapshot_payload:
-            symbol_slug = symbol.replace("/", "_")
-            plot_path = plots_dir / f"{symbol_slug}_stage3_regime_{regime.regime_index:02d}.png"
-            stage3_plotter.plot_result(
-                frame=frame,
-                stage1_event=stage1_event,
-                stage2_result=stage2_result,
-                stage3_result=stage3_result,
-                output_path=plot_path,
-                window_end_timestamp=stage3_result.reclaim_timestamp or stage3_result.analysis_end_timestamp,
-                title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d}",
-            )
-            passed_plots_built += 1
-        for symbol, regime, stage1_event, stage2_result, stage3_result, frame in selected_failed_snapshot_payload:
-            symbol_slug = symbol.replace("/", "_")
-            reason_slug = _slugify_reason(stage3_result.reason)
-            plot_end_timestamp = (
-                stage3_result.reclaim_timestamp
-                or stage3_result.invalidation_timestamp
-                or stage3_result.break_timestamp
-                or stage3_result.analysis_end_timestamp
-            )
-            plot_path = failed_plots_dir / f"{symbol_slug}_stage3_regime_{regime.regime_index:02d}_{reason_slug}.png"
-            stage3_plotter.plot_result(
-                frame=frame,
-                stage1_event=stage1_event,
-                stage2_result=stage2_result,
-                stage3_result=stage3_result,
-                output_path=plot_path,
-                window_end_timestamp=plot_end_timestamp,
-                title_suffix=f"{review_timeframe.value} | regime {regime.regime_index:02d} | {stage3_result.reason}",
-                dpi=120,
-                include_volume=False,
-            )
-            failed_plots_built += 1
-    else:
-        passed_evolution_payload = sorted(
-            passed_review_candidates,
-            key=lambda item: (
-                int(
-                    item.final_stage3_result.reclaim_timestamp
-                    or item.final_stage3_result.break_timestamp
-                    or item.final_stage2_result.analysis_end_timestamp
-                    or 0
-                ),
-                item.symbol,
-                item.regime.regime_index,
-            ),
-            reverse=True,
-        )
-        failed_evolution_payload = sorted(
-            failed_review_candidates,
-            key=lambda item: (
-                int(
-                    item.final_stage3_result.break_timestamp
-                    or item.final_stage3_result.invalidation_timestamp
-                    or item.final_stage3_result.analysis_end_timestamp
-                    or item.final_stage2_result.analysis_end_timestamp
-                    or 0
-                ),
-                item.symbol,
-                item.regime.regime_index,
-            ),
-            reverse=True,
-        )
-        for candidate in _select_plot_payload(
-            passed_evolution_payload,
-            plot_scope=plot_scope,
-            plot_limit=plot_limit,
-        ):
-            symbol_slug = candidate.symbol.replace("/", "_")
-            snapshots = candidate.snapshots or _build_stage23_evolution_snapshots(
-                symbol=candidate.symbol,
-                timeframe=review_timeframe,
-                frame=candidate.frame,
-                stage1_event=candidate.stage1_event,
-                regime=candidate.regime,
-                stage2_detector=stage2_detector,
-                stage3_detector=stage3_detector,
-                initial_stage2_result=candidate.final_stage2_result,
-            )
-            for snapshot in snapshots:
-                plot_path = plots_dir / (
-                    f"{symbol_slug}_stage23_regime_{candidate.regime.regime_index:02d}_step_{snapshot.order:04d}.png"
-                )
-                if snapshot.reference_stage2_result is not None:
-                    stage3_plotter.plot_result(
-                        frame=candidate.frame,
-                        stage1_event=candidate.stage1_event,
-                        stage2_result=snapshot.dynamic_stage2_result,
-                        stage3_result=snapshot.stage3_result,
-                        output_path=plot_path,
-                        window_end_timestamp=snapshot.timestamp,
-                        title_suffix=(
-                            f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
-                            f"| step {snapshot.order:04d} | {snapshot.stage3_result.reason}"
-                        ),
-                        dpi=100,
-                        include_volume=False,
-                    )
-                else:
-                    stage2_plotter.plot_result(
-                        frame=candidate.frame,
-                        stage1_event=candidate.stage1_event,
-                        stage2_result=snapshot.dynamic_stage2_result,
-                        output_path=plot_path,
-                        window_end_timestamp=snapshot.timestamp,
-                        title_suffix=(
-                            f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
-                            f"| step {snapshot.order:04d} | {snapshot.dynamic_stage2_result.reason}"
-                        ),
-                        dpi=100,
-                        include_volume=False,
-                    )
-                passed_plots_built += 1
-        for candidate in _select_failed_plot_payload(
-            failed_evolution_payload,
-            plot_scope=failed_plot_scope,
-            plot_limit=plot_limit,
-        ):
-            symbol_slug = candidate.symbol.replace("/", "_")
-            reason_slug = _slugify_reason(candidate.final_stage3_result.reason)
-            snapshots = candidate.snapshots or _build_stage23_evolution_snapshots(
-                symbol=candidate.symbol,
-                timeframe=review_timeframe,
-                frame=candidate.frame,
-                stage1_event=candidate.stage1_event,
-                regime=candidate.regime,
-                stage2_detector=stage2_detector,
-                stage3_detector=stage3_detector,
-                initial_stage2_result=candidate.final_stage2_result,
-            )
-            for snapshot in snapshots:
-                plot_path = failed_plots_dir / (
-                    f"{symbol_slug}_stage23_regime_{candidate.regime.regime_index:02d}_{reason_slug}_step_{snapshot.order:04d}.png"
-                )
-                if snapshot.reference_stage2_result is not None:
-                    stage3_plotter.plot_result(
-                        frame=candidate.frame,
-                        stage1_event=candidate.stage1_event,
-                        stage2_result=snapshot.dynamic_stage2_result,
-                        stage3_result=snapshot.stage3_result,
-                        output_path=plot_path,
-                        window_end_timestamp=snapshot.timestamp,
-                        title_suffix=(
-                            f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
-                            f"| step {snapshot.order:04d} | {snapshot.stage3_result.reason}"
-                        ),
-                        dpi=100,
-                        include_volume=False,
-                    )
-                else:
-                    stage2_plotter.plot_result(
-                        frame=candidate.frame,
-                        stage1_event=candidate.stage1_event,
-                        stage2_result=snapshot.dynamic_stage2_result,
-                        output_path=plot_path,
-                        window_end_timestamp=snapshot.timestamp,
-                        title_suffix=(
-                            f"{review_timeframe.value} | regime {candidate.regime.regime_index:02d} "
-                            f"| step {snapshot.order:04d} | {snapshot.dynamic_stage2_result.reason}"
-                        ),
-                        dpi=100,
-                        include_volume=False,
-                    )
-                failed_plots_built += 1
-
-    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
-    if top_reasons:
-        logger.info("review-stage3: rejection_reasons %s", top_reasons)
-    if empty_frame_symbols:
-        logger.warning("review-stage3: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
-    logger.info(
-        "review-stage3: symbols=%s symbols_with_stage3=%s csv=%s plots=%s plots_dir=%s review_mode=%s plot_scope=%s",
-        len(symbols),
-        len({item[0] for item in passed_stage3_results}),
-        output_path,
-        passed_plots_built,
-        plots_dir,
-        review_mode,
-        plot_scope,
-    )
-    logger.info(
-        "review-stage3: failed_stage3=%s failed_plots=%s failed_plots_dir=%s",
-        len(failed_stage3_results),
-        failed_plots_built,
-        failed_plots_dir,
-    )
-    return 0
-
-
-def _postmortem_stage4_inner(config: AppConfig, args: argparse.Namespace, *, logger_name: str = "postmortem-stage4") -> int:
-    logger = get_logger(logger_name, level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    logger.info("postmortem-stage4: cache_dir=%s", config.backtest.cache_dir)
-    review_timeframe = _resolve_review_timeframe(args)
-    param_grid = _resolve_stage4_param_grid()
-    symbol_timeout_seconds = _DEFAULT_STAGE4_SYMBOL_TIMEOUT_SECONDS
-    results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, "bee_bite")
-    output_dir = results_dir / "stage4_postmortem" / review_timeframe.value
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = Path(args.output) if getattr(args, "output", None) else output_dir / _DEFAULT_STAGE4_POSTMORTEM_OUTPUT_FILE
-    overview_path = output_dir / _DEFAULT_STAGE4_GRID_OVERVIEW_OUTPUT_FILE
-    report_path = output_dir / _DEFAULT_STAGE4_REPORT_OUTPUT_FILE
-    plots_dir = output_dir / "stage4_plots"
-    _reset_review_plot_dir(plots_dir)
-
-    preparer = DataPreparer(config.backtest.cache_dir)
-    symbols_raw = args.symbols or preparer.list_symbols(review_timeframe)
-    symbols = [normalize_symbol(symbol) for symbol in symbols_raw]
-    if not symbols:
-        logger.info("postmortem-stage4: no data in cache for tf=%s", review_timeframe.value)
-        return 0
-
-    stage3_passed_count = 0
-    plots_built = 0
-    total_trade_rows = 0
-    empty_frame_symbols: list[str] = []
-    timed_out_symbols: list[str] = []
-    reason_counts: Counter[str] = Counter()
-    plot_contexts_by_key: dict[tuple[str, int], dict[str, object]] = {}
-    progress_started_at = time.perf_counter()
-    with tempfile.NamedTemporaryFile(prefix="stage4_rows_", suffix=".jsonl", delete=False) as handle:
-        trade_rows_path = Path(handle.name)
-
-    try:
-        max_workers = min(_DEFAULT_STAGE4_SYMBOL_WORKERS, len(symbols))
-        logger.info("postmortem-stage4: workers=%s", max_workers)
-        completed_symbols = 0
-        next_index_to_submit = 1
-        pending_futures: dict[concurrent.futures.Future[tuple[dict[str, object] | None, str | None, Path | None]], tuple[int, str]] = {}
-
-        def _submit_symbol(
-            *,
-            executor: concurrent.futures.ThreadPoolExecutor,
-            symbol_index: int,
-        ) -> None:
-            symbol = symbols[symbol_index - 1]
-            symbol_timeout_for_run = None if symbol_index == 1 else symbol_timeout_seconds
-            logger.info(
-                "postmortem-stage4: processing=%s/%s symbol=%s",
-                symbol_index,
-                len(symbols),
-                symbol,
-            )
-            future = executor.submit(
-                _run_stage4_symbol_with_timeout,
-                cache_dir=config.backtest.cache_dir,
-                symbol=symbol,
-                review_timeframe=review_timeframe,
-                param_grid=param_grid,
-                timeout_seconds=symbol_timeout_for_run,
-            )
-            pending_futures[future] = (symbol_index, symbol)
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            while next_index_to_submit <= len(symbols) and len(pending_futures) < max_workers:
-                _submit_symbol(executor=executor, symbol_index=next_index_to_submit)
-                next_index_to_submit += 1
-
-            while pending_futures:
-                done_futures, _ = concurrent.futures.wait(
-                    pending_futures,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                for done_future in done_futures:
-                    index, symbol = pending_futures.pop(done_future)
-                    symbol_result = None
-                    symbol_error = None
-                    symbol_rows_path = None
-                    try:
-                        symbol_result, symbol_error, symbol_rows_path = done_future.result()
-                        if symbol_error == "timeout":
-                            timed_out_symbols.append(symbol)
-                            reason_counts["symbol_timeout"] += 1
-                            logger.warning(
-                                "postmortem-stage4: symbol_timeout=%ss symbol=%s",
-                                symbol_timeout_seconds,
-                                symbol,
-                            )
-                            continue
-                        if symbol_error is not None or symbol_result is None:
-                            reason_counts["symbol_worker_error"] += 1
-                            logger.warning("postmortem-stage4: symbol_worker_error symbol=%s error=%s", symbol, symbol_error)
-                            continue
-                        if bool(symbol_result.get("empty_frame")):
-                            empty_frame_symbols.append(symbol)
-                            continue
-
-                        if symbol_rows_path is not None:
-                            total_trade_rows += _append_stage4_rows_jsonl(
-                                source_path=symbol_rows_path,
-                                target_path=trade_rows_path,
-                            )
-                        stage3_passed_count += int(symbol_result.get("stage3_passed_count") or 0)
-                        reason_counts.update(cast(dict[str, int], symbol_result.get("reason_counts") or {}))
-                        for context_item in cast(list[dict[str, object]], symbol_result.get("plot_contexts") or []):
-                            plot_contexts_by_key[
-                                (str(context_item["symbol"]), int(context_item["regime_index"]))
-                            ] = cast(dict[str, object], context_item["context"])
-                    finally:
-                        if symbol_rows_path is not None:
-                            symbol_rows_path.unlink(missing_ok=True)
-                        completed_symbols += 1
-                        elapsed_seconds = time.perf_counter() - progress_started_at
-                        progress = (completed_symbols / len(symbols)) * 100.0 if symbols else 0.0
-                        eta_seconds = (
-                            (elapsed_seconds / completed_symbols) * (len(symbols) - completed_symbols)
-                            if completed_symbols
-                            else 0.0
-                        )
-                        logger.info(
-                            "postmortem-stage4: progress=%s/%s (%.1f%%) eta=%s symbol=%s stage3_passed=%s rows=%s queued_plots=%s",
-                            completed_symbols,
-                            len(symbols),
-                            progress,
-                            _format_eta_compact(eta_seconds),
-                            symbol,
-                            stage3_passed_count,
-                            total_trade_rows,
-                            total_trade_rows,
-                        )
-                        if next_index_to_submit <= len(symbols):
-                            _submit_symbol(executor=executor, symbol_index=next_index_to_submit)
-                            next_index_to_submit += 1
-
-        rows = _load_stage4_rows_jsonl(input_path=trade_rows_path)
-    finally:
-        trade_rows_path.unlink(missing_ok=True)
-
-    logger.info(
-        "postmortem-stage4: building_summary trade_rows=%s grid_size=%s",
-        len(rows),
-        len(param_grid),
-    )
-    summary_rows = _build_stage4_postmortem_summary_rows(
-        timeframe=review_timeframe,
-        param_grid=param_grid,
-        rows=rows,
-    )
-    logger.info("postmortem-stage4: summary_ready rows=%s", len(summary_rows))
-    logger.info("postmortem-stage4: scoring_summary")
-    summary_rows = _score_stage4_summary_rows(summary_rows)
-    logger.info("postmortem-stage4: summary_scored")
-    logger.info("postmortem-stage4: building_monthly_summary")
-    monthly_summary_map = _build_stage4_monthly_summary_map(
-        timeframe=review_timeframe,
-        param_grid=param_grid,
-        trade_rows=rows,
-    )
-    logger.info(
-        "postmortem-stage4: monthly_summary_ready months=%s",
-        len(monthly_summary_map),
-    )
-    logger.info("postmortem-stage4: selecting_best_combo")
-    best_summary_row = _select_best_stage4_summary_row(summary_rows)
-    best_param_key = _resolve_stage4_param_key(best_summary_row) if best_summary_row is not None else None
-    logger.info(
-        "postmortem-stage4: best_combo_selected best=%s",
-        (
-            _format_stage4_param_triplet(best_summary_row)
-            if best_summary_row is not None else "n/a"
-        ),
-    )
-    for summary_row in summary_rows:
-        summary_row["is_best"] = bool(best_param_key is not None and _resolve_stage4_param_key(summary_row) == best_param_key)
-
-    selected_trade_rows = [
-        trade_row
-        for trade_row in rows
-        if trade_row.get("row_type") == "trade"
-        and bool(trade_row.get("eligible"))
-        and best_param_key is not None
-        and _resolve_stage4_param_key(cast(dict[str, object], trade_row)) == best_param_key
-    ]
-    logger.info(
-        "postmortem-stage4: selected_best_trades count=%s",
-        len(selected_trade_rows),
-    )
-
-    total_selected_plots = len(selected_trade_rows)
-    if total_selected_plots:
-        logger.info(
-            "postmortem-stage4: plotting_start selected_plots=%s",
-            total_selected_plots,
-        )
-    else:
-        logger.info("postmortem-stage4: plotting_start selected_plots=0")
-
-    plotting_started_at = time.perf_counter()
-    for plot_index, trade_row in enumerate(selected_trade_rows, start=1):
-        symbol = cast(str, trade_row["symbol"])
-        regime_index = int(trade_row["regime_index"])
-        plot_timeout_for_run = None if symbol == symbols[0] else symbol_timeout_seconds
-        plot_context = plot_contexts_by_key.get((symbol, regime_index))
-        if plot_context is None:
-            reason_counts["plot_context_missing"] += 1
-            logger.warning(
-                "postmortem-stage4: missing_plot_context symbol=%s regime=%s",
-                symbol,
-                regime_index,
-            )
-            continue
-        plotting_elapsed = max(time.perf_counter() - plotting_started_at, 1e-9)
-        plotting_avg_seconds = plotting_elapsed / max(plot_index - 1, 1)
-        plotting_remaining = max(total_selected_plots - plot_index + 1, 0)
-        plotting_eta_seconds = plotting_avg_seconds * plotting_remaining
-        logger.info(
-            "postmortem-stage4: plotting=%s/%s (%.1f%%) eta=%s symbol=%s regime=%s",
-            plot_index,
-            total_selected_plots,
-            (plot_index / total_selected_plots) * 100.0 if total_selected_plots else 100.0,
-            _format_eta_compact(plotting_eta_seconds),
-            symbol,
-            regime_index,
-        )
-        plot_error = _run_stage4_plot_with_timeout(
-            cache_dir=config.backtest.cache_dir,
-            symbol=symbol,
-            review_timeframe=review_timeframe,
-            plot_context=plot_context,
-            trade_row=cast(dict[str, object], trade_row),
-            output_path=plots_dir / (
-                f"{symbol.replace('/', '_')}_stage4_regime_{regime_index:02d}"
-                f"_rr_{float(trade_row['minimal_rr']):.2f}"
-                f"_m_{float(trade_row['tp3_multiplier']):.1f}"
-                f"_sw_{float(trade_row.get('sweep_size_multiplier', 0.0) or 0.0):.1f}"
-                f"_sl_{_format_stage4_stop_mode(trade_row.get('stop_mode'))}"
-                f"_tp1sl_{_format_stage4_tp1_stop_mode(trade_row.get('tp1_stop_mode'))}"
-                f"_{_format_stage4_pump_minute_filter(trade_row.get('pump_minute_filter')).replace(':', '_').replace('|', '_')}"
-                f"_{_format_stage4_timing_session_filter(trade_row.get('timing_session_filter')).replace(':', '_').replace('/', '_')}"
-                f"_w_{int(round(float(trade_row['tp1_share']) * 100.0))}"
-                f"_{int(round(float(trade_row['tp2_share']) * 100.0))}"
-                f"_{int(round(float(trade_row['tp3_share']) * 100.0))}.png"
-            ),
-            timeout_seconds=plot_timeout_for_run,
-        )
-        if plot_error is not None:
-            if plot_error == "timeout":
-                timed_out_symbols.append(f"{symbol}#plot")
-                reason_counts["plot_timeout"] += 1
-                logger.warning(
-                    "postmortem-stage4: plot_timeout=%ss symbol=%s regime=%s",
-                    symbol_timeout_seconds,
-                    symbol,
-                    regime_index,
-                )
-            else:
-                reason_counts["plot_rebuild_error"] += 1
-                logger.warning(
-                    "postmortem-stage4: skipped_plot_rebuild symbol=%s regime=%s error=%s",
-                    symbol,
-                    regime_index,
-                    plot_error,
-            )
-            continue
-        plots_built += 1
-
-    logger.info(
-        "postmortem-stage4: plotting_ready built=%s selected=%s",
-        plots_built,
-        total_selected_plots,
-    )
-
-    logger.info("postmortem-stage4: building_results_frame")
-    results_frame = pd.DataFrame([*summary_rows, *rows])
-    if not results_frame.empty:
-        sort_columns = [column for column in ("row_type", "row_order", "symbol", "regime_index") if column in results_frame.columns]
-        results_frame = results_frame.sort_values(sort_columns).reset_index(drop=True)
-    logger.info("postmortem-stage4: results_frame_ready rows=%s", len(results_frame))
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    overview_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-
-    logger.info("postmortem-stage4: writing_csv path=%s", output_path)
-    results_frame.to_csv(output_path, index=False)
-    logger.info("postmortem-stage4: csv_ready path=%s", output_path)
-
-    logger.info("postmortem-stage4: writing_overview path=%s", overview_path)
-    pd.DataFrame(summary_rows).to_csv(overview_path, index=False)
-    logger.info("postmortem-stage4: overview_ready path=%s", overview_path)
-
-    logger.info("postmortem-stage4: rendering_report")
-    report_started_at = time.perf_counter()
-
-    def _stage4_report_progress(step: int, total_steps: int, phase: str) -> None:
-        elapsed = max(time.perf_counter() - report_started_at, 1e-9)
-        avg_seconds = elapsed / max(step, 1)
-        remaining_steps = max(total_steps - step, 0)
-        eta_seconds = avg_seconds * remaining_steps
-        logger.info(
-            "postmortem-stage4: report_progress=%s/%s (%.1f%%) eta=%s phase=%s",
-            step,
-            total_steps,
-            (step / total_steps) * 100.0 if total_steps else 100.0,
-            _format_eta_compact(eta_seconds),
-            phase,
-        )
-
-    report_markdown = _render_stage4_postmortem_report(
-        timeframe=review_timeframe,
-        symbols_count=len(symbols),
-        stage3_passed_count=stage3_passed_count,
-        param_grid=param_grid,
-        summary_rows=summary_rows,
-        trade_rows=rows,
-        monthly_summary_map=monthly_summary_map,
-        reason_counts=reason_counts,
-        timed_out_symbols=timed_out_symbols,
-        progress_callback=_stage4_report_progress,
-    )
-    logger.info("postmortem-stage4: report_rendered")
-    logger.info("postmortem-stage4: writing_report path=%s", report_path)
-    report_path.write_text(report_markdown, encoding="utf-8")
-    logger.info("postmortem-stage4: report_ready path=%s", report_path)
-
-    logger.info(
-        "postmortem-stage4: analysis_ready symbols=%s stage3_passed=%s trades=%s grid_size=%s selected_plots=%s csv=%s overview=%s report=%s",
-        len(symbols),
-        stage3_passed_count,
-        len(rows),
-        len(param_grid),
-        len(selected_trade_rows),
-        output_path,
-        overview_path,
-        report_path,
-    )
-
-    top_reasons = ", ".join(f"{reason}={count}" for reason, count in reason_counts.most_common())
-    if top_reasons:
-        logger.info("postmortem-stage4: rejection_reasons %s", top_reasons)
-    if empty_frame_symbols:
-        logger.warning("postmortem-stage4: empty_frames symbols=%s", ", ".join(empty_frame_symbols[:10]))
-    if timed_out_symbols:
-        logger.warning(
-            "postmortem-stage4: timed_out_symbols=%s list=%s",
-            len(timed_out_symbols),
-            ", ".join(timed_out_symbols[:10]),
-        )
-    logger.info(
-        "postmortem-stage4: symbols=%s stage3_passed=%s trades=%s plots=%s grid_size=%s best=%s csv=%s overview=%s report=%s",
-        len(symbols),
-        stage3_passed_count,
-        len(rows),
-        plots_built,
-        len(param_grid),
-        (
-            f"{_format_stage4_param_triplet(best_summary_row)},"
-            f"score={float(best_summary_row['stage4_score']):.4f}"
-            if best_summary_row is not None else "n/a"
-        ),
-        output_path,
-        overview_path,
-        report_path,
-    )
-    return 0
-
-
-def _make_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    logger = get_logger("make-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
-    csv_path = Path(args.input) if args.input else config.backtest.results_dir / config.backtest.results_file_name
-    if not csv_path.exists():
-        logger.info(f"make-report: file not found: {csv_path}")
-        return 1
-
-    frame = pd.read_csv(csv_path)
-    required_columns = [
-        "bite_profile_id",
-        "bite_grid_mode",
-        "bite_lookback",
-        "bite_volume_mult",
-        "bite_retest_window_hours",
-        "bite_min_rr",
-        "bite_tp2_mult",
-        "bite_confirmation_bars",
-        "bite_reclaim_mode",
-        "bite_retest_mode",
-        "profit_factor",
-        "pnl_percent",
-        "win_rate",
-        "trades_count",
-        "max_dd",
-        "sl_count",
-        "be_count",
-        "time_exit_profit_count",
-        "tp1_be_count",
-        "tp2_count",
-    ]
-    missing_columns = [column for column in required_columns if column not in frame.columns]
-    if missing_columns:
-        logger.error("make-report: missing required columns: %s", ", ".join(missing_columns))
-        return 1
-
-    if frame.empty:
-        logger.info("make-report: results file is empty")
-        return 1
-    if "max_drawdown_pct" not in frame.columns:
-        frame["max_drawdown_pct"] = frame["max_dd"]
-    if "median_pump_to_peak_bars" not in frame.columns:
-        frame["median_pump_to_peak_bars"] = pd.NA
-    if "median_pump_to_peak_minutes" not in frame.columns:
-        frame["median_pump_to_peak_minutes"] = pd.NA
-
-    filtered = frame[
-        (frame["trades_count"] >= REPORT_TRADES_COUNT_FILTER)
-        & (frame["profit_factor"] > REPORT_PROFIT_FACTOR_FILTER)
-    ].copy()
-    filtered = filtered.sort_values("profit_factor", ascending=False)
-
-    summary = BacktestSummary(
-        total_combinations=int(len(frame)),
-        profitable_combinations=int((frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD).sum()),
-        best_pf=round(float(frame["profit_factor"].max()), 4),
-    )
-
-    source = filtered if not filtered.empty else frame
-    optimal_ranges = OptimalParameterRanges(
-        bite_lookback=[int(source["bite_lookback"].min()), int(source["bite_lookback"].max())],
-        bite_volume_mult=[round(float(source["bite_volume_mult"].min()), 4), round(float(source["bite_volume_mult"].max()), 4)],
-        bite_min_rr=[round(float(source["bite_min_rr"].min()), 4), round(float(source["bite_min_rr"].max()), 4)],
-        bite_tp2_mult=[round(float(source["bite_tp2_mult"].min()), 4), round(float(source["bite_tp2_mult"].max()), 4)],
-    )
-
-    distribution = TradeResultsDistribution(
-        SL=int(source["sl_count"].sum()),
-        BE=int(source["be_count"].sum()),
-        TIME_EXIT_PROFIT=int(source["time_exit_profit_count"].sum()),
-        TP1_BE=int(source["tp1_be_count"].sum()),
-        TP2=int(source["tp2_count"].sum()),
-    )
-
-    profitable_variants = _build_profitable_variants(frame)
-    ai_analysis_report = _build_ai_analysis_report(summary, profitable_variants)
-    report = BacktestReport(
-        summary=summary,
-        optimal_ranges=optimal_ranges,
-        trade_results_distribution=distribution,
-        profitable_variants=profitable_variants,
-        ai_analysis_report=ai_analysis_report,
-    )
-
-    output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_REPORT_OUTPUT_FILE
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
-    logger.info(f"make-report: saved {output_path}")
-    return 0
-
-
-
-def _build_profitable_variants(frame: pd.DataFrame) -> list[ProfitableVariant]:
-    profitable = frame[frame["profit_factor"] > REPORT_PROFITABLE_PF_THRESHOLD].copy()
-    if profitable.empty:
-        return []
-
-    profitable = profitable.sort_values(["profit_factor", "pnl_percent", "trades_count"], ascending=[False, False, False])
-
-    def _optional_rounded_float(row: pd.Series, column_name: str) -> float | None:
-        raw_value = row.get(column_name)
-        if pd.isna(raw_value):
-            return None
-        return round(float(raw_value), 4)
-
-    variants: list[ProfitableVariant] = []
-    for index, (_, row) in enumerate(profitable.iterrows(), start=1):
-        variants.append(
-            ProfitableVariant(
-                rank=index,
-                bite_profile_id=str(row["bite_profile_id"]),
-                bite_grid_mode=str(row["bite_grid_mode"]),
-                bite_lookback=int(row["bite_lookback"]),
-                bite_volume_mult=round(float(row["bite_volume_mult"]), 4),
-                bite_retest_window_hours=int(row["bite_retest_window_hours"]),
-                bite_min_rr=round(float(row["bite_min_rr"]), 4),
-                bite_tp2_mult=round(float(row["bite_tp2_mult"]), 4),
-                bite_confirmation_bars=int(row["bite_confirmation_bars"]),
-                bite_reclaim_mode=str(row["bite_reclaim_mode"]),
-                bite_retest_mode=str(row["bite_retest_mode"]),
-                profit_factor=round(float(row["profit_factor"]), 4),
-                pnl_percent=round(float(row["pnl_percent"]), 4),
-                win_rate=round(float(row["win_rate"]), 4),
-                trades_count=int(row["trades_count"]),
-                max_dd=round(float(row["max_dd"]), 4),
-                max_drawdown_pct=round(float(row["max_drawdown_pct"]), 4),
-                median_pump_to_peak_bars=_optional_rounded_float(row, "median_pump_to_peak_bars"),
-                median_pump_to_peak_minutes=_optional_rounded_float(row, "median_pump_to_peak_minutes"),
-                sl_count=int(row["sl_count"]),
-                be_count=int(row["be_count"]),
-                tp1_be_count=int(row["tp1_be_count"]),
-                tp2_count=int(row["tp2_count"]),
-            )
-        )
-    return variants
-
-
-
-def _build_ai_analysis_report(summary: BacktestSummary, variants: list[ProfitableVariant]) -> str:
-    if not variants:
-        return (
-            "No setups with profit_factor > 1.0 were found. "
-            "Increase history depth or relax bee_bite filters."
-        )
-
-    lines = [
-        "# Bee Bite profitable combinations",
-        f"Total combinations: {summary.total_combinations}",
-        f"Profitable combinations (PF>1.0): {summary.profitable_combinations}",
-        f"Best Profit Factor: {summary.best_pf}",
-        "",
-        "## Variants",
-        "Format: rank | PF | PnL% | WinRate% | Trades | MaxDD% | PumpLenBars | PumpLenMin | params",
-    ]
-
-    for variant in variants:
-        pump_len_bars = "n/a" if variant.median_pump_to_peak_bars is None else str(variant.median_pump_to_peak_bars)
-        pump_len_minutes = "n/a" if variant.median_pump_to_peak_minutes is None else str(variant.median_pump_to_peak_minutes)
-        params = (
-            f"profile={variant.bite_profile_id}, grid={variant.bite_grid_mode}, "
-            f"lookback={variant.bite_lookback}, volume_mult={variant.bite_volume_mult}, "
-            f"retest_window_h={variant.bite_retest_window_hours}, min_rr={variant.bite_min_rr}, "
-            f"tp2_mult={variant.bite_tp2_mult}, confirmation_bars={variant.bite_confirmation_bars}, "
-            f"reclaim_mode={variant.bite_reclaim_mode}, retest_mode={variant.bite_retest_mode}"
-        )
-        lines.append(
-            f"{variant.rank} | {variant.profit_factor} | {variant.pnl_percent} | {variant.win_rate} | "
-            f"{variant.trades_count} | {variant.max_drawdown_pct} | {pump_len_bars} | {pump_len_minutes} | {params}"
-        )
-
-    return "\n".join(lines)
-
-
 def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     if "open_interest" not in frame.columns:
         return [
             {
                 "issue_type": QUALITY_OI_MISSING_COLUMN_ISSUE,
                 "severity": QUALITY_SEVERITY_ERROR,
-                "description": "Отсутствует колонка open_interest",
+                "description": "ÐžÑ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÐµÑ‚ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ° open_interest",
             }
         ]
 
@@ -6594,7 +1747,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
             {
                 "issue_type": QUALITY_OI_MISSING_VALUES_ISSUE,
                 "severity": QUALITY_SEVERITY_WARNING,
-                "description": "Есть сырые пропуски open_interest",
+                "description": "Ð•ÑÑ‚ÑŒ ÑÑ‹Ñ€Ñ‹Ðµ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸ open_interest",
             }
         )
 
@@ -6607,7 +1760,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
                     {
                         "issue_type": QUALITY_OI_LEADING_GAPS_ISSUE,
                         "severity": QUALITY_SEVERITY_WARNING,
-                        "description": "Обнаружены пропуски open_interest в начале ряда",
+                        "description": "ÐžÐ±Ð½Ð°Ñ€ÑƒÐ¶ÐµÐ½Ñ‹ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸ open_interest Ð² Ð½Ð°Ñ‡Ð°Ð»Ðµ Ñ€ÑÐ´Ð°",
                     }
                 )
 
@@ -6625,7 +1778,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
                 {
                     "issue_type": QUALITY_OI_STALE_SERIES_ISSUE,
                     "severity": QUALITY_SEVERITY_ERROR,
-                    "description": "open_interest почти не меняется на сырых данных",
+                    "description": "open_interest Ð¿Ð¾Ñ‡Ñ‚Ð¸ Ð½Ðµ Ð¼ÐµÐ½ÑÐµÑ‚ÑÑ Ð½Ð° ÑÑ‹Ñ€Ñ‹Ñ… Ð´Ð°Ð½Ð½Ñ‹Ñ…",
                 }
             )
 
@@ -6635,13 +1788,13 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
 def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, QualitySymbolStats]) -> list[str]:
     recommendations: list[str] = []
     if summary.gaps_total > 0:
-        recommendations.append("Дозагрузка диапазона: запустите update-cache для символов с пропусками")
+        recommendations.append("Ð”Ð¾Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° Ð´Ð¸Ð°Ð¿Ð°Ð·Ð¾Ð½Ð°: Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸Ñ‚Ðµ update-cache Ð´Ð»Ñ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ñ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ°Ð¼Ð¸")
 
     if any(data.gaps > 0 for data in symbols.values()):
-        recommendations.append("Проверка таймфрейма: убедитесь, что timeframe совпадает с кэшем")
+        recommendations.append("ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ° Ñ‚Ð°Ð¹Ð¼Ñ„Ñ€ÐµÐ¹Ð¼Ð°: ÑƒÐ±ÐµÐ´Ð¸Ñ‚ÐµÑÑŒ, Ñ‡Ñ‚Ð¾ timeframe ÑÐ¾Ð²Ð¿Ð°Ð´Ð°ÐµÑ‚ Ñ ÐºÑÑˆÐµÐ¼")
 
     if summary.issues_total > 0:
-        recommendations.append("Дедупликация и очистка: переcохраните ряды с удалением дублей и аномалий")
+        recommendations.append("Ð”ÐµÐ´ÑƒÐ¿Ð»Ð¸ÐºÐ°Ñ†Ð¸Ñ Ð¸ Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°: Ð¿ÐµÑ€ÐµcÐ¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚Ðµ Ñ€ÑÐ´Ñ‹ Ñ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸ÐµÐ¼ Ð´ÑƒÐ±Ð»ÐµÐ¹ Ð¸ Ð°Ð½Ð¾Ð¼Ð°Ð»Ð¸Ð¹")
 
     oi_problem_types = {
         QUALITY_OI_MISSING_COLUMN_ISSUE,
@@ -6650,10 +1803,10 @@ def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, Q
         QUALITY_OI_STALE_SERIES_ISSUE,
     }
     if any(problem in oi_problem_types for problem in summary.by_issue_type):
-        recommendations.append("Проверка OI-источника: перезапустите загрузку OI и проверьте сырые пропуски/аномалии")
+        recommendations.append("ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ° OI-Ð¸ÑÑ‚Ð¾Ñ‡Ð½Ð¸ÐºÐ°: Ð¿ÐµÑ€ÐµÐ·Ð°Ð¿ÑƒÑÑ‚Ð¸Ñ‚Ðµ Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÑƒ OI Ð¸ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑŒÑ‚Ðµ ÑÑ‹Ñ€Ñ‹Ðµ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸/Ð°Ð½Ð¾Ð¼Ð°Ð»Ð¸Ð¸")
 
     if summary.issues_total > 0 or summary.gaps_total > 0:
-        recommendations.append("Повторная валидация: после исправлений выполните check-quality повторно")
+        recommendations.append("ÐŸÐ¾Ð²Ñ‚Ð¾Ñ€Ð½Ð°Ñ Ð²Ð°Ð»Ð¸Ð´Ð°Ñ†Ð¸Ñ: Ð¿Ð¾ÑÐ»Ðµ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¸Ð¹ Ð²Ñ‹Ð¿Ð¾Ð»Ð½Ð¸Ñ‚Ðµ check-quality Ð¿Ð¾Ð²Ñ‚Ð¾Ñ€Ð½Ð¾")
 
     return recommendations
 
@@ -6687,7 +1840,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
     if not symbols:
-        logger.info("проверка-качества: нет данных для проверки")
+        logger.info("Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: Ð½ÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ… Ð´Ð»Ñ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ¸")
         return 0
 
     validator = DataValidator()
@@ -6702,7 +1855,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     for symbol in symbols:
         frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
         if frame.empty:
-            logger.info(f"проверка-качества: {symbol} пропущен, пустой датасет")
+            logger.info(f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: {symbol} Ð¿Ñ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½, Ð¿ÑƒÑÑ‚Ð¾Ð¹ Ð´Ð°Ñ‚Ð°ÑÐµÑ‚")
             continue
 
         issues = validator.validate(symbol, config.fetch.timeframe, frame)
@@ -6731,8 +1884,8 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
 
         logger.info(
-            f"проверка-качества: {symbol} проблемы={symbol_total_issues} пропуски={len(gaps)} "
-            f"проблемы_oi={len(oi_quality_issues)}"
+            f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: {symbol} Ð¿Ñ€Ð¾Ð±Ð»ÐµÐ¼Ñ‹={symbol_total_issues} Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸={len(gaps)} "
+            f"Ð¿Ñ€Ð¾Ð±Ð»ÐµÐ¼Ñ‹_oi={len(oi_quality_issues)}"
         )
 
     summary = QualitySummary(
@@ -6751,8 +1904,8 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
     _save_quality_report(report, output_path)
 
-    logger.info(f"проверка-качества: итог проблемы={report.summary.issues_total} пропуски={report.summary.gaps_total}")
-    logger.info(f"проверка-качества: отчет сохранен {output_path}")
+    logger.info(f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: Ð¸Ñ‚Ð¾Ð³ Ð¿Ñ€Ð¾Ð±Ð»ÐµÐ¼Ñ‹={report.summary.issues_total} Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸={report.summary.gaps_total}")
+    logger.info(f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: Ð¾Ñ‚Ñ‡ÐµÑ‚ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½ {output_path}")
     return 0
 
 
@@ -6763,43 +1916,43 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     cache_dir = config.backtest.cache_dir
     cache_dir_str = str(cache_dir).strip()
     if not cache_dir_str:
-        logger.error("очистка-кэша: путь к директории кэша пустой, удаление отменено")
+        logger.error("Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð¿ÑƒÑ‚ÑŒ Ðº Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸Ð¸ ÐºÑÑˆÐ° Ð¿ÑƒÑÑ‚Ð¾Ð¹, ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ Ð¾Ñ‚Ð¼ÐµÐ½ÐµÐ½Ð¾")
         return 1
 
     resolved_cache_dir = cache_dir.expanduser().resolve()
     home_dir = Path.home().resolve()
     if resolved_cache_dir == Path(resolved_cache_dir.anchor):
-        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на корень ФС, удаление отменено")
+        logger.error(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð¿ÑƒÑ‚ÑŒ '{resolved_cache_dir}' ÑƒÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÑ‚ Ð½Ð° ÐºÐ¾Ñ€ÐµÐ½ÑŒ Ð¤Ð¡, ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ Ð¾Ñ‚Ð¼ÐµÐ½ÐµÐ½Ð¾")
         return 1
 
     if resolved_cache_dir == home_dir:
-        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на домашнюю директорию, удаление отменено")
+        logger.error(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð¿ÑƒÑ‚ÑŒ '{resolved_cache_dir}' ÑƒÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÑ‚ Ð½Ð° Ð´Ð¾Ð¼Ð°ÑˆÐ½ÑŽÑŽ Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸ÑŽ, ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ Ð¾Ñ‚Ð¼ÐµÐ½ÐµÐ½Ð¾")
         return 1
 
-    logger.info(f"очистка-кэша: удаление содержимого {resolved_cache_dir}")
+    logger.info(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ ÑÐ¾Ð´ÐµÑ€Ð¶Ð¸Ð¼Ð¾Ð³Ð¾ {resolved_cache_dir}")
     shutil.rmtree(resolved_cache_dir, ignore_errors=True)
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"очистка-кэша: директория пересоздана {resolved_cache_dir}")
+    logger.info(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸Ñ Ð¿ÐµÑ€ÐµÑÐ¾Ð·Ð´Ð°Ð½Ð° {resolved_cache_dir}")
     return 0
 
 
 
-# endregion Приватные
+# endregion ÐŸÑ€Ð¸Ð²Ð°Ñ‚Ð½Ñ‹Ðµ
 
-# Публичные точки входа
+# ÐŸÑƒÐ±Ð»Ð¸Ñ‡Ð½Ñ‹Ðµ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ…Ð¾Ð´Ð°
 
 def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
-    """Запускает сценарий загрузки рыночных данных."""
+    """Ð—Ð°Ð¿ÑƒÑÐºÐ°ÐµÑ‚ ÑÑ†ÐµÐ½Ð°Ñ€Ð¸Ð¹ Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¸ Ñ€Ñ‹Ð½Ð¾Ñ‡Ð½Ñ‹Ñ… Ð´Ð°Ð½Ð½Ñ‹Ñ…."""
     return _run_with_logging("fetch-data", config, lambda: _fetch_data_inner(config, args))
 
 
 def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
-    """Обновляет локальный кэш данных."""
+    """ÐžÐ±Ð½Ð¾Ð²Ð»ÑÐµÑ‚ Ð»Ð¾ÐºÐ°Ð»ÑŒÐ½Ñ‹Ð¹ ÐºÑÑˆ Ð´Ð°Ð½Ð½Ñ‹Ñ…."""
     return _run_with_logging("update-cache", config, lambda: _update_cache_inner(config, args))
 
 
 def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
-    """Запускает бэктест по текущей конфигурации."""
+    """Ð—Ð°Ð¿ÑƒÑÐºÐ°ÐµÑ‚ Ð±ÑÐºÑ‚ÐµÑÑ‚ Ð¿Ð¾ Ñ‚ÐµÐºÑƒÑ‰ÐµÐ¹ ÐºÐ¾Ð½Ñ„Ð¸Ð³ÑƒÑ€Ð°Ñ†Ð¸Ð¸."""
     return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
 
 
@@ -6809,13 +1962,14 @@ def run_ppa_research(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
-    """Проверяет качество и целостность данных."""
+    """ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÑ‚ ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð¾ Ð¸ Ñ†ÐµÐ»Ð¾ÑÑ‚Ð½Ð¾ÑÑ‚ÑŒ Ð´Ð°Ð½Ð½Ñ‹Ñ…."""
     return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
 
 
 def clear_cache(config: AppConfig, args: argparse.Namespace) -> int:
-    """Очищает директорию локального кэша и пересоздаёт её."""
+    """ÐžÑ‡Ð¸Ñ‰Ð°ÐµÑ‚ Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸ÑŽ Ð»Ð¾ÐºÐ°Ð»ÑŒÐ½Ð¾Ð³Ð¾ ÐºÑÑˆÐ° Ð¸ Ð¿ÐµÑ€ÐµÑÐ¾Ð·Ð´Ð°Ñ‘Ñ‚ ÐµÑ‘."""
     return _run_with_logging("clear-cache", config, lambda: _clear_cache_inner(config, args))
+
 
 
 
