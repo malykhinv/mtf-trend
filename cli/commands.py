@@ -1,4 +1,4 @@
-﻿"""ÐœÐ¾Ð´ÑƒÐ»ÑŒ Ð¿Ñ€Ð¾ÐµÐºÑ‚Ð°."""
+﻿"""Модуль проекта."""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 
-# region ÐŸÑ€Ð¸Ð²Ð°Ñ‚Ð½Ñ‹Ðµ
+# region Приватные
 
 _PROGRESS_LOG_EVERY = 100
 _PPA_STAGE_PRESETS: dict[str, tuple[int | None, int | None]] = {
@@ -120,14 +120,14 @@ def _resolve_strategy_id(args: argparse.Namespace) -> str:
     if strategy_override is not None:
         normalized = str(strategy_override).strip().lower()
         if normalized not in {"bee_bite", "post_pump_absorption"}:
-            raise ValueError(f"ÐÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ð¹ strategy_id: {normalized}")
+            raise ValueError(f"Неподдерживаемый strategy_id: {normalized}")
         return normalized
     return "bee_bite"
 
 
 def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) -> Path:
     if strategy_id not in {"bee_bite", "post_pump_absorption"}:
-        raise ValueError(f"ÐÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ð¹ strategy_id: {strategy_id}")
+        raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
     return base_results_dir / "strategy" / strategy_id
 
 
@@ -167,7 +167,7 @@ def _build_bee_bite_params_from_row(
     bite_t_max_in_trade_raw = row.get("bite_t_max_in_trade")
     bite_t_max_in_trade = None if _is_missing_scalar(bite_t_max_in_trade_raw) else int(bite_t_max_in_trade_raw)
     if bite_t_max_in_trade is not None and bite_t_max_in_trade < 1:
-        raise ValueError("Ð¿Ð°Ñ€Ð°Ð¼ÐµÑ‚Ñ€ bite_t_max_in_trade Ð´Ð¾Ð»Ð¶ÐµÐ½ Ð±Ñ‹Ñ‚ÑŒ >= 1 Ð¸Ð»Ð¸ None")
+        raise ValueError("параметр bite_t_max_in_trade должен быть >= 1 или None")
     bite_reclaim_limit_raw = row.get("bite_reclaim_limit_bars")
     if _is_missing_scalar(bite_reclaim_limit_raw):
         bite_reclaim_limit_raw = row.get("bite_reclaim_limit")
@@ -469,7 +469,7 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
     )
 
     logger.info(
-        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸ÐºÐ° post_pump_absorption stage_symbols=%s stage_events=%s trades_generated=%s stages=%s output_dir=%s",
+        "%s: сохранена диагностика post_pump_absorption stage_symbols=%s stage_events=%s trades_generated=%s stages=%s output_dir=%s",
         log_prefix,
         symbols_with_stage_events,
         total_stage_events,
@@ -478,7 +478,7 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
         diagnostics_dir,
     )
     if total_stage_events == 0:
-        logger.warning("%s: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ¾Ð±Ñ‹Ñ‚Ð¸Ð¹ post_pump_absorption Ð´Ð»Ñ Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð½Ñ‹Ñ… stages", log_prefix)
+        logger.warning("%s: не найдено событий post_pump_absorption для выбранных stages", log_prefix)
 
 
 def _plot_bee_bite_diagnostics_for_symbols(
@@ -527,14 +527,14 @@ def _plot_bee_bite_diagnostics_for_symbols(
         output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     logger.info(
-        "%s: ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½Ð° Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸Ñ‡ÐµÑÐºÐ°Ñ Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ñ bee_bite symbols=%s trades_generated=%s output_dir=%s",
+        "%s: сохранена диагностическая визуализация bee_bite symbols=%s trades_generated=%s output_dir=%s",
         log_prefix,
         symbols_with_states,
         total_trades_generated,
         diagnostics_dir,
     )
     if symbols_with_states == 0:
-        logger.warning("%s: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ð´Ð¸Ð°Ð³Ð½Ð¾ÑÑ‚Ð¸Ñ‡ÐµÑÐºÐ¸Ñ… Ð´Ð°Ð½Ð½Ñ‹Ñ… bee_bite Ð´Ð»Ñ Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ð¸", log_prefix)
+        logger.warning("%s: не найдено диагностических данных bee_bite для визуализации", log_prefix)
 
 
 def _plot_for_strategy(
@@ -552,7 +552,7 @@ def _plot_for_strategy(
 ) -> bool:
     if strategy_id == "bee_bite":
         if not isinstance(strategy, BeeBiteStrategy):
-            logger.error("%s: Ð½ÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ð¹ Ñ‚Ð¸Ð¿ Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ð¸ Ð´Ð»Ñ ÑÑ‚Ñ€Ð°Ñ‚ÐµÐ³Ð¸Ð¸ bee_bite", log_prefix)
+            logger.error("%s: неподдерживаемый тип визуализации для стратегии bee_bite", log_prefix)
             return False
         _plot_bee_bite_diagnostics_for_symbols(
             config=config,
@@ -567,7 +567,7 @@ def _plot_for_strategy(
         )
         return True
 
-    logger.error("%s: Ð²Ð¸Ð·ÑƒÐ°Ð»Ð¸Ð·Ð°Ñ†Ð¸Ñ Ð½Ðµ Ð¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÑ‚ÑÑ Ð´Ð»Ñ ÑÑ‚Ñ€Ð°Ñ‚ÐµÐ³Ð¸Ð¸ %s", log_prefix, strategy_id)
+    logger.error("%s: визуализация не поддерживается для стратегии %s", log_prefix, strategy_id)
     return False
 
 
@@ -694,12 +694,12 @@ def _load_plot_params_row_from_results(
         csv_path = next((candidate for candidate in candidate_paths if candidate.exists()), candidate_paths[0])
 
     if not csv_path.exists():
-        logger.error("plot-from-results: Ñ„Ð°Ð¹Ð» Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚Ð¾Ð² Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½: %s", csv_path)
+        logger.error("plot-from-results: файл результатов не найден: %s", csv_path)
         return None
 
     frame = pd.read_csv(csv_path)
     if frame.empty:
-        logger.error("plot-from-results: Ñ„Ð°Ð¹Ð» Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚Ð¾Ð² Ð¿ÑƒÑÑ‚Ð¾Ð¹: %s", csv_path)
+        logger.error("plot-from-results: файл результатов пустой: %s", csv_path)
         return None
 
     required_columns_by_strategy = {
@@ -759,11 +759,11 @@ def _load_plot_params_row_from_results(
     }
     required_columns = required_columns_by_strategy.get(strategy_id)
     if required_columns is None:
-        logger.error("plot-from-results: Ð½ÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ð°Ñ ÑÑ‚Ñ€Ð°Ñ‚ÐµÐ³Ð¸Ñ %s", strategy_id)
+        logger.error("plot-from-results: неподдерживаемая стратегия %s", strategy_id)
         return None
     missing_columns = [column for column in required_columns if column not in frame.columns]
     if missing_columns:
-        logger.error("plot-from-results: Ð¾Ñ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÑŽÑ‚ Ð¾Ð±ÑÐ·Ð°Ñ‚ÐµÐ»ÑŒÐ½Ñ‹Ðµ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ¸: %s", ", ".join(missing_columns))
+        logger.error("plot-from-results: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
         return None
 
     selected_id_raw = getattr(args, "id", None)
@@ -781,7 +781,7 @@ def _load_plot_params_row_from_results(
             if not matches.empty:
                 matched_by_column = matches
                 logger.info(
-                    "plot-from-results: Ð½Ð°Ð¹Ð´ÐµÐ½Ð° ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸Ñ Ð¿Ð¾ ÐºÐ¾Ð»Ð¾Ð½ÐºÐµ %s, id=%s, ÑÐ¾Ð²Ð¿Ð°Ð´ÐµÐ½Ð¸Ð¹=%s",
+                    "plot-from-results: найдена комбинация по колонке %s, id=%s, совпадений=%s",
                     column,
                     selected_id,
                     len(matches),
@@ -794,14 +794,14 @@ def _load_plot_params_row_from_results(
             row_index = selected_id - 1
             if row_index < 0 or row_index >= len(frame):
                 logger.error(
-                    "plot-from-results: id=%s Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½ (Ð½ÐµÑ‚ ÐºÐ¾Ð»Ð¾Ð½Ð¾Ðº id/combination_id/rank Ð¸ Ð½Ð¾Ð¼ÐµÑ€ ÑÑ‚Ñ€Ð¾ÐºÐ¸ Ð²Ð½Ðµ Ð´Ð¸Ð°Ð¿Ð°Ð·Ð¾Ð½Ð° 1..%s)",
+                    "plot-from-results: id=%s не найден (нет колонок id/combination_id/rank и номер строки вне диапазона 1..%s)",
                     selected_id,
                     len(frame),
                 )
                 return None
             selected_row = frame.iloc[row_index]
             logger.warning(
-                "plot-from-results: id=%s Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½ Ð² id/combination_id/rank, Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½ 1-based Ð½Ð¾Ð¼ÐµÑ€ ÑÑ‚Ñ€Ð¾ÐºÐ¸=%s",
+                "plot-from-results: id=%s не найден в id/combination_id/rank, использован 1-based номер строки=%s",
                 selected_id,
                 selected_id,
             )
@@ -810,7 +810,7 @@ def _load_plot_params_row_from_results(
         selected_row = sorted_frame.iloc[0]
 
     logger.info(
-        "plot-from-results: Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½Ñ‹ Ð¿Ð°Ñ€Ð°Ð¼ÐµÑ‚Ñ€Ñ‹ Ð¸Ð· %s (pf=%s, trades_count=%s, id=%s)",
+        "plot-from-results: использованы параметры из %s (pf=%s, trades_count=%s, id=%s)",
         csv_path,
         selected_row.get("profit_factor", "n/a"),
         selected_row.get("trades_count", "n/a"),
@@ -824,13 +824,13 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
-    logger.info(f"{command_name}: ÑÑ‚Ð°Ñ€Ñ‚")
+    logger.info(f"{command_name}: старт")
     try:
         code = body()
-        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (ÐºÐ¾Ð´={code})")
+        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (код={code})")
         return code
     except Exception as exc:
-        logger.exception(f"{command_name}: Ð¾ÑˆÐ¸Ð±ÐºÐ°: {exc}")
+        logger.exception(f"{command_name}: ошибка: {exc}")
         return 1
 
 
@@ -1063,7 +1063,7 @@ def _log_fetch_summary(
     )
     if emit_log:
         logger.info(
-            "%s: ÑÐ²Ð¾Ð´ÐºÐ° Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¸ Ð²ÑÐµÐ³Ð¾=%s ÑƒÑÐ¿ÐµÑˆÐ½Ð¾=%s Ñ Ð¾ÑˆÐ¸Ð±ÐºÐ°Ð¼Ð¸=%s Ð´Ð¾Ð»Ñ_Ð¾ÑˆÐ¸Ð±Ð¾Ðº=%.2f%%",
+            "%s: сводка загрузки всего=%s успешно=%s с ошибками=%s доля_ошибок=%.2f%%",
             command_name,
             summary.total_symbols,
             summary.success_symbols,
@@ -1089,12 +1089,12 @@ def _resolve_liquidity_skip_reason(summary: FetchSummary | None, threshold: floa
 
 def _log_loaded_coins(logger: Logger, count: int, action: str) -> None:
     templates = {
-        "loaded": "Ð—Ð°Ð³Ñ€ÑƒÐ¶ÐµÐ½Ð¾ %s Ð¼Ð¾Ð½ÐµÑ‚.",
-        "updated": "ÐžÐ±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¾ %s Ð¼Ð¾Ð½ÐµÑ‚.",
+        "loaded": "Загружено %s монет.",
+        "updated": "Обновлено %s монет.",
     }
     template = templates.get(action)
     if template is None:
-        raise ValueError(f"ÐÐµÐ¿Ð¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ð¾Ðµ Ð´ÐµÐ¹ÑÑ‚Ð²Ð¸Ðµ: {action}")
+        raise ValueError(f"Неподдерживаемое действие: {action}")
     logger.info(template, count)
 
 
@@ -1130,7 +1130,7 @@ def _resolve_timeframe(value: str | None, *, fallback: Timeframe, argument_name:
             return timeframe
 
     supported = ", ".join(tf.value for tf in Timeframe)
-    raise ValueError(f"ÐÐµÐºÐ¾Ñ€Ñ€ÐµÐºÑ‚Ð½Ð¾Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ðµ {argument_name}: {value}. ÐŸÐ¾Ð´Ð´ÐµÑ€Ð¶Ð¸Ð²Ð°ÐµÐ¼Ñ‹Ðµ Ð·Ð½Ð°Ñ‡ÐµÐ½Ð¸Ñ: {supported}")
+    raise ValueError(f"Некорректное значение {argument_name}: {value}. Поддерживаемые значения: {supported}")
 
 
 def _resolve_timeframe_sequence(
@@ -1314,14 +1314,14 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols = explicit_symbols
         liquidity_quality_by_symbol = {}
     logger.info(
-        "Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°-Ð´Ð°Ð½Ð½Ñ‹Ñ…: Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ñ„ÑŒÑŽÑ‡ÐµÑ€ÑÐ¾Ð²=%s Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð¾_ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð²=%s (Ñ€ÐµÐ¶Ð¸Ð¼_Ð¿Ð¾Ð´Ð±Ð¾Ñ€Ð°=%s)",
+        "загрузка-данных: найдено фьючерсов=%s выбрано_символов=%s (режим_подбора=%s)",
         all_futures_count,
         len(symbols),
         "cache+exchange-liquidity",
     )
     if not symbols:
         liquidity_quality_by_symbol = {}
-        logger.info("Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°-Ð´Ð°Ð½Ð½Ñ‹Ñ…: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð´Ð»Ñ Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¸")
+        logger.info("загрузка-данных: не найдено символов для загрузки")
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
@@ -1336,7 +1336,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         emit_log: bool = True,
     ) -> None:
         logger.info(
-            "Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ°-Ð´Ð°Ð½Ð½Ñ‹Ñ…: ÑÐ±Ð¾Ñ€ ÐºÑÑˆÐ° Ð´Ð»Ñ TF=%s (ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð²=%s)",
+            "загрузка-данных: сбор кэша для TF=%s (символов=%s)",
             requested_timeframe.value,
             len(symbols_to_fetch),
         )
@@ -1451,19 +1451,19 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols = explicit_symbols
         liquidity_quality_by_symbol = {}
     logger.info(
-        "Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ Ñ„ÑŒÑŽÑ‡ÐµÑ€ÑÐ¾Ð²=%s Ð¾Ñ‚Ð¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¾ Ð² fetch_all=%s",
+        "обновление-кэша: найдено фьючерсов=%s отправлено в fetch_all=%s",
         all_futures_count,
         len(symbols),
     )
     if not symbols:
-        logger.info("Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: Ð½Ðµ Ð½Ð°Ð¹Ð´ÐµÐ½Ð¾ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð´Ð»Ñ Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ñ")
+        logger.info("обновление-кэша: не найдено символов для обновления")
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
     failed_symbols: set[str] = set()
     for index, timeframe in enumerate(fetch_timeframes):
-        logger.info("Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: ÑÐ±Ð¾Ñ€ ÐºÑÑˆÐ° Ð´Ð»Ñ TF=%s", timeframe.value)
+        logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
         result = fetcher.fetch_all(
             symbols=symbols,
             timeframe=timeframe,
@@ -1486,7 +1486,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
             or isinstance(result.market_caps.market_caps.get(symbol), str)
         )
         if index < len(fetch_timeframes) - 1:
-            logger.info("Ð¾Ð±Ð½Ð¾Ð²Ð»ÐµÐ½Ð¸Ðµ-ÐºÑÑˆÐ°: cooldown after TF=%s sleep=75s", timeframe.value)
+            logger.info("обновление-кэша: cooldown after TF=%s sleep=75s", timeframe.value)
             time.sleep(75)
 
     exit_code = _fetch_exit_code(len(failed_symbols))
@@ -1558,7 +1558,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         configured_entry_timeframe=config.strategy.entry_timeframe,
     )
     logger.info(
-        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ²Ð½Ñ‹Ð¹ Ð·Ð°Ð¿ÑƒÑÐº, ÑƒÑ€Ð¾Ð²Ð½Ð¸: %s, Ð²Ñ…Ð¾Ð´Ñ‹: %s",
+        "запуск-бэктеста: явный запуск, уровни: %s, входы: %s",
         levels_timeframe.value,
         entry_timeframe.value,
     )
@@ -1566,7 +1566,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(entry_timeframe)
     if not symbols:
-        logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÐµÐºÑ‚ÐµÑÑ‚Ð°: Ð½ÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ… Ð² ÐºÑÑˆÐµ")
+        logger.info("запуск-бектеста: нет данных в кэше")
         return 0
 
     symbols_before_ranking = len(symbols)
@@ -1606,7 +1606,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols = [item.symbol for item in selected_stage1_results]
         ranked_symbols_count = len(stage1_results)
         rejected_symbols_count = symbols_before_ranking - ranked_symbols_count
-        top_n_applied = top_n if pre_rank_enabled else "Ð½Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÑÐ»ÑÑ"
+        top_n_applied = top_n if pre_rank_enabled else "не применялся"
         preview = selected_stage1_results[:10]
         top_preview_text = ", ".join(
             (
@@ -1617,9 +1617,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             for item in preview
         )
         if not top_preview_text:
-            top_preview_text = "Ð¿ÑƒÑÑ‚Ð¾"
+            top_preview_text = "пусто"
         logger.info(
-            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: bee_bite stage1 symbols_total=%s passed=%s top_n=%s selected=%s reasons=%s",
+            "запуск-бэктеста: bee_bite stage1 symbols_total=%s passed=%s top_n=%s selected=%s reasons=%s",
             symbols_before_ranking,
             ranked_symbols_count,
             top_n_applied,
@@ -1632,7 +1632,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             preloaded_levels_frames[symbol] = levels_frame
             if levels_frame.empty:
                 logger.debug(
-                    "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ¸Ð¼Ð²Ð¾Ð» %s Ð¸ÑÐºÐ»ÑŽÑ‡Ñ‘Ð½ Ð¸Ð· pre-rank, Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð°=Ð¿ÑƒÑÑ‚Ð¾Ð¹ levels_tf=%s",
+                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=пустой levels_tf=%s",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -1640,7 +1640,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 continue
             if "volume" not in levels_frame.columns:
                 logger.info(
-                    "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ¸Ð¼Ð²Ð¾Ð» %s Ð¸ÑÐºÐ»ÑŽÑ‡Ñ‘Ð½ Ð¸Ð· pre-rank, Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð°=Ð½ÐµÑ‚ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ¸ volume Ð½Ð° levels_tf=%s",
+                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет колонки volume на levels_tf=%s",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -1651,7 +1651,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             volume_series = volume_numeric.dropna()
             if volume_series.empty:
                 logger.debug(
-                    "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ¸Ð¼Ð²Ð¾Ð» %s Ð¸ÑÐºÐ»ÑŽÑ‡Ñ‘Ð½ Ð¸Ð· pre-rank, Ð¿Ñ€Ð¸Ñ‡Ð¸Ð½Ð°=Ð½ÐµÑ‚ Ð²Ð°Ð»Ð¸Ð´Ð½Ð¾Ð³Ð¾ volume Ð½Ð° levels_tf=%s",
+                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет валидного volume на levels_tf=%s",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -1672,22 +1672,22 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             for symbol, avg_volume in preview
         )
         if not top_preview_text:
-            top_preview_text = "Ð¿ÑƒÑÑ‚Ð¾"
+            top_preview_text = "пусто"
     else:
         ranked_symbols_count = 0
         symbols = list(symbols)
-        top_n_applied = "Ð½Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÑÐ»ÑÑ"
-        top_preview_text = "pre-rank Ð¾Ñ‚ÐºÐ»ÑŽÑ‡Ñ‘Ð½"
+        top_n_applied = "не применялся"
+        top_preview_text = "pre-rank отключён"
 
     pre_rank_elapsed_seconds = time.perf_counter() - pre_rank_started_at
     logger.info(
-        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank Ð²Ñ€ÐµÐ¼Ñ=%.3fs enabled=%s",
+        "запуск-бэктеста: pre-rank время=%.3fs enabled=%s",
         pre_rank_elapsed_seconds,
         pre_filter_active,
     )
     if strategy_id == "bee_bite":
         logger.info(
-            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: bee_bite stage1 total=%s passed=%s rejected=%s top_n=%s selected=%s",
+            "запуск-бэктеста: bee_bite stage1 total=%s passed=%s rejected=%s top_n=%s selected=%s",
             symbols_before_ranking,
             ranked_symbols_count,
             rejected_symbols_count,
@@ -1696,12 +1696,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
         if not pre_rank_enabled:
             logger.info(
-                "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: bee_bite stage1 top_n Ð½Ðµ Ð·Ð°Ð´Ð°Ð½, Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÑ‚ÑÑ Ð²ÐµÑÑŒ stage1-Ð¾Ñ‚Ð±Ð¾Ñ€ (%s)",
+                "запуск-бэктеста: bee_bite stage1 top_n не задан, используется весь stage1-отбор (%s)",
                 len(symbols),
             )
     else:
         logger.info(
-            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank symbols_total=%s Ð²Ð°Ð»Ð¸Ð´Ð½Ñ‹Ð¹_volume_levels_tf=%s rejected=%s top_n=%s Ð²Ñ‹Ð±Ñ€Ð°Ð½Ð¾_Ð¿Ð¾ÑÐ»Ðµ_Ð¾Ñ‚ÑÐµÑ‡ÐµÐ½Ð¸Ñ=%s",
+            "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s rejected=%s top_n=%s выбрано_после_отсечения=%s",
             symbols_before_ranking,
             ranked_symbols_count,
             rejected_symbols_count,
@@ -1710,21 +1710,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
         if not pre_rank_enabled:
             logger.info(
-                "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank top_n Ð½Ðµ Ð·Ð°Ð´Ð°Ð½ Ð¸Ð»Ð¸ <= 0, Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÑ‚ÑÑ Ð¸ÑÑ…Ð¾Ð´Ð½Ñ‹Ð¹ ÑÐ¿Ð¸ÑÐ¾Ðº ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² (%s)",
+                "запуск-бэктеста: pre-rank top_n не задан или <= 0, используется исходный список символов (%s)",
                 len(symbols),
             )
-    logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: pre-rank top-list: %s", top_preview_text)
+    logger.info("запуск-бэктеста: pre-rank top-list: %s", top_preview_text)
 
     if not symbols:
         if strategy_id == "bee_bite":
-            logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ñ€Ð°Ð½Ð½Ð¸Ð¹ Ð²Ñ‹Ñ…Ð¾Ð´, Ð¿Ð¾ÑÐ»Ðµ bee_bite stage1 ÑÐ¿Ð¸ÑÐ¾Ðº ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð¿ÑƒÑÑ‚")
+            logger.info("запуск-бэктеста: ранний выход, после bee_bite stage1 список символов пуст")
         elif ranked_symbols_count == 0:
             logger.info(
-                "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ñ€Ð°Ð½Ð½Ð¸Ð¹ Ð²Ñ‹Ñ…Ð¾Ð´, Ð½ÐµÑ‚ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ñ Ð²Ð°Ð»Ð¸Ð´Ð½Ñ‹Ð¼ Ð¾Ð±ÑŠÑ‘Ð¼Ð¾Ð¼ Ð½Ð° levels_tf=%s",
+                "запуск-бэктеста: ранний выход, нет символов с валидным объёмом на levels_tf=%s",
                 levels_timeframe.value,
             )
         else:
-            logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ñ€Ð°Ð½Ð½Ð¸Ð¹ Ð²Ñ‹Ñ…Ð¾Ð´, Ð¿Ð¾ÑÐ»Ðµ Ð¿Ñ€Ð¸Ð¼ÐµÐ½ÐµÐ½Ð¸Ñ top_n=%s ÑÐ¿Ð¸ÑÐ¾Ðº ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ð¿ÑƒÑÑ‚", top_n)
+            logger.info("запуск-бэктеста: ранний выход, после применения top_n=%s список символов пуст", top_n)
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
@@ -1761,14 +1761,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             progress = (idx / symbols_total) * 100 if symbols_total else 0.0
             eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
             logger.info(
-                "Ð°Ð½Ð°Ð»Ð¸Ð·-ÐºÑÑˆÐ°: Ð¿Ð¾Ð´Ð³Ð¾Ñ‚Ð¾Ð²ÐºÐ°-ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² %s/%s (%.1f%%), eta=%ss",
+                "анализ-кэша: подготовка-символов %s/%s (%.1f%%), eta=%ss",
                 idx,
                 symbols_total,
                 progress,
                 int(eta_seconds),
             )
     if not symbol_frames:
-        logger.info("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÐµÐºÑ‚ÐµÑÑ‚Ð°: Ð½Ðµ ÑƒÐ´Ð°Ð»Ð¾ÑÑŒ Ð¿Ð¾Ð´Ð³Ð¾Ñ‚Ð¾Ð²Ð¸Ñ‚ÑŒ Ð´Ð°Ð½Ð½Ñ‹Ðµ")
+        logger.info("запуск-бектеста: не удалось подготовить данные")
         return 0
 
     strategy = build_strategy(config, logger)
@@ -1779,7 +1779,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     symbols_used_ratio = symbols_used / symbols_total if symbols_total else 0.0
     logger.info(
-        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: ÑÐ²Ð¾Ð´ÐºÐ° Ð¿Ð¾ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð°Ð¼ Ð²ÑÐµÐ³Ð¾=%s Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·Ð¾Ð²Ð°Ð½Ð¾=%s Ð±ÐµÐ·_Ð´Ð°Ð½Ð½Ñ‹Ñ…_levels_tf=%s Ð±ÐµÐ·_Ð´Ð°Ð½Ð½Ñ‹Ñ…_entry_tf=%s",
+        "запуск-бэктеста: сводка по символам всего=%s использовано=%s без_данных_levels_tf=%s без_данных_entry_tf=%s",
         symbols_total,
         symbols_used,
         symbols_missing_levels_tf,
@@ -1787,7 +1787,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     if symbols_total and symbols_used_ratio < 0.2:
         logger.warning(
-            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ð¸ÑÐ¿Ð¾Ð»ÑŒÐ·ÑƒÐµÑ‚ÑÑ Ñ‚Ð¾Ð»ÑŒÐºÐ¾ %.1f%% ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² (%s Ð¸Ð· %s); Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚ Ð±ÑÐºÑ‚ÐµÑÑ‚Ð° Ð¼Ð¾Ð¶ÐµÑ‚ Ð±Ñ‹Ñ‚ÑŒ Ð½ÐµÑ€ÐµÐ¿Ñ€ÐµÐ·ÐµÐ½Ñ‚Ð°Ñ‚Ð¸Ð²Ð½Ñ‹Ð¼",
+            "запуск-бэктеста: используется только %.1f%% символов (%s из %s); результат бэктеста может быть нерепрезентативным",
             symbols_used_ratio * 100,
             symbols_used,
             symbols_total,
@@ -1828,7 +1828,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     median_trades_per_combination = float(results["trades_count"].median()) if not results.empty else 0.0
     logger.info(
-        "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ð²ÑÐµÐ³Ð¾=%s Ð¿Ñ€Ð¸Ð±Ñ‹Ð»ÑŒÐ½Ñ‹Ñ…=%s Ð»ÑƒÑ‡ÑˆÐ¸Ð¹_pf=%.4f ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸Ð¹_ÑÐ¾_ÑÐ´ÐµÐ»ÐºÐ°Ð¼Ð¸=%s ÑÑƒÐ¼Ð¼Ð°_ÑÐ´ÐµÐ»Ð¾Ðº_Ð¿Ð¾_ÑÐµÑ‚ÐºÐµ=%s ÑÑ€ÐµÐ´Ð½ÐµÐµ_ÑÐ´ÐµÐ»Ð¾Ðº_Ð½Ð°_ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸ÑŽ=%.4f Ð¼ÐµÐ´Ð¸Ð°Ð½Ð°_ÑÐ´ÐµÐ»Ð¾Ðº_Ð½Ð°_ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸ÑŽ=%.4f",
+        "запуск-бэктеста: всего=%s прибыльных=%s лучший_pf=%.4f комбинаций_со_сделками=%s сумма_сделок_по_сетке=%s среднее_сделок_на_комбинацию=%.4f медиана_сделок_на_комбинацию=%.4f",
         summary.total_combinations,
         summary.profitable_combinations,
         summary.best_pf,
@@ -1839,7 +1839,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     if summary.best_pf == 0 and total_trades == 0:
         logger.warning(
-            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: Ð¾Ñ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÑŽÑ‚ ÑÐ´ÐµÐ»ÐºÐ¸ Ð¿Ð¾ Ð²ÑÐµÐ¼ ÐºÐ¾Ð¼Ð±Ð¸Ð½Ð°Ñ†Ð¸ÑÐ¼; Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑŒÑ‚Ðµ Ð´Ð¾ÑÑ‚Ð°Ñ‚Ð¾Ñ‡Ð½Ð¾ÑÑ‚ÑŒ Ð¸ÑÑ‚Ð¾Ñ€Ð¸Ð¸ Ð´Ð»Ñ levels_tf=%s Ð¸ ÑÐ¾Ð¾Ñ‚Ð²ÐµÑ‚ÑÑ‚Ð²Ð¸Ðµ Ñ‚Ð°Ð¹Ð¼Ñ„Ñ€ÐµÐ¹Ð¼Ð¾Ð² Ð² ÐºÑÑˆÐµ (%s/%s)",
+            "запуск-бэктеста: отсутствуют сделки по всем комбинациям; проверьте достаточность истории для levels_tf=%s и соответствие таймфреймов в кэше (%s/%s)",
             levels_timeframe.value,
             levels_timeframe.value,
             entry_timeframe.value,
@@ -1848,7 +1848,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
     if should_plot:
         if results.empty:
-            logger.warning("Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: plot=true, Ð½Ð¾ Ñ€ÐµÐ·ÑƒÐ»ÑŒÑ‚Ð°Ñ‚Ñ‹ Ð¿ÑƒÑÑ‚Ñ‹Ðµ")
+            logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
             return 0
 
         if strategy_id == "post_pump_absorption" and (
@@ -1878,7 +1878,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             params_row=best_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
-            log_prefix="Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: plot=true",
+            log_prefix="запуск-бэктеста: plot=true",
         ):
             return 1
     return 0
@@ -2044,7 +2044,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
             {
                 "issue_type": QUALITY_OI_MISSING_COLUMN_ISSUE,
                 "severity": QUALITY_SEVERITY_ERROR,
-                "description": "ÐžÑ‚ÑÑƒÑ‚ÑÑ‚Ð²ÑƒÐµÑ‚ ÐºÐ¾Ð»Ð¾Ð½ÐºÐ° open_interest",
+                "description": "Отсутствует колонка open_interest",
             }
         ]
 
@@ -2056,7 +2056,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
             {
                 "issue_type": QUALITY_OI_MISSING_VALUES_ISSUE,
                 "severity": QUALITY_SEVERITY_WARNING,
-                "description": "Ð•ÑÑ‚ÑŒ ÑÑ‹Ñ€Ñ‹Ðµ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸ open_interest",
+                "description": "Есть сырые пропуски open_interest",
             }
         )
 
@@ -2069,7 +2069,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
                     {
                         "issue_type": QUALITY_OI_LEADING_GAPS_ISSUE,
                         "severity": QUALITY_SEVERITY_WARNING,
-                        "description": "ÐžÐ±Ð½Ð°Ñ€ÑƒÐ¶ÐµÐ½Ñ‹ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸ open_interest Ð² Ð½Ð°Ñ‡Ð°Ð»Ðµ Ñ€ÑÐ´Ð°",
+                        "description": "Обнаружены пропуски open_interest в начале ряда",
                     }
                 )
 
@@ -2087,7 +2087,7 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
                 {
                     "issue_type": QUALITY_OI_STALE_SERIES_ISSUE,
                     "severity": QUALITY_SEVERITY_ERROR,
-                    "description": "open_interest Ð¿Ð¾Ñ‡Ñ‚Ð¸ Ð½Ðµ Ð¼ÐµÐ½ÑÐµÑ‚ÑÑ Ð½Ð° ÑÑ‹Ñ€Ñ‹Ñ… Ð´Ð°Ð½Ð½Ñ‹Ñ…",
+                    "description": "open_interest почти не меняется на сырых данных",
                 }
             )
 
@@ -2097,13 +2097,13 @@ def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
 def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, QualitySymbolStats]) -> list[str]:
     recommendations: list[str] = []
     if summary.gaps_total > 0:
-        recommendations.append("Ð”Ð¾Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ° Ð´Ð¸Ð°Ð¿Ð°Ð·Ð¾Ð½Ð°: Ð·Ð°Ð¿ÑƒÑÑ‚Ð¸Ñ‚Ðµ update-cache Ð´Ð»Ñ ÑÐ¸Ð¼Ð²Ð¾Ð»Ð¾Ð² Ñ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ°Ð¼Ð¸")
+        recommendations.append("Дозагрузка диапазона: запустите update-cache для символов с пропусками")
 
     if any(data.gaps > 0 for data in symbols.values()):
-        recommendations.append("ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ° Ñ‚Ð°Ð¹Ð¼Ñ„Ñ€ÐµÐ¹Ð¼Ð°: ÑƒÐ±ÐµÐ´Ð¸Ñ‚ÐµÑÑŒ, Ñ‡Ñ‚Ð¾ timeframe ÑÐ¾Ð²Ð¿Ð°Ð´Ð°ÐµÑ‚ Ñ ÐºÑÑˆÐµÐ¼")
+        recommendations.append("Проверка таймфрейма: убедитесь, что timeframe совпадает с кэшем")
 
     if summary.issues_total > 0:
-        recommendations.append("Ð”ÐµÐ´ÑƒÐ¿Ð»Ð¸ÐºÐ°Ñ†Ð¸Ñ Ð¸ Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°: Ð¿ÐµÑ€ÐµcÐ¾Ñ…Ñ€Ð°Ð½Ð¸Ñ‚Ðµ Ñ€ÑÐ´Ñ‹ Ñ ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸ÐµÐ¼ Ð´ÑƒÐ±Ð»ÐµÐ¹ Ð¸ Ð°Ð½Ð¾Ð¼Ð°Ð»Ð¸Ð¹")
+        recommendations.append("Дедупликация и очистка: переcохраните ряды с удалением дублей и аномалий")
 
     oi_problem_types = {
         QUALITY_OI_MISSING_COLUMN_ISSUE,
@@ -2112,10 +2112,10 @@ def _build_quality_recommendations(summary: QualitySummary, symbols: dict[str, Q
         QUALITY_OI_STALE_SERIES_ISSUE,
     }
     if any(problem in oi_problem_types for problem in summary.by_issue_type):
-        recommendations.append("ÐŸÑ€Ð¾Ð²ÐµÑ€ÐºÐ° OI-Ð¸ÑÑ‚Ð¾Ñ‡Ð½Ð¸ÐºÐ°: Ð¿ÐµÑ€ÐµÐ·Ð°Ð¿ÑƒÑÑ‚Ð¸Ñ‚Ðµ Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÑƒ OI Ð¸ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÑŒÑ‚Ðµ ÑÑ‹Ñ€Ñ‹Ðµ Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸/Ð°Ð½Ð¾Ð¼Ð°Ð»Ð¸Ð¸")
+        recommendations.append("Проверка OI-источника: перезапустите загрузку OI и проверьте сырые пропуски/аномалии")
 
     if summary.issues_total > 0 or summary.gaps_total > 0:
-        recommendations.append("ÐŸÐ¾Ð²Ñ‚Ð¾Ñ€Ð½Ð°Ñ Ð²Ð°Ð»Ð¸Ð´Ð°Ñ†Ð¸Ñ: Ð¿Ð¾ÑÐ»Ðµ Ð¸ÑÐ¿Ñ€Ð°Ð²Ð»ÐµÐ½Ð¸Ð¹ Ð²Ñ‹Ð¿Ð¾Ð»Ð½Ð¸Ñ‚Ðµ check-quality Ð¿Ð¾Ð²Ñ‚Ð¾Ñ€Ð½Ð¾")
+        recommendations.append("Повторная валидация: после исправлений выполните check-quality повторно")
 
     return recommendations
 
@@ -2149,7 +2149,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
     if not symbols:
-        logger.info("Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: Ð½ÐµÑ‚ Ð´Ð°Ð½Ð½Ñ‹Ñ… Ð´Ð»Ñ Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ¸")
+        logger.info("проверка-качества: нет данных для проверки")
         return 0
 
     validator = DataValidator()
@@ -2164,7 +2164,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     for symbol in symbols:
         frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
         if frame.empty:
-            logger.info(f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: {symbol} Ð¿Ñ€Ð¾Ð¿ÑƒÑ‰ÐµÐ½, Ð¿ÑƒÑÑ‚Ð¾Ð¹ Ð´Ð°Ñ‚Ð°ÑÐµÑ‚")
+            logger.info(f"проверка-качества: {symbol} пропущен, пустой датасет")
             continue
 
         issues = validator.validate(symbol, config.fetch.timeframe, frame)
@@ -2193,8 +2193,8 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
         )
 
         logger.info(
-            f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: {symbol} Ð¿Ñ€Ð¾Ð±Ð»ÐµÐ¼Ñ‹={symbol_total_issues} Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸={len(gaps)} "
-            f"Ð¿Ñ€Ð¾Ð±Ð»ÐµÐ¼Ñ‹_oi={len(oi_quality_issues)}"
+            f"проверка-качества: {symbol} проблемы={symbol_total_issues} пропуски={len(gaps)} "
+            f"проблемы_oi={len(oi_quality_issues)}"
         )
 
     summary = QualitySummary(
@@ -2213,8 +2213,8 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
     _save_quality_report(report, output_path)
 
-    logger.info(f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: Ð¸Ñ‚Ð¾Ð³ Ð¿Ñ€Ð¾Ð±Ð»ÐµÐ¼Ñ‹={report.summary.issues_total} Ð¿Ñ€Ð¾Ð¿ÑƒÑÐºÐ¸={report.summary.gaps_total}")
-    logger.info(f"Ð¿Ñ€Ð¾Ð²ÐµÑ€ÐºÐ°-ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð°: Ð¾Ñ‚Ñ‡ÐµÑ‚ ÑÐ¾Ñ…Ñ€Ð°Ð½ÐµÐ½ {output_path}")
+    logger.info(f"проверка-качества: итог проблемы={report.summary.issues_total} пропуски={report.summary.gaps_total}")
+    logger.info(f"проверка-качества: отчет сохранен {output_path}")
     return 0
 
 
@@ -2225,43 +2225,43 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     cache_dir = config.backtest.cache_dir
     cache_dir_str = str(cache_dir).strip()
     if not cache_dir_str:
-        logger.error("Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð¿ÑƒÑ‚ÑŒ Ðº Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸Ð¸ ÐºÑÑˆÐ° Ð¿ÑƒÑÑ‚Ð¾Ð¹, ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ Ð¾Ñ‚Ð¼ÐµÐ½ÐµÐ½Ð¾")
+        logger.error("очистка-кэша: путь к директории кэша пустой, удаление отменено")
         return 1
 
     resolved_cache_dir = cache_dir.expanduser().resolve()
     home_dir = Path.home().resolve()
     if resolved_cache_dir == Path(resolved_cache_dir.anchor):
-        logger.error(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð¿ÑƒÑ‚ÑŒ '{resolved_cache_dir}' ÑƒÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÑ‚ Ð½Ð° ÐºÐ¾Ñ€ÐµÐ½ÑŒ Ð¤Ð¡, ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ Ð¾Ñ‚Ð¼ÐµÐ½ÐµÐ½Ð¾")
+        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на корень ФС, удаление отменено")
         return 1
 
     if resolved_cache_dir == home_dir:
-        logger.error(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð¿ÑƒÑ‚ÑŒ '{resolved_cache_dir}' ÑƒÐºÐ°Ð·Ñ‹Ð²Ð°ÐµÑ‚ Ð½Ð° Ð´Ð¾Ð¼Ð°ÑˆÐ½ÑŽÑŽ Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸ÑŽ, ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ Ð¾Ñ‚Ð¼ÐµÐ½ÐµÐ½Ð¾")
+        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на домашнюю директорию, удаление отменено")
         return 1
 
-    logger.info(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: ÑƒÐ´Ð°Ð»ÐµÐ½Ð¸Ðµ ÑÐ¾Ð´ÐµÑ€Ð¶Ð¸Ð¼Ð¾Ð³Ð¾ {resolved_cache_dir}")
+    logger.info(f"очистка-кэша: удаление содержимого {resolved_cache_dir}")
     shutil.rmtree(resolved_cache_dir, ignore_errors=True)
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Ð¾Ñ‡Ð¸ÑÑ‚ÐºÐ°-ÐºÑÑˆÐ°: Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸Ñ Ð¿ÐµÑ€ÐµÑÐ¾Ð·Ð´Ð°Ð½Ð° {resolved_cache_dir}")
+    logger.info(f"очистка-кэша: директория пересоздана {resolved_cache_dir}")
     return 0
 
 
 
-# endregion ÐŸÑ€Ð¸Ð²Ð°Ñ‚Ð½Ñ‹Ðµ
+# endregion Приватные
 
-# ÐŸÑƒÐ±Ð»Ð¸Ñ‡Ð½Ñ‹Ðµ Ñ‚Ð¾Ñ‡ÐºÐ¸ Ð²Ñ…Ð¾Ð´Ð°
+# Публичные точки входа
 
 def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
-    """Ð—Ð°Ð¿ÑƒÑÐºÐ°ÐµÑ‚ ÑÑ†ÐµÐ½Ð°Ñ€Ð¸Ð¹ Ð·Ð°Ð³Ñ€ÑƒÐ·ÐºÐ¸ Ñ€Ñ‹Ð½Ð¾Ñ‡Ð½Ñ‹Ñ… Ð´Ð°Ð½Ð½Ñ‹Ñ…."""
+    """Запускает сценарий загрузки рыночных данных."""
     return _run_with_logging("fetch-data", config, lambda: _fetch_data_inner(config, args))
 
 
 def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
-    """ÐžÐ±Ð½Ð¾Ð²Ð»ÑÐµÑ‚ Ð»Ð¾ÐºÐ°Ð»ÑŒÐ½Ñ‹Ð¹ ÐºÑÑˆ Ð´Ð°Ð½Ð½Ñ‹Ñ…."""
+    """Обновляет локальный кэш данных."""
     return _run_with_logging("update-cache", config, lambda: _update_cache_inner(config, args))
 
 
 def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
-    """Ð—Ð°Ð¿ÑƒÑÐºÐ°ÐµÑ‚ Ð±ÑÐºÑ‚ÐµÑÑ‚ Ð¿Ð¾ Ñ‚ÐµÐºÑƒÑ‰ÐµÐ¹ ÐºÐ¾Ð½Ñ„Ð¸Ð³ÑƒÑ€Ð°Ñ†Ð¸Ð¸."""
+    """Запускает бэктест по текущей конфигурации."""
     return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
 
 
@@ -2276,12 +2276,12 @@ def run_ppa_stage(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
-    """ÐŸÑ€Ð¾Ð²ÐµÑ€ÑÐµÑ‚ ÐºÐ°Ñ‡ÐµÑÑ‚Ð²Ð¾ Ð¸ Ñ†ÐµÐ»Ð¾ÑÑ‚Ð½Ð¾ÑÑ‚ÑŒ Ð´Ð°Ð½Ð½Ñ‹Ñ…."""
+    """Проверяет качество и целостность данных."""
     return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
 
 
 def clear_cache(config: AppConfig, args: argparse.Namespace) -> int:
-    """ÐžÑ‡Ð¸Ñ‰Ð°ÐµÑ‚ Ð´Ð¸Ñ€ÐµÐºÑ‚Ð¾Ñ€Ð¸ÑŽ Ð»Ð¾ÐºÐ°Ð»ÑŒÐ½Ð¾Ð³Ð¾ ÐºÑÑˆÐ° Ð¸ Ð¿ÐµÑ€ÐµÑÐ¾Ð·Ð´Ð°Ñ‘Ñ‚ ÐµÑ‘."""
+    """Очищает директорию локального кэша и пересоздаёт её."""
     return _run_with_logging("clear-cache", config, lambda: _clear_cache_inner(config, args))
 
 
