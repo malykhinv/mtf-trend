@@ -62,10 +62,6 @@ Legacy and support commands:
 
 ```bash
 python main.py run-backtest --strategy bee_bite --top-n 50
-python main.py review-stage1 --plot-limit 20
-python main.py review-stage2 --plot-limit 20
-python main.py review-stage3 --plot-limit 20
-python main.py postmortem-stage4
 python main.py check-quality
 python main.py clear-cache
 ```
@@ -109,7 +105,7 @@ python launcher.py --mode fetch-cache --timeframes 1m 3m 5m --skip-open-interest
 - `post_pump_absorption` currently works only in single-timeframe mode: `levels_tf == entry_tf`
 - supported PPA timeframes are `1m`, `3m`, `5m`
 - `1m` data can be fetched without open interest via `--skip-open-interest`
-- `make-report` is part of the older `bee_bite` reporting flow; for PPA use `run-ppa-research`
+- legacy bee_bite review/postmortem CLI commands were removed from the supported user path
 
 ## Strategy Docs
 

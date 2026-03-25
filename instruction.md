@@ -38,7 +38,7 @@
 - current implementation stores per-trade metadata (`setup_type`, entry position in range, aggression strength, stop width, `MFE/MAE`, target hits) and uses it in backtest analytics.
 - current implementation has a dedicated one-command research runner: `run-ppa-research`.
 - `run-ppa-research` is the preferred entry point for PPA analysis; it must run all required micro timeframes (`1m`, `3m`, `5m` by default), export per-timeframe raw results, and build consolidated CSV/JSON/Markdown reports plus PNG charts in one root directory.
-- research artifacts for `post_pump_absorption` must stay strategy-specific and must not be forced through the old bee_bite-only `make-report` model.
+- research artifacts for `post_pump_absorption` must stay strategy-specific and must not be forced through the removed bee_bite reporting path.
 - `fetch-data` and `update-cache` must support explicit `--symbols`, `--timeframes` and `--skip-open-interest`; this is the supported way to build `1m` cache without OI.
 - `launcher.py` must expose the PPA flow as a first-class mode instead of keeping a `bee_bite only` interface.
 
@@ -53,7 +53,7 @@
 ### Правила для правок
 
 1. Новые изменения по поиску частых post-pump входов должны идти в `strategy/post_pump_absorption/`.
-2. `bee_bite` сохраняется как историческая стратегия и набор review-команд; stage-обзоры по ней не удалять без явного запроса.
+2. `bee_bite` сохраняется как историческая стратегия для backtest, но legacy review/postmortem CLI path по ней больше не является поддерживаемым пользовательским интерфейсом.
 3. Для `post_pump_absorption` приоритет у двух сетапов:
    - `LSB` (`local structure break`)
    - `MBB` (`micro base breakout`)
@@ -72,7 +72,6 @@
 - `python main.py run-backtest --strategy post_pump_absorption --ppa-profile balanced`
 - `python main.py run-ppa-research --ppa-profile balanced`
 - `python main.py run-backtest --strategy bee_bite`
-- `python main.py make-report`
 - `python main.py check-quality`
 - `python main.py clear-cache`
 

@@ -58,10 +58,6 @@ from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
-from data.liquidity.bee_bite_stage1_plotter import BeeBiteStage1Plotter
-from data.liquidity.bee_bite_stage2_plotter import BeeBiteStage2Plotter
-from data.liquidity.bee_bite_stage3_plotter import BeeBiteStage3Plotter
-from data.liquidity.bee_bite_stage4_plotter import BeeBiteStage4Plotter
 from data.liquidity.bee_bite_stage1_selector import BeeBiteStage1Result, BeeBiteStage1Selector
 from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
@@ -70,15 +66,10 @@ from data.storage.parquet_storage import ParquetStorage
 from domain.enums.entry_trigger import EntryTrigger
 from domain.enums.exchange import Exchange
 from domain.enums.timeframe import Timeframe
-from domain.models.reporting.backtest_report import BacktestReport
-from domain.models.reporting.backtest_summary import BacktestSummary
-from domain.models.reporting.optimal_parameter_ranges import OptimalParameterRanges
-from domain.models.reporting.profitable_variant import ProfitableVariant
 from domain.models.reporting.quality_report import QualityReport
 from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
-from domain.models.reporting.trade_results_distribution import TradeResultsDistribution
 from strategy.bee_bite import (
     BeeBiteParams,
     BeeBiteStrategy,
@@ -593,6 +584,7 @@ def _build_post_pump_absorption_params_from_row(
     return PostPumpAbsorptionParams(
         profile_id=profile_id,
         symbol=symbol,
+        grid_variant_id=str(row.get("ppa_grid_variant_id", "baseline")),
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
         atr_window_minutes=int(row["ppa_atr_window_minutes"]),
@@ -1361,6 +1353,56 @@ def _resolve_ppa_research_timeframes(args: argparse.Namespace) -> tuple[Timefram
         seen.add(timeframe)
         resolved.append(timeframe)
     return tuple(resolved) if resolved else POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES
+
+
+def _resolve_backtest_timeframes(
+    *,
+    strategy_id: str,
+    args: argparse.Namespace,
+    configured_levels_timeframe: Timeframe,
+    configured_entry_timeframe: Timeframe,
+) -> tuple[Timeframe, Timeframe]:
+    if strategy_id != "post_pump_absorption":
+        levels_timeframe = _resolve_timeframe(
+            getattr(args, "levels_tf", None),
+            fallback=configured_levels_timeframe,
+            argument_name="--levels-tf",
+        )
+        entry_timeframe = _resolve_timeframe(
+            getattr(args, "entry_tf", None),
+            fallback=configured_entry_timeframe,
+            argument_name="--entry-tf",
+        )
+        return levels_timeframe, entry_timeframe
+
+    fallback_entry = configured_entry_timeframe
+    if fallback_entry not in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES:
+        fallback_entry = POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME
+
+    entry_timeframe = _resolve_timeframe(
+        getattr(args, "entry_tf", None),
+        fallback=fallback_entry,
+        argument_name="--entry-tf",
+    )
+    if entry_timeframe not in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES:
+        supported_values = ", ".join(tf.value for tf in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES)
+        raise ValueError(
+            "post_pump_absorption supports only micro timeframes "
+            f"{{{supported_values}}}, got {entry_timeframe.value}"
+        )
+
+    levels_fallback = entry_timeframe if getattr(args, "levels_tf", None) is None else configured_levels_timeframe
+    levels_timeframe = _resolve_timeframe(
+        getattr(args, "levels_tf", None),
+        fallback=levels_fallback,
+        argument_name="--levels-tf",
+    )
+    if levels_timeframe != entry_timeframe:
+        raise ValueError(
+            "post_pump_absorption currently supports only single-timeframe execution: "
+            "--levels-tf must match --entry-tf"
+        )
+    return levels_timeframe, entry_timeframe
 
 
 def _with_review_timeframe(args: argparse.Namespace, timeframe: Timeframe, *, output_path: Path | None = None) -> argparse.Namespace:
@@ -2168,43 +2210,16 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             getattr(args, "ppa_profile", None),
             default=config.strategy.post_pump_absorption_profile,
         )
-        if getattr(args, "entry_tf", None) is None and config.strategy.entry_timeframe not in {
-            *POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES,
-        }:
-            config.strategy.entry_timeframe = POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME
-        if getattr(args, "levels_tf", None) is None:
-            config.strategy.levels_timeframe = config.strategy.entry_timeframe
         if getattr(args, "ppa_deposit", None) is not None:
             config.strategy.post_pump_absorption_deposit = float(args.ppa_deposit)
         if getattr(args, "ppa_risk_pct", None) is not None:
             config.strategy.post_pump_absorption_risk_pct = float(args.ppa_risk_pct)
-    if strategy_id == "post_pump_absorption":
-        entry_timeframe = _resolve_timeframe(
-            getattr(args, "entry_tf", None),
-            fallback=config.strategy.entry_timeframe,
-            argument_name="--entry-tf",
-        )
-        levels_timeframe = _resolve_timeframe(
-            getattr(args, "levels_tf", None),
-            fallback=entry_timeframe,
-            argument_name="--levels-tf",
-        )
-        if levels_timeframe != entry_timeframe:
-            raise ValueError(
-                "post_pump_absorption currently supports only single-timeframe execution: "
-                "--levels-tf must match --entry-tf"
-            )
-    else:
-        levels_timeframe = _resolve_timeframe(
-            getattr(args, "levels_tf", None),
-            fallback=config.strategy.levels_timeframe,
-            argument_name="--levels-tf",
-        )
-        entry_timeframe = _resolve_timeframe(
-            getattr(args, "entry_tf", None),
-            fallback=config.strategy.entry_timeframe,
-            argument_name="--entry-tf",
-        )
+    levels_timeframe, entry_timeframe = _resolve_backtest_timeframes(
+        strategy_id=strategy_id,
+        args=args,
+        configured_levels_timeframe=config.strategy.levels_timeframe,
+        configured_entry_timeframe=config.strategy.entry_timeframe,
+    )
     logger.info(
         "запуск-бэктеста: явный запуск, уровни: %s, входы: %s",
         levels_timeframe.value,
@@ -6791,107 +6806,6 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
 def run_ppa_research(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs post_pump_absorption on multiple micro timeframes and builds research artifacts."""
     return _run_with_logging("run-ppa-research", config, lambda: _run_ppa_research_inner(config, args))
-
-
-def make_report(config: AppConfig, args: argparse.Namespace) -> int:
-    """Формирует итоговый отчёт по результатам."""
-    return _run_with_logging("make-report", config, lambda: _make_report_inner(config, args))
-
-
-def review_stage1(config: AppConfig, args: argparse.Namespace) -> int:
-    """Находит historical stage-1 события и сохраняет review-артефакты."""
-    timeframes = _resolve_review_timeframes(args)
-    if len(timeframes) == 1:
-        return _run_with_logging("review-stage1", config, lambda: _review_stage1_inner(config, args))
-
-    exit_codes: list[int] = []
-    base_output = Path(args.output) if getattr(args, "output", None) else None
-    for timeframe in timeframes:
-        scoped_args = _with_review_timeframe(
-            args,
-            timeframe,
-            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
-        )
-        exit_codes.append(
-            _run_with_logging(
-                f"review-stage1[{timeframe.value}]",
-                config,
-                lambda stage_args=scoped_args: _review_stage1_inner(config, stage_args),
-            )
-        )
-    return max(exit_codes, default=0)
-
-
-def review_stage2(config: AppConfig, args: argparse.Namespace) -> int:
-    """Находит stage-2 структуру и сохраняет review-артефакты."""
-    timeframes = _resolve_review_timeframes(args)
-    if len(timeframes) == 1:
-        return _run_with_logging("review-stage2", config, lambda: _review_stage2_inner(config, args))
-
-    exit_codes: list[int] = []
-    base_output = Path(args.output) if getattr(args, "output", None) else None
-    for timeframe in timeframes:
-        scoped_args = _with_review_timeframe(
-            args,
-            timeframe,
-            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
-        )
-        exit_codes.append(
-            _run_with_logging(
-                f"review-stage2[{timeframe.value}]",
-                config,
-                lambda stage_args=scoped_args: _review_stage2_inner(config, stage_args),
-            )
-        )
-    return max(exit_codes, default=0)
-
-
-def review_stage3(config: AppConfig, args: argparse.Namespace) -> int:
-    """Находит stage-3 sweep+reclaim и сохраняет review-артефакты."""
-    timeframes = _resolve_review_timeframes(args)
-    if len(timeframes) == 1:
-        return _run_with_logging("review-stage3", config, lambda: _review_stage3_inner(config, args))
-
-    exit_codes: list[int] = []
-    base_output = Path(args.output) if getattr(args, "output", None) else None
-    for timeframe in timeframes:
-        scoped_args = _with_review_timeframe(
-            args,
-            timeframe,
-            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
-        )
-        exit_codes.append(
-            _run_with_logging(
-                f"review-stage3[{timeframe.value}]",
-                config,
-                lambda stage_args=scoped_args: _review_stage3_inner(config, stage_args),
-            )
-        )
-    return max(exit_codes, default=0)
-
-
-def postmortem_stage4(config: AppConfig, args: argparse.Namespace) -> int:
-    """Собирает stage-4 postmortem по валидным stage-3 setups и сетке minimal_rr."""
-    timeframes = _resolve_review_timeframes(args)
-    if len(timeframes) == 1:
-        return _run_with_logging("postmortem-stage4", config, lambda: _postmortem_stage4_inner(config, args, logger_name="postmortem-stage4"))
-
-    exit_codes: list[int] = []
-    base_output = Path(args.output) if getattr(args, "output", None) else None
-    for timeframe in timeframes:
-        scoped_args = _with_review_timeframe(
-            args,
-            timeframe,
-            output_path=_append_timeframe_suffix(base_output, timeframe) if base_output is not None else None,
-        )
-        exit_codes.append(
-            _run_with_logging(
-                f"postmortem-stage4[{timeframe.value}]",
-                config,
-                lambda stage_args=scoped_args, command_name=f"postmortem-stage4[{timeframe.value}]": _postmortem_stage4_inner(config, stage_args, logger_name=command_name),
-            )
-        )
-    return max(exit_codes, default=0)
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:

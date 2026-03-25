@@ -35,6 +35,30 @@ Important first-version constraints:
 - no portfolio ranking is used yet; the first iteration runs per symbol.
 - the strategy is designed to maximize candidate frequency first, then tighten filters in later iterations.
 
+## Parameter Grid
+
+The strategy no longer runs a single baseline combination per profile.
+
+Each PPA profile now expands into a research grid of named variants around the same thesis, for example:
+
+- `baseline`
+- `early_absorption`
+- `clean_break`
+- `continuation_push`
+- `mean_revert_pop`
+- `strict_support`
+- `late_confirmation`
+- `wide_stop_runner`
+
+Each variant moves only a small set of parameters:
+
+- flow strictness (`taker_ratio_threshold`, `taker_volume_mult`)
+- lower-zone and entry position tolerance
+- structure confirmation speed (`structure_break_minutes`, `micro_base_minutes`, `entry_break_buffer_atr`)
+- local stop regime (`stop_buffer_atr`, stop-width limits)
+
+Results export `ppa_grid_variant_id`, so research reports can be compared by named setup family instead of one anonymous baseline row.
+
 ## Research Runner
 
 The preferred entry point for analysis is the dedicated research command:

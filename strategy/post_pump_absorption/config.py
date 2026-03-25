@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from math import ceil
 from typing import Literal
 
@@ -28,6 +28,7 @@ POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = (
 class PostPumpAbsorptionParams:
     profile_id: PostPumpAbsorptionProfileId
     symbol: str
+    grid_variant_id: str = "baseline"
     levels_timeframe: Timeframe = POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME
     entry_timeframe: Timeframe = POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME
     ppa_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
@@ -76,6 +77,7 @@ class PostPumpAbsorptionRuntime:
 POST_PUMP_ABSORPTION_BASELINES: dict[PostPumpAbsorptionProfileId, PostPumpAbsorptionParams] = {
     "loose": PostPumpAbsorptionParams(
         profile_id="loose",
+        grid_variant_id="baseline",
         symbol="",
         pump_min_move_atr=1.4,
         pump_volume_mult=1.05,
@@ -100,10 +102,12 @@ POST_PUMP_ABSORPTION_BASELINES: dict[PostPumpAbsorptionProfileId, PostPumpAbsorp
     ),
     "balanced": PostPumpAbsorptionParams(
         profile_id="balanced",
+        grid_variant_id="baseline",
         symbol="",
     ),
     "strict": PostPumpAbsorptionParams(
         profile_id="strict",
+        grid_variant_id="baseline",
         symbol="",
         pump_min_move_atr=2.0,
         pump_volume_mult=1.25,
@@ -245,7 +249,124 @@ def build_post_pump_absorption_grid(
     *,
     profile_id: PostPumpAbsorptionProfileId,
 ) -> list[PostPumpAbsorptionParams]:
-    return [POST_PUMP_ABSORPTION_BASELINES[profile_id]]
+    base = POST_PUMP_ABSORPTION_BASELINES[profile_id]
+    float_precision = 6
+
+    def _clamp(value: float, lower: float, upper: float) -> float:
+        return round(min(max(value, lower), upper), float_precision)
+
+    def _minutes(value: float, minimum: int, maximum: int) -> int:
+        return int(min(max(round(value), minimum), maximum))
+
+    flow_variants = (
+        ("flow_loose", {
+            "taker_ratio_threshold": _clamp(base.taker_ratio_threshold - 0.03, 0.0, 1.0),
+            "taker_volume_mult": _clamp(base.taker_volume_mult - 0.15, 0.01, 5.0),
+        }),
+        ("flow_base", {}),
+        ("flow_strict", {
+            "taker_ratio_threshold": _clamp(base.taker_ratio_threshold + 0.03, 0.0, 1.0),
+            "taker_volume_mult": _clamp(base.taker_volume_mult + 0.20, 0.01, 5.0),
+        }),
+    )
+    location_variants = (
+        ("zone_tight", {
+            "lower_zone_fraction": _clamp(base.lower_zone_fraction - 0.05, 0.10, 0.60),
+            "max_entry_range_fraction": _clamp(base.max_entry_range_fraction - 0.05, 0.10, 1.0),
+        }),
+        ("zone_base", {}),
+        ("zone_loose", {
+            "lower_zone_fraction": _clamp(base.lower_zone_fraction + 0.05, 0.10, 0.60),
+            "max_entry_range_fraction": _clamp(base.max_entry_range_fraction + 0.05, 0.10, 1.0),
+        }),
+    )
+    confirmation_variants = (
+        ("confirm_fast", {
+            "structure_break_minutes": _minutes(base.structure_break_minutes * 0.8, 3, 240),
+            "micro_base_minutes": _minutes(base.micro_base_minutes * 0.8, 3, 240),
+            "entry_break_buffer_atr": _clamp(base.entry_break_buffer_atr * 0.7, 0.0, 1.0),
+        }),
+        ("confirm_base", {}),
+        ("confirm_slow", {
+            "structure_break_minutes": _minutes(base.structure_break_minutes * 1.25, 3, 240),
+            "micro_base_minutes": _minutes(base.micro_base_minutes * 1.25, 3, 240),
+            "entry_break_buffer_atr": _clamp(base.entry_break_buffer_atr * 1.3, 0.0, 1.0),
+        }),
+    )
+    stop_variants = (
+        ("stop_tight", {
+            "stop_buffer_atr": _clamp(base.stop_buffer_atr * 0.8, 0.0, 1.0),
+            "min_stop_atr": _clamp(base.min_stop_atr * 0.85, 0.01, 2.0),
+            "max_stop_range_fraction": _clamp(base.max_stop_range_fraction - 0.05, 0.10, 1.0),
+        }),
+        ("stop_base", {}),
+        ("stop_wide", {
+            "stop_buffer_atr": _clamp(base.stop_buffer_atr * 1.2, 0.0, 1.0),
+            "max_stop_atr": _clamp(base.max_stop_atr * 1.1, 0.01, 5.0),
+            "max_stop_range_fraction": _clamp(base.max_stop_range_fraction + 0.05, 0.10, 1.0),
+        }),
+    )
+
+    selected_combinations = (
+        ("baseline", ("flow_base", "zone_base", "confirm_base", "stop_base")),
+        ("early_absorption", ("flow_loose", "zone_loose", "confirm_fast", "stop_tight")),
+        ("clean_break", ("flow_strict", "zone_tight", "confirm_base", "stop_base")),
+        ("continuation_push", ("flow_strict", "zone_tight", "confirm_slow", "stop_wide")),
+        ("mean_revert_pop", ("flow_loose", "zone_loose", "confirm_fast", "stop_base")),
+        ("strict_support", ("flow_base", "zone_tight", "confirm_base", "stop_tight")),
+        ("late_confirmation", ("flow_base", "zone_base", "confirm_slow", "stop_base")),
+        ("wide_stop_runner", ("flow_base", "zone_base", "confirm_base", "stop_wide")),
+        ("aggressive_trigger", ("flow_loose", "zone_base", "confirm_fast", "stop_base")),
+        ("high_quality_only", ("flow_strict", "zone_tight", "confirm_slow", "stop_tight")),
+        ("loose_zone_confirmed", ("flow_base", "zone_loose", "confirm_slow", "stop_base")),
+        ("tape_follow", ("flow_strict", "zone_base", "confirm_fast", "stop_base")),
+        ("base_with_tight_risk", ("flow_base", "zone_base", "confirm_base", "stop_tight")),
+    )
+
+    variant_maps = {
+        "flow": {name: updates for name, updates in flow_variants},
+        "location": {name: updates for name, updates in location_variants},
+        "confirmation": {name: updates for name, updates in confirmation_variants},
+        "stop": {name: updates for name, updates in stop_variants},
+    }
+
+    grid: list[PostPumpAbsorptionParams] = []
+    seen_signatures: set[tuple[tuple[str, object], ...]] = set()
+    for variant_id, (flow_name, location_name, confirmation_name, stop_name) in selected_combinations:
+        merged_updates: dict[str, object] = {}
+        for updates in (
+            variant_maps["flow"][flow_name],
+            variant_maps["location"][location_name],
+            variant_maps["confirmation"][confirmation_name],
+            variant_maps["stop"][stop_name],
+        ):
+            merged_updates.update(updates)
+        candidate = replace(base, grid_variant_id=variant_id, **merged_updates)
+        validate_post_pump_absorption_params(candidate)
+        signature = tuple(
+            sorted(
+                (
+                    field.name,
+                    getattr(candidate, field.name),
+                )
+                for field in fields(candidate)
+                if field.name
+                not in {
+                    "symbol",
+                    "levels_timeframe",
+                    "entry_timeframe",
+                    "ppa_deposit",
+                    "ppa_risk_pct",
+                    "ppa_r_trade",
+                    "grid_variant_id",
+                }
+            )
+        )
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        grid.append(candidate)
+    return grid
 
 
 def with_post_pump_absorption_risk(

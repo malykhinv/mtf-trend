@@ -1,1 +1,9 @@
 /.env
+/.idea/
+/.inspection/
+/.output/
+/.pytest_cache/
+/.venv/
+__pycache__/
+*/__pycache__/
+*.py[cod]

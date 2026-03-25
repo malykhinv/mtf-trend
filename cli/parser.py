@@ -117,40 +117,6 @@ def build_parser() -> argparse.ArgumentParser:
     ppa_research.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
     ppa_research.add_argument("--output-dir", default=None, help="Root directory for research results")
 
-    report = subparsers.add_parser("make-report", help="Build a JSON report from backtest results")
-    report.add_argument("--input", default=None, help="Path to input CSV with results")
-    report.add_argument("--output", default=None, help="Path to output JSON report")
-
-    stage1 = subparsers.add_parser("review-stage1", help="Find historical bee_bite stage-1 events and save review PNGs")
-    stage1.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    stage1.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
-    stage1.add_argument("--tf-all", action="store_true", help="Run review for 15m, 10m, 5m and 3m")
-    stage1.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-1 review plots")
-    stage1.add_argument("--output", default=None, help="Path to CSV with detected stage-1 events")
-
-    stage2 = subparsers.add_parser("review-stage2", help="Find bee_bite stage-2 structure and save PNGs with balance boxes")
-    stage2.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    stage2.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
-    stage2.add_argument("--tf-all", action="store_true", help="Run review for 15m, 10m, 5m and 3m")
-    stage2.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-2 review plots")
-    stage2.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
-    stage2.add_argument("--output", default=None, help="Path to CSV with detected stage-2 structures")
-
-    stage3 = subparsers.add_parser("review-stage3", help="Find bee_bite stage-3 sweeps and save PNGs with reclaim review")
-    stage3.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    stage3.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
-    stage3.add_argument("--tf-all", action="store_true", help="Run review for 15m, 10m, 5m and 3m")
-    stage3.add_argument("--review-mode", choices=["snapshot", "evolution"], default="snapshot", help="Snapshot plots or candle-by-candle stage-2/stage-3 backtest")
-    stage3.add_argument("--plot-limit", type=_positive_int_for("--plot-limit"), default=20, help="Maximum number of stage-3 review plots")
-    stage3.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
-    stage3.add_argument("--output", default=None, help="Path to CSV with detected stage-3 sweeps")
-
-    stage4 = subparsers.add_parser("postmortem-stage4", help="Run stage-4 postmortem on the built-in parameter grid")
-    stage4.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    stage4.add_argument("--tf", default=None, help="Review timeframe, e.g. 15m, 5m, 1m")
-    stage4.add_argument("--tf-all", action="store_true", help="Run postmortem for 15m, 10m, 5m and 3m")
-    stage4.add_argument("--output", default=None, help="Path to CSV with stage-4 postmortem results")
-
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -165,11 +131,6 @@ def resolve_handler(command_name: str) -> Handler:
         "update-cache": commands.update_cache,
         "run-backtest": commands.run_backtest,
         "run-ppa-research": commands.run_ppa_research,
-        "make-report": commands.make_report,
-        "review-stage1": commands.review_stage1,
-        "review-stage2": commands.review_stage2,
-        "review-stage3": commands.review_stage3,
-        "postmortem-stage4": commands.postmortem_stage4,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }

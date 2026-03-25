@@ -1,6 +1,7 @@
 import argparse
 
 import launcher
+import pytest
 from cli import commands
 from cli.parser import build_parser, resolve_handler
 from domain.enums.timeframe import Timeframe
@@ -88,6 +89,16 @@ def test_resolve_handler_supports_run_ppa_research() -> None:
     assert handler is commands.run_ppa_research
 
 
+def test_cli_parser_rejects_removed_legacy_review_command() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["review-stage1"])
+
+
+def test_launcher_parser_rejects_removed_legacy_mode() -> None:
+    with pytest.raises(SystemExit):
+        launcher._build_parser().parse_args(["--mode", "review-stage1"])
+
+
 def test_resolve_fetch_timeframes_preserves_user_order() -> None:
     args = argparse.Namespace(timeframes=["1m", "5m", "3m"])
 
@@ -96,9 +107,31 @@ def test_resolve_fetch_timeframes_preserves_user_order() -> None:
     assert resolved == (Timeframe.M1, Timeframe.M5, Timeframe.M3)
 
 
-def test_launcher_task_namespace_parses_false_tf_all_from_batch_payload() -> None:
+def test_launcher_task_namespace_preserves_skip_open_interest_from_batch_payload() -> None:
     cli_args = launcher._build_parser().parse_args(["--mode", launcher.MODE_PPA_RESEARCH])
 
-    task_args = launcher._task_namespace({"tf_all": "false"}, cli_args)
+    task_args = launcher._task_namespace({"skip_open_interest": "true"}, cli_args)
 
-    assert task_args.tf_all is False
+    assert task_args.skip_open_interest is True
+
+
+def test_resolve_backtest_timeframes_normalizes_ppa_to_micro_single_tf() -> None:
+    levels_tf, entry_tf = commands._resolve_backtest_timeframes(
+        strategy_id="post_pump_absorption",
+        args=argparse.Namespace(entry_tf=None, levels_tf=None),
+        configured_levels_timeframe=Timeframe.D1,
+        configured_entry_timeframe=Timeframe.M15,
+    )
+
+    assert levels_tf == Timeframe.M3
+    assert entry_tf == Timeframe.M3
+
+
+def test_resolve_backtest_timeframes_rejects_non_micro_ppa_entry_tf() -> None:
+    with pytest.raises(ValueError, match="supports only micro timeframes"):
+        commands._resolve_backtest_timeframes(
+            strategy_id="post_pump_absorption",
+            args=argparse.Namespace(entry_tf="15m", levels_tf="15m"),
+            configured_levels_timeframe=Timeframe.D1,
+            configured_entry_timeframe=Timeframe.M15,
+        )

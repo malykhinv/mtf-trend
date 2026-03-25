@@ -15,11 +15,6 @@ MODE_FETCH_CACHE = "fetch-cache"
 MODE_UPDATE_CACHE = "update-cache"
 MODE_BACKTEST = "analyze-cache"
 MODE_PPA_RESEARCH = "ppa-research"
-MODE_REPORT = "make-report"
-MODE_STAGE1_REVIEW = "review-stage1"
-MODE_STAGE2_REVIEW = "review-stage2"
-MODE_STAGE3_REVIEW = "review-stage3"
-MODE_STAGE4_POSTMORTEM = "postmortem-stage4"
 MODE_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
@@ -28,11 +23,6 @@ MODE_LABELS: dict[str, str] = {
     MODE_UPDATE_CACHE: "Cache update",
     MODE_BACKTEST: "Analyze cache with strategy",
     MODE_PPA_RESEARCH: "Run PPA research",
-    MODE_REPORT: "Build report",
-    MODE_STAGE1_REVIEW: "Review historical stage-1",
-    MODE_STAGE2_REVIEW: "Review stage-2 balances",
-    MODE_STAGE3_REVIEW: "Review stage-3 sweeps",
-    MODE_STAGE4_POSTMORTEM: "Postmortem stage-4",
     MODE_QUALITY: "Check cache quality",
     MODE_CLEAR_CACHE: "Clear cache",
 }
@@ -77,10 +67,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-open-interest", action="store_true", default=False, help="Skip open interest fetching for fetch/update")
     parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
     parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    parser.add_argument("--tf", default=None, help="Review timeframe for stage review modes")
-    parser.add_argument("--tf-all", action="store_true", default=False, help="Run review/postmortem for 15m, 10m, 5m and 3m")
-    parser.add_argument("--review-mode", choices=["snapshot", "evolution"], default="snapshot", help="Review mode for review-stage3")
-    parser.add_argument("--plot-scope", choices=["latest", "all"], default=None, help="Plot only the latest setup or all found setups")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
     parser.add_argument("--strategy", choices=["bee_bite", "post_pump_absorption"], default=None, help="Strategy id for analyze-cache mode")
@@ -94,9 +80,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
     parser.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
     parser.add_argument("--output-dir", default=None, help="Directory for diagnostic files")
-    parser.add_argument("--plot-limit", type=int, default=20, help="Maximum number of review plots")
-    parser.add_argument("--limit", type=int, default=None, help="Limit number of candles/events")
-    parser.add_argument("--input", default=None, help="Input CSV for report")
     parser.add_argument("--output", default=None, help="Output JSON/CSV path")
     parser.add_argument("--plot", default=None, help="Save diagnostic files for the best combination (true/false)")
     parser.add_argument("--id", type=int, default=None, help="Combination ID for plot-from-results mode")
@@ -114,10 +97,6 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         skip_open_interest=_to_bool(task.get("skip_open_interest"), fallback=cli_args.skip_open_interest) if "skip_open_interest" in task else cli_args.skip_open_interest,
         end_timestamp_ms=task.get("end_timestamp_ms", cli_args.end_timestamp_ms),
         symbols=task.get("symbols", cli_args.symbols),
-        tf=task.get("tf", cli_args.tf),
-        tf_all=_to_bool(task.get("tf_all"), fallback=cli_args.tf_all) if "tf_all" in task else cli_args.tf_all,
-        review_mode=task.get("review_mode", cli_args.review_mode),
-        plot_scope=task.get("plot_scope", cli_args.plot_scope),
         levels_tf=task.get("levels_tf", cli_args.levels_tf),
         entry_tf=task.get("entry_tf", cli_args.entry_tf),
         strategy=task.get("strategy", cli_args.strategy),
@@ -131,9 +110,6 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         ppa_deposit=float(task["ppa_deposit"]) if "ppa_deposit" in task and task.get("ppa_deposit") is not None else cli_args.ppa_deposit,
         ppa_risk_pct=float(task["ppa_risk_pct"]) if "ppa_risk_pct" in task and task.get("ppa_risk_pct") is not None else cli_args.ppa_risk_pct,
         output_dir=task.get("output_dir", cli_args.output_dir),
-        plot_limit=int(task["plot_limit"]) if "plot_limit" in task and task.get("plot_limit") is not None else cli_args.plot_limit,
-        limit=int(task["limit"]) if "limit" in task and task.get("limit") is not None else cli_args.limit,
-        input=task.get("input", cli_args.input),
         output=task.get("output", cli_args.output),
         results_input=task.get("results_input", cli_args.results_input),
         plot=_to_bool(task.get("plot"), fallback=cli_args.plot) if "plot" in task else _to_bool(cli_args.plot, fallback=False),
@@ -148,11 +124,6 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_UPDATE_CACHE: commands.update_cache,
         MODE_BACKTEST: commands.run_backtest,
         MODE_PPA_RESEARCH: commands.run_ppa_research,
-        MODE_REPORT: commands.make_report,
-        MODE_STAGE1_REVIEW: commands.review_stage1,
-        MODE_STAGE2_REVIEW: commands.review_stage2,
-        MODE_STAGE3_REVIEW: commands.review_stage3,
-        MODE_STAGE4_POSTMORTEM: commands.postmortem_stage4,
         MODE_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
     }

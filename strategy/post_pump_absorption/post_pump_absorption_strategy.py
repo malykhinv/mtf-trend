@@ -62,6 +62,7 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
     def params_to_row(self, params: PostPumpAbsorptionParams) -> dict[str, int | float | str | None]:
         return {
             "ppa_profile_id": params.profile_id,
+            "ppa_grid_variant_id": params.grid_variant_id,
             "ppa_atr_window_minutes": params.atr_window_minutes,
             "ppa_pump_window_minutes": params.pump_window_minutes,
             "ppa_pump_baseline_window_minutes": params.pump_baseline_window_minutes,

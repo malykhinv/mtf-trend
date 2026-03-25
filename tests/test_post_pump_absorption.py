@@ -10,6 +10,7 @@ from strategy.factory import build_strategy
 from strategy.post_pump_absorption.config import (
     PostPumpAbsorptionParams,
     PostPumpAbsorptionRuntime,
+    build_post_pump_absorption_grid,
     build_post_pump_absorption_runtime,
 )
 from strategy.post_pump_absorption.engine import PostPumpAbsorptionEngine
@@ -376,3 +377,11 @@ def test_build_strategy_supports_post_pump_absorption() -> None:
     strategy = build_strategy(config)
 
     assert strategy.__class__.__name__ == "PostPumpAbsorptionStrategy"
+
+
+def test_post_pump_absorption_grid_has_multiple_named_variants() -> None:
+    grid = build_post_pump_absorption_grid(profile_id="balanced")
+
+    assert len(grid) >= 10
+    assert len({params.grid_variant_id for params in grid}) == len(grid)
+    assert any(params.grid_variant_id == "baseline" for params in grid)

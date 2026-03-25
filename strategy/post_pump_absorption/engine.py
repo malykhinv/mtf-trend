@@ -37,6 +37,26 @@ class PriceRow:
 
 
 @dataclass(slots=True)
+class MarketSeries:
+    rows: list[PriceRow]
+    timestamps: np.ndarray
+    opens: np.ndarray
+    highs: np.ndarray
+    lows: np.ndarray
+    closes: np.ndarray
+    volumes: np.ndarray
+    atr14: np.ndarray
+    taker_buy_ratio_resolved: np.ndarray
+    taker_buy_volume_resolved: np.ndarray
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def row(self, idx: int) -> PriceRow:
+        return self.rows[idx]
+
+
+@dataclass(slots=True)
 class PumpContext:
     pump_idx: int
     pump_high: float
@@ -184,8 +204,8 @@ class PostPumpAbsorptionEngine:
             self._last_generation_diagnostics = diagnostics
             return []
 
-        rows = self._build_price_rows(enriched)
-        if not rows:
+        market = self._build_market_series(enriched)
+        if not market.rows:
             self._last_generation_diagnostics = diagnostics
             return []
 
@@ -198,17 +218,17 @@ class PostPumpAbsorptionEngine:
             20,
         )
         max_entry_offset = max(runtime.range_min_bars, 2)
-        while i < len(rows) - max_entry_offset:
-            pump_ctx = self._detect_pump(rows=rows, idx=i, params=params, runtime=runtime)
+        while i < len(market) - max_entry_offset:
+            pump_ctx = self._detect_pump(market=market, idx=i, params=params, runtime=runtime)
             if pump_ctx is None:
                 i += 1
                 continue
 
-            pump_ctx = self._refine_pump_context(rows=rows, pump_ctx=pump_ctx, runtime=runtime)
+            pump_ctx = self._refine_pump_context(market=market, pump_ctx=pump_ctx, runtime=runtime)
 
             diagnostics["pumps_found"] = int(diagnostics.get("pumps_found", 0)) + 1
             regime_trades, regime_diagnostics, next_i = self._scan_pump_regime(
-                rows=rows,
+                market=market,
                 pump_ctx=pump_ctx,
                 params=params,
                 runtime=runtime,
@@ -283,8 +303,8 @@ class PostPumpAbsorptionEngine:
         return bool(usable.any())
 
     @staticmethod
-    def _build_price_rows(frame: pd.DataFrame) -> list[PriceRow]:
-        return [
+    def _build_market_series(frame: pd.DataFrame) -> MarketSeries:
+        rows = [
             PriceRow(
                 timestamp=int(row.timestamp),
                 open=float(row.open),
@@ -298,11 +318,23 @@ class PostPumpAbsorptionEngine:
             )
             for row in frame.itertuples(index=False)
         ]
+        return MarketSeries(
+            rows=rows,
+            timestamps=frame["timestamp"].to_numpy(dtype=np.int64, copy=True),
+            opens=frame["open"].to_numpy(dtype=np.float64, copy=True),
+            highs=frame["high"].to_numpy(dtype=np.float64, copy=True),
+            lows=frame["low"].to_numpy(dtype=np.float64, copy=True),
+            closes=frame["close"].to_numpy(dtype=np.float64, copy=True),
+            volumes=frame["volume"].to_numpy(dtype=np.float64, copy=True),
+            atr14=frame["atr14"].to_numpy(dtype=np.float64, copy=True),
+            taker_buy_ratio_resolved=frame["taker_buy_ratio_resolved"].to_numpy(dtype=np.float64, copy=True),
+            taker_buy_volume_resolved=frame["taker_buy_volume_resolved"].to_numpy(dtype=np.float64, copy=True),
+        )
 
     def _scan_pump_regime(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         pump_ctx: PumpContext,
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
@@ -312,17 +344,16 @@ class PostPumpAbsorptionEngine:
         latest_exit_idx = pump_ctx.pump_idx
 
         range_start_idx = pump_ctx.pump_idx + 1
-        max_scan_idx = min(pump_ctx.pump_idx + runtime.range_max_bars, len(rows) - 2)
+        max_scan_idx = min(pump_ctx.pump_idx + runtime.range_max_bars, len(market) - 2)
         first_entry_idx = range_start_idx + runtime.range_min_bars
         if first_entry_idx > max_scan_idx:
             return trades, diagnostics, max_scan_idx + 1
 
-        locked_window = rows[range_start_idx:first_entry_idx]
-        if len(locked_window) < runtime.range_min_bars:
+        if (first_entry_idx - range_start_idx) < runtime.range_min_bars:
             return trades, diagnostics, max_scan_idx + 1
 
-        range_low = min(row.low for row in locked_window)
-        range_high = max(row.high for row in locked_window)
+        range_low = float(market.lows[range_start_idx:first_entry_idx].min())
+        range_high = float(market.highs[range_start_idx:first_entry_idx].max())
         last_locked_idx = first_entry_idx - 1
         entry_idx = first_entry_idx
 
@@ -339,10 +370,10 @@ class PostPumpAbsorptionEngine:
                 break
 
             diagnostics["range_candidates"] = int(diagnostics.get("range_candidates", 0)) + 1
-            current_row = rows[entry_idx]
+            current_row = market.row(entry_idx)
             if current_row.close > range_ctx.lower_zone_high and current_row.low > range_ctx.lower_zone_high:
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
-                    rows=rows,
+                    market=market,
                     range_low=range_low,
                     range_high=range_high,
                     last_locked_idx=last_locked_idx,
@@ -352,10 +383,10 @@ class PostPumpAbsorptionEngine:
                 continue
 
             diagnostics["lower_zone_hits"] = int(diagnostics.get("lower_zone_hits", 0)) + 1
-            aggression = self._measure_aggression(rows=rows, idx=entry_idx, params=params, runtime=runtime)
+            aggression = self._measure_aggression(market=market, idx=entry_idx, params=params, runtime=runtime)
             if aggression is None:
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
-                    rows=rows,
+                    market=market,
                     range_low=range_low,
                     range_high=range_high,
                     last_locked_idx=last_locked_idx,
@@ -366,7 +397,7 @@ class PostPumpAbsorptionEngine:
 
             diagnostics["aggression_hits"] = int(diagnostics.get("aggression_hits", 0)) + 1
             setup = self._detect_entry_setup(
-                rows=rows,
+                market=market,
                 pump_ctx=pump_ctx,
                 range_ctx=range_ctx,
                 aggression=aggression,
@@ -376,7 +407,7 @@ class PostPumpAbsorptionEngine:
             )
             if setup is None:
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
-                    rows=rows,
+                    market=market,
                     range_low=range_low,
                     range_high=range_high,
                     last_locked_idx=last_locked_idx,
@@ -388,7 +419,7 @@ class PostPumpAbsorptionEngine:
             setup_key = "lsb_hits" if setup.setup_type == "LSB" else "mbb_hits"
             diagnostics[setup_key] = int(diagnostics.get(setup_key, 0)) + 1
             trade, exit_idx = self._simulate_trade(
-                rows=rows,
+                market=market,
                 entry_idx=entry_idx,
                 setup=setup,
                 pump_ctx=pump_ctx,
@@ -397,7 +428,7 @@ class PostPumpAbsorptionEngine:
             )
             if trade is None:
                 range_low, range_high, last_locked_idx = self._extend_locked_range(
-                    rows=rows,
+                    market=market,
                     range_low=range_low,
                     range_high=range_high,
                     last_locked_idx=last_locked_idx,
@@ -421,7 +452,7 @@ class PostPumpAbsorptionEngine:
                 return trades, diagnostics, max(max_scan_idx + 1, latest_exit_idx + 1)
 
             range_low, range_high, last_locked_idx = self._extend_locked_range(
-                rows=rows,
+                market=market,
                 range_low=range_low,
                 range_high=range_high,
                 last_locked_idx=last_locked_idx,
@@ -434,7 +465,7 @@ class PostPumpAbsorptionEngine:
     @staticmethod
     def _extend_locked_range(
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         range_low: float,
         range_high: float,
         last_locked_idx: int,
@@ -443,20 +474,15 @@ class PostPumpAbsorptionEngine:
         if next_locked_idx <= last_locked_idx:
             return range_low, range_high, last_locked_idx
 
-        updated_low = range_low
-        updated_high = range_high
-        updated_idx = last_locked_idx
-        for idx in range(last_locked_idx + 1, next_locked_idx + 1):
-            row = rows[idx]
-            updated_low = min(updated_low, row.low)
-            updated_high = max(updated_high, row.high)
-            updated_idx = idx
-        return updated_low, updated_high, updated_idx
+        updated_slice = slice(last_locked_idx + 1, next_locked_idx + 1)
+        updated_low = min(range_low, float(market.lows[updated_slice].min()))
+        updated_high = max(range_high, float(market.highs[updated_slice].max()))
+        return updated_low, updated_high, next_locked_idx
 
     def _detect_pump(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         idx: int,
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
@@ -467,31 +493,35 @@ class PostPumpAbsorptionEngine:
         if pump_start_idx < 1 or baseline_start_idx < 0:
             return None
 
-        recent = rows[pump_start_idx: idx + 1]
-        baseline = rows[baseline_start_idx: baseline_end_idx + 1]
-        if not baseline or not recent:
+        baseline_slice = slice(baseline_start_idx, baseline_end_idx + 1)
+        recent_slice = slice(pump_start_idx, idx + 1)
+        baseline_atr = market.atr14[baseline_slice]
+        recent_highs = market.highs[recent_slice]
+        if baseline_atr.size == 0 or recent_highs.size == 0:
             return None
 
-        atr_values = [row.atr14 for row in baseline if row.atr14 > 0.0]
-        if not atr_values:
+        atr_values = baseline_atr[baseline_atr > 0.0]
+        if atr_values.size == 0:
             return None
         atr_bg = float(np.median(atr_values))
         if atr_bg <= 0.0:
             return None
 
-        baseline_volumes = [row.volume for row in baseline if row.volume > 0.0]
-        if not baseline_volumes:
+        baseline_volumes = market.volumes[baseline_slice]
+        baseline_volumes = baseline_volumes[baseline_volumes > 0.0]
+        if baseline_volumes.size == 0:
             return None
         baseline_volume = float(np.median(baseline_volumes))
-        pump_volume = float(np.mean([row.volume for row in recent]))
+        pump_volume = float(np.mean(market.volumes[recent_slice]))
         if baseline_volume <= 0.0 or pump_volume < (params.pump_volume_mult * baseline_volume):
             return None
 
-        pump_high = max(row.high for row in recent)
-        pump_peak_relative_idx = max(range(len(recent)), key=lambda item_idx: recent[item_idx].high)
-        if pump_peak_relative_idx < len(recent) - 2:
+        pump_peak_relative_idx = int(np.argmax(recent_highs))
+        if pump_peak_relative_idx < recent_highs.size - 2:
             return None
-        low_before_pump = min(row.low for row in baseline[-min(6, len(baseline)):])
+        pump_high = float(recent_highs[pump_peak_relative_idx])
+        local_baseline_lows = market.lows[max(baseline_end_idx - 5, baseline_start_idx): baseline_end_idx + 1]
+        low_before_pump = float(local_baseline_lows.min())
         pump_height = pump_high - low_before_pump
         if pump_height < (params.pump_min_move_atr * atr_bg):
             return None
@@ -506,20 +536,22 @@ class PostPumpAbsorptionEngine:
     @staticmethod
     def _refine_pump_context(
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         pump_ctx: PumpContext,
         runtime: PostPumpAbsorptionRuntime,
     ) -> PumpContext:
         peak_idx = pump_ctx.pump_idx
         peak_high = pump_ctx.pump_high
         pump_base_low = pump_ctx.pump_high - pump_ctx.pump_height
-        scan_end_idx = min(len(rows) - 1, pump_ctx.pump_idx + runtime.pump_window_bars)
-
-        for idx in range(pump_ctx.pump_idx + 1, scan_end_idx + 1):
-            row = rows[idx]
-            if row.high >= peak_high:
-                peak_high = row.high
-                peak_idx = idx
+        scan_end_idx = min(len(market) - 1, pump_ctx.pump_idx + runtime.pump_window_bars)
+        if scan_end_idx > pump_ctx.pump_idx:
+            followup_highs = market.highs[pump_ctx.pump_idx + 1: scan_end_idx + 1]
+            if followup_highs.size > 0:
+                relative_idx = int(np.argmax(followup_highs))
+                candidate_high = float(followup_highs[relative_idx])
+                if candidate_high >= peak_high:
+                    peak_high = candidate_high
+                    peak_idx = pump_ctx.pump_idx + 1 + relative_idx
 
         if peak_idx == pump_ctx.pump_idx:
             return pump_ctx
@@ -565,32 +597,31 @@ class PostPumpAbsorptionEngine:
     def _measure_aggression(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         idx: int,
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
     ) -> AggressionContext | None:
-        row = rows[idx]
+        row = market.row(idx)
         baseline_start = max(0, idx - runtime.flow_baseline_window_bars)
-        baseline = rows[baseline_start:idx]
-        if not baseline:
+        if baseline_start >= idx:
             return None
 
-        baseline_buy_volume = [
-            item.taker_buy_volume_resolved for item in baseline if item.taker_buy_volume_resolved > 0.0
-        ]
-        if not baseline_buy_volume:
+        baseline_buy_volume = market.taker_buy_volume_resolved[baseline_start:idx]
+        baseline_buy_volume = baseline_buy_volume[baseline_buy_volume > 0.0]
+        if baseline_buy_volume.size == 0:
             return None
 
-        baseline_ratio_values = [item.taker_buy_ratio_resolved for item in baseline if item.taker_buy_ratio_resolved > 0.0]
-        if not baseline_ratio_values:
+        baseline_ratio_values = market.taker_buy_ratio_resolved[baseline_start:idx]
+        baseline_ratio_values = baseline_ratio_values[baseline_ratio_values > 0.0]
+        if baseline_ratio_values.size == 0:
             return None
 
         baseline_volume = float(np.median(baseline_buy_volume))
         baseline_ratio = float(np.median(baseline_ratio_values))
         ratio_now = max(
             row.taker_buy_ratio_resolved,
-            float(np.mean([item.taker_buy_ratio_resolved for item in rows[max(0, idx - 1): idx + 1]])),
+            float(np.mean(market.taker_buy_ratio_resolved[max(0, idx - 1): idx + 1])),
         )
         volume_now = row.taker_buy_volume_resolved
         if baseline_volume <= 0.0:
@@ -615,7 +646,7 @@ class PostPumpAbsorptionEngine:
     def _detect_entry_setup(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         pump_ctx: PumpContext,
         range_ctx: RangeContext,
         aggression: AggressionContext,
@@ -623,13 +654,13 @@ class PostPumpAbsorptionEngine:
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
     ) -> EntrySetup | None:
-        entry_row = rows[entry_idx]
+        entry_row = market.row(entry_idx)
         entry_fraction = (entry_row.close - range_ctx.range_low) / max(range_ctx.range_width, 1e-12)
         if entry_fraction > params.max_entry_range_fraction:
             return None
 
         lsb = self._detect_local_structure_break(
-            rows=rows,
+            market=market,
             range_ctx=range_ctx,
             aggression=aggression,
             entry_idx=entry_idx,
@@ -642,7 +673,7 @@ class PostPumpAbsorptionEngine:
             return lsb
 
         return self._detect_micro_base_breakout(
-            rows=rows,
+            market=market,
             range_ctx=range_ctx,
             aggression=aggression,
             entry_idx=entry_idx,
@@ -655,7 +686,7 @@ class PostPumpAbsorptionEngine:
     def _detect_local_structure_break(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         range_ctx: RangeContext,
         aggression: AggressionContext,
         entry_idx: int,
@@ -668,7 +699,7 @@ class PostPumpAbsorptionEngine:
         if entry_idx - start_idx < runtime.structure_break_lookback_bars:
             return None
 
-        swing_highs = self._find_swing_highs(rows=rows, start_idx=start_idx, end_idx=entry_idx)
+        swing_highs = self._find_swing_highs(market=market, start_idx=start_idx, end_idx=entry_idx)
         if len(swing_highs) < 2:
             return None
 
@@ -678,11 +709,11 @@ class PostPumpAbsorptionEngine:
             return None
 
         trigger_price = last_lower_high.price + (params.entry_break_buffer_atr * atr_bg)
-        if rows[entry_idx].close <= trigger_price:
+        if market.closes[entry_idx] <= trigger_price:
             return None
 
         structure_low = self._resolve_structure_low(
-            rows=rows,
+            market=market,
             start_idx=last_lower_high.idx,
             end_idx=entry_idx,
         )
@@ -701,7 +732,7 @@ class PostPumpAbsorptionEngine:
     def _detect_micro_base_breakout(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         range_ctx: RangeContext,
         aggression: AggressionContext,
         entry_idx: int,
@@ -713,12 +744,12 @@ class PostPumpAbsorptionEngine:
         start_idx = entry_idx - runtime.micro_base_bars
         if start_idx < 0:
             return None
-        base = rows[start_idx:entry_idx]
-        if len(base) < runtime.micro_base_bars:
+        if (entry_idx - start_idx) < runtime.micro_base_bars:
             return None
 
-        base_high = max(item.high for item in base)
-        base_low = min(item.low for item in base)
+        base_slice = slice(start_idx, entry_idx)
+        base_high = float(market.highs[base_slice].max())
+        base_low = float(market.lows[base_slice].min())
         base_width = base_high - base_low
         if base_width <= 0.0:
             return None
@@ -728,7 +759,7 @@ class PostPumpAbsorptionEngine:
             return None
 
         trigger_price = base_high + (params.entry_break_buffer_atr * atr_bg)
-        if rows[entry_idx].close <= trigger_price:
+        if market.closes[entry_idx] <= trigger_price:
             return None
 
         return EntrySetup(
@@ -743,68 +774,62 @@ class PostPumpAbsorptionEngine:
     @staticmethod
     def _find_swing_highs(
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         start_idx: int,
         end_idx: int,
     ) -> list[SwingPoint]:
         swing_highs: list[SwingPoint] = []
         for idx in range(max(1, start_idx), max(1, end_idx - 1)):
-            prev_row = rows[idx - 1]
-            row = rows[idx]
-            next_row = rows[idx + 1]
-            if row.high > prev_row.high and row.high >= next_row.high:
-                swing_highs.append(SwingPoint(idx=idx, price=row.high))
+            if market.highs[idx] > market.highs[idx - 1] and market.highs[idx] >= market.highs[idx + 1]:
+                swing_highs.append(SwingPoint(idx=idx, price=float(market.highs[idx])))
         return swing_highs
 
     @staticmethod
     def _find_swing_lows(
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         start_idx: int,
         end_idx: int,
     ) -> list[SwingPoint]:
         swing_lows: list[SwingPoint] = []
         for idx in range(max(1, start_idx), max(1, end_idx - 1)):
-            prev_row = rows[idx - 1]
-            row = rows[idx]
-            next_row = rows[idx + 1]
-            if row.low < prev_row.low and row.low <= next_row.low:
-                swing_lows.append(SwingPoint(idx=idx, price=row.low))
+            if market.lows[idx] < market.lows[idx - 1] and market.lows[idx] <= market.lows[idx + 1]:
+                swing_lows.append(SwingPoint(idx=idx, price=float(market.lows[idx])))
         return swing_lows
 
     def _resolve_structure_low(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         start_idx: int,
         end_idx: int,
     ) -> SwingPoint | None:
         if end_idx <= start_idx:
             return None
 
-        swing_lows = self._find_swing_lows(rows=rows, start_idx=start_idx, end_idx=end_idx)
+        swing_lows = self._find_swing_lows(market=market, start_idx=start_idx, end_idx=end_idx)
         swing_lows = [point for point in swing_lows if point.idx > start_idx]
         if swing_lows:
             return swing_lows[-1]
 
-        structure_slice = rows[start_idx:end_idx]
-        if not structure_slice:
+        local_slice = market.lows[start_idx:end_idx]
+        if local_slice.size == 0:
             return None
 
-        local_idx, local_row = min(enumerate(structure_slice), key=lambda item: item[1].low)
-        return SwingPoint(idx=start_idx + local_idx, price=local_row.low)
+        local_idx = int(np.argmin(local_slice))
+        return SwingPoint(idx=start_idx + local_idx, price=float(local_slice[local_idx]))
 
     def _simulate_trade(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         entry_idx: int,
         setup: EntrySetup,
         pump_ctx: PumpContext,
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
     ) -> tuple[TradeResult | None, int]:
-        entry_row = rows[entry_idx]
+        entry_row = market.row(entry_idx)
         entry_price = entry_row.close
         stop_loss = setup.stop_anchor - (params.stop_buffer_atr * pump_ctx.atr_bg)
         stop_distance = entry_price - stop_loss
@@ -840,7 +865,7 @@ class PostPumpAbsorptionEngine:
         position_size = trade_risk / max(trade_plan.stop_distance, 1e-12)
         tp1_share = params.tp1_share
         remainder_share = 1.0 - tp1_share
-        limit = min(len(rows) - 1, entry_idx + runtime.time_exit_bars)
+        limit = min(len(market) - 1, entry_idx + runtime.time_exit_bars)
         metadata = {
             "strategy_id": "post_pump_absorption",
             "symbol": params.symbol,
@@ -862,7 +887,7 @@ class PostPumpAbsorptionEngine:
             "stop_range_fraction": round(stop_distance / max(setup.range_ctx.range_width, 1e-12), 6),
         }
         return self._simulate_trade_path(
-            rows=rows,
+            market=market,
             entry_idx=entry_idx,
             limit=limit,
             position_size=position_size,
@@ -875,7 +900,7 @@ class PostPumpAbsorptionEngine:
     def _simulate_trade_path(
         self,
         *,
-        rows: list[PriceRow],
+        market: MarketSeries,
         entry_idx: int,
         limit: int,
         position_size: float,
@@ -884,7 +909,7 @@ class PostPumpAbsorptionEngine:
         remainder_share: float,
         metadata: dict[str, int | float | str | bool | None],
     ) -> tuple[TradeResult | None, int]:
-        entry_row = rows[entry_idx]
+        entry_row = market.row(entry_idx)
         entry_price = float(entry_row.close)
         stop_distance = max(trade_plan.stop_distance, 1e-12)
         tp1_hit = False
@@ -898,10 +923,9 @@ class PostPumpAbsorptionEngine:
         max_adverse = 0.0
 
         for idx in range(entry_idx + 1, limit + 1):
-            row = rows[idx]
-            low = float(row.low)
-            high = float(row.high)
-            close = float(row.close)
+            low = float(market.lows[idx])
+            high = float(market.highs[idx])
+            close = float(market.closes[idx])
             active_stop = trade_plan.be_stop if tp1_hit else trade_plan.stop_loss
             max_favorable = max(max_favorable, high - entry_price)
             max_adverse = max(max_adverse, entry_price - low)
@@ -963,7 +987,7 @@ class PostPumpAbsorptionEngine:
                 entry_price=Price(entry_price),
                 exit_price=Price(exit_price),
                 entry_timestamp_ms=int(entry_row.timestamp),
-                exit_timestamp_ms=int(rows[exit_idx].timestamp),
+                exit_timestamp_ms=int(market.timestamps[exit_idx]),
                 result_type=result_type,
                 pnl=realized_pnl,
                 pnl_percent=Percentage(pnl_percent),
