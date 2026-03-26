@@ -98,6 +98,7 @@ class CcxtFuturesClient(ExchangeClient):
         endpoint: str,
         call: Callable[..., object],
         args: tuple[object, ...] = (),
+        should_retry: Callable[[Exception], bool] | None = None,
         **kwargs: object,
     ) -> object:
         try:
@@ -112,12 +113,19 @@ class CcxtFuturesClient(ExchangeClient):
                 endpoint=endpoint,
                 symbol=symbol,
                 jitter_seconds=0.25,
+                should_retry=should_retry,
                 **kwargs,
             )
         except RetryExhaustedError as exc:
             raise RuntimeError(
                 f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts} cause={exc}"
             ) from exc
+
+    @staticmethod
+    def _is_non_retriable_binance_oi_error(exc: Exception) -> bool:
+        message = str(exc)
+        lowered = message.lower()
+        return "starttime" in lowered and "invalid" in lowered and "-1130" in lowered
 
     def _retry_exchange_startup_call(
         self,
@@ -521,6 +529,11 @@ class CcxtFuturesClient(ExchangeClient):
                         since=since,
                         limit=oi_limit,
                         params=params,
+                        should_retry=(
+                            None
+                            if self.exchange != Exchange.BINANCE
+                            else lambda exc: not self._is_non_retriable_binance_oi_error(exc)
+                        ),
                     )
                 except TypeError:
                     batch = self._retry_exchange_call(
@@ -532,10 +545,23 @@ class CcxtFuturesClient(ExchangeClient):
                         timeframe=ccxt_timeframe,
                         since=since,
                         limit=oi_limit,
+                        should_retry=(
+                            None
+                            if self.exchange != Exchange.BINANCE
+                            else lambda exc: not self._is_non_retriable_binance_oi_error(exc)
+                        ),
                     )
-            except RuntimeError as exc:
+            except Exception as exc:
                 message = str(exc)
                 if self.exchange == Exchange.BINANCE and "startTime" in message and "invalid" in message:
+                    self._logger.info(
+                        "OI skip invalid startTime: %s %s since=%s request_end=%s cause=%s",
+                        symbol,
+                        timeframe.value,
+                        since,
+                        request_end_ms,
+                        exc,
+                    )
                     since = request_end_ms + 1
                     continue
                 raise

@@ -41,6 +41,7 @@ def run_with_retry(
     endpoint: str | None = None,
     symbol: str | None = None,
     jitter_seconds: float | None = None,
+    should_retry: Callable[[Exception], bool] | None = None,
     **kwargs: P.kwargs,
 ) -> R:
     """Выполняет вызов функции с повторами и структурированными логами каждой попытки."""
@@ -70,6 +71,17 @@ def run_with_retry(
             )
             return result
         except retriable_exceptions as exc:
+            if should_retry is not None and not should_retry(exc):
+                target_logger.warning(
+                    "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s результат=неретрабельная_ошибка причина=%s",
+                    operation,
+                    attempt_number,
+                    attempts,
+                    endpoint_value,
+                    symbol_value,
+                    exc,
+                )
+                raise
             is_last = attempt_number >= attempts
             target_logger.warning(
                 "повтор операция=%s попытка=%s/%s эндпоинт=%s символ=%s результат=ошибка причина=%s",
