@@ -967,23 +967,9 @@ class PostPumpAbsorptionEngine:
             if oi_available and not np.isnan(row.oi_delta_pct_resolved)
             else None
         )
-        oi_supportive = bool(
-            oi_available
-            and oi_delta is not None
-            and oi_delta_pct is not None
-            and oi_delta > 0.0
-            and oi_delta_pct >= params.oi_min_delta_pct
-        )
-        ratio_threshold = max(
-            0.0,
-            params.taker_ratio_threshold
-            - (params.oi_ratio_threshold_relaxation if oi_supportive else 0.0),
-        )
-        volume_threshold = max(
-            0.01,
-            params.taker_volume_mult
-            - (params.oi_volume_mult_relaxation if oi_supportive else 0.0),
-        )
+        oi_supportive = False
+        ratio_threshold = max(0.0, params.taker_ratio_threshold)
+        volume_threshold = max(0.01, params.taker_volume_mult)
         if (
             ratio_now < ratio_threshold
             or volume_mult < volume_threshold

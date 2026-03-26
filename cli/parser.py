@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fetch_ppa = subparsers.add_parser(
         "fetch-ppa-cache",
-        help="Load post_pump_absorption cache: 5m with OI, 1m/3m without OI",
+        help="Load post_pump_absorption cache: 1m/3m/5m OHLCV only, without OI",
     )
     fetch_ppa.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     fetch_ppa.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)

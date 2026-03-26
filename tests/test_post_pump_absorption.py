@@ -345,7 +345,7 @@ def test_post_pump_absorption_reports_missing_taker_data_without_silent_failure(
     assert diagnostics["stage_hits"]["stage_1_pump"] >= 1
 
 
-def test_post_pump_absorption_uses_supportive_5m_oi_as_optional_enhancer() -> None:
+def test_post_pump_absorption_ignores_oi_as_trade_enhancer() -> None:
     engine = PostPumpAbsorptionEngine()
     params = PostPumpAbsorptionParams(
         profile_id="balanced",
@@ -370,11 +370,7 @@ def test_post_pump_absorption_uses_supportive_5m_oi_as_optional_enhancer() -> No
     )
 
     assert trades_without_oi == []
-    assert len(trades_with_oi) == 1
-    assert trades_with_oi[0].metadata is not None
-    assert trades_with_oi[0].metadata["oi_available"] is True
-    assert trades_with_oi[0].metadata["oi_supportive"] is True
-    assert trades_with_oi[0].metadata["oi_source_timeframe"] == Timeframe.M5.value
+    assert trades_with_oi == []
 
 
 def test_post_pump_absorption_runtime_scales_windows_by_timeframe() -> None:

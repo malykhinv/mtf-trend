@@ -48,8 +48,8 @@ class PostPumpAbsorptionParams:
     taker_ratio_threshold: float = 0.56
     taker_volume_mult: float = 1.20
     oi_min_delta_pct: float = 0.0
-    oi_ratio_threshold_relaxation: float = 0.01
-    oi_volume_mult_relaxation: float = 0.05
+    oi_ratio_threshold_relaxation: float = 0.0
+    oi_volume_mult_relaxation: float = 0.0
     flow_baseline_window_minutes: int = 60
     structure_break_minutes: int = 15
     micro_base_minutes: int = 12

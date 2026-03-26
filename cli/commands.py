@@ -1524,7 +1524,7 @@ def _fetch_ppa_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         args,
         symbols=symbols,
         timeframes=[Timeframe.M5.value],
-        skip_open_interest=False,
+        skip_open_interest=True,
     )
     fetch_micro_args = _clone_fetch_args(
         args,
@@ -1533,7 +1533,7 @@ def _fetch_ppa_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         skip_open_interest=True,
     )
 
-    logger.info("fetch-ppa-cache: phase 1/2 -> 5m with open interest")
+    logger.info("fetch-ppa-cache: phase 1/2 -> 5m OHLCV without open interest")
     code_5m = _fetch_data_inner(config, fetch_5m_args)
     logger.info("fetch-ppa-cache: phase 2/2 -> 1m/3m without open interest")
     code_micro = _fetch_data_inner(config, fetch_micro_args)
@@ -2383,7 +2383,7 @@ def fetch_data(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def fetch_ppa_cache(config: AppConfig, args: argparse.Namespace) -> int:
-    """Загружает кэш для post_pump_absorption: 5m c OI, 1m/3m без OI."""
+    """Загружает кэш для post_pump_absorption без OI: 1m/3m/5m только OHLCV."""
     return _run_with_logging("fetch-ppa-cache", config, lambda: _fetch_ppa_cache_inner(config, args))
 
 
