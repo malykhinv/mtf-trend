@@ -37,6 +37,8 @@ if TYPE_CHECKING:
 
 module_logger = logging.getLogger(__name__)
 PROGRESS_LOG_EVERY = 100
+SYMBOL_PROGRESS_STEPS = 10
+SYMBOL_PROGRESS_MAX_INTERVAL = 50
 DIAGNOSTIC_TOP_N = 5
 ZERO_ENTRY_REJECTION_KEYS = (
     "retest_rejected_by_volume",
@@ -58,6 +60,12 @@ def _format_duration_human(seconds: float) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
     return f"{hours}h {minutes}m {secs}s"
+
+
+def _resolve_symbol_progress_interval(symbols_count: int) -> int:
+    if symbols_count <= 0:
+        return 1
+    return max(1, min(SYMBOL_PROGRESS_MAX_INTERVAL, symbols_count // SYMBOL_PROGRESS_STEPS))
 
 
 class PreparedGridParams(NamedTuple):
@@ -424,9 +432,17 @@ class BacktestRunner:
         rejection_diagnostics_total: Counter[str] = Counter()
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         diagnostics_method = getattr(strategy, "consume_last_generation_diagnostics", None)
+        symbol_progress_interval = _resolve_symbol_progress_interval(symbols_count)
 
         for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
+            combo_started_at = perf_counter()
+            self._logger.info(
+                "run-progress: start combo=%s/%s, symbols=%s",
+                idx,
+                total,
+                symbols_count,
+            )
             portfolio_trades = strategy.generate_events_portfolio(
                 symbol_frames=symbol_frames,
                 params=prepared.params,
@@ -436,7 +452,8 @@ class BacktestRunner:
             elif strategy.__class__.__name__ == "BeeBiteStrategy":
                 raise RuntimeError("BeeBiteStrategy должен использовать только portfolio pipeline.")
             else:
-                for symbol, mtf_frames in symbol_frames.items():
+                total_symbol_units = max(1, total * symbols_count)
+                for symbol_idx, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
                     cfg = self._inject_runtime_fields(
                         prepared.params,
                         symbol=symbol,
@@ -466,6 +483,35 @@ class BacktestRunner:
                                 context_symbol = raw_context["symbol"]
                             key = (context_symbol, prepared.params_signature)
                             rejection_diagnostics_by_key[key].update(diagnostics_counter)
+
+                    if symbol_idx % symbol_progress_interval == 0 or symbol_idx == symbols_count:
+                        combo_elapsed_seconds = perf_counter() - combo_started_at
+                        combo_progress = (symbol_idx / symbols_count) * 100 if symbols_count else BACKTEST_ZERO_COUNT
+                        combo_eta_seconds = (
+                            (combo_elapsed_seconds / symbol_idx) * (symbols_count - symbol_idx)
+                            if symbol_idx and symbols_count
+                            else BACKTEST_ZERO_COUNT
+                        )
+                        total_elapsed_seconds = perf_counter() - started_at
+                        completed_units = ((idx - 1) * symbols_count) + symbol_idx
+                        total_eta_seconds = (
+                            (total_elapsed_seconds / completed_units) * (total_symbol_units - completed_units)
+                            if completed_units
+                            else BACKTEST_ZERO_COUNT
+                        )
+                        self._logger.info(
+                            "run-progress: combo=%s/%s, symbols=%s/%s (%.1f%%), combo_elapsed=%s, combo_eta=%s, total_elapsed=%s, total_eta=%s, symbol=%s",
+                            idx,
+                            total,
+                            symbol_idx,
+                            symbols_count,
+                            combo_progress,
+                            _format_duration_human(combo_elapsed_seconds),
+                            _format_duration_human(combo_eta_seconds),
+                            _format_duration_human(total_elapsed_seconds),
+                            _format_duration_human(total_eta_seconds),
+                            symbol,
+                        )
 
             row = self._build_metrics_row(strategy.params_to_row(prepared.params), all_trades)
             rows.append(row)
