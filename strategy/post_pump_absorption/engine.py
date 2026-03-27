@@ -162,8 +162,10 @@ class PostPumpAbsorptionEngine:
 
     def __init__(self) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
+        self._feature_frame_cache: dict[tuple[int, int], pd.DataFrame] = {}
         self._prepared_oi_frame_cache: dict[int, pd.DataFrame] = {}
         self._entry_with_oi_context_cache: dict[tuple[int, int], pd.DataFrame] = {}
+        self._market_series_cache: dict[int, MarketSeries] = {}
 
     def consume_last_generation_diagnostics(self) -> GenerationDiagnostics:
         diagnostics = dict(self._last_generation_diagnostics)
@@ -260,12 +262,12 @@ class PostPumpAbsorptionEngine:
     ) -> list[TradeResult]:
         runtime = build_post_pump_absorption_runtime(params)
         diagnostics = self._empty_diagnostics(symbol=params.symbol)
-        enriched = self._append_features(prepared, atr_window_bars=runtime.atr_window_bars)
+        enriched = self._prepare_feature_frame(prepared, atr_window_bars=runtime.atr_window_bars)
         enriched = self._attach_oi_context(entry_frame=enriched, oi_frame=oi_frame)
         if not self._has_usable_flow_data(enriched):
             diagnostics["missing_taker_data"] = 1
 
-        market = self._build_market_series(enriched)
+        market = self._get_market_series(enriched)
         if not market.rows:
             self._last_generation_diagnostics = diagnostics
             return []
@@ -365,6 +367,16 @@ class PostPumpAbsorptionEngine:
         if extra:
             payload.update(extra)
         stage_events.append(payload)
+
+    def _prepare_feature_frame(self, frame: pd.DataFrame, *, atr_window_bars: int) -> pd.DataFrame:
+        cache_key = (id(frame), int(atr_window_bars))
+        cached = self._feature_frame_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        prepared = self._append_features(frame, atr_window_bars=atr_window_bars)
+        self._feature_frame_cache[cache_key] = prepared
+        return prepared
 
     @staticmethod
     def _append_features(frame: pd.DataFrame, *, atr_window_bars: int) -> pd.DataFrame:
@@ -503,6 +515,16 @@ class PostPumpAbsorptionEngine:
         volume = pd.to_numeric(frame["taker_buy_volume_resolved"], errors="coerce").fillna(0.0)
         usable = ratio.gt(0.0) & volume.gt(0.0)
         return bool(usable.any())
+
+    def _get_market_series(self, frame: pd.DataFrame) -> MarketSeries:
+        cache_key = id(frame)
+        cached = self._market_series_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        market = self._build_market_series(frame)
+        self._market_series_cache[cache_key] = market
+        return market
 
     @staticmethod
     def _build_market_series(frame: pd.DataFrame) -> MarketSeries:
