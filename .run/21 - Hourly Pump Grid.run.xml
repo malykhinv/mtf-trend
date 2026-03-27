@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="22 - Hourly Pump Strict" type="PythonConfigurationType" factoryName="Python">
+  <configuration default="false" name="21 - Hourly Pump Grid" type="PythonConfigurationType" factoryName="Python">
     <module name="mtf-trend-2" />
     <option name="ENV_FILES" value="" />
     <option name="INTERPRETER_OPTIONS" value="" />
@@ -14,7 +14,7 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <option name="RUN_TOOL" value="" />
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/main.py" />
-    <option name="PARAMETERS" value="run-hourly-pump-research --selection-profile strict --timeframes 1m 3m 5m" />
+    <option name="PARAMETERS" value="run-hourly-pump-research --timeframes 1m 3m 5m" />
     <option name="SHOW_COMMAND_LINE" value="false" />
     <option name="EMULATE_TERMINAL" value="false" />
     <option name="MODULE_MODE" value="false" />
