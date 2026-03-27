@@ -31,6 +31,7 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
         self._deposit = deposit
         self._risk_pct = risk_pct
         self._engine = PostPumpAbsorptionEngine()
+        self._symbol_context_cache: dict[tuple[str, int, int], dict[str, pd.DataFrame | str]] = {}
 
     def validate_config(self, params: PostPumpAbsorptionParams) -> None:
         validate_post_pump_absorption_params(params)
@@ -51,6 +52,11 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
     ) -> list[TradeResult]:
         return self._engine.generate_events_multi_tf(
             entry_frame=mtf_frames.entry_frame,
+            prepared_entry_frame=(
+                context.get("prepared_entry_frame")
+                if isinstance(context.get("prepared_entry_frame"), pd.DataFrame)
+                else None
+            ),
             params=params,
             oi_frame=context.get("oi_frame") if isinstance(context.get("oi_frame"), pd.DataFrame) else None,
             oi_source_timeframe=(
@@ -110,10 +116,20 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
         mtf_frames: SymbolMtfFrames,
         params: PostPumpAbsorptionParams,
     ) -> dict[str, pd.DataFrame | str] | None:
-        del symbol, params
+        del params
+
+        cache_key = (
+            symbol,
+            id(mtf_frames.entry_frame),
+            id(mtf_frames.levels_frame),
+        )
+        cached = self._symbol_context_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
         oi_frame: pd.DataFrame | None = None
         oi_source_timeframe: str | None = None
+        prepared_entry_frame = self._engine.prepare_data(mtf_frames.entry_frame)
         if mtf_frames.entry_timeframe == Timeframe.M5 and "open_interest" in mtf_frames.entry_frame.columns:
             oi_frame = mtf_frames.entry_frame
             oi_source_timeframe = mtf_frames.entry_timeframe.value
@@ -124,12 +140,14 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
             oi_frame = mtf_frames.levels_frame
             oi_source_timeframe = mtf_frames.levels_timeframe.value
 
-        if oi_frame is None or oi_source_timeframe is None:
-            return None
-        return {
-            "oi_frame": oi_frame,
-            "oi_source_timeframe": oi_source_timeframe,
+        context: dict[str, pd.DataFrame | str] = {
+            "prepared_entry_frame": prepared_entry_frame,
         }
+        if oi_frame is not None and oi_source_timeframe is not None:
+            context["oi_frame"] = oi_frame
+            context["oi_source_timeframe"] = oi_source_timeframe
+        self._symbol_context_cache[cache_key] = context
+        return context
 
     def consume_last_generation_diagnostics(self) -> dict[str, object]:
         return dict(self._engine.consume_last_generation_diagnostics())

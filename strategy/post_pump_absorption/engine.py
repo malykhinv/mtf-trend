@@ -162,6 +162,7 @@ class PostPumpAbsorptionEngine:
 
     def __init__(self) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
+        self._prepared_oi_frame_cache: dict[int, pd.DataFrame] = {}
 
     def consume_last_generation_diagnostics(self) -> GenerationDiagnostics:
         diagnostics = dict(self._last_generation_diagnostics)
@@ -235,11 +236,12 @@ class PostPumpAbsorptionEngine:
         self,
         *,
         entry_frame: pd.DataFrame,
+        prepared_entry_frame: pd.DataFrame | None = None,
         params: PostPumpAbsorptionParams,
         oi_frame: pd.DataFrame | None = None,
         oi_source_timeframe: str | None = None,
     ) -> list[TradeResult]:
-        prepared = self.prepare_data(entry_frame)
+        prepared = prepared_entry_frame if prepared_entry_frame is not None else self.prepare_data(entry_frame)
         return self._run(
             prepared=prepared,
             params=params,
@@ -403,26 +405,21 @@ class PostPumpAbsorptionEngine:
         )
         return work
 
-    @staticmethod
-    def _attach_oi_context(
-        *,
-        entry_frame: pd.DataFrame,
-        oi_frame: pd.DataFrame | None,
-    ) -> pd.DataFrame:
-        work = entry_frame.copy()
+    def _prepare_oi_frame(self, oi_frame: pd.DataFrame | None) -> pd.DataFrame | None:
         if oi_frame is None or oi_frame.empty or "open_interest" not in oi_frame.columns:
-            work["open_interest_resolved"] = np.nan
-            work["oi_delta_resolved"] = np.nan
-            work["oi_delta_pct_resolved"] = np.nan
-            work["oi_available_resolved"] = False
-            return work
+            return None
+
+        cache_key = id(oi_frame)
+        cached = self._prepared_oi_frame_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
         prepared_oi = oi_frame.copy()
         prepared_oi["timestamp"] = pd.to_numeric(prepared_oi["timestamp"], errors="coerce")
         prepared_oi["open_interest"] = pd.to_numeric(prepared_oi["open_interest"], errors="coerce")
         prepared_oi = prepared_oi.dropna(subset=["timestamp", "open_interest"])
         if prepared_oi.empty:
-            return work
+            return None
 
         prepared_oi["timestamp"] = prepared_oi["timestamp"].astype("int64")
         prepared_oi = (
@@ -442,17 +439,35 @@ class PostPumpAbsorptionEngine:
             & prepared_oi["oi_delta_resolved"].notna()
             & prepared_oi["oi_delta_pct_resolved"].notna()
         )
+        prepared_oi = prepared_oi[
+            [
+                "timestamp",
+                "open_interest_resolved",
+                "oi_delta_resolved",
+                "oi_delta_pct_resolved",
+                "oi_available_resolved",
+            ]
+        ]
+        self._prepared_oi_frame_cache[cache_key] = prepared_oi
+        return prepared_oi
+
+    def _attach_oi_context(
+        self,
+        *,
+        entry_frame: pd.DataFrame,
+        oi_frame: pd.DataFrame | None,
+    ) -> pd.DataFrame:
+        work = entry_frame.copy()
+        prepared_oi = self._prepare_oi_frame(oi_frame)
+        if prepared_oi is None:
+            work["open_interest_resolved"] = np.nan
+            work["oi_delta_resolved"] = np.nan
+            work["oi_delta_pct_resolved"] = np.nan
+            work["oi_available_resolved"] = False
+            return work
         merged = pd.merge_asof(
             work.sort_values("timestamp"),
-            prepared_oi[
-                [
-                    "timestamp",
-                    "open_interest_resolved",
-                    "oi_delta_resolved",
-                    "oi_delta_pct_resolved",
-                    "oi_available_resolved",
-                ]
-            ],
+            prepared_oi,
             on="timestamp",
             direction="backward",
         )
