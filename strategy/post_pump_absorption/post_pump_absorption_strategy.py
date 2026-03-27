@@ -64,6 +64,7 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
                 if context.get("oi_source_timeframe") is not None
                 else None
             ),
+            collect_diagnostics=bool(context.get("collect_diagnostics", True)),
         )
 
     def build_parameter_grid(self) -> list[PostPumpAbsorptionParams]:

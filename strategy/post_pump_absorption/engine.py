@@ -233,6 +233,7 @@ class PostPumpAbsorptionEngine:
             params=params,
             oi_frame=None,
             oi_source_timeframe=None,
+            collect_diagnostics=True,
         )
 
     def generate_events_multi_tf(
@@ -243,6 +244,7 @@ class PostPumpAbsorptionEngine:
         params: PostPumpAbsorptionParams,
         oi_frame: pd.DataFrame | None = None,
         oi_source_timeframe: str | None = None,
+        collect_diagnostics: bool = True,
     ) -> list[TradeResult]:
         prepared = prepared_entry_frame if prepared_entry_frame is not None else self.prepare_data(entry_frame)
         return self._run(
@@ -250,6 +252,7 @@ class PostPumpAbsorptionEngine:
             params=params,
             oi_frame=oi_frame,
             oi_source_timeframe=oi_source_timeframe,
+            collect_diagnostics=collect_diagnostics,
         )
 
     def _run(
@@ -259,17 +262,22 @@ class PostPumpAbsorptionEngine:
         params: PostPumpAbsorptionParams,
         oi_frame: pd.DataFrame | None,
         oi_source_timeframe: str | None,
+        collect_diagnostics: bool,
     ) -> list[TradeResult]:
         runtime = build_post_pump_absorption_runtime(params)
-        diagnostics = self._empty_diagnostics(symbol=params.symbol)
+        diagnostics: GenerationDiagnostics = self._empty_diagnostics(symbol=params.symbol) if collect_diagnostics else {}
         enriched = self._prepare_feature_frame(prepared, atr_window_bars=runtime.atr_window_bars)
         enriched = self._attach_oi_context(entry_frame=enriched, oi_frame=oi_frame)
         if not self._has_usable_flow_data(enriched):
-            diagnostics["missing_taker_data"] = 1
+            self._increment_diagnostic_count(diagnostics, "missing_taker_data")
 
         market = self._get_market_series(enriched)
         if not market.rows:
-            self._last_generation_diagnostics = diagnostics
+            self._last_generation_diagnostics = (
+                diagnostics
+                if collect_diagnostics
+                else self._empty_diagnostics(symbol=params.symbol)
+            )
             return []
 
         trades: list[TradeResult] = []
@@ -294,7 +302,7 @@ class PostPumpAbsorptionEngine:
 
             pump_ctx = self._refine_pump_context(market=market, pump_ctx=pump_ctx, runtime=runtime)
 
-            diagnostics["pumps_found"] = int(diagnostics.get("pumps_found", 0)) + 1
+            self._increment_diagnostic_count(diagnostics, "pumps_found")
             self._mark_stage_hit(diagnostics, PPA_STAGE_1_PUMP)
             self._record_stage_event(
                 diagnostics,
@@ -311,16 +319,23 @@ class PostPumpAbsorptionEngine:
                 params=params,
                 runtime=runtime,
                 oi_source_timeframe=oi_source_timeframe,
+                collect_diagnostics=collect_diagnostics,
             )
             trades.extend(regime_trades)
             self._merge_diagnostics(target=diagnostics, source=regime_diagnostics)
             i = max(i + 1, next_i)
 
-        self._last_generation_diagnostics = diagnostics
+        self._last_generation_diagnostics = (
+            diagnostics
+            if collect_diagnostics
+            else self._empty_diagnostics(symbol=params.symbol)
+        )
         return trades
 
     @classmethod
     def _merge_diagnostics(cls, *, target: GenerationDiagnostics, source: GenerationDiagnostics) -> None:
+        if not target or not source:
+            return
         for key in cls.COUNT_KEYS:
             target[key] = int(target.get(key, 0)) + int(source.get(key, 0))
 
@@ -342,6 +357,8 @@ class PostPumpAbsorptionEngine:
 
     @staticmethod
     def _mark_stage_hit(diagnostics: GenerationDiagnostics, stage_id: str) -> None:
+        if not diagnostics:
+            return
         stage_hits = diagnostics.setdefault("stage_hits", {stage: 0 for stage in PPA_STAGE_SEQUENCE})
         if isinstance(stage_hits, dict):
             stage_hits[stage_id] = int(stage_hits.get(stage_id, 0)) + 1
@@ -354,6 +371,8 @@ class PostPumpAbsorptionEngine:
         row: PriceRow,
         extra: dict[str, object] | None = None,
     ) -> None:
+        if not diagnostics:
+            return
         stage_events = diagnostics.setdefault("stage_events", [])
         if not isinstance(stage_events, list):
             return
@@ -367,6 +386,12 @@ class PostPumpAbsorptionEngine:
         if extra:
             payload.update(extra)
         stage_events.append(payload)
+
+    @classmethod
+    def _increment_diagnostic_count(cls, diagnostics: GenerationDiagnostics, key: str, delta: int = 1) -> None:
+        if not diagnostics:
+            return
+        diagnostics[key] = int(diagnostics.get(key, 0)) + int(delta)
 
     def _prepare_feature_frame(self, frame: pd.DataFrame, *, atr_window_bars: int) -> pd.DataFrame:
         cache_key = (id(frame), int(atr_window_bars))
@@ -567,8 +592,9 @@ class PostPumpAbsorptionEngine:
         params: PostPumpAbsorptionParams,
         runtime: PostPumpAbsorptionRuntime,
         oi_source_timeframe: str | None,
+        collect_diagnostics: bool,
     ) -> tuple[list[TradeResult], GenerationDiagnostics, int]:
-        diagnostics = self._empty_diagnostics()
+        diagnostics: GenerationDiagnostics = self._empty_diagnostics() if collect_diagnostics else {}
         trades: list[TradeResult] = []
         latest_exit_idx = pump_ctx.pump_idx
 
@@ -595,10 +621,10 @@ class PostPumpAbsorptionEngine:
                 params=params,
             )
             if range_ctx is None:
-                diagnostics["range_invalidated"] = int(diagnostics.get("range_invalidated", 0)) + 1
+                self._increment_diagnostic_count(diagnostics, "range_invalidated")
                 break
 
-            diagnostics["range_candidates"] = int(diagnostics.get("range_candidates", 0)) + 1
+            self._increment_diagnostic_count(diagnostics, "range_candidates")
             self._mark_stage_hit(diagnostics, PPA_STAGE_2_RANGE)
             current_row = market.row(entry_idx)
             self._record_stage_event(
@@ -622,7 +648,7 @@ class PostPumpAbsorptionEngine:
                 entry_idx += 1
                 continue
 
-            diagnostics["lower_zone_hits"] = int(diagnostics.get("lower_zone_hits", 0)) + 1
+            self._increment_diagnostic_count(diagnostics, "lower_zone_hits")
             self._mark_stage_hit(diagnostics, PPA_STAGE_3_LOWER_ZONE)
             self._record_stage_event(
                 diagnostics,
@@ -651,7 +677,7 @@ class PostPumpAbsorptionEngine:
                 entry_idx += 1
                 continue
 
-            diagnostics["aggression_hits"] = int(diagnostics.get("aggression_hits", 0)) + 1
+            self._increment_diagnostic_count(diagnostics, "aggression_hits")
             self._mark_stage_hit(diagnostics, PPA_STAGE_4_AGGRESSION)
             self._record_stage_event(
                 diagnostics,
@@ -684,7 +710,7 @@ class PostPumpAbsorptionEngine:
                 continue
 
             setup_key = "lsb_hits" if setup.setup_type == "LSB" else "mbb_hits"
-            diagnostics[setup_key] = int(diagnostics.get(setup_key, 0)) + 1
+            self._increment_diagnostic_count(diagnostics, setup_key)
             self._mark_stage_hit(diagnostics, PPA_STAGE_5_SETUP)
             self._record_stage_event(
                 diagnostics,
@@ -716,7 +742,7 @@ class PostPumpAbsorptionEngine:
                 continue
 
             trades.append(trade)
-            diagnostics["trades_generated"] = int(diagnostics.get("trades_generated", 0)) + 1
+            self._increment_diagnostic_count(diagnostics, "trades_generated")
             self._mark_stage_hit(diagnostics, PPA_STAGE_6_TRADE)
             self._record_stage_event(
                 diagnostics,
@@ -729,9 +755,9 @@ class PostPumpAbsorptionEngine:
                 },
             )
             if len(trades) > 1:
-                diagnostics["reentries_generated"] = int(diagnostics.get("reentries_generated", 0)) + 1
+                self._increment_diagnostic_count(diagnostics, "reentries_generated")
 
-            trade_details = diagnostics.setdefault("trade_details", [])
+            trade_details = diagnostics.setdefault("trade_details", []) if diagnostics else None
             if isinstance(trade_details, list):
                 trade_details.append(self._build_trade_detail(trade))
 

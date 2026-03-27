@@ -483,7 +483,7 @@ class BacktestRunner:
                     trades = strategy.generate_events_multi_tf(
                         mtf_frames=mtf_frames,
                         params=cfg,
-                        **(context or {}),
+                        **({"collect_diagnostics": collect_diagnostics, **(context or {})}),
                     )
                     all_trades.extend(trades)
                     symbol_elapsed_seconds = perf_counter() - symbol_started_at
