@@ -39,6 +39,7 @@ module_logger = logging.getLogger(__name__)
 PROGRESS_LOG_EVERY = 100
 SYMBOL_PROGRESS_STEPS = 10
 SYMBOL_PROGRESS_MAX_INTERVAL = 50
+LONG_SYMBOL_LOG_SECONDS = 10.0
 DIAGNOSTIC_TOP_N = 5
 ZERO_ENTRY_REJECTION_KEYS = (
     "retest_rejected_by_volume",
@@ -454,6 +455,20 @@ class BacktestRunner:
             else:
                 total_symbol_units = max(1, total * symbols_count)
                 for symbol_idx, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
+                    should_log_symbol_start = symbol_idx == 1 or symbol_idx % symbol_progress_interval == 0
+                    if should_log_symbol_start:
+                        combo_elapsed_seconds = perf_counter() - combo_started_at
+                        self._logger.info(
+                            "run-progress: combo=%s/%s, symbol=%s/%s, phase=start_symbol, combo_elapsed=%s, symbol=%s",
+                            idx,
+                            total,
+                            symbol_idx,
+                            symbols_count,
+                            _format_duration_human(combo_elapsed_seconds),
+                            symbol,
+                        )
+
+                    symbol_started_at = perf_counter()
                     cfg = self._inject_runtime_fields(
                         prepared.params,
                         symbol=symbol,
@@ -471,6 +486,18 @@ class BacktestRunner:
                         **(context or {}),
                     )
                     all_trades.extend(trades)
+                    symbol_elapsed_seconds = perf_counter() - symbol_started_at
+                    if symbol_elapsed_seconds >= LONG_SYMBOL_LOG_SECONDS:
+                        self._logger.info(
+                            "run-progress: combo=%s/%s, symbol=%s/%s, phase=done_symbol, symbol_elapsed=%s, trades=%s, symbol=%s",
+                            idx,
+                            total,
+                            symbol_idx,
+                            symbols_count,
+                            _format_duration_human(symbol_elapsed_seconds),
+                            len(trades),
+                            symbol,
+                        )
 
                     if collect_diagnostics and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
@@ -515,6 +542,14 @@ class BacktestRunner:
 
             row = self._build_metrics_row(strategy.params_to_row(prepared.params), all_trades)
             rows.append(row)
+            combo_elapsed_seconds = perf_counter() - combo_started_at
+            self._logger.info(
+                "run-progress: done combo=%s/%s, combo_elapsed=%s, trades=%s",
+                idx,
+                total,
+                _format_duration_human(combo_elapsed_seconds),
+                len(all_trades),
+            )
 
             if idx % PROGRESS_LOG_EVERY == 0 or idx == total:
                 elapsed_seconds = perf_counter() - started_at
