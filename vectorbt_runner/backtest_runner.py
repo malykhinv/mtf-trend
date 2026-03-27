@@ -69,6 +69,10 @@ def _resolve_symbol_progress_interval(symbols_count: int) -> int:
     return max(1, min(SYMBOL_PROGRESS_MAX_INTERVAL, symbols_count // SYMBOL_PROGRESS_STEPS))
 
 
+def _stage_metric_column_name(stage_id: str) -> str:
+    return f"ppa_stage_hits_{stage_id}"
+
+
 class PreparedGridParams(NamedTuple):
     """Предвычисленная конфигурация сетки без symbol-specific полей."""
 
@@ -411,6 +415,7 @@ class BacktestRunner:
         *,
         levels_timeframe: Timeframe = Timeframe.D1,
         entry_timeframe: Timeframe = Timeframe.M15,
+        stage_metric_ids: tuple[str, ...] | None = None,
     ) -> pd.DataFrame:
         """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
@@ -429,6 +434,8 @@ class BacktestRunner:
         symbols_count = len(symbol_frames)
         started_at = perf_counter()
         collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG)
+        collect_stage_metrics = bool(stage_metric_ids)
+        tracked_stage_ids = tuple(stage_metric_ids or ())
 
         rejection_diagnostics_total: Counter[str] = Counter()
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
@@ -437,6 +444,7 @@ class BacktestRunner:
 
         for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
+            stage_metric_totals = {stage_id: 0 for stage_id in tracked_stage_ids}
             combo_started_at = perf_counter()
             self._logger.info(
                 "run-progress: start combo=%s/%s, symbols=%s",
@@ -483,7 +491,13 @@ class BacktestRunner:
                     trades = strategy.generate_events_multi_tf(
                         mtf_frames=mtf_frames,
                         params=cfg,
-                        **({"collect_diagnostics": collect_diagnostics, **(context or {})}),
+                        **(
+                            {
+                                "collect_diagnostics": collect_diagnostics,
+                                "collect_stage_metrics": collect_stage_metrics,
+                                **(context or {}),
+                            }
+                        ),
                     )
                     all_trades.extend(trades)
                     symbol_elapsed_seconds = perf_counter() - symbol_started_at
@@ -499,17 +513,23 @@ class BacktestRunner:
                             symbol,
                         )
 
-                    if collect_diagnostics and callable(diagnostics_method):
+                    if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
                         if isinstance(diagnostics_raw, dict):
-                            diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
-                            rejection_diagnostics_total.update(diagnostics_counter)
-                            raw_context = diagnostics_raw.get("context")
-                            context_symbol = symbol
-                            if isinstance(raw_context, dict) and isinstance(raw_context.get("symbol"), str):
-                                context_symbol = raw_context["symbol"]
-                            key = (context_symbol, prepared.params_signature)
-                            rejection_diagnostics_by_key[key].update(diagnostics_counter)
+                            if collect_diagnostics:
+                                diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
+                                rejection_diagnostics_total.update(diagnostics_counter)
+                                raw_context = diagnostics_raw.get("context")
+                                context_symbol = symbol
+                                if isinstance(raw_context, dict) and isinstance(raw_context.get("symbol"), str):
+                                    context_symbol = raw_context["symbol"]
+                                key = (context_symbol, prepared.params_signature)
+                                rejection_diagnostics_by_key[key].update(diagnostics_counter)
+                            if collect_stage_metrics:
+                                stage_hits_raw = diagnostics_raw.get("stage_hits")
+                                if isinstance(stage_hits_raw, dict):
+                                    for stage_id in tracked_stage_ids:
+                                        stage_metric_totals[stage_id] += int(stage_hits_raw.get(stage_id, 0) or 0)
 
                     if symbol_idx % symbol_progress_interval == 0 or symbol_idx == symbols_count:
                         combo_elapsed_seconds = perf_counter() - combo_started_at
@@ -541,6 +561,9 @@ class BacktestRunner:
                         )
 
             row = self._build_metrics_row(strategy.params_to_row(prepared.params), all_trades)
+            if collect_stage_metrics:
+                for stage_id in tracked_stage_ids:
+                    row[_stage_metric_column_name(stage_id)] = int(stage_metric_totals.get(stage_id, 0))
             rows.append(row)
             combo_elapsed_seconds = perf_counter() - combo_started_at
             self._logger.info(

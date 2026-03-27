@@ -65,6 +65,7 @@ class PostPumpAbsorptionStrategy(BaseStrategy[PostPumpAbsorptionParams]):
                 else None
             ),
             collect_diagnostics=bool(context.get("collect_diagnostics", True)),
+            collect_stage_metrics=bool(context.get("collect_stage_metrics", False)),
         )
 
     def build_parameter_grid(self) -> list[PostPumpAbsorptionParams]:

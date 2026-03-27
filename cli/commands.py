@@ -334,6 +334,10 @@ def _resolve_ppa_stage_preset(raw_value: object) -> tuple[int | None, int | None
     return stage, through_stage, preset
 
 
+def _ppa_stage_metric_column_name(stage_id: str) -> str:
+    return f"ppa_stage_hits_{stage_id}"
+
+
 def _export_ppa_stage_reviews(
     *,
     diagnostics_dir: Path,
@@ -629,6 +633,35 @@ def _select_ppa_plot_params_row_by_stage(
         return None
 
     selected_stage_ids = set(_resolve_ppa_stage_ids(args))
+    selected_stage_columns = [_ppa_stage_metric_column_name(stage_id) for stage_id in selected_stage_ids]
+    if selected_stage_columns and all(column in results.columns for column in selected_stage_columns):
+        scored_rows: list[tuple[int, int, float, int, pd.Series]] = []
+        for row_index, (_, row) in enumerate(results.iterrows()):
+            stage_events_count = 0
+            for column in selected_stage_columns:
+                raw_value = pd.to_numeric(row.get(column, 0), errors="coerce")
+                if not pd.isna(raw_value):
+                    stage_events_count += int(raw_value)
+            raw_trades_count = pd.to_numeric(row.get("trades_count", 0), errors="coerce")
+            stage_events_count = int(
+                stage_events_count
+            )
+            trades_generated = int(raw_trades_count) if not pd.isna(raw_trades_count) else 0
+            profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
+            scored_rows.append((stage_events_count, trades_generated, profit_factor, -row_index, row))
+
+        if not scored_rows:
+            return None
+
+        best_score = max(scored_rows, key=lambda item: item[:4])
+        logger.info(
+            "запуск-бэктеста: stage-plot selected row from results stage_events=%s trades_generated=%s profit_factor=%.4f",
+            best_score[0],
+            best_score[1],
+            best_score[2],
+        )
+        return best_score[4]
+
     scored_rows: list[tuple[int, int, float, int, pd.Series]] = []
 
     for row_index, (_, row) in enumerate(results.iterrows()):
@@ -1939,11 +1972,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             return 1
         return 0
 
+    should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
+    stage_metric_ids_for_run: tuple[str, ...] | None = None
+    if (
+        should_plot
+        and strategy_id == "post_pump_absorption"
+        and (getattr(args, "ppa_stage", None) is not None or getattr(args, "ppa_through_stage", None) is not None)
+    ):
+        stage_metric_ids_for_run = _resolve_ppa_stage_ids(args)
+
     results = runner.run(
         strategy,
         symbol_frames,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
+        stage_metric_ids=stage_metric_ids_for_run,
     )
     summary = runner.build_summary(results)
     combinations_with_trades = int((results["trades_count"] > 0).sum()) if not results.empty else 0
@@ -1972,7 +2015,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             entry_timeframe.value,
         )
 
-    should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
     if should_plot:
         if results.empty:
             logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
@@ -2082,6 +2124,64 @@ def _run_ppa_research_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return max(run_exit_codes, default=0)
 
 
+def _collect_ppa_stage_summary_rows(
+    *,
+    timeframe: Timeframe,
+    scoped_results_dir: Path,
+    preset_name: str,
+) -> list[dict[str, object]]:
+    strategy_results_dir = _resolve_results_dir_for_strategy(
+        Path(scoped_results_dir),
+        "post_pump_absorption",
+    )
+    stage_reviews_dir = strategy_results_dir / "trade_plots" / "post_pump_absorption_diagnostics" / "stage_reviews"
+    manifest = _read_csv_or_empty(stage_reviews_dir / "manifest.csv")
+    if manifest.empty:
+        return []
+
+    summary_rows: list[dict[str, object]] = []
+    for _, row in manifest.iterrows():
+        summary_rows.append(
+            {
+                "timeframe": timeframe.value,
+                "preset": preset_name,
+                "stage_id": row.get("stage_id"),
+                "events_count": row.get("events_count"),
+                "events_path": row.get("events_path"),
+                "summary_path": row.get("summary_path"),
+            }
+        )
+    return summary_rows
+
+
+def _run_ppa_stage_timeframe_job(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    timeframe: Timeframe,
+    preset_stage: int | None,
+    preset_through_stage: int | None,
+    preset_name: str,
+    root_output_dir: Path,
+) -> tuple[str, int, list[dict[str, object]]]:
+    scoped_config = deepcopy(config)
+    scoped_config.strategy.strategy_id = "post_pump_absorption"
+    scoped_config.backtest.results_dir = root_output_dir / timeframe.value
+    scoped_args = _with_ppa_stage_timeframe(
+        args,
+        timeframe,
+        preset_stage=preset_stage,
+        preset_through_stage=preset_through_stage,
+    )
+    exit_code = _run_backtest_inner(scoped_config, scoped_args)
+    summary_rows = _collect_ppa_stage_summary_rows(
+        timeframe=timeframe,
+        scoped_results_dir=Path(scoped_config.backtest.results_dir),
+        preset_name=preset_name,
+    )
+    return timeframe.value, exit_code, summary_rows
+
+
 def _run_ppa_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("ppa-stage", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     preset_stage, preset_through_stage, preset_name = _resolve_ppa_stage_preset(getattr(args, "preset", None))
@@ -2105,38 +2205,55 @@ def _run_ppa_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     run_exit_codes: list[int] = []
     summary_rows: list[dict[str, object]] = []
-    for timeframe in timeframes:
-        scoped_config = deepcopy(config)
-        scoped_config.strategy.strategy_id = "post_pump_absorption"
-        scoped_config.backtest.results_dir = root_output_dir / timeframe.value
-        scoped_args = _with_ppa_stage_timeframe(
-            args,
-            timeframe,
+    if len(timeframes) > 1:
+        logger.info("ppa-stage: parallel timeframes enabled workers=%s", len(timeframes))
+        ordered_results: dict[str, tuple[int, list[dict[str, object]]]] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(timeframes)) as executor:
+            futures = {
+                executor.submit(
+                    _run_ppa_stage_timeframe_job,
+                    config=config,
+                    args=args,
+                    timeframe=timeframe,
+                    preset_stage=preset_stage,
+                    preset_through_stage=preset_through_stage,
+                    preset_name=preset_name,
+                    root_output_dir=root_output_dir,
+                ): timeframe.value
+                for timeframe in timeframes
+            }
+            for future in concurrent.futures.as_completed(futures):
+                timeframe_value, exit_code, timeframe_rows = future.result()
+                ordered_results[timeframe_value] = (exit_code, timeframe_rows)
+                logger.info(
+                    "ppa-stage: timeframe=%s completed exit_code=%s summary_rows=%s",
+                    timeframe_value,
+                    exit_code,
+                    len(timeframe_rows),
+                )
+
+        for timeframe in timeframes:
+            exit_code, timeframe_rows = ordered_results[timeframe.value]
+            run_exit_codes.append(exit_code)
+            summary_rows.extend(timeframe_rows)
+    else:
+        timeframe_value, exit_code, timeframe_rows = _run_ppa_stage_timeframe_job(
+            config=config,
+            args=args,
+            timeframe=timeframes[0],
             preset_stage=preset_stage,
             preset_through_stage=preset_through_stage,
+            preset_name=preset_name,
+            root_output_dir=root_output_dir,
         )
-        exit_code = _run_backtest_inner(scoped_config, scoped_args)
+        logger.info(
+            "ppa-stage: timeframe=%s completed exit_code=%s summary_rows=%s",
+            timeframe_value,
+            exit_code,
+            len(timeframe_rows),
+        )
         run_exit_codes.append(exit_code)
-
-        strategy_results_dir = _resolve_results_dir_for_strategy(
-            Path(scoped_config.backtest.results_dir),
-            "post_pump_absorption",
-        )
-        stage_reviews_dir = strategy_results_dir / "trade_plots" / "post_pump_absorption_diagnostics" / "stage_reviews"
-        manifest_path = stage_reviews_dir / "manifest.csv"
-        manifest = _read_csv_or_empty(manifest_path)
-        if not manifest.empty:
-            for _, row in manifest.iterrows():
-                summary_rows.append(
-                    {
-                        "timeframe": timeframe.value,
-                        "preset": preset_name,
-                        "stage_id": row.get("stage_id"),
-                        "events_count": row.get("events_count"),
-                        "events_path": row.get("events_path"),
-                        "summary_path": row.get("summary_path"),
-                    }
-                )
+        summary_rows.extend(timeframe_rows)
 
     summary_path = root_output_dir / "stage_review_summary.csv"
     pd.DataFrame(summary_rows).to_csv(summary_path, index=False)

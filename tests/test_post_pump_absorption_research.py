@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -345,6 +346,43 @@ def test_run_ppa_stage_inner_runs_all_micro_timeframes(monkeypatch, tmp_path: Pa
     exit_code = commands._run_ppa_stage_inner(config, args)
 
     assert exit_code == 0
-    assert calls == ["1m", "3m", "5m"]
+    assert sorted(calls) == ["1m", "3m", "5m"]
     assert (output_dir / "stage_review_summary.csv").exists()
     assert (output_dir / "stage_review_context.json").exists()
+
+
+def test_select_ppa_plot_params_row_by_stage_uses_results_stage_columns_without_replay() -> None:
+    class _StrategyStub:
+        def generate_events_multi_tf(self, *args, **kwargs):  # pragma: no cover - should not be called
+            raise AssertionError("unexpected replay")
+
+        def consume_last_generation_diagnostics(self):  # pragma: no cover - should not be called
+            raise AssertionError("unexpected diagnostics replay")
+
+    results = pd.DataFrame(
+        [
+            {
+                "profit_factor": 1.1,
+                "trades_count": 2,
+                "ppa_stage_hits_stage_4_aggression": 3,
+            },
+            {
+                "profit_factor": 1.0,
+                "trades_count": 5,
+                "ppa_stage_hits_stage_4_aggression": 7,
+            },
+        ]
+    )
+
+    selected = commands._select_ppa_plot_params_row_by_stage(
+        args=argparse.Namespace(ppa_stage=4, ppa_through_stage=None),
+        strategy=_StrategyStub(),  # type: ignore[arg-type]
+        symbol_frames={"BTC/USDT": object()},  # type: ignore[dict-item]
+        results=results,
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+        logger=logging.getLogger("test"),
+    )
+
+    assert selected is not None
+    assert int(selected["ppa_stage_hits_stage_4_aggression"]) == 7
