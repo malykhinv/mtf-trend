@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -38,6 +39,28 @@ def _timeframe_minutes(timeframe: Timeframe) -> int:
 
 def _bars_for_minutes(timeframe: Timeframe, minutes: int) -> int:
     return max(1, math.ceil(minutes / _timeframe_minutes(timeframe)))
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None or seconds < 0:
+        return "n/a"
+    rounded = int(round(seconds))
+    hours, remainder = divmod(rounded, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _progress_snapshot(*, completed: int, total: int, started_at: float) -> tuple[float, float, float | None]:
+    elapsed = max(0.0, time.time() - started_at)
+    if total <= 0:
+        return 100.0, elapsed, 0.0
+    ratio = min(1.0, completed / total)
+    if completed <= 0 or ratio <= 0:
+        return 0.0, elapsed, None
+    eta_seconds = (elapsed / ratio) - elapsed
+    return ratio * 100.0, elapsed, max(0.0, eta_seconds)
 
 
 def _safe_numeric(value: object) -> float | None:
@@ -294,6 +317,14 @@ def _build_timeframe_candidates(
     candidate_parts: list[pd.DataFrame] = []
     total_candidates = 0
     max_workers = min(6, max(1, os.cpu_count() or 1))
+    scan_started_at = time.time()
+
+    logger.info(
+        "hourly-asia-pump: timeframe=%s stage=candidate-scan symbols_total=%s workers=%s",
+        timeframe.value,
+        len(symbols),
+        max_workers,
+    )
 
     if len(symbols) < max_workers * 2:
         for index, symbol in enumerate(symbols, start=1):
@@ -307,12 +338,20 @@ def _build_timeframe_candidates(
                 candidate_parts.append(events)
                 total_candidates += len(events)
             if index % 25 == 0 or index == len(symbols):
+                progress_pct, elapsed, eta_seconds = _progress_snapshot(
+                    completed=index,
+                    total=len(symbols),
+                    started_at=scan_started_at,
+                )
                 logger.info(
-                    "hourly-asia-pump: timeframe=%s scanned_symbols=%s/%s candidate_rows=%s mode=local",
+                    "hourly-asia-pump: timeframe=%s stage=candidate-scan progress=%.1f%% scanned_symbols=%s/%s candidate_rows=%s mode=local elapsed=%s eta=%s",
                     timeframe.value,
+                    progress_pct,
                     index,
                     len(symbols),
                     total_candidates,
+                    _format_duration(elapsed),
+                    _format_duration(eta_seconds),
                 )
     else:
         chunk_size = max(4, min(16, math.ceil(len(symbols) / (max_workers * 3))))
@@ -336,19 +375,56 @@ def _build_timeframe_candidates(
                     candidate_parts.append(events)
                     total_candidates += len(events)
                 if index % 4 == 0 or processed_symbols >= len(symbols):
+                    progress_pct, elapsed, eta_seconds = _progress_snapshot(
+                        completed=processed_symbols,
+                        total=len(symbols),
+                        started_at=scan_started_at,
+                    )
                     logger.info(
-                        "hourly-asia-pump: timeframe=%s scanned_symbols=%s/%s candidate_rows=%s workers=%s mode=process chunk_size=%s",
+                        "hourly-asia-pump: timeframe=%s stage=candidate-scan progress=%.1f%% scanned_symbols=%s/%s candidate_rows=%s workers=%s mode=process chunk_size=%s elapsed=%s eta=%s",
                         timeframe.value,
+                        progress_pct,
                         processed_symbols,
                         len(symbols),
                         total_candidates,
                         max_workers,
                         chunk_size,
+                        _format_duration(elapsed),
+                        _format_duration(eta_seconds),
                     )
 
     if not candidate_parts:
+        progress_pct, elapsed, eta_seconds = _progress_snapshot(
+            completed=len(symbols),
+            total=len(symbols),
+            started_at=scan_started_at,
+        )
+        logger.info(
+            "hourly-asia-pump: timeframe=%s stage=candidate-scan progress=%.1f%% scanned_symbols=%s/%s candidate_rows=0 elapsed=%s eta=%s",
+            timeframe.value,
+            progress_pct,
+            len(symbols),
+            len(symbols),
+            _format_duration(elapsed),
+            _format_duration(eta_seconds),
+        )
         return pd.DataFrame()
     result = pd.concat(candidate_parts, ignore_index=True)
+    progress_pct, elapsed, eta_seconds = _progress_snapshot(
+        completed=len(symbols),
+        total=len(symbols),
+        started_at=scan_started_at,
+    )
+    logger.info(
+        "hourly-asia-pump: timeframe=%s stage=candidate-scan-finished progress=%.1f%% scanned_symbols=%s/%s candidate_rows=%s elapsed=%s eta=%s",
+        timeframe.value,
+        progress_pct,
+        len(symbols),
+        len(symbols),
+        len(result),
+        _format_duration(elapsed),
+        _format_duration(eta_seconds),
+    )
     return result.sort_values(["timestamp_ms", "symbol"]).reset_index(drop=True)
 
 
@@ -760,6 +836,7 @@ def build_hourly_asia_pump_research_artifacts(
     active_logger = logger or module_logger
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    run_started_at = time.time()
 
     preparer = DataPreparer(cache_dir)
     ranker = DailyVolumeRanker(cache_dir)
@@ -770,10 +847,27 @@ def build_hourly_asia_pump_research_artifacts(
     common_pattern_frames: list[pd.DataFrame] = []
     symbol_summary_frames: list[pd.DataFrame] = []
     resolved_symbols_by_timeframe: dict[str, list[str]] = {}
+    timeframe_durations: list[float] = []
+    total_timeframes = len(timeframes)
 
-    for timeframe in timeframes:
+    for timeframe_index, timeframe in enumerate(timeframes, start=1):
         if timeframe not in HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES:
             raise ValueError(f"Unsupported hourly Asia pump timeframe: {timeframe.value}")
+        timeframe_started_at = time.time()
+        overall_progress_pct, overall_elapsed, overall_eta_seconds = _progress_snapshot(
+            completed=timeframe_index - 1,
+            total=total_timeframes,
+            started_at=run_started_at,
+        )
+        active_logger.info(
+            "hourly-asia-pump: overall progress=%.1f%% timeframe_step=%s/%s timeframe=%s elapsed=%s eta=%s stage=resolve-symbols",
+            overall_progress_pct,
+            timeframe_index,
+            total_timeframes,
+            timeframe.value,
+            _format_duration(overall_elapsed),
+            _format_duration(overall_eta_seconds),
+        )
 
         resolved_symbols = _resolve_symbols_for_timeframe(
             preparer=preparer,
@@ -784,7 +878,13 @@ def build_hourly_asia_pump_research_artifacts(
             logger=active_logger,
         )
         resolved_symbols_by_timeframe[timeframe.value] = resolved_symbols
-        active_logger.info("hourly-asia-pump: timeframe=%s symbols=%s", timeframe.value, len(resolved_symbols))
+        active_logger.info(
+            "hourly-asia-pump: timeframe=%s stage=resolve-symbols symbols=%s timeframe_step=%s/%s",
+            timeframe.value,
+            len(resolved_symbols),
+            timeframe_index,
+            total_timeframes,
+        )
 
         grid = build_hourly_asia_pump_grid(
             timeframe=timeframe,
@@ -816,10 +916,10 @@ def build_hourly_asia_pump_research_artifacts(
             if reuse_candidate_cache and candidates_cache_path.exists():
                 candidates = pd.read_parquet(candidates_cache_path)
                 active_logger.info(
-                    "hourly-asia-pump: timeframe=%s reused candidate cache=%s rows=%s",
+                    "hourly-asia-pump: timeframe=%s stage=candidate-cache cache=reused rows=%s path=%s",
                     timeframe.value,
-                    candidates_cache_path,
                     len(candidates),
+                    candidates_cache_path,
                 )
 
         if candidates.empty:
@@ -834,11 +934,17 @@ def build_hourly_asia_pump_research_artifacts(
                 candidates_cache_path.parent.mkdir(parents=True, exist_ok=True)
                 candidates.to_parquet(candidates_cache_path, index=False)
                 active_logger.info(
-                    "hourly-asia-pump: timeframe=%s saved candidate cache=%s rows=%s",
+                    "hourly-asia-pump: timeframe=%s stage=candidate-cache cache=saved rows=%s path=%s",
                     timeframe.value,
-                    candidates_cache_path,
                     len(candidates),
+                    candidates_cache_path,
                 )
+        active_logger.info(
+            "hourly-asia-pump: timeframe=%s stage=grid-eval grid_rows=%s candidate_rows=%s",
+            timeframe.value,
+            len(grid),
+            len(candidates),
+        )
         grid_summary = _build_grid_summary(timeframe=timeframe, events=candidates, grid=grid)
         grid_frames.append(grid_summary)
 
@@ -852,11 +958,28 @@ def build_hourly_asia_pump_research_artifacts(
         common_pattern_frames.append(_build_common_patterns(selected_events))
         symbol_summary_frames.append(_build_selected_symbol_summary(selected_events))
 
+        timeframe_elapsed = max(0.0, time.time() - timeframe_started_at)
+        timeframe_durations.append(timeframe_elapsed)
+        completed_timeframes = timeframe_index
+        overall_progress_pct, overall_elapsed, _ = _progress_snapshot(
+            completed=completed_timeframes,
+            total=total_timeframes,
+            started_at=run_started_at,
+        )
+        avg_timeframe_seconds = sum(timeframe_durations) / len(timeframe_durations)
+        remaining_timeframes = total_timeframes - completed_timeframes
+        overall_eta_seconds = avg_timeframe_seconds * remaining_timeframes
         active_logger.info(
-            "hourly-asia-pump: timeframe=%s candidates=%s selected_events=%s",
+            "hourly-asia-pump: overall progress=%.1f%% timeframe_step=%s/%s timeframe=%s candidates=%s selected_events=%s timeframe_elapsed=%s total_elapsed=%s eta=%s",
+            overall_progress_pct,
+            completed_timeframes,
+            total_timeframes,
             timeframe.value,
             len(candidates),
             len(selected_events),
+            _format_duration(timeframe_elapsed),
+            _format_duration(overall_elapsed),
+            _format_duration(overall_eta_seconds),
         )
 
     grid_summary_all = pd.concat(grid_frames, ignore_index=True) if grid_frames else pd.DataFrame()
@@ -911,11 +1034,13 @@ def build_hourly_asia_pump_research_artifacts(
         selection_profile=selection_profile,
     )
 
+    total_elapsed = max(0.0, time.time() - run_started_at)
     active_logger.info(
-        "hourly-asia-pump research artifacts saved: output_dir=%s timeframes=%s selected_events=%s",
+        "hourly-asia-pump research artifacts saved: output_dir=%s timeframes=%s selected_events=%s elapsed=%s",
         output_dir,
         ",".join(timeframe.value for timeframe in timeframes),
         len(selected_events_all),
+        _format_duration(total_elapsed),
     )
     return {
         "grid_summary": grid_summary_path,
