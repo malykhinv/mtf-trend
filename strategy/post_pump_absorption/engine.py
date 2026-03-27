@@ -163,6 +163,7 @@ class PostPumpAbsorptionEngine:
     def __init__(self) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
         self._prepared_oi_frame_cache: dict[int, pd.DataFrame] = {}
+        self._entry_with_oi_context_cache: dict[tuple[int, int], pd.DataFrame] = {}
 
     def consume_last_generation_diagnostics(self) -> GenerationDiagnostics:
         diagnostics = dict(self._last_generation_diagnostics)
@@ -457,13 +458,19 @@ class PostPumpAbsorptionEngine:
         entry_frame: pd.DataFrame,
         oi_frame: pd.DataFrame | None,
     ) -> pd.DataFrame:
-        work = entry_frame.copy()
         prepared_oi = self._prepare_oi_frame(oi_frame)
+        cache_key = (id(entry_frame), id(prepared_oi) if prepared_oi is not None else 0)
+        cached = self._entry_with_oi_context_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        work = entry_frame.copy()
         if prepared_oi is None:
             work["open_interest_resolved"] = np.nan
             work["oi_delta_resolved"] = np.nan
             work["oi_delta_pct_resolved"] = np.nan
             work["oi_available_resolved"] = False
+            self._entry_with_oi_context_cache[cache_key] = work
             return work
         merged = pd.merge_asof(
             work.sort_values("timestamp"),
@@ -481,7 +488,9 @@ class PostPumpAbsorptionEngine:
             errors="coerce",
         )
         merged["oi_available_resolved"] = merged["oi_available_resolved"].fillna(False).astype(bool)
-        return merged.reset_index(drop=True)
+        merged = merged.reset_index(drop=True)
+        self._entry_with_oi_context_cache[cache_key] = merged
+        return merged
 
     @classmethod
     def _has_usable_flow_data(cls, frame: pd.DataFrame) -> bool:
