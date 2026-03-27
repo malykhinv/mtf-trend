@@ -69,6 +69,15 @@ from strategy.bee_bite import (
     validate_bee_bite_runtime,
 )
 from strategy.factory import build_strategy
+from strategy.hourly_asia_pump import (
+    DEFAULT_ASIA_END_HOUR_UTC,
+    DEFAULT_ASIA_START_HOUR_UTC,
+    DEFAULT_MAX_FOLLOW_MINUTES,
+    DEFAULT_TRIGGER_MINUTE,
+    HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
+    build_hourly_asia_pump_research_artifacts,
+    parse_hourly_asia_pump_profile_id,
+)
 from strategy.post_pump_absorption import (
     PostPumpAbsorptionParams,
     PostPumpAbsorptionStrategy,
@@ -1219,6 +1228,16 @@ def _resolve_ppa_research_timeframes(args: argparse.Namespace) -> tuple[Timefram
     )
 
 
+def _resolve_hourly_pump_timeframes(args: argparse.Namespace) -> tuple[Timeframe, ...]:
+    return _resolve_timeframe_sequence(
+        getattr(args, "timeframes", None),
+        fallback=HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
+        fallback_timeframe=Timeframe.M1,
+        argument_name="--timeframes",
+        supported=set(HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES),
+    )
+
+
 def _resolve_backtest_timeframes(
     *,
     strategy_id: str,
@@ -2124,6 +2143,57 @@ def _run_ppa_research_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return max(run_exit_codes, default=0)
 
 
+def _run_hourly_pump_research_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-hourly-pump-research", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    timeframes = _resolve_hourly_pump_timeframes(args)
+    selection_profile = parse_hourly_asia_pump_profile_id(getattr(args, "selection_profile", None))
+    asia_start_hour_utc = int(getattr(args, "asia_start_hour_utc", DEFAULT_ASIA_START_HOUR_UTC))
+    asia_end_hour_utc = int(getattr(args, "asia_end_hour_utc", DEFAULT_ASIA_END_HOUR_UTC))
+    trigger_minute = int(getattr(args, "trigger_minute", DEFAULT_TRIGGER_MINUTE))
+    max_follow_minutes = int(getattr(args, "max_follow_minutes", DEFAULT_MAX_FOLLOW_MINUTES))
+    timestamp_label = time.strftime("%Y%m%d_%H%M%S")
+    root_output_dir = (
+        Path(args.output_dir)
+        if getattr(args, "output_dir", None)
+        else Path(config.backtest.results_dir) / "research" / "hourly_asia_pump" / timestamp_label
+    )
+    root_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "run-hourly-pump-research: timeframes=%s output_dir=%s profile=%s asia=%s-%s trigger_minute=%s max_follow_minutes=%s",
+        ",".join(timeframe.value for timeframe in timeframes),
+        root_output_dir,
+        selection_profile,
+        asia_start_hour_utc,
+        asia_end_hour_utc,
+        trigger_minute,
+        max_follow_minutes,
+    )
+
+    artifacts = build_hourly_asia_pump_research_artifacts(
+        cache_dir=config.backtest.cache_dir,
+        output_dir=root_output_dir,
+        timeframes=timeframes,
+        symbols=getattr(args, "symbols", None),
+        top_n=getattr(args, "top_n", None),
+        asia_start_hour_utc=asia_start_hour_utc,
+        asia_end_hour_utc=asia_end_hour_utc,
+        trigger_minute=trigger_minute,
+        max_follow_minutes=max_follow_minutes,
+        selection_profile=selection_profile,
+        candidate_cache_dir=Path(config.backtest.results_dir) / "research_cache" / "hourly_asia_pump",
+        reuse_candidate_cache=True,
+        logger=logger,
+    )
+    logger.info(
+        "run-hourly-pump-research: artifacts report=%s grid_summary=%s selected_events=%s",
+        artifacts["report"],
+        artifacts["grid_summary"],
+        artifacts["selected_profile_events"],
+    )
+    return 0
+
+
 def _collect_ppa_stage_summary_rows(
     *,
     timeframe: Timeframe,
@@ -2517,6 +2587,11 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
 def run_ppa_research(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs post_pump_absorption on multiple micro timeframes and builds research artifacts."""
     return _run_with_logging("run-ppa-research", config, lambda: _run_ppa_research_inner(config, args))
+
+
+def run_hourly_pump_research(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs hourly Asia-session pump research on cached micro timeframes."""
+    return _run_with_logging("run-hourly-pump-research", config, lambda: _run_hourly_pump_research_inner(config, args))
 
 
 def run_ppa_stage(config: AppConfig, args: argparse.Namespace) -> int:

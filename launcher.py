@@ -17,6 +17,7 @@ MODE_FETCH_CACHE = "fetch-cache"
 MODE_UPDATE_CACHE = "update-cache"
 MODE_BACKTEST = "analyze-cache"
 MODE_PPA_RESEARCH = "ppa-research"
+MODE_HOURLY_PUMP_RESEARCH = "hourly-pump-research"
 MODE_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
@@ -25,6 +26,7 @@ MODE_LABELS: dict[str, str] = {
     MODE_UPDATE_CACHE: "Cache update",
     MODE_BACKTEST: "Analyze cache with strategy",
     MODE_PPA_RESEARCH: "Run PPA research",
+    MODE_HOURLY_PUMP_RESEARCH: "Run hourly pump research",
     MODE_QUALITY: "Check cache quality",
     MODE_CLEAR_CACHE: "Clear cache",
 }
@@ -97,6 +99,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ppa-profile", choices=["loose", "balanced", "strict"], default=None, help="Post pump absorption profile")
     parser.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
     parser.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
+    parser.add_argument("--selection-profile", choices=["loose", "balanced", "strict"], default=None, help="Hourly pump research selection profile")
+    parser.add_argument("--asia-start-hour-utc", type=int, default=None, help="Hourly pump research Asia session start hour in UTC")
+    parser.add_argument("--asia-end-hour-utc", type=int, default=None, help="Hourly pump research Asia session end hour in UTC")
+    parser.add_argument("--trigger-minute", type=int, default=None, help="Hourly pump research trigger minute inside the hour")
+    parser.add_argument("--max-follow-minutes", type=int, default=None, help="Hourly pump research max follow window in minutes")
     parser.add_argument("--output-dir", default=None, help="Directory for diagnostic files")
     parser.add_argument("--output", default=None, help="Output JSON/CSV path")
     parser.add_argument("--plot", default=None, help="Save diagnostic files for the best combination (true/false)")
@@ -127,6 +134,11 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         ppa_profile=task.get("ppa_profile", cli_args.ppa_profile),
         ppa_deposit=float(task["ppa_deposit"]) if "ppa_deposit" in task and task.get("ppa_deposit") is not None else cli_args.ppa_deposit,
         ppa_risk_pct=float(task["ppa_risk_pct"]) if "ppa_risk_pct" in task and task.get("ppa_risk_pct") is not None else cli_args.ppa_risk_pct,
+        selection_profile=task.get("selection_profile", cli_args.selection_profile),
+        asia_start_hour_utc=int(task["asia_start_hour_utc"]) if "asia_start_hour_utc" in task and task.get("asia_start_hour_utc") is not None else cli_args.asia_start_hour_utc,
+        asia_end_hour_utc=int(task["asia_end_hour_utc"]) if "asia_end_hour_utc" in task and task.get("asia_end_hour_utc") is not None else cli_args.asia_end_hour_utc,
+        trigger_minute=int(task["trigger_minute"]) if "trigger_minute" in task and task.get("trigger_minute") is not None else cli_args.trigger_minute,
+        max_follow_minutes=int(task["max_follow_minutes"]) if "max_follow_minutes" in task and task.get("max_follow_minutes") is not None else cli_args.max_follow_minutes,
         output_dir=task.get("output_dir", cli_args.output_dir),
         output=task.get("output", cli_args.output),
         results_input=task.get("results_input", cli_args.results_input),
@@ -142,6 +154,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
         MODE_UPDATE_CACHE: commands.update_cache,
         MODE_BACKTEST: commands.run_backtest,
         MODE_PPA_RESEARCH: commands.run_ppa_research,
+        MODE_HOURLY_PUMP_RESEARCH: commands.run_hourly_pump_research,
         MODE_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
     }

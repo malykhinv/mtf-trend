@@ -140,6 +140,55 @@ def build_parser() -> argparse.ArgumentParser:
     ppa_research.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
     ppa_research.add_argument("--output-dir", default=None, help="Root directory for research results")
 
+    hourly_pump = subparsers.add_parser(
+        "run-hourly-pump-research",
+        help="Run hourly Asia-session top-of-hour pump research on cached micro timeframes",
+    )
+    hourly_pump.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    hourly_pump.add_argument(
+        "--top-n",
+        type=_positive_int_for("--top-n"),
+        default=None,
+        help="Number of symbols after cache-based volume pre-rank",
+    )
+    hourly_pump.add_argument(
+        "--timeframes",
+        nargs="*",
+        default=None,
+        help="Micro timeframes to run, default: 1m 3m 5m",
+    )
+    hourly_pump.add_argument(
+        "--selection-profile",
+        choices=["loose", "balanced", "strict"],
+        default="balanced",
+        help="Named threshold profile used for the detailed event table",
+    )
+    hourly_pump.add_argument(
+        "--asia-start-hour-utc",
+        type=int,
+        default=0,
+        help="Inclusive Asia session start hour in UTC",
+    )
+    hourly_pump.add_argument(
+        "--asia-end-hour-utc",
+        type=int,
+        default=9,
+        help="Exclusive Asia session end hour in UTC",
+    )
+    hourly_pump.add_argument(
+        "--trigger-minute",
+        type=int,
+        default=0,
+        help="Minute inside the hour used as the top-of-hour trigger, default: 0",
+    )
+    hourly_pump.add_argument(
+        "--max-follow-minutes",
+        type=_positive_int_for("--max-follow-minutes"),
+        default=720,
+        help="Maximum post-trigger window used to track the move before a 50%% retrace",
+    )
+    hourly_pump.add_argument("--output-dir", default=None, help="Root directory for research results")
+
     ppa_stage = subparsers.add_parser(
         "ppa-stage",
         help="Run compact post_pump_absorption stage review across micro timeframes",
@@ -192,6 +241,7 @@ def resolve_handler(command_name: str) -> Handler:
         "update-cache": commands.update_cache,
         "run-backtest": commands.run_backtest,
         "run-ppa-research": commands.run_ppa_research,
+        "run-hourly-pump-research": commands.run_hourly_pump_research,
         "ppa-stage": commands.run_ppa_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,

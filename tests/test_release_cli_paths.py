@@ -85,6 +85,24 @@ def test_launcher_parser_supports_ppa_research_mode() -> None:
     assert args.timeframes == ["1m", "5m"]
 
 
+def test_launcher_parser_supports_hourly_pump_research_mode() -> None:
+    args = launcher._build_parser().parse_args(
+        [
+            "--mode",
+            launcher.MODE_HOURLY_PUMP_RESEARCH,
+            "--selection-profile",
+            "strict",
+            "--timeframes",
+            "1m",
+            "5m",
+        ]
+    )
+
+    assert args.mode == launcher.MODE_HOURLY_PUMP_RESEARCH
+    assert args.selection_profile == "strict"
+    assert args.timeframes == ["1m", "5m"]
+
+
 def test_launcher_run_mode_routes_ppa_research(monkeypatch) -> None:
     called: list[str] = []
 
@@ -104,10 +122,35 @@ def test_launcher_run_mode_routes_ppa_research(monkeypatch) -> None:
     assert called == ["run_ppa_research"]
 
 
+def test_launcher_run_mode_routes_hourly_pump_research(monkeypatch) -> None:
+    called: list[str] = []
+
+    def _fake_run_hourly_pump_research(_config: object, _args: argparse.Namespace) -> int:
+        called.append("run_hourly_pump_research")
+        return 0
+
+    monkeypatch.setattr(commands, "run_hourly_pump_research", _fake_run_hourly_pump_research)
+
+    exit_code = launcher._run_mode(
+        config=object(),  # type: ignore[arg-type]
+        mode=launcher.MODE_HOURLY_PUMP_RESEARCH,
+        task_args=argparse.Namespace(),
+    )
+
+    assert exit_code == 0
+    assert called == ["run_hourly_pump_research"]
+
+
 def test_resolve_handler_supports_run_ppa_research() -> None:
     handler = resolve_handler("run-ppa-research")
 
     assert handler is commands.run_ppa_research
+
+
+def test_resolve_handler_supports_run_hourly_pump_research() -> None:
+    handler = resolve_handler("run-hourly-pump-research")
+
+    assert handler is commands.run_hourly_pump_research
 
 
 def test_resolve_handler_supports_fetch_ppa_cache() -> None:
@@ -146,6 +189,35 @@ def test_ppa_stage_parser_accepts_compact_stage_preset() -> None:
     assert args.command == "ppa-stage"
     assert args.preset == "s4"
     assert args.timeframes == ["1m", "5m"]
+
+
+def test_hourly_pump_parser_accepts_profile_and_session_arguments() -> None:
+    args = build_parser().parse_args(
+        [
+            "run-hourly-pump-research",
+            "--selection-profile",
+            "balanced",
+            "--asia-start-hour-utc",
+            "0",
+            "--asia-end-hour-utc",
+            "9",
+            "--trigger-minute",
+            "0",
+            "--max-follow-minutes",
+            "240",
+            "--timeframes",
+            "1m",
+            "3m",
+        ]
+    )
+
+    assert args.command == "run-hourly-pump-research"
+    assert args.selection_profile == "balanced"
+    assert args.asia_start_hour_utc == 0
+    assert args.asia_end_hour_utc == 9
+    assert args.trigger_minute == 0
+    assert args.max_follow_minutes == 240
+    assert args.timeframes == ["1m", "3m"]
 
 
 def test_resolve_ppa_stage_ids_supports_single_stage_and_cumulative_mode() -> None:

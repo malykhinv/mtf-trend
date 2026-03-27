@@ -1,92 +1,52 @@
 ## Инструкция для AI-агента
 
-Репозиторий снова рабоче-мультистратегийный, но активное R&D-направление сейчас одно: `post_pump_absorption`.
+Активное R&D-направление на этой ветке одно: `hourly_asia_pump`.
 
 ### Актуальная структура
 
 - `cli/` - CLI-команды
 - `config/` - загрузка конфигурации
 - `data/` - сбор, хранение и проверка данных
-- `strategy/bee_bite/` - старая стратегия и ее stage-review инструменты
-- `strategy/post_pump_absorption/` - новый рабочий эксперимент для частых входов после пампа
-- `strategy/common/` - общие утилиты
-- `simulation/` - симуляция позиций
-- `vectorbt_runner/` - backtest runner и подготовка данных
+- `strategy/hourly_asia_pump/` - основной research-поток для новой гипотезы
+- `strategy/post_pump_absorption/` - старая исследовательская ветка, сохраняется как reference
+- `strategy/bee_bite/` - legacy стратегия, сохраняется как reference
+- `vectorbt_runner/` - подготовка входных данных из parquet-кэша
 
-### Текущий приоритет
+### Текущая гипотеза
 
-Основная стратегия для новых итераций: `post_pump_absorption`.
+- в азиатскую сессию часто возникают импульсы ровно на `XX:00`;
+- ключевой сигнал - импульсная свеча, которая стартует в `00` минут;
+- импульс должен быть не просто зелёной свечой, а аномалией по диапазону, телу, объёму и локальному breakout;
+- важно измерять не только сам факт свечи, но и то, насколько далеко памп живёт до отката на `50%` и более;
+- основной результат этой ветки - исследовательские таблицы и отчёт, а не готовый торговый движок.
 
-Ее текущая гипотеза:
+### Что считать устаревшим для этой ветки
 
-- ищем свежий памп;
-- после него ищем post-pump range;
-- работаем только с нижней зоной этого диапазона;
-- главный триггер - buy-side aggression плюс ответ цены;
-- `OI` полезен, но не обязателен;
-- `sweep` полезен, но не обязателен;
-- в текущей реализации стратегия работает только на `1m`, `3m`, `5m`;
-- в текущей реализации HTF-box и MTF price-filter не используются;
-- `OI` подтягивается как optional enhancer из `5m`, если `entry_tf=1m/3m` и `levels_tf=5m`;
-- если `entry_tf=5m`, тот же `5m` ряд может быть источником `OI`;
-- `OI` не должен быть обязательным gate, но может смягчать пороги агрессии, когда `5m OI` подтверждает вход;
-- в текущей реализации time-boundary признаки `1m/5m/30m/60m` используются как trade metadata markers для отчётов и анализа, а не как фильтры входа;
-- ключевые окна стратегии хранятся в минутах и нормализуются в бары под текущий ТФ;
-- локальный stop ставится за локальную структуру или микро-базу, а не за весь боковик;
-- базовые цели - `range_mid` и `range_high`;
-- задача текущей итерации - получить много валидных входов, а затем отсекать шум статистически.
-- current implementation locks the range on candles before the trigger candle; trigger candles must not move `range_high` or `TP` levels at decision time.
-- current implementation refines the detected pump to the local peak before the post-pump scan begins.
-- current implementation supports sequential re-entries inside one post-pump regime after the previous trade is closed.
-- current implementation requires usable taker-flow data; if taker data is absent or unusable, diagnostics must report `missing_taker_data` instead of silently returning zero trades.
-- current implementation stores per-trade metadata (`setup_type`, entry position in range, aggression strength, stop width, `MFE/MAE`, target hits) and uses it in backtest analytics.
-- current implementation also stores `5m OI` confirmation metadata and time-boundary markers (`1m/5m/30m/60m`) for report slicing.
-- current implementation exposes explicit logical stages for PPA diagnostics: `stage_1_pump`, `stage_2_range`, `stage_3_lower_zone`, `stage_4_aggression`, `stage_5_setup`, `stage_6_trade`.
-- current implementation exports timestamped `stage_events` for PPA diagnostics, so manual review can be done stage-by-stage.
-- current implementation has a dedicated one-command research runner: `run-ppa-research`.
-- `run-ppa-research` is the preferred entry point for PPA analysis; it must run all required micro timeframes (`1m`, `3m`, `5m` by default), export per-timeframe raw results, and build consolidated CSV/JSON/Markdown reports plus PNG charts in one root directory.
-- research artifacts for `post_pump_absorption` must stay strategy-specific and must not be forced through the removed bee_bite reporting path.
-- `fetch-data` and `update-cache` must support explicit `--symbols`, `--timeframes` and `--skip-open-interest`; this is the supported way to build `1m` cache without OI.
-- `launcher.py` must expose the PPA flow as a first-class mode instead of keeping a `bee_bite only` interface.
-
-### Что считать устаревшим
-
-- Нельзя тянуть новую логику в `bee_bite` как еще один reclaim-режим.
-- Нельзя возвращать репозиторий к допущению "в рабочем коде есть только bee_bite".
-- Нельзя делать `OI` обязательным gate для `post_pump_absorption`.
-- Нельзя делать обязательным `sweep/reclaim` для `post_pump_absorption`.
-- Нельзя снова строить edge вокруг редкого дальнего `TP2` от хая пампа.
+- не тянуть новую логику в `post_pump_absorption` как ещё один режим;
+- не делать `post_pump_absorption` или `bee_bite` основным пользовательским путём в README и launcher;
+- не требовать `OI`, taker-flow или stage-диагностику для новой гипотезы, если они отсутствуют в кэше.
 
 ### Правила для правок
 
-1. Новые изменения по поиску частых post-pump входов должны идти в `strategy/post_pump_absorption/`.
-2. `bee_bite` сохраняется как историческая стратегия для backtest, но legacy review/postmortem CLI path по ней больше не является поддерживаемым пользовательским интерфейсом.
-3. Для `post_pump_absorption` приоритет у двух сетапов:
-   - `LSB` (`local structure break`)
-   - `MBB` (`micro base breakout`)
-4. Если меняется гипотеза новой стратегии, сначала обновляется этот файл и/или README стратегии, потом код.
-5. Для первой итерации предпочтительнее простая per-symbol логика, чем сложный portfolio ranking.
-6. Приоритет метрик для новой стратегии:
-   - число входов,
-   - hit-rate до `range_mid`,
-   - hit-rate до `range_high`,
-   - `MAE/MFE`,
-   - и только потом общий `PnL`.
+1. Новые изменения по поиску top-of-hour пампов должны идти в `strategy/hourly_asia_pump/`.
+2. Сначала обновляется документация ветки (`README.md`, этот файл, README стратегии), затем код.
+3. Приоритет артефактов:
+   - полная сетка параметров,
+   - сводка по найденным событиям,
+   - детальная таблица по каждому найденному пампу,
+   - выводы о том, что объединяет эти события.
+4. Поддерживаемые таймфреймы для этой ветки: `1m`, `3m`, `5m`.
+5. Основная команда для пользователя: `python main.py run-hourly-pump-research`.
 
 ### Актуальные пользовательские точки входа
 
-- `python main.py run-backtest --strategy post_pump_absorption`
-- `python main.py run-backtest --strategy post_pump_absorption --ppa-profile balanced`
-- `python main.py run-backtest --strategy post_pump_absorption --entry-tf 1m --plot true --ppa-through-stage 4`
-- `python main.py run-backtest --strategy post_pump_absorption --entry-tf 3m --plot true --ppa-stage 5`
-- `python main.py ppa-stage s4`
-- `python main.py ppa-stage t3`
-- `python main.py run-ppa-research --ppa-profile balanced`
-- `python main.py run-backtest --strategy bee_bite`
+- `python main.py run-hourly-pump-research`
+- `python main.py run-hourly-pump-research --selection-profile balanced`
+- `python main.py run-hourly-pump-research --timeframes 1m 3m 5m`
+- `python main.py update-cache --timeframes 1m 3m 5m --skip-open-interest`
 - `python main.py check-quality`
-- `python main.py clear-cache`
 
 ### Важное разграничение
 
-- `post_pump_absorption` - основная стратегия для новых экспериментов и реализации.
-- `bee_bite` - сохраняем, поддерживаем, но не используем как основу для новых идей про bottom-entries после пампа.
+- `hourly_asia_pump` - основная ветка исследования и реализации на этом бранче;
+- `post_pump_absorption` и `bee_bite` - сохранённые reference-ветки, но не база для новых идей на этой ветке.
