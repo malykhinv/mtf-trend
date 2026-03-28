@@ -78,6 +78,7 @@ from strategy.hourly_asia_pump import (
     build_hourly_asia_pump_production_artifacts,
     build_hourly_asia_pump_research_artifacts,
     build_hourly_asia_pump_static_combo_artifacts,
+    build_hourly_asia_pump_unified_artifacts,
     parse_hourly_asia_pump_profile_id,
 )
 from strategy.post_pump_absorption import (
@@ -2269,6 +2270,36 @@ def _run_hourly_pump_production_report_inner(config: AppConfig, args: argparse.N
     return 0 if bool(artifacts["gate_passed"]) else 1
 
 
+def _run_hourly_pump_unified_analysis_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-hourly-pump-unified-analysis", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    confirmed_events_path = Path(getattr(args, "confirmed_events", ""))
+    if not confirmed_events_path.exists():
+        raise FileNotFoundError(f"Не найден confirmed events csv: {confirmed_events_path}")
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else confirmed_events_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "run-hourly-pump-unified-analysis: confirmed_events=%s output_dir=%s",
+        confirmed_events_path,
+        output_dir,
+    )
+    artifacts = build_hourly_asia_pump_unified_artifacts(
+        confirmed_events_path=confirmed_events_path,
+        output_dir=output_dir,
+        logger=logger,
+    )
+    logger.info(
+        "run-hourly-pump-unified-analysis: артефакты отчёт=%s best=%s months=%s holdout=%s goal_passed=%s",
+        artifacts["report"],
+        artifacts["best_summary"],
+        artifacts["best_monthly"],
+        artifacts["best_holdout"],
+        artifacts["goal_passed"],
+    )
+    return 0
+
+
 def _collect_ppa_stage_summary_rows(
     *,
     timeframe: Timeframe,
@@ -2684,6 +2715,15 @@ def run_hourly_pump_production_report(config: AppConfig, args: argparse.Namespac
         "run-hourly-pump-production-report",
         config,
         lambda: _run_hourly_pump_production_report_inner(config, args),
+    )
+
+
+def run_hourly_pump_unified_analysis(config: AppConfig, args: argparse.Namespace) -> int:
+    """Builds one unified XX:00 strategy without hour-specific branches."""
+    return _run_with_logging(
+        "run-hourly-pump-unified-analysis",
+        config,
+        lambda: _run_hourly_pump_unified_analysis_inner(config, args),
     )
 
 
