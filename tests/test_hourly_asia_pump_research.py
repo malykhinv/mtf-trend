@@ -60,6 +60,8 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     common_patterns = pd.read_csv(artifacts["common_patterns"])
     early_entry_events = pd.read_csv(artifacts["early_entry_events"])
     early_entry_summary = pd.read_csv(artifacts["early_entry_summary"])
+    trade_model_events = pd.read_csv(artifacts["trade_model_events"])
+    trade_model_summary = pd.read_csv(artifacts["trade_model_summary"])
 
     assert artifacts["report"].exists()
     assert len(selected_events) == 1
@@ -73,3 +75,6 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     assert float(early_entry_events.iloc[0]["entry_delay_minutes"]) == 1.0
     assert "target_5pct_hit_rate" in set(early_entry_summary.columns)
     assert int(early_entry_summary.iloc[0]["entries_triggered_count"]) == 1
+    assert {"trade_model_id", "trade_triggered", "exit_reason"} <= set(trade_model_events.columns)
+    assert {"trade_model_id", "trades_count", "profit_factor", "trades_per_year"} <= set(trade_model_summary.columns)
+    assert int(trade_model_summary["trades_count"].max()) >= 1

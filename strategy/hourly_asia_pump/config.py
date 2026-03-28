@@ -9,6 +9,13 @@ from typing import Literal, cast
 from domain.enums.timeframe import Timeframe
 
 HourlyAsiaPumpProfileId = Literal["loose", "balanced", "strict"]
+HourlyAsiaPumpTradeEntryStyle = Literal[
+    "break_trigger_high",
+    "pullback_reclaim",
+    "pressure_reclaim",
+    "flag_break",
+]
+HourlyAsiaPumpTradeTrailStyle = Literal["prev_bar_low", "last_red_low"]
 
 HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = (
     Timeframe.M1,
@@ -53,6 +60,31 @@ class HourlyAsiaPumpParams:
     min_volume_mult: float
     max_close_to_high_frac: float
     min_breakout_pct: float
+
+
+@dataclass(frozen=True, slots=True)
+class HourlyAsiaPumpTradeModel:
+    model_id: str
+    label: str
+    entry_style: HourlyAsiaPumpTradeEntryStyle
+    trail_style: HourlyAsiaPumpTradeTrailStyle
+    min_trigger_return_pct: float
+    min_range_atr: float
+    min_body_atr: float
+    min_volume_mult: float
+    max_close_to_high_frac: float
+    max_entry_bars: int
+    max_pullback_frac: float
+    pullback_volume_frac: float
+    flag_bars: int
+    flag_max_range_frac: float
+    partial_take_pct: float
+    partial_take_r: float
+    partial_fraction: float
+    move_stop_to_be_after_partial: bool
+    fast_fail_bars: int
+    fast_fail_min_return_pct: float
+    max_hold_minutes: int
 
 
 def parse_hourly_asia_pump_profile_id(
@@ -153,3 +185,146 @@ def build_hourly_asia_pump_grid(
             )
         )
     return sorted(params, key=lambda item: item.grid_id)
+
+
+def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
+    return [
+        HourlyAsiaPumpTradeModel(
+            model_id="aggr_break_fast",
+            label="Aggressive Break Fast",
+            entry_style="break_trigger_high",
+            trail_style="prev_bar_low",
+            min_trigger_return_pct=0.02,
+            min_range_atr=2.5,
+            min_body_atr=1.5,
+            min_volume_mult=2.5,
+            max_close_to_high_frac=0.20,
+            max_entry_bars=2,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.02,
+            partial_take_r=1.5,
+            partial_fraction=0.35,
+            move_stop_to_be_after_partial=True,
+            fast_fail_bars=2,
+            fast_fail_min_return_pct=0.005,
+            max_hold_minutes=180,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="pullback_reclaim",
+            label="Pullback Reclaim",
+            entry_style="pullback_reclaim",
+            trail_style="prev_bar_low",
+            min_trigger_return_pct=0.015,
+            min_range_atr=2.5,
+            min_body_atr=1.5,
+            min_volume_mult=2.5,
+            max_close_to_high_frac=0.25,
+            max_entry_bars=4,
+            max_pullback_frac=0.45,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.025,
+            partial_take_r=2.0,
+            partial_fraction=0.5,
+            move_stop_to_be_after_partial=True,
+            fast_fail_bars=3,
+            fast_fail_min_return_pct=0.003,
+            max_hold_minutes=240,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="pressure_reclaim",
+            label="Pressure Reclaim",
+            entry_style="pressure_reclaim",
+            trail_style="last_red_low",
+            min_trigger_return_pct=0.02,
+            min_range_atr=2.75,
+            min_body_atr=1.75,
+            min_volume_mult=3.0,
+            max_close_to_high_frac=0.20,
+            max_entry_bars=4,
+            max_pullback_frac=0.40,
+            pullback_volume_frac=0.70,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.03,
+            partial_take_r=2.0,
+            partial_fraction=0.4,
+            move_stop_to_be_after_partial=True,
+            fast_fail_bars=3,
+            fast_fail_min_return_pct=0.004,
+            max_hold_minutes=240,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="tight_flag_runner",
+            label="Tight Flag Runner",
+            entry_style="flag_break",
+            trail_style="prev_bar_low",
+            min_trigger_return_pct=0.015,
+            min_range_atr=2.5,
+            min_body_atr=1.5,
+            min_volume_mult=2.5,
+            max_close_to_high_frac=0.20,
+            max_entry_bars=2,
+            max_pullback_frac=0.35,
+            pullback_volume_frac=1.0,
+            flag_bars=2,
+            flag_max_range_frac=0.60,
+            partial_take_pct=0.03,
+            partial_take_r=2.0,
+            partial_fraction=0.35,
+            move_stop_to_be_after_partial=True,
+            fast_fail_bars=2,
+            fast_fail_min_return_pct=0.004,
+            max_hold_minutes=240,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="monster_break_3pct",
+            label="Monster Break 3pct",
+            entry_style="break_trigger_high",
+            trail_style="last_red_low",
+            min_trigger_return_pct=0.03,
+            min_range_atr=3.0,
+            min_body_atr=2.0,
+            min_volume_mult=3.0,
+            max_close_to_high_frac=0.20,
+            max_entry_bars=2,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.03,
+            partial_take_r=1.5,
+            partial_fraction=0.30,
+            move_stop_to_be_after_partial=True,
+            fast_fail_bars=2,
+            fast_fail_min_return_pct=0.0075,
+            max_hold_minutes=360,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="monster_break_5pct",
+            label="Monster Break 5pct",
+            entry_style="break_trigger_high",
+            trail_style="last_red_low",
+            min_trigger_return_pct=0.05,
+            min_range_atr=3.0,
+            min_body_atr=2.0,
+            min_volume_mult=3.0,
+            max_close_to_high_frac=0.20,
+            max_entry_bars=2,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.05,
+            partial_take_r=2.0,
+            partial_fraction=0.25,
+            move_stop_to_be_after_partial=True,
+            fast_fail_bars=2,
+            fast_fail_min_return_pct=0.01,
+            max_hold_minutes=480,
+        ),
+    ]

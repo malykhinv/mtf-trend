@@ -23,8 +23,10 @@ from strategy.hourly_asia_pump.config import (
     HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
     HourlyAsiaPumpParams,
     HourlyAsiaPumpProfileId,
+    HourlyAsiaPumpTradeModel,
     build_hourly_asia_pump_grid,
     build_hourly_asia_pump_profile,
+    build_hourly_asia_pump_trade_models,
 )
 from vectorbt_runner.data_preparer import DataPreparer
 
@@ -752,6 +754,415 @@ def _build_early_entry_summary(early_entry_events: pd.DataFrame) -> pd.DataFrame
     return pd.DataFrame(rows).sort_values("timeframe").reset_index(drop=True)
 
 
+def _event_matches_trade_model(event: dict[str, object], model: HourlyAsiaPumpTradeModel) -> bool:
+    trigger_return_pct = _safe_numeric(event.get("trigger_return_pct"))
+    range_atr = _safe_numeric(event.get("range_atr"))
+    body_atr = _safe_numeric(event.get("body_atr"))
+    volume_mult = _safe_numeric(event.get("volume_mult"))
+    close_to_high_frac = _safe_numeric(event.get("close_to_high_frac"))
+    if trigger_return_pct is None or range_atr is None or body_atr is None or volume_mult is None or close_to_high_frac is None:
+        return False
+    return (
+        trigger_return_pct >= model.min_trigger_return_pct
+        and range_atr >= model.min_range_atr
+        and body_atr >= model.min_body_atr
+        and volume_mult >= model.min_volume_mult
+        and close_to_high_frac <= model.max_close_to_high_frac
+    )
+
+
+def _find_trade_model_entry(
+    *,
+    model: HourlyAsiaPumpTradeModel,
+    event: dict[str, object],
+    open_values: Any,
+    high_values: Any,
+    low_values: Any,
+    close_values: Any,
+    volume_values: Any,
+    timestamp_values: Any,
+    row_index: int,
+) -> dict[str, object]:
+    trigger_open = float(open_values[row_index])
+    trigger_high = float(high_values[row_index])
+    trigger_low = float(low_values[row_index])
+    trigger_close = float(close_values[row_index])
+    trigger_volume = float(volume_values[row_index])
+    trigger_range = max(1e-12, trigger_high - trigger_low)
+    trigger_body_mid = trigger_open + 0.5 * (trigger_close - trigger_open)
+
+    no_entry: dict[str, object] = {
+        "trade_triggered": False,
+        "entry_idx": None,
+        "entry_price": None,
+        "entry_reason": "no_entry",
+        "initial_stop_price": None,
+        "initial_stop_reason": None,
+    }
+
+    if model.entry_style == "break_trigger_high":
+        entry_end_idx = min(len(high_values) - 1, row_index + model.max_entry_bars)
+        for idx in range(row_index + 1, entry_end_idx + 1):
+            if float(high_values[idx]) >= trigger_high:
+                return {
+                    "trade_triggered": True,
+                    "entry_idx": idx,
+                    "entry_price": trigger_high,
+                    "entry_reason": "break_trigger_high",
+                    "initial_stop_price": trigger_body_mid,
+                    "initial_stop_reason": "trigger_body_mid",
+                }
+        return no_entry
+
+    if model.entry_style in {"pullback_reclaim", "pressure_reclaim"}:
+        pullback_end_idx = min(len(high_values) - 2, row_index + model.max_entry_bars)
+        for pullback_idx in range(row_index + 1, pullback_end_idx + 1):
+            pullback_low = float(low_values[pullback_idx])
+            retrace_frac = (trigger_high - pullback_low) / trigger_range
+            is_red_or_weaker = float(close_values[pullback_idx]) <= float(open_values[pullback_idx]) or float(close_values[pullback_idx]) < float(close_values[pullback_idx - 1])
+            if retrace_frac > model.max_pullback_frac or not is_red_or_weaker:
+                continue
+            if model.entry_style == "pressure_reclaim" and float(volume_values[pullback_idx]) > (trigger_volume * model.pullback_volume_frac):
+                continue
+            pullback_high = float(high_values[pullback_idx])
+            entry_end_idx = min(len(high_values) - 1, pullback_idx + model.max_entry_bars)
+            for idx in range(pullback_idx + 1, entry_end_idx + 1):
+                if float(high_values[idx]) >= pullback_high:
+                    return {
+                        "trade_triggered": True,
+                        "entry_idx": idx,
+                        "entry_price": pullback_high,
+                        "entry_reason": model.entry_style,
+                        "initial_stop_price": pullback_low,
+                        "initial_stop_reason": "pullback_low",
+                    }
+        return no_entry
+
+    if model.entry_style == "flag_break":
+        flag_start = row_index + 1
+        flag_end = min(len(high_values) - 2, flag_start + model.flag_bars - 1)
+        if flag_end <= flag_start:
+            return no_entry
+        flag_high = float(max(high_values[flag_start : flag_end + 1]))
+        flag_low = float(min(low_values[flag_start : flag_end + 1]))
+        flag_range = flag_high - flag_low
+        retrace_frac = (trigger_high - flag_low) / trigger_range
+        if retrace_frac > model.max_pullback_frac or flag_range > (trigger_range * model.flag_max_range_frac):
+            return no_entry
+        entry_end_idx = min(len(high_values) - 1, flag_end + model.max_entry_bars)
+        for idx in range(flag_end + 1, entry_end_idx + 1):
+            if float(high_values[idx]) >= flag_high:
+                return {
+                    "trade_triggered": True,
+                    "entry_idx": idx,
+                    "entry_price": flag_high,
+                    "entry_reason": "flag_break",
+                    "initial_stop_price": flag_low,
+                    "initial_stop_reason": "flag_low",
+                }
+        return no_entry
+
+    return no_entry
+
+
+def _simulate_trade_model_from_entry(
+    *,
+    model: HourlyAsiaPumpTradeModel,
+    timeframe: Timeframe,
+    open_values: Any,
+    high_values: Any,
+    low_values: Any,
+    close_values: Any,
+    timestamp_values: Any,
+    row_index: int,
+    entry_idx: int,
+    entry_price: float,
+    initial_stop_price: float,
+) -> dict[str, object]:
+    tf_minutes = _timeframe_minutes(timeframe)
+    end_idx = min(len(close_values) - 1, entry_idx + _bars_for_minutes(timeframe, model.max_hold_minutes))
+    risk_pct = (entry_price - initial_stop_price) / entry_price if entry_price > 0 else None
+
+    base_result: dict[str, object] = {
+        "trade_triggered": True,
+        "entry_timestamp_ms": int(timestamp_values[entry_idx]),
+        "entry_timestamp_utc": pd.to_datetime(int(timestamp_values[entry_idx]), unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S"),
+        "entry_delay_bars": entry_idx - row_index,
+        "entry_delay_minutes": (entry_idx - row_index) * tf_minutes,
+        "initial_risk_pct": risk_pct,
+        "exit_reason": "invalid_risk",
+        "exit_timestamp_ms": None,
+        "exit_timestamp_utc": None,
+        "exit_return_pct": None,
+        "exit_r_multiple": None,
+        "max_return_after_entry_pct": None,
+        "max_r_multiple": None,
+        "bars_held_after_entry": None,
+        "minutes_held_after_entry": None,
+        "partial_taken": False,
+        "realized_ge_5pct": False,
+        "realized_ge_10pct": False,
+    }
+    for target_pct in _EARLY_ENTRY_TARGET_PCTS:
+        pct_label = int(round(target_pct * 100))
+        base_result[f"mfe_ge_{pct_label}pct"] = False
+
+    if risk_pct is None or risk_pct <= 0:
+        return base_result
+
+    target_from_r = model.partial_take_r * risk_pct
+    partial_target_pct = max(model.partial_take_pct, target_from_r)
+    partial_target_price = entry_price * (1.0 + partial_target_pct)
+
+    current_stop = initial_stop_price
+    remaining_fraction = 1.0
+    realized_return_pct = 0.0
+    partial_taken = False
+    last_red_low: float | None = None
+    highest_high = max(entry_price, float(high_values[entry_idx]))
+    exit_idx: int | None = None
+    exit_reason = "time_exit"
+
+    for idx in range(entry_idx + 1, end_idx + 1):
+        low_value = float(low_values[idx])
+        high_value = float(high_values[idx])
+        open_value = float(open_values[idx])
+        close_value = float(close_values[idx])
+
+        if low_value <= current_stop:
+            realized_return_pct += remaining_fraction * ((current_stop / entry_price) - 1.0)
+            remaining_fraction = 0.0
+            exit_idx = idx
+            exit_reason = "stop"
+            break
+
+        if not partial_taken and high_value >= partial_target_price:
+            realized_return_pct += model.partial_fraction * partial_target_pct
+            remaining_fraction = max(0.0, remaining_fraction - model.partial_fraction)
+            partial_taken = True
+            if model.move_stop_to_be_after_partial:
+                current_stop = max(current_stop, entry_price)
+
+        if high_value > highest_high:
+            highest_high = high_value
+            if model.trail_style == "prev_bar_low" and idx - 1 >= entry_idx:
+                current_stop = max(current_stop, float(low_values[idx - 1]))
+            elif model.trail_style == "last_red_low" and last_red_low is not None:
+                current_stop = max(current_stop, last_red_low)
+
+        if model.fast_fail_bars > 0 and (idx - entry_idx) == model.fast_fail_bars:
+            min_progress_price = entry_price * (1.0 + model.fast_fail_min_return_pct)
+            if highest_high < min_progress_price:
+                realized_return_pct += remaining_fraction * ((close_value / entry_price) - 1.0)
+                remaining_fraction = 0.0
+                exit_idx = idx
+                exit_reason = "fast_fail"
+                break
+
+        if close_value < open_value:
+            last_red_low = low_value
+
+    if remaining_fraction > 0.0:
+        realized_return_pct += remaining_fraction * ((float(close_values[end_idx]) / entry_price) - 1.0)
+        exit_idx = end_idx
+
+    exit_timestamp_ms = int(timestamp_values[exit_idx]) if exit_idx is not None else None
+    max_return_after_entry_pct = (highest_high / entry_price) - 1.0
+    result = {
+        **base_result,
+        "exit_reason": exit_reason,
+        "exit_timestamp_ms": exit_timestamp_ms,
+        "exit_timestamp_utc": (
+            pd.to_datetime(exit_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+            if exit_timestamp_ms is not None
+            else None
+        ),
+        "exit_return_pct": realized_return_pct,
+        "exit_r_multiple": realized_return_pct / risk_pct if risk_pct > 0 else None,
+        "max_return_after_entry_pct": max_return_after_entry_pct,
+        "max_r_multiple": max_return_after_entry_pct / risk_pct if risk_pct > 0 else None,
+        "bars_held_after_entry": (exit_idx - entry_idx) if exit_idx is not None else None,
+        "minutes_held_after_entry": ((exit_idx - entry_idx) * tf_minutes) if exit_idx is not None else None,
+        "partial_taken": partial_taken,
+        "realized_ge_5pct": realized_return_pct >= 0.05,
+        "realized_ge_10pct": realized_return_pct >= 0.10,
+    }
+    for target_pct in _EARLY_ENTRY_TARGET_PCTS:
+        pct_label = int(round(target_pct * 100))
+        result[f"mfe_ge_{pct_label}pct"] = max_return_after_entry_pct >= target_pct
+    return result
+
+
+def _build_trade_model_events_for_timeframe(
+    *,
+    preparer: DataPreparer,
+    timeframe: Timeframe,
+    selected_events: pd.DataFrame,
+    trade_models: Sequence[HourlyAsiaPumpTradeModel],
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    if selected_events.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    grouped = list(selected_events.groupby("symbol", sort=True))
+    total_symbols = len(grouped)
+    started_at = time.time()
+    for symbol_index, (symbol, group) in enumerate(grouped, start=1):
+        frame = preparer.load_symbol_data(symbol, timeframe)
+        if frame.empty:
+            continue
+        open_values = pd.to_numeric(frame["open"], errors="coerce").to_numpy(dtype="float64")
+        high_values = pd.to_numeric(frame["high"], errors="coerce").to_numpy(dtype="float64")
+        low_values = pd.to_numeric(frame["low"], errors="coerce").to_numpy(dtype="float64")
+        close_values = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype="float64")
+        volume_values = pd.to_numeric(frame["volume"], errors="coerce").to_numpy(dtype="float64")
+        timestamp_values = pd.to_numeric(frame["timestamp"], errors="coerce").fillna(0).astype("int64").to_numpy()
+
+        for event in group.to_dict("records"):
+            row_index = int(event["row_index"])
+            for model in trade_models:
+                if not _event_matches_trade_model(event, model):
+                    rows.append(
+                        {
+                            **event,
+                            "trade_model_id": model.model_id,
+                            "trade_model_label": model.label,
+                            "trade_model_timeframe": timeframe.value,
+                            "trade_triggered": False,
+                            "entry_reason": "filtered_out",
+                            "exit_reason": "filtered_out",
+                        }
+                    )
+                    continue
+
+                entry = _find_trade_model_entry(
+                    model=model,
+                    event=event,
+                    open_values=open_values,
+                    high_values=high_values,
+                    low_values=low_values,
+                    close_values=close_values,
+                    volume_values=volume_values,
+                    timestamp_values=timestamp_values,
+                    row_index=row_index,
+                )
+                if not bool(entry.get("trade_triggered")):
+                    rows.append(
+                        {
+                            **event,
+                            "trade_model_id": model.model_id,
+                            "trade_model_label": model.label,
+                            "trade_model_timeframe": timeframe.value,
+                            **entry,
+                        }
+                    )
+                    continue
+
+                trade = _simulate_trade_model_from_entry(
+                    model=model,
+                    timeframe=timeframe,
+                    open_values=open_values,
+                    high_values=high_values,
+                    low_values=low_values,
+                    close_values=close_values,
+                    timestamp_values=timestamp_values,
+                    row_index=row_index,
+                    entry_idx=int(entry["entry_idx"]),
+                    entry_price=float(entry["entry_price"]),
+                    initial_stop_price=float(entry["initial_stop_price"]),
+                )
+                rows.append(
+                    {
+                        **event,
+                        "trade_model_id": model.model_id,
+                        "trade_model_label": model.label,
+                        "trade_model_timeframe": timeframe.value,
+                        **entry,
+                        **trade,
+                    }
+                )
+
+        if symbol_index % 25 == 0 or symbol_index == total_symbols:
+            progress_pct, elapsed, eta_seconds = _progress_snapshot(
+                completed=symbol_index,
+                total=total_symbols,
+                started_at=started_at,
+            )
+            logger.info(
+                "hourly-asia-pump: timeframe=%s stage=trade-models progress=%.1f%% scanned_symbols=%s/%s model_rows=%s elapsed=%s eta=%s",
+                timeframe.value,
+                progress_pct,
+                symbol_index,
+                total_symbols,
+                len(rows),
+                _format_duration(elapsed),
+                _format_duration(eta_seconds),
+            )
+
+    return pd.DataFrame(rows)
+
+
+def _profit_factor(series: pd.Series) -> float | None:
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    if cleaned.empty:
+        return None
+    wins = cleaned[cleaned > 0]
+    losses = cleaned[cleaned < 0]
+    if losses.empty:
+        return None if wins.empty else float("inf")
+    return float(wins.sum() / abs(losses.sum())) if not wins.empty else 0.0
+
+
+def _build_trade_model_summary(trade_model_events: pd.DataFrame) -> pd.DataFrame:
+    if trade_model_events.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    grouped = trade_model_events.groupby(["timeframe", "trade_model_id", "trade_model_label"], sort=True)
+    for (timeframe, model_id, model_label), group in grouped:
+        trades = group[group["trade_triggered"].astype(bool)].copy()
+        entry_timestamps = pd.to_datetime(trades.get("entry_timestamp_ms", pd.Series(dtype="float64")), unit="ms", utc=True, errors="coerce").dropna()
+        span_days = max(1.0, ((entry_timestamps.max() - entry_timestamps.min()).total_seconds() / 86_400) if len(entry_timestamps) >= 2 else float(max(1, trades.get("date_utc", pd.Series(dtype='object')).nunique())))
+        trades_per_year = (len(trades) / span_days) * 365.0 if len(trades) > 0 else 0.0
+        exit_returns = pd.to_numeric(trades.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce").dropna()
+        rows.append(
+            {
+                "timeframe": timeframe,
+                "trade_model_id": model_id,
+                "trade_model_label": model_label,
+                "setups_count": int(len(group)),
+                "trades_count": int(len(trades)),
+                "trade_trigger_rate": (len(trades) / len(group)) if len(group) > 0 else None,
+                "trade_days_count": int(trades["date_utc"].nunique()) if not trades.empty and "date_utc" in trades.columns else 0,
+                "trades_per_year": trades_per_year,
+                "mean_return_pct": _mean_or_none(exit_returns),
+                "median_return_pct": _median_or_none(exit_returns),
+                "p75_return_pct": _quantile_or_none(exit_returns, 0.75),
+                "win_rate": _mean_or_none((exit_returns > 0).astype("float64")),
+                "profit_factor": _profit_factor(exit_returns),
+                "avg_win_pct": _mean_or_none(exit_returns[exit_returns > 0]),
+                "avg_loss_pct": _mean_or_none(exit_returns[exit_returns < 0]),
+                "median_mfe_pct": _median_or_none(trades.get("max_return_after_entry_pct", pd.Series(dtype="float64"))),
+                "mfe_ge_5pct_rate": _mean_or_none(trades.get("mfe_ge_5pct", pd.Series(dtype="float64"))),
+                "mfe_ge_10pct_rate": _mean_or_none(trades.get("mfe_ge_10pct", pd.Series(dtype="float64"))),
+                "realized_ge_5pct_rate": _mean_or_none(trades.get("realized_ge_5pct", pd.Series(dtype="float64"))),
+                "realized_ge_10pct_rate": _mean_or_none(trades.get("realized_ge_10pct", pd.Series(dtype="float64"))),
+                "median_hold_minutes": _median_or_none(trades.get("minutes_held_after_entry", pd.Series(dtype="float64"))),
+                "median_initial_risk_pct": _median_or_none(trades.get("initial_risk_pct", pd.Series(dtype="float64"))),
+                "meets_50_trades_per_year": trades_per_year >= 50.0,
+                "meets_150_trades_per_year": trades_per_year >= 150.0,
+            }
+        )
+
+    summary = pd.DataFrame(rows)
+    return summary.sort_values(
+        ["timeframe", "meets_150_trades_per_year", "profit_factor", "mean_return_pct", "trades_count"],
+        ascending=[True, False, False, False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
 def _filter_events_for_params(events: pd.DataFrame, params: HourlyAsiaPumpParams) -> pd.DataFrame:
     if events.empty:
         return pd.DataFrame()
@@ -947,6 +1358,7 @@ def _write_report(
     selected_common_patterns: pd.DataFrame,
     top_grid_rows: pd.DataFrame,
     early_entry_summary: pd.DataFrame,
+    trade_model_summary: pd.DataFrame,
     selection_profile: HourlyAsiaPumpProfileId,
 ) -> Path:
     context_frame = pd.DataFrame(
@@ -1030,6 +1442,25 @@ def _write_report(
             ),
         ),
         "",
+        "## Trade Model Comparison",
+        "",
+        _frame_to_markdown(
+            trade_model_summary,
+            columns=(
+                "timeframe",
+                "trade_model_id",
+                "trades_count",
+                "trades_per_year",
+                "mean_return_pct",
+                "median_return_pct",
+                "win_rate",
+                "profit_factor",
+                "mfe_ge_5pct_rate",
+                "realized_ge_5pct_rate",
+                "meets_150_trades_per_year",
+            ),
+        ),
+        "",
         "## Top Grid Rows",
         "",
     ]
@@ -1071,6 +1502,8 @@ def _write_report(
             f"- common patterns: `{output_dir / 'common_patterns_by_timeframe.csv'}`",
             f"- early entry events: `{output_dir / 'early_entry_events.csv'}`",
             f"- early entry summary: `{output_dir / 'early_entry_summary.csv'}`",
+            f"- trade model events: `{output_dir / 'trade_model_events.csv'}`",
+            f"- trade model summary: `{output_dir / 'trade_model_summary.csv'}`",
             "",
         ]
     )
@@ -1109,9 +1542,11 @@ def build_hourly_asia_pump_research_artifacts(
     common_pattern_frames: list[pd.DataFrame] = []
     symbol_summary_frames: list[pd.DataFrame] = []
     early_entry_event_frames: list[pd.DataFrame] = []
+    trade_model_event_frames: list[pd.DataFrame] = []
     resolved_symbols_by_timeframe: dict[str, list[str]] = {}
     timeframe_durations: list[float] = []
     total_timeframes = len(timeframes)
+    trade_models = build_hourly_asia_pump_trade_models()
 
     for timeframe_index, timeframe in enumerate(timeframes, start=1):
         if timeframe not in HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES:
@@ -1228,6 +1663,14 @@ def build_hourly_asia_pump_research_artifacts(
             logger=active_logger,
         )
         early_entry_event_frames.append(early_entry_events)
+        trade_model_events = _build_trade_model_events_for_timeframe(
+            preparer=preparer,
+            timeframe=timeframe,
+            selected_events=selected_events,
+            trade_models=trade_models,
+            logger=active_logger,
+        )
+        trade_model_event_frames.append(trade_model_events)
 
         timeframe_elapsed = max(0.0, time.time() - timeframe_started_at)
         timeframe_durations.append(timeframe_elapsed)
@@ -1260,6 +1703,8 @@ def build_hourly_asia_pump_research_artifacts(
     symbol_summary_all = pd.concat(symbol_summary_frames, ignore_index=True) if symbol_summary_frames else pd.DataFrame()
     early_entry_events_all = pd.concat(early_entry_event_frames, ignore_index=True) if early_entry_event_frames else pd.DataFrame()
     early_entry_summary_all = _build_early_entry_summary(early_entry_events_all)
+    trade_model_events_all = pd.concat(trade_model_event_frames, ignore_index=True) if trade_model_event_frames else pd.DataFrame()
+    trade_model_summary_all = _build_trade_model_summary(trade_model_events_all)
     top_grid_rows = _top_grid_rows_by_timeframe(grid_summary_all, limit=10)
 
     grid_summary_path = output_dir / "grid_summary.csv"
@@ -1282,6 +1727,12 @@ def build_hourly_asia_pump_research_artifacts(
 
     early_entry_summary_path = output_dir / "early_entry_summary.csv"
     early_entry_summary_all.to_csv(early_entry_summary_path, index=False)
+
+    trade_model_events_path = output_dir / "trade_model_events.csv"
+    trade_model_events_all.to_csv(trade_model_events_path, index=False)
+
+    trade_model_summary_path = output_dir / "trade_model_summary.csv"
+    trade_model_summary_all.to_csv(trade_model_summary_path, index=False)
 
     top_grid_rows_path = output_dir / "top_grid_by_timeframe.csv"
     top_grid_rows.to_csv(top_grid_rows_path, index=False)
@@ -1311,6 +1762,7 @@ def build_hourly_asia_pump_research_artifacts(
         selected_common_patterns=common_patterns_all,
         top_grid_rows=top_grid_rows,
         early_entry_summary=early_entry_summary_all,
+        trade_model_summary=trade_model_summary_all,
         selection_profile=selection_profile,
     )
 
@@ -1330,6 +1782,8 @@ def build_hourly_asia_pump_research_artifacts(
         "selected_profile_symbol_summary": symbol_summary_path,
         "early_entry_events": early_entry_events_path,
         "early_entry_summary": early_entry_summary_path,
+        "trade_model_events": trade_model_events_path,
+        "trade_model_summary": trade_model_summary_path,
         "top_grid_by_timeframe": top_grid_rows_path,
         "research_context": context_path,
         "report": report_path,
