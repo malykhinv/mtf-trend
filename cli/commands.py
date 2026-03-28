@@ -75,6 +75,7 @@ from strategy.hourly_asia_pump import (
     DEFAULT_MAX_FOLLOW_MINUTES,
     DEFAULT_TRIGGER_MINUTE,
     HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
+    build_hourly_asia_pump_production_artifacts,
     build_hourly_asia_pump_research_artifacts,
     build_hourly_asia_pump_static_combo_artifacts,
     parse_hourly_asia_pump_profile_id,
@@ -2237,6 +2238,36 @@ def _run_hourly_pump_static_combo_analysis_inner(config: AppConfig, args: argpar
     return 0
 
 
+def _run_hourly_pump_production_report_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-hourly-pump-production-report", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    static_combo_dir = Path(getattr(args, "static_combo_dir", ""))
+    if not static_combo_dir.exists():
+        raise FileNotFoundError(f"Не найдена директория static combo: {static_combo_dir}")
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else static_combo_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "run-hourly-pump-production-report: static_combo_dir=%s output_dir=%s",
+        static_combo_dir,
+        output_dir,
+    )
+    artifacts = build_hourly_asia_pump_production_artifacts(
+        static_combo_dir=static_combo_dir,
+        output_dir=output_dir,
+    )
+    logger.info(
+        "run-hourly-pump-production-report: artifacts report=%s summary=%s monthly=%s holdout=%s kpi=%s gate_passed=%s",
+        artifacts["report"],
+        artifacts["production_default_summary"],
+        artifacts["production_default_monthly"],
+        artifacts["production_default_holdout"],
+        artifacts["production_kpi_validation"],
+        artifacts["gate_passed"],
+    )
+    return 0 if bool(artifacts["gate_passed"]) else 1
+
+
 def _collect_ppa_stage_summary_rows(
     *,
     timeframe: Timeframe,
@@ -2643,6 +2674,15 @@ def run_hourly_pump_static_combo_analysis(config: AppConfig, args: argparse.Name
         "run-hourly-pump-static-combo-analysis",
         config,
         lambda: _run_hourly_pump_static_combo_analysis_inner(config, args),
+    )
+
+
+def run_hourly_pump_production_report(config: AppConfig, args: argparse.Namespace) -> int:
+    """Builds a fixed production report and KPI gate from a static combo run."""
+    return _run_with_logging(
+        "run-hourly-pump-production-report",
+        config,
+        lambda: _run_hourly_pump_production_report_inner(config, args),
     )
 
 

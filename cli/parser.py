@@ -209,6 +209,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Root directory for static combo analysis results",
     )
 
+    hourly_pump_production = subparsers.add_parser(
+        "run-hourly-pump-production-report",
+        help="Build a fixed production pack report and KPI gate from an existing hourly pump static-combo run",
+    )
+    hourly_pump_production.add_argument(
+        "--static-combo-dir",
+        required=True,
+        help="Directory produced by run-hourly-pump-static-combo-analysis",
+    )
+    hourly_pump_production.add_argument(
+        "--output-dir",
+        default=None,
+        help="Where to write the production report; default: static-combo directory itself",
+    )
+
     ppa_stage = subparsers.add_parser(
         "ppa-stage",
         help="Run compact post_pump_absorption stage review across micro timeframes",
@@ -263,6 +278,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-ppa-research": commands.run_ppa_research,
         "run-hourly-pump-research": commands.run_hourly_pump_research,
         "run-hourly-pump-static-combo-analysis": commands.run_hourly_pump_static_combo_analysis,
+        "run-hourly-pump-production-report": commands.run_hourly_pump_production_report,
         "ppa-stage": commands.run_ppa_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
