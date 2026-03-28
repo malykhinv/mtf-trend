@@ -9,6 +9,10 @@ from strategy.hourly_asia_pump.static_combo import (
     _index_to_variant_label,
     build_hourly_asia_pump_static_combo_artifacts,
 )
+from strategy.hourly_asia_pump.static_combo_trade_plotter import (
+    StaticComboTradePlotSpec,
+    StaticComboTradePlotter,
+)
 
 
 def _build_empty_base_events_csv(path: Path) -> None:
@@ -236,3 +240,87 @@ def test_build_hourly_asia_pump_static_combo_artifacts_builds_great_combo_catalo
     assert len(recommended_shortlist) == 1
     assert set(priority_monthly.columns) >= {"month_utc", "total_return_pct", "trades_count", "month_positive"}
     assert trade_chart_manifest.empty
+
+
+def test_static_combo_trade_plotter_renders_bee_bite_style_chart(tmp_path: Path) -> None:
+    timestamps = pd.date_range("2025-09-22 02:00:00+00:00", periods=28, freq="5min")
+    frame = pd.DataFrame(
+        {
+            "timestamp": (timestamps.view("int64") // 1_000_000).astype("int64"),
+            "open": [
+                100.0, 100.1, 100.0, 99.9, 100.0, 100.1, 100.0, 100.1, 100.0, 100.2,
+                100.1, 100.2, 100.3, 100.4, 102.8, 103.2, 104.0, 105.1, 104.9, 105.7,
+                106.5, 107.2, 106.8, 107.9, 108.3, 108.0, 107.4, 107.8,
+            ],
+            "high": [
+                100.2, 100.2, 100.1, 100.1, 100.2, 100.2, 100.1, 100.2, 100.2, 100.3,
+                100.3, 100.4, 100.5, 103.4, 103.6, 104.4, 105.6, 105.8, 106.1, 106.9,
+                107.4, 107.6, 108.4, 108.7, 108.6, 108.2, 108.0, 108.1,
+            ],
+            "low": [
+                99.9, 99.9, 99.8, 99.8, 99.9, 100.0, 99.9, 100.0, 99.9, 100.0,
+                100.0, 100.1, 100.2, 100.3, 102.6, 103.0, 103.7, 104.6, 104.7, 105.2,
+                106.0, 106.7, 106.5, 107.7, 107.8, 107.2, 107.1, 107.5,
+            ],
+            "close": [
+                100.1, 100.0, 99.9, 100.0, 100.1, 100.0, 100.1, 100.0, 100.2, 100.1,
+                100.2, 100.3, 100.4, 103.2, 103.4, 104.1, 105.2, 104.9, 105.8, 106.6,
+                107.1, 106.9, 108.1, 108.4, 108.1, 107.5, 107.7, 107.9,
+            ],
+            "volume": [
+                1000, 950, 980, 930, 960, 970, 990, 985, 1005, 1010,
+                995, 1008, 1020, 5200, 4700, 4300, 4100, 3600, 3400, 3200,
+                3000, 2850, 2700, 2550, 2400, 2300, 2200, 2100,
+            ],
+        }
+    )
+    trigger_timestamp_ms = int(frame.iloc[13]["timestamp"])
+    entry_timestamp_ms = int(frame.iloc[14]["timestamp"])
+    exit_timestamp_ms = int(frame.iloc[24]["timestamp"])
+    output_path = tmp_path / "trade.png"
+
+    plotter = StaticComboTradePlotter()
+    plotter.plot_trade(
+        frame=frame,
+        spec=StaticComboTradePlotSpec(
+            symbol="TEST/USDT",
+            combo_variant="A",
+            component_ids="mb5_01_shallow,tf7_raw",
+            trigger_timestamp_ms=trigger_timestamp_ms,
+            entry_timestamp_ms=entry_timestamp_ms,
+            exit_timestamp_ms=exit_timestamp_ms,
+            entry_price=103.2,
+            stop_price=101.6,
+            exit_price=108.1,
+            trigger_open=100.4,
+            trigger_high=103.4,
+            trigger_low=100.3,
+            trigger_close=103.2,
+            trigger_return_pct=0.028,
+            trigger_range_pct=0.031,
+            range_atr=3.4,
+            body_atr=2.2,
+            volume_mult=5.6,
+            close_to_high_frac=0.06,
+            pre_base_range_pct_60m=0.012,
+            pre_base_drift_pct_60m=0.002,
+            pre_base_range_vs_trigger=0.41,
+            pre_entry_pullback_frac=0.18,
+            pre_entry_red_volume_frac=0.27,
+            initial_risk_pct=0.0155,
+            peak_timestamp_ms=int(frame.iloc[23]["timestamp"]),
+            peak_price=108.7,
+            exit_return_pct=0.047,
+            exit_reason="trail_stop",
+            entry_reason="break_high",
+            initial_stop_reason="trigger_low",
+            source_trade_model_id="monster_break_5pct",
+            source_trade_model_label="Monster Break 5%",
+            source_config_id="balanced",
+            hour_utc=3,
+        ),
+        output_path=output_path,
+    )
+
+    assert output_path.exists()
+    assert output_path.stat().st_size > 0

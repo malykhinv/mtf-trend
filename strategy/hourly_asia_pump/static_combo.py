@@ -16,6 +16,10 @@ from matplotlib.ticker import FuncFormatter
 import pandas as pd
 
 from domain.enums.timeframe import Timeframe
+from strategy.hourly_asia_pump.static_combo_trade_plotter import (
+    StaticComboTradePlotSpec,
+    StaticComboTradePlotter,
+)
 from vectorbt_runner.data_preparer import DataPreparer
 
 _STATIC_TOP_K_VALUES: tuple[int, ...] = (99, 1, 2)
@@ -367,11 +371,16 @@ def _build_combo_events(
                 "range_atr": float(pd.to_numeric(sorted_group.get("range_atr"), errors="coerce").max()),
                 "source_timeframe": representative.get("timeframe"),
                 "source_trade_model_id": representative.get("trade_model_id"),
+                "source_trade_model_label": representative.get("trade_model_label"),
                 "source_config_id": representative.get("config_id"),
+                "source_hour_utc": representative.get("hour_utc"),
                 "source_entry_timestamp_ms": representative.get("entry_timestamp_ms"),
                 "source_entry_timestamp_utc": representative.get("entry_timestamp_utc"),
                 "source_entry_price": entry_price,
+                "source_entry_reason": representative.get("entry_reason"),
                 "source_stop_price": stop_price,
+                "source_initial_stop_reason": representative.get("initial_stop_reason"),
+                "source_initial_risk_pct": _safe_numeric(representative.get("initial_risk_pct")),
                 "source_exit_timestamp_ms": representative.get("exit_timestamp_ms"),
                 "source_exit_timestamp_utc": representative.get("exit_timestamp_utc"),
                 "source_exit_price": exit_price,
@@ -380,6 +389,24 @@ def _build_combo_events(
                 "source_trigger_high": _safe_numeric(representative.get("trigger_high")),
                 "source_trigger_low": _safe_numeric(representative.get("trigger_low")),
                 "source_trigger_close": _safe_numeric(representative.get("trigger_close")),
+                "source_trigger_return_pct": _safe_numeric(representative.get("trigger_return_pct")),
+                "source_trigger_range_pct": _safe_numeric(representative.get("trigger_range_pct")),
+                "source_range_atr": _safe_numeric(representative.get("range_atr")),
+                "source_body_atr": _safe_numeric(representative.get("body_atr")),
+                "source_volume_mult": _safe_numeric(representative.get("volume_mult")),
+                "source_close_to_high_frac": _safe_numeric(representative.get("close_to_high_frac")),
+                "source_peak_timestamp_ms": _safe_numeric(representative.get("peak_timestamp_ms")),
+                "source_peak_timestamp_utc": representative.get("peak_timestamp_utc"),
+                "source_peak_price_before_50pct_retrace": _safe_numeric(representative.get("peak_price_before_50pct_retrace")),
+                "source_peak_return_pct": _safe_numeric(representative.get("peak_return_pct")),
+                "source_continuation_peak_return_pct": _safe_numeric(representative.get("continuation_peak_return_pct")),
+                "source_pre_base_range_pct_60m": _safe_numeric(representative.get("pre_base_range_pct_60m")),
+                "source_pre_base_drift_pct_60m": _safe_numeric(representative.get("pre_base_drift_pct_60m")),
+                "source_pre_base_range_vs_trigger": _safe_numeric(representative.get("pre_base_range_vs_trigger")),
+                "source_pre_entry_pullback_frac": _safe_numeric(representative.get("pre_entry_pullback_frac")),
+                "source_pre_entry_red_volume_frac": _safe_numeric(representative.get("pre_entry_red_volume_frac")),
+                "source_next_bar_pullback_frac": _safe_numeric(representative.get("next_bar_pullback_frac")),
+                "source_next_close_to_high_frac": _safe_numeric(representative.get("next_close_to_high_frac")),
             }
         )
     frame = pd.DataFrame(rows)
@@ -988,111 +1015,6 @@ def _select_trade_chart_samples(manifest: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(deduped_rows).reset_index(drop=True)
 
 
-def _save_trade_instrument_chart(
-    *,
-    frame: pd.DataFrame,
-    symbol: str,
-    combo_variant: str,
-    event_timestamp_ms: int,
-    entry_timestamp_ms: int,
-    exit_timestamp_ms: int | None,
-    entry_price: float | None,
-    stop_price: float | None,
-    exit_price: float | None,
-    trigger_high: float | None,
-    trigger_low: float | None,
-    exit_return_pct: float | None,
-    output_path: Path,
-) -> None:
-    if frame.empty:
-        _save_placeholder_chart(output_path, title=f"{symbol} {combo_variant} trade")
-        return
-
-    chart_frame = frame.copy().sort_values("timestamp").reset_index(drop=True)
-    chart_frame["datetime_utc"] = pd.to_datetime(chart_frame["timestamp"], unit="ms", utc=True, errors="coerce")
-    x_values = list(range(len(chart_frame)))
-
-    figure, (price_axis, volume_axis) = plt.subplots(
-        2,
-        1,
-        figsize=(16, 9),
-        sharex=True,
-        gridspec_kw={"height_ratios": [4, 1]},
-    )
-
-    candle_width = 0.6
-    for idx, row in chart_frame.iterrows():
-        open_price = float(row["open"])
-        close_price = float(row["close"])
-        high_price = float(row["high"])
-        low_price = float(row["low"])
-        color = "#198754" if close_price >= open_price else "#DC3545"
-        price_axis.vlines(idx, low_price, high_price, color=color, linewidth=1.0)
-        body_low = min(open_price, close_price)
-        body_height = max(abs(close_price - open_price), 1e-8)
-        price_axis.add_patch(plt.Rectangle((idx - candle_width / 2, body_low), candle_width, body_height, color=color, alpha=0.85))
-        volume_axis.bar(idx, float(row["volume"]), color=color, width=0.7, alpha=0.75)
-
-    timestamp_lookup = {int(value): idx for idx, value in enumerate(pd.to_numeric(chart_frame["timestamp"], errors="coerce").fillna(0).astype(int).tolist())}
-    trigger_idx = timestamp_lookup.get(int(event_timestamp_ms))
-    entry_idx = timestamp_lookup.get(int(entry_timestamp_ms))
-    exit_idx = timestamp_lookup.get(int(exit_timestamp_ms)) if exit_timestamp_ms is not None else None
-
-    if trigger_idx is not None:
-        price_axis.axvline(trigger_idx, color="#6F42C1", linewidth=1.6, linestyle="--", label="Trigger")
-    if entry_idx is not None:
-        price_axis.axvline(entry_idx, color="#0D6EFD", linewidth=1.6, linestyle="-.", label="Entry")
-    if exit_idx is not None:
-        price_axis.axvline(exit_idx, color="#FD7E14", linewidth=1.6, linestyle="-.", label="Exit")
-
-    if entry_price is not None:
-        price_axis.axhline(entry_price, color="#0D6EFD", linewidth=1.3, linestyle="-", alpha=0.8)
-    if stop_price is not None:
-        price_axis.axhline(stop_price, color="#DC3545", linewidth=1.3, linestyle="--", alpha=0.8)
-    if exit_price is not None:
-        price_axis.axhline(exit_price, color="#FD7E14", linewidth=1.3, linestyle=":", alpha=0.9)
-    if trigger_high is not None:
-        price_axis.axhline(trigger_high, color="#20C997", linewidth=1.0, linestyle=":", alpha=0.7)
-    if trigger_low is not None:
-        price_axis.axhline(trigger_low, color="#6C757D", linewidth=1.0, linestyle=":", alpha=0.7)
-
-    if entry_idx is not None and exit_idx is not None and entry_price is not None and stop_price is not None:
-        left = min(entry_idx, exit_idx)
-        right = max(entry_idx, exit_idx)
-        risk_bottom = min(entry_price, stop_price)
-        risk_height = abs(entry_price - stop_price)
-        if risk_height > 0:
-            price_axis.add_patch(
-                plt.Rectangle(
-                    (left - 0.45, risk_bottom),
-                    max(right - left, 1) + 0.9,
-                    risk_height,
-                    color="#DC3545",
-                    alpha=0.10,
-                )
-            )
-
-    tick_positions = x_values[:: max(1, len(x_values) // 8)]
-    tick_labels = [chart_frame.iloc[position]["datetime_utc"].strftime("%m-%d %H:%M") for position in tick_positions]
-    price_axis.set_xticks(tick_positions)
-    price_axis.set_xticklabels(tick_labels, rotation=45, ha="right")
-    volume_axis.set_xticks(tick_positions)
-    volume_axis.set_xticklabels(tick_labels, rotation=45, ha="right")
-
-    chart_return = f"{(exit_return_pct or 0.0) * 100:.2f}%"
-    price_axis.set_title(f"{symbol} | {combo_variant} | return {chart_return}")
-    price_axis.set_ylabel("Price")
-    volume_axis.set_ylabel("Volume")
-    price_axis.grid(alpha=0.20)
-    volume_axis.grid(alpha=0.20)
-    handles, labels = price_axis.get_legend_handles_labels()
-    if handles:
-        price_axis.legend(handles, labels, loc="upper left")
-    figure.tight_layout()
-    figure.savefig(output_path, dpi=160, bbox_inches="tight")
-    plt.close(figure)
-
-
 def _build_trade_chart_manifest(
     *,
     priority_events: pd.DataFrame,
@@ -1122,6 +1044,7 @@ def _build_trade_chart_manifest(
     trade_charts_dir = charts_dir / "trades"
     trade_charts_dir.mkdir(parents=True, exist_ok=True)
     preparer = DataPreparer(Path(cache_dir))
+    plotter = StaticComboTradePlotter()
     frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     rows: list[dict[str, object]] = []
@@ -1137,8 +1060,10 @@ def _build_trade_chart_manifest(
         entry_price = _safe_numeric(event.get("source_entry_price"))
         stop_price = _safe_numeric(event.get("source_stop_price"))
         exit_price = _safe_numeric(event.get("source_exit_price"))
+        trigger_open = _safe_numeric(event.get("source_trigger_open"))
         trigger_high = _safe_numeric(event.get("source_trigger_high"))
         trigger_low = _safe_numeric(event.get("source_trigger_low"))
+        trigger_close = _safe_numeric(event.get("source_trigger_close"))
         exit_return_pct = _safe_numeric(event.get("exit_return_pct"))
         chart_status = "created"
         chart_path: Path | None = None
@@ -1170,21 +1095,59 @@ def _build_trade_chart_manifest(
                         f"{pd.to_datetime(int(entry_timestamp_ms), unit='ms', utc=True).strftime('%Y%m%d_%H%M')}.png"
                     )
                     chart_path = trade_charts_dir / chart_file_name
-                    _save_trade_instrument_chart(
-                        frame=scoped,
-                        symbol=symbol,
-                        combo_variant=combo_variant,
-                        event_timestamp_ms=int(_safe_numeric(event.get("timestamp_ms")) or entry_timestamp_ms),
-                        entry_timestamp_ms=int(entry_timestamp_ms),
-                        exit_timestamp_ms=int(exit_timestamp_ms) if exit_timestamp_ms is not None else None,
-                        entry_price=entry_price,
-                        stop_price=stop_price,
-                        exit_price=exit_price,
-                        trigger_high=trigger_high,
-                        trigger_low=trigger_low,
-                        exit_return_pct=exit_return_pct,
-                        output_path=chart_path,
-                    )
+                    try:
+                        plotter.plot_trade(
+                            frame=scoped,
+                            spec=StaticComboTradePlotSpec(
+                                symbol=symbol,
+                                combo_variant=combo_variant,
+                                component_ids=str(event.get("component_ids", "")),
+                                trigger_timestamp_ms=int(_safe_numeric(event.get("timestamp_ms")) or entry_timestamp_ms),
+                                entry_timestamp_ms=int(entry_timestamp_ms),
+                                exit_timestamp_ms=int(exit_timestamp_ms) if exit_timestamp_ms is not None else None,
+                                entry_price=entry_price,
+                                stop_price=stop_price,
+                                exit_price=exit_price,
+                                trigger_open=trigger_open,
+                                trigger_high=trigger_high,
+                                trigger_low=trigger_low,
+                                trigger_close=trigger_close,
+                                trigger_return_pct=_safe_numeric(event.get("source_trigger_return_pct")) or _safe_numeric(event.get("trigger_return_pct")),
+                                trigger_range_pct=_safe_numeric(event.get("source_trigger_range_pct")),
+                                range_atr=_safe_numeric(event.get("source_range_atr")) or _safe_numeric(event.get("range_atr")),
+                                body_atr=_safe_numeric(event.get("source_body_atr")),
+                                volume_mult=_safe_numeric(event.get("source_volume_mult")) or _safe_numeric(event.get("volume_mult")),
+                                close_to_high_frac=_safe_numeric(event.get("source_close_to_high_frac")),
+                                pre_base_range_pct_60m=_safe_numeric(event.get("source_pre_base_range_pct_60m")),
+                                pre_base_drift_pct_60m=_safe_numeric(event.get("source_pre_base_drift_pct_60m")),
+                                pre_base_range_vs_trigger=_safe_numeric(event.get("source_pre_base_range_vs_trigger")),
+                                pre_entry_pullback_frac=_safe_numeric(event.get("source_pre_entry_pullback_frac")),
+                                pre_entry_red_volume_frac=_safe_numeric(event.get("source_pre_entry_red_volume_frac")),
+                                next_bar_pullback_frac=_safe_numeric(event.get("source_next_bar_pullback_frac")),
+                                next_close_to_high_frac=_safe_numeric(event.get("source_next_close_to_high_frac")),
+                                initial_risk_pct=_safe_numeric(event.get("source_initial_risk_pct")),
+                                peak_timestamp_ms=int(_safe_numeric(event.get("source_peak_timestamp_ms"))) if _safe_numeric(event.get("source_peak_timestamp_ms")) is not None else None,
+                                peak_price=_safe_numeric(event.get("source_peak_price_before_50pct_retrace")),
+                                exit_return_pct=exit_return_pct,
+                                exit_reason=str(event.get("source_exit_reason", "")) or None,
+                                entry_reason=str(event.get("source_entry_reason", "")) or None,
+                                initial_stop_reason=str(event.get("source_initial_stop_reason", "")) or None,
+                                source_trade_model_id=str(event.get("source_trade_model_id", "")) or None,
+                                source_trade_model_label=str(event.get("source_trade_model_label", "")) or None,
+                                source_config_id=str(event.get("source_config_id", "")) or None,
+                                hour_utc=int(_safe_numeric(event.get("source_hour_utc"))) if _safe_numeric(event.get("source_hour_utc")) is not None else None,
+                            ),
+                            output_path=chart_path,
+                        )
+                    except Exception as exc:
+                        chart_status = f"chart_failed:{type(exc).__name__}"
+                        chart_path = None
+                        active_logger.warning(
+                            "hourly-asia-pump-static-combo: stage=trade-charts warning symbol=%s combo=%s reason=%s",
+                            symbol,
+                            combo_variant,
+                            exc,
+                        )
 
         rows.append(
             {
@@ -1562,7 +1525,12 @@ def build_hourly_asia_pump_static_combo_artifacts(
                         _format_elapsed(combo_eta),
                     )
 
-    combo_events_all = pd.concat(combo_event_frames, ignore_index=True) if combo_event_frames else pd.DataFrame()
+    combo_event_frames_for_concat = [frame.dropna(axis=1, how="all") for frame in combo_event_frames if not frame.empty]
+    combo_events_all = (
+        pd.concat(combo_event_frames_for_concat, ignore_index=True, sort=False)
+        if combo_event_frames_for_concat
+        else pd.DataFrame()
+    )
     active_logger.info(
         "hourly-asia-pump-static-combo: stage=combo-grid-complete processed=%s/%s combo_events=%s combo_summaries=%s elapsed=%s",
         processed_combo_jobs,
