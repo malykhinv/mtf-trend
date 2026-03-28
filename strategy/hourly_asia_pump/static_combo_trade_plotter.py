@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from pathlib import Path
+import warnings
 
 import matplotlib
 
@@ -100,7 +101,7 @@ class StaticComboTradePlotter:
     ) -> None:
         required_columns = {"timestamp", "open", "high", "low", "close", "volume"}
         if frame.empty or not required_columns.issubset(frame.columns):
-            raise ValueError("Trade chart requires timestamp/open/high/low/close/volume columns.")
+            raise ValueError("Для графика сделки нужны колонки timestamp/open/high/low/close/volume.")
 
         prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
         for column in prepared.columns:
@@ -112,7 +113,7 @@ class StaticComboTradePlotter:
             .reset_index(drop=True)
         )
         if prepared.empty:
-            raise ValueError("Trade chart received an empty frame after normalization.")
+            raise ValueError("После нормализации данных окно графика оказалось пустым.")
 
         trigger_idx = self._timestamp_to_index(prepared, spec.trigger_timestamp_ms)
         entry_idx = self._timestamp_to_index(prepared, spec.entry_timestamp_ms)
@@ -293,7 +294,7 @@ class StaticComboTradePlotter:
             title_parts.append(f"{int(spec.hour_utc):02d} UTC")
         price_axis.set_title(" | ".join(title_parts))
         price_axis.title.set_color(self._TEXT_COLOR)
-        price_axis.set_ylabel("Price", color=self._TEXT_COLOR)
+        price_axis.set_ylabel("Цена", color=self._TEXT_COLOR)
         price_axis.grid(alpha=0.18, color=self._GRID_COLOR)
 
         info_lines = self._build_info_lines(spec=spec, tp1_price=tp1_price, tp2_price=tp2_price, tp3_price=tp3_price)
@@ -317,7 +318,7 @@ class StaticComboTradePlotter:
         tick_positions = self._build_tick_positions(window)
         tick_labels = self._build_tick_labels(window, tick_positions)
         if include_volume:
-            volume_axis.set_ylabel("Volume", color=self._TEXT_COLOR)
+            volume_axis.set_ylabel("Объём", color=self._TEXT_COLOR)
             volume_axis.grid(alpha=0.18, color=self._GRID_COLOR)
             volume_axis.set_xticks(tick_positions)
             volume_axis.set_xticklabels(tick_labels, rotation=0, ha="center", color=self._TEXT_COLOR)
@@ -327,7 +328,9 @@ class StaticComboTradePlotter:
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
         figure.subplots_adjust(left=0.07, right=0.985, top=0.93, bottom=0.08, hspace=0.06)
-        figure.savefig(output_path, dpi=max(int(dpi), self._FIGURE_DPI))
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=r"Glyph .* missing from font\(s\) DejaVu Sans\.", category=UserWarning)
+            figure.savefig(output_path, dpi=max(int(dpi), self._FIGURE_DPI))
         plt.close(figure)
 
     @staticmethod
@@ -363,13 +366,13 @@ class StaticComboTradePlotter:
     @staticmethod
     def _format_pct(value: float | None) -> str:
         if value is None:
-            return "n/a"
+            return "н/д"
         return f"{value * 100:.2f}%"
 
     @staticmethod
     def _format_ratio(value: float | None) -> str:
         if value is None:
-            return "n/a"
+            return "н/д"
         return f"{value:.2f}"
 
     @classmethod
@@ -384,20 +387,45 @@ class StaticComboTradePlotter:
         realized_r = None
         if spec.exit_return_pct is not None and spec.initial_risk_pct not in {None, 0.0}:
             realized_r = spec.exit_return_pct / spec.initial_risk_pct
-        model_marker = spec.source_trade_model_label or spec.source_trade_model_id or spec.source_config_id or "n/a"
+        model_marker = spec.source_trade_model_label or spec.source_trade_model_id or spec.source_config_id or "н/д"
         lines = [
-            f"Result: {cls._format_pct(spec.exit_return_pct)} | R: {cls._format_ratio(realized_r)}",
-            f"Model: {model_marker}",
-            f"Entry: {spec.entry_price:.5f} | SL: {spec.stop_price:.5f}" if spec.entry_price is not None and spec.stop_price is not None else "Entry/SL: n/a",
-            f"1R/2R/3R: {tp1_price:.5f} / {tp2_price:.5f} / {tp3_price:.5f}" if tp1_price is not None and tp2_price is not None and tp3_price is not None else "1R/2R/3R: n/a",
-            f"Trigger: {cls._format_pct(spec.trigger_return_pct)} | Range: {cls._format_pct(spec.trigger_range_pct)} | Vol: {cls._format_ratio(spec.volume_mult)}x",
-            f"Base60: {cls._format_pct(spec.pre_base_range_pct_60m)} | Drift60: {cls._format_pct(spec.pre_base_drift_pct_60m)} | Base/Trigger: {cls._format_ratio(spec.pre_base_range_vs_trigger)}",
-            f"Pullback: {cls._format_pct(spec.pre_entry_pullback_frac)} | Red vol: {cls._format_ratio(spec.pre_entry_red_volume_frac)} | CTH: {cls._format_pct(spec.close_to_high_frac)}",
-            f"RangeATR: {cls._format_ratio(spec.range_atr)} | BodyATR: {cls._format_ratio(spec.body_atr)} | Exit: {spec.exit_reason or 'n/a'}",
+            f"Результат: {cls._format_pct(spec.exit_return_pct)} | R: {cls._format_ratio(realized_r)}",
+            f"Модель: {model_marker}",
+            (
+                f"Вход: {spec.entry_price:.5f} | Стоп: {spec.stop_price:.5f}"
+                if spec.entry_price is not None and spec.stop_price is not None
+                else "Вход/стоп: н/д"
+            ),
+            (
+                f"1R/2R/3R: {tp1_price:.5f} / {tp2_price:.5f} / {tp3_price:.5f}"
+                if tp1_price is not None and tp2_price is not None and tp3_price is not None
+                else "1R/2R/3R: н/д"
+            ),
+            (
+                f"Импульс: {cls._format_pct(spec.trigger_return_pct)} | "
+                f"Диапазон: {cls._format_pct(spec.trigger_range_pct)} | "
+                f"Объём: {cls._format_ratio(spec.volume_mult)}x"
+            ),
+            (
+                f"База60: {cls._format_pct(spec.pre_base_range_pct_60m)} | "
+                f"Дрифт60: {cls._format_pct(spec.pre_base_drift_pct_60m)} | "
+                f"База/импульс: {cls._format_ratio(spec.pre_base_range_vs_trigger)}"
+            ),
+            (
+                f"Откат: {cls._format_pct(spec.pre_entry_pullback_frac)} | "
+                f"Красный объём: {cls._format_ratio(spec.pre_entry_red_volume_frac)} | "
+                f"Закр. к хаю: {cls._format_pct(spec.close_to_high_frac)}"
+            ),
+            (
+                f"Диап/ATR: {cls._format_ratio(spec.range_atr)} | "
+                f"Тело/ATR: {cls._format_ratio(spec.body_atr)} | "
+                f"Выход: {spec.exit_reason or 'н/д'}"
+            ),
         ]
         if spec.next_bar_pullback_frac is not None or spec.next_close_to_high_frac is not None:
             lines.append(
-                f"Next pb: {cls._format_pct(spec.next_bar_pullback_frac)} | Next CTH: {cls._format_pct(spec.next_close_to_high_frac)}"
+                f"След. откат: {cls._format_pct(spec.next_bar_pullback_frac)} | "
+                f"След. закр. к хаю: {cls._format_pct(spec.next_close_to_high_frac)}"
             )
         return lines
 

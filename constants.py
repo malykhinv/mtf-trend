@@ -128,7 +128,7 @@ LOGGER_FILE_BACKUP_COUNT = 3
 LOGGER_FILE_ENCODING = "utf-8"
 
 # Log message templates
-LOG_MSG_TASK_COMPLETED = "%s: completed"
+LOG_MSG_TASK_COMPLETED = "%s: завершено"
 LOG_MSG_SKIP_UP_TO_DATE = "%s skip up-to-date: %s"
 LOG_MSG_LOAD_ERROR = "load error: path=%s error=%s"
 LOG_MSG_RETRY_EXHAUSTED = "retry exhausted: endpoint=%s symbol=%s attempts=%s"

@@ -62,7 +62,7 @@ def _safe_numeric(value: object) -> float | None:
 
 def _format_elapsed(seconds: float | None) -> str:
     if seconds is None:
-        return "n/a"
+        return "н/д"
     total_seconds = max(0, int(round(seconds)))
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
@@ -77,7 +77,7 @@ def _format_value(column_name: str, value: object) -> str:
     if isinstance(value, float) and pd.isna(value):
         return ""
     if isinstance(value, bool):
-        return "true" if value else "false"
+        return "да" if value else "нет"
     if isinstance(value, int) and not isinstance(value, bool):
         return str(value)
     numeric = _safe_numeric(value)
@@ -88,17 +88,24 @@ def _format_value(column_name: str, value: object) -> str:
     return f"{numeric:.4f}" if not float(numeric).is_integer() else f"{int(numeric)}"
 
 
-def _frame_to_markdown(frame: pd.DataFrame, *, columns: Sequence[str], limit: int | None = None) -> str:
+def _frame_to_markdown(
+    frame: pd.DataFrame,
+    *,
+    columns: Sequence[str],
+    limit: int | None = None,
+    header_labels: dict[str, str] | None = None,
+) -> str:
     if frame.empty:
-        return "_No data._"
+        return "_Нет данных._"
     prepared = frame.copy()
     existing_columns = [column for column in columns if column in prepared.columns]
     if existing_columns:
         prepared = prepared[existing_columns]
     if limit is not None and limit >= 0:
         prepared = prepared.head(limit)
+    display_headers = [header_labels.get(str(column), str(column)) if header_labels else str(column) for column in prepared.columns]
     lines = [
-        "| " + " | ".join(prepared.columns.astype(str)) + " |",
+        "| " + " | ".join(display_headers) + " |",
         "| " + " | ".join("---" for _ in prepared.columns) + " |",
     ]
     for _, row in prepared.iterrows():
@@ -920,7 +927,7 @@ def _as_percent_formatter() -> FuncFormatter:
 def _save_placeholder_chart(path: Path, *, title: str) -> None:
     figure, axis = plt.subplots(figsize=(10, 5))
     axis.axis("off")
-    axis.text(0.5, 0.5, "No data available", ha="center", va="center", fontsize=14)
+    axis.text(0.5, 0.5, "Нет данных для отображения", ha="center", va="center", fontsize=14)
     axis.set_title(title)
     figure.tight_layout()
     figure.savefig(path, dpi=160, bbox_inches="tight")
@@ -929,7 +936,7 @@ def _save_placeholder_chart(path: Path, *, title: str) -> None:
 
 def _save_priority_equity_curve_chart(events: pd.DataFrame, path: Path) -> None:
     if events.empty:
-        _save_placeholder_chart(path, title="Priority Portfolio Equity Curve")
+        _save_placeholder_chart(path, title="Кривая результатов приоритетного портфеля")
         return
     ordered = events.sort_values("entry_timestamp_ms").copy()
     ordered["entry_datetime_utc"] = pd.to_datetime(ordered["entry_timestamp_ms"], unit="ms", utc=True, errors="coerce")
@@ -937,8 +944,8 @@ def _save_priority_equity_curve_chart(events: pd.DataFrame, path: Path) -> None:
 
     figure, axis = plt.subplots(figsize=(12, 5))
     axis.plot(ordered["entry_datetime_utc"], ordered["equity_curve"], color="#125B50", linewidth=2.0)
-    axis.set_title("Priority Portfolio Equity Curve")
-    axis.set_ylabel("Equity (1 + cumulative trade returns)")
+    axis.set_title("Кривая результатов приоритетного портфеля")
+    axis.set_ylabel("Капитал (1 + накопленная сумма доходностей)")
     axis.grid(alpha=0.25)
     figure.tight_layout()
     figure.savefig(path, dpi=160, bbox_inches="tight")
@@ -947,14 +954,14 @@ def _save_priority_equity_curve_chart(events: pd.DataFrame, path: Path) -> None:
 
 def _save_priority_monthly_returns_chart(monthly_returns: pd.DataFrame, path: Path) -> None:
     if monthly_returns.empty:
-        _save_placeholder_chart(path, title="Priority Portfolio Monthly Returns")
+        _save_placeholder_chart(path, title="Помесячная доходность приоритетного портфеля")
         return
     colors = ["#198754" if positive else "#DC3545" for positive in monthly_returns["month_positive"].astype(bool)]
     figure, axis = plt.subplots(figsize=(12, 5))
     axis.bar(monthly_returns["month_utc"], monthly_returns["total_return_pct"], color=colors)
     axis.axhline(0.0, color="#222222", linewidth=1.0)
-    axis.set_title("Priority Portfolio Monthly Returns")
-    axis.set_ylabel("Return")
+    axis.set_title("Помесячная доходность приоритетного портфеля")
+    axis.set_ylabel("Доходность")
     axis.yaxis.set_major_formatter(_as_percent_formatter())
     axis.tick_params(axis="x", rotation=45)
     axis.grid(axis="y", alpha=0.25)
@@ -965,18 +972,18 @@ def _save_priority_monthly_returns_chart(monthly_returns: pd.DataFrame, path: Pa
 
 def _save_priority_trade_distribution_chart(events: pd.DataFrame, path: Path) -> None:
     if events.empty:
-        _save_placeholder_chart(path, title="Priority Portfolio Trade Distribution")
+        _save_placeholder_chart(path, title="Распределение доходности сделок")
         return
     returns = pd.to_numeric(events["exit_return_pct"], errors="coerce").dropna()
     if returns.empty:
-        _save_placeholder_chart(path, title="Priority Portfolio Trade Distribution")
+        _save_placeholder_chart(path, title="Распределение доходности сделок")
         return
     figure, axis = plt.subplots(figsize=(12, 5))
     axis.hist(returns, bins=min(40, max(10, len(returns) // 3)), color="#0D6EFD", alpha=0.85, edgecolor="white")
-    axis.axvline(float(returns.mean()), color="#198754", linewidth=2.0, label="Mean")
-    axis.axvline(float(returns.median()), color="#FD7E14", linewidth=2.0, linestyle="--", label="Median")
-    axis.set_title("Priority Portfolio Trade Return Distribution")
-    axis.set_xlabel("Trade return")
+    axis.axvline(float(returns.mean()), color="#198754", linewidth=2.0, label="Среднее")
+    axis.axvline(float(returns.median()), color="#FD7E14", linewidth=2.0, linestyle="--", label="Медиана")
+    axis.set_title("Распределение доходности сделок приоритетного портфеля")
+    axis.set_xlabel("Доходность сделки")
     axis.xaxis.set_major_formatter(_as_percent_formatter())
     axis.grid(alpha=0.25)
     axis.legend()
@@ -987,7 +994,7 @@ def _save_priority_trade_distribution_chart(events: pd.DataFrame, path: Path) ->
 
 def _save_priority_trade_timeline_chart(events: pd.DataFrame, path: Path) -> None:
     if events.empty:
-        _save_placeholder_chart(path, title="Priority Portfolio Trade Timeline")
+        _save_placeholder_chart(path, title="Лента сделок приоритетного портфеля")
         return
     ordered = events.sort_values("entry_timestamp_ms").copy()
     ordered["entry_datetime_utc"] = pd.to_datetime(ordered["entry_timestamp_ms"], unit="ms", utc=True, errors="coerce")
@@ -997,8 +1004,8 @@ def _save_priority_trade_timeline_chart(events: pd.DataFrame, path: Path) -> Non
     figure, axis = plt.subplots(figsize=(12, 5))
     axis.scatter(ordered["entry_datetime_utc"], returns, c=colors, s=34, alpha=0.85)
     axis.axhline(0.0, color="#222222", linewidth=1.0)
-    axis.set_title("Priority Portfolio Trade Timeline")
-    axis.set_ylabel("Trade return")
+    axis.set_title("Лента сделок приоритетного портфеля")
+    axis.set_ylabel("Доходность сделки")
     axis.yaxis.set_major_formatter(_as_percent_formatter())
     axis.grid(alpha=0.25)
     figure.tight_layout()
@@ -1008,7 +1015,7 @@ def _save_priority_trade_timeline_chart(events: pd.DataFrame, path: Path) -> Non
 
 def _save_top_variants_scatter_chart(shortlist: pd.DataFrame, path: Path) -> None:
     if shortlist.empty:
-        _save_placeholder_chart(path, title="Top Static Variants")
+        _save_placeholder_chart(path, title="Лучшие статические варианты")
         return
     scoped = shortlist.copy()
     scoped["robustness_label"] = scoped.get("robustness_label", pd.Series("mixed", index=scoped.index)).fillna("mixed")
@@ -1038,12 +1045,12 @@ def _save_top_variants_scatter_chart(shortlist: pd.DataFrame, path: Path) -> Non
             textcoords="offset points",
             fontsize=9,
         )
-    axis.set_title("Top Static Variants: Frequency vs Mean Trade")
-    axis.set_xlabel("Trades per year")
-    axis.set_ylabel("Mean trade return")
+    axis.set_title("Лучшие статические варианты: частота против средней сделки")
+    axis.set_xlabel("Сделок в год")
+    axis.set_ylabel("Средняя доходность сделки")
     axis.yaxis.set_major_formatter(_as_percent_formatter())
     axis.grid(alpha=0.25)
-    axis.legend(title="Robustness")
+    axis.legend(title="Устойчивость")
     figure.tight_layout()
     figure.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(figure)
@@ -1051,16 +1058,16 @@ def _save_top_variants_scatter_chart(shortlist: pd.DataFrame, path: Path) -> Non
 
 def _save_priority_topn_chart(priority_topn_summary: pd.DataFrame, path: Path) -> None:
     if priority_topn_summary.empty:
-        _save_placeholder_chart(path, title="Priority Top-N Stability")
+        _save_placeholder_chart(path, title="Устойчивость top-N")
         return
     scoped = priority_topn_summary.sort_values("top_n_variants").copy()
     x_values = pd.to_numeric(scoped["top_n_variants"], errors="coerce")
     figure, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
     metrics = [
-        ("mean_return_pct", "Mean trade", True),
-        ("annualized_unit_pnl_pct", "Annualized unit PnL", True),
-        ("max_drawdown_pct", "Max drawdown", True),
-        ("trades_per_year", "Trades per year", False),
+        ("mean_return_pct", "Средняя сделка", True),
+        ("annualized_unit_pnl_pct", "Годовой unit-PnL", True),
+        ("max_drawdown_pct", "Макс. просадка", True),
+        ("trades_per_year", "Сделок в год", False),
     ]
     for axis, (column, title, is_percent) in zip(axes.flat, metrics, strict=False):
         axis.plot(x_values, pd.to_numeric(scoped[column], errors="coerce"), marker="o", linewidth=2.0, color="#0D6EFD")
@@ -1068,9 +1075,9 @@ def _save_priority_topn_chart(priority_topn_summary: pd.DataFrame, path: Path) -
         if is_percent:
             axis.yaxis.set_major_formatter(_as_percent_formatter())
         axis.grid(alpha=0.25)
-    axes[1, 0].set_xlabel("Top-N variants enabled")
-    axes[1, 1].set_xlabel("Top-N variants enabled")
-    figure.suptitle("Priority Selection Stability vs Top-N Variant Pool", fontsize=14)
+    axes[1, 0].set_xlabel("Сколько top-N вариантов включено")
+    axes[1, 1].set_xlabel("Сколько top-N вариантов включено")
+    figure.suptitle("Устойчивость приоритетного отбора при расширении пула вариантов", fontsize=14)
     figure.tight_layout()
     figure.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(figure)
@@ -1078,15 +1085,15 @@ def _save_priority_topn_chart(priority_topn_summary: pd.DataFrame, path: Path) -
 
 def _save_leader_robustness_chart(shortlist: pd.DataFrame, path: Path) -> None:
     if shortlist.empty:
-        _save_placeholder_chart(path, title="Leader Robustness")
+        _save_placeholder_chart(path, title="Устойчивость лидера")
         return
     scoped = shortlist.head(8).copy()
     labels = scoped["combo_variant"].astype(str).tolist()
     figure, axes = plt.subplots(1, 3, figsize=(15, 5))
     metrics = [
-        ("local_goal_rate", "Local goal rate", True),
-        ("local_mean_return_p25_pct", "Local p25 mean trade", True),
-        ("local_dd_p75_pct", "Local p75 drawdown", True),
+        ("local_goal_rate", "Доля соседей, проходящих цель", True),
+        ("local_mean_return_p25_pct", "P25 средней сделки у соседей", True),
+        ("local_dd_p75_pct", "P75 просадки у соседей", True),
     ]
     for axis, (column, title, is_percent) in zip(axes, metrics, strict=False):
         axis.bar(labels, pd.to_numeric(scoped.get(column), errors="coerce"), color="#125B50")
@@ -1094,7 +1101,7 @@ def _save_leader_robustness_chart(shortlist: pd.DataFrame, path: Path) -> None:
         if is_percent:
             axis.yaxis.set_major_formatter(_as_percent_formatter())
         axis.grid(axis="y", alpha=0.25)
-    figure.suptitle("Leader Robustness Around Neighboring Parameter Sets", fontsize=14)
+    figure.suptitle("Устойчивость лидера на соседних параметрах", fontsize=14)
     figure.tight_layout()
     figure.savefig(path, dpi=160, bbox_inches="tight")
     plt.close(figure)
@@ -1120,7 +1127,7 @@ def _resolve_trade_chart_timeframe(raw_value: object) -> Timeframe | None:
 def _select_trade_chart_samples(manifest: pd.DataFrame) -> pd.DataFrame:
     if manifest.empty or "chart_status" not in manifest.columns:
         return pd.DataFrame(columns=list(manifest.columns) if not manifest.empty else ["chart_path"])
-    available = manifest[manifest["chart_status"].astype(str) == "created"].copy()
+    available = manifest[manifest["chart_status"].astype(str) == "создан"].copy()
     if available.empty:
         return available
 
@@ -1193,11 +1200,11 @@ def _build_trade_chart_manifest(
         trigger_low = _safe_numeric(event.get("source_trigger_low"))
         trigger_close = _safe_numeric(event.get("source_trigger_close"))
         exit_return_pct = _safe_numeric(event.get("exit_return_pct"))
-        chart_status = "created"
+        chart_status = "создан"
         chart_path: Path | None = None
 
         if timeframe is None or entry_timestamp_ms is None:
-            chart_status = "missing_trade_metadata"
+            chart_status = "нет_метаданных_сделки"
         else:
             cache_key = (symbol, timeframe.value)
             frame = frame_cache.get(cache_key)
@@ -1205,7 +1212,7 @@ def _build_trade_chart_manifest(
                 frame = preparer.load_symbol_data(symbol, timeframe)
                 frame_cache[cache_key] = frame
             if frame.empty:
-                chart_status = "missing_cache_frame"
+                chart_status = "нет_данных_в_кеше"
             else:
                 timeframe_ms = timeframe.to_milliseconds()
                 start_ts = int((_safe_numeric(event.get("timestamp_ms")) or entry_timestamp_ms) - (timeframe_ms * 18))
@@ -1216,7 +1223,7 @@ def _build_trade_chart_manifest(
                     & (pd.to_numeric(frame["timestamp"], errors="coerce") <= end_ts)
                 ].copy()
                 if scoped.empty:
-                    chart_status = "empty_chart_window"
+                    chart_status = "пустое_окно_графика"
                 else:
                     chart_file_name = (
                         f"{idx:03d}_{combo_variant}_{_sanitize_filename(symbol)}_"
@@ -1268,10 +1275,10 @@ def _build_trade_chart_manifest(
                             output_path=chart_path,
                         )
                     except Exception as exc:
-                        chart_status = f"chart_failed:{type(exc).__name__}"
+                        chart_status = f"ошибка_графика:{type(exc).__name__}"
                         chart_path = None
                         active_logger.warning(
-                            "hourly-asia-pump-static-combo: stage=trade-charts warning symbol=%s combo=%s reason=%s",
+                            "hourly-asia-pump-static-combo: этап=графики-сделок предупреждение symbol=%s combo=%s reason=%s",
                             symbol,
                             combo_variant,
                             exc,
@@ -1295,7 +1302,7 @@ def _build_trade_chart_manifest(
             elapsed = time.perf_counter() - stage_started_at
             eta = (elapsed / idx) * (total_events - idx) if idx > 0 else None
             active_logger.info(
-                "hourly-asia-pump-static-combo: stage=trade-charts progress=%.1f%% charts=%s/%s elapsed=%s eta=%s",
+                "hourly-asia-pump-static-combo: этап=графики-сделок прогресс=%.1f%% графиков=%s/%s прошло=%s eta=%s",
                 (idx / total_events) * 100.0,
                 idx,
                 total_events,
@@ -1367,24 +1374,25 @@ def _write_static_combo_report(
 
     top_variant = str(great_combos.iloc[0]["combo_variant"]) if not great_combos.empty else ""
     lines = [
-        "# Hourly Asia Pump Static Combo Report",
+        "# Отчёт По Статическим Комбинациям Hourly Asia Pump",
         "",
-        "## Executive Summary",
+        "## Краткий Вывод",
         "",
-        f"- Great static variants passing the yearly goal: `{great_combo_count}`.",
-        f"- Unique component sets in the catalog: `{unique_component_sets}`.",
-        f"- Priority-selected portfolio is built with the rule: if several variants match the same signal, take the lowest `combo_priority`.",
-        f"- Top-ranked leader: `{top_variant}`.",
-        f"- `top-1..top-10` priority selection is identical: `{str(topn_equal_up_to_10).lower()}`.",
+        f"- Статических вариантов, проходящих годовую цель: `{great_combo_count}`.",
+        f"- Уникальных наборов компонентов в каталоге: `{unique_component_sets}`.",
+        f"- Приоритетный портфель строится по правилу: если один сигнал проходит несколько вариантов, берём вариант с наименьшим `combo_priority`.",
+        f"- Лидер по итоговому рангу: `{top_variant}`.",
+        f"- Результат `top-1..top-10` одинаковый: `{str(topn_equal_up_to_10).lower()}`.",
         "",
-        "## Run Context",
+        "## Контекст Запуска",
         "",
         _frame_to_markdown(
             pd.DataFrame([{"key": key, "value": json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value} for key, value in context.items()]),
             columns=("key", "value"),
+            header_labels={"key": "Параметр", "value": "Значение"},
         ),
         "",
-        "## Final Priority Portfolio",
+        "## Итоговый Приоритетный Портфель",
         "",
         _frame_to_markdown(
             priority_summary,
@@ -1405,9 +1413,26 @@ def _write_static_combo_report(
                 "overlapping_entries_count",
                 "matched_combo_variants_count",
             ),
+            header_labels={
+                "trades_count": "Сделок",
+                "trades_per_year": "Сделок в год",
+                "mean_return_pct": "Средняя сделка",
+                "median_return_pct": "Медианная сделка",
+                "win_rate": "WR",
+                "profit_factor": "PF",
+                "annualized_unit_pnl_pct": "Годовой unit-PnL",
+                "max_drawdown_pct": "Макс. просадка",
+                "mean_pos_trade_pct": "Средняя прибыльная",
+                "mean_neg_trade_pct": "Средняя убыточная",
+                "positive_months_count": "Плюсовых месяцев",
+                "non_positive_months_count": "Неплюсовых месяцев",
+                "max_concurrent_trades": "Макс. одновременных сделок",
+                "overlapping_entries_count": "Перекрывающихся входов",
+                "matched_combo_variants_count": "Подошедших вариантов",
+            },
         ),
         "",
-        "## Monthly Distribution",
+        "## Распределение По Месяцам",
         "",
         _frame_to_markdown(
             priority_monthly_returns,
@@ -1417,9 +1442,15 @@ def _write_static_combo_report(
                 "trades_count",
                 "month_positive",
             ),
+            header_labels={
+                "month_utc": "Месяц",
+                "total_return_pct": "Сумма доходности",
+                "trades_count": "Сделок",
+                "month_positive": "Месяц в плюс",
+            },
         ),
         "",
-        "## Recommended Variants",
+        "## Рекомендуемые Варианты",
         "",
         _frame_to_markdown(
             recommended_shortlist,
@@ -1435,9 +1466,20 @@ def _write_static_combo_report(
                 "robustness_label",
             ),
             limit=12,
+            header_labels={
+                "combo_variant": "Вариант",
+                "component_ids": "Компоненты",
+                "trades_per_year": "Сделок в год",
+                "mean_return_pct": "Средняя сделка",
+                "win_rate": "WR",
+                "annualized_unit_pnl_pct": "Годовой unit-PnL",
+                "max_drawdown_pct": "Макс. просадка",
+                "positive_months_count": "Плюсовых месяцев",
+                "robustness_label": "Устойчивость",
+            },
         ),
         "",
-        "## Robustness Around Neighboring Parameter Sets",
+        "## Устойчивость На Соседних Параметрах",
         "",
         _frame_to_markdown(
             combo_robustness_summary[combo_robustness_summary["combo_variant"].astype(str).isin(recommended_shortlist["combo_variant"].astype(str).tolist())].copy(),
@@ -1452,9 +1494,20 @@ def _write_static_combo_report(
                 "local_annualized_median_pct",
                 "robustness_label",
             ),
+            header_labels={
+                "combo_variant": "Вариант",
+                "local_neighbors_count": "Соседей",
+                "same_components_other_topk_count": "Те же компоненты, другой top-k",
+                "minor_component_change_count": "Соседи с малой заменой",
+                "local_goal_rate": "Доля проходящих цель",
+                "local_mean_return_p25_pct": "P25 средней сделки",
+                "local_dd_p75_pct": "P75 просадки",
+                "local_annualized_median_pct": "Медиана годового unit-PnL",
+                "robustness_label": "Устойчивость",
+            },
         ),
         "",
-        "## Priority Top-N Stability",
+        "## Устойчивость Приоритетного Top-N",
         "",
         _frame_to_markdown(
             priority_topn_summary,
@@ -1469,9 +1522,20 @@ def _write_static_combo_report(
                 "positive_months_count",
                 "non_positive_months_count",
             ),
+            header_labels={
+                "top_n_variants": "Сколько top-N вариантов",
+                "trades_count": "Сделок",
+                "trades_per_year": "Сделок в год",
+                "mean_return_pct": "Средняя сделка",
+                "win_rate": "WR",
+                "annualized_unit_pnl_pct": "Годовой unit-PnL",
+                "max_drawdown_pct": "Макс. просадка",
+                "positive_months_count": "Плюсовых месяцев",
+                "non_positive_months_count": "Неплюсовых месяцев",
+            },
         ),
         "",
-        "## Holdout Sanity",
+        "## Поздняя Проверка На Отложенном Окне",
         "",
         _frame_to_markdown(
             priority_holdout_sanity,
@@ -1486,9 +1550,20 @@ def _write_static_combo_report(
                 "positive_months_count",
                 "non_positive_months_count",
             ),
+            header_labels={
+                "split_id": "Сплит",
+                "trades_count": "Сделок",
+                "trades_per_year": "Сделок в год",
+                "mean_return_pct": "Средняя сделка",
+                "win_rate": "WR",
+                "annualized_unit_pnl_pct": "Годовой unit-PnL",
+                "max_drawdown_pct": "Макс. просадка",
+                "positive_months_count": "Плюсовых месяцев",
+                "non_positive_months_count": "Неплюсовых месяцев",
+            },
         ),
         "",
-        "## Trade Chart Manifest",
+        "## Список Графиков Сделок",
         "",
         _frame_to_markdown(
             trade_chart_manifest,
@@ -1502,52 +1577,61 @@ def _write_static_combo_report(
                 "chart_path",
             ),
             limit=30,
+            header_labels={
+                "chart_index": "№",
+                "symbol": "Инструмент",
+                "combo_variant": "Вариант",
+                "entry_timestamp_utc": "Вход UTC",
+                "exit_return_pct": "Доходность",
+                "chart_status": "Статус графика",
+                "chart_path": "Путь к графику",
+            },
         ),
         "",
-        "## Chart Gallery",
+        "## Галерея Графиков",
         "",
-        "### Equity Curve",
+        "### Кривая Результатов",
         "",
-        "![Priority Equity](charts/priority_equity_curve.png)",
+        "![Кривая результатов](charts/priority_equity_curve.png)",
         "",
-        "### Monthly Returns",
+        "### Помесячная Доходность",
         "",
-        "![Priority Monthly Returns](charts/priority_monthly_returns.png)",
+        "![Помесячная доходность](charts/priority_monthly_returns.png)",
         "",
-        "### Trade Timeline",
+        "### Лента Сделок",
         "",
-        "![Priority Trade Timeline](charts/priority_trade_timeline.png)",
+        "![Лента сделок](charts/priority_trade_timeline.png)",
         "",
-        "### Trade Distribution",
+        "### Распределение Сделок",
         "",
-        "![Priority Trade Distribution](charts/priority_trade_distribution.png)",
+        "![Распределение сделок](charts/priority_trade_distribution.png)",
         "",
-        "### Top Variants",
+        "### Лучшие Варианты",
         "",
-        "![Top Variants Scatter](charts/top_variants_scatter.png)",
+        "![Лучшие варианты](charts/top_variants_scatter.png)",
         "",
-        "### Top-N Stability",
+        "### Устойчивость Top-N",
         "",
-        "![Top-N Stability](charts/priority_topn_stability.png)",
+        "![Устойчивость top-n](charts/priority_topn_stability.png)",
         "",
-        "### Leader Robustness",
+        "### Устойчивость Лидера",
         "",
-        "![Leader Robustness](charts/leader_robustness.png)",
+        "![Устойчивость лидера](charts/leader_robustness.png)",
         "",
-        "## Reliability Note",
+        "## Важные Оговорки",
         "",
-        "- `annualized_unit_pnl_pct` is additive unit-PnL across trades, not capital-constrained CAGR.",
-        f"- Source trade returns already include taker fees: `true`."
+        "- `annualized_unit_pnl_pct` — это additive unit-PnL по сделкам, а не CAGR счёта с ограничением по капиталу.",
+            f"- Доходности сделок уже учитывают комиссию тейкера: `да`."
         + (
-            f" Assumed taker fee = `{commission_rate * 100:.02f}%` per side, `{round_trip_taker_fee_pct * 100:.02f}%` round-trip."
+            f" Принята комиссия тейкера = `{commission_rate * 100:.02f}%` на сторону, `{round_trip_taker_fee_pct * 100:.02f}%` за круг."
             if commission_rate is not None and round_trip_taker_fee_pct is not None
             else ""
         ),
-        "- `max_concurrent_trades` and `overlapping_entries_count` show where multiple trades overlap in time.",
-        "- `shallow/q75/q25` candidate thresholds are frozen numeric values in code, not recomputed quantiles at report time.",
-        "- Combo discovery and ranking are still selected on the same full-year dataset, so this report remains research-grade rather than independent live proof.",
+        "- `max_concurrent_trades` и `overlapping_entries_count` показывают, где сделки перекрываются по времени.",
+        "- Пороги `shallow/q75/q25` зафиксированы как численные значения в коде и не пересчитываются квантилизацией при каждом запуске.",
+        "- Поиск и ранжирование комбинаций всё ещё сделаны на этом же полном годе, поэтому отчёт остаётся исследовательским, а не независимым доказательством для реальной торговли.",
         "",
-        "## Trade Chart Samples",
+        "## Примеры Графиков Сделок",
         "",
     ]
     for _, row in trade_chart_samples.iterrows():
@@ -1559,7 +1643,7 @@ def _write_static_combo_report(
             [
                 f"### {row.get('combo_variant', '')} | {row.get('symbol', '')} | {_format_value('exit_return_pct', row.get('exit_return_pct'))}",
                 "",
-                f"![{row.get('symbol', '')} trade](charts/trades/{chart_name})",
+                f"![Сделка {row.get('symbol', '')}](charts/trades/{chart_name})",
                 "",
             ]
         )
@@ -1582,13 +1666,13 @@ def build_hourly_asia_pump_static_combo_artifacts(
     output_path.mkdir(parents=True, exist_ok=True)
     run_started_at = time.perf_counter()
 
-    active_logger.info("hourly-asia-pump-static-combo: stage=load-inputs")
+    active_logger.info("hourly-asia-pump-static-combo: этап=загрузка-входных-данных")
     base_events = _prepare_base_events(Path(base_events_path))
     confirmed_events = _prepare_confirmed_events(Path(confirmed_events_path))
     analysis_calendar_months = _calendar_months_from_frames(base_events, confirmed_events)
     candidate_frames = _build_static_candidate_frames(base_events=base_events, confirmed_events=confirmed_events)
     active_logger.info(
-        "hourly-asia-pump-static-combo: stage=candidates candidates=%s base_events=%s confirmed_events=%s elapsed=%s",
+        "hourly-asia-pump-static-combo: этап=кандидаты кандидатов=%s базовых_сделок=%s подтвержденных_сделок=%s прошло=%s",
         len(candidate_frames),
         len(base_events),
         len(confirmed_events),
@@ -1621,7 +1705,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
     combo_stage_started_at = time.perf_counter()
     processed_combo_jobs = 0
     active_logger.info(
-        "hourly-asia-pump-static-combo: stage=combo-grid-start candidates=%s combo_jobs=%s elapsed=%s eta=n/a",
+        "hourly-asia-pump-static-combo: этап=старт-сетки-комбинаций кандидатов=%s задач_по_комбинациям=%s прошло=%s eta=н/д",
         len(candidate_ids),
         total_combo_jobs,
         _format_elapsed(combo_stage_started_at - run_started_at),
@@ -1661,7 +1745,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
                         else None
                     )
                     active_logger.info(
-                        "hourly-asia-pump-static-combo: stage=combo-grid progress=%.1f%% processed=%s/%s size=%s top_k=%s summary_rows=%s elapsed=%s eta=%s",
+                        "hourly-asia-pump-static-combo: этап=сетка-комбинаций прогресс=%.1f%% обработано=%s/%s размер=%s top_k=%s строк_в_сводке=%s прошло=%s eta=%s",
                         (processed_combo_jobs / total_combo_jobs) * 100.0 if total_combo_jobs > 0 else 100.0,
                         processed_combo_jobs,
                         total_combo_jobs,
@@ -1679,14 +1763,14 @@ def build_hourly_asia_pump_static_combo_artifacts(
         else pd.DataFrame()
     )
     active_logger.info(
-        "hourly-asia-pump-static-combo: stage=combo-grid-complete processed=%s/%s combo_events=%s combo_summaries=%s elapsed=%s",
+        "hourly-asia-pump-static-combo: этап=сетка-комбинаций-завершена обработано=%s/%s событий_комбинаций=%s сводок_комбинаций=%s прошло=%s",
         processed_combo_jobs,
         total_combo_jobs,
         len(combo_events_all),
         len(combo_summary_rows),
         _format_elapsed(time.perf_counter() - combo_stage_started_at),
     )
-    active_logger.info("hourly-asia-pump-static-combo: stage=ranking")
+    active_logger.info("hourly-asia-pump-static-combo: этап=ранжирование")
     combo_summary = _rank_combo_summary(pd.DataFrame(combo_summary_rows))
 
     if not combo_summary.empty and "event_signature" in combo_summary.columns:
@@ -1698,7 +1782,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
     else:
         great_combos = unique_combo_summary.iloc[0:0].copy()
     active_logger.info(
-        "hourly-asia-pump-static-combo: stage=selection unique_combos=%s great_combos=%s elapsed=%s",
+        "hourly-asia-pump-static-combo: этап=отбор уникальных_комбинаций=%s сильных_комбинаций=%s прошло=%s",
         len(unique_combo_summary),
         len(great_combos),
         _format_elapsed(time.perf_counter() - run_started_at),
@@ -1751,7 +1835,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
         )
     priority_holdout_sanity = pd.DataFrame(priority_holdout_sanity_rows)
     active_logger.info(
-        "hourly-asia-pump-static-combo: stage=post-analysis priority_trades=%s monthly_rows=%s holdout_rows=%s elapsed=%s",
+        "hourly-asia-pump-static-combo: этап=пост-анализ приоритетных_сделок=%s строк_по_месяцам=%s строк_holdout=%s прошло=%s",
         len(priority_events),
         len(priority_monthly_returns),
         len(priority_holdout_sanity),
@@ -1846,7 +1930,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
     )
 
     active_logger.info(
-        "hourly-asia-pump-static-combo artifacts saved: output_dir=%s great_combos=%s priority_trades=%s report=%s charts_dir=%s elapsed=%s",
+        "hourly-asia-pump-static-combo: артефакты сохранены output_dir=%s сильных_комбинаций=%s приоритетных_сделок=%s report=%s charts_dir=%s прошло=%s",
         output_path,
         len(great_combos),
         len(priority_events),

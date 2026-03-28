@@ -2215,7 +2215,7 @@ def _run_hourly_pump_static_combo_analysis_inner(config: AppConfig, args: argpar
     root_output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "run-hourly-pump-static-combo-analysis: base_events=%s confirmed_events=%s output_dir=%s",
+        "run-hourly-pump-static-combo-analysis: входные_сделки=%s подтвержденные_сделки=%s output_dir=%s",
         base_events_path,
         confirmed_events_path,
         root_output_dir,
@@ -2229,7 +2229,7 @@ def _run_hourly_pump_static_combo_analysis_inner(config: AppConfig, args: argpar
         logger=logger,
     )
     logger.info(
-        "run-hourly-pump-static-combo-analysis: artifacts report=%s great_catalog=%s priority_summary=%s priority_events=%s charts=%s",
+        "run-hourly-pump-static-combo-analysis: артефакты отчёт=%s каталог_комбинаций=%s сводка_приоритета=%s события_приоритета=%s графики=%s",
         artifacts["report"],
         artifacts["great_combo_catalog"],
         artifacts["priority_selected_summary"],
@@ -2249,7 +2249,7 @@ def _run_hourly_pump_production_report_inner(config: AppConfig, args: argparse.N
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(
-        "run-hourly-pump-production-report: static_combo_dir=%s output_dir=%s",
+        "run-hourly-pump-production-report: каталог_static_combo=%s output_dir=%s",
         static_combo_dir,
         output_dir,
     )
@@ -2258,7 +2258,7 @@ def _run_hourly_pump_production_report_inner(config: AppConfig, args: argparse.N
         output_dir=output_dir,
     )
     logger.info(
-        "run-hourly-pump-production-report: artifacts report=%s summary=%s monthly=%s holdout=%s kpi=%s gate_passed=%s",
+        "run-hourly-pump-production-report: артефакты отчёт=%s сводка=%s месяцы=%s отложенное_окно=%s kpi=%s kpi_пройден=%s",
         artifacts["report"],
         artifacts["production_default_summary"],
         artifacts["production_default_monthly"],

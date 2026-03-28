@@ -49,32 +49,32 @@ class HourlyAsiaPumpProductionKpi:
 HOURLY_ASIA_PUMP_PRODUCTION_VARIANTS: tuple[HourlyAsiaPumpProductionVariantSpec, ...] = (
     HourlyAsiaPumpProductionVariantSpec(
         profile_id="core_a",
-        title="A Core",
-        description="Main production leader with the best full-year balance of frequency, mean trade and robustness.",
+        title="A База",
+        description="Главный производственный режим с лучшим балансом частоты, средней сделки и устойчивости на полном году.",
         component_ids=("mb5_01_shallow", "mb3_03_raw", "mb5_06_shallow", "tf7_raw", "conf00_trg65_pb50"),
         top_k_per_timestamp=99,
         priority=1,
     ),
     HourlyAsiaPumpProductionVariantSpec(
         profile_id="d_sharp",
-        title="D Sharp",
-        description="Sharper subset with stronger mean trade and lower drawdown, used as a secondary confirmation regime.",
+        title="D Усиленный",
+        description="Более острый подрежим с сильнее средней сделкой и ниже просадкой; используем как дополнительное подтверждение.",
         component_ids=("mb5_01_shallow", "mb3_03_trg_q75", "mb5_06_shallow", "tf7_raw", "conf00_trg65_pb50"),
         top_k_per_timestamp=2,
         priority=2,
     ),
     HourlyAsiaPumpProductionVariantSpec(
         profile_id="h_active",
-        title="H Active",
-        description="Active overlay leaning on the 03h and 06h monster continuation family.",
+        title="H Активный",
+        description="Активный overlay-режим, который опирается на monster-continuation семейство в 03h и 06h.",
         component_ids=("mb5_01_shallow", "mb5_06_shallow", "mb5_03_raw", "tf7_raw", "conf00_trg65_pb50"),
         top_k_per_timestamp=99,
         priority=3,
     ),
     HourlyAsiaPumpProductionVariantSpec(
         profile_id="mo_low_dd",
-        title="MO Low DD",
-        description="Low-drawdown fallback regime for quieter market states.",
+        title="MO Низкая Просадка",
+        description="Запасной низкорисковый режим для более спокойных состояний рынка.",
         component_ids=("mb5_01_shallow", "tf7_raw", "conf00_trg65_pb50"),
         top_k_per_timestamp=99,
         priority=4,
@@ -91,7 +91,7 @@ def _normalize_component_ids(raw_value: object) -> tuple[str, ...]:
 
 def _load_required_csv(path: Path) -> pd.DataFrame:
     if not path.exists():
-        raise FileNotFoundError(f"Required CSV was not found: {path}")
+        raise FileNotFoundError(f"Не найден обязательный CSV: {path}")
     frame = pd.read_csv(path)
     return frame
 
@@ -118,7 +118,7 @@ def _find_variant_row(
     variant_spec: HourlyAsiaPumpProductionVariantSpec,
 ) -> pd.Series:
     if great_catalog.empty:
-        raise ValueError("Static combo catalog is empty; cannot build production profile.")
+        raise ValueError("Каталог static combo пуст; невозможно собрать production-профиль.")
     normalized = great_catalog.copy()
     normalized["component_tuple"] = normalized.get("component_ids", pd.Series(dtype="object")).apply(_normalize_component_ids)
     matches = normalized[
@@ -127,7 +127,7 @@ def _find_variant_row(
     ].copy()
     if matches.empty:
         raise ValueError(
-            "Production variant was not found in great_combo_catalog: "
+            "Не найден production-вариант в great_combo_catalog: "
             f"{variant_spec.profile_id} ({','.join(variant_spec.component_ids)} | top_k={variant_spec.top_k_per_timestamp})"
         )
     return matches.sort_values(["combo_priority", "priority_score"], ascending=[True, False]).iloc[0]
@@ -257,7 +257,7 @@ def _evaluate_kpi_gate(
     kpi: HourlyAsiaPumpProductionKpi,
 ) -> pd.DataFrame:
     if full_year_summary.empty:
-        raise ValueError("Production summary is empty; cannot evaluate KPI gate.")
+        raise ValueError("Production summary пуст; невозможно проверить KPI-gate.")
     row = full_year_summary.iloc[0]
     checks: list[dict[str, object]] = [
         {
@@ -402,9 +402,9 @@ def _save_production_variant_chart(variant_summary: pd.DataFrame, path: Path) ->
             textcoords="offset points",
             fontsize=10,
         )
-    axis.set_title("Production Variants: Frequency vs Mean Trade")
-    axis.set_xlabel("Trades per year")
-    axis.set_ylabel("Mean trade return")
+    axis.set_title("Производственные варианты: частота против средней сделки")
+    axis.set_xlabel("Сделок в год")
+    axis.set_ylabel("Средняя доходность сделки")
     axis.yaxis.set_major_formatter(FuncFormatter(lambda value, _: f"{value * 100:.0f}%"))
     axis.grid(alpha=0.25)
     figure.tight_layout()
@@ -427,31 +427,58 @@ def _write_production_report(
     default_profiles = ",".join(variant_summary["production_profile_id"].astype(str).tolist()) if not variant_summary.empty else ""
     commission_rate = pd.to_numeric(pd.Series([context.get("commission_rate")]), errors="coerce").iloc[0]
     round_trip_taker_fee_pct = pd.to_numeric(pd.Series([context.get("round_trip_taker_fee_pct")]), errors="coerce").iloc[0]
+    scope_map = {
+        "full_year": "полный_год",
+        "holdout": "отложенное_окно",
+        "train8_test4": "train8_test4",
+        "train9_test3": "train9_test3",
+    }
+    metric_map = {
+        "annualized_unit_pnl_pct": "Годовой unit-PnL",
+        "mean_return_pct": "Средняя сделка",
+        "win_rate": "WR",
+        "trades_per_year": "Сделок в год",
+        "max_drawdown_pct": "Макс. просадка",
+        "positive_months_count": "Плюсовых месяцев",
+        "holdout_presence": "Наличие отложенного окна",
+        "all_active_months_positive": "Все активные месяцы в плюс",
+    }
+    context_display = pd.DataFrame(
+        [
+            {
+                "key": key,
+                "value": json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value,
+            }
+            for key, value in context.items()
+        ]
+    )
+    kpi_display = kpi_validation.copy()
+    if not kpi_display.empty:
+        kpi_display["scope"] = kpi_display["scope"].astype(str).map(lambda value: scope_map.get(value, value))
+        kpi_display["metric"] = kpi_display["metric"].astype(str).map(lambda value: metric_map.get(value, value))
+    production_holdout_display = production_holdout.copy()
+    if not production_holdout_display.empty and "split_id" in production_holdout_display.columns:
+        production_holdout_display["split_id"] = production_holdout_display["split_id"].astype(str).map(
+            lambda value: scope_map.get(value, value)
+        )
     lines = [
-        "# Hourly Asia Pump Production Report",
+        "# Боевой Отчёт По Hourly Asia Pump",
         "",
-        "## Executive Summary",
+        "## Краткий Вывод",
         "",
-        f"- Production pack: `{default_profiles}`.",
-        "- Priority rule: if several production variants match the same signal, take the lowest `production_priority`.",
-        f"- KPI gate passed: `{str(gate_passed).lower()}`.",
+        f"- Производственный набор: `{default_profiles}`.",
+        "- Правило приоритета: если один сигнал проходит несколько производственных вариантов, берём вариант с наименьшим `production_priority`.",
+        f"- KPI-проверка пройдена: `{'да' if gate_passed else 'нет'}`.",
         "",
-        "## Run Context",
+        "## Контекст Запуска",
         "",
         _frame_to_markdown(
-            pd.DataFrame(
-                [
-                    {
-                        "key": key,
-                        "value": json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value,
-                    }
-                    for key, value in context.items()
-                ]
-            ),
+            context_display,
             columns=("key", "value"),
+            header_labels={"key": "Параметр", "value": "Значение"},
         ),
         "",
-        "## Production Pack Summary",
+        "## Сводка По Боевому Паку",
         "",
         _frame_to_markdown(
             production_summary,
@@ -472,16 +499,41 @@ def _write_production_report(
                 "overlapping_entries_count",
                 "matched_combo_variants_count",
             ),
+            header_labels={
+                "trades_count": "Сделок",
+                "trades_per_year": "Сделок в год",
+                "mean_return_pct": "Средняя сделка",
+                "median_return_pct": "Медианная сделка",
+                "win_rate": "WR",
+                "profit_factor": "PF",
+                "annualized_unit_pnl_pct": "Годовой unit-PnL",
+                "max_drawdown_pct": "Макс. просадка",
+                "mean_pos_trade_pct": "Средняя прибыльная",
+                "mean_neg_trade_pct": "Средняя убыточная",
+                "positive_months_count": "Плюсовых месяцев",
+                "non_positive_months_count": "Неплюсовых месяцев",
+                "max_concurrent_trades": "Макс. одновременных сделок",
+                "overlapping_entries_count": "Перекрывающихся входов",
+                "matched_combo_variants_count": "Вариантов в наборе",
+            },
         ),
         "",
-        "## KPI Gate",
+        "## KPI-Проверка",
         "",
         _frame_to_markdown(
-            kpi_validation,
+            kpi_display,
             columns=("scope", "metric", "actual", "operator", "threshold", "passed"),
+            header_labels={
+                "scope": "Область",
+                "metric": "Метрика",
+                "actual": "Факт",
+                "operator": "Условие",
+                "threshold": "Порог",
+                "passed": "Пройдено",
+            },
         ),
         "",
-        "## Named Production Variants",
+        "## Именованные Рабочие Варианты",
         "",
         _frame_to_markdown(
             variant_summary,
@@ -498,19 +550,38 @@ def _write_production_report(
                 "max_concurrent_trades",
                 "robustness_label",
             ),
+            header_labels={
+                "production_profile_id": "Профиль",
+                "production_title": "Название",
+                "combo_variant": "Вариант",
+                "trades_per_year": "Сделок в год",
+                "mean_return_pct": "Средняя сделка",
+                "win_rate": "WR",
+                "annualized_unit_pnl_pct": "Годовой unit-PnL",
+                "max_drawdown_pct": "Макс. просадка",
+                "positive_months_count": "Плюсовых месяцев",
+                "max_concurrent_trades": "Макс. одновременных сделок",
+                "robustness_label": "Устойчивость",
+            },
         ),
         "",
-        "## Monthly Distribution",
+        "## Распределение По Месяцам",
         "",
         _frame_to_markdown(
             production_monthly,
             columns=("month_utc", "total_return_pct", "trades_count", "month_positive"),
+            header_labels={
+                "month_utc": "Месяц",
+                "total_return_pct": "Сумма доходности",
+                "trades_count": "Сделок",
+                "month_positive": "Месяц в плюс",
+            },
         ),
         "",
-        "## Late Holdout Sanity",
+        "## Поздняя Проверка На Отложенном Окне",
         "",
         _frame_to_markdown(
-            production_holdout,
+            production_holdout_display,
             columns=(
                 "split_id",
                 "trades_count",
@@ -525,42 +596,56 @@ def _write_production_report(
                 "overlapping_entries_count",
                 "all_active_months_positive",
             ),
+            header_labels={
+                "split_id": "Сплит",
+                "trades_count": "Сделок",
+                "trades_per_year": "Сделок в год",
+                "mean_return_pct": "Средняя сделка",
+                "win_rate": "WR",
+                "annualized_unit_pnl_pct": "Годовой unit-PnL",
+                "max_drawdown_pct": "Макс. просадка",
+                "positive_months_count": "Плюсовых месяцев",
+                "non_positive_months_count": "Неплюсовых месяцев",
+                "max_concurrent_trades": "Макс. одновременных сделок",
+                "overlapping_entries_count": "Перекрывающихся входов",
+                "all_active_months_positive": "Все активные месяцы в плюс",
+            },
         ),
         "",
-        "## Chart Gallery",
+        "## Галерея Графиков",
         "",
-        "### Production Equity Curve",
+        "### Кривая Результатов Боевого Пака",
         "",
-        f"![Production Equity]({chart_paths['equity_curve'].relative_to(output_dir).as_posix()})",
+        f"![Кривая результатов боевого пака]({chart_paths['equity_curve'].relative_to(output_dir).as_posix()})",
         "",
-        "### Production Monthly Returns",
+        "### Помесячная Доходность Боевого Пака",
         "",
-        f"![Production Monthly Returns]({chart_paths['monthly_returns'].relative_to(output_dir).as_posix()})",
+        f"![Помесячная доходность боевого пака]({chart_paths['monthly_returns'].relative_to(output_dir).as_posix()})",
         "",
-        "### Production Trade Timeline",
+        "### Лента Сделок Боевого Пака",
         "",
-        f"![Production Timeline]({chart_paths['trade_timeline'].relative_to(output_dir).as_posix()})",
+        f"![Лента сделок боевого пака]({chart_paths['trade_timeline'].relative_to(output_dir).as_posix()})",
         "",
-        "### Production Trade Distribution",
+        "### Распределение Сделок Боевого Пака",
         "",
-        f"![Production Trade Distribution]({chart_paths['trade_distribution'].relative_to(output_dir).as_posix()})",
+        f"![Распределение сделок боевого пака]({chart_paths['trade_distribution'].relative_to(output_dir).as_posix()})",
         "",
-        "### Variant Comparison",
+        "### Сравнение Вариантов",
         "",
-        f"![Production Variants]({chart_paths['variant_scatter'].relative_to(output_dir).as_posix()})",
+        f"![Сравнение рабочих вариантов]({chart_paths['variant_scatter'].relative_to(output_dir).as_posix()})",
         "",
-        "## Reliability Note",
+        "## Важные Оговорки",
         "",
-        "- `annualized_unit_pnl_pct` is additive unit-PnL across trades, not capital-constrained account CAGR.",
+        "- `annualized_unit_pnl_pct` — это суммарный unit-PnL по сделкам, а не CAGR счёта с ограничением по капиталу.",
         (
-            f"- Source trade returns already include taker fees: `true`. "
-            f"Assumed taker fee = `{float(commission_rate) * 100:.02f}%` per side, `{float(round_trip_taker_fee_pct) * 100:.02f}%` round-trip."
+            f"- Доходности сделок уже учитывают комиссию тейкера: `да`. "
+            f"Принята комиссия тейкера = `{float(commission_rate) * 100:.02f}%` на сторону, `{float(round_trip_taker_fee_pct) * 100:.02f}%` за круг."
             if pd.notna(commission_rate) and pd.notna(round_trip_taker_fee_pct)
-            else "- Source trade returns are expected to be net of taker fees from the upstream research events."
+            else "- Доходности сделок уже считаются с учётом комиссии тейкера на предыдущем этапе исследования."
         ),
-        "- `max_concurrent_trades` and `overlapping_entries_count` are reported to show where multiple trades overlap in time.",
-        "- The pack itself is selected from the same full-year research dataset; late holdout rows are sanity checks, not independent proof of live profitability.",
-        "- This is a production gate for the current research dataset, not a guarantee of future real-money profitability.",
+        "- `max_concurrent_trades` и `overlapping_entries_count` показывают, где сделки перекрываются по времени.",
+        "- Сам набор выбран на этом же полном исследовательском периоде; поздняя проверка на отложенном окне здесь только дополнительная проверка, а не независимое доказательство прибыльности в реальной торговле.",
+        "- Это боевая KPI-проверка для текущего исследовательского датасета, а не гарантия будущей реальной доходности.",
     ]
     report_path = output_dir / "production_report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -600,7 +685,7 @@ def build_hourly_asia_pump_production_artifacts(
     )
     production_summary_payload = _summarize_events(production_events, calendar_months=calendar_months)
     if production_summary_payload is None:
-        raise ValueError("Production pack selected no trades; cannot build production report.")
+        raise ValueError("Производственный набор не выбрал ни одной сделки; невозможно собрать production-отчёт.")
     production_summary = pd.DataFrame(
         [
             {
