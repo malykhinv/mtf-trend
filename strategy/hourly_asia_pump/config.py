@@ -16,7 +16,15 @@ HourlyAsiaPumpTradeEntryStyle = Literal[
     "flag_break",
 ]
 HourlyAsiaPumpTradeTrailStyle = Literal["prev_bar_low", "last_red_low"]
-HourlyAsiaPumpTradeInitialStopStyle = Literal["trigger_body_mid", "trigger_low", "pattern_low"]
+HourlyAsiaPumpTradeInitialStopStyle = Literal[
+    "trigger_body_mid",
+    "trigger_body_upper_quarter",
+    "trigger_close",
+    "trigger_low",
+    "pattern_low",
+    "flag_low",
+]
+HourlyAsiaPumpTradePortfolioMode = Literal["stacked"]
 
 HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = (
     Timeframe.M1,
@@ -94,6 +102,21 @@ class HourlyAsiaPumpTradeModel:
     max_pre_entry_pullback_frac: float | None = None
     max_pre_entry_red_volume_frac: float | None = None
     min_pre_entry_low_frac_of_trigger_range: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HourlyAsiaPumpTradePortfolioComponent:
+    model_id: str
+    include_hours_utc: tuple[int, ...] | None = None
+    exclude_hours_utc: tuple[int, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HourlyAsiaPumpTradePortfolio:
+    portfolio_id: str
+    label: str
+    mode: HourlyAsiaPumpTradePortfolioMode
+    components: tuple[HourlyAsiaPumpTradePortfolioComponent, ...]
 
 
 def parse_hourly_asia_pump_profile_id(
@@ -552,5 +575,135 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             max_pre_entry_pullback_frac=0.35,
             max_pre_entry_red_volume_frac=0.7,
             min_pre_entry_low_frac_of_trigger_range=0.45,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="context_break_65_uq_tight",
+            label="Context Break 6.5pct UQ Tight",
+            entry_style="break_trigger_high",
+            trail_style="last_red_low",
+            initial_stop_style="trigger_body_upper_quarter",
+            min_trigger_return_pct=0.065,
+            min_range_atr=3.5,
+            min_body_atr=2.5,
+            min_volume_mult=4.0,
+            max_close_to_high_frac=0.18,
+            max_entry_bars=2,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.0,
+            partial_take_r=0.0,
+            partial_fraction=0.0,
+            move_stop_to_be_after_partial=False,
+            trail_activation_pct=0.03,
+            fast_fail_bars=1,
+            fast_fail_min_return_pct=0.01,
+            max_hold_minutes=720,
+            max_pre_base_range_pct_60m=0.04,
+            max_pre_base_drift_pct_60m=0.02,
+            max_pre_base_range_vs_trigger=0.4,
+            max_pre_entry_pullback_frac=0.35,
+            max_pre_entry_red_volume_frac=0.7,
+            min_pre_entry_low_frac_of_trigger_range=0.45,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="context_break_65_uq_tight_mid",
+            label="Context Break 6.5pct UQ Tight Mid",
+            entry_style="break_trigger_high",
+            trail_style="last_red_low",
+            initial_stop_style="trigger_body_upper_quarter",
+            min_trigger_return_pct=0.065,
+            min_range_atr=3.5,
+            min_body_atr=2.5,
+            min_volume_mult=4.0,
+            max_close_to_high_frac=0.18,
+            max_entry_bars=2,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.0,
+            partial_take_r=0.0,
+            partial_fraction=0.0,
+            move_stop_to_be_after_partial=False,
+            trail_activation_pct=0.03,
+            fast_fail_bars=1,
+            fast_fail_min_return_pct=0.01,
+            max_hold_minutes=720,
+            max_pre_base_range_pct_60m=0.05,
+            max_pre_base_drift_pct_60m=0.025,
+            max_pre_base_range_vs_trigger=0.55,
+            max_pre_entry_pullback_frac=0.45,
+            max_pre_entry_red_volume_frac=0.8,
+            min_pre_entry_low_frac_of_trigger_range=0.38,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="context_break_65_close_tight",
+            label="Context Break 6.5pct Close Tight",
+            entry_style="break_trigger_high",
+            trail_style="last_red_low",
+            initial_stop_style="trigger_close",
+            min_trigger_return_pct=0.065,
+            min_range_atr=3.5,
+            min_body_atr=2.5,
+            min_volume_mult=4.0,
+            max_close_to_high_frac=0.18,
+            max_entry_bars=2,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.0,
+            partial_take_r=0.0,
+            partial_fraction=0.0,
+            move_stop_to_be_after_partial=False,
+            trail_activation_pct=0.03,
+            fast_fail_bars=1,
+            fast_fail_min_return_pct=0.01,
+            max_hold_minutes=720,
+            max_pre_base_range_pct_60m=0.04,
+            max_pre_base_drift_pct_60m=0.02,
+            max_pre_base_range_vs_trigger=0.4,
+            max_pre_entry_pullback_frac=0.35,
+            max_pre_entry_red_volume_frac=0.7,
+            min_pre_entry_low_frac_of_trigger_range=0.45,
+        ),
+    ]
+
+
+def build_hourly_asia_pump_trade_portfolios() -> list[HourlyAsiaPumpTradePortfolio]:
+    return [
+        HourlyAsiaPumpTradePortfolio(
+            portfolio_id="stacked_context_core_65",
+            label="Stacked Context Core 6.5",
+            mode="stacked",
+            components=(
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="context_break_65_uq_tight",
+                    exclude_hours_utc=(3,),
+                ),
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="context_break_65_close_tight",
+                ),
+            ),
+        ),
+        HourlyAsiaPumpTradePortfolio(
+            portfolio_id="stacked_context_all_positive_v1",
+            label="Stacked Context All Positive V1",
+            mode="stacked",
+            components=(
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="context_break_65_uq_tight",
+                    exclude_hours_utc=(3,),
+                ),
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="context_break_65_close_tight",
+                ),
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="monster_break_5pct",
+                    include_hours_utc=(1,),
+                ),
+            ),
         ),
     ]

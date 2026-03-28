@@ -23,9 +23,12 @@ from strategy.hourly_asia_pump.config import (
     HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
     HourlyAsiaPumpParams,
     HourlyAsiaPumpProfileId,
+    HourlyAsiaPumpTradePortfolio,
+    HourlyAsiaPumpTradePortfolioComponent,
     HourlyAsiaPumpTradeModel,
     build_hourly_asia_pump_grid,
     build_hourly_asia_pump_profile,
+    build_hourly_asia_pump_trade_portfolios,
     build_hourly_asia_pump_trade_models,
 )
 from vectorbt_runner.data_preparer import DataPreparer
@@ -141,6 +144,20 @@ def _quantile_or_none(series: pd.Series, quantile: float) -> float | None:
     if cleaned.empty:
         return None
     return float(cleaned.quantile(quantile))
+
+
+def _min_or_none(series: pd.Series) -> float | None:
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    if cleaned.empty:
+        return None
+    return float(cleaned.min())
+
+
+def _max_or_none(series: pd.Series) -> float | None:
+    cleaned = pd.to_numeric(series, errors="coerce").dropna()
+    if cleaned.empty:
+        return None
+    return float(cleaned.max())
 
 
 def _rate_ge(series: pd.Series, threshold: float) -> float | None:
@@ -874,6 +891,18 @@ def _find_trade_model_entry(
     trigger_volume = float(volume_values[row_index])
     trigger_range = max(1e-12, trigger_high - trigger_low)
     trigger_body_mid = trigger_open + 0.5 * (trigger_close - trigger_open)
+    trigger_body_upper_quarter = trigger_open + 0.75 * (trigger_close - trigger_open)
+
+    def _resolve_initial_stop(default_price: float) -> float:
+        if model.initial_stop_style == "trigger_low":
+            return trigger_low
+        if model.initial_stop_style == "trigger_body_mid":
+            return trigger_body_mid
+        if model.initial_stop_style == "trigger_body_upper_quarter":
+            return trigger_body_upper_quarter
+        if model.initial_stop_style == "trigger_close":
+            return trigger_close
+        return default_price
 
     no_entry: dict[str, object] = {
         "trade_triggered": False,
@@ -888,9 +917,7 @@ def _find_trade_model_entry(
         entry_end_idx = min(len(high_values) - 1, row_index + model.max_entry_bars)
         for idx in range(row_index + 1, entry_end_idx + 1):
             if float(high_values[idx]) >= trigger_high:
-                initial_stop_price = trigger_body_mid
-                if model.initial_stop_style == "trigger_low":
-                    initial_stop_price = trigger_low
+                initial_stop_price = _resolve_initial_stop(trigger_body_mid)
                 context = _build_pre_entry_context(
                     row_index=row_index,
                     entry_idx=idx,
@@ -944,11 +971,7 @@ def _find_trade_model_entry(
                     )
                     if not _context_entry_allowed(model, context):
                         continue
-                    initial_stop_price = pullback_low
-                    if model.initial_stop_style == "trigger_low":
-                        initial_stop_price = trigger_low
-                    elif model.initial_stop_style == "trigger_body_mid":
-                        initial_stop_price = trigger_body_mid
+                    initial_stop_price = _resolve_initial_stop(pullback_low)
                     return {
                         "trade_triggered": True,
                         "entry_idx": idx,
@@ -988,11 +1011,7 @@ def _find_trade_model_entry(
                 )
                 if not _context_entry_allowed(model, context):
                     continue
-                initial_stop_price = flag_low
-                if model.initial_stop_style == "trigger_low":
-                    initial_stop_price = trigger_low
-                elif model.initial_stop_style == "trigger_body_mid":
-                    initial_stop_price = trigger_body_mid
+                initial_stop_price = _resolve_initial_stop(flag_low)
                 return {
                     "trade_triggered": True,
                     "entry_idx": idx,
@@ -1317,6 +1336,166 @@ def _build_trade_model_summary(trade_model_events: pd.DataFrame) -> pd.DataFrame
     ).reset_index(drop=True)
 
 
+def _filter_trade_portfolio_component_rows(
+    trade_model_events: pd.DataFrame,
+    component: HourlyAsiaPumpTradePortfolioComponent,
+) -> pd.DataFrame:
+    if trade_model_events.empty:
+        return pd.DataFrame()
+    rows = trade_model_events[
+        trade_model_events["trade_triggered"].astype(bool)
+        & (trade_model_events["trade_model_id"].astype(str) == component.model_id)
+    ].copy()
+    if rows.empty:
+        return rows
+    hours = pd.to_numeric(rows.get("hour_utc", pd.Series(dtype="float64")), errors="coerce")
+    if component.include_hours_utc is not None:
+        rows = rows[hours.isin(component.include_hours_utc)].copy()
+        hours = pd.to_numeric(rows.get("hour_utc", pd.Series(dtype="float64")), errors="coerce")
+    if component.exclude_hours_utc is not None:
+        rows = rows[~hours.isin(component.exclude_hours_utc)].copy()
+    return rows
+
+
+def _build_trade_portfolio_events(
+    trade_model_events: pd.DataFrame,
+    portfolios: Sequence[HourlyAsiaPumpTradePortfolio],
+) -> pd.DataFrame:
+    if trade_model_events.empty or not portfolios:
+        return pd.DataFrame()
+
+    rows: list[pd.DataFrame] = []
+    for portfolio in portfolios:
+        if portfolio.mode != "stacked":
+            raise ValueError(f"Unsupported hourly Asia pump trade portfolio mode: {portfolio.mode}")
+        for component in portfolio.components:
+            component_rows = _filter_trade_portfolio_component_rows(trade_model_events, component)
+            if component_rows.empty:
+                continue
+            component_rows = component_rows.copy()
+            component_rows["trade_portfolio_id"] = portfolio.portfolio_id
+            component_rows["trade_portfolio_label"] = portfolio.label
+            component_rows["trade_portfolio_mode"] = portfolio.mode
+            component_rows["portfolio_component_model_id"] = component.model_id
+            component_rows["portfolio_component_include_hours_utc"] = (
+                ",".join(str(hour) for hour in component.include_hours_utc)
+                if component.include_hours_utc is not None
+                else ""
+            )
+            component_rows["portfolio_component_exclude_hours_utc"] = (
+                ",".join(str(hour) for hour in component.exclude_hours_utc)
+                if component.exclude_hours_utc is not None
+                else ""
+            )
+            rows.append(component_rows)
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
+
+
+def _build_trade_portfolio_summary(trade_portfolio_events: pd.DataFrame) -> pd.DataFrame:
+    if trade_portfolio_events.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    grouped = trade_portfolio_events.groupby(["timeframe", "trade_portfolio_id", "trade_portfolio_label"], sort=True)
+    for (timeframe, portfolio_id, portfolio_label), group in grouped:
+        entry_timestamps = pd.to_datetime(
+            group.get("entry_timestamp_ms", pd.Series(dtype="float64")),
+            unit="ms",
+            utc=True,
+            errors="coerce",
+        ).dropna()
+        span_days = max(
+            1.0,
+            ((entry_timestamps.max() - entry_timestamps.min()).total_seconds() / 86_400)
+            if len(entry_timestamps) >= 2
+            else float(max(1, group.get("date_utc", pd.Series(dtype="object")).nunique())),
+        )
+        trades_per_year = (len(group) / span_days) * 365.0 if len(group) > 0 else 0.0
+        exit_returns = pd.to_numeric(group.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce").dropna()
+        months = pd.to_datetime(
+            group.get("entry_timestamp_ms", pd.Series(dtype="float64")),
+            unit="ms",
+            utc=True,
+            errors="coerce",
+        ).dropna()
+        monthly_returns = (
+            pd.DataFrame(
+                {
+                    "month_utc": months.dt.tz_localize(None).dt.to_period("M").astype(str),
+                    "exit_return_pct": pd.to_numeric(
+                        group.loc[months.index, "exit_return_pct"],
+                        errors="coerce",
+                    ).to_numpy(),
+                }
+            )
+            .groupby("month_utc", sort=True)["exit_return_pct"]
+            .sum()
+        )
+        rows.append(
+            {
+                "timeframe": timeframe,
+                "trade_portfolio_id": portfolio_id,
+                "trade_portfolio_label": portfolio_label,
+                "trades_count": int(len(group)),
+                "trade_days_count": int(group["date_utc"].nunique()) if "date_utc" in group.columns else 0,
+                "trades_per_year": trades_per_year,
+                "mean_return_pct": _mean_or_none(exit_returns),
+                "median_return_pct": _median_or_none(exit_returns),
+                "p75_return_pct": _quantile_or_none(exit_returns, 0.75),
+                "win_rate": _mean_or_none((exit_returns > 0).astype("float64")),
+                "profit_factor": _profit_factor(exit_returns),
+                "avg_win_pct": _mean_or_none(exit_returns[exit_returns > 0]),
+                "avg_loss_pct": _mean_or_none(exit_returns[exit_returns < 0]),
+                "median_mfe_pct": _median_or_none(group.get("max_return_after_entry_pct", pd.Series(dtype="float64"))),
+                "realized_ge_5pct_rate": _mean_or_none(group.get("realized_ge_5pct", pd.Series(dtype="float64"))),
+                "realized_ge_10pct_rate": _mean_or_none(group.get("realized_ge_10pct", pd.Series(dtype="float64"))),
+                "median_hold_minutes": _median_or_none(group.get("minutes_held_after_entry", pd.Series(dtype="float64"))),
+                "positive_months_count": int((monthly_returns > 0).sum()),
+                "non_positive_months_count": int((monthly_returns <= 0).sum()),
+                "all_active_months_positive": bool((monthly_returns > 0).all()) if not monthly_returns.empty else False,
+                "worst_month_return_pct": _min_or_none(monthly_returns),
+                "best_month_return_pct": _max_or_none(monthly_returns),
+                "annual_sum_return_pct": float(exit_returns.sum()) if not exit_returns.empty else None,
+                "meets_50_trades_per_year": trades_per_year >= 50.0,
+                "meets_150_trades_per_year": trades_per_year >= 150.0,
+            }
+        )
+
+    summary = pd.DataFrame(rows)
+    return summary.sort_values(
+        ["timeframe", "all_active_months_positive", "mean_return_pct", "profit_factor", "trades_count"],
+        ascending=[True, False, False, False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def _build_trade_portfolio_monthly(trade_portfolio_events: pd.DataFrame) -> pd.DataFrame:
+    if trade_portfolio_events.empty:
+        return pd.DataFrame()
+
+    frame = trade_portfolio_events.copy()
+    entry_timestamps = pd.to_datetime(
+        frame.get("entry_timestamp_ms", pd.Series(dtype="float64")),
+        unit="ms",
+        utc=True,
+        errors="coerce",
+    )
+    frame["month_utc"] = entry_timestamps.dt.tz_localize(None).dt.to_period("M").astype(str)
+    frame["exit_return_pct"] = pd.to_numeric(frame.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce")
+    monthly = (
+        frame.groupby(["timeframe", "trade_portfolio_id", "trade_portfolio_label", "month_utc"], sort=True)
+        .agg(
+            trades_count=("exit_return_pct", "size"),
+            wins_count=("exit_return_pct", lambda s: int((pd.to_numeric(s, errors="coerce") > 0).sum())),
+            mean_return_pct=("exit_return_pct", "mean"),
+            total_return_pct=("exit_return_pct", "sum"),
+        )
+        .reset_index()
+    )
+    monthly["month_positive"] = pd.to_numeric(monthly["total_return_pct"], errors="coerce") > 0
+    return monthly
+
+
 def _filter_events_for_params(events: pd.DataFrame, params: HourlyAsiaPumpParams) -> pd.DataFrame:
     if events.empty:
         return pd.DataFrame()
@@ -1513,6 +1692,7 @@ def _write_report(
     top_grid_rows: pd.DataFrame,
     early_entry_summary: pd.DataFrame,
     trade_model_summary: pd.DataFrame,
+    trade_portfolio_summary: pd.DataFrame,
     selection_profile: HourlyAsiaPumpProfileId,
 ) -> Path:
     context_frame = pd.DataFrame(
@@ -1615,6 +1795,26 @@ def _write_report(
             ),
         ),
         "",
+        "## Trade Portfolio Comparison",
+        "",
+        _frame_to_markdown(
+            trade_portfolio_summary,
+            columns=(
+                "timeframe",
+                "trade_portfolio_id",
+                "trades_count",
+                "trades_per_year",
+                "mean_return_pct",
+                "median_return_pct",
+                "win_rate",
+                "profit_factor",
+                "positive_months_count",
+                "non_positive_months_count",
+                "all_active_months_positive",
+                "annual_sum_return_pct",
+            ),
+        ),
+        "",
         "## Top Grid Rows",
         "",
     ]
@@ -1658,6 +1858,9 @@ def _write_report(
             f"- early entry summary: `{output_dir / 'early_entry_summary.csv'}`",
             f"- trade model events: `{output_dir / 'trade_model_events.csv'}`",
             f"- trade model summary: `{output_dir / 'trade_model_summary.csv'}`",
+            f"- trade portfolio events: `{output_dir / 'trade_portfolio_events.csv'}`",
+            f"- trade portfolio summary: `{output_dir / 'trade_portfolio_summary.csv'}`",
+            f"- trade portfolio monthly: `{output_dir / 'trade_portfolio_monthly.csv'}`",
             "",
         ]
     )
@@ -1698,10 +1901,12 @@ def build_hourly_asia_pump_research_artifacts(
     symbol_summary_frames: list[pd.DataFrame] = []
     early_entry_event_frames: list[pd.DataFrame] = []
     trade_model_event_frames: list[pd.DataFrame] = []
+    trade_portfolio_event_frames: list[pd.DataFrame] = []
     resolved_symbols_by_timeframe: dict[str, list[str]] = {}
     timeframe_durations: list[float] = []
     total_timeframes = len(timeframes)
     trade_models = build_hourly_asia_pump_trade_models()
+    trade_portfolios = build_hourly_asia_pump_trade_portfolios()
 
     for timeframe_index, timeframe in enumerate(timeframes, start=1):
         if timeframe not in HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES:
@@ -1827,6 +2032,8 @@ def build_hourly_asia_pump_research_artifacts(
             logger=active_logger,
         )
         trade_model_event_frames.append(trade_model_events)
+        trade_portfolio_events = _build_trade_portfolio_events(trade_model_events, trade_portfolios)
+        trade_portfolio_event_frames.append(trade_portfolio_events)
 
         timeframe_elapsed = max(0.0, time.time() - timeframe_started_at)
         timeframe_durations.append(timeframe_elapsed)
@@ -1861,6 +2068,13 @@ def build_hourly_asia_pump_research_artifacts(
     early_entry_summary_all = _build_early_entry_summary(early_entry_events_all)
     trade_model_events_all = pd.concat(trade_model_event_frames, ignore_index=True) if trade_model_event_frames else pd.DataFrame()
     trade_model_summary_all = _build_trade_model_summary(trade_model_events_all)
+    trade_portfolio_events_all = (
+        pd.concat(trade_portfolio_event_frames, ignore_index=True)
+        if trade_portfolio_event_frames
+        else pd.DataFrame()
+    )
+    trade_portfolio_summary_all = _build_trade_portfolio_summary(trade_portfolio_events_all)
+    trade_portfolio_monthly_all = _build_trade_portfolio_monthly(trade_portfolio_events_all)
     top_grid_rows = _top_grid_rows_by_timeframe(grid_summary_all, limit=10)
 
     grid_summary_path = output_dir / "grid_summary.csv"
@@ -1889,6 +2103,15 @@ def build_hourly_asia_pump_research_artifacts(
 
     trade_model_summary_path = output_dir / "trade_model_summary.csv"
     trade_model_summary_all.to_csv(trade_model_summary_path, index=False)
+
+    trade_portfolio_events_path = output_dir / "trade_portfolio_events.csv"
+    trade_portfolio_events_all.to_csv(trade_portfolio_events_path, index=False)
+
+    trade_portfolio_summary_path = output_dir / "trade_portfolio_summary.csv"
+    trade_portfolio_summary_all.to_csv(trade_portfolio_summary_path, index=False)
+
+    trade_portfolio_monthly_path = output_dir / "trade_portfolio_monthly.csv"
+    trade_portfolio_monthly_all.to_csv(trade_portfolio_monthly_path, index=False)
 
     top_grid_rows_path = output_dir / "top_grid_by_timeframe.csv"
     top_grid_rows.to_csv(top_grid_rows_path, index=False)
@@ -1920,6 +2143,7 @@ def build_hourly_asia_pump_research_artifacts(
         top_grid_rows=top_grid_rows,
         early_entry_summary=early_entry_summary_all,
         trade_model_summary=trade_model_summary_all,
+        trade_portfolio_summary=trade_portfolio_summary_all,
         selection_profile=selection_profile,
     )
 
@@ -1941,6 +2165,9 @@ def build_hourly_asia_pump_research_artifacts(
         "early_entry_summary": early_entry_summary_path,
         "trade_model_events": trade_model_events_path,
         "trade_model_summary": trade_model_summary_path,
+        "trade_portfolio_events": trade_portfolio_events_path,
+        "trade_portfolio_summary": trade_portfolio_summary_path,
+        "trade_portfolio_monthly": trade_portfolio_monthly_path,
         "top_grid_by_timeframe": top_grid_rows_path,
         "research_context": context_path,
         "report": report_path,

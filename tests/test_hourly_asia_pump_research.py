@@ -35,11 +35,11 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     frame = _build_flat_frame(start="2026-01-01 12:00:00", periods=900, freq="1min")
 
     pump_idx = 780
-    frame.loc[pump_idx, ["open", "high", "low", "close", "volume"]] = [100.0, 104.0, 99.9, 103.5, 120.0]
-    frame.loc[pump_idx + 1, ["open", "high", "low", "close", "volume"]] = [103.5, 105.0, 103.2, 104.6, 80.0]
-    frame.loc[pump_idx + 2, ["open", "high", "low", "close", "volume"]] = [104.6, 106.0, 104.1, 105.7, 75.0]
-    frame.loc[pump_idx + 3, ["open", "high", "low", "close", "volume"]] = [105.7, 105.9, 104.8, 105.0, 40.0]
-    frame.loc[pump_idx + 4, ["open", "high", "low", "close", "volume"]] = [105.0, 105.1, 102.8, 103.1, 35.0]
+    frame.loc[pump_idx, ["open", "high", "low", "close", "volume"]] = [100.0, 109.0, 99.9, 108.0, 120.0]
+    frame.loc[pump_idx + 1, ["open", "high", "low", "close", "volume"]] = [108.0, 111.0, 107.5, 110.2, 80.0]
+    frame.loc[pump_idx + 2, ["open", "high", "low", "close", "volume"]] = [110.2, 113.4, 109.8, 112.6, 75.0]
+    frame.loc[pump_idx + 3, ["open", "high", "low", "close", "volume"]] = [112.6, 112.8, 110.9, 111.5, 40.0]
+    frame.loc[pump_idx + 4, ["open", "high", "low", "close", "volume"]] = [111.5, 111.8, 107.4, 108.2, 35.0]
 
     _write_symbol_cache(cache_dir, "AAA/USDT", Timeframe.M1, frame)
 
@@ -62,6 +62,9 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     early_entry_summary = pd.read_csv(artifacts["early_entry_summary"])
     trade_model_events = pd.read_csv(artifacts["trade_model_events"])
     trade_model_summary = pd.read_csv(artifacts["trade_model_summary"])
+    trade_portfolio_events = pd.read_csv(artifacts["trade_portfolio_events"])
+    trade_portfolio_summary = pd.read_csv(artifacts["trade_portfolio_summary"])
+    trade_portfolio_monthly = pd.read_csv(artifacts["trade_portfolio_monthly"])
 
     assert artifacts["report"].exists()
     assert len(selected_events) == 1
@@ -93,7 +96,26 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     assert {
         "context_monster_5pct",
         "context_monster_5pct_tight",
+        "context_break_65_uq_tight",
+        "context_break_65_uq_tight_mid",
+        "context_break_65_close_tight",
         "context_monster_7p5pct",
         "context_monster_7p5pct_mid",
         "context_monster_7p5pct_tight",
     } <= set(trade_model_summary["trade_model_id"].dropna().astype(str))
+    assert {
+        "trade_portfolio_id",
+        "portfolio_component_model_id",
+        "trade_portfolio_label",
+    } <= set(trade_portfolio_events.columns)
+    assert {
+        "trade_portfolio_id",
+        "trades_count",
+        "positive_months_count",
+        "all_active_months_positive",
+    } <= set(trade_portfolio_summary.columns)
+    assert {
+        "stacked_context_core_65",
+        "stacked_context_all_positive_v1",
+    } <= set(trade_portfolio_summary["trade_portfolio_id"].dropna().astype(str))
+    assert {"trade_portfolio_id", "month_utc", "total_return_pct", "month_positive"} <= set(trade_portfolio_monthly.columns)
