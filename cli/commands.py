@@ -2225,6 +2225,7 @@ def _run_hourly_pump_static_combo_analysis_inner(config: AppConfig, args: argpar
         confirmed_events_path=confirmed_events_path,
         output_dir=root_output_dir,
         cache_dir=config.backtest.cache_dir,
+        commission_rate=config.simulation.commission_rate,
         logger=logger,
     )
     logger.info(

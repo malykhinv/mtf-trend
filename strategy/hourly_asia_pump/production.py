@@ -425,6 +425,8 @@ def _write_production_report(
 ) -> Path:
     gate_passed = bool(kpi_validation["passed"].all()) if not kpi_validation.empty else False
     default_profiles = ",".join(variant_summary["production_profile_id"].astype(str).tolist()) if not variant_summary.empty else ""
+    commission_rate = pd.to_numeric(pd.Series([context.get("commission_rate")]), errors="coerce").iloc[0]
+    round_trip_taker_fee_pct = pd.to_numeric(pd.Series([context.get("round_trip_taker_fee_pct")]), errors="coerce").iloc[0]
     lines = [
         "# Hourly Asia Pump Production Report",
         "",
@@ -550,6 +552,12 @@ def _write_production_report(
         "## Reliability Note",
         "",
         "- `annualized_unit_pnl_pct` is additive unit-PnL across trades, not capital-constrained account CAGR.",
+        (
+            f"- Source trade returns already include taker fees: `true`. "
+            f"Assumed taker fee = `{float(commission_rate) * 100:.02f}%` per side, `{float(round_trip_taker_fee_pct) * 100:.02f}%` round-trip."
+            if pd.notna(commission_rate) and pd.notna(round_trip_taker_fee_pct)
+            else "- Source trade returns are expected to be net of taker fees from the upstream research events."
+        ),
         "- `max_concurrent_trades` and `overlapping_entries_count` are reported to show where multiple trades overlap in time.",
         "- The pack itself is selected from the same full-year research dataset; late holdout rows are sanity checks, not independent proof of live profitability.",
         "- This is a production gate for the current research dataset, not a guarantee of future real-money profitability.",
@@ -646,6 +654,9 @@ def build_hourly_asia_pump_production_artifacts(
 
     context = {
         "static_combo_dir": str(static_combo_path),
+        "commission_rate": static_combo_context.get("commission_rate"),
+        "round_trip_taker_fee_pct": static_combo_context.get("round_trip_taker_fee_pct"),
+        "source_trade_returns_net_of_taker_fees": static_combo_context.get("source_trade_returns_net_of_taker_fees"),
         "production_profiles": [
             {
                 "profile_id": spec.profile_id,

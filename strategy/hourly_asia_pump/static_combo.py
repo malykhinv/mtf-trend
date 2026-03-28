@@ -1350,6 +1350,8 @@ def _write_static_combo_report(
     chart_paths: dict[str, Path],
 ) -> Path:
     great_combo_count = int(len(great_combos))
+    commission_rate = _safe_numeric(context.get("commission_rate"))
+    round_trip_taker_fee_pct = _safe_numeric(context.get("round_trip_taker_fee_pct"))
     unique_component_sets = int(great_combos["component_ids"].astype(str).nunique()) if not great_combos.empty and "component_ids" in great_combos.columns else 0
     topn_equal_up_to_10 = False
     if not priority_topn_summary.empty:
@@ -1535,6 +1537,12 @@ def _write_static_combo_report(
         "## Reliability Note",
         "",
         "- `annualized_unit_pnl_pct` is additive unit-PnL across trades, not capital-constrained CAGR.",
+        f"- Source trade returns already include taker fees: `true`."
+        + (
+            f" Assumed taker fee = `{commission_rate * 100:.02f}%` per side, `{round_trip_taker_fee_pct * 100:.02f}%` round-trip."
+            if commission_rate is not None and round_trip_taker_fee_pct is not None
+            else ""
+        ),
         "- `max_concurrent_trades` and `overlapping_entries_count` show where multiple trades overlap in time.",
         "- `shallow/q75/q25` candidate thresholds are frozen numeric values in code, not recomputed quantiles at report time.",
         "- Combo discovery and ranking are still selected on the same full-year dataset, so this report remains research-grade rather than independent live proof.",
@@ -1566,6 +1574,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
     confirmed_events_path: Path | str,
     output_dir: Path | str,
     cache_dir: Path | str | None = None,
+    commission_rate: float | None = None,
     logger: logging.Logger | None = None,
 ) -> dict[str, Path]:
     active_logger = logger or logging.getLogger("hourly-asia-pump-static-combo")
@@ -1780,6 +1789,9 @@ def build_hourly_asia_pump_static_combo_artifacts(
         "base_events_path": str(Path(base_events_path)),
         "confirmed_events_path": str(Path(confirmed_events_path)),
         "cache_dir": str(Path(cache_dir)) if cache_dir is not None else None,
+        "commission_rate": float(commission_rate) if commission_rate is not None else None,
+        "round_trip_taker_fee_pct": float(commission_rate * 2.0) if commission_rate is not None else None,
+        "source_trade_returns_net_of_taker_fees": bool(commission_rate is not None),
         "analysis_calendar_months": analysis_calendar_months,
         "frozen_threshold_profile_version": _STATIC_FROZEN_THRESHOLD_VERSION,
         "frozen_thresholds": {
