@@ -6,8 +6,12 @@ import json
 import logging
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
 import pandas as pd
 
 _STATIC_TOP_K_VALUES: tuple[int, ...] = (99, 1, 2)
@@ -40,6 +44,45 @@ def _safe_numeric(value: object) -> float | None:
     if math.isnan(numeric):
         return None
     return numeric
+
+
+def _format_value(column_name: str, value: object) -> str:
+    if value is None or value is pd.NA:
+        return ""
+    if isinstance(value, float) and pd.isna(value):
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return str(value)
+    numeric = _safe_numeric(value)
+    if numeric is None:
+        return str(value)
+    if column_name.endswith("_rate") or column_name.endswith("_pct"):
+        return f"{numeric * 100:.2f}%"
+    return f"{numeric:.4f}" if not float(numeric).is_integer() else f"{int(numeric)}"
+
+
+def _frame_to_markdown(frame: pd.DataFrame, *, columns: Sequence[str], limit: int | None = None) -> str:
+    if frame.empty:
+        return "_No data._"
+    prepared = frame.copy()
+    existing_columns = [column for column in columns if column in prepared.columns]
+    if existing_columns:
+        prepared = prepared[existing_columns]
+    if limit is not None and limit >= 0:
+        prepared = prepared.head(limit)
+    lines = [
+        "| " + " | ".join(prepared.columns.astype(str)) + " |",
+        "| " + " | ".join("---" for _ in prepared.columns) + " |",
+    ]
+    for _, row in prepared.iterrows():
+        lines.append(
+            "| "
+            + " | ".join(_format_value(str(column), row[column]) for column in prepared.columns)
+            + " |"
+        )
+    return "\n".join(lines)
 
 
 def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -627,6 +670,447 @@ def _build_combo_robustness_summary(
     return pd.DataFrame(rows)
 
 
+def _build_recommended_shortlist(
+    *,
+    great_combos: pd.DataFrame,
+    combo_robustness_summary: pd.DataFrame,
+    limit: int = 12,
+) -> pd.DataFrame:
+    if great_combos.empty:
+        return pd.DataFrame()
+    merged = great_combos.copy()
+    if not combo_robustness_summary.empty and "combo_id" in combo_robustness_summary.columns:
+        merged = merged.merge(
+            combo_robustness_summary[
+                [
+                    "combo_id",
+                    "robustness_label",
+                    "local_goal_rate",
+                    "local_mean_return_p25_pct",
+                    "local_dd_p75_pct",
+                    "local_annualized_median_pct",
+                ]
+            ],
+            on="combo_id",
+            how="left",
+        )
+    return merged.drop_duplicates(subset=["component_ids"], keep="first").head(limit).reset_index(drop=True)
+
+
+def _build_monthly_returns_frame(events: pd.DataFrame) -> pd.DataFrame:
+    if events.empty or "month_utc" not in events.columns or "exit_return_pct" not in events.columns:
+        return pd.DataFrame(columns=["month_utc", "total_return_pct", "trades_count", "month_positive"])
+    monthly = (
+        events.groupby("month_utc", sort=True)
+        .agg(
+            total_return_pct=("exit_return_pct", "sum"),
+            trades_count=("exit_return_pct", "size"),
+        )
+        .reset_index()
+    )
+    monthly["month_positive"] = monthly["total_return_pct"] > 0
+    return monthly
+
+
+def _as_percent_formatter() -> FuncFormatter:
+    return FuncFormatter(lambda value, _: f"{value * 100:.0f}%")
+
+
+def _save_placeholder_chart(path: Path, *, title: str) -> None:
+    figure, axis = plt.subplots(figsize=(10, 5))
+    axis.axis("off")
+    axis.text(0.5, 0.5, "No data available", ha="center", va="center", fontsize=14)
+    axis.set_title(title)
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_priority_equity_curve_chart(events: pd.DataFrame, path: Path) -> None:
+    if events.empty:
+        _save_placeholder_chart(path, title="Priority Portfolio Equity Curve")
+        return
+    ordered = events.sort_values("entry_timestamp_ms").copy()
+    ordered["entry_datetime_utc"] = pd.to_datetime(ordered["entry_timestamp_ms"], unit="ms", utc=True, errors="coerce")
+    ordered["equity_curve"] = 1.0 + pd.to_numeric(ordered["exit_return_pct"], errors="coerce").fillna(0.0).cumsum()
+
+    figure, axis = plt.subplots(figsize=(12, 5))
+    axis.plot(ordered["entry_datetime_utc"], ordered["equity_curve"], color="#125B50", linewidth=2.0)
+    axis.set_title("Priority Portfolio Equity Curve")
+    axis.set_ylabel("Equity (1 + cumulative trade returns)")
+    axis.grid(alpha=0.25)
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_priority_monthly_returns_chart(monthly_returns: pd.DataFrame, path: Path) -> None:
+    if monthly_returns.empty:
+        _save_placeholder_chart(path, title="Priority Portfolio Monthly Returns")
+        return
+    colors = ["#198754" if positive else "#DC3545" for positive in monthly_returns["month_positive"].astype(bool)]
+    figure, axis = plt.subplots(figsize=(12, 5))
+    axis.bar(monthly_returns["month_utc"], monthly_returns["total_return_pct"], color=colors)
+    axis.axhline(0.0, color="#222222", linewidth=1.0)
+    axis.set_title("Priority Portfolio Monthly Returns")
+    axis.set_ylabel("Return")
+    axis.yaxis.set_major_formatter(_as_percent_formatter())
+    axis.tick_params(axis="x", rotation=45)
+    axis.grid(axis="y", alpha=0.25)
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_priority_trade_distribution_chart(events: pd.DataFrame, path: Path) -> None:
+    if events.empty:
+        _save_placeholder_chart(path, title="Priority Portfolio Trade Distribution")
+        return
+    returns = pd.to_numeric(events["exit_return_pct"], errors="coerce").dropna()
+    if returns.empty:
+        _save_placeholder_chart(path, title="Priority Portfolio Trade Distribution")
+        return
+    figure, axis = plt.subplots(figsize=(12, 5))
+    axis.hist(returns, bins=min(40, max(10, len(returns) // 3)), color="#0D6EFD", alpha=0.85, edgecolor="white")
+    axis.axvline(float(returns.mean()), color="#198754", linewidth=2.0, label="Mean")
+    axis.axvline(float(returns.median()), color="#FD7E14", linewidth=2.0, linestyle="--", label="Median")
+    axis.set_title("Priority Portfolio Trade Return Distribution")
+    axis.set_xlabel("Trade return")
+    axis.xaxis.set_major_formatter(_as_percent_formatter())
+    axis.grid(alpha=0.25)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_priority_trade_timeline_chart(events: pd.DataFrame, path: Path) -> None:
+    if events.empty:
+        _save_placeholder_chart(path, title="Priority Portfolio Trade Timeline")
+        return
+    ordered = events.sort_values("entry_timestamp_ms").copy()
+    ordered["entry_datetime_utc"] = pd.to_datetime(ordered["entry_timestamp_ms"], unit="ms", utc=True, errors="coerce")
+    returns = pd.to_numeric(ordered["exit_return_pct"], errors="coerce").fillna(0.0)
+    colors = ["#198754" if value > 0 else "#DC3545" for value in returns]
+
+    figure, axis = plt.subplots(figsize=(12, 5))
+    axis.scatter(ordered["entry_datetime_utc"], returns, c=colors, s=34, alpha=0.85)
+    axis.axhline(0.0, color="#222222", linewidth=1.0)
+    axis.set_title("Priority Portfolio Trade Timeline")
+    axis.set_ylabel("Trade return")
+    axis.yaxis.set_major_formatter(_as_percent_formatter())
+    axis.grid(alpha=0.25)
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_top_variants_scatter_chart(shortlist: pd.DataFrame, path: Path) -> None:
+    if shortlist.empty:
+        _save_placeholder_chart(path, title="Top Static Variants")
+        return
+    scoped = shortlist.copy()
+    scoped["robustness_label"] = scoped.get("robustness_label", pd.Series("mixed", index=scoped.index)).fillna("mixed")
+    palette = {
+        "strong": "#198754",
+        "mixed": "#FD7E14",
+        "fragile": "#DC3545",
+    }
+    figure, axis = plt.subplots(figsize=(12, 7))
+    for label, group in scoped.groupby("robustness_label", sort=True):
+        axis.scatter(
+            pd.to_numeric(group["trades_per_year"], errors="coerce"),
+            pd.to_numeric(group["mean_return_pct"], errors="coerce"),
+            s=140,
+            alpha=0.9,
+            label=label,
+            color=palette.get(str(label), "#6C757D"),
+        )
+    for _, row in scoped.iterrows():
+        axis.annotate(
+            str(row["combo_variant"]),
+            (
+                float(pd.to_numeric(row["trades_per_year"], errors="coerce")),
+                float(pd.to_numeric(row["mean_return_pct"], errors="coerce")),
+            ),
+            xytext=(6, 6),
+            textcoords="offset points",
+            fontsize=9,
+        )
+    axis.set_title("Top Static Variants: Frequency vs Mean Trade")
+    axis.set_xlabel("Trades per year")
+    axis.set_ylabel("Mean trade return")
+    axis.yaxis.set_major_formatter(_as_percent_formatter())
+    axis.grid(alpha=0.25)
+    axis.legend(title="Robustness")
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_priority_topn_chart(priority_topn_summary: pd.DataFrame, path: Path) -> None:
+    if priority_topn_summary.empty:
+        _save_placeholder_chart(path, title="Priority Top-N Stability")
+        return
+    scoped = priority_topn_summary.sort_values("top_n_variants").copy()
+    x_values = pd.to_numeric(scoped["top_n_variants"], errors="coerce")
+    figure, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
+    metrics = [
+        ("mean_return_pct", "Mean trade", True),
+        ("annualized_sum_return_pct", "Annualized sum", True),
+        ("max_drawdown_pct", "Max drawdown", True),
+        ("trades_per_year", "Trades per year", False),
+    ]
+    for axis, (column, title, is_percent) in zip(axes.flat, metrics, strict=False):
+        axis.plot(x_values, pd.to_numeric(scoped[column], errors="coerce"), marker="o", linewidth=2.0, color="#0D6EFD")
+        axis.set_title(title)
+        if is_percent:
+            axis.yaxis.set_major_formatter(_as_percent_formatter())
+        axis.grid(alpha=0.25)
+    axes[1, 0].set_xlabel("Top-N variants enabled")
+    axes[1, 1].set_xlabel("Top-N variants enabled")
+    figure.suptitle("Priority Selection Stability vs Top-N Variant Pool", fontsize=14)
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _save_leader_robustness_chart(shortlist: pd.DataFrame, path: Path) -> None:
+    if shortlist.empty:
+        _save_placeholder_chart(path, title="Leader Robustness")
+        return
+    scoped = shortlist.head(8).copy()
+    labels = scoped["combo_variant"].astype(str).tolist()
+    figure, axes = plt.subplots(1, 3, figsize=(15, 5))
+    metrics = [
+        ("local_goal_rate", "Local goal rate", True),
+        ("local_mean_return_p25_pct", "Local p25 mean trade", True),
+        ("local_dd_p75_pct", "Local p75 drawdown", True),
+    ]
+    for axis, (column, title, is_percent) in zip(axes, metrics, strict=False):
+        axis.bar(labels, pd.to_numeric(scoped.get(column), errors="coerce"), color="#125B50")
+        axis.set_title(title)
+        if is_percent:
+            axis.yaxis.set_major_formatter(_as_percent_formatter())
+        axis.grid(axis="y", alpha=0.25)
+    figure.suptitle("Leader Robustness Around Neighboring Parameter Sets", fontsize=14)
+    figure.tight_layout()
+    figure.savefig(path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _build_chart_manifest(
+    *,
+    charts_dir: Path,
+    priority_events: pd.DataFrame,
+    priority_topn_summary: pd.DataFrame,
+    recommended_shortlist: pd.DataFrame,
+) -> dict[str, Path]:
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    monthly_returns = _build_monthly_returns_frame(priority_events)
+    chart_paths = {
+        "priority_equity_curve": charts_dir / "priority_equity_curve.png",
+        "priority_monthly_returns": charts_dir / "priority_monthly_returns.png",
+        "priority_trade_distribution": charts_dir / "priority_trade_distribution.png",
+        "priority_trade_timeline": charts_dir / "priority_trade_timeline.png",
+        "top_variants_scatter": charts_dir / "top_variants_scatter.png",
+        "priority_topn_stability": charts_dir / "priority_topn_stability.png",
+        "leader_robustness": charts_dir / "leader_robustness.png",
+    }
+    _save_priority_equity_curve_chart(priority_events, chart_paths["priority_equity_curve"])
+    _save_priority_monthly_returns_chart(monthly_returns, chart_paths["priority_monthly_returns"])
+    _save_priority_trade_distribution_chart(priority_events, chart_paths["priority_trade_distribution"])
+    _save_priority_trade_timeline_chart(priority_events, chart_paths["priority_trade_timeline"])
+    _save_top_variants_scatter_chart(recommended_shortlist, chart_paths["top_variants_scatter"])
+    _save_priority_topn_chart(priority_topn_summary, chart_paths["priority_topn_stability"])
+    _save_leader_robustness_chart(recommended_shortlist, chart_paths["leader_robustness"])
+    return chart_paths
+
+
+def _write_static_combo_report(
+    *,
+    output_dir: Path,
+    context: dict[str, object],
+    great_combos: pd.DataFrame,
+    recommended_shortlist: pd.DataFrame,
+    priority_summary: pd.DataFrame,
+    priority_monthly_returns: pd.DataFrame,
+    priority_holdout_sanity: pd.DataFrame,
+    priority_topn_summary: pd.DataFrame,
+    combo_robustness_summary: pd.DataFrame,
+    chart_paths: dict[str, Path],
+) -> Path:
+    great_combo_count = int(len(great_combos))
+    unique_component_sets = int(great_combos["component_ids"].astype(str).nunique()) if not great_combos.empty and "component_ids" in great_combos.columns else 0
+    topn_equal_up_to_10 = False
+    if not priority_topn_summary.empty:
+        topn_subset = priority_topn_summary[priority_topn_summary["top_n_variants"].astype(int).isin({1, 3, 5, 10})].copy()
+        if not topn_subset.empty:
+            comparison_columns = ["trades_count", "mean_return_pct", "win_rate", "annualized_sum_return_pct", "max_drawdown_pct"]
+            first_row = topn_subset.iloc[0]
+            topn_equal_up_to_10 = bool(
+                topn_subset[comparison_columns]
+                .apply(lambda row: all(abs(float(row[column]) - float(first_row[column])) < 1e-12 for column in comparison_columns), axis=1)
+                .all()
+            )
+
+    top_variant = str(great_combos.iloc[0]["combo_variant"]) if not great_combos.empty else ""
+    lines = [
+        "# Hourly Asia Pump Static Combo Report",
+        "",
+        "## Executive Summary",
+        "",
+        f"- Great static variants passing the yearly goal: `{great_combo_count}`.",
+        f"- Unique component sets in the catalog: `{unique_component_sets}`.",
+        f"- Priority-selected portfolio is built with the rule: if several variants match the same signal, take the lowest `combo_priority`.",
+        f"- Top-ranked leader: `{top_variant}`.",
+        f"- `top-1..top-10` priority selection is identical: `{str(topn_equal_up_to_10).lower()}`.",
+        "",
+        "## Run Context",
+        "",
+        _frame_to_markdown(
+            pd.DataFrame([{"key": key, "value": json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else value} for key, value in context.items()]),
+            columns=("key", "value"),
+        ),
+        "",
+        "## Final Priority Portfolio",
+        "",
+        _frame_to_markdown(
+            priority_summary,
+            columns=(
+                "trades_count",
+                "trades_per_year",
+                "mean_return_pct",
+                "median_return_pct",
+                "win_rate",
+                "profit_factor",
+                "annualized_sum_return_pct",
+                "max_drawdown_pct",
+                "mean_pos_trade_pct",
+                "mean_neg_trade_pct",
+                "positive_months_count",
+                "non_positive_months_count",
+                "matched_combo_variants_count",
+            ),
+        ),
+        "",
+        "## Monthly Distribution",
+        "",
+        _frame_to_markdown(
+            priority_monthly_returns,
+            columns=(
+                "month_utc",
+                "total_return_pct",
+                "trades_count",
+                "month_positive",
+            ),
+        ),
+        "",
+        "## Recommended Variants",
+        "",
+        _frame_to_markdown(
+            recommended_shortlist,
+            columns=(
+                "combo_variant",
+                "component_ids",
+                "trades_per_year",
+                "mean_return_pct",
+                "win_rate",
+                "annualized_sum_return_pct",
+                "max_drawdown_pct",
+                "positive_months_count",
+                "robustness_label",
+            ),
+            limit=12,
+        ),
+        "",
+        "## Robustness Around Neighboring Parameter Sets",
+        "",
+        _frame_to_markdown(
+            combo_robustness_summary[combo_robustness_summary["combo_variant"].astype(str).isin(recommended_shortlist["combo_variant"].astype(str).tolist())].copy(),
+            columns=(
+                "combo_variant",
+                "local_neighbors_count",
+                "same_components_other_topk_count",
+                "minor_component_change_count",
+                "local_goal_rate",
+                "local_mean_return_p25_pct",
+                "local_dd_p75_pct",
+                "local_annualized_median_pct",
+                "robustness_label",
+            ),
+        ),
+        "",
+        "## Priority Top-N Stability",
+        "",
+        _frame_to_markdown(
+            priority_topn_summary,
+            columns=(
+                "top_n_variants",
+                "trades_count",
+                "trades_per_year",
+                "mean_return_pct",
+                "win_rate",
+                "annualized_sum_return_pct",
+                "max_drawdown_pct",
+                "positive_months_count",
+                "non_positive_months_count",
+            ),
+        ),
+        "",
+        "## Holdout Sanity",
+        "",
+        _frame_to_markdown(
+            priority_holdout_sanity,
+            columns=(
+                "split_id",
+                "trades_count",
+                "trades_per_year",
+                "mean_return_pct",
+                "win_rate",
+                "annualized_sum_return_pct",
+                "max_drawdown_pct",
+                "positive_months_count",
+                "non_positive_months_count",
+            ),
+        ),
+        "",
+        "## Chart Gallery",
+        "",
+        "### Equity Curve",
+        "",
+        "![Priority Equity](charts/priority_equity_curve.png)",
+        "",
+        "### Monthly Returns",
+        "",
+        "![Priority Monthly Returns](charts/priority_monthly_returns.png)",
+        "",
+        "### Trade Timeline",
+        "",
+        "![Priority Trade Timeline](charts/priority_trade_timeline.png)",
+        "",
+        "### Trade Distribution",
+        "",
+        "![Priority Trade Distribution](charts/priority_trade_distribution.png)",
+        "",
+        "### Top Variants",
+        "",
+        "![Top Variants Scatter](charts/top_variants_scatter.png)",
+        "",
+        "### Top-N Stability",
+        "",
+        "![Top-N Stability](charts/priority_topn_stability.png)",
+        "",
+        "### Leader Robustness",
+        "",
+        "![Leader Robustness](charts/leader_robustness.png)",
+        "",
+    ]
+    report_path = output_dir / "static_combo_report.md"
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
+
+
 def build_hourly_asia_pump_static_combo_artifacts(
     *,
     base_events_path: Path | str,
@@ -714,6 +1198,11 @@ def build_hourly_asia_pump_static_combo_artifacts(
         selected_combos=great_combos,
         all_unique_combos=unique_combo_summary,
     )
+    recommended_shortlist = _build_recommended_shortlist(
+        great_combos=great_combos,
+        combo_robustness_summary=combo_robustness_summary,
+    )
+    priority_monthly_returns = _build_monthly_returns_frame(priority_events)
     priority_holdout_sanity_rows: list[dict[str, object]] = []
     if not priority_events.empty:
         months = sorted(priority_events["month_utc"].dropna().astype(str).unique().tolist())
@@ -761,21 +1250,53 @@ def build_hourly_asia_pump_static_combo_artifacts(
     priority_topn_summary.to_csv(priority_topn_summary_path, index=False)
     combo_robustness_summary_path = output_path / "combo_robustness_summary.csv"
     combo_robustness_summary.to_csv(combo_robustness_summary_path, index=False)
+    recommended_shortlist_path = output_path / "recommended_combo_shortlist.csv"
+    recommended_shortlist.to_csv(recommended_shortlist_path, index=False)
+    priority_monthly_returns_path = output_path / "priority_selected_monthly.csv"
+    priority_monthly_returns.to_csv(priority_monthly_returns_path, index=False)
 
     context = {
         "base_events_path": str(Path(base_events_path)),
         "confirmed_events_path": str(Path(confirmed_events_path)),
         "candidate_ids": list(candidate_frames.keys()),
         "great_combo_count": int(len(great_combos)),
+        "recommended_shortlist_count": int(len(recommended_shortlist)),
     }
     context_path = output_path / "static_combo_context.json"
     context_path.write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    charts_dir = output_path / "charts"
+    chart_paths = _build_chart_manifest(
+        charts_dir=charts_dir,
+        priority_events=priority_events,
+        priority_topn_summary=priority_topn_summary,
+        recommended_shortlist=recommended_shortlist,
+    )
+    charts_manifest_path = output_path / "charts_manifest.json"
+    charts_manifest_path.write_text(
+        json.dumps({key: str(path) for key, path in chart_paths.items()}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    report_path = _write_static_combo_report(
+        output_dir=output_path,
+        context=context,
+        great_combos=great_combos,
+        recommended_shortlist=recommended_shortlist,
+        priority_summary=priority_summary,
+        priority_monthly_returns=priority_monthly_returns,
+        priority_holdout_sanity=priority_holdout_sanity,
+        priority_topn_summary=priority_topn_summary,
+        combo_robustness_summary=combo_robustness_summary,
+        chart_paths=chart_paths,
+    )
+
     active_logger.info(
-        "hourly-asia-pump-static-combo artifacts saved: output_dir=%s great_combos=%s priority_trades=%s",
+        "hourly-asia-pump-static-combo artifacts saved: output_dir=%s great_combos=%s priority_trades=%s report=%s charts_dir=%s",
         output_path,
         len(great_combos),
         len(priority_events),
+        report_path,
+        charts_dir,
     )
     return {
         "candidate_component_summary": candidate_summary_path,
@@ -789,6 +1310,10 @@ def build_hourly_asia_pump_static_combo_artifacts(
         "priority_selected_holdout_sanity": priority_holdout_sanity_path,
         "priority_topn_summary": priority_topn_summary_path,
         "combo_robustness_summary": combo_robustness_summary_path,
+        "recommended_combo_shortlist": recommended_shortlist_path,
+        "priority_selected_monthly": priority_monthly_returns_path,
+        "charts_manifest": charts_manifest_path,
+        "report": report_path,
         "static_combo_context": context_path,
     }
 

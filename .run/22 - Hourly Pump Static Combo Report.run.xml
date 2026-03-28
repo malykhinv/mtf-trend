@@ -1,0 +1,25 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="22 - Hourly Pump Static Combo Report" type="PythonConfigurationType" factoryName="Python">
+    <module name="mtf-trend-2" />
+    <option name="ENV_FILES" value="" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="PYTHONUNBUFFERED" value="1" />
+    </envs>
+    <option name="SDK_HOME" value="" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <option name="IS_MODULE_SDK" value="true" />
+    <option name="ADD_CONTENT_ROOTS" value="true" />
+    <option name="ADD_SOURCE_ROOTS" value="true" />
+    <option name="RUN_TOOL" value="" />
+    <option name="SCRIPT_NAME" value="$PROJECT_DIR$/main.py" />
+    <option name="PARAMETERS" value="run-hourly-pump-static-combo-analysis --base-events .output\results\research\hourly_asia_pump_5m_oos_validation_v1\trade_model_events.csv --confirmed-events .output\results\research\hourly_asia_pump_5m_confirmed_edge_search_v1\confirmed_trade_events.csv --output-dir .output\results\research\hourly_asia_pump_static_combo\latest_report" />
+    <option name="SHOW_COMMAND_LINE" value="false" />
+    <option name="EMULATE_TERMINAL" value="false" />
+    <option name="MODULE_MODE" value="false" />
+    <option name="REDIRECT_INPUT" value="false" />
+    <option name="INPUT_FILE" value="" />
+    <method v="2" />
+  </configuration>
+</component>

@@ -2226,10 +2226,12 @@ def _run_hourly_pump_static_combo_analysis_inner(config: AppConfig, args: argpar
         logger=logger,
     )
     logger.info(
-        "run-hourly-pump-static-combo-analysis: artifacts great_catalog=%s priority_summary=%s priority_events=%s",
+        "run-hourly-pump-static-combo-analysis: artifacts report=%s great_catalog=%s priority_summary=%s priority_events=%s charts=%s",
+        artifacts["report"],
         artifacts["great_combo_catalog"],
         artifacts["priority_selected_summary"],
         artifacts["priority_selected_events"],
+        artifacts["charts_manifest"],
     )
     return 0
 
